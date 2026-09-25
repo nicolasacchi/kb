@@ -365,6 +365,34 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// RS-U6 — write ONLY `reviews.base_status` (the per-capture fetch/state
+    /// record), never the policy columns: a capture that did not change the
+    /// policy must not rewrite `base_mode`/`base_branch`/`base_set_by` from a
+    /// possibly stale read (a concurrent retrack/retarget would be undone).
+    pub fn set_review_base_status(&self, id: i64, base_status_json: &str) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE reviews SET base_status = ?2 WHERE id = ?1",
+            params![id, base_status_json],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// RS-U6 — cache the forge's default branch (`ls-remote --symref`) in the
+    /// store row's `state_json`, touching ONLY the `default_branch` /
+    /// `default_branch_at` keys (never `state`, never a stale copy of the
+    /// rest of the JSON).
+    pub fn set_review_store_default_branch(&self, id: i64, branch: &str, at: i64) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE review_stores
+             SET state_json = json_set(
+                 CASE WHEN json_valid(state_json) THEN state_json ELSE '{}' END,
+                 '$.default_branch', ?2, '$.default_branch_at', ?3)
+             WHERE id = ?1",
+            params![id, branch, at],
+        )?;
+        Ok(n > 0)
+    }
+
     /// RS-U6 — sync `reviews.pr_head_sha` to a freshly FETCHED forge PR
     /// head (README §1 defect 5: it used to be refreshed only by reuse and
     /// sweep). Only ever called with a sha a successful PR-head fetch just

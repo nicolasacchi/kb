@@ -574,6 +574,38 @@ pub fn member_remotes(repo_root: &dyn GitRoot) -> Vec<(String, String)> {
     rows
 }
 
+/// RS-U6 — the full ref name `spec` DWIM-resolves to in a member clone
+/// (`feature` → `refs/heads/feature`, `origin/x` → `refs/remotes/origin/x`),
+/// via `rev-parse --symbolic-full-name` (read-only). `None` for a sha, an
+/// expression, or anything ambiguous/unresolvable.
+pub fn symbolic_full_name(repo_root: &dyn GitRoot, spec: &Revspec) -> Option<String> {
+    let out = run_git(
+        repo_root,
+        &["rev-parse", "--symbolic-full-name", spec.as_str()],
+    )
+    .ok()?;
+    let name = String::from_utf8_lossy(&out).trim().to_string();
+    (name.starts_with("refs/") && !name.contains('\n')).then_some(name)
+}
+
+/// RS-U6 — a member clone's local branch names (`refs/heads/*`, short
+/// form), read-only.
+pub fn member_branches(repo_root: &dyn GitRoot) -> Vec<String> {
+    run_git(
+        repo_root,
+        &["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"],
+    )
+    .map(|out| {
+        String::from_utf8_lossy(&out)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// RS-U6 — `refs/heads/<branch>`'s configured upstream as a full ref
 /// (`refs/remotes/origin/main`, `refs/heads/dev`), via `for-each-ref
 /// --format=%(upstream)` (read-only). `None` when unset or `branch` is not
@@ -1426,75 +1458,151 @@ async fn review_base_block_async(
 /// file/env token is configured and the review store's forge is GitHub
 /// with an `auto`/`gh-cli` credential, the daemon's own `gh` login answers
 /// GETs (pinned `gh_user`, the store's recorded account). Held in memory
-/// for this request only; never logged, never persisted.
+/// for this request only; never logged, never persisted. A
+/// `credential-account-mismatch` is dropped here — callers that can carry
+/// a warning use [`github_with_gh_cli_warned`].
+#[allow(dead_code)] // the no-warning form, kept for RS-U7/U10b callers
 pub(crate) async fn github_with_gh_cli(
     state: &SharedState,
     github: crate::github::GithubClient,
     handle: &crate::review_store::StoreHandle,
     repo_name: &str,
 ) -> crate::github::GithubClient {
-    use crate::review_store::{ApiCredential, CredentialPin, GhCli, RemoteUrl};
+    github_with_gh_cli_warned(
+        state,
+        github,
+        handle,
+        repo_name,
+        crate::review_store::GhCli::from_process_env(),
+    )
+    .await
+    .0
+}
+
+/// [`github_with_gh_cli`] with an explicit `gh` and the D12 surface: an
+/// answering account that is not the pinned/recorded one is a
+/// `credential-account-mismatch` WARNING (never a silent fall-through to
+/// "no credentials"). Any other gh failure (not installed, not logged in)
+/// simply leaves the rung unused.
+pub(crate) async fn github_with_gh_cli_warned(
+    state: &SharedState,
+    github: crate::github::GithubClient,
+    handle: &crate::review_store::StoreHandle,
+    repo_name: &str,
+    gh: crate::review_store::GhCli,
+) -> (crate::github::GithubClient, Vec<BaseWarningOut>) {
+    use crate::review_store::{ApiCredential, CredError, CredentialPin, RemoteUrl};
     if github.has_ambient_token() || handle.forge_kind.as_deref() != Some("github") {
-        return github;
+        return (github, vec![]);
     }
     let Some(url) = handle
         .base_url
         .as_deref()
         .and_then(|u| RemoteUrl::parse_remote(u).ok())
     else {
-        return github;
+        return (github, vec![]);
     };
     let settings = state.review_stores.settings().repo(repo_name);
     if !matches!(
         settings.credential,
         CredentialPin::Auto | CredentialPin::GhCli
     ) {
-        return github;
+        return (github, vec![]);
     }
     let st = state.clone();
     let id = handle.id;
-    let cred = tokio::task::spawn_blocking(move || {
+    let res = tokio::task::spawn_blocking(move || {
         let recorded = st
             .store
             .get_review_store(id)
             .ok()
             .flatten()
             .and_then(|r| r.cred_account);
-        ApiCredential::from_gh_cli(
-            &GhCli::from_process_env(),
+        match ApiCredential::from_gh_cli(
+            &gh,
             &url,
             settings.gh_user.as_deref(),
             recorded.as_deref(),
-        )
-        .ok()
+        ) {
+            Ok(c) => (Some(c), vec![]),
+            Err(CredError::AccountMismatch {
+                host,
+                expected,
+                found,
+            }) => (
+                None,
+                vec![crate::review_base::warning(
+                    crate::review_base::warn::CREDENTIAL_ACCOUNT_MISMATCH,
+                    format!(
+                        "gh answers for {host} as {found:?}, not the pinned/recorded account {expected:?} — the forge API was not read with it (gh auth switch, or set [[review.repos]] gh_user)"
+                    ),
+                )],
+            ),
+            Err(_) => (None, vec![]),
+        }
     })
     .await
-    .ok()
-    .flatten();
-    github.with_api_credential(cred)
+    .unwrap_or((None, vec![]));
+    (github.with_api_credential(res.0), res.1)
 }
 
-/// RS-U6 — the forge API's `base.ref` for PR `n` (the PR target rung,
-/// README §6; D15 retarget-follow reads it on every fetch). `None` when the
-/// origin is not GitHub or the API cannot answer.
-async fn forge_pr_base_ref(
+/// RS-U6 — the forge project (`owner/name`) of a GitHub review store, from
+/// the store row's `forge_slug` — NEVER the member's `origin`, which may be
+/// a fork (asking the fork's API for PR #N reads a different PR).
+pub(crate) fn store_github_repo(
+    row: &crate::store::ReviewStoreRow,
+) -> Option<crate::github::GithubRepo> {
+    if row.forge_kind.as_deref() != Some("github") {
+        return None;
+    }
+    let (owner, name) = row.forge_slug.as_deref()?.split_once('/')?;
+    (!owner.is_empty() && !name.is_empty() && !name.contains('/')).then(|| {
+        crate::github::GithubRepo {
+            owner: owner.to_string(),
+            name: name.to_string(),
+        }
+    })
+}
+
+async fn store_row(
     state: &SharedState,
-    repo: &RepoEntry,
     handle: &crate::review_store::StoreHandle,
+) -> Option<crate::store::ReviewStoreRow> {
+    let id = handle.id;
+    state
+        .store
+        .run_blocking(move |store| store.get_review_store(id))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// RS-U6 — the forge API's `base.ref` for PR `n` of the STORE's project
+/// (the PR target rung, README §6; D15 retarget-follow reads it on every
+/// fetch), plus any D12 warning. `None` when the store is not a GitHub
+/// project or the API cannot answer.
+pub(crate) async fn forge_pr_base_ref(
+    state: &SharedState,
+    handle: &crate::review_store::StoreHandle,
+    repo_name: &str,
     n: u32,
     github: crate::github::GithubClient,
-) -> Option<String> {
-    let root = repo.path.clone();
-    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&root))
+    gh: crate::review_store::GhCli,
+) -> (Option<String>, Vec<BaseWarningOut>) {
+    let Some(gh_repo) = store_row(state, handle)
         .await
-        .ok()?
-        .ok()?;
-    let github = github_with_gh_cli(state, github, handle, &repo.name).await;
-    github
+        .as_ref()
+        .and_then(store_github_repo)
+    else {
+        return (None, vec![]);
+    };
+    let (github, warnings) = github_with_gh_cli_warned(state, github, handle, repo_name, gh).await;
+    let base = github
         .get_pull(&gh_repo.owner, &gh_repo.name, n as u64)
         .await
         .ok()
-        .map(|p| p.base_ref)
+        .map(|p| p.base_ref);
+    (base, warnings)
 }
 
 /// Where [`delete_review_with_refs`] deletes `refs/kbc/pr/<n>` from, if at
@@ -1984,6 +2092,28 @@ pub(crate) async fn create_review_value(
     state: &SharedState,
     body: CreateReviewBody,
 ) -> Result<serde_json::Value, ApiError> {
+    create_review_value_inner(state, body, None).await
+}
+
+/// RS-U6 — [`create_review_value`] for a base the DAEMON detected
+/// (`branch review --base auto`): on a ready store `body.base_ref` is NOT
+/// treated as a `--base` (which would record `set_by=user`,
+/// `source=explicit`) — the store's resolution chain runs instead, with
+/// `stack_parent` as its stack rung. The pre-store fallback uses
+/// `body.base_ref` verbatim, exactly as before.
+pub(crate) async fn create_review_value_auto(
+    state: &SharedState,
+    body: CreateReviewBody,
+    stack_parent: Option<String>,
+) -> Result<serde_json::Value, ApiError> {
+    create_review_value_inner(state, body, Some(stack_parent)).await
+}
+
+async fn create_review_value_inner(
+    state: &SharedState,
+    body: CreateReviewBody,
+    auto: Option<Option<String>>,
+) -> Result<serde_json::Value, ApiError> {
     let state = state.clone();
     let (repo, _repo_id) = find_repo(&state, &body.repo)?;
     reject_user_ref(&body.head_ref)?;
@@ -1991,7 +2121,7 @@ pub(crate) async fn create_review_value(
     // chain, fetch into the store, capture there (the user clone is never
     // written). A seeding store refuses with 503 `store-seeding`.
     if let Some(handle) = admit_store(&state, &body.repo).await? {
-        return create_review_in_store(&state, handle, body).await;
+        return create_review_in_store(&state, handle, body, auto).await;
     }
     if let Some(b) = body.base_ref.as_deref() {
         reject_user_ref(b)?;
@@ -2086,11 +2216,17 @@ async fn create_review_in_store(
     state: &SharedState,
     handle: crate::review_store::StoreHandle,
     body: CreateReviewBody,
+    auto: Option<Option<String>>,
 ) -> Result<serde_json::Value, ApiError> {
     let member = store_member(state, &body.repo)?;
+    let (base_input, stack_parent) = match auto {
+        None => (body.base_ref.clone(), None),
+        Some(stack_parent) => (None, stack_parent),
+    };
     let nr = NewReview {
         head_ref: body.head_ref.clone(),
-        base_input: body.base_ref.clone(),
+        base_input,
+        stack_parent,
         ..NewReview::default()
     };
     let prepared = with_store_ctx(state, handle.clone(), member.clone(), move |ctx| {
@@ -2239,11 +2375,19 @@ pub async fn snapshot_review(
     let (review, repo, _) = require_review(&state, id).await?;
     let body = if let Some(handle) = admit_store(&state, &review.repo).await? {
         let network = opts.fetch.unwrap_or(true);
-        let forge_base_ref = match (network, pr_of_head(&review.head_ref)) {
+        let (forge_base_ref, api_warnings) = match (network, pr_of_head(&review.head_ref)) {
             (true, Some(n)) => {
-                forge_pr_base_ref(&state, repo, &handle, n, state.github.with_cli_token(None)).await
+                forge_pr_base_ref(
+                    &state,
+                    &handle,
+                    &review.repo,
+                    n,
+                    state.github.with_cli_token(None),
+                    crate::review_store::GhCli::from_process_env(),
+                )
+                .await
             }
-            _ => None,
+            _ => (None, vec![]),
         };
         let member = store_member(&state, &review.repo)?;
         let review2 = review.clone();
@@ -2251,6 +2395,7 @@ pub async fn snapshot_review(
             network,
             force: opts.force,
             forge_base_ref,
+            api_warnings,
             ..Recapture::default()
         };
         let r = with_store_ctx(&state, handle, member, move |ctx| {
@@ -3611,12 +3756,13 @@ async fn reuse_pr_review(
                     .ok_or_else(|| ApiError::not_found(format!("no such review: {id}")))
             })
             .await?;
-        let forge_base_ref = forge_pr_base_ref(
+        let (forge_base_ref, api_warnings) = forge_pr_base_ref(
             state,
-            repo,
             &handle,
+            &repo.name,
             pr_number,
             github.with_api_credential(None),
+            crate::review_store::GhCli::from_process_env(),
         )
         .await;
         let member = store_member(state, &review.repo)?;
@@ -3624,6 +3770,7 @@ async fn reuse_pr_review(
         let rc = Recapture {
             network: true,
             forge_base_ref,
+            api_warnings,
             ..Recapture::default()
         };
         let r = with_store_ctx(state, handle, member, move |ctx| {
@@ -4052,7 +4199,26 @@ async fn create_review_pr_in_store(
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let number = body.pr_number;
     crate::review_jobs::set_stage(&job, "base");
-    let github = github_with_gh_cli(state, github, &handle, &body.repo).await;
+    // RS-U6 — every API call on the store path targets the STORE's forge
+    // project (`review_stores.forge_slug`), never the member's `origin`,
+    // which may be a fork.
+    let row = store_row(state, &handle).await;
+    let gh_repo = match row.as_ref() {
+        Some(r) => store_github_repo(r),
+        None => gh_repo,
+    };
+    let pr_repo_slug = gh_repo
+        .as_ref()
+        .map(|g| format!("{}/{}", g.owner, g.name))
+        .unwrap_or(pr_repo_slug);
+    let (github, gh_warnings) = github_with_gh_cli_warned(
+        state,
+        github,
+        &handle,
+        &body.repo,
+        crate::review_store::GhCli::from_process_env(),
+    )
+    .await;
     let had_credentials = github.has_credentials();
     let pull = match &gh_repo {
         Some(gh) => Some(github.get_pull(&gh.owner, &gh.name, number as u64).await),
@@ -4071,10 +4237,14 @@ async fn create_review_pr_in_store(
         pr_head_branch,
         ..NewReview::default()
     };
-    let prepared = with_store_ctx(state, handle.clone(), member.clone(), move |ctx| {
+    let mut prepared = with_store_ctx(state, handle.clone(), member.clone(), move |ctx| {
         ctx.prepare_new(&nr)
     })
     .await??;
+    if !gh_warnings.is_empty() {
+        prepared.status.code = Some(crate::review_base::warn::CREDENTIAL_ACCOUNT_MISMATCH.into());
+        prepared.warnings.extend(gh_warnings);
+    }
     let review = insert_store_review(
         state,
         &body.repo,

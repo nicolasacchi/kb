@@ -1540,17 +1540,26 @@ pub async fn start_branch_review(
     // Composed, never re-implemented: `create_review_value` IS
     // `POST /api/reviews`'s body, so this verb cannot drift from it (and
     // cannot be a weaker gate than it — see this module's doc).
-    let review = crate::reviews::create_review_value(
-        &state,
-        crate::reviews::CreateReviewBody {
-            repo: body.repo.clone(),
-            head_ref: head.as_str().to_string(),
-            base_ref: Some(base_ref),
-            title: body.title.clone(),
-            session_id: body.session_id.clone(),
-        },
-    )
-    .await?;
+    //
+    // RS-U6 — only a CALLER-supplied base is an explicit `--base`
+    // (`set_by=user`). An auto-detected answer goes through the review
+    // store's own resolution chain (stack parent → upstream → the forge's
+    // default branch, `set_by=auto`) once the store is ready — never the
+    // member's possibly stale local `main` frozen as a user choice (D14).
+    // The pre-store fallback keeps using the ladder's ref verbatim.
+    let create_body = crate::reviews::CreateReviewBody {
+        repo: body.repo.clone(),
+        head_ref: head.as_str().to_string(),
+        base_ref: Some(base_ref.clone()),
+        title: body.title.clone(),
+        session_id: body.session_id.clone(),
+    };
+    let review = if base_source == "explicit" {
+        crate::reviews::create_review_value(&state, create_body).await?
+    } else {
+        let stack_parent = (base_source == "stack").then_some(base_ref);
+        crate::reviews::create_review_value_auto(&state, create_body, stack_parent).await?
+    };
 
     Ok((
         StatusCode::CREATED,

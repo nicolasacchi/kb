@@ -566,7 +566,10 @@ fn kind_decisions() {
         decide_kind(Some((t1, m1)), t1, m1, Some(Retarget), false),
         None
     );
-    assert_eq!(decide_kind(Some((t1, m1)), t1, m1, None, true), Some(Push));
+    assert_eq!(
+        decide_kind(Some((t1, m1)), t1, m1, None, true),
+        Some(Forced)
+    );
     assert_eq!(decide_kind(Some((t1, m1)), t2, m1, None, false), Some(Push));
     assert_eq!(
         decide_kind(Some((t1, m1)), t2, m2, None, false),
@@ -652,6 +655,12 @@ const REPO: &str = "widgets";
 const PR: u32 = 7;
 
 fn fixture() -> Fx {
+    fixture_with(false)
+}
+
+/// `no_remote`: the member clone has NO remote at all (a `local:` store
+/// with no forge to fetch a base from).
+fn fixture_with(no_remote: bool) -> Fx {
     let tmp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(tmp.path()).unwrap();
     let forge = root.join("forge/widgets.git");
@@ -678,6 +687,9 @@ fn fixture() -> Fx {
             clone.to_str().unwrap(),
         ],
     );
+    if no_remote {
+        git(&clone, &["remote", "remove", "origin"]);
+    }
     let home = root.join("state");
     std::fs::create_dir_all(&home).unwrap();
     let store = Store::open(&home.join("index.db")).unwrap();
@@ -877,6 +889,14 @@ fn review_65_shape_base_correction_is_github_equal() {
     let before = fx.clone_refs();
     let r1 = recap(&fx, review.id, fetch());
     assert!(r1.outcome.minted);
+    // A capture that did not change the policy writes ONLY base_status —
+    // the legacy row keeps its NULL policy columns (never rewritten).
+    let b = fx.store.get_review_base(review.id).unwrap().unwrap();
+    assert_eq!(
+        (b.base_mode.as_deref(), b.base_set_by.as_str()),
+        (None, "legacy")
+    );
+    assert!(b.base_status.is_some());
     assert_eq!(r1.outcome.ps.tip_sha, tip0);
     assert_eq!(r1.outcome.ps.base_sha, fx.m1);
     assert_eq!(r1.effective.policy().unwrap().set_by, SetBy::Legacy);
@@ -1197,6 +1217,33 @@ fn explicit_bases_and_refusals_in_the_store() {
     );
     let c = fx.with(|c| c.classify(Some("main"), false)).unwrap();
     assert_eq!(c.policy.map(|p| p.mode), Some(BaseMode::Local));
+    // A bare non-PR branch that exists only on the forge (never fetched
+    // here): fetch-then-track, never a 400.
+    git(
+        &fx.author,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{}:refs/heads/develop", fx.m1),
+        ],
+    );
+    git(&fx.clone, &["checkout", "-q", "-b", "topic"]);
+    commit(&fx.clone, "t.rs", "t");
+    let prepared = fx
+        .with(|c| {
+            c.prepare_new(&NewReview {
+                head_ref: "topic".into(),
+                base_input: Some("develop".into()),
+                ..NewReview::default()
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        prepared.policy,
+        BasePolicy::track("develop", SetBy::User, BaseSource::Explicit)
+    );
+    assert_eq!(prepared.base_tip, fx.m1);
     // A branch the forge does not have is a 400, before any row exists.
     let err = fx
         .with(|c| {
@@ -1430,7 +1477,7 @@ async fn start_pr_and_snapshot_routes_capture_in_the_store_not_the_clone() {
         .iter()
         .map(|p| p["kind"].as_str().unwrap_or("?"))
         .collect();
-    assert_eq!(kinds, vec!["initial", "push", "push"], "{show}");
+    assert_eq!(kinds, vec!["initial", "push", "forced"], "{show}");
     assert_eq!(
         show["pr_head_sha"],
         tip1.as_str(),
@@ -1438,4 +1485,518 @@ async fn start_pr_and_snapshot_routes_capture_in_the_store_not_the_clone() {
     );
 
     assert_eq!(fx.clone_refs(), before, "the user clone was never written");
+}
+
+// =====================================================================
+// RS-U6 review fixes
+// =====================================================================
+
+/// Fix 1 (D14) — `branch review --base auto` on a ready store: the ladder's
+/// answer (the member's STALE local `main`) is not frozen as a user
+/// choice; the store's chain tracks the forge's `main`, `set_by=auto`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_review_auto_runs_the_store_chain_not_a_frozen_local_main() {
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    let forge_main = fx.advance_main(2, "br");
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    commit(&fx.clone, "f.rs", "f");
+    let state = route_state(&fx).await;
+    let before = fx.clone_refs();
+    let body: crate::branches::BranchReviewBody =
+        serde_json::from_value(serde_json::json!({"repo": REPO, "ref": "feature"})).unwrap();
+    let resp = crate::branches::start_branch_review(State(state.clone()), axum::Json(body))
+        .await
+        .unwrap_or_else(|e| panic!("branch review: {e:?}"))
+        .into_response();
+    let out = body_json(resp).await;
+    let review = &out["review"];
+    assert_eq!(review["base"]["mode"], "track", "{out}");
+    assert_eq!(review["base"]["branch"], "main");
+    assert_eq!(review["base"]["set_by"], "auto");
+    assert_eq!(review["base"]["source"], "default-assumed");
+    assert_eq!(review["base_tip_sha"], forge_main.as_str(), "{out}");
+    assert_eq!(fx.clone_refs(), before);
+}
+
+/// Fix 1 — the stack-parent rung is `local(parent)`, auto, stack-parent.
+#[test]
+fn a_stack_parent_is_an_auto_local_base() {
+    let fx = fixture();
+    git(&fx.clone, &["checkout", "-q", "-b", "layer-a"]);
+    commit(&fx.clone, "a.rs", "a");
+    git(&fx.clone, &["checkout", "-q", "-b", "layer-b"]);
+    let tip_b = commit(&fx.clone, "b.rs", "b");
+    let a_tip = git(&fx.clone, &["rev-parse", "layer-a"]);
+    let prepared = fx
+        .with(|c| {
+            c.prepare_new(&NewReview {
+                head_ref: "layer-b".into(),
+                stack_parent: Some("layer-a".into()),
+                ..NewReview::default()
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        prepared.policy,
+        BasePolicy::local("layer-a", SetBy::Auto, BaseSource::StackParent)
+    );
+    assert_eq!(
+        (prepared.base_tip.as_str(), prepared.head_sha.as_str()),
+        (a_tip.as_str(), tip_b.as_str())
+    );
+}
+
+/// Fix 2 — capture never imports `refs/kbc/*` from the user clone: a
+/// deleted review's leftover clone refs do not come back into the store
+/// when ANOTHER review is captured.
+#[test]
+fn a_deleted_reviews_refs_stay_gone_when_another_review_captures() {
+    let fx = fixture();
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    let tip = commit(&fx.clone, "f.rs", "f");
+    let mk = |fx: &Fx| {
+        let id = fx
+            .store
+            .create_review(REPO, None, "refs/heads/main", "feature", None, 1)
+            .unwrap();
+        fx.store
+            .set_review_base(id, "local", Some("main"), None, "user", None)
+            .unwrap();
+        id
+    };
+    let a = mk(&fx);
+    let r = recap(
+        &fx,
+        a,
+        Recapture {
+            force: true,
+            ..Recapture::default()
+        },
+    );
+    assert!(r.outcome.minted);
+    // A legacy copy of A's patchset ref in the user clone.
+    git(
+        &fx.clone,
+        &["update-ref", &crate::reviews::patchset_ref(a, 1), &tip],
+    );
+    let review_a = fx.refetch(a);
+    crate::reviews::delete_review_with_refs(
+        &fx.store,
+        &fx.bus,
+        &fx.with(|c| c.root()),
+        None,
+        &review_a,
+        crate::reviews::PrRefScope::StoreWide,
+    )
+    .unwrap();
+    let b = mk(&fx);
+    recap(
+        &fx,
+        b,
+        Recapture {
+            force: true,
+            ..Recapture::default()
+        },
+    );
+    let store_refs = git(&fx.store_dir(), &["for-each-ref", "--format=%(refname)"]);
+    assert!(
+        !store_refs.contains(&format!("refs/kbc/review/{a}/")),
+        "a deleted review's refs were re-imported: {store_refs}"
+    );
+    assert!(
+        store_refs.contains(&format!("refs/kbc/review/{b}/ps1")),
+        "{store_refs}"
+    );
+}
+
+/// Fix 3 — heads that are not local branches are imported: a
+/// remote-tracking branch (`origin/<b>`) and a detached sha.
+#[test]
+fn remote_tracking_and_detached_heads_are_imported() {
+    let fx = fixture();
+    git(&fx.author, &["checkout", "-q", "-B", "remote-only", &fx.m1]);
+    let remote_tip = commit(&fx.author, "r.rs", "r");
+    git(&fx.author, &["push", "-q", "origin", "remote-only"]);
+    git(&fx.author, &["checkout", "-q", "main"]);
+    git(&fx.clone, &["fetch", "-q", "origin"]);
+    git(&fx.clone, &["checkout", "-q", "--detach", "main"]);
+    let detached = commit(&fx.clone, "d.rs", "d");
+    git(&fx.clone, &["checkout", "-q", "main"]);
+    for (head, want) in [
+        ("origin/remote-only", remote_tip.as_str()),
+        (detached.as_str(), detached.as_str()),
+    ] {
+        let prepared = fx
+            .with(|c| {
+                c.prepare_new(&NewReview {
+                    head_ref: head.into(),
+                    base_input: Some("main".into()),
+                    ..NewReview::default()
+                })
+            })
+            .unwrap_or_else(|e| panic!("{head}: {e}"));
+        assert_eq!(prepared.head_sha, want, "{head}");
+        let id = fx
+            .store
+            .create_review(REPO, None, &prepared.base_ref, head, None, 1)
+            .unwrap();
+        let review = fx.refetch(id);
+        let out = fx
+            .with(|c| {
+                c.capture(
+                    &review,
+                    &EffectiveBase::Policy(prepared.policy.clone()),
+                    &CaptureOpts {
+                        force: true,
+                        kind_hint: None,
+                    },
+                )
+            })
+            .unwrap_or_else(|e| panic!("{head}: {e}"));
+        assert_eq!(out.ps.tip_sha, want, "{head}");
+    }
+}
+
+/// Fix 5 — a vanished tracked base: `set_by=auto` re-resolves (retarget),
+/// a user base on an explicit fetch is a typed 409.
+#[test]
+fn a_vanished_base_is_reresolved_when_auto_and_refused_when_user_set() {
+    let fx = fixture();
+    fx.push_pr(&fx.m1, &["a.rs"], "v1");
+    git(
+        &fx.author,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{}:refs/heads/release", fx.m1),
+        ],
+    );
+    let auto = BasePolicy::track("release", SetBy::Auto, BaseSource::ForgeApi);
+    let ra = fx.pr_review("refs/remotes/origin/release", Some(&auto));
+    // The user-set one is a non-PR review of a member branch.
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    commit(&fx.clone, "f.rs", "f");
+    let id_u = fx
+        .store
+        .create_review(
+            REPO,
+            None,
+            "refs/remotes/origin/release",
+            "feature",
+            None,
+            1,
+        )
+        .unwrap();
+    fx.store
+        .set_review_base(id_u, "track", Some("release"), None, "user", None)
+        .unwrap();
+    let ru = fx.refetch(id_u);
+    recap(&fx, ra.id, fetch());
+    recap(&fx, ru.id, fetch());
+    git(&fx.author, &["push", "-q", "origin", ":refs/heads/release"]);
+
+    let r = recap(&fx, ra.id, fetch());
+    assert!(r.retargeted);
+    assert!(
+        codes(&r.warnings).contains(&warn::BASE_VANISHED),
+        "{:?}",
+        r.warnings
+    );
+    assert_eq!(
+        r.effective.policy().unwrap().branch.as_deref(),
+        Some("main")
+    );
+    let b = fx.store.get_review_base(ra.id).unwrap().unwrap();
+    assert_eq!(b.base_branch.as_deref(), Some("main"));
+
+    let review_u = fx.refetch(ru.id);
+    let err = fx.with(|c| c.recapture(&review_u, &fetch())).unwrap_err();
+    assert_eq!(err.urn, URN_BASE_VANISHED, "{err}");
+    let b = fx.store.get_review_base(ru.id).unwrap().unwrap();
+    assert_eq!(
+        (b.base_branch.as_deref(), b.base_set_by.as_str()),
+        (Some("release"), "user"),
+        "a user-set base is never changed"
+    );
+}
+
+/// Fix 8 — with no forge, an ambiguous default branch REFUSES instead of
+/// taking whatever is checked out.
+#[test]
+fn no_forge_default_branch_refuses_when_ambiguous() {
+    let fx = fixture_with(true);
+    assert_eq!(fx.with(|c| c.forge()), capture::Forge::None);
+    git(&fx.clone, &["branch", "master", "main"]);
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    let err = fx
+        .with(|c| c.default_branch(None, Some("feature")))
+        .unwrap_err();
+    assert_eq!(err.urn, URN_BASE_UNDETERMINED, "{err}");
+    git(&fx.clone, &["branch", "-D", "master"]);
+    let (b, w) = fx
+        .with(|c| c.default_branch(None, Some("feature")))
+        .unwrap();
+    assert_eq!(b, "main");
+    assert_eq!(codes(&w), vec![warn::DEFAULT_BRANCH_GUESSED]);
+}
+
+/// A daemon state over the fixture's clone, with its store seeded.
+async fn route_state(fx: &Fx) -> crate::state::SharedState {
+    route_state_with(fx, crate::config::GithubSection::default()).await
+}
+
+async fn route_state_with(
+    fx: &Fx,
+    github: crate::config::GithubSection,
+) -> crate::state::SharedState {
+    let cfg = crate::config::KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: REPO.into(),
+            path: fx.clone.clone(),
+        }],
+        kb_daemon: crate::config::KbDaemonSection {
+            enabled: false,
+            url: Some("http://127.0.0.1:0".to_string()),
+            token_file: None,
+            public_url: None,
+        },
+        transcripts: crate::config::TranscriptsSection {
+            enabled: false,
+            ..crate::config::TranscriptsSection::default()
+        },
+        github,
+        ..crate::config::KbCodeConfig::default()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "kb-code");
+    // Leak the tempdir for the test's lifetime (the state outlives this fn).
+    std::mem::forget(tmp);
+    let state = crate::build_state_for_test(cfg, paths).await.unwrap();
+    let st = state.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Registration::Member { store_id, .. } =
+            st.review_stores.register_repo(&st.store, REPO, None)
+        {
+            let _ = st.review_stores.seed(&st.store, store_id, false);
+        }
+    })
+    .await
+    .unwrap();
+    state
+}
+
+const TOKEN_ALICE: &str = "ghp_FAKEaliceAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+/// A fake `gh` answering `auth status`/`auth token` for one account.
+fn fake_gh(dir: &Path, login: &str) -> crate::review_store::GhCli {
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1 $2" = "auth status" ]; then
+  echo '{{"hosts":{{"github.com":[{{"state":"success","active":true,"host":"github.com","login":"{login}","tokenSource":"keyring","scopes":"repo","gitProtocol":"https"}}]}}}}'
+  exit 0
+fi
+if [ "$1 $2" = "auth token" ]; then echo "{TOKEN_ALICE}"; exit 0; fi
+exit 2
+"#
+    );
+    let p = dir.join("gh");
+    std::fs::write(&p, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // ETXTBSY guard: a sibling test's fork may briefly hold the write fd.
+    for _ in 0..200 {
+        match Command::new(&p).arg("--warmup").output() {
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(10))
+            }
+            _ => break,
+        }
+    }
+    crate::review_store::GhCli::from_env_fn(p, |k| match k {
+        "PATH" => Some("/usr/bin:/bin".into()),
+        _ => None,
+    })
+}
+
+/// Fixes 6 + 7 + deviation 3's follow-up — on the store path the forge API
+/// is read for the STORE's project (never a fork `origin`), with the
+/// daemon's gh-cli token (never visible in the client's Debug form), and a
+/// gh account that is not the recorded one is a
+/// `credential-account-mismatch` warning, never a silent fall-through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
+    use axum::extract::Path as AxumPath;
+    use axum::http::HeaderMap;
+    use std::sync::{Arc, Mutex};
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    // origin = a personal FORK; the store's project is acme/widgets.
+    git(
+        &fx.clone,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/someone/widgets.git",
+        ],
+    );
+    type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
+    let seen: Seen = Arc::default();
+    let seen2 = seen.clone();
+    let router = axum::Router::new().route(
+        "/repos/{owner}/{name}/pulls/{n}",
+        axum::routing::get(
+            move |AxumPath((owner, name, _n)): AxumPath<(String, String, u64)>,
+                  headers: HeaderMap| {
+                let seen = seen2.clone();
+                async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    seen.lock().unwrap().push((format!("{owner}/{name}"), auth));
+                    let base = if owner == "acme" {
+                        "release"
+                    } else {
+                        "fork-main"
+                    };
+                    axum::Json(serde_json::json!({
+                        "number": 7, "title": "t", "user": {"login": "someone"},
+                        "head": {"ref": "feature", "sha": "deadbeef"},
+                        "base": {"ref": base},
+                        "updated_at": "2024-01-01T00:00:00Z", "draft": false,
+                        "state": "open", "merged": false, "labels": []
+                    }))
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let github = crate::config::GithubSection {
+        token_file: None,
+        api_base: format!("http://{addr}"),
+    };
+    let cfg = crate::config::KbCodeConfig {
+        repos: vec![RepoEntry {
+            name: REPO.into(),
+            path: fx.clone.clone(),
+        }],
+        kb_daemon: crate::config::KbDaemonSection {
+            enabled: false,
+            url: Some("http://127.0.0.1:0".to_string()),
+            token_file: None,
+            public_url: None,
+        },
+        transcripts: crate::config::TranscriptsSection {
+            enabled: false,
+            ..crate::config::TranscriptsSection::default()
+        },
+        github,
+        ..crate::config::KbCodeConfig::default()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "kb-code");
+    let state = crate::build_state_for_test(cfg, paths).await.unwrap();
+    if state.github.has_ambient_token() {
+        eprintln!("skipped: a GitHub token is configured in this environment");
+        return;
+    }
+    let st = state.clone();
+    let row = tokio::task::spawn_blocking(move || {
+        let reg = st.review_stores.register_repo(
+            &st.store,
+            REPO,
+            Some("https://github.com/acme/widgets.git"),
+        );
+        assert!(matches!(reg, Registration::Member { .. }), "{reg:?}");
+        st.store.store_for_repo_name(REPO).unwrap().unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(row.forge_slug.as_deref(), Some("acme/widgets"));
+    let handle = crate::review_store::StoreHandle {
+        id: row.id,
+        uuid: row.uuid.clone(),
+        git_dir: PathBuf::from(&row.git_dir),
+        store_key: row.store_key.clone(),
+        base_url: row.base_url.clone(),
+        forge_kind: row.forge_kind.clone(),
+    };
+
+    let gh_dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(gh_dir.path(), "alice");
+    let (client, warnings) = crate::reviews::github_with_gh_cli_warned(
+        &state,
+        state.github.with_cli_token(None),
+        &handle,
+        REPO,
+        gh.clone(),
+    )
+    .await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(
+        !format!("{client:?}").contains("ghp_"),
+        "the token must never appear in Debug output"
+    );
+    let (base, warnings) = crate::reviews::forge_pr_base_ref(
+        &state,
+        &handle,
+        REPO,
+        7,
+        state.github.with_cli_token(None),
+        gh,
+    )
+    .await;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        base.as_deref(),
+        Some("release"),
+        "the store's project, not the fork"
+    );
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, "acme/widgets");
+        assert_eq!(
+            seen[0].1.as_deref(),
+            Some(format!("Bearer {TOKEN_ALICE}").as_str())
+        );
+    }
+
+    // D12: the store recorded `alice`; gh now answers as `mallory`.
+    let st = state.clone();
+    let id = row.id;
+    tokio::task::spawn_blocking(move || {
+        st.store
+            .set_review_store_credential(id, "gh-cli", None, Some("alice"))
+            .unwrap();
+    })
+    .await
+    .unwrap();
+    let gh_dir2 = tempfile::tempdir().unwrap();
+    let (_, warnings) = crate::reviews::forge_pr_base_ref(
+        &state,
+        &handle,
+        REPO,
+        7,
+        state.github.with_cli_token(None),
+        fake_gh(gh_dir2.path(), "mallory"),
+    )
+    .await;
+    assert_eq!(
+        codes(&warnings),
+        vec![warn::CREDENTIAL_ACCOUNT_MISMATCH],
+        "{warnings:?}"
+    );
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen.iter().skip(1).all(|(_, auth)| auth.is_none()),
+        "no token is sent when the account does not match: {seen:?}"
+    );
 }

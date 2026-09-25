@@ -6411,9 +6411,29 @@ pub async fn prs_fetch_route(
     // an open review bound to this PR gets its `pr_head_sha` synced.
     if let Some(handle) = crate::reviews::admit_store(&state, &body.repo).await? {
         let member = crate::reviews::store_member(&state, &body.repo)?;
+        let repo_for_base = body.repo.clone();
+        let root_for_base = repo.path.clone();
         let rep = crate::reviews::with_store_ctx(&state, handle, member, move |ctx| {
+            // README §5.3: `pr fetch` fetches the base with the PR head —
+            // the tracked base branch of the open review bound to this PR,
+            // if any, in the same fetch.
+            let branches: Vec<String> = ctx
+                .store
+                .get_review_by_pr_binding(&repo_for_base, number as i64)
+                .ok()
+                .flatten()
+                .filter(|r| r.state == "open")
+                .map(|r| crate::reviews::review_base_block(ctx.store, &r, &root_for_base, None).0)
+                .filter(|b| b.mode.as_deref() == Some("track"))
+                .and_then(|b| b.branch)
+                .into_iter()
+                .collect();
             let access = ctx.access();
-            ctx.fetch_forge(access.as_ref().map_err(String::as_str), &[], Some(number))
+            ctx.fetch_forge(
+                access.as_ref().map_err(String::as_str),
+                &branches,
+                Some(number),
+            )
         })
         .await?;
         let Some(sha) = rep.pr_head else {

@@ -52,7 +52,7 @@ use crate::review_store::git::{
 };
 use crate::review_store::key::store_key_for_url;
 use crate::review_store::registry::{ReviewStores, StoreHandle};
-use crate::review_store::seed::{self, SeedMember};
+use crate::review_store::seed;
 use crate::review_store::url::{FetchRefspec, RefName, RefSource, RemoteName, RemoteUrl};
 use crate::reviews::{self, KbcRef, ReviewGitError};
 use crate::store::{ReviewPatchsetRow, ReviewRow, ReviewStoreRow, Store};
@@ -408,7 +408,9 @@ pub struct NewReview {
     /// Non-PR: the caller's head ref.
     pub head_ref: String,
     pub pr: Option<u32>,
-    /// The `--base` grammar input.
+    /// The `--base` grammar input — ONLY a caller-supplied `--base`; an
+    /// auto-detected answer never rides here (it would be recorded as
+    /// `set_by=user`, `source=explicit`).
     pub base_input: Option<String>,
     /// Forge API `base.ref` (read by the async caller).
     pub forge_base_ref: Option<String>,
@@ -416,6 +418,10 @@ pub struct NewReview {
     pub caller_base_ref: Option<String>,
     /// The PR's head branch (API `head.ref`), excluded from every rung.
     pub pr_head_branch: Option<String>,
+    /// Non-PR: the stack-parent rung's answer (`branch review`'s own stack
+    /// ladder, `history::stacks`), recorded `local(parent)`, `auto`,
+    /// `stack-parent`.
+    pub stack_parent: Option<String>,
 }
 
 /// An existing review's re-capture.
@@ -430,6 +436,10 @@ pub struct Recapture {
     pub kind_hint: Option<PatchsetKind>,
     /// Replace the policy (an explicit re-base); persisted with the capture.
     pub policy_override: Option<BasePolicy>,
+    /// Warnings the async caller collected while reading the forge API
+    /// (e.g. `credential-account-mismatch`, D12) — carried onto the
+    /// envelope and into `base_status.code`.
+    pub api_warnings: Vec<BaseWarningOut>,
 }
 
 /// What [`StoreCtx::recapture`] did.
@@ -480,9 +490,43 @@ pub fn status_after(
     }
 }
 
+/// How long a cached forge default branch (`ls-remote --symref`) is
+/// trusted before it is probed again.
+pub const DEFAULT_BRANCH_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// The scratch hint branch (`refs/kbc/hint/<repo_id>/<name>`) a head or
+/// base that is neither a local nor a remote-tracking branch of the member
+/// (a sha, a tag, an expression) is imported into BY SHA — one per role,
+/// overwritten each time; the patchset refs pin whatever a capture keeps.
+const SCRATCH_HEAD: &str = "_head";
+const SCRATCH_BASE: &str = "_base";
+
 struct StoreProbe<'a, 'b> {
     ctx: &'b StoreCtx<'a>,
     mapped: Vec<String>,
+    access: std::cell::OnceCell<Result<Access, String>>,
+}
+
+impl<'a, 'b> StoreProbe<'a, 'b> {
+    fn new(ctx: &'b StoreCtx<'a>) -> Self {
+        Self {
+            ctx,
+            mapped: ctx.mapped_remotes(),
+            access: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The forge access, resolved once and only when something needs it
+    /// (the credential ladder can run `gh`).
+    fn access(&self) -> Result<&Access, &str> {
+        self.access
+            .get_or_init(|| match self.ctx.forge() {
+                Forge::None => Err("no-base-remote".to_string()),
+                _ => self.ctx.access(),
+            })
+            .as_ref()
+            .map_err(String::as_str)
+    }
 }
 
 impl BaseProbe for StoreProbe<'_, '_> {
@@ -496,7 +540,8 @@ impl BaseProbe for StoreProbe<'_, '_> {
             .is_some()
     }
     fn remote_branch_exists(&self, b: &str) -> bool {
-        self.ctx
+        if self
+            .ctx
             .store_sha(&format!("refs/remotes/base/{b}"))
             .is_some()
             || self.mapped.iter().any(|m| {
@@ -505,6 +550,15 @@ impl BaseProbe for StoreProbe<'_, '_> {
                     .and_then(|r| reviews::resolve_commit_sha(&self.ctx.work_root(), &r).ok())
                     .is_some()
             })
+        {
+            return true;
+        }
+        // Not fetched yet: ask the forge (fetch-then-track, never a 400 for
+        // a branch that exists upstream but was never fetched here).
+        match self.access() {
+            Ok(a) => self.ctx.forge_has_branch(a, b),
+            Err(_) => false,
+        }
     }
     fn resolve_rev(&self, rev: &Revspec) -> Option<String> {
         reviews::resolve_commit_sha(&self.ctx.work_root(), rev)
@@ -512,6 +566,12 @@ impl BaseProbe for StoreProbe<'_, '_> {
             .or_else(|| reviews::resolve_commit_sha(&self.ctx.root(), rev).ok())
     }
 }
+
+/// The fixed per-invocation SOURCE-side override that lets a local fetch
+/// ask a member clone for an object by id (same flag seeding's by-sha
+/// recovery uses; nothing is written to the member's config).
+const UPLOAD_PACK_ANY_SHA: &str =
+    "--upload-pack=git -c uploadpack.allowAnySHA1InWant=true upload-pack";
 
 impl<'a> StoreCtx<'a> {
     pub fn git(&self) -> Result<&'a StoreGit, BaseError> {
@@ -536,7 +596,9 @@ impl<'a> StoreCtx<'a> {
         reviews::member_remotes(&self.work_root())
     }
 
-    /// Where `base` fetches from.
+    /// Where `base` fetches from. A local-path "forge" is admitted ONLY for
+    /// a `local:` store — a networked store never fetches `base/*` from a
+    /// path.
     pub fn forge(&self) -> Forge {
         if let Some(u) = self
             .handle
@@ -545,6 +607,9 @@ impl<'a> StoreCtx<'a> {
             .and_then(|u| RemoteUrl::parse_remote(u).ok())
         {
             return Forge::Network(u);
+        }
+        if !crate::review_store::key::is_local_key(&self.handle.store_key) {
+            return Forge::None;
         }
         match local_forge_path(&self.member_remotes()) {
             Some((_, p)) => Forge::Local(p),
@@ -613,6 +678,24 @@ impl<'a> StoreCtx<'a> {
         }
     }
 
+    /// Does the forge have branch `b`? (`ls-remote base refs/heads/<b>`.)
+    fn forge_has_branch(&self, access: &Access, b: &str) -> bool {
+        let (Ok(git), Some(auth), Ok(r)) = (self.git(), access.auth(), RefName::branch(b)) else {
+            return false;
+        };
+        let args = GitArgs::new("ls-remote")
+            .end_of_options()
+            .remote(&RemoteName::base())
+            .refname(&r);
+        git.run(
+            GitCall::new("ls-remote", args)
+                .git_dir(&self.handle.git_dir)
+                .auth(auth)
+                .timeout(LS_REMOTE_TIMEOUT),
+        )
+        .is_ok_and(|o| !o.stdout_str().trim().is_empty())
+    }
+
     /// Fetch base `branches` (+ PR `pr`'s head) from `base` into the store,
     /// under the `base` fetch lock (README §5.3).
     pub fn fetch_forge(
@@ -648,13 +731,15 @@ impl<'a> StoreCtx<'a> {
             }
         }
         let mut pr_error = None;
+        let mut pr_spec = false;
         if let Some(n) = pr {
             match pr_head_source(self.handle.forge_kind.as_deref(), n)
                 .and_then(|s| RefName::parse(&s).ok())
                 .zip(RefName::parse(&reviews::pr_ref(n)).ok())
             {
                 Some((src, dst)) => {
-                    specs.push((FetchRefspec::new(true, RefSource::Ref(src), dst), None))
+                    specs.push((FetchRefspec::new(true, RefSource::Ref(src), dst), None));
+                    pr_spec = true;
                 }
                 None => pr_error = Some("pr-refs-unsupported".to_string()),
             }
@@ -676,92 +761,185 @@ impl<'a> StoreCtx<'a> {
             pr_error,
             ..FetchReport::default()
         };
+        // The PR head counts as refreshed ONLY when a fetch that carried
+        // its refspec succeeded — never inferred from "no error recorded".
+        let mut pr_fetched = false;
+        let fail_state = |e: &crate::review_store::StoreGitError| {
+            if e.class.is_transient() {
+                "offline"
+            } else {
+                "failed"
+            }
+        };
         match git.fetch(dir, &base, &all, auth, BASE_FETCH_TIMEOUT) {
-            Ok(_) => report.state = "fetched".into(),
+            Ok(_) => {
+                report.state = "fetched".into();
+                pr_fetched = pr_spec;
+            }
             Err(e) if e.class == crate::review_store::FailureClass::Vanished => {
                 // One by one, so a missing ref never blocks the rest.
                 report.state = "fetched".into();
                 for (spec, label) in &specs {
-                    match git.fetch(
-                        dir,
-                        &base,
-                        std::slice::from_ref(spec),
-                        auth,
-                        BASE_FETCH_TIMEOUT,
+                    match (
+                        git.fetch(
+                            dir,
+                            &base,
+                            std::slice::from_ref(spec),
+                            auth,
+                            BASE_FETCH_TIMEOUT,
+                        ),
+                        label,
                     ) {
-                        Ok(_) => {}
-                        Err(e) if e.class == crate::review_store::FailureClass::Vanished => {
-                            match label {
-                                Some(b) => report.vanished.push(b.clone()),
-                                None => report.pr_error = Some("pr-not-found".into()),
-                            }
+                        (Ok(_), None) => pr_fetched = true,
+                        (Ok(_), Some(_)) => {}
+                        (Err(e), Some(b))
+                            if e.class == crate::review_store::FailureClass::Vanished =>
+                        {
+                            report.vanished.push(b.clone())
                         }
-                        Err(e) => {
-                            report.state = if e.class.is_transient() {
-                                "offline".into()
-                            } else {
-                                "failed".into()
-                            };
+                        (Err(e), None)
+                            if e.class == crate::review_store::FailureClass::Vanished =>
+                        {
+                            report.pr_error = Some("pr-not-found".into())
+                        }
+                        (Err(e), label) => {
+                            report.state = fail_state(&e).into();
                             report.code = Some(e.slug().into());
+                            if label.is_none() {
+                                report.pr_error = Some(e.slug().into());
+                            }
                         }
                     }
                 }
             }
             Err(e) => {
-                report.state = if e.class.is_transient() {
-                    "offline".into()
-                } else {
-                    "failed".into()
-                };
+                report.state = fail_state(&e).into();
                 report.code = Some(e.slug().into());
-                if pr.is_some() {
+                if pr_spec {
                     report.pr_error = Some(e.slug().into());
                 }
             }
         }
-        if let Some(n) = pr {
-            if report.pr_error.is_none() {
-                report.pr_head = self.store_sha(&reviews::pr_ref(n));
-            }
+        if let (Some(n), true) = (pr, pr_fetched) {
+            report.pr_head = self.store_sha(&reviews::pr_ref(n));
         }
         report
     }
 
-    /// Import the member's heads (+ review refs) into `work-<id>` — a LOCAL
-    /// fetch, the only fetch auto-capture ever does (README §5.3).
-    pub fn import_work(&self) -> Result<(), BaseError> {
+    /// One LOCAL fetch from the member clone (`work-<id>`, `file` only)
+    /// under that member's fetch lock. `by_sha` = the source is an object
+    /// id (the source-side `allowAnySHA1InWant` override).
+    fn fetch_from_member(&self, spec: &FetchRefspec, by_sha: bool) -> Result<(), BaseError> {
         let git = self.git()?;
-        let common = seed::common_dir_of(&self.member.root).map_err(|e| {
+        let fail = |detail: String| {
             BaseError::new(
-                500,
+                409,
                 URN_HEAD_UNAVAILABLE,
-                format!("the member clone is not a git repository: {}", e.kind()),
+                format!("importing from the member clone into the review store failed ({detail})"),
             )
-        })?;
-        let lock = self
-            .rs
-            .fetch_lock(self.handle.id, &RemoteName::work(self.member.id));
+        };
+        let common = seed::common_dir_of(&self.member.root).map_err(|e| fail(e.to_string()))?;
+        git.allow_local_source(&common)
+            .map_err(|e| fail(e.to_string()))?;
+        let remote = RemoteName::work(self.member.id);
+        let url = RemoteUrl::local_seed(&common).map_err(|e| fail(e.to_string()))?;
+        let lock = self.rs.fetch_lock(self.handle.id, &remote);
         let _guard = lock.blocking_lock();
-        seed::import_member(
-            git,
-            &self.handle.git_dir,
-            &SeedMember {
-                repo_id: self.member.id,
-                common_dir: common,
-            },
-            WORK_FETCH_TIMEOUT,
+        git.configure_remote(&self.handle.git_dir, &remote, &url)
+            .map_err(|e| fail(e.slug().to_string()))?;
+        let mut args = GitArgs::new("fetch")
+            .flag("--no-tags")
+            .flag("--no-write-fetch-head")
+            .flag("--no-auto-gc")
+            .flag("--no-auto-maintenance")
+            .flag("--quiet");
+        if by_sha {
+            args = args.flag(UPLOAD_PACK_ANY_SHA);
+        }
+        let args = args.end_of_options().remote(&remote).refspec(spec);
+        git.run(
+            GitCall::new("fetch", args)
+                .git_dir(&self.handle.git_dir)
+                .auth(FetchAuth::LocalOnly)
+                .timeout(WORK_FETCH_TIMEOUT),
         )
         .map(|_| ())
-        .map_err(|e| {
-            BaseError::new(
-                500,
-                URN_HEAD_UNAVAILABLE,
-                format!(
-                    "importing the member's branches into the review store failed ({})",
-                    e.slug()
-                ),
-            )
-        })
+        .map_err(|e| fail(e.slug().to_string()))
+    }
+
+    /// Import the member's LOCAL branch `b` into `refs/remotes/work-<id>/b`
+    /// (a local fetch of exactly that branch — never `refs/kbc/*`, never
+    /// every head). `Ok(None)` when the member has no such branch.
+    pub fn import_branch(&self, b: &str) -> Result<Option<String>, BaseError> {
+        let Ok(src) = RefName::branch(b) else {
+            return Ok(None);
+        };
+        let Some(sha) = Revspec::parse(src.as_str())
+            .ok()
+            .and_then(|r| reviews::resolve_commit_sha(&self.work_root(), &r).ok())
+        else {
+            return Ok(None);
+        };
+        let dst = RefName::parse(&format!("refs/remotes/work-{}/{b}", self.member.id))
+            .map_err(|_| BaseError::unresolved(format!("{b:?} is not a valid branch name")))?;
+        self.fetch_from_member(&FetchRefspec::new(true, RefSource::Ref(src), dst), false)?;
+        Ok(Some(sha))
+    }
+
+    /// Import the commit a member-side rev names (README §5.3: explicit
+    /// actions import the head branch, auto-capture "the resolved tip
+    /// only"): a local branch → `work-<id>/<b>`; a remote-tracking branch
+    /// (`origin/feature`) → `refs/kbc/hint/<id>/origin/feature`; anything
+    /// else (a sha, a tag, an expression) by object id into the scratch
+    /// hint `scratch`. Never fetches `refs/kbc/*` from the clone. Returns
+    /// the full sha, which is then in the store.
+    fn import_rev(&self, rev: &str, scratch: &str) -> Result<String, BaseError> {
+        let unavailable = |m: String| BaseError::new(409, URN_HEAD_UNAVAILABLE, m);
+        let spec = reviews::parse_user_ref(rev)
+            .map_err(|_| unavailable(format!("{rev:?} is not a valid ref")))?;
+        let sha = reviews::resolve_commit_sha(&self.work_root(), &spec)
+            .map_err(|_| unavailable(format!("could not resolve {rev:?} in the member clone")))?;
+        if self.has_commit(&sha) {
+            return Ok(sha);
+        }
+        let full = reviews::symbolic_full_name(&self.work_root(), &spec);
+        match full.as_deref() {
+            Some(r) if r.starts_with("refs/heads/") => {
+                self.import_branch(&r["refs/heads/".len()..])?;
+            }
+            Some(r) if r.starts_with("refs/remotes/") => {
+                let rest = &r["refs/remotes/".len()..];
+                let (Ok(src), Some(dst)) = (
+                    RefName::parse(r),
+                    reviews::hint_ref(self.member.id, rest).and_then(|h| RefName::parse(&h).ok()),
+                ) else {
+                    return Err(unavailable(format!("{r:?} cannot be imported")));
+                };
+                self.fetch_from_member(&FetchRefspec::new(true, RefSource::Ref(src), dst), false)?;
+            }
+            _ => {
+                let (Ok(src), Some(dst)) = (
+                    RefSource::oid(&sha),
+                    reviews::hint_ref(self.member.id, scratch)
+                        .and_then(|h| RefName::parse(&h).ok()),
+                ) else {
+                    return Err(unavailable(format!("{sha} cannot be imported")));
+                };
+                self.fetch_from_member(&FetchRefspec::new(true, src, dst), true)?;
+            }
+        }
+        if self.has_commit(&sha) {
+            Ok(sha)
+        } else {
+            Err(unavailable(format!(
+                "{rev:?} ({sha}) could not be imported into the review store"
+            )))
+        }
+    }
+
+    /// Import a review's HEAD (non-PR) into the store; see [`Self::import_rev`].
+    pub fn import_head(&self, head_ref: &str) -> Result<String, BaseError> {
+        self.import_rev(head_ref, SCRATCH_HEAD)
     }
 
     /// `git ls-remote --symref base HEAD` → the forge's default branch.
@@ -793,26 +971,16 @@ impl<'a> StoreCtx<'a> {
         })
     }
 
+    /// The cached forge default branch, if it is younger than
+    /// [`DEFAULT_BRANCH_TTL_SECS`].
     fn cached_default_branch(&self) -> Option<String> {
         let row = self.store.get_review_store(self.handle.id).ok().flatten()?;
         let v: serde_json::Value = serde_json::from_str(row.state_json.as_deref()?).ok()?;
+        let at = v.get("default_branch_at")?.as_i64()?;
+        if now() - at > DEFAULT_BRANCH_TTL_SECS {
+            return None;
+        }
         v.get("default_branch")?.as_str().map(str::to_string)
-    }
-
-    fn cache_default_branch(&self, b: &str) {
-        let Ok(Some(row)) = self.store.get_review_store(self.handle.id) else {
-            return;
-        };
-        let mut v: serde_json::Value = row
-            .state_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .filter(serde_json::Value::is_object)
-            .unwrap_or_else(|| serde_json::json!({}));
-        v["default_branch"] = b.into();
-        let _ = self
-            .store
-            .set_review_store_state(row.id, &row.state, Some(&v.to_string()));
     }
 
     fn store_branches(&self, prefix: &'static str) -> Vec<String> {
@@ -829,9 +997,10 @@ impl<'a> StoreCtx<'a> {
     }
 
     /// The project's default branch (README §6): config → the forge's
-    /// `HEAD` (cached in the store) → exactly one of main/master/trunk/
-    /// develop → refuse. With no forge: config → one of the four in the
-    /// member → the member's current branch.
+    /// `HEAD` symref (cached in the store for a day) → exactly one of
+    /// main/master/trunk/develop, with `default-branch-guessed` → refuse.
+    /// With no forge the candidates are the member's own branches and the
+    /// ladder still REFUSES rather than taking whatever is checked out.
     pub fn default_branch(
         &self,
         access: Option<&Access>,
@@ -839,17 +1008,8 @@ impl<'a> StoreCtx<'a> {
     ) -> Result<(String, Vec<BaseWarningOut>), BaseError> {
         let cfg = self.rs.settings().repo(&self.member.name).default_branch;
         if matches!(self.forge(), Forge::None) {
-            let heads = self.store_branches_member();
-            return match pick_default_branch(cfg.as_deref(), None, &heads, head_branch) {
-                Ok(r) => Ok(r),
-                Err(e) => crate::git::GitRepo::open(&self.member.root)
-                    .ok()
-                    .and_then(|g| g.head_info().ok())
-                    .and_then(|h| h.branch)
-                    .filter(|b| valid_branch_name(b) && Some(b.as_str()) != head_branch)
-                    .map(|b| (b, vec![]))
-                    .ok_or(e),
-            };
+            let heads = reviews::member_branches(&self.work_root());
+            return pick_default_branch(cfg.as_deref(), None, &heads, head_branch);
         }
         let symref = if cfg.is_some() {
             None
@@ -857,27 +1017,15 @@ impl<'a> StoreCtx<'a> {
             self.cached_default_branch().or_else(|| {
                 let b = access.and_then(|a| self.probe_symref(a));
                 if let Some(b) = &b {
-                    self.cache_default_branch(b);
+                    let _ = self
+                        .store
+                        .set_review_store_default_branch(self.handle.id, b, now());
                 }
                 b
             })
         };
         let candidates = self.store_branches("refs/remotes/base/");
         pick_default_branch(cfg.as_deref(), symref.as_deref(), &candidates, head_branch)
-    }
-
-    fn store_branches_member(&self) -> Vec<String> {
-        let prefix = format!("refs/remotes/work-{}/", self.member.id);
-        let Ok(git) = self.git() else {
-            return vec![];
-        };
-        seed::list_refs(git, &self.handle.git_dir, &["refs/remotes/"])
-            .map(|rows| {
-                rows.into_iter()
-                    .filter_map(|(_, r)| r.strip_prefix(prefix.as_str()).map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     /// The head branch's `@{upstream}` as `(branch, maps_to_project)`. The
@@ -895,7 +1043,8 @@ impl<'a> StoreCtx<'a> {
             .map(|b| (b.to_string(), false))
     }
 
-    /// The base tip `T` an effective base resolves to in the store.
+    /// The base tip `T` an effective base resolves to in the store (no
+    /// fetch, no import — [`Self::capture`] imports first).
     pub fn base_tip(&self, eff: &EffectiveBase) -> Result<String, BaseError> {
         let unavailable = |what: String| BaseError::new(409, URN_BASE_UNAVAILABLE, what);
         match eff {
@@ -949,7 +1098,8 @@ impl<'a> StoreCtx<'a> {
     }
 
     /// The head tip: the fetched PR ref for a PR review, else the member's
-    /// ref resolved read-only in the clone and required to be in the store.
+    /// ref resolved read-only in the clone and required to be in the store
+    /// (no import — [`Self::import_head`] does that).
     pub fn head_tip(&self, head_ref: &str) -> Result<String, BaseError> {
         let unavailable = |m: String| BaseError::new(409, URN_HEAD_UNAVAILABLE, m);
         if let Some(n) = pr_of_head(head_ref) {
@@ -967,24 +1117,76 @@ impl<'a> StoreCtx<'a> {
             Ok(sha)
         } else {
             Err(unavailable(format!(
-                "{head_ref:?} ({sha}) is not reachable from any branch imported into the review store"
+                "{head_ref:?} ({sha}) is not in the review store"
             )))
         }
     }
 
+    /// Import what the base needs from the member (a `local` branch, a pin
+    /// or legacy rev not yet in the store). Fetch lock only; call BEFORE
+    /// taking the ops lock (fetch → ops, never the reverse).
+    fn import_base(&self, eff: &EffectiveBase) -> Result<(), BaseError> {
+        match eff {
+            EffectiveBase::Policy(p) => match p.mode {
+                BaseMode::Local if p.member.unwrap_or(self.member.id) == self.member.id => {
+                    if let Some(b) = &p.branch {
+                        self.import_branch(b)?;
+                    }
+                }
+                BaseMode::Pin => {
+                    if let Some(sha) = p.pin.as_deref().filter(|s| !self.has_commit(s)) {
+                        let _ = self.import_rev(sha, SCRATCH_BASE);
+                    }
+                }
+                _ => {}
+            },
+            EffectiveBase::Verbatim(r) => {
+                let _ = self.import_rev(r, SCRATCH_BASE);
+            }
+        }
+        Ok(())
+    }
+
     /// Capture under the `ops` lock: head and base are (re-)resolved inside
     /// it, so nothing GC reads can move between resolution and the write.
+    /// The member-side imports (head, `local` base) run first, under the
+    /// member's fetch lock only.
     pub fn capture(
         &self,
         review: &ReviewRow,
         eff: &EffectiveBase,
         opts: &CaptureOpts,
     ) -> Result<CaptureOutcome, BaseError> {
+        self.capture_with(review, eff, opts, |_| {})
+    }
+
+    fn capture_with(
+        &self,
+        review: &ReviewRow,
+        eff: &EffectiveBase,
+        opts: &CaptureOpts,
+        under_lock: impl FnOnce(&CaptureOutcome),
+    ) -> Result<CaptureOutcome, BaseError> {
+        let imported_head = match pr_of_head(&review.head_ref) {
+            Some(_) => None,
+            None => Some(self.import_head(&review.head_ref)?),
+        };
+        self.import_base(eff)?;
         let lock = self.rs.ops_lock(self.handle.id);
         let _guard = lock.blocking_lock();
-        let head = self.head_tip(&review.head_ref)?;
+        let head = match imported_head {
+            Some(sha) if self.has_commit(&sha) => sha,
+            Some(sha) => {
+                return Err(BaseError::new(
+                    409,
+                    URN_HEAD_UNAVAILABLE,
+                    format!("the head {sha} is no longer in the review store"),
+                ))
+            }
+            None => self.head_tip(&review.head_ref)?,
+        };
         let t = self.base_tip(eff)?;
-        capture_at(
+        let out = capture_at(
             self.store,
             self.bus,
             &self.root(),
@@ -995,20 +1197,17 @@ impl<'a> StoreCtx<'a> {
             opts,
             self.max_patchsets,
         )
-        .map_err(capture_error)
+        .map_err(capture_error)?;
+        under_lock(&out);
+        Ok(out)
     }
 
     /// Resolve + fetch a NEW review (README §6 chain, §5.3 create trigger).
     pub fn prepare_new(&self, nr: &NewReview) -> Result<Prepared, BaseError> {
-        self.import_work()?;
-        let mapped = self.mapped_remotes();
-        let probe = StoreProbe {
-            ctx: self,
-            mapped: mapped.clone(),
-        };
+        let probe = StoreProbe::new(self);
+        let mapped = probe.mapped.clone();
         let explicit = classify_base(nr.base_input.as_deref(), nr.pr.is_some(), &probe)?;
-        let forge = self.forge();
-        let has_forge = !matches!(forge, Forge::None);
+        let has_forge = !matches!(self.forge(), Forge::None);
         if nr.pr.is_some() && !has_forge {
             return Err(BaseError::new(
                 400,
@@ -1016,8 +1215,7 @@ impl<'a> StoreCtx<'a> {
                 "this repo has no forge remote to fetch PR refs from — review the branch with `kb-code review start <remote>/<branch>`",
             ));
         }
-        let access = if has_forge { Some(self.access()) } else { None };
-        let access_ok = access.as_ref().and_then(|a| a.as_ref().ok());
+        let access_ok = if has_forge { probe.access().ok() } else { None };
         let (policy, mut warnings) = match nr.pr {
             Some(_) => {
                 let head_branch = nr.pr_head_branch.clone();
@@ -1035,7 +1233,7 @@ impl<'a> StoreCtx<'a> {
                 let head_branch = branch_of_head(&nr.head_ref);
                 let chain = NonPrChain {
                     explicit: Some(explicit),
-                    stack_parent: None,
+                    stack_parent: nr.stack_parent.clone(),
                     upstream: self.upstream_of(head_branch.as_deref(), &mapped),
                     head_branch: head_branch.clone(),
                     has_forge,
@@ -1049,10 +1247,12 @@ impl<'a> StoreCtx<'a> {
             BaseMode::Track => policy.branch.iter().cloned().collect(),
             _ => vec![],
         };
-        let fetch = match &access {
-            None => FetchReport::skipped("no-base-remote"),
-            Some(_) if branches.is_empty() && nr.pr.is_none() => FetchReport::cached(),
-            Some(a) => self.fetch_forge(a.as_ref().map_err(String::as_str), &branches, nr.pr),
+        let fetch = if !has_forge {
+            FetchReport::skipped("no-base-remote")
+        } else if branches.is_empty() && nr.pr.is_none() {
+            FetchReport::cached()
+        } else {
+            self.fetch_forge(probe.access(), &branches, nr.pr)
         };
         warnings.extend(fetch.warnings());
         if let Some(b) = branches.first() {
@@ -1077,9 +1277,19 @@ impl<'a> StoreCtx<'a> {
                     ),
                 )
             })?,
-            None => self.head_tip(&nr.head_ref)?,
+            None => self.import_head(&nr.head_ref)?,
         };
         let eff = EffectiveBase::Policy(policy.clone());
+        if policy.mode == BaseMode::Local {
+            let b = policy.branch.as_deref().unwrap_or("");
+            if self.import_branch(b)?.is_none() {
+                return Err(BaseError::unresolved(format!(
+                    "the local base branch {b:?} does not exist in the member clone"
+                )));
+            }
+        } else {
+            self.import_base(&eff)?;
+        }
         let base_tip = self.base_tip(&eff)?;
         reviews::merge_base_sha(&self.root(), &base_tip, &head_sha).map_err(capture_error)?;
         let status = status_after(&fetch, &eff, &BaseStatus::default());
@@ -1095,16 +1305,16 @@ impl<'a> StoreCtx<'a> {
     }
 
     /// The `--base` grammar against this member + store (for `retrack`,
-    /// RS-U7): `Ok(policy: None)` = `auto`. Blocking.
+    /// RS-U7): `Ok(policy: None)` = `auto`. Blocking; may probe the forge
+    /// (`ls-remote`) for a bare branch name nothing local knows.
     pub fn classify(&self, input: Option<&str>, is_pr: bool) -> Result<Classified, BaseError> {
-        let probe = StoreProbe {
-            ctx: self,
-            mapped: self.mapped_remotes(),
-        };
+        let probe = StoreProbe::new(self);
         classify_base(input, is_pr, &probe)
     }
 
-    /// Persist a policy + status on review `id`.
+    /// Persist a policy + status on review `id` (the whole policy: mode,
+    /// branch, member, set_by). Callers that did NOT change the policy must
+    /// write only the status (`Store::set_review_base_status`).
     pub fn persist_policy(&self, id: i64, policy: &BasePolicy, status: &BaseStatus) {
         let _ = self.store.set_review_base(
             id,
@@ -1119,6 +1329,18 @@ impl<'a> StoreCtx<'a> {
     /// Re-capture an existing review in the store — snapshot, start-pr
     /// reuse, auto-capture (README §5.3 triggers; D13 dedup; D15
     /// retarget-follow for `set_by=auto`).
+    ///
+    /// Policy writes happen under the `ops` lock, and only when this call
+    /// changed the policy (override / retarget / legacy upgrade) AND the
+    /// stored policy is still the one it started from — a concurrent
+    /// retrack or retarget always wins. Otherwise only `base_status` is
+    /// written.
+    ///
+    /// A tracked base branch the forge no longer has: `set_by=auto` →
+    /// re-resolved through the chain (kind `retarget`); a user/legacy base
+    /// on an explicit fetch → 409 `base-vanished`; a not-yet-persisted
+    /// legacy upgrade → evaluated verbatim as before. Always a
+    /// `base-vanished` warning.
     pub fn recapture(&self, review: &ReviewRow, rc: &Recapture) -> Result<Recaptured, BaseError> {
         let base_row = self.store.get_review_base(review.id).ok().flatten();
         let binding = self
@@ -1140,6 +1362,17 @@ impl<'a> StoreCtx<'a> {
         let mapped = self.mapped_remotes();
         let prev_status =
             BaseStatus::parse(base_row.as_ref().and_then(|b| b.base_status.as_deref()));
+        let policy_key = |r: Option<&crate::store::ReviewBaseRow>| {
+            r.map(|b| {
+                (
+                    b.base_mode.clone(),
+                    b.base_branch.clone(),
+                    b.base_member,
+                    b.base_set_by.clone(),
+                )
+            })
+        };
+        let started_from = policy_key(base_row.as_ref());
         let class = effective_base(
             &review.base_ref,
             base_row.as_ref().and_then(|b| b.base_mode.as_deref()),
@@ -1154,8 +1387,8 @@ impl<'a> StoreCtx<'a> {
             meta_base.as_deref(),
             &mapped,
         );
-        let has_columns = base_row.as_ref().is_some_and(|b| b.base_mode.is_some());
         let mut warnings = class.warnings.clone();
+        warnings.extend(rc.api_warnings.iter().cloned());
         let mut kind_hint = rc.kind_hint;
         let mut persist = rc.policy_override.is_some();
         let mut retargeted = false;
@@ -1200,46 +1433,152 @@ impl<'a> StoreCtx<'a> {
             }
         }
         let has_forge = !matches!(self.forge(), Forge::None);
-        let fetch = if rc.network && has_forge {
-            let branches: Vec<String> = effective
-                .policy()
+        let access = (rc.network && has_forge).then(|| self.access());
+        let tracked = |e: &EffectiveBase| -> Vec<String> {
+            e.policy()
                 .filter(|p| p.mode == BaseMode::Track)
                 .and_then(|p| p.branch.clone())
                 .into_iter()
-                .collect();
-            let access = self.access();
-            self.fetch_forge(access.as_ref().map_err(String::as_str), &branches, pr)
-        } else {
-            FetchReport::cached()
+                .collect()
         };
+        let mut fetch = match &access {
+            Some(a) => {
+                self.fetch_forge(a.as_ref().map_err(String::as_str), &tracked(&effective), pr)
+            }
+            None => FetchReport::cached(),
+        };
+        // A tracked base branch the forge no longer has.
+        let mut vanished_branch = None;
+        if let Some(p) = effective.policy().cloned() {
+            if let Some(b) = p
+                .branch
+                .clone()
+                .filter(|b| p.mode == BaseMode::Track && fetch.vanished.contains(b))
+            {
+                vanished_branch = Some(b.clone());
+                warnings.push(warning(
+                    warn::BASE_VANISHED,
+                    format!("the base branch {b:?} no longer exists on the forge"),
+                ));
+                if class.upgraded && rc.policy_override.is_none() && !retargeted {
+                    // A legacy row whose upgrade never persisted: keep its
+                    // pre-upgrade behaviour, never persist onto a dead branch.
+                    effective = EffectiveBase::Verbatim(review.base_ref.clone());
+                } else if p.set_by == SetBy::Auto && rc.policy_override.is_none() {
+                    let access_ok = access.as_ref().and_then(|a| a.as_ref().ok());
+                    let head_branch = match pr {
+                        Some(_) => None,
+                        None => branch_of_head(&review.head_ref),
+                    };
+                    let api = rc
+                        .forge_base_ref
+                        .as_deref()
+                        .filter(|a| valid_branch_name(a) && *a != b)
+                        .map(|a| (a.to_string(), BaseSource::ForgeApi, vec![]));
+                    let next = api.or_else(|| {
+                        self.default_branch(access_ok, head_branch.as_deref())
+                            .ok()
+                            .filter(|(d, _)| *d != b)
+                            .map(|(d, w)| (d, BaseSource::DefaultAssumed, w))
+                    });
+                    let Some((nb, src, w)) = next else {
+                        return Err(BaseError::new(
+                            409,
+                            super::URN_BASE_VANISHED,
+                            format!(
+                                "the base branch {b:?} no longer exists on the forge and no other target could be resolved — pass --base <branch> (retrack)"
+                            ),
+                        ));
+                    };
+                    warnings.extend(w);
+                    warnings.push(warning(
+                        warn::RETARGETED,
+                        format!("the base {b:?} vanished; the review now tracks {nb:?}"),
+                    ));
+                    effective = EffectiveBase::Policy(BasePolicy::track(&nb, SetBy::Auto, src));
+                    kind_hint = Some(PatchsetKind::Retarget);
+                    persist = true;
+                    retargeted = true;
+                    if let Some(a) = &access {
+                        let again = self.fetch_forge(
+                            a.as_ref().map_err(String::as_str),
+                            std::slice::from_ref(&nb),
+                            None,
+                        );
+                        if again.vanished.contains(&nb) || !again.fetched() {
+                            return Err(BaseError::new(
+                                409,
+                                super::URN_BASE_VANISHED,
+                                format!("the base {b:?} vanished and its replacement {nb:?} could not be fetched"),
+                            ));
+                        }
+                        fetch.state = again.state;
+                        fetch.code = again.code;
+                    }
+                } else {
+                    return Err(BaseError::new(
+                        409,
+                        super::URN_BASE_VANISHED,
+                        format!(
+                            "the base branch {b:?} no longer exists on the forge — retrack the review: kb-code review retrack {} --base <branch>",
+                            review.id
+                        ),
+                    ));
+                }
+            }
+        }
         warnings.extend(fetch.warnings());
-        self.import_work()?;
         if let Some(sha) = &fetch.pr_head {
             let _ = self.store.set_review_pr_head_sha(review.id, sha);
         }
-        if class.upgraded && fetch.fetched() && rc.policy_override.is_none() {
+        if class.upgraded
+            && rc.policy_override.is_none()
+            && !retargeted
+            && vanished_branch.is_none()
+            && fetch.fetched()
+        {
             persist = true;
         }
-        let outcome = self.capture(
+        let mut status = status_after(&fetch, &effective, &prev_status);
+        if vanished_branch.is_some() && retargeted {
+            status.code = Some("base-vanished".into());
+        }
+        if rc
+            .api_warnings
+            .iter()
+            .any(|w| w.code == warn::CREDENTIAL_ACCOUNT_MISMATCH)
+        {
+            status.code = Some(warn::CREDENTIAL_ACCOUNT_MISMATCH.into());
+        }
+        let status_json = status.to_json();
+        let display = effective
+            .policy()
+            .map(|p| p.display_base_ref(mapped.first().map(String::as_str)));
+        let id = review.id;
+        let outcome = self.capture_with(
             review,
             &effective,
             &CaptureOpts {
                 force: rc.force,
                 kind_hint,
             },
+            |_| {
+                // Under the ops lock: re-read, then write.
+                let now_row = self.store.get_review_base(id).ok().flatten();
+                let unchanged = policy_key(now_row.as_ref()) == started_from;
+                match (persist && unchanged, effective.policy()) {
+                    (true, Some(p)) => {
+                        self.persist_policy(id, p, &status);
+                        if let Some(d) = &display {
+                            let _ = self.store.set_review_base_ref(id, d);
+                        }
+                    }
+                    _ => {
+                        let _ = self.store.set_review_base_status(id, &status_json);
+                    }
+                }
+            },
         )?;
-        let status = status_after(&fetch, &effective, &prev_status);
-        if let EffectiveBase::Policy(p) = &effective {
-            if persist || has_columns {
-                self.persist_policy(review.id, p, &status);
-            }
-            if persist {
-                let _ = self.store.set_review_base_ref(
-                    review.id,
-                    &p.display_base_ref(mapped.first().map(String::as_str)),
-                );
-            }
-        }
         Ok(Recaptured {
             outcome,
             effective,
