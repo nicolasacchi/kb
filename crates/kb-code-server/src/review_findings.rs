@@ -287,7 +287,7 @@ pub const FINDING_SLUG_PATTERN: &str = "f-[a-z0-9-]+";
 /// `pub(crate)` (V73-K1) — `review_doc::refs`'s `finding:` scheme and
 /// `review_doc::lint` validate against this exact predicate rather than a
 /// second copy of the pattern.
-pub(crate) fn is_valid_finding_slug(s: &str) -> bool {
+pub fn is_valid_finding_slug(s: &str) -> bool {
     match s.strip_prefix("f-") {
         Some(rest) if !rest.is_empty() => rest
             .chars()
@@ -321,13 +321,25 @@ fn kebab_case(title: &str) -> String {
     out
 }
 
+/// RS-U10a — the `f-<kebab>` slug kb derives from a finding title, exposed
+/// for `kb-code review compose --slugify` so an agent never re-implements
+/// it. ASCII-only by construction: every non-ASCII character (`à`, `ü`,
+/// emoji, CJK) is a separator, never sliced, so no title can panic it and
+/// every result satisfies [`is_valid_finding_slug`]. Deterministic — the
+/// same title always yields the same slug (uniquifying is the caller's
+/// job: [`derive_unique_slug`] against the store, or `--slugify` within a
+/// batch).
+pub fn slug_from_title(title: &str) -> String {
+    format!("f-{}", kebab_case(title))
+}
+
 /// `POST /api/reviews/{id}/findings`'s slug derivation: `f-<kebab>`,
 /// uniquified `-2`/`-3`… against every EXISTING finding on this review
 /// (superseded included — `idx_review_findings_review_slug` is unique
 /// across all rows regardless of supersession, so this must check the
 /// same universe that index enforces).
 fn derive_unique_slug(store: &Store, review_id: i64, title: &str) -> Result<String, ApiError> {
-    let base = format!("f-{}", kebab_case(title));
+    let base = slug_from_title(title);
     if store.get_review_finding(review_id, &base)?.is_none() {
         return Ok(base);
     }
@@ -2333,6 +2345,27 @@ mod tests {
         assert!(!is_valid_finding_slug(""));
         assert!(!is_valid_finding_slug("F-dedup"));
         assert_eq!(FINDING_SLUG_PATTERN, "f-[a-z0-9-]+");
+    }
+
+    #[test]
+    fn slug_from_title_is_ascii_and_panic_free_for_non_ascii_titles() {
+        // RS-U10a — non-ASCII titles (the à-panic class; the panic itself
+        // was `prose_refs`' byte tokenizer, fixed on the base) derive an
+        // ASCII slug here without ever slicing inside a character.
+        for (title, want) in [
+            ("Perché à rotto", "f-perch-rotto"),
+            ("Café déjà vu", "f-caf-d-j-vu"),
+            ("Größe über alles", "f-gr-e-ber-alles"),
+            ("🔥 hot path 🔥", "f-hot-path"),
+            ("数据库 N+1 查询", "f-n-1"),
+            ("à", "f-finding"),
+            ("", "f-finding"),
+        ] {
+            let got = slug_from_title(title);
+            assert_eq!(got, want, "{title:?}");
+            assert!(got.is_ascii(), "{got:?}");
+            assert!(is_valid_finding_slug(&got), "{got:?}");
+        }
     }
 
     #[test]

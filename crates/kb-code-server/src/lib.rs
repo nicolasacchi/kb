@@ -448,6 +448,8 @@ pub mod review_store;
 pub mod review_sweep;
 pub mod review_timeline;
 pub mod review_turns;
+// RS-U10a — the review's own git views (diff/log/cat) + PR lookup.
+pub mod review_views;
 pub mod reviews;
 pub mod router;
 pub mod routes;
