@@ -15,6 +15,18 @@ pub const DEFAULT_ROOT_DIR: &str = "git";
 /// `HOME` for scrubbed store git calls — always under the state dir, never
 /// under the (overridable) store root (design §3.1).
 pub const GIT_HOME_DIR: &str = "git-home";
+/// RS-U9 (README §5.4/§8) — where `store-<uuid>-<ts>.bundle` backups land.
+/// Always under the daemon's state dir, same "never under the overridable
+/// store root" rule as [`GIT_HOME_DIR`] (a bundle must survive `store rm`/a
+/// bad `[review.store] root`).
+pub const BACKUPS_DIR_NAME: &str = "backups";
+/// RS-U9 — the restore-guard sentinel's file name. Lives beside
+/// `backup.marker`/`index.db` (the daemon's state dir, NOT under
+/// `[review.store] root`), on purpose: restoring the sqlite volume alone
+/// can never also roll this file back, which is exactly the asymmetry the
+/// guard's epoch-rollback detector depends on (see
+/// `review_store::maint::restore_guard`'s module doc).
+pub const RESTORE_GUARD_FILE: &str = "review-store-restore-guard.json";
 
 /// `[[review.repos]] forge`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -99,6 +111,11 @@ pub struct RepoStoreSettings {
 pub struct StoreSettings {
     pub root: PathBuf,
     pub git_home: PathBuf,
+    /// RS-U9 — `<state>/backups/`; see [`BACKUPS_DIR_NAME`].
+    pub backups_dir: PathBuf,
+    /// RS-U9 — `<state>/review-store-restore-guard.json`; see
+    /// [`RESTORE_GUARD_FILE`].
+    pub restore_guard_path: PathBuf,
     pub seed_on_boot: bool,
     pub allow_inherited_credentials: bool,
     pub repos: BTreeMap<String, RepoStoreSettings>,
@@ -184,6 +201,8 @@ impl StoreSettings {
         }
         Self {
             git_home: state_dir.join(GIT_HOME_DIR),
+            backups_dir: state_dir.join(BACKUPS_DIR_NAME),
+            restore_guard_path: state_dir.join(RESTORE_GUARD_FILE),
             root,
             seed_on_boot: review.store.seed_on_boot,
             allow_inherited_credentials: review.store.allow_inherited_credentials,

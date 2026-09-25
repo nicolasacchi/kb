@@ -1235,6 +1235,13 @@ pub async fn bind_and_spawn(
     // never awaited (no git I/O on the boot critical path).
     let _review_store_boot = review_store::boot::spawn_boot_job(state.clone());
 
+    // RS-U9 — the scheduled store maintenance worker (README §5.4):
+    // daily/weekly/monthly git housekeeping, the store-wide GC + ref
+    // invariant pass, jittered, under each store's own ops lock. Spawned
+    // UNCONDITIONALLY (idles out internally when the store is disabled),
+    // never on the boot critical path.
+    let _review_store_maint = review_store::maint::spawn_maintenance_worker(state.clone());
+
     // DCB W3.A — the doc_refs reverse-index sync. Spawned UNCONDITIONALLY,
     // deciding internally whether to idle out (`sync_interval_secs == 0`),
     // the same shape as `spawn_auto_capture_worker`'s own

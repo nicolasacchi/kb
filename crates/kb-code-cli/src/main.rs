@@ -25834,6 +25834,21 @@ fn backup_cmd(db: Option<&std::path::Path>, json: bool) -> Result<()> {
     // no sqlite dependency of its own.
     let receipt =
         kb_code_server::backup::take_at_current_epoch(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
+    // RS-U9 — also bundle-back up every `ready` review store (README
+    // §5.4/§8: "on ... `kb-code backup`"). Best-effort and side-channel
+    // only: a git-bundle failure never fails this command, and `--json`'s
+    // OUTPUT SHAPE stays exactly `receipt` (additive-only — bundle results
+    // go to stderr/stdout human lines, never into the JSON document).
+    let bundle_report = kb_code_server::review_store::maint::backup_all_ready_stores_at(&db);
+    match &bundle_report {
+        Ok(r) if !json && !r.stores.is_empty() => {
+            let written = r.stores.iter().filter(|s| s.written.is_some()).count();
+            let errored = r.stores.iter().filter(|s| s.error.is_some()).count();
+            println!("review stores: {written} bundle(s) written, {errored} error(s)");
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("warning: review-store bundle backup skipped: {e}"),
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&receipt)?);
         return Ok(());
