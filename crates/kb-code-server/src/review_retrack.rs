@@ -163,6 +163,7 @@ fn retrack_sync(
     base_input: Option<&str>,
     is_pr: bool,
     forge_base_ref: Option<&str>,
+    api_warnings: Vec<BaseWarningOut>,
     dry_run: bool,
 ) -> Result<RetrackOutcome, BaseError> {
     let mapped = ctx.mapped_remotes();
@@ -185,6 +186,10 @@ fn retrack_sync(
     let pr_number = pr_of_head(&review.head_ref);
 
     if dry_run {
+        // The apply branch below carries these into `Recapture::
+        // api_warnings` instead, so `recapture`'s own merge doesn't
+        // duplicate them into `r.warnings`.
+        warnings.extend(api_warnings.iter().cloned());
         let has_forge = !matches!(ctx.forge(), Forge::None);
         if has_forge {
             let branches: Vec<String> = if policy.mode == BaseMode::Track {
@@ -200,10 +205,17 @@ fn retrack_sync(
             );
             warnings.extend(fetch.warnings());
         }
-        // Local mode needs the store's `work-<id>` mirror fresh too.
-        let _ = ctx.import_work();
-
+        // Mirrors `StoreCtx::capture_with`'s own two import calls (the
+        // ONLY other path that resolves `base_tip`/`head_tip`), since a
+        // dry run never reaches `capture`/`capture_with` itself: the
+        // review's own head (non-PR only — a PR's head comes from the
+        // fetch above) and whatever the TARGET policy needs (a `local`
+        // branch, or a pin/legacy rev not yet in the store).
+        if pr_number.is_none() {
+            ctx.import_head(&review.head_ref)?;
+        }
         let eff = EffectiveBase::Policy(policy.clone());
+        ctx.import_base(&eff)?;
         let target_tip = ctx.base_tip(&eff)?;
         let head_tip = ctx.head_tip(&review.head_ref)?;
         let merge_base =
@@ -259,6 +271,7 @@ fn retrack_sync(
         // ALWAYS persists it (never relies on the `class.upgraded` path,
         // which is for legacy auto-upgrades, not a deliberate retrack).
         policy_override: Some(policy.clone()),
+        api_warnings,
     };
     let r = ctx.recapture(review, &rc)?;
     warnings.extend(r.warnings.clone());
@@ -341,8 +354,8 @@ pub async fn retrack_route(
         serde_json::from_slice(&raw)
             .map_err(|e| ApiError::bad_request(format!("invalid retrack body: {e}")))?
     };
-    let (review, repo, _) = require_review(&state, id).await?;
-    let outcome = retrack_one(&state, review, repo.clone(), body.base, body.dry_run).await?;
+    let (review, _repo, _) = require_review(&state, id).await?;
+    let outcome = retrack_one(&state, review, body.base, body.dry_run).await?;
     Ok((
         [(axum::http::header::CACHE_CONTROL, "no-store")],
         Json(outcome_json(&outcome, body.dry_run)),
@@ -352,7 +365,6 @@ pub async fn retrack_route(
 async fn retrack_one(
     state: &SharedState,
     review: ReviewRow,
-    repo: RepoEntry,
     base_input: Option<String>,
     dry_run: bool,
 ) -> Result<RetrackOutcome, ApiError> {
@@ -361,11 +373,19 @@ async fn retrack_one(
         .ok_or_else(|| store_required(&review.repo))?;
     let member = store_member(state, &review.repo)?;
     let is_pr = pr_of_head(&review.head_ref).is_some();
-    let forge_base_ref = match pr_of_head(&review.head_ref) {
+    let (forge_base_ref, api_warnings) = match pr_of_head(&review.head_ref) {
         Some(n) => {
-            forge_pr_base_ref(state, &repo, &handle, n, state.github.with_cli_token(None)).await
+            forge_pr_base_ref(
+                state,
+                &handle,
+                &review.repo,
+                n,
+                state.github.with_cli_token(None),
+                crate::review_store::GhCli::from_process_env(),
+            )
+            .await
         }
-        None => None,
+        None => (None, vec![]),
     };
     let review2 = review.clone();
     let outcome = with_store_ctx(state, handle, member, move |ctx| {
@@ -375,6 +395,7 @@ async fn retrack_one(
             base_input.as_deref(),
             is_pr,
             forge_base_ref.as_deref(),
+            api_warnings,
             dry_run,
         )
     })
@@ -503,11 +524,18 @@ async fn retrack_all_for_repo(
     // Forge `base.ref` per PR-bound candidate — network, so gathered
     // BEFORE the one sequential sync pass below (spawn_blocking cannot
     // await).
-    let mut forge_refs: HashMap<i64, Option<String>> = HashMap::new();
+    let mut forge_refs: HashMap<i64, (Option<String>, Vec<BaseWarningOut>)> = HashMap::new();
     for review in &candidates {
         if let Some(n) = pr_of_head(&review.head_ref) {
-            let r =
-                forge_pr_base_ref(state, repo, &handle, n, state.github.with_cli_token(None)).await;
+            let r = forge_pr_base_ref(
+                state,
+                &handle,
+                &repo.name,
+                n,
+                state.github.with_cli_token(None),
+                crate::review_store::GhCli::from_process_env(),
+            )
+            .await;
             forge_refs.insert(review.id, r);
         }
     }
@@ -517,13 +545,15 @@ async fn retrack_all_for_repo(
             .into_iter()
             .map(|review| {
                 let is_pr = pr_of_head(&review.head_ref).is_some();
-                let forge_base_ref = forge_refs.get(&review.id).cloned().flatten();
+                let (forge_base_ref, api_warnings) =
+                    forge_refs.get(&review.id).cloned().unwrap_or_default();
                 let dry = match retrack_sync(
                     ctx,
                     &review,
                     None,
                     is_pr,
                     forge_base_ref.as_deref(),
+                    api_warnings.clone(),
                     true,
                 ) {
                     Ok(o) => o,
@@ -536,8 +566,15 @@ async fn retrack_all_for_repo(
                     }
                 };
                 if apply && matches!(dry.class, RetrackClass::StalePin) {
-                    match retrack_sync(ctx, &review, None, is_pr, forge_base_ref.as_deref(), false)
-                    {
+                    match retrack_sync(
+                        ctx,
+                        &review,
+                        None,
+                        is_pr,
+                        forge_base_ref.as_deref(),
+                        api_warnings,
+                        false,
+                    ) {
                         Ok(o) => outcome_json(&o, false),
                         Err(e) => serde_json::json!({
                             "id": review.id,
