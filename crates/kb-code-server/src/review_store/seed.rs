@@ -78,6 +78,8 @@ pub struct ExpectedPatchset {
     pub ps_number: i64,
     pub tip_sha: String,
     pub base_sha: String,
+    /// The base branch's tip at capture (V0045); `None` = legacy patchset.
+    pub base_tip_sha: Option<String>,
 }
 
 /// What to seed.
@@ -107,6 +109,9 @@ pub struct MemberImport {
     pub skipped_refs: usize,
     /// Non-forced review refs the store already held at another commit.
     pub conflicts: Vec<String>,
+    /// `refs/remotes/work-<id>/*` refs deleted because the member no
+    /// longer has that branch (kb owns the namespace).
+    pub pruned: usize,
 }
 
 /// Step 3's outcome.
@@ -188,6 +193,32 @@ impl SeedError {
             class: FailureClass::Failed.slug(),
             detail: detail.into(),
         }
+    }
+}
+
+/// The oldest git the store supports: `fetch --porcelain` (2.41).
+pub const MIN_GIT: (u32, u32) = (2, 41);
+
+/// Parse `git version X.Y[.Z…]` → `(X, Y)`.
+pub fn parse_git_version(s: &str) -> Option<(u32, u32)> {
+    let v = s.trim().strip_prefix("git version ")?;
+    let mut it = v.split(|c: char| !c.is_ascii_digit());
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+/// `Some(found)` when the store's git is older than `min` (or its version
+/// cannot be read); `None` when it is new enough.
+pub fn git_too_old(git: &StoreGit, min: (u32, u32)) -> Option<String> {
+    let out = match git.run(GitCall::new("version", GitArgs::new("version"))) {
+        Ok(o) => o,
+        Err(e) => return Some(format!("unknown ({})", e.slug())),
+    };
+    let text = out.stdout_str().trim().to_string();
+    match parse_git_version(&text) {
+        Some(v) if v >= min => None,
+        _ => Some(text.chars().take(64).collect()),
     }
 }
 
@@ -399,7 +430,26 @@ fn fetch_stdin(
         .filter(|l| l.starts_with('!'))
         .filter_map(|l| l.rsplit(' ').next().map(str::to_string))
         .collect();
-    if out.exit_code != Some(0) && rejected.is_empty() {
+    // Only a non-forced REVIEW ref may be rejected as a (reported)
+    // conflict; any other rejection — a forced `work-<id>` ref that could
+    // not be written, e.g. a D/F clash — is a real failure, never success.
+    let (conflicts, other): (Vec<String>, Vec<String>) = rejected
+        .into_iter()
+        .partition(|r| r.starts_with("refs/kbc/review/"));
+    if !other.is_empty() {
+        return Err(StoreGitError {
+            op: "fetch",
+            class: FailureClass::Failed,
+            exit_code: out.exit_code,
+            detail: format!(
+                "rejected {} ref(s), first {}: {}",
+                other.len(),
+                other[0],
+                out.stderr.chars().take(1024).collect::<String>()
+            ),
+        });
+    }
+    if out.exit_code != Some(0) && conflicts.is_empty() {
         return Err(StoreGitError {
             op: "fetch",
             class: classify(&out.stderr, AuthContext::None),
@@ -407,7 +457,7 @@ fn fetch_stdin(
             detail: out.stderr.chars().take(2048).collect(),
         });
     }
-    Ok(rejected)
+    Ok(conflicts)
 }
 
 /// Import one member into the store (step 2). Also the `work-<id>` sync
@@ -470,6 +520,10 @@ pub fn import_member(
                 skipped += 1;
             }
         }
+        // Prune BEFORE fetching: a branch renamed `feature` → `feature/x`
+        // would otherwise D/F-clash with the stale `work-<id>/feature`.
+        let wanted: BTreeSet<&str> = specs.iter().map(|s| s.dst().as_str()).collect();
+        let pruned = prune_work_refs(git, git_dir, &work_prefix, &wanted)?;
         match fetch_stdin(git, git_dir, &remote, &specs, timeout) {
             Ok(conflicts) => {
                 return Ok(MemberImport {
@@ -478,12 +532,44 @@ pub fn import_member(
                     review_refs: reviews,
                     skipped_refs: skipped,
                     conflicts,
+                    pruned,
                 })
             }
             Err(e) if e.class == FailureClass::Vanished && attempt < 2 => continue,
             Err(e) => return Err(e),
         }
     }
+}
+
+/// Delete store refs under `work_prefix` (`refs/remotes/work-<id>/`) that
+/// are not in `wanted`. kb owns that namespace, so this never touches a
+/// ref anything else wrote. One `update-ref --stdin` transaction, each
+/// delete guarded by the old value.
+fn prune_work_refs(
+    git: &StoreGit,
+    git_dir: &Path,
+    work_prefix: &str,
+    wanted: &BTreeSet<&str>,
+) -> Result<usize, StoreGitError> {
+    let mut tx = String::new();
+    let mut n = 0;
+    for (oid, name) in list_refs(git, git_dir, &["refs/remotes/"])? {
+        if name.starts_with(work_prefix) && !wanted.contains(name.as_str()) && full_hex(&oid) {
+            if RefName::parse(&name).is_err() {
+                continue;
+            }
+            tx.push_str(&format!("delete {name} {oid}\n"));
+            n += 1;
+        }
+    }
+    if n > 0 {
+        git.run(
+            GitCall::new("update-ref", GitArgs::new("update-ref").flag("--stdin"))
+                .git_dir(git_dir)
+                .stdin(tx.into_bytes()),
+        )?;
+    }
+    Ok(n)
 }
 
 /// Step 3 / `store sync`: fetch `branches` from remote `base` into
@@ -616,10 +702,14 @@ pub fn verify_connectivity(
     git_dir: &Path,
     members: &[SeedMember],
     patchsets: &[ExpectedPatchset],
+    ops: Option<&tokio::sync::Mutex<()>>,
 ) -> Result<(Vec<i64>, Vec<i64>, usize, usize), StoreGitError> {
     let mut shas = BTreeSet::new();
     for p in patchsets {
-        for s in [&p.tip_sha, &p.base_sha] {
+        for s in [Some(&p.tip_sha), Some(&p.base_sha), p.base_tip_sha.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             if full_hex(s) {
                 shas.insert(s.clone());
             }
@@ -649,7 +739,10 @@ pub fn verify_connectivity(
     if recovered > 0 {
         missing = missing_objects(git, git_dir, &shas)?;
     }
-    // Recreate absent ps refs whose tip is present (create-only).
+    // Recreate absent ps refs whose tip is present (create-only), under
+    // the store's ops lock (a capture writes the same ref family). Taken
+    // with `blocking_lock`: callers are on a blocking thread.
+    let _ops = ops.map(|m| m.blocking_lock());
     let have: BTreeSet<String> = list_refs(git, git_dir, &["refs/kbc/review/"])?
         .into_iter()
         .map(|(_, r)| r)
@@ -676,7 +769,11 @@ pub fn verify_connectivity(
         all.insert(p.review_id);
         let tip_bad = !full_hex(&p.tip_sha) || missing.contains(&p.tip_sha);
         let base_bad = full_hex(&p.base_sha) && missing.contains(&p.base_sha);
-        if tip_bad || base_bad {
+        let base_tip_bad = p
+            .base_tip_sha
+            .as_ref()
+            .is_some_and(|b| full_hex(b) && missing.contains(b));
+        if tip_bad || base_bad || base_tip_bad {
             bad.insert(p.review_id);
         }
     }
@@ -772,7 +869,7 @@ fn seed_into(
         (Some(c), Some(_)) => fetch_base_branches(git, tmp, &plan.base_branches, c),
     };
     let (missing, ok, recovered, recreated) =
-        verify_connectivity(git, tmp, &plan.members, &plan.patchsets)
+        verify_connectivity(git, tmp, &plan.members, &plan.patchsets, None)
             .map_err(|e| SeedError::git("connectivity", e))?;
     manifest::write(tmp, &Manifest::new(&plan.uuid, &plan.store_key, now))
         .map_err(|e| SeedError::io("manifest", e))?;
