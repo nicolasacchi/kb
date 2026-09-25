@@ -15,8 +15,10 @@
 //!   Every line is old-value-guarded, so a fetch or checkout racing this
 //!   call fails the WHOLE transaction rather than silently deleting a ref
 //!   that just moved. `repo_stores.legacy_refs_state` becomes `cleaned`
-//!   only when NOTHING `refs/kbc/{pr,review}/*`-shaped remains in the
-//!   clone afterward — never downgraded, never written on a dry run.
+//!   only when NOTHING `refs/kbc/*`-shaped remains in the clone
+//!   afterward — a FULL `refs/kbc/` listing, not this pass's
+//!   `Pr`/`Patchset`-only classification — never downgraded, never
+//!   written on a dry run.
 //! * `POST /api/repos/{name}/store/export-legacy` — the reverse: every
 //!   `refs/kbc/{pr,review}/*` THIS repo's own reviews reference (PR
 //!   bindings in any state, its own patchsets), written into the clone
@@ -141,6 +143,21 @@ fn store_kbc_map(
         .collect())
 }
 
+/// Does the member clone still carry ANY ref under `refs/kbc/`? The FULL
+/// prefix listing, deliberately NOT [`reviews::list_kbc_refs`]: that one
+/// keeps only the `Pr`/`Patchset` shapes — its own doc names the
+/// `ps<n>-base` filter as the reason a `refs/kbc/review/<id>/ps<n>-base`
+/// is invisible to it — so it cannot answer "is anything `refs/kbc/*`
+/// left?". Read through the store's own allowlisted spawner, exactly as
+/// `seed::import_member` reads a member's refs: a `for-each-ref` against
+/// the member's common dir, never a write.
+fn clone_carries_any_kbc_ref(
+    git: &super::git::StoreGit,
+    common_dir: &std::path::Path,
+) -> Result<bool, super::git::StoreGitError> {
+    Ok(!super::seed::list_refs(git, common_dir, &["refs/kbc/"])?.is_empty())
+}
+
 fn dry_run_default() -> bool {
     true
 }
@@ -184,6 +201,21 @@ fn legacy_refs_apply(
         .review_stores
         .git()
         .ok_or_else(|| ApplyErr::Internal("review store git spawner unavailable".to_string()))?;
+    // RS-U5 review fix, applied to this classify-then-mutate path too: the
+    // store's `ops` lock is taken BEFORE the store listing and held through
+    // the delete, exactly as `reviews::gc_review_refs_inner` takes it for
+    // the same sequence. Without it, a capture force-refreshing
+    // `refs/kbc/pr/<n>` (`FetchRefspec::new(true, …)`) or a
+    // `delete_review`/`gc_patchsets` dropping `refs/kbc/review/<id>/ps<n>`
+    // between the scan and the delete leaves the store no longer holding
+    // the scanned sha while the clone's pin to it is removed anyway — the
+    // commit unreferenced in BOTH repos. The old-value guards in the
+    // transaction protect the CLONE's own ref from moving, never the
+    // store-side predicate. A blocking acquire is safe and expected here:
+    // we are already inside `spawn_blocking` (the same reasoning
+    // `gc_review_refs_inner` records).
+    let ops = state.review_stores.ops_lock(handle.id);
+    let _ops_guard = ops.blocking_lock();
     let store_map =
         store_kbc_map(git, &handle.git_dir).map_err(|e| ApplyErr::Internal(e.to_string()))?;
     let user_refs = reviews::list_kbc_refs(&WorkTreeRoot::user_clone(&repo.root))
@@ -204,11 +236,29 @@ fn legacy_refs_apply(
         // Never downgraded, never rewritten to anything but `cleaned`
         // (the column default is already `present`) — and only when the
         // clone genuinely carries nothing `refs/kbc/*`-shaped anymore.
+        // `kept == 0` alone does NOT say that: `statuses` holds only what
+        // `reviews::list_kbc_refs` returned, and that lister drops every
+        // shape but `Pr`/`Patchset` — a `refs/kbc/review/<id>/ps<n>-base`
+        // sits under the very prefix it scans and is filtered out (its own
+        // doc names this as the reason the filter exists). The fallback
+        // path mints `ps<n>` and `ps<n>-base` from the same `capture_at`,
+        // so a clone can reach `cleaned` here with the `-base` pin still in
+        // it, contradicting the invariant this module's doc states and
+        // leaving a later operator run to report `total: 0` forever. So the
+        // claim is decided by a FULL `refs/kbc/` listing instead.
         if kept == 0 {
-            new_state = Some("cleaned");
-            let _ = state
-                .store
-                .set_repo_store_legacy_refs_state(repo.id, "cleaned");
+            let root = &repo.root;
+            let common_dir = super::seed::common_dir_of(root)
+                .map_err(|e| ApplyErr::Internal(format!("{}: {}", root.display(), e.kind())))?;
+            let _ = git.allow_local_source(&common_dir);
+            if !clone_carries_any_kbc_ref(git, &common_dir)
+                .map_err(|e| ApplyErr::Internal(e.to_string()))?
+            {
+                new_state = Some("cleaned");
+                let _ = state
+                    .store
+                    .set_repo_store_legacy_refs_state(repo.id, "cleaned");
+            }
         }
     }
 

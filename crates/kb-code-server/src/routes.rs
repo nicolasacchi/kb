@@ -670,10 +670,12 @@ pub(crate) fn read_repo_file(
             let work = crate::git::roots::WorkTreeRoot::of_repo(repo);
             let addressable = crate::git::roots::is_store_addressable(spec.as_str());
             match via {
-                RevVia::Ctx(ctx) if addressable => ctx.read_with_fallback(read_at)?,
+                RevVia::Ctx(ctx) if addressable => {
+                    ctx.read_rev_with_fallback(spec.as_str(), read_at)?
+                }
                 RevVia::Lookup(store) if addressable => {
                     crate::git::roots::GitCtx::for_repo(store, &repo.name, work)
-                        .read_with_fallback(read_at)?
+                        .read_rev_with_fallback(spec.as_str(), read_at)?
                 }
                 _ => read_at(&work)?,
             }

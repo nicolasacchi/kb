@@ -80,7 +80,7 @@
 
 use crate::config::RepoEntry;
 use crate::entities::RouteContract;
-use crate::git::roots::{GitCtx, GitRoot, WorkTreeRoot};
+use crate::git::roots::{GitCtx, GitRoot, StoreRoot, WorkTreeRoot};
 use crate::git::{GitRepo, Revspec};
 use crate::history::{self, HistoryError};
 use crate::review_base::capture::{
@@ -101,6 +101,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kb_core::events::EventBus;
 use serde::Deserialize;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
@@ -1509,6 +1510,87 @@ pub(crate) async fn admit_store(
         .map_err(store_refusal_error)
 }
 
+/// RS-U6 review fix — the git root a review WRITE path must use for
+/// `repo_name`: the store when a mutation is admitted against it, the
+/// user work tree otherwise.
+///
+/// Resolved through [`crate::review_store::ReviewStores::admit_mutation`]
+/// — the crate's ONE verdict on "is this repo's store usable for a
+/// write", and the same one capture runs ([`admit_store`], and the
+/// auto-capture worker). Asking [`GitCtx::is_fallback`] instead reads
+/// only `review_stores.state == "ready"` plus the member-import flag and
+/// never consults `unavailable_reason()`, so a `Disabled` store (or
+/// `GitTooOld`) still resolved to the STORE here while capture — which
+/// DOES consult it — had minted the patchset ref into the user clone.
+/// Delete/GC then swept a store that never held the ref and dropped the
+/// row, stranding the clone's `refs/kbc/review/<id>/ps<n>` forever, with
+/// reads and writes resolving to two different roots for one repo.
+///
+/// A refusal (seeding, or held by another daemon) is PROPAGATED, never
+/// folded into "no store": treating it as `Ok(None)` here would
+/// re-create exactly that split. The legacy work tree is therefore taken
+/// exactly when `admit_mutation` says there is no usable store.
+struct WriteRoot {
+    /// The admitted store — `Some` exactly when a store root was admitted.
+    store: Option<StoreRoot>,
+    /// The member's user clone, the root on the no-store branch.
+    work: WorkTreeRoot,
+    /// The admitted store's row id — the `ops` lock key, and `None` when
+    /// there is no store (nothing to serialize against).
+    store_id: Option<i64>,
+}
+
+impl WriteRoot {
+    fn primary(&self) -> &dyn GitRoot {
+        match &self.store {
+            Some(s) => s,
+            None => &self.work,
+        }
+    }
+
+    /// Whether a store was actually admitted — the only condition under
+    /// which a store-wide ref namespace applies.
+    fn store_primary(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// This root's store `ops` lock, or `None` on the legacy work-tree
+    /// branch. Keyed off the admitted handle's own id, never a re-lookup
+    /// that could name a different store.
+    fn ops_lock(
+        &self,
+        review_stores: &crate::review_store::ReviewStores,
+    ) -> Option<Arc<tokio::sync::Mutex<()>>> {
+        self.store_id.map(|id| review_stores.ops_lock(id))
+    }
+}
+
+/// [`WriteRoot`] for `repo_name` — see its doc for why the write paths
+/// ask [`crate::review_store::ReviewStores::admit_mutation`] and not
+/// `GitCtx`.
+fn admit_write_root(
+    review_stores: &crate::review_store::ReviewStores,
+    store: &Store,
+    repo_name: &str,
+    work: WorkTreeRoot,
+) -> Result<WriteRoot, ApiError> {
+    let handle = review_stores
+        .admit_mutation(store, repo_name)
+        .map_err(store_refusal_error)?;
+    Ok(match handle {
+        Some(h) => WriteRoot {
+            store: Some(StoreRoot::from_handle(&h)),
+            work,
+            store_id: Some(h.id),
+        },
+        None => WriteRoot {
+            store: None,
+            work,
+            store_id: None,
+        },
+    })
+}
+
 pub(crate) fn store_member(state: &SharedState, repo: &str) -> Result<Member, ApiError> {
     state
         .review_stores
@@ -1773,9 +1855,10 @@ pub enum PrRefScope {
     PerRepo,
     /// A ready store: the store's OWN (shared) `refs/kbc/pr/<n>` is never
     /// touched here. "Don't delete" is always the safe direction — the
-    /// store-wide GC (`review_store::gc::{attribute, delete_candidates,
-    /// apply}`) computes the keep-set across EVERY member and cleans up
-    /// what this call correctly declined to.
+    /// store-wide GC pass ([`crate::review_store::maint::run_gc_pass`],
+    /// which is also the ONLY way to reach `review_store::gc::apply`)
+    /// computes the keep-set across EVERY member and cleans up what this
+    /// call correctly declined to.
     StoreWide,
 }
 
@@ -1865,25 +1948,32 @@ pub fn delete_review_with_refs(
 /// is `None`) down to `max_patchsets`. Used by `kb-code review gc` and
 /// the capture path.
 ///
-/// RS-U5 — one [`GitCtx`] per repo (the store, once ready; the work tree
-/// otherwise — never a user-clone write when the store is ready),
-/// memoized so N reviews of the same repo share one store lookup. Also
-/// drops the patchset's `-base` pin ([`KbcRef::PatchsetBase`]) alongside
-/// its `ps<n>` ref. Each review's delete loop runs under that store's
-/// `ops` lock (`review_stores`), so a concurrent capture/GC can't race it.
+/// RS-U6 review fix — one [`WriteRoot`] per repo (the store, once a
+/// mutation is ADMITTED against it; the member's work tree otherwise),
+/// memoized so N reviews of the same repo share one store lookup. This is
+/// the crate's ONE verdict, the same `admit_mutation` capture runs, so GC
+/// can never sweep a store that a `Disabled` (or `GitTooOld`) verdict
+/// already excluded — the case where capture minted `ps<n>` into the user
+/// clone and GC then deleted the row without reclaiming it. A refusal
+/// propagates as a 503; it is never folded into "no store".
 ///
-/// RS-U6: with capture now writing ONLY the store once it is ready, the
-/// RS-U5 interim "also delete the work-tree copy" is gone — GC never
-/// writes a user clone when the store is primary (BUILD-BRIEF §3 gate 2
-/// lists GC). Legacy `refs/kbc/*` copies captured before the store was
-/// ready stay in the clone until the explicit `store legacy-refs` (D19).
+/// Also drops the patchset's `-base` pin ([`KbcRef::PatchsetBase`])
+/// alongside its `ps<n>` ref. Each review's delete loop runs under that
+/// store's `ops` lock (`review_stores`), so a concurrent capture/GC can't
+/// race it.
+///
+/// RS-U6: with capture now writing ONLY the store once it is admitted, the
+/// RS-U5 interim "also delete the work-tree copy" is gone — GC writes
+/// exactly one root, the one admission chose (BUILD-BRIEF §3 gate 2 lists
+/// GC). Legacy `refs/kbc/*` copies captured before the store was admitted
+/// stay in the clone until the explicit `store legacy-refs` (D19).
 pub fn gc_patchsets(
     store: &Store,
     review_stores: &crate::review_store::ReviewStores,
     repos: &[RepoEntry],
     review_id: Option<i64>,
     max_patchsets: u32,
-) -> Result<u32, ReviewGitError> {
+) -> Result<u32, ApiError> {
     let max = max_patchsets.max(1);
     let mut deleted = 0u32;
     let reviews: Vec<ReviewRow> = if let Some(id) = review_id {
@@ -1900,30 +1990,41 @@ pub fn gc_patchsets(
         }
         all
     };
-    let mut ctx_cache: HashMap<String, GitCtx> = HashMap::new();
+    let mut root_cache: HashMap<String, WriteRoot> = HashMap::new();
     for review in reviews {
         let Some(repo) = repos.iter().find(|r| r.name == review.repo) else {
             continue;
         };
-        let ctx = ctx_cache.entry(repo.name.clone()).or_insert_with(|| {
-            GitCtx::for_repo(store, &repo.name, WorkTreeRoot::user_clone(&repo.path))
-        });
-        let store_primary = !ctx.is_fallback();
+        // RS-U6 review fix — the crate's ONE verdict on store
+        // usability for a write, so GC resolves the SAME root capture
+        // did; a `Disabled` store (or `GitTooOld`) no longer makes GC
+        // sweep a store that never held the ref while the user's clone
+        // keeps it. A refusal propagates — see `WriteRoot`.
+        let root = match root_cache.entry(repo.name.clone()) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let r = admit_write_root(
+                    review_stores,
+                    store,
+                    &repo.name,
+                    WorkTreeRoot::user_clone(&repo.path),
+                )?;
+                e.insert(r)
+            }
+        };
         // One ops-lock acquisition per review's delete loop below — cheap
         // (`blocking_lock`, we're already on a blocking thread) and holds
-        // for exactly the span it protects.
-        let ops_lock = store_primary
-            .then(|| store.store_for_repo_name(&repo.name).ok().flatten())
-            .flatten()
-            .map(|row| review_stores.ops_lock(row.id));
+        // for exactly the span it protects. `None` on the work-tree
+        // branch: no store, nothing to serialize against.
+        let ops_lock = root.ops_lock(review_stores);
         let _ops_guard = ops_lock.as_ref().map(|l| l.blocking_lock());
         while store.patchset_count(review.id).unwrap_or(0) as u32 > max {
             let Some(old) = store.oldest_patchset(review.id).ok().flatten() else {
                 break;
             };
-            let _ = delete_patchset_ref(ctx.primary(), review.id, old.ps_number);
+            let _ = delete_patchset_ref(root.primary(), review.id, old.ps_number);
             let _ = delete_kbc_ref(
-                ctx.primary(),
+                root.primary(),
                 KbcRef::PatchsetBase {
                     review_id: review.id,
                     ps_number: old.ps_number,
@@ -2789,14 +2890,32 @@ pub async fn delete_review(
     let review_stores = state.review_stores.clone();
     let bus = state.bus.clone();
     let repo_name = review.repo.clone();
-    let root = repo.path.clone();
-    tokio::task::spawn_blocking(move || {
-        // RS-U5 — the store, once ready (never a user-clone-ONLY write when
-        // it is); the work tree otherwise, exactly as before. `GitCtx` is
-        // the ONE place that resolution runs (its own doc, RS-U4).
-        let ctx = GitCtx::for_repo(&store, &repo_name, WorkTreeRoot::user_clone(&root));
-        let store_primary = !ctx.is_fallback();
-        let scope = if store_primary {
+    let work_path = repo.path.clone();
+    // The closure yields two error types — `ApiError` from
+    // `admit_write_root` and `ReviewGitError` from
+    // `delete_review_with_refs` — so name the result type and let the
+    // `From<ReviewGitError> for ApiError` impl above (reviews.rs:186) do
+    // the conversion, exactly as this route reported git failures before.
+    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
+        // RS-U6 review fix — the store, once a mutation is ADMITTED
+        // against it (never a user-clone-ONLY write when it is); the work
+        // tree otherwise, exactly as before. `admit_mutation` is the ONE
+        // verdict capture also runs and the one `GitCtx` never applied:
+        // it consults `unavailable_reason()` first, so a `Disabled` store
+        // (or `GitTooOld`) resolves to the work tree HERE too, and the
+        // patchset ref capture put in the clone is actually reclaimed.
+        // A refusal (seeding / held elsewhere) propagates as a 503 rather
+        // than being read as "no store" — see `WriteRoot`.
+        let write_root = admit_write_root(
+            &review_stores,
+            &store,
+            &repo_name,
+            WorkTreeRoot::user_clone(&work_path),
+        )?;
+        // Store-wide only when a store root was actually admitted: the
+        // shared `refs/kbc/pr/<n>` namespace is the store's, and a
+        // per-repo binding count cannot answer for it.
+        let scope = if write_root.store_primary() {
             PrRefScope::StoreWide
         } else {
             PrRefScope::PerRepo
@@ -2804,17 +2923,20 @@ pub async fn delete_review(
         // RS-U5 review fix — hold the store's `ops` lock across the whole
         // delete when the store is primary: a capture/GC racing this
         // review's deletion must not interleave with it (same discipline
-        // as the store-wide GC route).
-        let ops_lock = store_primary
-            .then(|| store.store_for_repo_name(&repo_name).ok().flatten())
-            .flatten()
-            .map(|row| review_stores.ops_lock(row.id));
+        // as the store-wide GC route). Keyed off the admitted handle's
+        // own id; `None` on the work-tree branch, where there is no store
+        // to serialize against.
+        let ops_lock = write_root.ops_lock(&review_stores);
         let _ops_guard = ops_lock.as_ref().map(|l| l.blocking_lock());
-        // RS-U6 — capture writes only the store once it is ready, so the
-        // RS-U5 interim work-tree dual-delete is no longer passed: a ready
-        // store's review delete never writes the user clone (legacy copies
-        // wait for the explicit `store legacy-refs`, D19).
-        delete_review_with_refs(&store, &bus, ctx.primary(), None, &review, scope)
+        // RS-U6 — `legacy_work_tree` stays `None` (see
+        // `delete_review_with_refs`' doc: pass `None` when `repo_root`
+        // already IS the work tree). That is now true on the non-store
+        // branch, so the clone-side sweep — the one that reclaims a
+        // clone-minted `ps<n>` — is reachable exactly when it is needed
+        // instead of being dead code. On the store branch the clone is
+        // left alone: legacy copies wait for `store legacy-refs` (D19).
+        delete_review_with_refs(&store, &bus, write_root.primary(), None, &review, scope)?;
+        Ok(())
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
@@ -5177,9 +5299,16 @@ fn attribute_kbc_refs(
 /// The raw `refs/kbc/*` listing and the store-wide
 /// [`crate::review_store::gc::GcKeepSet`] for `row`'s store. `ctx` must
 /// NOT be a fallback (every caller checks `ctx.is_fallback()` first). The
-/// caller already resolved `row` (RS-U5 review fix: so it can take the
-/// store's `ops` lock, keyed on `row.id`, BEFORE calling this — see
-/// [`gc_review_refs_inner`]). Synchronous — call from `spawn_blocking`.
+/// caller already resolved `row` (RS-U5 review fix). Synchronous — call
+/// from `spawn_blocking`.
+///
+/// READ-ONLY, and deliberately NOT a GC apply path: [`gc_review_refs_inner`]
+/// no longer gathers candidates through here at all — it delegates to
+/// [`crate::review_store::maint::run_gc_pass`], which re-derives them under
+/// the store's own ops lock so the guards run against exactly the
+/// classification they were decided on. This now serves only the
+/// read-only view in [`review_refs_view`], which takes no lock because it
+/// mutates nothing.
 ///
 /// RS-U5 review fix (BLOCKER 1) — `crate::review_store::gc::keep_set` is
 /// DB-only (`row.id` + `Store::store_members`), never resolving member
@@ -5295,26 +5424,60 @@ pub async fn list_review_refs(
     ))
 }
 
+/// What one pass decided, as the route renders it. `candidates` is the
+/// refname list this pass classified — the response's `deleted` array and
+/// `deleted_count`, EXACTLY as before, so `kb-code review refs gc`'s
+/// dry-run wording and its per-ref output are unchanged. `applied` /
+/// `reason` / `detail` are ADDED so a guard that REFUSED the apply is
+/// visible instead of being reported as a clean success.
+struct GcReviewRefsOutcome {
+    candidates: Vec<String>,
+    applied: bool,
+    /// [`crate::review_store::maint::GcRunReport::reason`]'s vocabulary on
+    /// the store branch, so the two report the same reasons the same way.
+    reason: &'static str,
+    detail: Option<String>,
+}
+
 /// Synchronous body of [`gc_review_refs`]. RS-U5: store-wide (README §5.4)
-/// when the repo's store is `ready`; the legacy per-repo work-tree GC
-/// otherwise, unchanged.
+/// when a mutation is ADMITTED against the repo's store — the same
+/// `admit_mutation` verdict capture and the other two write paths use; the
+/// legacy per-repo work-tree GC otherwise, unchanged.
 ///
-/// RS-U5 review fix (BLOCKER 2) — the store's `ops` lock is taken BEFORE
-/// [`store_refs_and_keep_set`] (the list + keep-set gather) and held
-/// through classification AND `apply`: a capture minting a patchset ref,
-/// or `start-pr` binding a new PR, racing the scan must not invalidate a
-/// decision this pass already made (old-value guards in `apply`'s
-/// transaction protect the WRITE, but nothing protected the READ this
-/// pass's DELETE decision was based on until now). A dry run takes the
-/// lock too — a torn snapshot would make for a dishonest report.
+/// The store branch is NOT a second GC engine: it hands the whole pass to
+/// [`crate::review_store::maint::run_gc_pass`] — the same entry point
+/// `kb-code store gc --yes` uses — which takes the store's `ops` lock
+/// itself for the whole list -> keep-set -> classify -> guard-check ->
+/// bundle -> apply -> timestamp sequence, and is the ONLY route to
+/// [`crate::review_store::gc::apply`]. RS-U5 originally called `gc::apply`
+/// from here directly, which meant this route deleted refs across the
+/// WHOLE store with no pre-apply bundle, no restore-guard check, no
+/// DB-truth high-water check, and without recording
+/// `state_json.last_gc_apply` (so the monthly cruft cooldown was judged
+/// from a stale timestamp). `bypass_guard` is `false`: this route has no
+/// `--yes`, and an operator acknowledgement belongs to `store gc`.
 fn gc_review_refs_inner(
     state: &SharedState,
     repo_name: &str,
     work_root: &Path,
     dry_run: bool,
-) -> Result<(Vec<String>, usize), ApiError> {
-    let ctx = GitCtx::for_repo(&state.store, repo_name, WorkTreeRoot::user_clone(work_root));
-    if ctx.is_fallback() {
+) -> Result<GcReviewRefsOutcome, ApiError> {
+    // RS-U6 review fix — the store branch is chosen by `admit_mutation`,
+    // the crate's ONE verdict and the one capture runs, NOT by
+    // `GitCtx::is_fallback` (which reads only `state == "ready"` and
+    // never consults `unavailable_reason()`). A `Disabled` store, or a
+    // `GitTooOld` one, therefore takes the SAME legacy work-tree branch
+    // capture's writes did — instead of a store-wide pass over a store
+    // that never held the ref, while the clone kept it. A refusal
+    // (seeding / held elsewhere) propagates as a 503; it is never read
+    // as "no store" — see `WriteRoot`.
+    let admitted = state
+        .review_stores
+        .admit_mutation(&state.store, repo_name)
+        .map_err(store_refusal_error)?;
+    let Some(handle) = admitted else {
+        // No usable store (absent / not registered / disabled): the legacy
+        // per-repo work-tree pass, byte for byte as before.
         let listed = list_kbc_refs(&WorkTreeRoot::user_clone(work_root))?;
         let pr_bound = state.store.list_pr_bound_reviews(repo_name)?;
         let patch_keys = state.store.list_patchset_keys_for_repo(repo_name)?;
@@ -5331,40 +5494,68 @@ fn gc_review_refs_inner(
             }
         }
         let n = would.len();
-        return Ok((would, n));
-    }
-    let row = require_store_row(state, repo_name)?;
-    // Held for the WHOLE list -> keep-set -> classify -> apply sequence —
-    // a blocking acquire is safe and expected here: we are already
-    // running inside `spawn_blocking` (`seed::verify_connectivity` does
-    // the same).
-    let ops = state.review_stores.ops_lock(row.id);
-    let _guard = ops.blocking_lock();
-    let (refs, keep) = store_refs_and_keep_set(state, &row, &ctx)?;
-    let attributed = crate::review_store::gc::attribute(&refs, &keep);
-    let delete = crate::review_store::gc::delete_candidates(&attributed);
-    let would: Vec<String> = delete.iter().map(|c| c.refname.clone()).collect();
-    if !dry_run && !delete.is_empty() {
-        let git = state.review_stores.git().ok_or_else(|| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "review store git spawner unavailable",
-            )
-        })?;
-        let store_root = ctx
-            .store_root()
-            .expect("caller already checked ctx is not a fallback");
-        crate::review_store::gc::apply(git, store_root.git_dir(), &delete)
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-    let n = would.len();
-    Ok((would, n))
+        return Ok(GcReviewRefsOutcome {
+            candidates: would,
+            applied: !dry_run && n > 0,
+            reason: if n == 0 {
+                "nothing-to-do"
+            } else if dry_run {
+                "dry-run"
+            } else {
+                "applied"
+            },
+            detail: None,
+        });
+    };
+    // The handle carries the admitted store's own id/uuid, so the row is
+    // keyed by THAT — never re-resolved by repo name, which could name a
+    // different store than the one just admitted. `run_gc_pass` re-reads
+    // it under the ops lock anyway and refuses if it is no longer ready.
+    let row = state.store.get_review_store(handle.id)?.ok_or_else(|| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "review store row vanished mid-request",
+        )
+    })?;
+    // `run_gc_pass` takes the ops lock ITSELF, for the whole
+    // list -> keep-set -> classify -> guard -> apply sequence — a
+    // blocking acquire is safe and expected here: we are already running
+    // inside `spawn_blocking` (`seed::verify_connectivity` does the same).
+    // A capture minting a patchset ref, or `start-pr` binding a new PR,
+    // racing the scan must not invalidate a decision this pass already
+    // made; a dry run takes the lock too — a torn snapshot would make for
+    // a dishonest report. Re-deriving the candidates here instead of
+    // passing them in is deliberate: the guards must run against exactly
+    // the classification they were decided on, under one lock.
+    let (report, candidates) = crate::review_store::maint::run_gc_pass(
+        &state.review_stores,
+        &state.store,
+        &row,
+        !dry_run,
+        false,
+        chrono::Utc::now().timestamp(),
+    )
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(GcReviewRefsOutcome {
+        candidates,
+        applied: report.applied,
+        reason: report.reason,
+        detail: report.detail,
+    })
 }
 
 /// `POST /api/reviews/refs/gc?repo=&dry_run=` — delete orphan refs and
 /// refs of deleted reviews. LOOPBACK-ONLY. `dry_run` default ON. RS-U5:
 /// store-wide once the repo's store is `ready` — see
-/// [`gc_review_refs_inner`].
+/// [`gc_review_refs_inner`], which applies store-wide candidates ONLY
+/// through the guarded [`crate::review_store::maint::run_gc_pass`] pass.
+///
+/// `deleted` / `deleted_count` keep their pre-wave meaning: the refs this
+/// pass classified as delete candidates (a dry run reports the same list
+/// without deleting it). `applied` / `reason` / `detail` are the
+/// ADDITIONAL honest half — a store pass refused by the restore guard or
+/// by the high-water check reports `applied: false` with the reason and
+/// detail, never a bare success.
 pub async fn gc_review_refs(
     State(state): State<SharedState>,
     Query(params): Query<ReviewRefsGcParams>,
@@ -5374,18 +5565,22 @@ pub async fn gc_review_refs(
     let root = repo.path.clone();
     let repo_name = params.repo.clone();
     let st = state.clone();
-    let (would, deleted_count) =
+    let out =
         tokio::task::spawn_blocking(move || gc_review_refs_inner(&st, &repo_name, &root, dry_run))
             .await
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let deleted_count = out.candidates.len();
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
             "schema": REFS_SCHEMA,
             "repo": params.repo,
             "dry_run": dry_run,
-            "deleted": would,
+            "deleted": out.candidates,
             "deleted_count": deleted_count,
+            "applied": out.applied,
+            "reason": out.reason,
+            "detail": out.detail,
         })),
     ))
 }

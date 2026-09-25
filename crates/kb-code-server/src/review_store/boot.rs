@@ -16,6 +16,13 @@
 //!    `[review.store] seed_on_boot` — seed every `absent` one, LOCAL ONLY
 //!    (no credential, no network: base branches arrive with the first
 //!    explicit `store sync`/capture).
+//!
+//! Steps 1–2 are CRASH RECOVERY and need no git spawner, so they run
+//! BEFORE the spawner gate that guards steps 3–4: skipping them when the
+//! spawner is unavailable would leave every boot re-skipping the recovery
+//! and wedge for good a store a dead process left `seeding`. That gate
+//! logs `store git spawner unavailable` and stops there — with the
+//! recovery counts still in the `BootSummary` it logged.
 
 use std::collections::BTreeSet;
 
@@ -54,6 +61,7 @@ pub fn spawn_boot_job(state: SharedState) -> tokio::task::JoinHandle<()> {
                 seeded = s.seeded,
                 failed = s.failed.len(),
                 swept_tmp = s.swept_tmp,
+                reset_seeding = s.reset_seeding,
                 skipped = ?s.skipped_reason,
                 "review store boot job done"
             ),
@@ -69,14 +77,29 @@ pub fn run_boot(rs: &ReviewStores, store: &Store) -> BootSummary {
         s.skipped_reason = Some(d.clone());
         return s;
     }
-    if rs.git().is_none() {
-        s.skipped_reason = Some("store git spawner unavailable".into());
-        return s;
-    }
+    // Steps 1–2 (RS-U3) are CRASH RECOVERY, not store traffic: neither
+    // `sweep_stale_tmp` nor `reset_interrupted_seeding` spawns git, reads
+    // a ref, or touches a store directory's object database — both are a
+    // `read_dir` and a `Store` write. They therefore run BEFORE the git
+    // gate below, not behind it: a daemon whose store spawner is
+    // unavailable (no `git` on PATH, spawn budget exhausted) would
+    // otherwise skip them on EVERY boot, so a row a dead process left
+    // `seeding` would wedge that store's actions forever with no boot log
+    // naming the cause. The exclusion list is still THIS process's
+    // in-flight ids (`ReviewStores::seeding_ids`, read at the same
+    // instant relative to everything else — no seeding starts between
+    // here and where this used to run, so the set is the same one it was),
+    // so a seed genuinely in flight in this process is never reset here;
+    // a boot is a recovery pass, not a reaper.
     s.swept_tmp = seed::sweep_stale_tmp(&rs.settings().root);
     s.reset_seeding = store
         .reset_interrupted_seeding(&rs.seeding_ids())
         .unwrap_or(0);
+
+    if rs.git().is_none() {
+        s.skipped_reason = Some("store git spawner unavailable".into());
+        return s;
+    }
 
     let with_reviews: BTreeSet<String> = store
         .repos_with_reviews()

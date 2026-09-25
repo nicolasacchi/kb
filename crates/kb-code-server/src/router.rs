@@ -494,12 +494,12 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/schemas", get(crate::api_schemas::list_schemas_route))
         .route("/schemas/{name}", get(crate::api_schemas::get_schema_route))
         .route("/repos", get(routes::repos))
-        // RS-U3 (review store) — the store card + the persisted fetch
-        // credential. Bearer reads: no secret bytes, no repo content.
-        .route(
-            "/repos/{name}/store",
-            get(crate::review_store::routes::store_show_route),
-        )
+        // RS-U3 (review store) — the persisted fetch credential. A bearer
+        // read: kind/account/reason, never secret bytes. The store CARD
+        // (`/repos/{name}/store`) is NOT here: it reports the store's
+        // absolute on-disk `git_dir` and its `uuid`, which no other route
+        // on this gate exposes — it lives on the loopback-only
+        // sub-router beside the rest of the RS-U3 family (see below).
         .route(
             "/repos/{name}/credentials",
             get(crate::review_store::routes::credentials_route),
@@ -1508,6 +1508,18 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/trails/state", post(crate::trails::routes::set_state))
         .route("/trails/{id}", get(crate::trails::routes::get_trail))
         .route("/trails/{id}/fork", post(crate::trails::routes::fork_trail))
+        // RS-U3 (review store) — the store CARD read, loopback-only beside
+        // the family it belongs to. It is a read, not a write, but it
+        // reports `store.git_dir` (the ABSOLUTE path of the daemon's own
+        // internal state dir — `<state_dir>/<store_root>/<uuid>.git`) plus
+        // `store.uuid` and internal store row ids, and no other route on
+        // the bearer `api` gate returns a kb-internal path. The sibling
+        // `/repos/{name}/credentials` read stays on bearer: kind, account
+        // and reason — never a path, never a secret.
+        .route(
+            "/repos/{name}/store",
+            get(crate::review_store::routes::store_show_route),
+        )
         // RS-U3 (review store) — store/credential MUTATIONS, loopback-only
         // like every other sanctioned git write (README §8: "key and
         // credential endpoints are loopback-only and audited").
