@@ -14,7 +14,10 @@
 //!
 //! Everything else is rejected, including `file://`, plain `http://`, any
 //! `<transport>::<address>` remote-helper form (`ext::`, `fd::`), control
-//! characters and whitespace, and IPv6 literals (they need `::`).
+//! characters and whitespace, IPv6 literals (they need `::`), and
+//! percent-encoding anywhere in the path (`%` is rejected, never decoded:
+//! git transmits the path undecoded while an HTTP forge decodes it, so one
+//! accepted form would name two different projects).
 //!
 //! A LOCAL seed source (the user's clone, design §3.2) goes through a
 //! separate constructor, [`RemoteUrl::local_seed`]: an absolute path, and
@@ -152,8 +155,7 @@ fn path_ok(p: &str) -> bool {
     !b.is_empty()
         && (b[0].is_ascii_alphanumeric() || b[0] == b'~' || b[0] == b'_')
         && b.iter().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(*c, b'.' | b'_' | b'-' | b'/' | b'~' | b'+' | b'%')
+            c.is_ascii_alphanumeric() || matches!(*c, b'.' | b'_' | b'-' | b'/' | b'~' | b'+')
         })
         && !p.split('/').any(|seg| seg == "..")
 }
@@ -551,6 +553,10 @@ mod tests {
                 UrlRejected::ControlOrSpace,
             ),
             ("https://github.com/acme/../../w.git", UrlRejected::BadPath),
+            (
+                "https://github.com/acme/..%2F..%2Fw.git",
+                UrlRejected::BadPath,
+            ),
             ("https://github.com/-acme/w.git", UrlRejected::BadPath),
             ("https://github.com:0/acme/w.git", UrlRejected::BadPort),
             ("https://[::1]/acme/w.git", UrlRejected::TransportHelper),

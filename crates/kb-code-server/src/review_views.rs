@@ -492,7 +492,10 @@ pub struct ReviewFindParams {
 /// across every configured repo (or just `R`), one store query. `repos`
 /// lists the distinct repos that matched and `preferred` maps each to the
 /// review `pr:<N>` addressing picks there (open before closed, newest
-/// first — `Store::get_review_by_pr_binding`'s own order). Bearer.
+/// first — `Store::get_review_by_pr_binding`'s own order). Bearer, and the
+/// "configured" of the no-`?repo=` case is ENFORCED against `state.repos`
+/// (de-configured repos keep their rows, so the store alone would list
+/// them) by the same exact-name rule `find_repo` applies for `?repo=R`.
 pub async fn review_find_route(
     State(state): State<SharedState>,
     Query(params): Query<ReviewFindParams>,
@@ -502,10 +505,25 @@ pub async fn review_find_route(
     }
     let pr = i64::from(params.pr);
     let repo_f = params.repo.clone();
+    // A de-configured repo's review rows are DELIBERATELY kept (see
+    // `store_for_repo_name`'s own doc: "reviews outlive a store
+    // re-register"), so `find_reviews_by_pr`'s `(?2 IS NULL OR repo = ?2)`
+    // with no `?repo=` would hand back every review this daemon has ever
+    // stored — including repos the operator has since dropped from
+    // `[[repos]]`. The `find_repo` 404 above only fires when `?repo=` IS
+    // supplied. Intersect with the CONFIGURED set instead, by the same
+    // exact-name rule `find_repo` applies: `GET /api/reviews` refuses the
+    // very same repo with 404, and this route must not be the wider one.
+    let configured: std::collections::HashSet<String> =
+        state.repos.iter().map(|r| r.name.clone()).collect();
     let (rows, latest) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
-            let rows = store.find_reviews_by_pr(pr, repo_f.as_deref())?;
+            let rows: Vec<_> = store
+                .find_reviews_by_pr(pr, repo_f.as_deref())?
+                .into_iter()
+                .filter(|(r, _, _)| configured.contains(&r.repo))
+                .collect();
             let ids: Vec<i64> = rows.iter().map(|(r, _, _)| r.id).collect();
             let latest = store.latest_patchsets(&ids)?;
             Ok((rows, latest))

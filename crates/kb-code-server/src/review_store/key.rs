@@ -14,6 +14,12 @@
 //! * the PATH case preserved — except on `github.com`, whose owner/name
 //!   are case-insensitive, so `Acme/Widgets` and `acme/widgets` are one
 //!   project there.
+//! * any percent-encoding REFUSED (`%` is not a path character): git
+//!   transmits a remote URL's path UNDECODED while an HTTP forge may
+//!   decode it, so `acme/..%2F..%2Fwidgets/secret` and `widgets/secret`
+//!   can be the same project under two keys — and the decoded reading is
+//!   a traversal out of the project the URL literally names. A URL
+//!   carrying a percent escape has no store key at all.
 //!
 //! Accepted forms: `https://`, `http://`, `ssh://`, `git://`,
 //! `git+ssh://`/`ssh+git://` URLs and scp form (`[user@]host:path`). A
@@ -114,6 +120,10 @@ pub fn split_key(key: &str) -> Option<(&str, &str)> {
 /// transport URL is the HTTPS form, derived from the canonical slug").
 /// `None` for `local:` keys and for keys carrying a non-default port — the
 /// port may belong to ssh, and an https guess on it would be wrong.
+///
+/// A key can never carry a percent escape ([`store_key_for_url`] refuses
+/// `%`), so re-emitting the path verbatim here cannot turn one project's
+/// key into another project's URL.
 pub fn https_url_for_key(key: &str) -> Option<String> {
     let (host, path) = split_key(key)?;
     if host.contains(':') {
@@ -181,9 +191,19 @@ fn normalize_path(p: &str) -> Option<String> {
     if out.is_empty() {
         return None;
     }
-    let ok = out.bytes().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-' | b'/' | b'~' | b'+' | b'%')
-    });
+    // `%` is deliberately NOT a path character. A `..%2F..%2F` segment
+    // passes the `..` check above — it is ONE segment, not two — while
+    // the fetch, which git transmits undecoded and an HTTP forge may
+    // decode, resolves to a different project than the key names: the
+    // store would hold `widgets/secret`'s objects under a key naming
+    // `acme/..%2F..%2Fwidgets/secret`, and the two distinct keys
+    // `…/acme/..%2F..%2Fwidgets/secret` and `…/widgets/secret` would
+    // address one project. Decoding here cannot repair that (which
+    // reading the FORGE honours is its own business), so the only rule
+    // that keeps the derivation injective is to refuse the escape.
+    let ok = out
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-' | b'/' | b'~' | b'+'));
     ok.then_some(out)
 }
 
