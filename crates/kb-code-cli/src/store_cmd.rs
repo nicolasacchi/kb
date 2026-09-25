@@ -10,6 +10,15 @@
 //! * `store set-base-url --repo R <URL>` — the ladder's explicit rung;
 //! * `store credentials --repo R [--test]` — the fetch credential as last
 //!   resolved; `--test` walks the ladder live (loopback-only; runs `gh`).
+//! * `store gc --repo R [--dry-run|--yes]` — the store-wide ref GC (RS-U9,
+//!   README §5.4): default (or `--dry-run`) computes candidates without
+//!   deleting anything; `--yes` applies (with old-value guards) and, if
+//!   the restore guard was flagged (a detected DB restore), acknowledges
+//!   it — the ONE way to unblock scheduled GC after a restore
+//!   (loopback-only).
+//! * `store maintain --repo R [--task daily|weekly|monthly]` — run the
+//!   git-housekeeping cadences now: the named one, or whatever is due
+//!   (RS-U9, loopback-only).
 //!
 //! `--json` prints the D20 envelope (`envelope::print_ok`/`print_err`).
 //! Exit codes: the shipped table (1 generic, 3 conflict — incl. a store
@@ -86,6 +95,39 @@ pub enum StoreCmd {
         repo: String,
         #[arg(long)]
         test: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Store-wide ref GC (RS-U9). Default is a dry run; `--yes` applies
+    /// and acknowledges the restore guard if it was flagged. Loopback-only.
+    Gc {
+        #[arg(long)]
+        repo: String,
+        /// Compute candidates only (the default when neither flag is
+        /// given — kept for an explicit, self-documenting invocation).
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply the deletions. The restore guard's ONE acknowledgement
+        /// path: if a DB restore was detected, this both applies and
+        /// clears the flag.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the git-housekeeping cadences now (RS-U9). `--task` forces one
+    /// cadence regardless of when it last ran; omitted runs whatever is
+    /// due. Loopback-only.
+    Maintain {
+        #[arg(long)]
+        repo: String,
+        /// `daily` | `weekly` | `monthly`.
+        #[arg(long)]
+        task: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -478,6 +520,106 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
                         );
                     }
                 }
+            }
+        }
+        StoreCmd::Gc {
+            repo,
+            dry_run,
+            yes,
+            daemon,
+            json,
+        } => {
+            let apply = yes && !dry_run;
+            let (st, body) = post(
+                &daemon,
+                &format!("/api/repos/{}/store/gc", enc(&repo)),
+                &serde_json::json!({ "yes": apply }),
+                Duration::from_secs(10 * 60),
+            )
+            .await?;
+            if !st.is_success() {
+                fail(json, st, &body);
+            }
+            if json {
+                envelope::print_ok("kbc-store-gc/1", &body, vec![], false, None);
+            } else {
+                let report = &body["report"];
+                println!(
+                    "{}: gc {} — {} candidate(s){}",
+                    repo,
+                    s(&report["reason"]),
+                    s(&report["candidates"]),
+                    if report["applied"] == true {
+                        ", applied"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+        StoreCmd::Maintain {
+            repo,
+            task,
+            daemon,
+            json,
+        } => {
+            let body_in = match &task {
+                Some(t) => serde_json::json!({ "task": t }),
+                None => serde_json::json!({}),
+            };
+            let (st, body) = post(
+                &daemon,
+                &format!("/api/repos/{}/store/maintain", enc(&repo)),
+                &body_in,
+                Duration::from_secs(30 * 60),
+            )
+            .await?;
+            if !st.is_success() {
+                fail(json, st, &body);
+            }
+            let report = &body["report"];
+            let errors = report["errors"].as_array().map(Vec::len).unwrap_or(0);
+            if json {
+                envelope::print_ok("kbc-store-maintain/1", &body, vec![], errors > 0, None);
+            } else {
+                let tasks: Vec<String> = report["tasks_run"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(s)
+                    .collect();
+                println!("{}: ran [{}]", repo, tasks.join(", "));
+                if let Some(inv) = report.get("invariant").filter(|v| !v.is_null()) {
+                    println!(
+                        "  invariant: {} missing, {} ok, {} recovered, {} recreated",
+                        s(&inv["objects_missing"]),
+                        s(&inv["objects_ok"]),
+                        s(&inv["recovered_by_sha"]),
+                        s(&inv["refs_recreated"]),
+                    );
+                }
+                if let Some(gc) = report.get("gc").filter(|v| !v.is_null()) {
+                    println!(
+                        "  gc: {} — {} candidate(s){}",
+                        s(&gc["reason"]),
+                        s(&gc["candidates"]),
+                        if gc["applied"] == true {
+                            ", applied"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                let swept = report["swept_tmp_pack"].as_u64().unwrap_or(0);
+                if swept > 0 {
+                    println!("  swept {swept} stale tmp_pack file(s)");
+                }
+                for e in report["errors"].as_array().into_iter().flatten() {
+                    println!("  error: {}", s(e));
+                }
+            }
+            if errors > 0 {
+                std::process::exit(envelope::EXIT_PARTIAL);
             }
         }
     }

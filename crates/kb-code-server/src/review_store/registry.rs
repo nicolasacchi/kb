@@ -1217,6 +1217,20 @@ impl ReviewStores {
                 // Repos that joined WHILE this seed ran were not in its
                 // plan snapshot: import them now.
                 let _ = self.import_pending_members(store, row.id);
+                // RS-U9 (RS-U3's own follow-up note): a multi-member seed
+                // leaves one pack per imported member — repack to one now,
+                // rather than waiting for the next scheduled weekly/monthly
+                // pass. Best-effort: a repack failure never fails the seed
+                // that just succeeded.
+                if plan.members.len() > 1 {
+                    if let Err(e) = super::maint::repack_full(git, &report.git_dir) {
+                        tracing::warn!(
+                            error = %e,
+                            uuid = %row.uuid,
+                            "kb-code: post-seed repack-to-one failed (non-fatal)"
+                        );
+                    }
+                }
                 Ok(report)
             }
             Err(e) => {
