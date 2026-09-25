@@ -179,7 +179,7 @@ describe("patchset kind", () => {
     ).toBe("aaaaaaa");
     expect(
       patchsetBaseShort({ base_tip_sha: null, base_sha_full: "cccccccccc1234567890", base_sha: "ccccccc" }),
-    ).toBe("cccccc");
+    ).toBe("ccccccc");
   });
 });
 
