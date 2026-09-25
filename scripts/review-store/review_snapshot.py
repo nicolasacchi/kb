@@ -137,6 +137,7 @@ def _get_json(
     timeout: float,
     *,
     ok_404: bool = False,
+    ok_redacted: bool = False,
 ) -> Any | None:
     url = base.rstrip("/") + path
     req = urllib.request.Request(url, method="GET")
@@ -149,12 +150,22 @@ def _get_json(
         if ok_404 and e.code == 404:
             return None
         detail = e.read().decode("utf-8", "replace")[:500]
+        if ok_redacted and e.code == 403 and REDACTED_URN in detail:
+            return REDACTED
         raise DaemonError(f"GET {path} -> HTTP {e.code}: {detail}") from None
     except urllib.error.URLError as e:
         raise DaemonError(f"GET {path} -> {e.reason}") from None
     if not body:
         return None
     return json.loads(body)
+
+
+# The daemon's secret-path policy (`urn:kb:errors:redacted-by-policy`, e.g.
+# `.env.*`) refuses to read some paths through `compare/file`. That refusal
+# is deterministic, so it is recorded as a stable marker rather than
+# aborting the whole snapshot.
+REDACTED_URN = "urn:kb:errors:redacted-by-policy"
+REDACTED = "<redacted-by-policy>"
 
 
 # --------------------------------------------------------------------------
@@ -188,9 +199,13 @@ def _old_blob_sha(
     q = urllib.parse.urlencode(
         {"repo": repo, "path": path, "a": base_sha, "b": base_sha}
     )
-    body = _get_json(base, f"/api/compare/file?{q}", token, timeout, ok_404=True)
+    body = _get_json(
+        base, f"/api/compare/file?{q}", token, timeout, ok_404=True, ok_redacted=True
+    )
     if body is None:
         return None
+    if body == REDACTED:
+        return REDACTED
     return _blob_field(body.get("a", {}).get("blob_hash"))
 
 
