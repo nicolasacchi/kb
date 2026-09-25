@@ -379,13 +379,21 @@ pub fn run_weekly(git: &StoreGit, git_dir: &Path) -> Result<(), StoreGitError> {
     Ok(())
 }
 
-/// Monthly: `repack --cruft -d --geometric=2 --cruft-expiration=2.weeks.ago`
-/// plus `reflog expire --expire=14.days --all` (README §5.4,
-/// design-internal-store.md §8's fuller flag list). `--all` (not in the
-/// README's shorthand) is a deliberate build-time addition: without it
-/// `git reflog expire` only ever touches the ref(s) named on its command
-/// line, and a bare store has no branch reflog of its own to default to —
-/// omitting it would make this call a byte-identical no-op.
+/// Monthly: `repack --cruft -d --cruft-expiration=2.weeks.ago` plus
+/// `reflog expire --expire=14.days --all` (README §5.4,
+/// design-internal-store.md §8's fuller flag list).
+///
+/// **Design-doc correction:** the source docs' flag list also names
+/// `--geometric=2` on the cruft repack. Real git refuses that combination
+/// outright (`fatal: options '--geometric' and '-A/-a' cannot be used
+/// together` — `--cruft` implies an `-A`-style whole-repo repack, which is
+/// a different STRATEGY from `--geometric`'s incremental one; confirmed
+/// against CI's git by a failing fixture test), so it is dropped here.
+/// `--all` on the reflog expire (not in the README's shorthand) is a
+/// deliberate build-time addition: without it `git reflog expire` only
+/// ever touches the ref(s) named on its command line, and a bare store
+/// has no branch reflog of its own to default to — omitting it would make
+/// that call a byte-identical no-op.
 pub fn run_monthly(git: &StoreGit, git_dir: &Path) -> Result<(), StoreGitError> {
     git.run(
         GitCall::new(
@@ -393,7 +401,6 @@ pub fn run_monthly(git: &StoreGit, git_dir: &Path) -> Result<(), StoreGitError> 
             GitArgs::new("repack")
                 .flag("--cruft")
                 .flag("-d")
-                .flag("--geometric=2")
                 .flag("--cruft-expiration=2.weeks.ago")
                 .flag("--quiet"),
         )
@@ -630,11 +637,23 @@ pub fn bundle_path(backups_dir: &Path, uuid: &str, ts: i64) -> PathBuf {
 }
 
 /// Write ONE bundle: `refs/kbc/*` minus objects reachable from
-/// `refs/remotes/base/*` (README §5.4 / design-internal-store.md §8 —
-/// `git bundle create <f> --stdin` fed the kbc refs plus `^<base tips>`).
+/// `refs/remotes/base/*` (README §5.4 / design-internal-store.md §8).
 /// `Skipped { reason: "no-refs" }` when the store has no `refs/kbc/*` yet
 /// (a freshly seeded store with no reviews) — `git bundle create` refuses
 /// an empty ref list, and an empty bundle is not a useful backup anyway.
+///
+/// **Design-doc correction (BUILDER-RULES: code-vs-design discrepancy):**
+/// the source docs describe this as `git bundle create <f> --stdin` fed
+/// the refs on stdin. Real git has no such flag — `git bundle create`'s
+/// own `--help` lists only `-q/--quiet`, `--progress`, `--version=<n>`,
+/// confirmed against CI's git by a failing fixture test
+/// (`error: unknown option 'stdin'`). This function instead passes every
+/// ref as a POSITIONAL rev-list argument (the grammar `git bundle create
+/// <file> <git-rev-list-args>` documents), which is exactly how `git
+/// rev-list`/`git log` take a ref list too. The store's own
+/// `MAX_KBC_REFS` cap (10,000) sits comfortably under Linux's ARG_MAX
+/// with `env_clear()`'s already-tiny environment, so there is no practical
+/// case this overflows argv.
 pub fn write_bundle(
     git: &StoreGit,
     git_dir: &Path,
@@ -645,30 +664,28 @@ pub fn write_bundle(
         return Ok(BundleOutcome::Skipped { reason: "no-refs" });
     }
     let base_refs = super::seed::list_refs(git, git_dir, &["refs/remotes/base/"])?;
-    let mut stdin = String::new();
-    for (_, name) in &kbc_refs {
-        stdin.push_str(name);
-        stdin.push('\n');
-    }
-    for (_, name) in &base_refs {
-        stdin.push('^');
-        stdin.push_str(name);
-        stdin.push('\n');
-    }
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let args = GitArgs::new("bundle")
+    let mut args = GitArgs::new("bundle")
         .flag("create")
-        .flag("--stdin")
         .flag("--quiet")
         .end_of_options()
         .abs_path(dest)
         .map_err(|e| MaintError::Other(e.to_string()))?;
+    for (_, name) in &kbc_refs {
+        let r = super::url::RefName::parse(name)
+            .map_err(|_| MaintError::Other(format!("unparseable kbc ref: {name}")))?;
+        args = args.refname(&r);
+    }
+    for (_, name) in &base_refs {
+        let r = super::url::RefName::parse(name)
+            .map_err(|_| MaintError::Other(format!("unparseable base ref: {name}")))?;
+        args = args.exclude_ref(&r);
+    }
     git.run(
         GitCall::new("bundle-create", args)
             .git_dir(git_dir)
-            .stdin(stdin.into_bytes())
             .timeout(MAINT_TIMEOUT),
     )?;
     Ok(BundleOutcome::Written)

@@ -255,6 +255,18 @@ impl GitArgs {
         self
     }
 
+    /// A ref name as a rev-list EXCLUSION (`^<ref>`) — the grammar
+    /// `git bundle create <file> <git-rev-list-args>` and `git rev-list`
+    /// itself share (RS-U9, README §5.4/§8: a backup bundle carries
+    /// `refs/kbc/*` minus what `refs/remotes/base/*` reaches). The `^`
+    /// prefix is a static, code-controlled literal composed onto an
+    /// already-validated [`RefName`] — never attacker input, same
+    /// "compose from validated parts" posture as [`Self::composed`].
+    pub fn exclude_ref(mut self, r: &RefName) -> Self {
+        self.v.push(format!("^{}", r.as_str()).into());
+        self
+    }
+
     pub fn rev(mut self, r: &Revspec) -> Self {
         self.v.push(r.as_str().into());
         self
