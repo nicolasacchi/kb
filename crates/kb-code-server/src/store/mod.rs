@@ -390,17 +390,15 @@ impl Store {
         let pre_migration = crate::backup::ensure_for_epoch_crossing(&conn, path, schema_epoch())
             .map_err(|e| StoreError::BackupRequired(e.to_string()))?;
 
-        // RS-U9 — the restore guard's automatic detector, plus a
-        // belt-and-suspenders review-store bundle backup: on a gated-epoch
-        // snapshot (`pre_migration.is_some()`) OR a freshly detected
-        // restore (`just_flagged`), bundle-back up every `ready` store
-        // NOW, before any scheduled GC gets a chance to touch a ref
-        // (design-internal-store.md §8 / README §5.4's "on a gated-epoch
-        // snapshot … or a restore"). Best-effort: `review_stores` may not
-        // exist yet on the FIRST V0045 crossing itself
-        // (`backup_all_ready_stores` checks and no-ops), and any failure
-        // here is a warning, never a boot refusal — a backup pass is a
-        // safety net, not a precondition for opening the volume.
+        // RS-U9 — the restore guard's automatic detector: filesystem only
+        // (a sentinel read/write), no git, no network. Should-fix review
+        // finding — "NO git I/O on the boot path": the actual bundle
+        // backup this MAY warrant (a gated-epoch snapshot or a freshly
+        // detected restore, design-internal-store.md §8 / README §5.4's
+        // "on a gated-epoch snapshot … or a restore") is deferred to
+        // `spawn_boot_bundle_backup` (`lib.rs`, spawned AFTER the daemon
+        // binds) via a marker file — this function only ever WRITES that
+        // marker, never runs git itself.
         {
             let state_dir = path.parent().unwrap_or_else(|| Path::new("."));
             let guard_path = crate::review_store::maint::restore_guard::path_for(state_dir);
@@ -412,36 +410,23 @@ impl Store {
             if guard.just_flagged {
                 tracing::warn!(
                     reason = ?guard.flagged_reason,
-                    "kb-code: review-store restore guard flagged — scheduled ref GC stays \
-                     dry-run-only until an operator runs `kb-code store gc --repo R --yes`"
+                    "kb-code: review-store restore guard flagged — a real GC apply stays \
+                     refused per-store until an operator runs `kb-code store gc --repo R --yes`"
                 );
             }
             if pre_migration.is_some() || guard.just_flagged {
-                let git_home = state_dir.join(crate::review_store::settings::GIT_HOME_DIR);
-                match crate::review_store::git::StoreGit::new(&git_home) {
-                    Ok(git) => {
-                        let report = crate::review_store::maint::backup_all_ready_stores(
-                            &conn,
-                            &git,
-                            state_dir,
-                            chrono::Utc::now().timestamp(),
-                        );
-                        let errors: Vec<&str> = report
-                            .stores
-                            .iter()
-                            .filter_map(|s| s.error.as_deref())
-                            .collect();
-                        if !errors.is_empty() {
-                            tracing::warn!(
-                                ?errors,
-                                "kb-code: review-store boot-time bundle backup had errors"
-                            );
-                        }
-                    }
-                    Err(e) => tracing::warn!(
+                let reason = if pre_migration.is_some() {
+                    "gated-epoch-snapshot"
+                } else {
+                    "restore-detected"
+                };
+                if let Err(e) =
+                    crate::review_store::maint::mark_boot_backup_pending(state_dir, reason)
+                {
+                    tracing::warn!(
                         error = %e,
-                        "kb-code: review-store boot-time bundle backup: could not build the store git spawner"
-                    ),
+                        "kb-code: could not mark a boot-time review-store bundle backup pending"
+                    );
                 }
             }
         }
