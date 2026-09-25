@@ -41,6 +41,8 @@ fn capture_answers_map_onto_the_closed_reason_set() {
         (true, Some("base-moved"), false, BaseMoved),
         (true, Some("base-corrected"), false, BaseMoved),
         (true, Some("retarget"), false, Retargeted),
+        // A forced re-mint of an identical pair: nothing moved.
+        (true, Some("forced"), false, Unchanged),
         // A followed retarget whose merge-base left the pair unchanged.
         (false, Some("push"), true, Retargeted),
     ];
