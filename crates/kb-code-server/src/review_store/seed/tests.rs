@@ -1050,9 +1050,8 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
     // exactly the shape GC exists to reconcile).
     e.store.delete_review(r1).unwrap();
 
-    let member_names = vec!["widgets-01".to_string(), "widgets-02".to_string()];
     let member_ids = e.store.store_members(row.id).unwrap();
-    let keep = gc::keep_set(&e.store, &member_names, &member_ids).unwrap();
+    let keep = gc::keep_set(&e.store, row.id, &member_ids).unwrap();
     let refs = crate::review_store::seed::list_refs(
         e.rs.git().unwrap(),
         &dir,
@@ -1087,11 +1086,16 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
 
 /// RS-U5 — `delete_review_with_refs` on a READY store deletes the
 /// review's `ps<n>`/`ps<n>-base` refs from the STORE (never the user
-/// clone). Under `PrRefScope::StoreWide` it leaves `refs/kbc/pr/<n>`
-/// alone — that decision is the store-wide GC's job (see the test above),
-/// since a shared store's PR ref can be bound by ANOTHER member too.
+/// clone) AND — RS-U5 review fix, temporary until U6 makes
+/// `capture_patchset` store-aware — from the member clone's OWN legacy
+/// copies too (capture still always writes `ps<n>` there today, so a
+/// store-only delete would otherwise leak them forever). Under
+/// `PrRefScope::StoreWide` the STORE's shared `refs/kbc/pr/<n>` is left
+/// alone (deferred to the store-wide GC, see the test above, since it can
+/// be bound by ANOTHER member) — but the CLONE's own `pr/<n>` copy is
+/// always this-repo-only, so it IS cleaned up.
 #[test]
-fn delete_review_with_refs_on_a_ready_store_removes_store_refs_never_the_clone() {
+fn delete_review_with_refs_on_a_ready_store_removes_store_and_legacy_clone_refs() {
     let e = env();
     // widgets-01 alone carries TWO forge remotes and cannot resolve on its
     // own; register widgets-02 (a single remote) FIRST to mint the store
@@ -1127,6 +1131,13 @@ fn delete_review_with_refs_on_a_ready_store_removes_store_refs_never_the_clone()
         &["update-ref", &patchset_base_ref(id, 1), &e.fx.feat_tip],
     );
     git(&dir, &["update-ref", &pr_ref(9), &e.fx.feat_tip]);
+    // `capture_patchset` (unchanged until U6) still always writes into the
+    // work tree too — model that legacy leftover directly.
+    git(
+        &e.fx.one,
+        &["update-ref", &patchset_ref(id, 1), &e.fx.feat_tip],
+    );
+    git(&e.fx.one, &["update-ref", &pr_ref(9), &e.fx.feat_tip]);
 
     let review = e.store.get_review(id).unwrap().unwrap();
     let ctx = GitCtx::for_repo(&e.store, "widgets-01", WorkTreeRoot::user_clone(&e.fx.one));
@@ -1139,6 +1150,7 @@ fn delete_review_with_refs_on_a_ready_store_removes_store_refs_never_the_clone()
         &e.store,
         &bus,
         ctx.primary(),
+        Some(ctx.work_tree()),
         &review,
         PrRefScope::StoreWide,
     )
@@ -1150,12 +1162,20 @@ fn delete_review_with_refs_on_a_ready_store_removes_store_refs_never_the_clone()
     assert!(!refs.contains(&patchset_base_ref(id, 1)), "{refs:?}");
     assert!(
         refs.contains(&pr_ref(9)),
-        "StoreWide scope leaves refs/kbc/pr/<n> for the store-wide GC to decide: {refs:?}"
+        "StoreWide scope leaves the STORE's refs/kbc/pr/<n> for the store-wide GC to decide: {refs:?}"
     );
-    // The member clone was never written to.
+    // The legacy work-tree copies are cleaned up too (the leak this fix
+    // closes) — never left dangling once the review itself is gone.
     let clone_refs = git(&e.fx.one, &["for-each-ref", "--format=%(refname)"]);
-    assert!(!clone_refs.contains(&patchset_ref(id, 1)));
-    assert!(!clone_refs.contains(&patchset_base_ref(id, 1)));
+    assert!(!clone_refs.contains(&patchset_ref(id, 1)), "{clone_refs:?}");
+    assert!(
+        !clone_refs.contains(&patchset_base_ref(id, 1)),
+        "{clone_refs:?}"
+    );
+    assert!(
+        !clone_refs.contains(&pr_ref(9)),
+        "the clone's OWN pr/<n> copy is this-repo-only, so it is always cleaned up: {clone_refs:?}"
+    );
 }
 
 /// RS-U3 benchmark (not part of the suite): seed a store from REAL local

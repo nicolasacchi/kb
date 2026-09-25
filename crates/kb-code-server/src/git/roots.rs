@@ -233,18 +233,13 @@ impl GitCtx {
     /// THE store-resolution function (sync form — call it from a blocking
     /// context; async callers use [`Self::resolve`]). Looks the repo's
     /// store up by name (`Store::store_for_repo_name`) and uses it only
-    /// when its state is `ready`; otherwise — no store, still seeding,
-    /// broken, or a DB error — falls back to `work` and counts the hit.
+    /// when its state is `ready` AND this repo's own member import has
+    /// landed; otherwise — no store, still seeding, broken, this member
+    /// still `MemberPending`, or a DB error — falls back to `work` and
+    /// counts the hit.
     pub fn for_repo(store: &Store, repo_name: &str, work: WorkTreeRoot) -> Self {
         let stats = store.git_fallbacks_handle();
-        let resolved = match store.store_for_repo_name(repo_name) {
-            Ok(Some(row)) if row.state == "ready" => Some(StoreRoot::from_row(&row)),
-            Ok(_) => None,
-            Err(e) => {
-                tracing::warn!(repo = repo_name, error = %e, "kb-code: review-store lookup failed; reading the work tree");
-                None
-            }
-        };
+        let resolved = Self::resolve_ready_store(store, repo_name);
         if resolved.is_none() {
             stats.unresolved.fetch_add(1, Ordering::Relaxed);
         }
@@ -253,6 +248,44 @@ impl GitCtx {
             store: resolved,
             stats,
         }
+    }
+
+    /// RS-U5 review fix — a `ready` STORE row is not enough: a member that
+    /// just joined has its own `repo_stores.legacy_import_json` still
+    /// unset until the background import lands (the same
+    /// `MemberPending` case [`crate::review_store::registry::ReviewStores::
+    /// handle_for_repo`] refuses on), meaning ITS reviews' refs may not be
+    /// in the store yet even though the store itself is ready for OTHER
+    /// members. This mirrors that check without needing a `ReviewStores`
+    /// handle here — both read the same `repo_stores` row.
+    fn resolve_ready_store(store: &Store, repo_name: &str) -> Option<StoreRoot> {
+        let row = match store.store_for_repo_name(repo_name) {
+            Ok(Some(row)) if row.state == "ready" => row,
+            Ok(_) => return None,
+            Err(e) => {
+                tracing::warn!(repo = repo_name, error = %e, "kb-code: review-store lookup failed; reading the work tree");
+                return None;
+            }
+        };
+        let repo_id = match store.repo_id(repo_name) {
+            Ok(Some(id)) => id,
+            Ok(None) => return None,
+            Err(e) => {
+                tracing::warn!(repo = repo_name, error = %e, "kb-code: repo id lookup failed; reading the work tree");
+                return None;
+            }
+        };
+        let pending = match store.repo_store(repo_id) {
+            Ok(m) => m.is_some_and(|m| m.legacy_import_json.is_none()),
+            Err(e) => {
+                tracing::warn!(repo = repo_name, error = %e, "kb-code: member-import lookup failed; reading the work tree");
+                return None;
+            }
+        };
+        if pending {
+            return None;
+        }
+        Some(StoreRoot::from_row(&row))
     }
 
     /// [`Self::for_repo`] for a configured repo entry.
@@ -517,6 +550,40 @@ mod tests {
         let ctx = GitCtx::for_repo(&store, "widgets", WorkTreeRoot::user_clone(tmp.path()));
         assert!(ctx.is_fallback());
         assert_eq!(store.git_fallback_stats().unresolved, 1);
+    }
+
+    /// RS-U5 review fix — a `ready` STORE row is not enough on its own: a
+    /// member whose own import hasn't landed yet (`repo_stores.
+    /// legacy_import_json` still unset) must fall back exactly like an
+    /// absent store, mirroring `ReviewStores::handle_for_repo`'s
+    /// `MemberPending` refusal.
+    #[test]
+    fn for_repo_falls_back_while_the_member_import_is_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(&tmp.path().join("kbc.sqlite")).unwrap();
+        let repo_id = store.upsert_repo("widgets", "/nonexistent").unwrap();
+        let store_id = store
+            .create_review_store(
+                "11111111-1111-4111-8111-111111111111",
+                "github.com/acme/widgets",
+                "/nonexistent.git",
+                None,
+                None,
+                1,
+            )
+            .unwrap();
+        store
+            .set_review_store_state(store_id, "ready", None)
+            .unwrap();
+        // Leaves `legacy_import_json` at its column default (NULL, "not
+        // imported yet") — exactly the state a member sits in between
+        // joining and its background import landing.
+        store.add_repo_to_store(repo_id, store_id).unwrap();
+        let ctx = GitCtx::for_repo(&store, "widgets", WorkTreeRoot::user_clone(tmp.path()));
+        assert!(
+            ctx.is_fallback(),
+            "a ready store with a still-pending member must fall back, not resolve"
+        );
     }
 
     #[test]
