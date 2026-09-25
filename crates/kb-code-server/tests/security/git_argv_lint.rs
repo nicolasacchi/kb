@@ -181,6 +181,10 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     // in `review_store/maint.rs` spawns nothing directly — every git call
     // goes through the already-audited `StoreGit`.
     "review_store/maint/tests.rs",
+    // RS-U10b — `#[cfg(test)]` fixtures for `review sync`'s store path
+    // (the same synthetic acme/widgets forge + member + author clones as
+    // `review_base/tests.rs`). `review_sync.rs` itself spawns nothing.
+    "review_sync/tests.rs",
     "reviews.rs",
     "scip.rs",
     "sessiondiff/git_diff.rs",

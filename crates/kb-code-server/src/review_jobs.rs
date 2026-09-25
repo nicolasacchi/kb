@@ -58,6 +58,11 @@ pub const JOB_TTL_SECS: u64 = 3600;
 #[derive(Debug, Clone)]
 pub struct ReviewJob {
     pub id: String,
+    /// RS-U10b — what the job runs: `start-pr` (V76-R1a) or `sync`
+    /// (`crate::review_sync`). A job only ATTACHES to a running job of the
+    /// SAME kind, so a `review sync` never hands a start-pr poller its
+    /// differently-shaped result (or the reverse).
+    pub kind: &'static str,
     pub repo: String,
     pub pr_number: u32,
     /// `running` | `done` | `failed` — the closed vocabulary the wire
@@ -81,6 +86,10 @@ pub struct ReviewJob {
     /// (`urn:kb:errors:stale-mirror`) — a poller branches on this, never
     /// on the prose.
     pub error_type: Option<&'static str>,
+    /// RS-U10b — the HTTP status the synchronous route would have
+    /// answered for a failed job (`400`, `409`, `502`, …), so a poller
+    /// maps it onto its exit-code table without re-deriving it from prose.
+    pub error_status: Option<u16>,
 }
 
 /// The job table: `job_id` → job. `parking_lot::Mutex` (the 2026-09-01
@@ -119,17 +128,55 @@ pub async fn start_or_attach(
     body: CreateReviewPrBody,
     on_closed: Option<OnClosed>,
 ) -> Result<Response, ApiError> {
+    let repo = body.repo.clone();
+    let pr_number = body.pr_number;
+    start_job(
+        state,
+        "start-pr",
+        repo,
+        pr_number,
+        move |st, handle| async move {
+            crate::reviews::create_review_pr_value(&st, body, Some(handle), on_closed).await
+        },
+    )
+    .await
+}
+
+/// RS-U10a/U10b — the generalized daemon-side job: attach to a RUNNING
+/// job of the same `(kind, repo, pr_number)` or mint one and spawn `run`.
+/// `run` produces the same `(status, body)` pair its synchronous route
+/// would answer; a success status settles `done` with the body under
+/// `result`, anything else `failed`. `pr_number` is `0` for a job that is
+/// not about one PR (`review sync --open`).
+pub async fn start_job<F, Fut>(
+    state: SharedState,
+    kind: &'static str,
+    repo: String,
+    pr_number: u32,
+    run: F,
+) -> Result<Response, ApiError>
+where
+    F: FnOnce(SharedState, JobHandle) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(StatusCode, serde_json::Value), ApiError>>
+        + Send
+        + 'static,
+{
     sweep(&state.review_jobs);
 
-    // Attach: one fetch per (repo, PR) at a time. A settled job (done or
-    // failed) does NOT attach — a caller retrying after a failure gets a
-    // fresh job, and a caller re-POSTing after success runs
-    // `create_review_pr_value` again (OPEN → reuse 200; CLOSED → 409
-    // unless `on_closed=reopen|new`).
+    // Attach: one fetch per (kind, repo, PR) at a time. A settled job
+    // (done or failed) does NOT attach — a caller retrying after a failure
+    // gets a fresh job, and a caller re-POSTing after success runs the
+    // work again (start-pr: OPEN → reuse 200; CLOSED → 409 unless
+    // `on_closed=reopen|new`; sync: idempotent by construction).
     let attached = {
         let jobs = state.review_jobs.lock();
         jobs.values()
-            .find(|j| j.status == "running" && j.repo == body.repo && j.pr_number == body.pr_number)
+            .find(|j| {
+                j.status == "running"
+                    && j.kind == kind
+                    && j.repo == repo
+                    && j.pr_number == pr_number
+            })
             .map(|j| j.id.clone())
     };
     if let Some(job_id) = attached {
@@ -138,6 +185,7 @@ pub async fn start_or_attach(
             [(header::CACHE_CONTROL, "no-store")],
             Json(serde_json::json!({
                 "job_id": job_id,
+                "kind": kind,
                 "status": "running",
                 "attached": true,
             })),
@@ -153,8 +201,9 @@ pub async fn start_or_attach(
             job_id.clone(),
             ReviewJob {
                 id: job_id.clone(),
-                repo: body.repo.clone(),
-                pr_number: body.pr_number,
+                kind,
+                repo,
+                pr_number,
                 status: "running",
                 stage: "fetch",
                 created: Instant::now(),
@@ -162,6 +211,7 @@ pub async fn start_or_attach(
                 result: None,
                 error: None,
                 error_type: None,
+                error_status: None,
             },
         );
     }
@@ -170,8 +220,7 @@ pub async fn start_or_attach(
     let id2 = job_id.clone();
     tokio::spawn(async move {
         let handle: JobHandle = (state2.review_jobs.clone(), id2.clone());
-        let outcome =
-            crate::reviews::create_review_pr_value(&state2, body, Some(handle), on_closed).await;
+        let outcome = run(state2.clone(), handle).await;
         // One lock, dropped before this task ends — never across an await.
         let mut jobs = state2.review_jobs.lock();
         if let Some(j) = jobs.get_mut(&id2) {
@@ -179,20 +228,24 @@ pub async fn start_or_attach(
                 Ok((status, value)) if status.is_success() => {
                     j.status = "done";
                     j.stage = "done";
-                    j.review_id = value.get("id").and_then(serde_json::Value::as_i64);
+                    j.review_id = value
+                        .get("id")
+                        .or_else(|| value.get("review_id"))
+                        .and_then(serde_json::Value::as_i64);
                     j.result = Some(value);
                 }
-                Ok((_status, value)) => {
+                Ok((status, value)) => {
                     // A non-success VALUE outcome (closed-binding 409
                     // [`ERR_REVIEW_CLOSED`], historically also the
                     // duplicate-binding 409) — the poller sees the same
                     // payload the synchronous route would have returned.
                     j.status = "failed";
+                    j.error_status = Some(status.as_u16());
                     j.error = value
                         .get("error")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
-                        .or_else(|| Some("start-pr failed".to_string()));
+                        .or_else(|| Some(format!("{kind} failed")));
                     if value.get("type").and_then(|v| v.as_str()) == Some(ERR_REVIEW_CLOSED) {
                         j.error_type = Some(ERR_REVIEW_CLOSED);
                     }
@@ -200,6 +253,7 @@ pub async fn start_or_attach(
                 }
                 Err(e) => {
                     j.status = "failed";
+                    j.error_status = Some(e.status_code().as_u16());
                     j.error_type = e.problem_type();
                     j.error = Some(e.message().to_string());
                 }
@@ -212,6 +266,7 @@ pub async fn start_or_attach(
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
             "job_id": job_id,
+            "kind": kind,
             "status": "running",
         })),
     )
@@ -237,6 +292,7 @@ pub async fn review_job_route(
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
             "job_id": j.id,
+            "kind": j.kind,
             "status": j.status,
             "progress": { "stage": j.stage },
             "repo": j.repo,
@@ -244,6 +300,7 @@ pub async fn review_job_route(
             "review_id": j.review_id,
             "error": j.error,
             "error_type": j.error_type,
+            "error_status": j.error_status,
             "result": j.result,
         })),
     )
@@ -298,6 +355,7 @@ mod tests {
         let jobs: ReviewJobs = parking_lot::Mutex::new(HashMap::new());
         let fresh = ReviewJob {
             id: "job_fresh".into(),
+            kind: "start-pr",
             repo: "r".into(),
             pr_number: 1,
             status: "running",
@@ -307,6 +365,7 @@ mod tests {
             result: None,
             error: None,
             error_type: None,
+            error_status: None,
         };
         let mut stale = fresh.clone();
         stale.id = "job_stale".into();
@@ -327,6 +386,7 @@ mod tests {
             "job_x".to_string(),
             ReviewJob {
                 id: "job_x".into(),
+                kind: "start-pr",
                 repo: "r".into(),
                 pr_number: 1,
                 status: "running",
@@ -336,6 +396,7 @@ mod tests {
                 result: None,
                 error: None,
                 error_type: None,
+                error_status: None,
             },
         );
         let handle: JobHandle = (Arc::new(jobs), "job_x".to_string());
