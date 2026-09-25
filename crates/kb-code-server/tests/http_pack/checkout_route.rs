@@ -262,6 +262,17 @@ async fn checkout_of_a_store_only_review_tip_fetches_by_sha_and_writes_no_refs_k
         .set_review_store_state(store_id, "ready", None)
         .unwrap());
     store.add_repo_to_store(repo_id, store_id).unwrap();
+    // RS-U5 review fix — `GitCtx::for_repo` also requires this member's OWN
+    // import to have landed (`repo_stores.legacy_import_json` set), the
+    // same `MemberPending` check `ReviewStores::handle_for_repo` makes.
+    // Without this, a `ready` store row still resolves to the work-tree
+    // fallback for a member whose import never ran (this test's case).
+    store
+        .set_repo_store_legacy_import(
+            repo_id,
+            Some(r#"{"at":1,"imported":1,"conflicts":[],"missing_reviews":[]}"#),
+        )
+        .unwrap();
     drop(store);
 
     let before = ref_tree(dir);
