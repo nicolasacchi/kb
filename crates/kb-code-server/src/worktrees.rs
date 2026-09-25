@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::RepoEntry;
 use crate::entities::RouteContract;
+use crate::git::roots::GitCtx;
 use crate::git::Revspec;
 use crate::routes::ApiError;
 use crate::state::SharedState;
@@ -343,6 +344,23 @@ pub enum WorktreeError {
     Store(#[from] crate::store::StoreError),
     #[error("workspace error: {0}")]
     Workspace(#[from] workspace::WorkspaceError),
+}
+
+/// RS-U8 — a [`crate::checkout::CheckoutError`] from the review-store
+/// bridge ([`crate::checkout::resolve_target_via_store`], reused by
+/// [`create_worktree`]'s `branch` arm) folds into the shape this module
+/// already reports, so a fetch-by-sha failure renders exactly like any
+/// other `git` failure a caller of this route would see.
+impl From<crate::checkout::CheckoutError> for WorktreeError {
+    fn from(e: crate::checkout::CheckoutError) -> Self {
+        match e {
+            crate::checkout::CheckoutError::Spawn(err) => WorktreeError::Spawn(err),
+            crate::checkout::CheckoutError::GitFailed { args, stderr } => {
+                WorktreeError::GitFailed { args, stderr }
+            }
+            other => WorktreeError::Refused(other.to_string()),
+        }
+    }
 }
 
 impl From<crate::git::RevspecError> for WorktreeError {
@@ -749,7 +767,23 @@ pub fn create_worktree(
     if let Some(nb) = new_branch {
         run_git_path(&main, &["worktree", "add", "-b", nb.as_str()], path, &[])?;
     } else if let Some(b) = branch {
-        run_git_path(&main, &["worktree", "add"], path, &[b.as_str()])?;
+        // RS-U8 — `b` may name a review/PR tip that lives ONLY in this
+        // repo's review store (a sha, or a `refs/kbc/*` name): resolve it
+        // through the SAME bridge `checkout::switch_repo` uses, so
+        // `worktree add` fetches the object by sha with no ref write
+        // before it ever runs, and a repo whose store isn't `ready` (or a
+        // target that isn't store-addressable) is untouched — see
+        // `checkout::resolve_target_via_store`'s doc. `main` — the SHARED
+        // object database every linked worktree of this workspace reads
+        // from — is where the fetch has to land, not `path` (which does
+        // not exist yet).
+        let git_ctx = repos
+            .iter()
+            .find(|r| r.path == main)
+            .map(|r| GitCtx::for_entry(store, r));
+        let store_root = git_ctx.as_ref().and_then(GitCtx::store_root);
+        let effective = crate::checkout::resolve_target_via_store(&main, store_root, b)?;
+        run_git_path(&main, &["worktree", "add"], path, &[effective.as_str()])?;
     }
     let _ = refresh_workspace(store, repos, workspace_id, &main)?;
     let ident = classify(path);
