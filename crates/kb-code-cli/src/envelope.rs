@@ -52,10 +52,10 @@ pub const EXIT_OK: i32 = 0;
 pub const EXIT_GENERIC: i32 = 1;
 /// clap's OWN exit code for a parse/usage error (`--help`, unknown flag,
 /// missing required arg) — `Cli::parse()` calls `std::process::exit` with
-/// this before any code in this module ever runs. Never constructed HERE
-/// (same reason as [`EXIT_OK`]) — documented so the full table reads in
-/// one place.
-#[allow(dead_code)]
+/// this before any code in this module ever runs. RS-U10a's review verbs
+/// (`crate::review_agent`) reuse the slot for the same class of caller
+/// mistake clap cannot see: a malformed `<id>`/`pr:<N>`/`<id>/ps<n>`
+/// address, an ambiguous `pr:<N>`, or a daemon 400.
 pub const EXIT_USAGE: i32 = 2;
 /// The daemon's response was well-formed but reports a conflict with
 /// current state (HTTP 409 — a drifted suggestion apply, a dirty-tree
@@ -105,6 +105,79 @@ pub fn print_ok<T: Serialize>(
         Err(_) => println!("{body}"),
     }
 }
+
+// ── RS-U10a (agent-facing review CLI, README §13) — begin ──
+
+/// A suggested follow-up command, as an argv vector (`["kb-code", "review",
+/// "diff", "12", "--patch"]`) — never a shell string, so an agent can
+/// exec it without quoting rules.
+pub type NextArgv = Vec<String>;
+
+/// The success envelope as a VALUE: [`print_ok`]'s shape plus a top-level
+/// `next` array of suggested follow-up argvs. The RS-U10a verbs build it
+/// through this function so a test can validate the exact bytes a verb
+/// would print without a daemon.
+pub fn ok_value<T: Serialize>(
+    schema: &str,
+    data: T,
+    warnings: Vec<String>,
+    degraded: bool,
+    empty_reason: Option<&str>,
+    next: Vec<NextArgv>,
+) -> serde_json::Value {
+    json!({
+        "schema": schema,
+        "ok": true,
+        "data": data,
+        "warnings": warnings,
+        "degraded": degraded,
+        "empty_reason": empty_reason,
+        "next": next,
+    })
+}
+
+/// `code` as a URN: `"not-found"` → `"urn:kb:errors:not-found"`; an
+/// already-URN code passes through unchanged.
+pub fn error_urn(code: &str) -> String {
+    if code.starts_with("urn:") {
+        code.to_string()
+    } else {
+        format!("urn:kb:errors:{code}")
+    }
+}
+
+/// The typed error envelope as a VALUE: `{ok:false, error:{code (a URN),
+/// message, hint, next}}` (+ `candidates` when an address was ambiguous).
+/// Printed to STDERR by the RS-U10a verbs — stdout stays reserved for the
+/// success document, exactly like [`print_err`].
+pub fn err_value(
+    code: &str,
+    message: &str,
+    hint: Option<&str>,
+    next: &[NextArgv],
+    candidates: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut error = json!({
+        "code": error_urn(code),
+        "message": message,
+        "hint": hint,
+        "next": next,
+    });
+    if let Some(c) = candidates {
+        error["candidates"] = c.clone();
+    }
+    json!({ "ok": false, "error": error })
+}
+
+/// Pretty-print a value to stdout (the RS-U10a success path).
+pub fn print_value(v: &serde_json::Value) {
+    match serde_json::to_string_pretty(v) {
+        Ok(s) => println!("{s}"),
+        Err(_) => println!("{v}"),
+    }
+}
+
+// ── RS-U10a — end ──
 
 /// Print the error envelope (`{ok:false, error:{code, message, hint}}`) to
 /// STDERR. `code` is a short machine tag (e.g. `"unreachable"`,

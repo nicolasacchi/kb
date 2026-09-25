@@ -960,8 +960,30 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/reviews/jobs/{id}",
             get(crate::review_jobs::review_job_route),
         )
+        // RS-U10a — `GET /api/reviews/find?pr=N[&repo=R]`: the PR lookup
+        // behind `kb-code review find` and `pr:<N>` addressing. Literal
+        // `/reviews/find` at `/reviews/{id}`'s depth (literals win, same
+        // as `/reviews/inbox`). Bearer.
+        .route("/reviews/find", get(crate::review_views::review_find_route))
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))
+        // RS-U10a — the patchset's own git views, computed by the daemon
+        // from the patchset row's base/tip shas through `GitCtx` (store
+        // once ready, work tree otherwise) and never from `refs/kbc/*`.
+        // Ordinary bearer reads; `/cat` and the patch text honour the
+        // secret denylist (`crate::review_views`' own doc).
+        .route(
+            "/reviews/{id}/diff",
+            get(crate::review_views::review_diff_route),
+        )
+        .route(
+            "/reviews/{id}/log",
+            get(crate::review_views::review_log_route),
+        )
+        .route(
+            "/reviews/{id}/cat",
+            get(crate::review_views::review_cat_route),
+        )
         .route("/reviews/{id}/interdiff", get(reviews::review_interdiff))
         .route(
             "/reviews/{id}/annotations",
