@@ -9,7 +9,14 @@ use std::process::Command;
 
 use super::*;
 use crate::config::{RepoEntry, ReviewSection};
+use crate::git::roots::{GitCtx, WorkTreeRoot};
+use crate::review_store::gc;
 use crate::review_store::registry::{Registration, ReviewStores, StoreUnavailable};
+// `patchset_ref`/`patchset_base_ref` come from `super::*` below (this
+// module's OWN copies, `seed.rs:patchset_ref`/`patchset_base_ref` —
+// byte-identical strings to `crate::reviews`'s, RS-U3's existing
+// duplication, not a new one).
+use crate::reviews::{delete_review_with_refs, pr_ref, PrRefScope};
 use crate::store::Store;
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -896,6 +903,49 @@ fn a_missing_base_tip_marks_the_review() {
     assert_eq!(rep.objects_missing, vec![id]);
 }
 
+/// RS-U5 — README §5.4/§8's invariant extended to the `-base` pin: a
+/// patchset's `base_tip_sha` whose object IS present (reachable via the
+/// member's own imported heads, same as the tip) gets its
+/// `ps<n>-base` ref recreated alongside `ps<n>`, even though neither was
+/// ever written into the member clone itself.
+#[test]
+fn a_present_base_tip_gets_its_base_ref_recreated() {
+    let e = env();
+    let id = e
+        .store
+        .create_review("widgets-01", None, "main", "x", None, 1)
+        .unwrap();
+    // main_tip and feat_tip are both reachable in widgets-01 (the fixture's
+    // `main`/`feature/x` branches), so both objects land in the store via
+    // the ordinary heads import — no sha-recovery needed for either.
+    e.store
+        .insert_patchset_with_base(
+            id,
+            1,
+            &e.fx.main_tip,
+            &e.fx.main_tip,
+            Some(&e.fx.feat_tip),
+            Some("push"),
+            1,
+        )
+        .unwrap();
+    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
+    let rep = e.rs.seed(&e.store, sid, false).unwrap();
+    assert!(rep.objects_missing.is_empty(), "{:?}", rep.objects_missing);
+    let refs = store_refs(Path::new(&row_for(&e, "widgets-01").git_dir));
+    assert!(
+        refs.contains(&patchset_ref(id, 1)),
+        "tip ref recreated: {refs:?}"
+    );
+    assert!(
+        refs.contains(&patchset_base_ref(id, 1)),
+        "base_tip_sha's object is present, so its -base ref is recreated: {refs:?}"
+    );
+    // The member clone was never written to.
+    assert!(!git(&e.fx.one, &["for-each-ref", "--format=%(refname)"])
+        .contains(&patchset_base_ref(id, 1)));
+}
+
 #[test]
 fn boot_never_resets_a_seed_that_is_live_in_process() {
     let e = env();
@@ -954,6 +1004,131 @@ fn store_uuids_and_git_versions_are_validated() {
         "this box runs a new git"
     );
     assert!(git_too_old(e.rs.git().unwrap(), (999, 0)).is_some());
+}
+
+/// RS-U5 / README §15.1, end to end (not `gc.rs`'s pure unit tests): two
+/// REAL member clones sharing one store, reviews in both — the store-wide
+/// GC engine (`gc::keep_set`/`attribute`/`delete_candidates`/`apply`)
+/// deletes a gone review's refs and NEVER touches the other member's.
+#[test]
+fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
+    let e = env();
+    let r1 = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    let two_tip = git(&e.fx.two, &["rev-parse", "only-in-two"]);
+    let r2 = review_in(&e, "widgets-02", &e.fx.two, &two_tip, &e.fx.main_tip);
+
+    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
+    member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    let rep = e.rs.seed(&e.store, sid, false).unwrap();
+    assert!(rep.objects_missing.is_empty(), "{:?}", rep.objects_missing);
+    let row = row_for(&e, "widgets-01");
+    let dir = PathBuf::from(&row.git_dir);
+    let before = store_refs(&dir);
+    assert!(before.contains(&patchset_ref(r1, 1)), "{before:?}");
+    assert!(before.contains(&patchset_ref(r2, 1)), "{before:?}");
+
+    // r1 "goes away" (deleted through some other path, refs left behind —
+    // exactly the shape GC exists to reconcile).
+    e.store.delete_review(r1).unwrap();
+
+    let member_names = vec!["widgets-01".to_string(), "widgets-02".to_string()];
+    let member_ids = e.store.store_members(row.id).unwrap();
+    let keep = gc::keep_set(&e.store, &member_names, &member_ids).unwrap();
+    let refs = crate::review_store::seed::list_refs(
+        e.rs.git().unwrap(),
+        &dir,
+        &["refs/kbc/", "refs/remotes/work-"],
+    )
+    .unwrap();
+    let attributed = gc::attribute(&refs, &keep);
+    let delete = gc::delete_candidates(&attributed);
+    let delete_names: Vec<String> = delete.iter().map(|c| c.refname.clone()).collect();
+    assert_eq!(delete_names, vec![patchset_ref(r1, 1)], "{delete_names:?}");
+    gc::apply(e.rs.git().unwrap(), &dir, &delete).unwrap();
+
+    let after = store_refs(&dir);
+    assert!(!after.contains(&patchset_ref(r1, 1)), "{after:?}");
+    assert!(
+        after.contains(&patchset_ref(r2, 1)),
+        "member B's ref must survive member A's review going away: {after:?}"
+    );
+    let (i1, i2) = (e.ids["widgets-01"], e.ids["widgets-02"]);
+    assert!(after.contains(&format!("refs/remotes/work-{i1}/main")));
+    assert!(after.contains(&format!("refs/remotes/work-{i2}/main")));
+    // Neither member clone was ever written to by the GC.
+    for clone in [&e.fx.one, &e.fx.two] {
+        assert!(
+            !git(clone, &["for-each-ref", "--format=%(refname)"]).contains(&patchset_ref(r1, 1))
+        );
+    }
+}
+
+/// RS-U5 — `delete_review_with_refs` on a READY store deletes the
+/// review's `ps<n>`/`ps<n>-base` refs from the STORE (never the user
+/// clone). Under `PrRefScope::StoreWide` it leaves `refs/kbc/pr/<n>`
+/// alone — that decision is the store-wide GC's job (see the test above),
+/// since a shared store's PR ref can be bound by ANOTHER member too.
+#[test]
+fn delete_review_with_refs_on_a_ready_store_removes_store_refs_never_the_clone() {
+    let e = env();
+    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
+    let rep = e.rs.seed(&e.store, sid, false).unwrap();
+    assert!(rep.objects_missing.is_empty(), "{:?}", rep.objects_missing);
+
+    let id = e
+        .store
+        .create_review("widgets-01", None, "main", "feature/x", None, 1)
+        .unwrap();
+    e.store
+        .insert_patchset_with_base(
+            id,
+            1,
+            &e.fx.feat_tip,
+            &e.fx.main_tip,
+            Some(&e.fx.feat_tip),
+            Some("push"),
+            1,
+        )
+        .unwrap();
+    e.store
+        .set_review_pr_binding(id, 9, "acme/widgets", None, None, None)
+        .unwrap();
+    let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
+    git(&dir, &["update-ref", &patchset_ref(id, 1), &e.fx.feat_tip]);
+    git(
+        &dir,
+        &["update-ref", &patchset_base_ref(id, 1), &e.fx.feat_tip],
+    );
+    git(&dir, &["update-ref", &pr_ref(9), &e.fx.feat_tip]);
+
+    let review = e.store.get_review(id).unwrap().unwrap();
+    let ctx = GitCtx::for_repo(&e.store, "widgets-01", WorkTreeRoot::user_clone(&e.fx.one));
+    assert!(
+        !ctx.is_fallback(),
+        "the store must be ready for this test to mean anything"
+    );
+    let bus = kb_core::events::EventBus::default();
+    delete_review_with_refs(
+        &e.store,
+        &bus,
+        ctx.primary(),
+        &review,
+        PrRefScope::StoreWide,
+    )
+    .unwrap();
+
+    assert!(e.store.get_review(id).unwrap().is_none(), "row deleted");
+    let refs = store_refs(&dir);
+    assert!(!refs.contains(&patchset_ref(id, 1)), "{refs:?}");
+    assert!(!refs.contains(&patchset_base_ref(id, 1)), "{refs:?}");
+    assert!(
+        refs.contains(&pr_ref(9)),
+        "StoreWide scope leaves refs/kbc/pr/<n> for the store-wide GC to decide: {refs:?}"
+    );
+    // The member clone was never written to.
+    let clone_refs = git(&e.fx.one, &["for-each-ref", "--format=%(refname)"]);
+    assert!(!clone_refs.contains(&patchset_ref(id, 1)));
+    assert!(!clone_refs.contains(&patchset_base_ref(id, 1)));
 }
 
 /// RS-U3 benchmark (not part of the suite): seed a store from REAL local
