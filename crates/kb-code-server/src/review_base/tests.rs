@@ -1187,6 +1187,16 @@ fn explicit_bases_and_refusals_in_the_store() {
         .unwrap();
     assert_eq!(prepared.policy.mode, BaseMode::Pin);
     assert!(codes(&prepared.warnings).contains(&warn::BASE_PINNED));
+    // The store-backed grammar (retrack's entry point): `origin` maps to
+    // the project, so `origin/main` tracks main; a bare local branch on a
+    // non-PR review stays local.
+    let c = fx.with(|c| c.classify(Some("origin/main"), false)).unwrap();
+    assert_eq!(
+        c.policy,
+        Some(BasePolicy::track("main", SetBy::User, BaseSource::Explicit))
+    );
+    let c = fx.with(|c| c.classify(Some("main"), false)).unwrap();
+    assert_eq!(c.policy.map(|p| p.mode), Some(BaseMode::Local));
     // A branch the forge does not have is a 400, before any row exists.
     let err = fx
         .with(|c| {
