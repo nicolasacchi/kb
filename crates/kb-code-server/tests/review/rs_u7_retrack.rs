@@ -97,7 +97,10 @@ fn cfg_for(dir: &Path, gh_addr: SocketAddr) -> KbCodeConfig {
 /// registration + seeding here, over `POST /api/repos/{name}/store/sync`.
 struct Repo {
     _tmp: tempfile::TempDir,
-    forge: std::path::PathBuf,
+    /// Kept for the fixture's own doc/shape (every push in these tests
+    /// goes through `author`'s `origin` remote, which already points
+    /// here) — no test reads the path back directly.
+    _forge: std::path::PathBuf,
     author: std::path::PathBuf,
     clone: std::path::PathBuf,
 }
@@ -131,7 +134,7 @@ fn fixture_repo() -> (Repo, String) {
     (
         Repo {
             _tmp: tmp,
-            forge,
+            _forge: forge,
             author,
             clone,
         },
@@ -159,17 +162,6 @@ impl Repo {
             ],
         );
         git(&self.author, &["checkout", "-q", "main"]);
-        tip
-    }
-
-    /// Advance the forge's `main` by `n` commits (never the member's).
-    fn advance_main(&self, n: usize, tag: &str) -> String {
-        git(&self.author, &["checkout", "-q", "main"]);
-        let mut tip = String::new();
-        for i in 0..n {
-            tip = commit(&self.author, &format!("main-{tag}-{i}.txt"), tag);
-        }
-        git(&self.author, &["push", "-q", "origin", "main"]);
         tip
     }
 
