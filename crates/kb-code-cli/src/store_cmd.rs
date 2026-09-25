@@ -754,7 +754,6 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
                 std::process::exit(envelope::EXIT_PARTIAL);
             }
         }
-        }
     }
     Ok(())
 }
