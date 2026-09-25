@@ -170,6 +170,12 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     // RS-U3 — `#[cfg(test)]` fixture clones for the seeding/registration
     // tests (synthetic acme/widgets; no caller-supplied values).
     "review_store/seed/tests.rs",
+    // RS-U9 — `#[cfg(test)]` fixture clones + loose-blob/pack-objects
+    // helpers for the maintenance/GC/backup-bundle/restore-guard tests
+    // (synthetic acme/widgets; no caller-supplied values). Production code
+    // in `review_store/maint.rs` spawns nothing directly — every git call
+    // goes through the already-audited `StoreGit`.
+    "review_store/maint/tests.rs",
     "reviews.rs",
     "scip.rs",
     "sessiondiff/git_diff.rs",
