@@ -91,13 +91,27 @@ pub enum Registration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "reason", rename_all = "kebab-case")]
 pub enum StoreUnavailable {
-    Disabled { detail: String },
+    Disabled {
+        detail: String,
+    },
     NotRegistered,
     Absent,
     Seeding,
-    Broken { code: String },
+    Broken {
+        code: String,
+    },
     LockedElsewhere,
-    Error { detail: String },
+    /// The store is ready, but THIS member joined after the seed and its
+    /// refs are not imported yet (background import pending). Reads fall
+    /// back to the user repo, exactly like an absent store.
+    MemberPending,
+    /// The installed git is older than the store needs.
+    GitTooOld {
+        found: String,
+    },
+    Error {
+        detail: String,
+    },
 }
 
 impl StoreUnavailable {
@@ -109,6 +123,8 @@ impl StoreUnavailable {
             Self::Seeding => "store-seeding",
             Self::Broken { .. } => "store-broken",
             Self::LockedElsewhere => "store-locked",
+            Self::MemberPending => "store-member-pending",
+            Self::GitTooOld { .. } => "git-too-old",
             Self::Error { .. } => "store-error",
         }
     }
@@ -184,6 +200,39 @@ pub struct ReviewStores {
     /// store ids being seeded by this process right now.
     seeding: parking_lot::Mutex<BTreeSet<i64>>,
     registrations: parking_lot::Mutex<BTreeMap<String, Registration>>,
+    /// `Some(found)` once a probe showed git < 2.41 (lazy, first use).
+    git_version: std::sync::OnceLock<Option<String>>,
+    /// uuid → (taken at, stats): `store show` never walks a store more
+    /// than once per [`STATS_TTL`].
+    stats_cache: parking_lot::Mutex<HashMap<String, (std::time::Instant, seed::StoreStats)>>,
+}
+
+/// How long a store's disk walk is reused by `store show`.
+pub const STATS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Is `s` a kb-minted v4 uuid (lower-case hex, 8-4-4-4-12, version 4)?
+/// Checked before a DB-held uuid becomes a path or a config value.
+pub fn is_store_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            14 => *c == b'4',
+            _ => matches!(c, b'0'..=b'9' | b'a'..=b'f'),
+        })
+}
+
+/// Record that `m`'s member import landed (README §5.2 step 2): the
+/// per-member marker. `repo_stores.legacy_import_json` NULL = not imported.
+fn mark_imported(store: &Store, m: &seed::MemberImport) {
+    let li = serde_json::json!({
+        "at": now(),
+        "imported": m.review_refs,
+        "heads": m.heads,
+        "pruned": m.pruned,
+        "conflicts": m.conflicts,
+    });
+    let _ = store.set_repo_store_legacy_import(m.repo_id, Some(&li.to_string()));
 }
 
 impl std::fmt::Debug for ReviewStores {
@@ -326,6 +375,8 @@ impl ReviewStores {
             locked_elsewhere: Default::default(),
             seeding: Default::default(),
             registrations: Default::default(),
+            git_version: std::sync::OnceLock::new(),
+            stats_cache: Default::default(),
         }
     }
 
@@ -353,15 +404,116 @@ impl ReviewStores {
         if let Some(d) = &self.settings.disabled {
             return Some(StoreUnavailable::Disabled { detail: d.clone() });
         }
-        if self.git.is_none() {
+        let Some(git) = self.git.as_ref() else {
             return Some(StoreUnavailable::Disabled {
                 detail: self
                     .git_error
                     .clone()
                     .unwrap_or_else(|| "store git spawner unavailable".into()),
             });
+        };
+        let too_old = self
+            .git_version
+            .get_or_init(|| seed::git_too_old(git, seed::MIN_GIT))
+            .clone();
+        too_old.map(|found| StoreUnavailable::GitTooOld { found })
+    }
+
+    /// `store show`'s disk facts, cached for [`STATS_TTL`].
+    pub fn cached_stats(&self, uuid: &str, dir: &Path) -> seed::StoreStats {
+        if let Some((at, s)) = self.stats_cache.lock().get(uuid) {
+            if at.elapsed() < STATS_TTL {
+                return s.clone();
+            }
         }
-        None
+        let s = seed::store_stats(dir);
+        self.stats_cache
+            .lock()
+            .insert(uuid.to_string(), (std::time::Instant::now(), s.clone()));
+        s
+    }
+
+    /// Store ids this process is seeding right now (boot must not reset
+    /// their `seeding` rows).
+    pub fn seeding_ids(&self) -> Vec<i64> {
+        self.seeding.lock().iter().copied().collect()
+    }
+
+    /// Import every member of ready store `store_id` whose import marker is
+    /// unset — a repo that JOINED after the seed (or while it ran). Each
+    /// import runs under that member's fetch lock; the ps-ref recreate
+    /// step under the store's ops lock. Blocking (uses `blocking_lock`):
+    /// call from `spawn_blocking`, never while holding either lock.
+    pub fn import_pending_members(
+        &self,
+        store: &Store,
+        store_id: i64,
+    ) -> Result<Vec<seed::MemberImport>, StoreUnavailable> {
+        if let Some(u) = self.unavailable_reason() {
+            return Err(u);
+        }
+        let git = self.git.as_ref().expect("checked");
+        let db = |e: crate::store::StoreError| StoreUnavailable::Error {
+            detail: e.to_string(),
+        };
+        let row = store
+            .get_review_store(store_id)
+            .map_err(db)?
+            .ok_or(StoreUnavailable::NotRegistered)?;
+        if row.state != "ready" {
+            return Ok(vec![]);
+        }
+        let dir = PathBuf::from(&row.git_dir);
+        let (members, _) = self.members_of(store, store_id);
+        let ops = self.ops_lock(store_id);
+        let mut out = Vec::new();
+        for (r, m) in members {
+            let pending = store
+                .repo_store(r.id)
+                .map_err(db)?
+                .is_some_and(|rs| rs.legacy_import_json.is_none());
+            if !pending {
+                continue;
+            }
+            let fl = self.fetch_lock(store_id, &RemoteName::work(r.id));
+            let _g = fl.blocking_lock();
+            let imp = match seed::import_member(git, &dir, &m, seed::SEED_FETCH_TIMEOUT) {
+                Ok(i) => i,
+                Err(e) => {
+                    tracing::warn!(repo = %r.name, class = %e.class, "review store: member import failed");
+                    continue;
+                }
+            };
+            let patchsets: Vec<ExpectedPatchset> = store
+                .patchsets_for_repos(std::slice::from_ref(&r.name))
+                .map_err(db)?
+                .into_iter()
+                .map(
+                    |(review_id, ps_number, tip_sha, base_sha, base_tip_sha)| ExpectedPatchset {
+                        review_id,
+                        ps_number,
+                        tip_sha,
+                        base_sha,
+                        base_tip_sha,
+                    },
+                )
+                .collect();
+            match seed::verify_connectivity(
+                git,
+                &dir,
+                std::slice::from_ref(&m),
+                &patchsets,
+                Some(&ops),
+            ) {
+                Ok((missing, ok, _, _)) => self.apply_objects_state(store, &missing, &ok),
+                Err(e) => {
+                    tracing::warn!(repo = %r.name, class = %e.class, "review store: member connectivity check failed")
+                }
+            }
+            mark_imported(store, &imp);
+            out.push(imp);
+        }
+        Ok(out)
     }
 
     /// The in-memory registration outcome for `name`, if registration ran.
@@ -397,19 +549,17 @@ impl ReviewStores {
         self.ops_locks.lock().entry(store_id).or_default().clone()
     }
 
-    /// Take (or confirm we hold) the lifetime flock on `uuid`.
-    fn hold_lock(&self, uuid: &str) -> Result<(), StoreUnavailable> {
-        if self.held.lock().contains_key(uuid) {
-            return Ok(());
-        }
+    /// Take the lifetime flock on `uuid`. The caller holds the `held`
+    /// guard for the whole check-acquire-insert, so two same-process opens
+    /// can never race each other into a self-inflicted `store-locked`.
+    fn acquire_lock(&self, uuid: &str) -> Result<StoreLock, StoreUnavailable> {
         std::fs::create_dir_all(&self.settings.root).map_err(|e| StoreUnavailable::Error {
             detail: format!("store root: {}", e.kind()),
         })?;
         match StoreLock::try_acquire(&self.settings.root, uuid) {
             Ok(Some(l)) => {
                 self.locked_elsewhere.lock().remove(uuid);
-                self.held.lock().insert(uuid.to_string(), l);
-                Ok(())
+                Ok(l)
             }
             Ok(None) => {
                 self.locked_elsewhere.lock().insert(uuid.to_string());
@@ -438,7 +588,19 @@ impl ReviewStores {
                 detail: e.to_string(),
             })?
             .ok_or(StoreUnavailable::NotRegistered)?;
-        self.open(store, &row)
+        let handle = self.open(store, &row)?;
+        if let Some(r) = self.repo(repo_name) {
+            let pending = store
+                .repo_store(r.id)
+                .map_err(|e| StoreUnavailable::Error {
+                    detail: e.to_string(),
+                })?
+                .is_some_and(|m| m.legacy_import_json.is_none());
+            if pending {
+                return Err(StoreUnavailable::MemberPending);
+            }
+        }
+        Ok(handle)
     }
 
     /// Mutation admission: `Ok(Some(handle))` for a ready store, `Ok(None)`
@@ -482,11 +644,17 @@ impl ReviewStores {
             }
             _ => return Err(StoreUnavailable::Absent),
         }
+        if !is_store_uuid(&row.uuid) {
+            return Err(StoreUnavailable::Broken {
+                code: "bad-uuid".into(),
+            });
+        }
         let dir = PathBuf::from(&row.git_dir);
-        if !self.held.lock().contains_key(&row.uuid) {
-            self.hold_lock(&row.uuid)?;
+        let mut held = self.held.lock();
+        if !held.contains_key(&row.uuid) {
+            let lock = self.acquire_lock(&row.uuid)?;
             if let Err(p) = manifest::check(&dir, &row.uuid, &row.store_key) {
-                self.held.lock().remove(&row.uuid);
+                drop(lock);
                 let code = p.code();
                 let _ = store.set_review_store_state(
                     row.id,
@@ -503,7 +671,9 @@ impl ReviewStores {
                     StoreUnavailable::Broken { code: code.into() }
                 });
             }
+            held.insert(row.uuid.clone(), lock);
         }
+        drop(held);
         Ok(StoreHandle {
             id: row.id,
             uuid: row.uuid.clone(),
@@ -799,11 +969,12 @@ impl ReviewStores {
             .map_err(|e| e.to_string())?
             .into_iter()
             .map(
-                |(review_id, ps_number, tip_sha, base_sha)| ExpectedPatchset {
+                |(review_id, ps_number, tip_sha, base_sha, base_tip_sha)| ExpectedPatchset {
                     review_id,
                     ps_number,
                     tip_sha,
                     base_sha,
+                    base_tip_sha,
                 },
             )
             .collect();
@@ -906,7 +1077,18 @@ impl ReviewStores {
             .get_review_store(store_id)
             .map_err(db)?
             .ok_or(StoreUnavailable::NotRegistered)?;
-        self.hold_lock(&row.uuid)?;
+        if !is_store_uuid(&row.uuid) {
+            return Err(StoreUnavailable::Broken {
+                code: "bad-uuid".into(),
+            });
+        }
+        {
+            let mut held = self.held.lock();
+            if !held.contains_key(&row.uuid) {
+                let lock = self.acquire_lock(&row.uuid)?;
+                held.insert(row.uuid.clone(), lock);
+            }
+        }
         let dir = PathBuf::from(&row.git_dir);
         if dir.exists() {
             // Already on disk (a DB left `absent`, e.g. after a restore):
@@ -917,11 +1099,17 @@ impl ReviewStores {
                     let (plan, _) = self
                         .plan_for(store, &row)
                         .map_err(|d| StoreUnavailable::Error { detail: d })?;
-                    let (missing, ok, rec, rr) =
-                        seed::verify_connectivity(git, &dir, &plan.members, &plan.patchsets)
-                            .map_err(|e| StoreUnavailable::Error {
-                                detail: e.to_string(),
-                            })?;
+                    let ops = self.ops_lock(row.id);
+                    let (missing, ok, rec, rr) = seed::verify_connectivity(
+                        git,
+                        &dir,
+                        &plan.members,
+                        &plan.patchsets,
+                        Some(&ops),
+                    )
+                    .map_err(|e| StoreUnavailable::Error {
+                        detail: e.to_string(),
+                    })?;
                     self.apply_objects_state(store, &missing, &ok);
                     store
                         .set_review_store_state(
@@ -937,6 +1125,8 @@ impl ReviewStores {
                             ),
                         )
                         .map_err(db)?;
+                    // An adopted directory may predate some members.
+                    let _ = self.import_pending_members(store, row.id);
                     Ok(SeedReport {
                         git_dir: dir.clone(),
                         members: vec![],
@@ -1009,13 +1199,7 @@ impl ReviewStores {
                 }
                 self.apply_objects_state(store, &report.objects_missing, &report.objects_ok);
                 for m in &report.members {
-                    let li = serde_json::json!({
-                        "at": now(),
-                        "imported": m.review_refs,
-                        "heads": m.heads,
-                        "conflicts": m.conflicts,
-                    });
-                    let _ = store.set_repo_store_legacy_import(m.repo_id, Some(&li.to_string()));
+                    mark_imported(store, m);
                 }
                 let sj = serde_json::json!({
                     "code": "ready",
@@ -1030,6 +1214,9 @@ impl ReviewStores {
                 store
                     .set_review_store_state(row.id, "ready", Some(&sj.to_string()))
                     .map_err(db)?;
+                // Repos that joined WHILE this seed ran were not in its
+                // plan snapshot: import them now.
+                let _ = self.import_pending_members(store, row.id);
                 Ok(report)
             }
             Err(e) => {
@@ -1083,7 +1270,10 @@ impl ReviewStores {
         let mut member_errors = Vec::new();
         for m in &plan.members {
             match seed::import_member(git, &handle.git_dir, m, super::git::WORK_FETCH_TIMEOUT) {
-                Ok(i) => members.push(i),
+                Ok(i) => {
+                    mark_imported(store, &i);
+                    members.push(i)
+                }
                 Err(e) => member_errors.push(format!("work-{}: {}", m.repo_id, e.slug())),
             }
         }
@@ -1109,11 +1299,17 @@ impl ReviewStores {
                 },
             }
         };
-        let (missing, ok, _, _) =
-            seed::verify_connectivity(git, &handle.git_dir, &plan.members, &plan.patchsets)
-                .map_err(|e| StoreUnavailable::Error {
-                    detail: e.to_string(),
-                })?;
+        let ops = self.ops_lock(handle.id);
+        let (missing, ok, _, _) = seed::verify_connectivity(
+            git,
+            &handle.git_dir,
+            &plan.members,
+            &plan.patchsets,
+            Some(&ops),
+        )
+        .map_err(|e| StoreUnavailable::Error {
+            detail: e.to_string(),
+        })?;
         self.apply_objects_state(store, &missing, &ok);
         let mut sj: serde_json::Value = row
             .state_json

@@ -673,6 +673,260 @@ async fn the_sync_route_answers_503_while_seeding() {
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
 }
 
+// --- review fixes (RS-U3 follow-up) ------------------------------------
+
+/// BLOCKER 1: a repo that joins an already-`ready` store is imported, and
+/// until then its handle falls back (`MemberPending`, admission `None`).
+#[test]
+fn a_member_joining_a_ready_store_is_imported_and_falls_back_until_then() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.seed(&e.store, id, false).unwrap();
+    assert!(e.rs.handle_for_repo(&e.store, "widgets-02").is_ok());
+    // widgets-01 gets a review AFTER the seed, then joins.
+    let late = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    assert_eq!(
+        member_id(&e.rs.register_repo(&e.store, "widgets-01", None)),
+        id
+    );
+    assert_eq!(
+        e.rs.handle_for_repo(&e.store, "widgets-01").unwrap_err(),
+        StoreUnavailable::MemberPending
+    );
+    assert!(e
+        .rs
+        .admit_mutation(&e.store, "widgets-01")
+        .unwrap()
+        .is_none());
+    let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
+    assert!(!store_refs(&dir).contains(&patchset_ref(late, 1)));
+    let imported = e.rs.import_pending_members(&e.store, id).unwrap();
+    assert_eq!(imported.len(), 1);
+    assert_eq!(imported[0].repo_id, e.ids["widgets-01"]);
+    let refs = store_refs(&dir);
+    assert!(refs.contains(&patchset_ref(late, 1)), "{refs:?}");
+    assert!(refs.contains(&format!(
+        "refs/remotes/work-{}/feature/x",
+        e.ids["widgets-01"]
+    )));
+    assert!(e.rs.handle_for_repo(&e.store, "widgets-01").is_ok());
+    // Idempotent: nothing pending any more.
+    assert!(e
+        .rs
+        .import_pending_members(&e.store, id)
+        .unwrap()
+        .is_empty());
+    // The boot job does the same for a ready store.
+    let e2 = env();
+    let id2 = member_id(&e2.rs.register_repo(&e2.store, "widgets-02", None));
+    e2.rs.seed(&e2.store, id2, false).unwrap();
+    review_in(
+        &e2,
+        "widgets-01",
+        &e2.fx.one,
+        &e2.fx.feat_tip,
+        &e2.fx.main_tip,
+    );
+    review_in(
+        &e2,
+        "widgets-02",
+        &e2.fx.two,
+        &e2.fx.main_tip,
+        &e2.fx.main_tip,
+    );
+    let s = crate::review_store::boot::run_boot(&e2.rs, &e2.store);
+    assert_eq!((s.opened, s.imported), (1, 1), "{s:?}");
+    assert!(e2.rs.handle_for_repo(&e2.store, "widgets-01").is_ok());
+}
+
+/// Fix 3: kb prunes `work-<id>/*` refs the member no longer has — before
+/// the fetch, so a rename across a directory boundary cannot D/F-clash.
+#[test]
+fn renamed_branches_are_pruned_from_the_work_namespace() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(
+        &e.store,
+        "widgets-01",
+        Some("https://github.com/acme/widgets.git"),
+    ));
+    e.rs.seed(&e.store, id, false).unwrap();
+    let w = e.ids["widgets-01"];
+    let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
+    // feature/x → feature (the file-over-directory direction) ...
+    git(&e.fx.one, &["branch", "-m", "feature/x", "feature"]);
+    let h = e.rs.handle_for_repo(&e.store, "widgets-01").unwrap();
+    let rep = e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(rep.member_errors.is_empty(), "{:?}", rep.member_errors);
+    assert_eq!(rep.members[0].pruned, 1);
+    let refs = store_refs(&dir);
+    assert!(
+        refs.contains(&format!("refs/remotes/work-{w}/feature")),
+        "{refs:?}"
+    );
+    assert!(!refs.contains(&format!("refs/remotes/work-{w}/feature/x")));
+    // ... and back: feature → feature/x (directory-over-file).
+    git(&e.fx.one, &["branch", "-m", "feature", "feature/x"]);
+    let rep = e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(rep.member_errors.is_empty(), "{:?}", rep.member_errors);
+    let refs = store_refs(&dir);
+    assert!(
+        refs.contains(&format!("refs/remotes/work-{w}/feature/x")),
+        "{refs:?}"
+    );
+    assert!(!refs.contains(&format!("refs/remotes/work-{w}/feature")));
+    // A deleted branch disappears too; `main` is untouched.
+    git(&e.fx.one, &["branch", "-D", "feature/x"]);
+    e.rs.sync_ready(&e.store, &h, false).unwrap();
+    let refs = store_refs(&dir);
+    assert!(!refs
+        .iter()
+        .any(|r| r.starts_with(&format!("refs/remotes/work-{w}/feature"))));
+    assert!(refs.contains(&format!("refs/remotes/work-{w}/main")));
+}
+
+/// Fix 4: a store minted first for the personal fork never captures a
+/// clone whose PR bindings target the org.
+#[test]
+fn a_fork_store_that_exists_first_does_not_capture_an_org_clone() {
+    let e = env();
+    let fork_uuid = crate::review_store::registry::new_store_uuid().unwrap();
+    e.store
+        .create_review_store(
+            &fork_uuid,
+            "github.com/someone/widgets",
+            "/nonexistent/fork.git",
+            Some("https://github.com/someone/widgets.git"),
+            Some("explicit"),
+            1,
+        )
+        .unwrap();
+    let r = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    e.store
+        .set_review_pr_binding(r, 7, "acme/widgets", None, None, None)
+        .unwrap();
+    match e.rs.register_repo(&e.store, "widgets-01", None) {
+        Registration::Member {
+            store_key, source, ..
+        } => {
+            assert_eq!(store_key, "github.com/acme/widgets");
+            assert_eq!(source, "pr-slug");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Fix 2: concurrent same-process opens never flock-conflict.
+#[test]
+fn concurrent_opens_in_one_process_do_not_lock_each_other_out() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.seed(&e.store, id, false).unwrap();
+    let repos = vec![RepoEntry {
+        name: "widgets-02".into(),
+        path: e.fx.two.clone(),
+    }];
+    let fresh = std::sync::Arc::new(ReviewStores::new(
+        &ReviewSection::default(),
+        &e.fx.home,
+        &repos,
+        &e.ids,
+    ));
+    drop(e.rs);
+    let store = std::sync::Arc::new(e.store);
+    let hs: Vec<_> = (0..8)
+        .map(|_| {
+            let (f, st) = (fresh.clone(), store.clone());
+            std::thread::spawn(move || f.handle_for_repo(&st, "widgets-02"))
+        })
+        .collect();
+    for h in hs {
+        h.join().unwrap().expect("every concurrent open succeeds");
+    }
+}
+
+#[test]
+fn a_missing_base_tip_marks_the_review() {
+    let e = env();
+    let id = e
+        .store
+        .create_review("widgets-02", None, "main", "x", None, 1)
+        .unwrap();
+    e.store
+        .insert_patchset_with_base(
+            id,
+            1,
+            &e.fx.main_tip,
+            &e.fx.main_tip,
+            Some(&"4".repeat(40)),
+            Some("push"),
+            1,
+        )
+        .unwrap();
+    let sid = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    let rep = e.rs.seed(&e.store, sid, false).unwrap();
+    assert_eq!(rep.objects_missing, vec![id]);
+}
+
+#[test]
+fn boot_never_resets_a_seed_that_is_live_in_process() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.store.set_review_store_state(id, "seeding", None).unwrap();
+    assert_eq!(e.store.reset_interrupted_seeding(&[id]).unwrap(), 0);
+    assert_eq!(
+        e.store.get_review_store(id).unwrap().unwrap().state,
+        "seeding"
+    );
+    assert_eq!(e.store.reset_interrupted_seeding(&[]).unwrap(), 1);
+    assert_eq!(
+        e.store.get_review_store(id).unwrap().unwrap().state,
+        "absent"
+    );
+}
+
+#[test]
+fn store_uuids_and_git_versions_are_validated() {
+    use crate::review_store::registry::is_store_uuid;
+    let u = crate::review_store::registry::new_store_uuid().unwrap();
+    assert!(is_store_uuid(&u));
+    for bad in [
+        "",
+        "../../etc",
+        "9cdee070-5909-12a4-b045-05e79aa5b7f3",
+        "9CDEE070-5909-42A4-B045-05E79AA5B7F3",
+        "9cdee070-5909-42a4-b045-05e79aa5b7f3\n",
+    ] {
+        assert!(!is_store_uuid(bad), "{bad:?}");
+    }
+    // A row with a hostile uuid is refused before it becomes a path.
+    let e = env();
+    let id = e
+        .store
+        .create_review_store("../x", "github.com/acme/widgets", "/tmp/x", None, None, 1)
+        .unwrap();
+    e.store.add_repo_to_store(e.ids["widgets-02"], id).unwrap();
+    assert_eq!(
+        e.rs.seed(&e.store, id, false).unwrap_err(),
+        StoreUnavailable::Broken {
+            code: "bad-uuid".into()
+        }
+    );
+    assert_eq!(parse_git_version("git version 2.55.0"), Some((2, 55)));
+    assert_eq!(
+        parse_git_version("git version 2.41.0.windows.1"),
+        Some((2, 41))
+    );
+    assert_eq!(parse_git_version("git version 2.9"), Some((2, 9)));
+    assert!(parse_git_version("git version 2.9").unwrap() < MIN_GIT);
+    assert_eq!(parse_git_version("nope"), None);
+    assert_eq!(
+        git_too_old(e.rs.git().unwrap(), MIN_GIT),
+        None,
+        "this box runs a new git"
+    );
+    assert!(git_too_old(e.rs.git().unwrap(), (999, 0)).is_some());
+}
+
 /// RS-U3 benchmark (not part of the suite): seed a store from REAL local
 /// clones named by env vars, into a scratch root, local-only. Run with
 /// `KBRS_BENCH_CLONES=/a,/b KBRS_BENCH_ROOT=/scratch cargo test … --

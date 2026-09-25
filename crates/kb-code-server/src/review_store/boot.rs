@@ -35,6 +35,8 @@ pub struct BootSummary {
     pub refused: Vec<String>,
     pub opened: usize,
     pub seeded: usize,
+    /// Members imported into an already-ready store.
+    pub imported: usize,
     pub failed: Vec<String>,
     pub skipped_reason: Option<String>,
 }
@@ -72,7 +74,9 @@ pub fn run_boot(rs: &ReviewStores, store: &Store) -> BootSummary {
         return s;
     }
     s.swept_tmp = seed::sweep_stale_tmp(&rs.settings().root);
-    s.reset_seeding = store.reset_interrupted_seeding().unwrap_or(0);
+    s.reset_seeding = store
+        .reset_interrupted_seeding(&rs.seeding_ids())
+        .unwrap_or(0);
 
     let with_reviews: BTreeSet<String> = store
         .repos_with_reviews()
@@ -103,7 +107,14 @@ pub fn run_boot(rs: &ReviewStores, store: &Store) -> BootSummary {
         };
         match row.state.as_str() {
             "ready" => match rs.open(store, &row) {
-                Ok(_) => s.opened += 1,
+                Ok(_) => {
+                    s.opened += 1;
+                    // Members that joined after the seed (BLOCKER 1).
+                    match rs.import_pending_members(store, id) {
+                        Ok(v) => s.imported += v.len(),
+                        Err(u) => s.failed.push(format!("{}: {}", row.store_key, u.code())),
+                    }
+                }
                 // The directory vanished: `open` put the row back to
                 // `absent`; re-seed it now rather than a boot later.
                 Err(super::registry::StoreUnavailable::Absent) if rs.settings().seed_on_boot => {

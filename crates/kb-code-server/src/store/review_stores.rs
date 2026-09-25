@@ -485,13 +485,17 @@ impl Store {
         Ok(out)
     }
 
-    /// `(review_id, ps_number, tip_sha, base_sha)` of every patchset of the
+    /// `(review_id, ps_number, tip_sha, base_sha, base_tip_sha)` of every patchset of the
     /// reviews of `repos` — the store's connectivity check (README §5.2
     /// step 4).
-    pub fn patchsets_for_repos(&self, repos: &[String]) -> Result<Vec<(i64, i64, String, String)>> {
+    #[allow(clippy::type_complexity)]
+    pub fn patchsets_for_repos(
+        &self,
+        repos: &[String],
+    ) -> Result<Vec<(i64, i64, String, String, Option<String>)>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT p.review_id, p.ps_number, p.tip_sha, p.base_sha
+            "SELECT p.review_id, p.ps_number, p.tip_sha, p.base_sha, p.base_tip_sha
              FROM review_patchsets p JOIN reviews r ON r.id = p.review_id
              WHERE r.repo = ?1 ORDER BY p.review_id, p.ps_number",
         )?;
@@ -499,7 +503,7 @@ impl Store {
         for repo in repos {
             let rows = stmt
                 .query_map(params![repo], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             out.extend(rows);
@@ -524,15 +528,24 @@ impl Store {
     }
 
     /// Boot: a store left `seeding` by a process that died mid-seed goes
-    /// back to `absent` (its `.seed-*.tmp` is swept separately). Returns
+    /// back to `absent` (its `.seed-*.tmp` is swept separately) — except
+    /// the ids in `live`, which THIS process is seeding right now. Returns
     /// how many rows changed.
-    pub fn reset_interrupted_seeding(&self) -> Result<usize> {
-        let n = self.lock().execute(
-            "UPDATE review_stores SET state = 'absent',
-                 state_json = json_object('code', 'seed-interrupted')
-             WHERE state = 'seeding'",
-            [],
-        )?;
+    pub fn reset_interrupted_seeding(&self, live: &[i64]) -> Result<usize> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT id FROM review_stores WHERE state = 'seeding'")?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, i64>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut n = 0;
+        for id in ids.into_iter().filter(|id| !live.contains(id)) {
+            n += conn.execute(
+                "UPDATE review_stores SET state = 'absent',
+                     state_json = json_object('code', 'seed-interrupted')
+                 WHERE id = ?1 AND state = 'seeding'",
+                params![id],
+            )?;
+        }
         Ok(n)
     }
 }

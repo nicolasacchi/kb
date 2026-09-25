@@ -188,7 +188,7 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
             runtime = serde_json::json!({ "seeding": seeding, "locked_elsewhere": locked });
             let dir = std::path::Path::new(&r.git_dir);
             if dir.is_dir() {
-                disk = Some(seed::store_stats(dir));
+                disk = Some(rs.cached_stats(&r.uuid, dir));
             }
             match r.state.as_str() {
                 "broken" => doctor.push(finding(
@@ -379,6 +379,36 @@ fn pin_slug(p: super::cred::CredentialPin) -> &'static str {
     }
 }
 
+/// One audit line per store/credential mutation call (README §8: "key and
+/// credential endpoints are loopback-only and audited"). Route, repo and
+/// outcome only — never a URL body, token, or stderr.
+fn audit(route: &'static str, repo: &str, status: StatusCode) {
+    tracing::info!(
+        target: "kb_code::audit",
+        route,
+        repo,
+        status = status.as_u16(),
+        "review store mutation"
+    );
+}
+
+/// Import members that joined a ready store (BLOCKER-1 fix) in the
+/// background: never on the request path.
+fn spawn_pending_import(state: &SharedState, name: &str) {
+    let st = state.clone();
+    let n = name.to_string();
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(Some(row)) = st.store.store_for_repo_name(&n) {
+                if let Err(u) = st.review_stores.import_pending_members(&st.store, row.id) {
+                    tracing::warn!(repo = %n, code = u.code(), "review store: background member import failed");
+                }
+            }
+        })
+        .await;
+    });
+}
+
 /// `?offline=1` on sync: skip the network base fetch.
 #[derive(Debug, Default, Deserialize)]
 pub struct SyncQuery {
@@ -421,6 +451,19 @@ fn registration_refusal(r: &Registration) -> Option<Response> {
 
 /// `POST /api/repos/{name}/store/sync` (loopback-only).
 pub async fn store_sync_route(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+    Query(q): Query<SyncQuery>,
+) -> Response {
+    let resp = store_sync_route_inner(State(state.clone()), Path(name.clone()), Query(q)).await;
+    audit("store_sync_route", &name, resp.status());
+    if resp.status().is_success() {
+        spawn_pending_import(&state, &name);
+    }
+    resp
+}
+
+async fn store_sync_route_inner(
     State(state): State<SharedState>,
     Path(name): Path<String>,
     Query(q): Query<SyncQuery>,
@@ -474,11 +517,8 @@ pub async fn store_sync_route(
     }
     // 2b. sync a ready store under its fetch locks.
     let st = state.clone();
-    let n = name.clone();
     let handle =
-        match tokio::task::spawn_blocking(move || st.review_stores.handle_for_repo(&st.store, &n))
-            .await
-        {
+        match tokio::task::spawn_blocking(move || st.review_stores.open(&st.store, &row)).await {
             Ok(Ok(h)) => h,
             Ok(Err(u)) => return StoreRefusal(u).into_response(),
             Err(e) => return internal(e),
@@ -532,6 +572,20 @@ pub async fn store_base_url_route(
     Path(name): Path<String>,
     Json(body): Json<BaseUrlBody>,
 ) -> Response {
+    let resp =
+        store_base_url_route_inner(State(state.clone()), Path(name.clone()), Json(body)).await;
+    audit("store_base_url_route", &name, resp.status());
+    if resp.status().is_success() {
+        spawn_pending_import(&state, &name);
+    }
+    resp
+}
+
+async fn store_base_url_route_inner(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+    Json(body): Json<BaseUrlBody>,
+) -> Response {
     if state.review_stores.repo(&name).is_none() {
         return not_found(&name);
     }
@@ -572,6 +626,18 @@ pub async fn store_base_url_route(
 
 /// `POST /api/repos/{name}/credentials/test` (loopback-only).
 pub async fn credential_test_route(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+) -> Response {
+    let resp = credential_test_route_inner(State(state.clone()), Path(name.clone())).await;
+    audit("credential_test_route", &name, resp.status());
+    if resp.status().is_success() {
+        spawn_pending_import(&state, &name);
+    }
+    resp
+}
+
+async fn credential_test_route_inner(
     State(state): State<SharedState>,
     Path(name): Path<String>,
 ) -> Response {
