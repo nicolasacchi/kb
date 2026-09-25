@@ -278,6 +278,16 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
             }
         }
     }
+    // Process-wide counters of review/PR git reads that could not use a
+    // store (`unresolved`: no ready store; `odb_miss`: a ready store lacked
+    // the object and the work tree served it). Acceptance gate 3 ("0 user-ODB
+    // fallback hits once every store is ready") reads `odb_miss` here.
+    if let Some(obj) = runtime.as_object_mut() {
+        obj.insert(
+            "git_fallbacks".to_string(),
+            serde_json::to_value(store.git_fallback_stats()).unwrap_or_default(),
+        );
+    }
     Ok(StoreCard {
         schema: STORE_SCHEMA,
         repo: name.to_string(),
