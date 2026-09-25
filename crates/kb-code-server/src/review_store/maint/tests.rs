@@ -186,6 +186,7 @@ fn a_cadence_is_due_only_once_its_own_period_has_elapsed() {
         daily: Some(1000),
         weekly: Some(1000),
         monthly: Some(1000),
+        ..Default::default()
     };
     // Just under a day: nothing due.
     assert!(due_tasks(1000 + DAY_SECS - 1, last).is_empty());
@@ -210,6 +211,7 @@ fn a_clock_that_moved_backward_never_makes_a_cadence_due() {
         daily: Some(10_000),
         weekly: None,
         monthly: None,
+        ..Default::default()
     };
     let due = due_tasks(1, last);
     assert!(!due.contains(&MaintTask::Daily), "{due:?}");
