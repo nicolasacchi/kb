@@ -181,6 +181,23 @@ REDACTED = "<redacted-by-policy>"
 # Transport retries per request (not per status code).
 RETRIES = 4
 
+# `--record-errors`: record a per-patchset section that keeps failing as an
+# explicit `{"error": …}` marker instead of aborting the snapshot. Off by
+# default. Meant for a baseline taken on a binary with a known crash (the
+# gates volume's review 48 panicked every comments read before the
+# prose_refs fix), so the before/after diff shows the section changing
+# from an error to content rather than the run never finishing.
+RECORD_ERRORS = False
+
+
+def _section(fetch):
+    try:
+        return fetch()
+    except DaemonError as e:
+        if not RECORD_ERRORS:
+            raise
+        return {"error": str(e)}
+
 
 # --------------------------------------------------------------------------
 # Snapshot assembly
@@ -308,9 +325,15 @@ def _snapshot_review(
                 "base_sha_full": ps.get("base_sha_full"),
                 "captured_at": ps.get("captured_at"),
                 "commit_count": ps.get("commit_count"),
-                "files": _snapshot_files(base, token, timeout, repo, review_id, n),
-                "comments": _snapshot_comments(base, token, timeout, review_id, n),
-                "findings": _snapshot_findings(base, token, timeout, review_id, n),
+                "files": _section(
+                    lambda: _snapshot_files(base, token, timeout, repo, review_id, n)
+                ),
+                "comments": _section(
+                    lambda: _snapshot_comments(base, token, timeout, review_id, n)
+                ),
+                "findings": _section(
+                    lambda: _snapshot_findings(base, token, timeout, review_id, n)
+                ),
             }
         )
     patchsets_out.sort(key=lambda p: p["ps_number"])
@@ -523,6 +546,8 @@ def diff_snapshots(before: dict, after: dict, allow_new_keys: bool) -> list[str]
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
+    global RECORD_ERRORS
+    RECORD_ERRORS = args.record_errors
     token = _read_token(args)
     doc = build_snapshot(args.base, token, args.timeout, args.repo, args.cache_dir)
     if args.normalize_fixture:
@@ -566,6 +591,11 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--token-env", help="env var holding the bearer token (default KB_CODE_TOKEN)")
     ps.add_argument("--timeout", type=float, default=30.0)
     ps.add_argument("-o", "--out", help="output path (default: stdout)")
+    ps.add_argument(
+        "--record-errors",
+        action="store_true",
+        help="record a failing per-patchset section as an {\"error\"} marker instead of aborting",
+    )
     ps.add_argument(
         "--cache-dir",
         help="per-review resume cache (one fresh dir per snapshot; never invalidated)",
