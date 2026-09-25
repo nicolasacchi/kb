@@ -134,12 +134,22 @@ describe("warningShortLabel / warningChipSpec", () => {
   it("every warning shares the same tone — the wire carries no severity axis", () => {
     expect(BASE_WARNING_CHIP).toEqual({ token: "--warn", icon: "Warn" });
     for (const code of [
+      // the base model's own (`review_base.rs::warn`)
       "base-pinned",
       "pr-target-assumed",
       "base-upgraded",
       "base-vanished",
       "credential-account-mismatch",
       "stale-mirror",
+      // RS-U10b's `review sync`/`review status` codes (`review_sync.rs::
+      // sync_warn`) — pass through the SAME `BaseWarningOut` shape, so
+      // nothing here needed to change for them to render correctly.
+      "forge-unavailable",
+      "base-ignored",
+      "pr-closed",
+      "would-reopen",
+      "fetch-unavailable",
+      "fetch-failed",
     ]) {
       expect(warningChipSpec({ code })).toEqual(BASE_WARNING_CHIP);
       expect(warningShortLabel(code)).toBe(code.replace(/-/g, " "));
@@ -164,6 +174,11 @@ describe("patchset kind", () => {
     expect(patchsetKindSpec("base-moved")).toEqual({ token: "--warn", icon: "Branch" });
     expect(patchsetKindSpec(null)).toEqual({ token: "--ink-mute", icon: "Dot" });
     expect(patchsetKindSpec("some-future-kind")).toEqual({ token: "--ink-mute", icon: "Dot" });
+  });
+
+  it("forced reads NEUTRAL — a --force re-mint of an unchanged pair is not a base-tracking anomaly (RS-U10b's own SyncReason doc: 'nothing moved')", () => {
+    expect(patchsetKindSpec("forced")).toEqual({ token: "--ink-mute", icon: "Refresh" });
+    expect(patchsetKindSpec("forced").token).not.toBe("--warn");
   });
 
   it("label is null for a legacy patchset (no badge), else dashes-as-spaces", () => {

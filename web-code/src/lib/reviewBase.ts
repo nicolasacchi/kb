@@ -160,7 +160,11 @@ export const PATCHSET_KIND_CHIPS: Record<string, BaseChipSpec> = {
   "base-moved": { token: "--warn", icon: "Branch" },
   "base-corrected": { token: "--warn", icon: "Branch" },
   retarget: { token: "--warn", icon: "Fork" },
-  forced: { token: "--warn", icon: "Refresh" },
+  // RS-U10b's own doc (`review_sync.rs::SyncReason::from_capture`): a
+  // `--force` re-mint of an UNCHANGED pair is "nothing moved" — neutral,
+  // same tone as `initial`/`push`, not a base-tracking anomaly like the
+  // four rows above it.
+  forced: { token: "--ink-mute", icon: "Refresh" },
 };
 
 const PATCHSET_KIND_FALLBACK: BaseChipSpec = { token: "--ink-mute", icon: "Dot" };
