@@ -29,7 +29,25 @@
 //! `Dirty`, the refuse-on-a-dirty-tree guard `POST /api/checkout` maps to a
 //! structured 409 body (`routes.rs`) — a shape no sibling wrapper has any
 //! use for.
+//!
+//! **RS-U8** adds the review-store bridge ([`resolve_target_via_store`]):
+//! once a repo's review store is `ready`, a checkout/worktree-add target
+//! that names a review/PR tip (a full sha, or a `refs/kbc/*` name — see
+//! `crate::git::roots::is_store_addressable`) the local clone does not yet
+//! have is fetched BY SHA from the store, with NO ref written into the
+//! clone (design-internal-store.md §7 step 2: no destination refspec, so
+//! git lands the object and nothing else — not even `FETCH_HEAD`,
+//! suppressed by `--no-write-fetch-head`). This is why `switch_repo` takes
+//! an `Option<&StoreRoot>` now: with `None` (no ready store — every repo
+//! before its store finishes seeding) the bridge is a hard no-op and
+//! behaviour is byte-for-byte what it was before this unit — README
+//! §10.1's "exactly today's behaviour". `worktrees::create_worktree`'s
+//! `branch` arm reuses [`resolve_target_via_store`] for the exact same
+//! reason (a linked worktree materializing a review tip is the other half
+//! of README §9's "3 checkout/worktree changes that fetch by sha from the
+//! store").
 
+use crate::git::roots::StoreRoot;
 use crate::git::Revspec;
 use std::path::Path;
 use std::process::Command;
@@ -112,19 +130,166 @@ fn is_local_branch(repo_root: &Path, target: &str) -> bool {
 /// is gone, and an unvalidated `String` can no longer reach this fn at
 /// all. `CheckoutError::BadTarget` survives as the wire shape the route
 /// maps a `RevspecError` to, so the refusal a caller sees is unchanged.
-pub fn switch_repo(repo_root: &Path, target: &Revspec) -> Result<CheckoutOutcome> {
-    let target = target.as_str();
+///
+/// RS-U8 — `store` is the caller's repo's review store, ONLY when it is
+/// `ready` (`crate::git::roots::GitCtx::store_root`); see
+/// [`resolve_target_via_store`] for the fetch-by-sha bridge this runs
+/// AFTER the dirty check (never before — a dirty tree is refused before
+/// this daemon does any store I/O on its behalf) and BEFORE deciding
+/// `switch` vs `checkout` (the resolved sha is never a local branch, so a
+/// bridged checkout is always reported `detached`, matching the design's
+/// "`git switch --detach <sha>`").
+pub fn switch_repo(
+    repo_root: &Path,
+    target: &Revspec,
+    store: Option<&StoreRoot>,
+) -> Result<CheckoutOutcome> {
+    let requested = target.as_str();
     let dirty = dirty_paths(repo_root)?;
     if !dirty.is_empty() {
         return Err(CheckoutError::Dirty(dirty));
     }
-    let detached = !is_local_branch(repo_root, target);
+    let effective = resolve_target_via_store(repo_root, store, target)?;
+    let detached = !is_local_branch(repo_root, &effective);
     let verb = if detached { "checkout" } else { "switch" };
-    run_git(repo_root, &[verb, target])?;
+    run_git(repo_root, &[verb, &effective])?;
     Ok(CheckoutOutcome {
-        target: target.to_string(),
+        target: requested.to_string(),
         detached,
     })
+}
+
+/// RS-U8 — resolve `target` against `repo_root`, fetching the object BY
+/// SHA from a ready review store when the local repo does not have it yet.
+/// Returns the revision the caller should actually hand to `git switch`/
+/// `git checkout`/`git worktree add` in place of `target`.
+///
+/// * `store = None` is ALWAYS a no-op: `target` comes back unchanged and
+///   nothing beyond the caller's own eventual git invocation runs — "no
+///   store" covers every repo before its review store finishes seeding
+///   (README §10.1).
+/// * A `target` that is not store-addressable — an ordinary local branch
+///   name, `HEAD`, anything that is not a full sha or a `refs/kbc/*` name
+///   (`crate::git::roots::is_store_addressable`) — is also a no-op: such a
+///   name means something different in a bare store than in the user
+///   clone (design-internal-store.md §6), so the store is never even
+///   asked.
+/// * Otherwise: if `repo_root` already has the object, `target` comes back
+///   unchanged (idempotent — a repeat checkout/worktree-add of an
+///   already-fetched review tip touches the store zero times). If not,
+///   and `target` is already a full sha, that sha is what gets fetched. If
+///   `target` is a `refs/kbc/*` NAME, it is resolved to a sha INSIDE the
+///   store first (`git rev-parse`); a miss there is not an error — the
+///   store simply has nothing to offer for that name, so `target` comes
+///   back unchanged and the caller's own switch/checkout produces the
+///   same "unknown revision" refusal it always would have.
+///
+/// The fetch itself is `git -C <repo_root> fetch --no-tags
+/// --no-write-fetch-head --no-auto-gc --no-auto-maintenance <store> <sha>`
+/// (design-internal-store.md §7 step 2) — a LOCAL, uncredentialed,
+/// ref-less fetch: no destination refspec means git lands the object in
+/// the ODB and writes NO ref, not even `FETCH_HEAD`. `crate::review_store`'s
+/// `StoreGit` (the ONLY spawner in this crate allowed to carry a
+/// credential) is deliberately not used here — both sides of this fetch
+/// are local filesystem paths, and the store's own config already sets
+/// `uploadpack.allowAnySHA1InWant=true` (`review_store::seed`); the
+/// `--upload-pack` override below is belt-and-suspenders, matching the
+/// design's explicit "the override is also passed per invocation".
+///
+/// Because the returned revision is a SHA whenever the store had to be
+/// consulted at all, a caller that substitutes a `refs/kbc/*` name must
+/// use the RETURNED string for the actual mutation — that name still does
+/// not exist in `repo_root` afterwards, only the object it pointed to
+/// does.
+pub(crate) fn resolve_target_via_store(
+    repo_root: &Path,
+    store: Option<&StoreRoot>,
+    target: &Revspec,
+) -> Result<String> {
+    let target = target.as_str();
+    let Some(store) = store else {
+        return Ok(target.to_string());
+    };
+    if !crate::git::roots::is_store_addressable(target) {
+        return Ok(target.to_string());
+    }
+    if object_exists_locally(repo_root, target) {
+        return Ok(target.to_string());
+    }
+    let sha = if crate::git::roots::is_object_id(target) {
+        target.to_string()
+    } else {
+        match rev_parse_commit_in(store.git_dir(), target) {
+            Some(sha) => sha,
+            None => return Ok(target.to_string()),
+        }
+    };
+    fetch_sha_no_ref(repo_root, store.git_dir(), &sha)?;
+    Ok(sha)
+}
+
+/// `true` if `repo_root`'s own ODB already has `rev` — checked BEFORE any
+/// store lookup so a repeat checkout/worktree-add of an already-fetched
+/// review tip touches the store exactly zero times.
+fn object_exists_locally(repo_root: &Path, rev: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["cat-file", "-e", rev])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Resolve `rev` to a full commit sha INSIDE `store_git_dir` — never run
+/// against the user repo. `None` means the store doesn't have this name
+/// either (not an error: see [`resolve_target_via_store`]'s doc).
+fn rev_parse_commit_in(store_git_dir: &Path, rev: &str) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(store_git_dir)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("{rev}^{{commit}}"))
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!sha.is_empty()).then_some(sha)
+}
+
+/// `git -C repo_root fetch --no-write-fetch-head <store_git_dir> <sha>` —
+/// see [`resolve_target_via_store`]'s doc for why this writes no ref.
+fn fetch_sha_no_ref(repo_root: &Path, store_git_dir: &Path, sha: &str) -> Result<()> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args([
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--no-auto-gc",
+            "--no-auto-maintenance",
+            "--quiet",
+            "--upload-pack",
+            "git -c uploadpack.allowAnySHA1InWant=true upload-pack",
+        ])
+        .arg(store_git_dir)
+        .arg(sha)
+        .output()
+        .map_err(CheckoutError::Spawn)?;
+    if !out.status.success() {
+        return Err(CheckoutError::GitFailed {
+            args: vec![
+                "fetch".to_string(),
+                store_git_dir.display().to_string(),
+                sha.to_string(),
+            ],
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// V70-A2 (SEC-17) — a `RevspecError` from the route's own
@@ -156,6 +321,7 @@ fn run_git(repo_root: &Path, args: &[&str]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// Test-local shorthand: every fixture target here is a branch name or
     /// sha this test just minted, so `parse` cannot fail.
@@ -222,7 +388,7 @@ mod tests {
         let tmp = fixture_two_branches();
         let dir = tmp.path();
         std::fs::write(dir.join("a.txt"), "modified\n").unwrap();
-        let err = switch_repo(dir, &rs("feature")).unwrap_err();
+        let err = switch_repo(dir, &rs("feature"), None).unwrap_err();
         match err {
             CheckoutError::Dirty(paths) => assert_eq!(paths, vec!["a.txt".to_string()]),
             other => panic!("expected Dirty, got {other:?}"),
@@ -249,7 +415,7 @@ mod tests {
     fn switch_repo_switches_a_clean_tree_to_a_local_branch() {
         let tmp = fixture_two_branches();
         let dir = tmp.path();
-        let outcome = switch_repo(dir, &rs("feature")).unwrap();
+        let outcome = switch_repo(dir, &rs("feature"), None).unwrap();
         assert_eq!(outcome.target, "feature");
         assert!(!outcome.detached);
         assert_eq!(git_head(dir), "feature");
@@ -271,7 +437,7 @@ mod tests {
         .unwrap()
         .trim()
         .to_string();
-        let outcome = switch_repo(dir, &rs(&sha)).unwrap();
+        let outcome = switch_repo(dir, &rs(&sha), None).unwrap();
         assert!(outcome.detached);
         // Detached HEAD: `git symbolic-ref` fails (no branch name).
         let sym = StdCommand::new("git")
@@ -287,7 +453,7 @@ mod tests {
     fn switch_repo_reports_a_clean_error_for_an_unknown_ref() {
         let tmp = fixture_two_branches();
         let dir = tmp.path();
-        let err = switch_repo(dir, &rs("does-not-exist")).unwrap_err();
+        let err = switch_repo(dir, &rs("does-not-exist"), None).unwrap_err();
         match err {
             CheckoutError::GitFailed { .. } => {}
             other => panic!("expected GitFailed, got {other:?}"),
@@ -309,5 +475,156 @@ mod tests {
         .unwrap()
         .trim()
         .to_string()
+    }
+
+    fn git_head_sha(dir: &Path) -> String {
+        String::from_utf8(
+            StdCommand::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string()
+    }
+
+    /// `for-each-ref` of `dir` — the invariance snapshot BUILD-BRIEF U8 asks
+    /// for ("record for-each-ref + packed-refs + the refs/ tree ... before
+    /// and after"). `for-each-ref` never lists `HEAD` itself, so a
+    /// byte-identical result before/after a checkout is exactly "only HEAD
+    /// moved, no ref was written".
+    fn ref_tree(dir: &Path) -> Vec<String> {
+        let out = StdCommand::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// A "user repo" with one commit, and a separate bare "store" (the
+    /// same `uploadpack.allowAnySHA1InWant=true` config `review_store::seed`
+    /// writes into a real store) holding a SECOND commit the user repo has
+    /// never seen, reachable inside the store only by the review-ref shape
+    /// `refs/kbc/review/<id>/ps<n>` — never a branch, so `is_local_branch`
+    /// can never see it either.
+    fn store_bridge_fixture() -> (tempfile::TempDir, PathBuf, StoreRoot, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+        std::fs::create_dir_all(&user).unwrap();
+        init_repo(&user);
+        std::fs::write(user.join("a.txt"), "one\n").unwrap();
+        git(&user, &["add", "-A"]);
+        git(&user, &["commit", "-q", "-m", "one"]);
+
+        // The commit that will live ONLY in the store — an unrelated repo,
+        // minted separately so the user repo's own ODB never sees it by
+        // accident (ancestry doesn't matter: allowAnySHA1InWant fetches by
+        // sha regardless).
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        init_repo(&src);
+        std::fs::write(src.join("b.txt"), "two\n").unwrap();
+        git(&src, &["add", "-A"]);
+        git(&src, &["commit", "-q", "-m", "review tip"]);
+        let tip = git_head_sha(&src);
+
+        let store_dir = tmp.path().join("store.git");
+        StdCommand::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&store_dir)
+            .status()
+            .unwrap();
+        std::fs::write(
+            store_dir.join("config"),
+            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
+             [uploadpack]\n\tallowAnySHA1InWant = true\n",
+        )
+        .unwrap();
+        git(
+            &store_dir,
+            &[
+                "fetch",
+                "-q",
+                src.to_str().unwrap(),
+                "HEAD:refs/kbc/review/1/ps1",
+            ],
+        );
+
+        (tmp, user, StoreRoot::for_test(store_dir), tip)
+    }
+
+    #[test]
+    fn a_store_only_review_ref_is_fetched_by_sha_and_checked_out_detached_with_no_new_ref() {
+        let (_tmp, user, store, tip) = store_bridge_fixture();
+        let before = ref_tree(&user);
+        let target = rs("refs/kbc/review/1/ps1");
+        let outcome = switch_repo(&user, &target, Some(&store)).unwrap();
+        assert!(outcome.detached);
+        assert_eq!(git_head_sha(&user), tip);
+        let after = ref_tree(&user);
+        assert_eq!(
+            before, after,
+            "checkout via the store bridge must write no ref besides HEAD"
+        );
+        // The store-only NAME itself still does not exist locally — only
+        // the object it pointed to does.
+        assert!(!object_exists_locally(&user, "refs/kbc/review/1/ps1"));
+    }
+
+    #[test]
+    fn a_full_sha_already_fetched_is_never_re_fetched() {
+        let (_tmp, user, store, tip) = store_bridge_fixture();
+        switch_repo(&user, &rs("refs/kbc/review/1/ps1"), Some(&store)).unwrap();
+        // The bogus store below would error loudly if it were ever
+        // consulted — proving the second checkout of the SAME sha touches
+        // the store zero times (idempotent, README's "0 fallback" spirit).
+        let bogus = StoreRoot::for_test(PathBuf::from("/nonexistent-kb-code-store"));
+        let outcome = switch_repo(&user, &rs(&tip), Some(&bogus)).unwrap();
+        assert!(outcome.detached);
+        assert_eq!(git_head_sha(&user), tip);
+    }
+
+    #[test]
+    fn a_ready_store_lacking_the_name_falls_back_to_the_ordinary_refusal() {
+        let (_tmp, user, store, _tip) = store_bridge_fixture();
+        let err = switch_repo(&user, &rs("refs/kbc/review/999/ps1"), Some(&store)).unwrap_err();
+        assert!(
+            matches!(err, CheckoutError::GitFailed { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_branch_target_never_consults_the_store() {
+        let (_tmp, user, _store, _tip) = store_bridge_fixture();
+        git(&user, &["branch", "feature"]);
+        // A bogus store: if `switch_repo` ever asked it about "feature"
+        // (not store-addressable), this would error loudly.
+        let bogus = StoreRoot::for_test(PathBuf::from("/nonexistent-kb-code-store"));
+        let outcome = switch_repo(&user, &rs("feature"), Some(&bogus)).unwrap();
+        assert!(!outcome.detached);
+    }
+
+    #[test]
+    fn no_ready_store_is_byte_identical_to_before_this_bridge_existed() {
+        let (_tmp, user, _store, _tip) = store_bridge_fixture();
+        let before = ref_tree(&user);
+        let err = switch_repo(&user, &rs("refs/kbc/review/1/ps1"), None).unwrap_err();
+        assert!(
+            matches!(err, CheckoutError::GitFailed { .. }),
+            "got: {err:?}"
+        );
+        assert_eq!(ref_tree(&user), before);
     }
 }
