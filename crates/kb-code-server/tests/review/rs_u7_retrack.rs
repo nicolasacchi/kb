@@ -131,6 +131,10 @@ fn fixture_repo() -> (Repo, String) {
             clone.to_str().unwrap(),
         ],
     );
+    // `git clone` doesn't inherit `author`'s repo-local identity — the
+    // legacy-refs test commits directly in the clone.
+    git(&clone, &["config", "user.email", "test@example.com"]);
+    git(&clone, &["config", "user.name", "Test"]);
     (
         Repo {
             _tmp: tmp,
@@ -456,14 +460,20 @@ async fn retrack_a_pin_not_on_the_target_branch_is_custom() {
 async fn retrack_all_pinned_applies_only_stale_pin() {
     let _guard = SERIAL.lock().await;
     let (repo, m1) = fixture_repo();
+    let m0 = git_out(&repo.author, &["rev-list", "--max-parents=0", "main"]);
     let gh_router = Router::new();
     let (gh_addr, _gh) = mock_github_server(gh_router).await;
     let (_tmp, base) = boot(cfg_for(&repo.clone, gh_addr)).await;
     let client = reqwest::Client::new();
     sync_store(&client, &base, "fixture").await;
 
+    // Pinned one commit too far back (M0 instead of the real fork point
+    // M1) — the review-65 shape: `merge-base(pin, tip)` still resolves,
+    // it's just wrong, so `stale-pin` is the correct class (never
+    // `equivalent` — a pin EQUAL to the real merge-base is what makes a
+    // row `equivalent`, and M1 itself would be exactly that).
     repo.push_pr(&m1, 9, &["a.rs"], "v1");
-    let stale_id = create_pr_review(&client, &base, "fixture", 9, Some(&m1)).await;
+    let stale_id = create_pr_review(&client, &base, "fixture", 9, Some(&m0)).await;
 
     let unrelated = repo.unrelated_commit();
     repo.push_pr(&m1, 10, &["b.rs"], "v1");
