@@ -162,7 +162,7 @@ mdns-sd = "0.21"
 
 # Text diffing for the artifact version timeline (Track V) — line-level
 # grouping over extracted prose / raw source.
-similar = "2"
+similar = "3"
 
 # TypeScript bindings generated from the Rust wire types into
 # web/src/api/generated/ (the SPA's drift guard typechecks against them).
