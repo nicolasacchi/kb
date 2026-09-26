@@ -401,7 +401,7 @@ pub async fn load_set(
     ps_param: Option<&str>,
 ) -> Result<PseudoSet, ApiError> {
     let (_review, repo, _repo_id) = crate::reviews::require_review(state, id).await?;
-    let repo_root = repo.path.clone();
+    let repo_root = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
     let owned = ps_param.map(str::to_string);
     let (ps, binding, doc, findings) = state
         .store
@@ -439,7 +439,7 @@ pub async fn load_set(
 /// parser — never a hand-rolled scan, so `commits.md` shows exactly what the
 /// session↔commit join reads.
 pub fn commit_list(
-    repo_root: &std::path::Path,
+    repo_root: &crate::git::roots::GitCtx,
     base_sha: &str,
     tip_sha: &str,
 ) -> (Vec<PseudoCommit>, Option<usize>) {
@@ -448,7 +448,9 @@ pub fn commit_list(
     // fields — a trailer block contains newlines, so a line-oriented split
     // would not be unambiguous the way `history::LOG_SUMMARY_FMT`'s is.
     let fmt = "--format=%x1e%H%x1f%s%x1f%an <%ae>%x1f%at%x1f%(trailers:only,unfold)";
-    let Ok(out) = crate::history::run_git_raw(repo_root, &["log", fmt, &range]) else {
+    let Ok(out) = repo_root
+        .read_with_fallback(|root| crate::history::run_git_raw(root, &["log", fmt, &range]))
+    else {
         return (Vec::new(), None);
     };
     let text = String::from_utf8_lossy(&out);

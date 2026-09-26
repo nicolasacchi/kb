@@ -24,6 +24,13 @@
 //!    across restarts. A genuinely-novel query's first embed is still
 //!    irreducible; persistence only spares repeats.
 //!
+//! **Boot warm-start** ([`warm_memory_query_cache`]) embeds a tiny fixed
+//! set of memory-recall probes once per model so the cold subprocess load
+//! is paid at bring-up, not on the first `/api/memory/recall`. The cache
+//! is process-wide (keyed on model + query). This file cannot see
+//! `memory_scope`, so the per-kb filter belongs in `bring_up_kb` — do not
+//! warm every corpus from here.
+//!
 //! The model name is part of the cache key because two kbs with the
 //! same `embedding_model` produce bit-identical vectors for the same
 //! input (`embed_one` is deterministic — see
@@ -34,9 +41,9 @@
 use kb_core::embed::{model_info, Embedder};
 use kb_core::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Instant;
 
 /// In-memory LRU capacity. 1024 (was 256) — a 1024-dim bge-large vector is
@@ -221,18 +228,54 @@ pub struct EmbedOutcome {
     pub cache_hit: bool,
 }
 
-/// Embed `query` for `embedder`, consulting `cache` first. On miss runs
-/// `embed_one` inside `spawn_blocking` so the IPC round-trip doesn't
-/// pin a tokio worker thread, then writes the result to the cache.
+/// Model name cached beside each embedder mutex, keyed by the `Arc`
+/// allocation. `model_name()` is a `&'static str` and stable for the life of
+/// that embedder; locking the mutex just to read it makes a cache lookup wait
+/// out a document embed and keeps the query out of the counter the indexer
+/// polls. First population locks briefly and drops the guard before returning
+/// — never across an await (invariant 15). A dropped embedder's slot is swept
+/// on the next cold insert so a reused address cannot serve a stale name.
+type ModelNameSlot = (Weak<Mutex<Embedder>>, &'static str);
+static MODEL_NAME_SLOTS: LazyLock<Mutex<HashMap<usize, ModelNameSlot>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Model name for `embedder`, without holding its mutex once known.
+pub(crate) fn embedder_model_name(embedder: &Arc<Mutex<Embedder>>) -> &'static str {
+    let addr = Arc::as_ptr(embedder) as usize;
+    {
+        let g = MODEL_NAME_SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((alive, name)) = g.get(&addr) {
+            if alive.strong_count() > 0 {
+                return name;
+            }
+        }
+    }
+    // Cold slot. Lock only long enough to read the static name, then drop
+    // the guard before touching the side table again.
+    let name = {
+        let guard = embedder.lock().unwrap_or_else(|e| e.into_inner());
+        guard.model_name()
+    };
+    let mut g = MODEL_NAME_SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    g.retain(|_, (alive, _)| alive.strong_count() > 0);
+    g.insert(addr, (Arc::downgrade(embedder), name));
+    name
+}
+
+/// Embed `query` for `embedder`, consulting `cache` first. The model name
+/// comes from [`embedder_model_name`], so the lookup holds no embedder lock
+/// and a hit takes none at all. On miss, [`kb_core::embed::QueryLaneGuard`]
+/// is entered before that lock; `embed_one` then runs inside `spawn_blocking`
+/// so the IPC round-trip doesn't pin a tokio worker thread, and the vector
+/// is written back to the cache.
 pub async fn embed_query(
     cache: &Arc<QueryEmbedCache>,
     embedder: &Arc<Mutex<Embedder>>,
     query: &str,
 ) -> Result<EmbedOutcome> {
-    let model = {
-        let guard = embedder.lock().unwrap_or_else(|e| e.into_inner());
-        guard.model_name()
-    };
+    // Cold name slot may lock briefly; that guard is dropped before this
+    // lookup and before any await (invariant 15).
+    let model = embedder_model_name(embedder);
     let key = CacheKey {
         model,
         query: query.to_string(),
@@ -246,11 +289,12 @@ pub async fn embed_query(
         });
     }
 
-    // Query-priority lane: mark this model as having a query contending for the
-    // shared embedder, so a concurrent reindex yields the mutex between its
-    // chunk mini-batches instead of making this latency-sensitive embed wait a
-    // whole document (2026-07-03 recall-stall fix). Held across the embed;
-    // dropped when the function returns.
+    // Miss path: register in the query lane BEFORE the embedder lock the
+    // `spawn_blocking` below takes. A concurrent reindex polls this counter
+    // and yields the mutex between chunk mini-batches, so this embed waits
+    // at most one mini-batch instead of a whole document (2026-07-03
+    // recall-stall fix). Held across the embed; dropped when the function
+    // returns. A cache hit returned above and never enters.
     let _lane = kb_core::embed::QueryLaneGuard::enter(model);
 
     let embedder = embedder.clone();
@@ -270,6 +314,88 @@ pub async fn embed_query(
         embed_ms,
         cache_hit: false,
     })
+}
+
+/// Standing `/api/memory/recall` probes. Tiny on purpose: each miss is one
+/// embedder IPC round-trip, and the cache key is `(model, query)` — not a
+/// corpus. These are the fixed strings the product itself re-issues
+/// (`kb recall "test"` is the documented liveness check; `kb-setup verified`
+/// is the setup smoke). A novel user prompt still misses once.
+pub const MEMORY_WARM_QUERIES: &[&str] = &["test", "kb-setup verified"];
+
+/// Warm-start the process-wide query cache for `embedder`'s model.
+///
+/// Resolves the model with [`embedder_model_name`] and drops that guard
+/// before any await (invariant 15). Each probe already in `cache` is a hit:
+/// no embedder lock, and the query lane is not entered. Misses are embedded
+/// together inside `spawn_blocking` — the embedder mutex lives only on that
+/// blocking thread, never across the await — after
+/// [`kb_core::embed::QueryLaneGuard`] is entered, matching [`embed_query`].
+///
+/// Returns how many probes were embedded (0 when every probe was cached).
+/// A failure is the caller's to log; do not fail bring-up on it.
+///
+/// This file cannot see which corpora are memory-scoped. Call from
+/// `bring_up_kb` only when `kb_section.memory_scope` is set, passing the
+/// daemon `QueryEmbedCache`. One call per distinct model is enough; a later
+/// memory kb on the same model is all cache hits.
+pub async fn warm_memory_query_cache(
+    cache: &Arc<QueryEmbedCache>,
+    embedder: &Arc<Mutex<Embedder>>,
+) -> Result<usize> {
+    // Cold name slot may lock briefly. That guard is dropped before this
+    // function returns from the helper, and before any await below.
+    let model = embedder_model_name(embedder);
+    let mut pending: Vec<&str> = Vec::new();
+    for query in MEMORY_WARM_QUERIES {
+        let key = CacheKey {
+            model,
+            query: (*query).to_string(),
+        };
+        // Hit: touch the LRU and take no embedder lock. A fully warm cache
+        // returns below without entering the query lane.
+        if cache.get(&key).is_none() {
+            pending.push(*query);
+        }
+    }
+    if pending.is_empty() {
+        tracing::debug!(model, "memory query-cache warm-start: all probes cached");
+        return Ok(0);
+    }
+
+    let _lane = kb_core::embed::QueryLaneGuard::enter(model);
+    let embedder = embedder.clone();
+    let texts: Vec<String> = pending.iter().map(|q| (*q).to_string()).collect();
+    let vectors = tokio::task::spawn_blocking(move || {
+        let mut g = embedder.lock().unwrap_or_else(|e| e.into_inner());
+        g.embed_batch(&texts)
+    })
+    .await
+    .map_err(|e| Error::Storage(format!("warm embed task join: {e}")))??;
+    if vectors.len() != pending.len() {
+        return Err(Error::Storage(format!(
+            "warm embed returned {} vectors for {} probes",
+            vectors.len(),
+            pending.len()
+        )));
+    }
+    let embedded = pending.len();
+    for (query, vec) in pending.into_iter().zip(vectors) {
+        cache.put(
+            CacheKey {
+                model,
+                query: query.to_string(),
+            },
+            vec,
+        );
+    }
+    tracing::info!(
+        model,
+        probes = MEMORY_WARM_QUERIES.len(),
+        embedded,
+        "memory query-cache warm-start"
+    );
+    Ok(embedded)
 }
 
 #[cfg(test)]
@@ -424,5 +550,132 @@ mod tests {
         let path = tmp.path().join("ec.json");
         QueryEmbedCache::new(4).save(&path).unwrap();
         assert!(!path.exists(), "an empty cache leaves no file behind");
+    }
+
+    /// A cache hit must not take the embedder mutex. A miss must enter
+    /// `QueryLaneGuard` before it does. The name cache is pre-warmed so the
+    /// allowed one-time population lock sits outside that window. A warm-start
+    /// whose probes are already cached must also return without that mutex.
+    #[cfg(unix)]
+    #[test]
+    fn cache_hit_skips_embedder_lock_and_miss_enters_lane_before_lock() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Duration;
+
+        const FAKE: &str = r#"#!/bin/sh
+printf '{"kind":"ready","model":"bge-small-en-v1.5","dim":3}\n'
+while IFS= read -r line; do
+  case "$line" in
+    *'"kind":"shutdown"'*) exit 0 ;;
+    *'"kind":"embed"'*)
+      rid=$(printf '%s' "$line" | sed 's/.*"req_id":\([0-9][0-9]*\).*/\1/')
+      printf '{"kind":"embed_ok","req_id":%s,"vectors":[[0.1,0.2,0.3]]}\n' "$rid"
+      ;;
+  esac
+done
+"#;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-embedder.sh");
+        std::fs::write(&script, FAKE).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let prev = std::env::var("KB_EMBEDDER_BIN").ok();
+        std::env::set_var("KB_EMBEDDER_BIN", &script);
+        let spawned = Embedder::spawn_ipc("bge-small-en-v1.5", dir.path().to_path_buf(), 19);
+        match &prev {
+            Some(v) => std::env::set_var("KB_EMBEDDER_BIN", v),
+            None => std::env::remove_var("KB_EMBEDDER_BIN"),
+        }
+        let embedder = Arc::new(Mutex::new(spawned.expect("fake embedder")));
+
+        let model = embedder_model_name(&embedder);
+        assert_eq!(model, "bge-small-en-v1.5");
+        let cache = Arc::new(QueryEmbedCache::new(4));
+        cache.put(key(model, "cached-query"), vec![9.0]);
+
+        // Hit: hold the embedder mutex. embed_query must return without it.
+        let hold = embedder.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cache_h = Arc::clone(&cache);
+        let emb_h = Arc::clone(&embedder);
+        let hit_thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("runtime");
+            let out = rt.block_on(embed_query(&cache_h, &emb_h, "cached-query"));
+            let _ = tx.send(out);
+        });
+        let got = rx.recv_timeout(Duration::from_secs(5));
+        drop(hold);
+        let _ = hit_thread.join();
+        let hit = got
+            .expect("cache hit acquired the embedder mutex")
+            .expect("cache hit");
+        assert!(hit.cache_hit);
+        assert_eq!(hit.vec, vec![9.0]);
+        assert_eq!(hit.embed_ms, 0);
+        assert_eq!(
+            kb_core::embed::pending_query_count(model),
+            0,
+            "a cache hit must not enter the query lane"
+        );
+
+        // Miss: the lane count rises while this thread still holds the mutex.
+        let before = kb_core::embed::pending_query_count(model);
+        let hold = embedder.lock().unwrap_or_else(|e| e.into_inner());
+        let cache_m = Arc::clone(&cache);
+        let emb_m = Arc::clone(&embedder);
+        let miss_thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("runtime");
+            rt.block_on(embed_query(&cache_m, &emb_m, "novel-query"))
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while kb_core::embed::pending_query_count(model) <= before {
+            if std::time::Instant::now() > deadline {
+                drop(hold);
+                let _ = miss_thread.join();
+                panic!("miss did not enter QueryLaneGuard before acquiring the embedder mutex");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            embedder.try_lock().is_err(),
+            "test should still hold the embedder mutex when the lane is entered"
+        );
+        assert!(
+            !miss_thread.is_finished(),
+            "miss acquired the embedder mutex before the lane guard"
+        );
+        drop(hold);
+        let miss = miss_thread.join().unwrap().expect("miss embed");
+        assert!(!miss.cache_hit);
+        assert_eq!(miss.vec, vec![0.1, 0.2, 0.3]);
+        assert_eq!(kb_core::embed::pending_query_count(model), before);
+
+        // Warm-start hits: probes already cached must return without the
+        // embedder mutex, and must not enter the query lane.
+        let warm_cache = Arc::new(QueryEmbedCache::new(8));
+        for q in MEMORY_WARM_QUERIES {
+            warm_cache.put(key(model, q), vec![4.0, 5.0, 6.0]);
+        }
+        let hold = embedder.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cache_w = Arc::clone(&warm_cache);
+        let emb_w = Arc::clone(&embedder);
+        let warm_thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("runtime");
+            let out = rt.block_on(warm_memory_query_cache(&cache_w, &emb_w));
+            let _ = tx.send(out);
+        });
+        let warmed = rx.recv_timeout(Duration::from_secs(5));
+        drop(hold);
+        let _ = warm_thread.join();
+        let embedded = warmed
+            .expect("warm-start cache hits acquired the embedder mutex")
+            .expect("warm-start");
+        assert_eq!(embedded, 0, "cached probes must not re-embed");
+        assert_eq!(
+            kb_core::embed::pending_query_count(model),
+            before,
+            "a warm-start cache hit must not enter the query lane"
+        );
     }
 }

@@ -30,8 +30,13 @@ feature and pulls ONNX Runtime into `kb` too (architecture invariant §26).
 The [`Dockerfile`](../Dockerfile) is the canonical reproducible build:
 
 ```bash
-KB_GIT_SHA=$(git rev-parse --short=12 HEAD) \
-  docker build --build-arg KB_GIT_SHA="$KB_GIT_SHA" -t kb:latest .
+KB_GIT_SHA=$(git rev-parse --short=12 HEAD)
+KB_BUILD_VERSION=$(git describe --tags --match 'v[0-9]*' --always 2>/dev/null || printf '%s' "$KB_GIT_SHA")
+KB_BUILD_VERSION=${KB_BUILD_VERSION#v}
+docker build \
+  --build-arg KB_GIT_SHA="$KB_GIT_SHA" \
+  --build-arg KB_BUILD_VERSION="$KB_BUILD_VERSION" \
+  -t kb:latest .
 ```
 
 It builds both binaries (separate invocations), bakes in the SPA bundle
@@ -46,7 +51,9 @@ from its own `kb-code-runtime` target:
 
 ```bash
 docker build --target kb-code-runtime \
-  --build-arg KB_GIT_SHA="$KB_GIT_SHA" -t kb-code:latest .
+  --build-arg KB_GIT_SHA="$KB_GIT_SHA" \
+  --build-arg KB_BUILD_VERSION="$KB_BUILD_VERSION" \
+  -t kb-code:latest .
 ```
 
 kb's `runtime` is deliberately the **last** stage, so a bare `docker build`
