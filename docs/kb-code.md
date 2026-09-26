@@ -1112,10 +1112,15 @@ old-value-guarded so a fetch or capture racing the GC can never be
 clobbered, taken under the store's ops lock.
 
 **The dry-run-before-delete rule is absolute.** `gc::apply` has exactly
-ONE caller in the crate, and that caller has exactly TWO entry points:
+ONE production caller, and that caller has exactly TWO entry points:
 the operator's `kb-code store gc --repo R --yes`, and the legacy
 `kb-code review refs gc --repo R --apply` route, which hands its
 candidates to the same pass rather than being a second, looser engine.
+(A second, NON-production caller exists: `super::seed`'s end-to-end GC
+test calls `apply` directly so its delete/sibling-invariance assertions
+stay clear of the guard plumbing — so the count is one production
+caller plus that test, and the compiler enforces only the production
+half, since the test sits inside the subtree that may mint the token.)
 Each takes the ops lock FIRST, re-checks readiness and the restore guard
 UNDER it, runs the unconditional (never `--yes`-bypassable) DB-truth
 check that no candidate names a review id newer than this volume has

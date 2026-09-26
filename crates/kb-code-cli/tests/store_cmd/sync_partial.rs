@@ -14,16 +14,32 @@
 //! worktrees.
 //!
 //! `member_errors` and `member_problems` are SIBLINGS off the same
-//! `members_of` call; both mean a member was skipped. The fix widens the
-//! signal to both (and prints them in the human branch).
+//! `members_of` call; both mean a member was skipped. The fix widened
+//! the signal to both (and prints them in the human branch) — and the
+//! signal is now WIDER still: three sources, not two.
 //!
 //! # What each test pins
 //!
 //! ```text
-//! let partial = ["member_errors", "member_problems"]
-//!     .iter()
-//!     .any(|k| report[*k].as_array().is_some_and(|a| !a.is_empty()));
+//! let skipped_refs: u64 = report["members"]
+//!     .as_array()
+//!     .map(|ms| ms.iter().map(|m| m["skipped_refs"].as_u64().unwrap_or(0)).sum())
+//!     .unwrap_or(0);
+//! let partial = skipped_refs > 0
+//!     || ["member_errors", "member_problems"]
+//!         .iter()
+//!         .any(|k| report[*k].as_array().is_some_and(|a| !a.is_empty()));
 //! ```
+//!
+//! The THIRD source is per-member: `members[].skipped_refs` — refs the
+//! member's import counted and left behind because their name is not a
+//! valid store ref name (`review_store::seed::import_member`).
+//! It is on BOTH shapes (`seeded` and `synced`) and it is partial on
+//! its own: a member whose refs were all skipped, and whose import
+//! reported neither an error nor a problem, is NOT a clean seed — the
+//! two arrays alone would exit 0 over it. The tests below pin the two
+//! array arms; this file does not pin the per-member one, so read the
+//! quoted rule above, not the two-key shape the tests happen to use.
 //!
 //! `member_problems_alone_exits_7` pins the `"member_problems"` arm of
 //! that `any` plus the `EXIT_PARTIAL` exit: before the fix the CLI read

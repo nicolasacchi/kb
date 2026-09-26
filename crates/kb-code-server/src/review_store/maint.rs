@@ -11,9 +11,9 @@
 //! `super::gc::apply` — which is `pub(crate)` and takes a
 //! `super::gc::ApplyGuard` nothing outside `review_store` can mint, so
 //! that is enforced by the compiler, not by this comment. It has exactly
-//! ONE production caller — [`apply_gc_candidates`], the sole minter of
-//! the token — and that has exactly TWO entry points, BOTH funnelling
-//! through [`run_gc_pass`]: the operator's
+//! ONE production caller — [`apply_gc_candidates`], the only production
+//! minter of the token — and that has exactly TWO entry points, BOTH
+//! funnelling through [`run_gc_pass`]: the operator's
 //! explicit `kb-code store gc --repo R --yes` ([`run_gc_now`], which is
 //! what the `--yes` acknowledgement is for) and the legacy
 //! `kb-code review refs gc --repo R --apply` route
@@ -24,6 +24,14 @@
 //! (never `--yes`-bypassable) DB-truth check that no candidate names a
 //! review id newer than this volume has ever assigned, and only then
 //! takes the fresh bundle backup and applies.
+//!
+//! ONE further caller exists and is not production: `super::seed`'s
+//! end-to-end GC test calls `apply` itself, minting the token directly
+//! so its delete/sibling-invariance assertions stay clear of the guard
+//! plumbing. So the count is one production caller plus that test — and
+//! the compiler can enforce only the PRODUCTION half, because the test
+//! sits inside the subtree allowed to mint. See [`super::gc::apply`]'s
+//! own doc, which says the same thing.
 //!
 //! Four pieces, one file per the build plan's architecture table:
 //!

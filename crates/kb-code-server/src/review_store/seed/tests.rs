@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::*;
-use crate::config::{RepoEntry, ReviewSection};
+use crate::config::{RepoEntry, ReviewRepoEntry, ReviewSection};
 use crate::git::roots::{GitCtx, WorkTreeRoot};
 use crate::review_store::gc;
-use crate::review_store::registry::{Registration, ReviewStores, StoreUnavailable};
+use crate::review_store::registry::{state_code, Registration, ReviewStores, StoreUnavailable};
 // `patchset_ref`/`patchset_base_ref` come from `super::*` below (this
 // module's OWN copies, `seed.rs:patchset_ref`/`patchset_base_ref` —
 // byte-identical strings to `crate::reviews`'s, RS-U3's existing
@@ -667,6 +667,125 @@ fn a_repo_with_no_forge_remote_gets_a_local_store() {
     assert_eq!(row.base_url, None);
     let rep = e.rs.seed(&e.store, row.id, true).unwrap();
     assert!(matches!(rep.base, BaseFetch::Skipped { ref code } if code == "no-base-remote"));
+}
+
+/// A `[[review.repos]]` entry pinning `credential` for `name`.
+fn pin(review: &mut ReviewSection, name: &str, credential: &str, token_file: Option<&Path>) {
+    review.repos.push(ReviewRepoEntry {
+        name: name.into(),
+        credential: Some(credential.into()),
+        token_file: token_file.map(Path::to_path_buf),
+        ..ReviewRepoEntry::default()
+    });
+}
+
+/// An owner-only token file that cannot validate: present, a regular
+/// file, ours, 0600, and EMPTY. Every "does this rung apply" check in
+/// `cred.rs` passes and the file is read to the end, so the refusal it
+/// gets is `CredError::Invalid` — the one the ladder stops on (D12),
+/// not the "unreadable, so the rung does not apply" skip.
+fn empty_token_file(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join("token");
+    std::fs::write(&p, b"").unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    p
+}
+
+/// A store whose credential the operator configured came back REFUSED.
+/// Before the fix this seeded with NO credential, rewrote the report to
+/// `Skipped { code: "credential-rejected" }` — a warning shape — and
+/// still wrote `ready`: a store reported ready whose base was never
+/// fetched, as no identity at all, which is the state D12 exists to
+/// prevent.
+#[test]
+fn a_refused_credential_never_brings_the_store_up() {
+    let fx = fixture();
+    std::fs::create_dir_all(&fx.home).unwrap();
+    let token = empty_token_file(&fx.home);
+    let mut review = ReviewSection::default();
+    pin(&mut review, "widgets-02", "token", Some(&token));
+    let e = env_with(fx, review);
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    match e.rs.seed(&e.store, id, true).unwrap_err() {
+        StoreUnavailable::CredentialRefused { class, detail } => {
+            assert_eq!(class, "credential-rejected");
+            assert!(detail.contains("empty token"), "{detail}");
+        }
+        other => panic!("a refused credential must not seed the store: {other:?}"),
+    }
+    let row = row_for(&e, "widgets-02");
+    assert_eq!(row.state, "absent", "never `ready` on a refused credential");
+    assert_eq!(
+        state_code(row.state_json.as_deref()).as_deref(),
+        Some("credential-rejected"),
+        "the row carries the class, so `store show` names the fault"
+    );
+    assert!(
+        !Path::new(&row.git_dir).exists(),
+        "the store was never seeded, so there is nothing to serve"
+    );
+    // Reads fall back to the user repo, exactly like an unseeded store.
+    assert_eq!(
+        e.rs.handle_for_repo(&e.store, "widgets-02").unwrap_err(),
+        StoreUnavailable::Absent
+    );
+}
+
+/// The control, and the boundary of the arm above: NO credential was
+/// supplied and none was refused — the store is pinned to the `none`
+/// rung, so the ladder had nothing to try. That is a recorded skip and
+/// the store still comes up `ready` on cached refs, as it always did.
+#[test]
+fn no_credential_at_all_still_brings_the_store_up() {
+    let fx = fixture();
+    let mut review = ReviewSection::default();
+    pin(&mut review, "widgets-02", "none", None);
+    let e = env_with(fx, review);
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    let rep = e.rs.seed(&e.store, id, true).unwrap();
+    assert!(matches!(rep.base, BaseFetch::Skipped { ref code } if code == "no-credentials"));
+    assert_eq!(row_for(&e, "widgets-02").state, "ready");
+}
+
+/// The same rule on the sync path, where the store is already seeded:
+/// a refused credential ends the pass with the class, and is NOT
+/// recorded over the base status the store last really had. The
+/// `--offline` pass in the same store is the control — a supported,
+/// successful operation, still a skip and still a `ready` row.
+#[test]
+fn a_refused_credential_ends_the_sync_and_leaves_the_recorded_base_alone() {
+    let fx = fixture();
+    std::fs::create_dir_all(&fx.home).unwrap();
+    let token = empty_token_file(&fx.home);
+    let mut review = ReviewSection::default();
+    pin(&mut review, "widgets-02", "token", Some(&token));
+    let e = env_with(fx, review);
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.seed(&e.store, id, false).unwrap();
+    let base_code = |e: &Env| -> String {
+        let sj: serde_json::Value =
+            serde_json::from_str(row_for(e, "widgets-02").state_json.as_deref().unwrap()).unwrap();
+        sj["base"]["code"].as_str().unwrap_or_default().to_string()
+    };
+    assert_eq!(base_code(&e), "offline-seed");
+    let h = e.rs.handle_for_repo(&e.store, "widgets-02").unwrap();
+    match e.rs.sync_ready(&e.store, &h, true).unwrap_err() {
+        StoreUnavailable::CredentialRefused { class, detail } => {
+            assert_eq!(class, "credential-rejected");
+            assert!(detail.contains("empty token"), "{detail}");
+        }
+        other => panic!("a refused credential must not sync as a skip: {other:?}"),
+    }
+    assert_eq!(
+        base_code(&e),
+        "offline-seed",
+        "a refused credential must not become the store's recorded base status"
+    );
+    // The control: an offline sync is a supported, successful pass.
+    let rep = e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(matches!(rep.base, BaseFetch::Skipped { ref code } if code == "offline"));
+    assert_eq!(base_code(&e), "offline");
 }
 
 #[test]
