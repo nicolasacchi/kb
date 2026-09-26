@@ -107,8 +107,11 @@ pub fn workspace_id(common_dir: &Path, root_commit: Option<&str>) -> String {
 // ── git reads ────────────────────────────────────────────────────────
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String> {
-    let raw = crate::history::run_git_raw(repo_root, args)
-        .map_err(|e| WorkspaceError::Git(e.to_string()))?;
+    let raw = crate::history::run_git_raw(
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+        args,
+    )
+    .map_err(|e| WorkspaceError::Git(e.to_string()))?;
     Ok(String::from_utf8_lossy(&raw).to_string())
 }
 

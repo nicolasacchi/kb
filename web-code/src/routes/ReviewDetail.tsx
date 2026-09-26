@@ -35,6 +35,7 @@ import {
 } from "../hooks/useReviews";
 import { readerUrl } from "../lib/breadcrumbs";
 import { mergeCurrentSearch, parseDocCardsMode, parseReviewPs, parseReviewTab } from "../lib/codeUrl";
+import { setCurrentReview } from "../lib/currentReview";
 import { cardList } from "../lib/reviewDoc";
 import { indexThreads } from "../lib/reviewComments";
 // ── V76-R2a — the Room's rail geometry + density. The rail's truth is the
@@ -58,6 +59,7 @@ import {
   parseRoomDensity,
   type RoomDensity,
 } from "../lib/reviewRoom";
+import { loadDensity, setThemePrefs } from "../lib/prefs";
 import { RESIZE_SUBMODE_HINT } from "../desk/resizeSubmode";
 import { toast } from "../lib/toast";
 import "../styles/reviews.css";
@@ -116,6 +118,16 @@ export default function ReviewDetail() {
 
   const reviewQ = useReview(repo, idOk ? id : undefined);
   const review = reviewQ.data;
+  // V80-M3 — entering a Room auto-sets the browser-only "current review"
+  // marker for this repo (no click needed; `lib/currentReview.ts` — the
+  // daemon has no notion of it). The Room's own "Work this review" action
+  // (`ReviewHeader.tsx`) re-affirms the SAME call explicitly, for the
+  // operator who's read several rooms and wants to pick one back.
+  useEffect(() => {
+    if (!idOk || !review) return;
+    setCurrentReview(repo, { id: String(id), title: review.title?.trim() || review.head_ref });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, id, idOk, review?.title, review?.head_ref]);
   const patchsets = review?.patchsets ?? [];
   const latestPs = patchsets.length > 0 ? patchsets[patchsets.length - 1].ps_number : null;
 
@@ -324,24 +336,52 @@ export default function ReviewDetail() {
     if (result.state !== rail) setRail(result.state);
   }
 
-  // ── V76-R2a — the Room density toggle. localStorage is the home;
-  // `?density=` only mirrors it (the `lib/branchViews.ts` precedent). ──
-  const [densityState, setDensityState] = useState<RoomDensity>(() =>
-    parseRoomDensity(
-      typeof localStorage !== "undefined" ? localStorage.getItem(ROOM_DENSITY_STORAGE_KEY) : null,
-    ),
-  );
-  // An explicit `?density=` wins (a shared link carries the density);
-  // absent, the mirrored/persisted state. Same posture as `?ps=` above.
-  const densityParam = searchParams.get("density");
-  const density: RoomDensity = densityParam ? parseRoomDensity(densityParam) : densityState;
-  function setDensity(next: RoomDensity) {
-    setDensityState(next);
-    try {
-      localStorage.setItem(ROOM_DENSITY_STORAGE_KEY, next);
-    } catch {
-      // private-mode refusal — the toggle still works for this session.
+  // ── V80-R0 — the Room density toggle now reads/writes the GLOBAL pref
+  // (`lib/prefs.ts`'s `density` + `setThemePrefs`), retiring the Room's own
+  // localStorage key — one density preference, not two (item 2 of this
+  // unit). `?density=` is still the share-link MIRROR, but it now WRITES
+  // THROUGH to the global pref on load (below) instead of merely
+  // overriding this one render, so opening a shared compact link makes the
+  // whole app compact, not just the Room. ──
+  const [density, setDensityLocal] = useState<RoomDensity>(() => loadDensity());
+  // Any global density change (the ThemePicker, another tab's write via
+  // storage — `setThemePrefs` dispatches this on every call) re-syncs the
+  // Room's mirrored render state, so toggling density from EITHER surface
+  // agrees with the other immediately.
+  useEffect(() => {
+    const onPrefsChanged = () => setDensityLocal(loadDensity());
+    window.addEventListener("kbc:theme.changed", onPrefsChanged);
+    return () => window.removeEventListener("kbc:theme.changed", onPrefsChanged);
+  }, []);
+  // One-time migration: a pre-V80-R0 browser profile may still carry the
+  // Room's private key. Read-then-remove — it is applied at most once, and
+  // only when nothing has already migrated it away.
+  useEffect(() => {
+    if (typeof localStorage === "undefined") return;
+    const legacy = localStorage.getItem(ROOM_DENSITY_STORAGE_KEY);
+    if (legacy === null) return;
+    localStorage.removeItem(ROOM_DENSITY_STORAGE_KEY);
+    const parsed = parseRoomDensity(legacy);
+    if (parsed !== loadDensity()) {
+      setThemePrefs({ density: parsed });
+      setDensityLocal(parsed);
     }
+  }, []);
+  // The share-link mirror: an incoming `?density=` (from someone else's
+  // link, or a bookmark) wins over both the global pref and the migration
+  // above, and persists so it survives the next navigation within the app.
+  useEffect(() => {
+    const dp = searchParams.get("density");
+    if (!dp) return;
+    const parsed = parseRoomDensity(dp);
+    if (parsed !== loadDensity()) {
+      setThemePrefs({ density: parsed });
+      setDensityLocal(parsed);
+    }
+  }, [searchParams]);
+  function setDensity(next: RoomDensity) {
+    setThemePrefs({ density: next });
+    setDensityLocal(next);
     navigate(
       {
         search: mergeCurrentSearch((p) => {
@@ -581,6 +621,7 @@ export default function ReviewDetail() {
       onOpenFilesTab={() => setCockpitView("files")}
       claims={claims}
       onFilterFindings={filterRailTo}
+      activeSeverityFilter={findingSevFilter}
     />
   ) : !compareMode && cockpitView === "map" ? (
     <ReviewMapPanel
@@ -646,7 +687,6 @@ export default function ReviewDetail() {
       loading={filesQ.isLoading}
       error={(filesQ.error as Error | null) ?? null}
       expanded={expanded}
-      onOpenFile={openFile}
       pathFilter={pathFilter}
       onPathFilter={setPathFilter}
       fileSort={fileSort}
@@ -746,6 +786,7 @@ export default function ReviewDetail() {
             docCards={cockpitView === "doc" ? docCards : undefined}
             focusedRef={focusedRef}
             onFocusRef={setFocusedRef}
+            tipSha={tipSha}
             findingSeverityFilter={findingSevFilter}
             onFindingSeverityFilter={setFindingSevFilter}
           />
@@ -800,6 +841,7 @@ export default function ReviewDetail() {
                 docCards={cockpitView === "doc" ? docCards : undefined}
                 focusedRef={focusedRef}
                 onFocusRef={setFocusedRef}
+                tipSha={tipSha}
                 density={density}
                 onToggleDensity={() => setDensity(nextRoomDensity(density))}
                 onCollapseRail={() => setRail((cur) => toggleRail(cur))}

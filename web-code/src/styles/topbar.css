@@ -121,6 +121,64 @@
   outline-offset: -1px;
 }
 
+/* V80-M3 — "which review am I working." The label re-uses `.kbc-topbar__chip`
+ * (via `.kbc-topbar__current-review-link`) so it reads as one of the row's
+ * ordinary chips; the wrapping `<span>` just adds the small inline `×`. */
+.kbc-topbar__current-review {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+}
+.kbc-topbar__current-review-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.kbc-topbar__current-review-x:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+.kbc-topbar__current-review-x:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Mobile (NavSheet) home for the same chip — mirrors `.kbc-navsheet__row`
+ * plus its own inline clear button, same shape as the desktop pair above. */
+.kbc-navsheet__current-review {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-1);
+}
+.kbc-navsheet__current-review .kbc-navsheet__row {
+  flex: 1 1 auto;
+}
+.kbc-navsheet__current-review-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+.kbc-navsheet__current-review-x:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi);
+}
+
 /* V76-R3c — the reader's @ref chip. Lives in the shared topbar so every
  * reader URL (including a split) has one home for "which ref is this". */
 .kbc-topbar__ref-class {

@@ -1,4 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import SaveAsSetButton from "../components/sets/SaveAsSetButton";
 import { useSessionDiff } from "../hooks/useSessionDiff";
 import { formatUnixMillis } from "../lib/format";
@@ -36,16 +38,18 @@ export default function SessionDiff() {
 
   return (
     <div className="kbc-sessiondiff">
-      <header className="kbc-sessiondiff__head">
-        <h1 className="kbc-sessiondiff__title">{data.display_name ?? data.session_id}</h1>
-        <div className="kbc-sessiondiff__totals">{totalsSummary(data.totals)}</div>
-        {data.commits_status.status === "degraded" && (
-          <div className="kbc-sessiondiff__degraded" data-kbc-sessiondiff-degraded>
-            Commit data degraded — {data.commits_status.reason}
-          </div>
-        )}
-        <SaveAsSetButton sessionId={data.session_id} reposTouched={data.repos_touched} explicitRepo={repo} />
-      </header>
+      <PageHeader
+        title={data.display_name ?? data.session_id}
+        actions={
+          <SaveAsSetButton sessionId={data.session_id} reposTouched={data.repos_touched} explicitRepo={repo} />
+        }
+      />
+      <MetaLine className="kbc-sessiondiff__totals" items={[totalsSummary(data.totals)]} />
+      {data.commits_status.status === "degraded" && (
+        <div className="kbc-sessiondiff__degraded" data-kbc-sessiondiff-degraded>
+          Commit data degraded — {data.commits_status.reason}
+        </div>
+      )}
       <div className="kbc-sessiondiff__segments">
         {data.segments.map((seg, i) => {
           if (seg.kind === "prompt") {

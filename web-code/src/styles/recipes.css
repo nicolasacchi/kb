@@ -5,18 +5,15 @@
   margin: 0 auto;
   padding: 32px 16px 64px;
 }
-.kbc-recipes__head {
-  margin-bottom: 16px;
-}
-.kbc-recipes__title {
-  font-size: 24px;
-  margin: 0 0 4px;
-}
 .kbc-recipes__hint {
   color: var(--ink-mute);
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   max-width: 52em;
+}
+.kbc-recipes__hint--block {
+  display: block;
+  margin-top: 4px;
 }
 .kbc-recipes__layout {
   display: grid;
@@ -30,7 +27,7 @@
   }
 }
 .kbc-recipes__sub {
-  font-size: 14px;
+  font-size: var(--fs-md);
   margin: 0 0 8px;
   color: var(--ink-mute);
   text-transform: uppercase;
@@ -74,23 +71,23 @@
 }
 .kbc-recipes__cat-name {
   font-family: var(--font-mono, monospace);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 .kbc-recipes__cat-desc {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   line-height: 1.35;
 }
 .kbc-recipes__cat-needs {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-faint, var(--ink-mute));
 }
 .kbc-recipes__run {
   min-width: 0;
 }
 .kbc-recipes__desc {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   margin: 0 0 12px;
   max-width: 52em;
@@ -107,7 +104,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-recipes__input,
@@ -117,12 +114,12 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 7px 10px;
   min-width: 160px;
 }
 .kbc-recipes__field-hint {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kbc-recipes__go {
@@ -131,7 +128,7 @@
   border: none;
   border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 8px 16px;
   cursor: pointer;
 }
@@ -146,7 +143,7 @@
   border: 1px solid var(--warn);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipes__banner--note {
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-card));
@@ -154,11 +151,11 @@
 }
 .kbc-recipes__muted {
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipes__error {
   color: var(--red);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   margin-bottom: 10px;
 }
 .kbc-recipes__table-wrap {
@@ -170,7 +167,7 @@
 .kbc-recipes__table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipes__table th,
 .kbc-recipes__table td {
@@ -182,7 +179,7 @@
 .kbc-recipes__table th {
   color: var(--ink-mute);
   font-weight: 500;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -190,7 +187,7 @@
   color: var(--accent);
   text-decoration: none;
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipes__path:hover {
   text-decoration: underline;
@@ -201,7 +198,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 2px 8px;
   cursor: pointer;
 }
@@ -212,7 +209,7 @@
   margin: 6px 0 0;
   display: grid;
   gap: 2px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipes__terms div {
   display: flex;
@@ -236,7 +233,7 @@
 .kbc-recipes__back-link {
   display: inline-block;
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-decoration: none;
   margin-bottom: 6px;
 }
@@ -250,7 +247,7 @@
 }
 .kbc-recipes__legacy-title {
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-title);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin: 0 0 12px;
@@ -263,7 +260,7 @@
   gap: 24px;
 }
 .kbc-recipe-home__group-title {
-  font-size: 16px;
+  font-size: var(--fs-title);
   margin: 0 0 10px;
 }
 .kbc-recipe-home__list {
@@ -290,7 +287,7 @@
 }
 .kbc-recipe-home__card-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 .kbc-recipe-home__card-chips {
   display: flex;
@@ -298,7 +295,7 @@
   align-items: center;
 }
 .kbc-recipe-home__home-chip {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-mute);
@@ -307,12 +304,12 @@
   padding: 1px 6px;
 }
 .kbc-recipe-home__card-desc {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   line-height: 1.35;
 }
 .kbc-recipe-home__card-shadow {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--warn);
 }
 
@@ -320,7 +317,7 @@
  * A DIFFERENT vocabulary from the per-cell `.kbc-trust-*` (exact/likely/
  * candidate) — see `RecipeTrustBadge.tsx`'s doc for why it isn't reused. */
 .kbc-recipe-trust {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 1px 6px;
@@ -350,7 +347,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipe-trust-gate__diff {
   max-height: 240px;
@@ -359,7 +356,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   padding: 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   white-space: pre-wrap;
 }
 
@@ -377,7 +374,7 @@
   gap: 3px;
 }
 .kbc-recipe-form__label {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-recipe-form__required {
@@ -392,21 +389,21 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 6px 9px;
 }
 .kbc-recipe-form__hint {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   margin: 0;
 }
 .kbc-recipe-form__range {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-faint, var(--ink-mute));
   margin: 0;
 }
 .kbc-recipe-form__error {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--red);
   margin: 0;
 }
@@ -414,14 +411,14 @@
   grid-column: 1 / -1;
   border-top: 1px solid var(--rule);
   padding-top: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipe-form__context > summary {
   cursor: pointer;
   color: var(--ink-mute);
 }
 .kbc-recipe-form__context-chip {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent);
   margin: 6px 0;
 }
@@ -442,7 +439,7 @@
   flex: 1;
   min-width: 200px;
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   overflow-wrap: anywhere;
 }
@@ -455,7 +452,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 5px 10px;
   cursor: pointer;
 }
@@ -486,18 +483,18 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--fs-lg);
   margin: 0 0 8px;
 }
 .kbc-recipe-step__meta {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   font-weight: 400;
 }
 
 /* -- census panel: the one-line "why is this empty" reason -------------- */
 .kbc-recipe-census {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-recipe-census__line {
@@ -515,7 +512,7 @@
   border: none;
   color: var(--accent);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 4px 0 0;
   cursor: pointer;
 }
@@ -527,7 +524,7 @@
   border-radius: var(--radius-sm);
   display: grid;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kbc-recipe-census__detail div {
   display: flex;
@@ -556,7 +553,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   padding: 4px 9px;
   cursor: pointer;
 }
@@ -579,7 +576,7 @@
   color: var(--accent);
   text-decoration: none;
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipe-addr__link:hover {
   text-decoration: underline;
@@ -587,7 +584,7 @@
 .kbc-recipe-addr__text {
   color: var(--ink-mute);
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 /* -- list view ------------------------------------------------------------ */
@@ -616,7 +613,7 @@
 .kbc-recipe-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-recipe-table th,
 .kbc-recipe-table td {
@@ -628,7 +625,7 @@
 .kbc-recipe-table th {
   color: var(--ink-mute);
   font-weight: 500;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -647,7 +644,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   padding: 3px 0;
 }
@@ -664,14 +661,14 @@
   border-top: 1px dashed var(--rule);
 }
 .kbc-recipe-tree__ungrouped-caption {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   margin: 0 0 4px;
 }
 
 /* -- graph view (isolated-node layout, honestly captioned) ------------------ */
 .kbc-recipe-graph__caption {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   margin: 0 0 8px;
 }
@@ -681,7 +678,7 @@
   max-height: 480px;
 }
 .kbc-recipe-graph__node {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   background: var(--bg-card);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);

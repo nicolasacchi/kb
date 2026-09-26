@@ -33,6 +33,7 @@ import UserChip from "./UserChip";
 import { relTime, anchorLabel } from "../lib/commentFmt";
 import { canEditComment } from "../lib/canEditComment";
 import { fetchArtifactHtml, importReview } from "../api/client";
+import { currentDaemonBase } from "../api/base";
 import { embedReviewIntoHtml, extractReviewFromHtml } from "../lib/reviewEmbed";
 import { buildCiteMarkdown } from "../lib/quote";
 import { stableAnchorKey, useDraft } from "../lib/drafts";
@@ -826,6 +827,63 @@ export function groupByFile(
 
 // --- comment row + reply composer ------------------------------------------
 
+function KeepCommentButton({
+  kb,
+  commentId,
+}: {
+  kb: string;
+  commentId: string;
+}) {
+  const [phase, setPhase] = useState<"keep" | "pending" | "kept" | "failed">(
+    "keep",
+  );
+  const busy = useRef(false);
+
+  async function keep() {
+    if (busy.current || phase === "kept") return;
+    busy.current = true;
+    setPhase("pending");
+    try {
+      const r = await fetch(
+        `${currentDaemonBase()}/api/kb/${encodeURIComponent(kb)}/comments/${encodeURIComponent(commentId)}/keep`,
+        { method: "POST", headers: { Accept: "application/json" } },
+      );
+      if (!r.ok) {
+        busy.current = false;
+        setPhase("failed");
+        return;
+      }
+      setPhase("kept");
+    } catch {
+      // A failed POST stays on the button. Never throw into the panel.
+      busy.current = false;
+      setPhase("failed");
+    }
+  }
+
+  const label =
+    phase === "kept"
+      ? "kept"
+      : phase === "failed"
+        ? "keep failed"
+        : phase === "pending"
+          ? "keeping…"
+          : "keep";
+  return (
+    <button
+      data-kb-act="keep-comment"
+      data-keep-state={phase}
+      disabled={phase === "pending" || phase === "kept"}
+      title={phase === "failed" ? "Couldn't keep this comment" : "Keep this"}
+      onClick={() => {
+        void keep();
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function CommentRow({
   kb,
   artifactId,
@@ -1021,6 +1079,9 @@ function CommentRow({
         >
           ❝ cite
         </button>
+        {comment.status === "open" && (
+          <KeepCommentButton kb={kb} commentId={comment.id} />
+        )}
         {onJump && (
           <button onClick={onJump} title="jump to anchor in iframe">
             ↗ jump

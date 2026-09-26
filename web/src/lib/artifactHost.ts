@@ -186,13 +186,26 @@ export function verifyAgainstIdentity(
   // local iteration (editing web/ with the tree uncommitted). That's not a
   // contract drift — only a different base commit is — so stripping the
   // suffix stops the banner from crying wolf on every dirty working tree.
+  //
+  // A missing or "unknown" stamp is not a silent skip. That used to hide
+  // the old Dockerfile default (`KB_GIT_SHA=unknown`), which made drift
+  // undetectable. It gets its own banner, distinct from the mismatch text.
+  // A real match — including `<sha>` vs `<sha>-dirty` — still pushes nothing.
   const baseSha = (s: string) => s.replace(/-dirty$/, "");
   const bundleSha =
     typeof __KB_BUILD_SHA__ === "string" ? __KB_BUILD_SHA__ : "unknown";
+  const daemonBase =
+    identity.build_sha == null ? "" : baseSha(identity.build_sha.trim());
+  const bundleBase = baseSha(bundleSha.trim());
   if (
+    daemonBase.length === 0 ||
+    daemonBase === "unknown" ||
+    bundleBase.length === 0 ||
+    bundleBase === "unknown"
+  ) {
+    warnings.push("stamp missing, drift undetectable");
+  } else if (
     identity.build_sha &&
-    identity.build_sha !== "unknown" &&
-    bundleSha !== "unknown" &&
     baseSha(identity.build_sha) !== baseSha(bundleSha)
   ) {
     warnings.push(

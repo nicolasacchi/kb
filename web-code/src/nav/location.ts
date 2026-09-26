@@ -34,6 +34,7 @@
 // transition table's benefit and is never encoded.
 
 import {
+  appendReviewParam,
   appendTrail,
   branchesUrl,
   canvasPageUrl,
@@ -46,6 +47,7 @@ import {
   parseEntParam,
   parseLineParam,
   parsePane2,
+  parseReviewIdParam,
   parseReviewPs,
   parseReviewTab,
   parseTrailLink,
@@ -113,6 +115,13 @@ export interface ReviewLoc {
   file?: string;
   finding?: string;
 }
+
+/// V80-M3 — the SAME `ReviewLoc` shape doubles as the reader's `?review=`
+/// mirror of the browser-only "current review" marker (`lib/currentReview.ts`
+/// — the daemon has no notion of it). On a `mode: "reader"` location only
+/// `id` is ever populated (a `ReviewLoc` with only what the param carries —
+/// `tab`/`ps`/`file`/`finding` are review-cockpit-only fields the reader's
+/// own URL has no room for), never a second type for the same idea.
 
 export interface Location {
   repo: string;
@@ -234,6 +243,10 @@ export function encode(loc: Location): string {
       });
       if (loc.sym) url += `${url.includes("?") ? "&" : "?"}sym=${encodeURIComponent(loc.sym)}`;
       if (loc.ent) url += `${url.includes("?") ? "&" : "?"}ent=${encodeURIComponent(loc.ent)}`;
+      // V80-M3 — appended LAST among the reader's own params (through the
+      // one `codeUrl.ts` builder, never a second grammar); `trail` still
+      // rides after everything via the universal `appendTrail` call below.
+      url = appendReviewParam(url, loc.review?.id);
       break;
     }
     case "diff": {
@@ -403,6 +416,10 @@ export function decode(url: string, focused: 1 | 2 = 1): Location {
 
   const sym = params.get("sym") ?? undefined;
   const ent = parseEntParam(params.get("ent")) ?? undefined;
+  // V80-M3 — `?review=` on a reader URL only; a `ReviewLoc` carrying just
+  // the id (see that interface's own doc for why nothing else is populated
+  // here).
+  const reviewId = parseReviewIdParam(params.get("review")) ?? undefined;
   return base({
     repo,
     mode: "reader",
@@ -412,6 +429,7 @@ export function decode(url: string, focused: 1 | 2 = 1): Location {
     ...(frame ? { frame } : {}),
     ...(sym ? { sym } : {}),
     ...(ent ? { ent } : {}),
+    ...(reviewId ? { review: { id: reviewId } } : {}),
     ...(anchorFrom(params) ? { anchor: anchorFrom(params) } : {}),
   });
 }
@@ -480,6 +498,14 @@ function sameExceptOverlays(a: Location, b: Location): boolean {
 /// Rule 4 is what `lib/cursorUrlSync.ts` has always done by hand
 /// (`history.replaceState`, "a cursor move is not a navigation event"); it is
 /// written down here so the other twenty surfaces cannot disagree with it.
+///
+/// V80-M3's reader-only `?review=` mirror needs NO new clause here: it rides
+/// the existing catch-all `encode(...) !== encode(...)` comparison inside
+/// rule 5's block below (a review change on an otherwise-identical reader
+/// location changes the encoded URL, same as a rail-tab or trail change
+/// already does), which is exactly what makes "setting/clearing the current
+/// review while staying on the same file" a `replace`, never a `push` and
+/// never a `none`.
 export function transition(from: Location | null, to: Location): Transition {
   if (!from) return "push";
   // 1 — an overlay open/close, and NOTHING else, is not a navigation.

@@ -66,13 +66,20 @@ extra=()
 # the payload cwd. `--scope all` is DROPPED — the CLI falls back to that
 # same fleet-wide behaviour on its own outside a repo or against an old
 # daemon.
+# The index uses the same header + `<!--kb-recall/1-->` marker grammar
+# kb-wake.sh emits, so a capture of this injection opens ingest_attachment's
+# recall gate. Selection is unchanged (`kb recall '' --limit 10`). No
+# `pos=` — match kb-wake.sh; do not invent a display rank.
 recall_args=()
 [ -n "$cwd" ] && recall_args+=(--cwd "$cwd")
 index="$(kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
   | jq -r '(.hits // [])
       | map("- \(.title)  [\(.kb)]"
-          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160]) else "" end))
-      | if length == 0 then empty else "Recent memories:\n" + join("\n") end' \
+          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160]) else "" end)
+          + "\n<!--kb-recall/1 kb=\(.kb) id=\(.id)-->")
+      | if length == 0 then empty
+        else "Relevant memories from kb (recall — these persist across sessions):\n" + join("\n")
+        end' \
   2>/dev/null)" || index=""
 
 # (c) — surface + consume the distill-pending ledger (drop entries older

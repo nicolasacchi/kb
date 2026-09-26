@@ -224,8 +224,12 @@ build: a `rust:1.96-trixie` builder produces the `kb` binary + the
 the SPA bundle at `/usr/local/share/kb/web/dist`. `KB_SPA_DIST` points
 the daemon at that bundle, so the full web UI serves out of the box — no
 `web/dist` mount or in-container rebuild needed. (Pass
-`--build-arg KB_GIT_SHA=$(git rev-parse --short HEAD)` so the binary and
+`--build-arg KB_GIT_SHA=$(git rev-parse --short HEAD)` and
+`--build-arg KB_BUILD_VERSION` so the binary and
 SPA carry the same build stamp and the drift banner stays quiet.)
+`KB_BUILD_VERSION` is required and must be a git-describe version
+(`git describe --tags --match 'v[0-9]*' --always`, leading `v` stripped,
+falling back to the sha if describe fails).
 
 As of v0.14 (track D) the image **bakes in the bge-large-en-v1.5
 model**, so semantic and hybrid search work without a first-run
@@ -245,7 +249,13 @@ to name the model you want, and adjust the kb.toml `[defaults]
 embedding_model` accordingly.
 
 ```bash
-docker build -t kb:latest .
+KB_GIT_SHA=$(git rev-parse --short HEAD)
+KB_BUILD_VERSION=$(git describe --tags --match 'v[0-9]*' --always 2>/dev/null || printf '%s' "$KB_GIT_SHA")
+KB_BUILD_VERSION=${KB_BUILD_VERSION#v}
+docker build \
+  --build-arg KB_GIT_SHA="$KB_GIT_SHA" \
+  --build-arg KB_BUILD_VERSION="$KB_BUILD_VERSION" \
+  -t kb:latest .
 docker run -d --name kb \
   -p 4000:4000 \
   -v /srv/kb/config:/var/lib/kb/config:ro \

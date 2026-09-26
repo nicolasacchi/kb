@@ -462,6 +462,7 @@ use crate::review_impact;
 use crate::review_inbox;
 use crate::review_map;
 use crate::review_pseudo;
+use crate::review_retrack;
 use crate::review_sweep;
 use crate::review_timeline;
 use crate::reviews;
@@ -493,6 +494,16 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/schemas", get(crate::api_schemas::list_schemas_route))
         .route("/schemas/{name}", get(crate::api_schemas::get_schema_route))
         .route("/repos", get(routes::repos))
+        // RS-U3 (review store) — the persisted fetch credential. A bearer
+        // read: kind/account/reason, never secret bytes. The store CARD
+        // (`/repos/{name}/store`) is NOT here: it reports the store's
+        // absolute on-disk `git_dir` and its `uuid`, which no other route
+        // on this gate exposes — it lives on the loopback-only
+        // sub-router beside the rest of the RS-U3 family (see below).
+        .route(
+            "/repos/{name}/credentials",
+            get(crate::review_store::routes::credentials_route),
+        )
         // V75-M1 (D13/D14) — the Workspace re-key's two reads and the
         // `@ref` frame table. Ordinary `auth_bearer` reads on the same
         // sub-router as `/repos`: they carry repository PATHS and git
@@ -632,6 +643,18 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/annotations/{id}/suggestion",
             put(routes::put_annotation_suggestion).delete(routes::delete_annotation_suggestion),
+        )
+        // V80-M0 — bind/rebind/unbind an EXISTING annotation's review
+        // scope after the fact (same bearer, annotation-mutation family;
+        // NOT `review_remote`/loopback — see `routes::bind_annotation_
+        // review`'s doc). No `RouteContract` (invariant 15): the payload
+        // (a review id + optional ps/side) IS the contract, same as every
+        // other PUT/DELETE mutation on this family — `trails::V74_L3B_
+        // TRAIL_ROUTES`'s own doc records the identical reasoning for its
+        // five mutations.
+        .route(
+            "/annotations/{id}/review",
+            put(routes::bind_annotation_review).delete(routes::unbind_annotation_review),
         )
         // W5.1 + W5.2 — the agent context verbs (see the module doc above).
         .route("/map", get(agentview::map::map_route))
@@ -938,8 +961,38 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/reviews/jobs/{id}",
             get(crate::review_jobs::review_job_route),
         )
+        // RS-U10a — `GET /api/reviews/find?pr=N[&repo=R]`: the PR lookup
+        // behind `kb-code review find` and `pr:<N>` addressing. Literal
+        // `/reviews/find` at `/reviews/{id}`'s depth (literals win, same
+        // as `/reviews/inbox`). Bearer.
+        .route("/reviews/find", get(crate::review_views::review_find_route))
+        // RS-U10b — `GET /api/reviews/{id}/status[?fetch=1]`: head moved?
+        // base state, file-count drift, verdict staleness (`crate::
+        // review_sync`). A bearer read; `?fetch=1` (writes the review
+        // store) refuses a non-loopback caller inside the handler.
+        .route(
+            "/reviews/{id}/status",
+            get(crate::review_sync::review_status_route),
+        )
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))
+        // RS-U10a — the patchset's own git views, computed by the daemon
+        // from the patchset row's base/tip shas through `GitCtx` (store
+        // once ready, work tree otherwise) and never from `refs/kbc/*`.
+        // Ordinary bearer reads; `/cat` and the patch text honour the
+        // secret denylist (`crate::review_views`' own doc).
+        .route(
+            "/reviews/{id}/diff",
+            get(crate::review_views::review_diff_route),
+        )
+        .route(
+            "/reviews/{id}/log",
+            get(crate::review_views::review_log_route),
+        )
+        .route(
+            "/reviews/{id}/cat",
+            get(crate::review_views::review_cat_route),
+        )
         .route("/reviews/{id}/interdiff", get(reviews::review_interdiff))
         .route(
             "/reviews/{id}/annotations",
@@ -1293,6 +1346,18 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // snapshots), so loopback-only like the rest of this sub-router,
         // NOT `auth_bearer` (unlike its read-only sibling `pr-status`).
         .route("/reviews/sweep", post(review_sweep::sweep_route))
+        // RS-U7 (D17) — bulk retrack. Same literal-before-param family as
+        // `/reviews/gc`/`/reviews/pr`/`/reviews/sweep` just above; a WRITE
+        // (persists a base policy + may mint patchsets), loopback-only.
+        .route(
+            "/reviews/retrack-bulk",
+            post(review_retrack::retrack_all_route),
+        )
+        // RS-U10b — `review sync`: create-or-reuse + fetch + snapshot-if-
+        // the-pair-moved for one PR or every open PR (`crate::review_sync`).
+        // A WRITE (rows + store refs), so loopback-only like `/reviews/pr`;
+        // literal `/reviews/sync` beside it, ahead of `/reviews/{id}`.
+        .route("/reviews/sync", post(crate::review_sync::sync_route))
         // PRR-R3 — the ONE findings mutation that stays loopback-only (an
         // agent-side batch-reconcile verb, not a mobile-mutation candidate
         // — see the module doc above). `POST /reviews/{id}/findings`
@@ -1319,6 +1384,8 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             post(crate::branches::start_branch_review),
         )
         .route("/reviews/{id}/snapshot", post(reviews::snapshot_review))
+        // RS-U7 (D17/D20) — single retrack: see `review_retrack`'s module doc.
+        .route("/reviews/{id}/retrack", post(review_retrack::retrack_route))
         .route(
             "/reviews/{id}",
             patch(reviews::patch_review).delete(reviews::delete_review),
@@ -1441,6 +1508,64 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route("/trails/state", post(crate::trails::routes::set_state))
         .route("/trails/{id}", get(crate::trails::routes::get_trail))
         .route("/trails/{id}/fork", post(crate::trails::routes::fork_trail))
+        // RS-U3 (review store) — the store CARD read, loopback-only beside
+        // the family it belongs to. It is a read, not a write, but it
+        // reports `store.git_dir` (the ABSOLUTE path of the daemon's own
+        // internal state dir — `<state_dir>/<store_root>/<uuid>.git`) plus
+        // `store.uuid` and internal store row ids, and no other route on
+        // the bearer `api` gate returns a kb-internal path. The sibling
+        // `/repos/{name}/credentials` read stays on bearer: kind, account
+        // and reason — never a path, never a secret.
+        //
+        // The loopback gate here is a REVIEWED decision, not the accident of
+        // which `Router::new()` this `.route()` call landed in:
+        // `store_card_route_gate_is_pinned` (tests/doclens/doclens_route.rs)
+        // 404s this whole family for a non-loopback caller, so moving it back
+        // onto the bearer `api` router above fails a test. The CORS half of
+        // the same pin is `cors_layer_route_set_is_pinned`.
+        .route(
+            "/repos/{name}/store",
+            get(crate::review_store::routes::store_show_route),
+        )
+        // RS-U3 (review store) — store/credential MUTATIONS, loopback-only
+        // like every other sanctioned git write (README §8: "key and
+        // credential endpoints are loopback-only and audited").
+        .route(
+            "/repos/{name}/store/sync",
+            post(crate::review_store::routes::store_sync_route),
+        )
+        .route(
+            "/repos/{name}/store/base-url",
+            post(crate::review_store::routes::store_base_url_route),
+        )
+        .route(
+            "/repos/{name}/credentials/test",
+            post(crate::review_store::routes::credential_test_route),
+        )
+        // RS-U7 (D19) — `store legacy-refs`/`store export-legacy`: the
+        // ONE OTHER sanctioned user-clone ref write besides `checkout::
+        // switch_repo` (see `review_store::legacy_refs`'s module doc).
+        // MANUAL ONLY, same loopback-only family as the store/credential
+        // mutations just above.
+        .route(
+            "/repos/{name}/store/legacy-refs",
+            post(crate::review_store::legacy_refs::legacy_refs_route),
+        )
+        .route(
+            "/repos/{name}/store/export-legacy",
+            post(crate::review_store::legacy_refs::export_legacy_route),
+        )
+        // RS-U9 — store-wide GC and the scheduled-maintenance manual
+        // trigger, the SAME loopback-only + audited posture as the store/
+        // credential mutations directly above (README §5.4/§8).
+        .route(
+            "/repos/{name}/store/gc",
+            post(crate::review_store::maint::store_gc_route),
+        )
+        .route(
+            "/repos/{name}/store/maintain",
+            post(crate::review_store::maint::store_maintain_route),
+        )
         .layer(from_fn_with_state(
             auth.clone(),
             transcripts::search::loopback_only,

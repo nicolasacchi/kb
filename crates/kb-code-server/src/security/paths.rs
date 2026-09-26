@@ -77,7 +77,13 @@ pub fn outside_repo(rel: &str) -> ApiError {
 
 /// `canonicalize`, degrading to the deepest existing ancestor plus the
 /// literal remainder — see the module doc.
-fn canonicalize_lenient(path: &Path) -> PathBuf {
+///
+/// Crate-visible (not module-private) so the other containment guards
+/// reuse THIS lenient semantics instead of growing a third copy:
+/// `review_store::settings::contains` applies the same "canonicalise
+/// both sides, then `starts_with`" discipline to the store-vs-repo
+/// overlap check.
+pub(crate) fn canonicalize_lenient(path: &Path) -> PathBuf {
     if let Ok(c) = path.canonicalize() {
         return c;
     }

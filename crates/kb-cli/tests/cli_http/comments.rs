@@ -48,6 +48,7 @@ async fn boot() -> (tempfile::TempDir, String) {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -59,6 +60,7 @@ async fn boot() -> (tempfile::TempDir, String) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -755,6 +757,7 @@ async fn boot2() -> (tempfile::TempDir, String) {
                 atlas: None,
                 templates: std::collections::BTreeMap::new(),
                 memory_scope: None,
+                project_slugs: Vec::new(),
                 default_search_category: None,
                 code_url: None,
                 decay_policy: None,
@@ -766,6 +769,7 @@ async fn boot2() -> (tempfile::TempDir, String) {
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             },
         );
     }

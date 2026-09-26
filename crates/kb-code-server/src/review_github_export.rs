@@ -77,6 +77,7 @@
 //! field is still present, byte-identical in meaning).
 
 use crate::annotations;
+use crate::git::roots::GitCtx;
 use crate::review_comments::{self, ResolvedForPs};
 use crate::reviews::require_review;
 use crate::routes::ApiError;
@@ -295,6 +296,7 @@ pub async fn export_github_route(
             _ => (None, Some("no_verdict_set")),
         };
 
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut comments: Vec<serde_json::Value> = Vec::new();
     let mut general_comments: Vec<serde_json::Value> = Vec::new();
@@ -322,7 +324,7 @@ pub async fn export_github_route(
             if !blob_cache.contains_key(&key) {
                 blob_cache.insert(
                     key.clone(),
-                    review_comments::read_blob_text(&repo.path, &ann.path, &sha),
+                    review_comments::read_blob_text(&git_ctx, &ann.path, &sha),
                 );
             }
             blob_cache.get(&key).and_then(|c| c.as_deref())
@@ -472,7 +474,7 @@ pub async fn publish_finding_route(
             Ok((target_ps, row))
         })
         .await?;
-    let repo_root = repo.path.clone();
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let view = state
         .store
         .run_blocking(move |store| {
