@@ -32,7 +32,10 @@
 //! * A per-call timeout, enforced on the whole PROCESS GROUP
 //!   ([`super::proc`]), and bounded stdout/stderr capture.
 //! * Every captured stderr is REDACTED ([`super::redact`]) before it is
-//!   classified, returned, or logged; failures are typed
+//!   classified, returned, or logged; and the known secret literals of the
+//!   call travel INSIDE the returned [`GitOutput`], so its `Debug` and
+//!   `stdout_redacted()` redact stdout with the same list — the guarantee
+//!   is the type's, not a call site's. Failures are typed
 //!   ([`super::classify::FailureClass`], stable `urn:kb:errors:<slug>`).
 //! * argv carries only static flags and validated atoms ([`GitArgs`]):
 //!   remote NAMES, refspecs, ref names, `Revspec`s, allowlisted URLs,
@@ -82,7 +85,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::classify::{classify, AuthContext, FailureClass};
 use super::cred::HttpsCredential;
@@ -364,14 +367,24 @@ pub struct GitOutput {
     /// Redacted, capped stderr.
     pub stderr: String,
     pub elapsed: Duration,
+    /// The known secret LITERALS this call carried, kept in the VALUE so
+    /// the redaction guarantee belongs to the type instead of to whichever
+    /// call site happened to remember to apply it. `Debug` and
+    /// [`Self::stdout_redacted`] are the only renderings, and both run
+    /// these, so a credentialed call that returns a `GitOutput` cannot
+    /// print its token by accident. Zeroized on drop.
+    known_secrets: Zeroizing<Vec<String>>,
 }
 
 impl GitOutput {
     pub fn stdout_str(&self) -> std::borrow::Cow<'_, str> {
         String::from_utf8_lossy(&self.stdout)
     }
+    /// stdout with BOTH the shape rules and this call's own known
+    /// literals applied, then capped.
     pub fn stdout_redacted(&self) -> String {
-        redact_bytes(&self.stdout, &[], DETAIL_CAP)
+        let secrets: Vec<&str> = self.known_secrets.iter().map(String::as_str).collect();
+        redact_bytes(&self.stdout, &secrets, DETAIL_CAP)
     }
     pub fn success(&self) -> bool {
         self.exit_code == Some(0)
@@ -747,6 +760,7 @@ impl StoreGit {
             stdout_truncated: cap.stdout_truncated,
             stderr,
             elapsed: cap.elapsed,
+            known_secrets: Zeroizing::new(secrets.iter().map(|s| (*s).to_string()).collect()),
         })
     }
 
