@@ -822,9 +822,18 @@ fn a_token_on_stdout_does_not_survive_into_the_debug_rendering() {
     // A stand-in git that relays the helper payload AND echoes the token
     // back on a line of its own, the way a misbehaving credential
     // subcommand would.
+    //
+    // Only shell BUILTINS. The store scrubs the child's environment and
+    // sets PATH to this directory ALONE, so an external `cat` is not
+    // found, the helper payload never reaches stdout, and the
+    // `password=[redacted]` assertion below would fail for a reason
+    // that has nothing to do with the type. Reading fd 3 with `read` +
+    // `printf` needs nothing off the PATH.
     std::fs::write(
         &fake,
-        format!("#!/bin/sh\ncat <&3\nprintf '%s\\n' '{OPAQUE}'\n"),
+        format!(
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done <&3\nprintf '%s\\n' '{OPAQUE}'\n"
+        ),
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;

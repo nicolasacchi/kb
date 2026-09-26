@@ -442,10 +442,18 @@ fn missing_tips_mark_reviews_while_the_store_goes_ready() {
 #[test]
 fn a_dropped_member_rides_out_on_the_seed_report() {
     let e = env();
-    let id = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
-    // widgets-02 normalizes to the same store key, so it JOINS this store.
+    // Order matters, and this is the established one in this file:
+    // `widgets-01` alone carries TWO forge remotes (`origin` = acme/widgets
+    // + `mine` = a personal fork), so with no PR binding and no store yet
+    // it REFUSES as `base-url-ambiguous` — it cannot mint a store on its
+    // own. `widgets-02` has ONE forge remote, so it mints the store
+    // unambiguously and `widgets-01` JOINS it by membership (README §5.1
+    // "Joining", the same order `the_adopted_store_reports_what_it_
+    // imported_and_what_it_dropped` and the two worktree tests use).
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    // widgets-01 normalizes to the same store key, so it JOINS this store.
     assert_eq!(
-        member_id(&e.rs.register_repo(&e.store, "widgets-02", None)),
+        member_id(&e.rs.register_repo(&e.store, "widgets-01", None)),
         id
     );
     // Its worktree is gone, so `members_of` drops it and names the reason.

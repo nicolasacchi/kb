@@ -86,6 +86,31 @@ pub const JOB_TTL_SECS: u64 = 3600;
 /// rather than a status that will never change.
 pub const STUCK_JOB_HORIZON_SECS: u64 = 6 * 3600;
 
+/// Mirror of `kb_code_cli::review_sync`'s `DEFAULT_WAIT_OPEN` — the
+/// longest budget any caller imposes on a running job. That constant is
+/// private to the CLI crate, which does not depend on this one, so the
+/// value is restated here on purpose; the assertions below are what stop
+/// this from silently drifting away from the CLI's actual default.
+const DEFAULT_WAIT_OPEN: u64 = 3600;
+
+/// The horizon is only honest if it is comfortably LONGER than the
+/// longest job anyone waits for: a `review sync --open` poller waits up
+/// to [`DEFAULT_WAIT_OPEN`] s by default, and a job that spends all of
+/// it must not be swept from under a live poller; `>= 2x` leaves the
+/// second wait a client makes after a corpse 404s inside the horizon,
+/// and the horizon must also outlast the [`JOB_TTL_SECS`] a settled
+/// entry gets, or a long job would be indistinguishable from a wedged
+/// one.
+///
+/// These were a `#[test]`. Every operand is a constant, so the relation
+/// belongs to the COMPILER: it is checked on every build, by everyone
+/// who touches this file, instead of only when someone runs the suite
+/// (`clippy::assertions_on_constants` is right, and the lint's own
+/// suggested form is the one used here).
+const _: () = assert!(STUCK_JOB_HORIZON_SECS > DEFAULT_WAIT_OPEN);
+const _: () = assert!(STUCK_JOB_HORIZON_SECS >= 2 * DEFAULT_WAIT_OPEN);
+const _: () = assert!(STUCK_JOB_HORIZON_SECS > JOB_TTL_SECS);
+
 /// One in-flight (or settled) start-pr job.
 #[derive(Debug, Clone)]
 pub struct ReviewJob {
@@ -480,18 +505,6 @@ mod tests {
         assert!(jobs.contains_key("job_just_done"));
         assert!(!jobs.contains_key("job_stale"));
         assert!(!jobs.contains_key("job_wedged"));
-    }
-
-    /// The horizon is only honest if it is comfortably LONGER than the
-    /// longest job anyone waits for: `review sync --open`'s `--wait`
-    /// default is 3600 s, and a job that spends all of it must not be
-    /// swept under a live poller.
-    #[test]
-    fn the_stuck_horizon_outlasts_the_longest_poll_budget() {
-        const DEFAULT_WAIT_OPEN: u64 = 3600; // kb_code_cli::review_sync
-        assert!(STUCK_JOB_HORIZON_SECS > DEFAULT_WAIT_OPEN);
-        assert!(STUCK_JOB_HORIZON_SECS >= 2 * DEFAULT_WAIT_OPEN);
-        assert!(STUCK_JOB_HORIZON_SECS > JOB_TTL_SECS);
     }
 
     async fn booted_state() -> (tempfile::TempDir, SharedState) {

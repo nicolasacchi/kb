@@ -2505,20 +2505,30 @@ mod tests {
     }
 
     /// Page 1 carries `Link: rel="next"` to page 2; page 2 carries none,
-    /// so the walk must stop there. A third route exists purely to make
-    /// "followed exactly one header" observable: the rows on page 2 can
-    /// ONLY have come from following it.
+    /// so the walk must stop there. The rows on page 2 can ONLY have come
+    /// from following the header, which is what makes this fixture
+    /// load-bearing.
+    ///
+    /// The header is the MULTI-VALUE `prev`/`next`/`last`/`first` form
+    /// real GitHub sends, not a lone `rel="next"` entry: a single-entry
+    /// header would still pass if [`parse_link_next`] had lost its comma
+    /// split, and that regression silently caps EVERY paginated read in
+    /// this crate at one page.
     fn two_page_router(
         addr: std::net::SocketAddr,
         page1: Vec<serde_json::Value>,
         page2: Vec<serde_json::Value>,
     ) -> Router {
-        let page2_next = format!(r#"<http://{addr}/repos/acme/widget/pulls3>; rel="next""#);
+        let page1_url = format!("http://{addr}/repos/acme/widget/pulls?page=1");
+        let page2_url = format!("http://{addr}/repos/acme/widget/pulls2");
+        let link_header = format!(
+            r#"<{page1_url}>; rel="prev", <{page2_url}>; rel="next", <{page2_url}>; rel="last", <{page1_url}>; rel="first""#
+        );
         Router::new()
             .route(
                 "/repos/acme/widget/pulls",
                 get(move || {
-                    let next = page2_next.clone();
+                    let next = link_header.clone();
                     let page = serde_json::Value::Array(page1.clone());
                     async move { ([(axum::http::header::LINK, next)], Json(page)) }
                 }),
@@ -2529,10 +2539,6 @@ mod tests {
                     let page = serde_json::Value::Array(page2.clone());
                     async move { Json(page) }
                 }),
-            )
-            .route(
-                "/repos/acme/widget/pulls3",
-                get(|| async { Json(serde_json::json!([])) }),
             )
     }
 
