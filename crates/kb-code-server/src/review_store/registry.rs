@@ -1097,6 +1097,10 @@ impl ReviewStores {
         }
     }
 
+    // Eight parameters, and the eighth is the refused-remote list: it is
+    // not part of the store's identity, so bundling it would mean a
+    // struct that exists only to satisfy a lint.
+    #[allow(clippy::too_many_arguments)]
     fn create_and_join(
         &self,
         store: &Store,
