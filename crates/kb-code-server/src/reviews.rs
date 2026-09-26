@@ -1925,10 +1925,8 @@ pub fn delete_review_with_refs(
             let remaining = store
                 .count_reviews_by_pr_binding(&review.repo, n)
                 .unwrap_or(0);
-            if remaining == 0 {
-                if pr_ref_scope == PrRefScope::PerRepo {
-                    let _ = delete_pr_ref(repo_root, n as u32);
-                }
+            if remaining == 0 && pr_ref_scope == PrRefScope::PerRepo {
+                let _ = delete_pr_ref(repo_root, n as u32);
             }
         }
     }
