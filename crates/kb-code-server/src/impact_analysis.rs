@@ -544,7 +544,7 @@ fn anchor_symbol(
     col: u32,
     rev: Option<&str>,
 ) -> Result<(String, Option<String>, u32, u32), ApiError> {
-    let read = read_repo_file(repo, path, rev)?;
+    let read = read_repo_file(repo, path, crate::routes::RevResolver::lookup(store, rev))?;
     let lang = crate::lang::detect(path, Some(&read.bytes));
     if let Some(li) = lang {
         if let Ok(syms) = store.symbols_for_blob(&read.blob_hash, li.symbol_salt) {

@@ -1136,10 +1136,16 @@ fn run_unreviewed_hotspots(
 
     let reviews = store.list_reviews(repo_name, None)?;
     let mut reviewed_paths: HashSet<String> = HashSet::new();
+    // RS-U4 (S6) — review reads; complexity above stays on the work tree.
+    let git_ctx = crate::git::roots::GitCtx::for_repo(
+        store,
+        repo_name,
+        crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+    );
     for rev in &reviews {
         let pss = store.list_patchsets(rev.id).unwrap_or_default();
         for ps in pss {
-            if let Ok(files) = files_changed(repo_root, &ps.base_sha, &ps.tip_sha) {
+            if let Ok(files) = files_changed(&git_ctx, &ps.base_sha, &ps.tip_sha) {
                 for f in files {
                     reviewed_paths.insert(f.path);
                 }

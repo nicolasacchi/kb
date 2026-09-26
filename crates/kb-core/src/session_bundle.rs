@@ -42,6 +42,18 @@ pub fn claude_project_slug(abs_cwd: &str) -> String {
         .collect()
 }
 
+/// Grouping key for [`crate::sessions::derive_project`]: the Claude slug of
+/// `path` with trailing `/` stripped first, so `/tmp/kb` and `/tmp/kb/` do
+/// not split into two projects.
+///
+/// Do **not** fold this trim into [`claude_project_slug`]. That function
+/// stays byte-identical — a trailing `/` is a trailing `-` — because it
+/// reproduces `~/.claude/projects/<slug>`, and `claude -r` misses the
+/// folder if the name changes. Only `derive_project` should call this.
+pub fn project_key_of(path: &str) -> String {
+    claude_project_slug(path.trim_end_matches('/'))
+}
+
 /// One file the session touched, flattened for the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestFile {
@@ -362,6 +374,18 @@ mod tests {
         );
         // Non-ASCII → `-` (matches a JS `[^A-Za-z0-9]` replace).
         assert_eq!(claude_project_slug("/p/caffè"), "-p-caff-");
+    }
+
+    #[test]
+    fn project_key_of_collapses_trailing_slash_slug_keeps_dash() {
+        // Grouping key: a trailing slash must not split the project.
+        assert_eq!(project_key_of("/tmp/kb"), project_key_of("/tmp/kb/"));
+        assert_eq!(project_key_of("/tmp/kb"), "-tmp-kb");
+        assert_eq!(project_key_of("/tmp/kb//"), project_key_of("/tmp/kb"));
+        // Resume placement: the Claude folder slug still keeps the dash.
+        // A collapsing change here would make `claude -r` miss the dir.
+        assert_eq!(claude_project_slug("/tmp/kb/"), "-tmp-kb-");
+        assert_ne!(claude_project_slug("/tmp/kb/"), project_key_of("/tmp/kb/"));
     }
 
     #[test]

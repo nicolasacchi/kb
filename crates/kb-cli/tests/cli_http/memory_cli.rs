@@ -39,6 +39,7 @@ async fn boot_memory() -> (tempfile::TempDir, SocketAddr) {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: Some("global".into()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -50,6 +51,7 @@ async fn boot_memory() -> (tempfile::TempDir, SocketAddr) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     kb_map.insert(
@@ -66,6 +68,7 @@ async fn boot_memory() -> (tempfile::TempDir, SocketAddr) {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: Some("project".into()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -77,6 +80,7 @@ async fn boot_memory() -> (tempfile::TempDir, SocketAddr) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

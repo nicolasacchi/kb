@@ -26,11 +26,15 @@ export default function DiffView({ repo, path, from, to }: DiffViewProps) {
     () => (parsed ? parsed.hunks.some((h) => h.lines.some((l) => l.kind === "remove")) : false),
     [parsed],
   );
+  const hasAdds = useMemo(
+    () => (parsed ? parsed.hunks.some((h) => h.lines.some((l) => l.kind === "add")) : false),
+    [parsed],
+  );
   const highlights = useDiffHighlights(
     parsed ? repo : undefined,
     parsed ? path : undefined,
     { oldSha: from, newSha: to },
-    { hasRemoves, parsed },
+    { hasRemoves, hasAdds, parsed },
   );
 
   if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;

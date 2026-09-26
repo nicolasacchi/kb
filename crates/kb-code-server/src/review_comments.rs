@@ -23,6 +23,7 @@
 //! line is worse than an honest orphan.
 
 use crate::annotations;
+use crate::git::roots::GitCtx;
 use crate::git::{GitError, GitRepo, DEFAULT_BLOB_SIZE_CAP};
 use crate::reviews::{changed_path_set, require_review, resolve_ps};
 use crate::routes::ApiError;
@@ -35,7 +36,6 @@ use axum::Json;
 use kb_core::review::Anchor;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 
 pub const SCHEMA: &str = "review-comments/1";
 
@@ -117,7 +117,7 @@ fn combine_confidence(
 /// [`resolve_for_ps_with_content`] when a caller already has the bytes
 /// (the comments route caches one read per `(path, sha)`).
 pub fn resolve_for_ps(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     row: &AnnotationRow,
     target_ps: &ReviewPatchsetRow,
 ) -> ResolvedForPs {
@@ -240,13 +240,19 @@ pub fn resolve_for_ps_with_content(
 /// `pub(crate)` — PRR-R3's findings-list route (`crate::review_findings`)
 /// reuses this exact blob read (same per-`(path, sha)` caching convention
 /// as [`build_comment_groups`]) rather than a second copy.
-pub(crate) fn read_blob_text(repo_root: &Path, path: &str, sha: &str) -> Option<String> {
-    let git = GitRepo::open(repo_root).ok()?;
-    match git.read_blob(sha, path, DEFAULT_BLOB_SIZE_CAP) {
-        Ok(bytes) => String::from_utf8(bytes).ok(),
-        Err(GitError::PathNotFound { .. }) | Err(GitError::NotABlob { .. }) => None,
-        Err(_) => None,
-    }
+///
+/// RS-U4 (S6) — a review read at a patchset sha: the review store first
+/// once it is ready, then the member work tree's ODB
+/// (`GitCtx::read_opt_with_fallback`).
+pub(crate) fn read_blob_text(ctx: &GitCtx, path: &str, sha: &str) -> Option<String> {
+    ctx.read_opt_with_fallback(|root| {
+        let git = GitRepo::open(root.git_path()).ok()?;
+        match git.read_blob(sha, path, DEFAULT_BLOB_SIZE_CAP) {
+            Ok(bytes) => String::from_utf8(bytes).ok(),
+            Err(GitError::PathNotFound { .. }) | Err(GitError::NotABlob { .. }) => None,
+            Err(_) => None,
+        }
+    })
 }
 
 fn snippet_of(anchor: &Anchor) -> &str {
@@ -332,7 +338,7 @@ pub async fn review_comments(
     // groups` are all synchronous store work — one blocking-pool trip.
     let ps_param = params.ps.clone();
     let all = params.all;
-    let repo_root = repo.path.clone();
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let (target_ps, groups_out) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
@@ -389,7 +395,7 @@ pub async fn review_comments(
 /// comment regardless).
 pub(crate) fn build_comment_groups(
     store: &Store,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     target_ps: &ReviewPatchsetRow,
     rows: Vec<AnnotationRow>,
     ctx: &crate::prose_refs::RefCtx,

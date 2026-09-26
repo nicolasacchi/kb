@@ -296,7 +296,7 @@ pub(crate) fn resolve_position(
     if line < 1 {
         return Err(ApiError::bad_request("line must be >= 1 (1-based)"));
     }
-    let read = read_repo_file(repo, path, rev)?;
+    let read = read_repo_file(repo, path, crate::routes::RevResolver::lookup(store, rev))?;
     let content = std::str::from_utf8(&read.bytes).map_err(|_| {
         ApiError::bad_request(format!(
             "{path}: not valid UTF-8 — position resolve needs text content"

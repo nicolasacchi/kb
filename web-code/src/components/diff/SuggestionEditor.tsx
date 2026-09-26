@@ -3,6 +3,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import type { ReviewComment } from "../../api/types";
+import { useDiffHighlights } from "../../hooks/useDiffHighlights";
 import { useFile } from "../../hooks/useFile";
 import {
   sliceAnchoredLines,
@@ -64,6 +65,22 @@ export default function SuggestionEditor({
     () => synthesizeSuggestionDiff(originalLines, draft, start),
     [originalLines, draft, start],
   );
+  // BOTH sides read the ONE blob this component already has open
+  // (`useFile(repo, path, sha)` above, the same `["file", repo, path, sha]`
+  // key) — so the paint costs no extra request. Only lines that byte-equal
+  // that blob paint: the seeded ORIGINAL side always does, while the
+  // user's DRAFT is not the blob's text and so stays plain (the hook's
+  // per-line integrity guard, never a wrong colour).
+  const hasRemoves = useMemo(
+    () => (parsed ? parsed.hunks.some((h) => h.lines.some((l) => l.kind === "remove")) : false),
+    [parsed],
+  );
+  const highlights = useDiffHighlights(
+    eligible ? repo : undefined,
+    eligible ? thread.path : undefined,
+    { oldSha: sha, newSha: sha },
+    { hasRemoves, parsed },
+  );
 
   async function save() {
     if (busy) return;
@@ -92,7 +109,7 @@ export default function SuggestionEditor({
       )}
       {!loading && <SuggestionMirror seed={seed} onChange={setDraft} />}
       <div className="kbc-suggestion__preview kbc-diff" data-kbc-suggestion-preview>
-        <UnifiedHunks path={thread.path} parsed={parsed} />
+        <UnifiedHunks path={thread.path} parsed={parsed} highlights={highlights} />
       </div>
       <div className="kbc-suggestion__actions">
         <button
