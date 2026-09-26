@@ -55,7 +55,7 @@ futures = { workspace = true }
 # SCIP/protobuf surface, so parsing lives entirely here, and the CLI POSTs
 # already-mapped `{name, role, line, col_start, col_end}` rows to the daemon
 # instead (`crates/kb-code-server/src/scip.rs`'s own module doc).
-scip = "0.9"
+scip = "0.10"
 # `scip::types::Index` implements `protobuf::Message` — parsing a `.scip`
 # file needs `Message::parse_from_bytes` in scope, which isn't re-exported
 # by the `scip` crate itself (only its own `write_message_to_file` helper
