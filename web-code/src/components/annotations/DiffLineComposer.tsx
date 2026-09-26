@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useCreateAnnotation } from "../../hooks/useAnnotations";
+import { useCurrentReview } from "../../lib/currentReview";
 import { toast } from "../../lib/toast";
+import ReviewBindSelector from "./ReviewBindSelector";
 
 export interface DiffLineComposerProps {
   repo: string;
@@ -26,15 +28,36 @@ export interface DiffLineComposerProps {
 /// `onSuccess` invalidates it) — a comment left here shows up there too,
 /// and `DiffFileAnnotations`' thread list below refreshes from the same
 /// write, no second index.
+///
+/// V80-M2 — same "Review" selector `AnnotationsPanel`'s composer carries,
+/// preselected to the current review (`lib/currentReview.ts`, M3) on
+/// mount: a comment filed at a commit can bind to a review the same way
+/// one filed from the plain reader can, so it shows up in that review's
+/// Room too. `side` is always `"new"` when a review is set — this
+/// composer's own anchor is already pinned to `sha`'s blob, independent
+/// of the review's patchset old/new sides.
 export default function DiffLineComposer({ repo, path, sha, line, onDone }: DiffLineComposerProps) {
   const [body, setBody] = useState("");
   const create = useCreateAnnotation(repo, path);
+  const currentReview = useCurrentReview(repo);
+  const [reviewId, setReviewId] = useState<number | null>(() => {
+    const n = currentReview ? Number(currentReview.id) : NaN;
+    return Number.isFinite(n) ? n : null;
+  });
 
   async function save() {
     const trimmed = body.trim();
     if (!trimmed) return;
     try {
-      await create.mutateAsync({ repo, path, line, anchor_kind: "diff", sha, body: trimmed });
+      await create.mutateAsync({
+        repo,
+        path,
+        line,
+        anchor_kind: "diff",
+        sha,
+        body: trimmed,
+        ...(reviewId !== null ? { review_id: reviewId, side: "new" as const } : {}),
+      });
       onDone();
     } catch (e) {
       toast.err(`couldn't save comment: ${e instanceof Error ? e.message : String(e)}`);
@@ -54,6 +77,7 @@ export default function DiffLineComposer({ repo, path, sha, line, onDone }: Diff
         autoFocus
         data-kbc-diffcomment-body
       />
+      <ReviewBindSelector repo={repo} path={path} value={reviewId} onChange={setReviewId} />
       <div className="kbc-diffcomment-composer__actions">
         <button
           type="button"

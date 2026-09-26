@@ -8,9 +8,12 @@
 use crate::diff::diff_file;
 use crate::entities::RouteContract;
 use crate::frames::{self, FrameClaim};
+use crate::git::roots::{GitCtx, GitRoot, WorkTreeRoot};
 use crate::git::Revspec;
 use crate::ingest;
-use crate::routes::{find_repo, parse_revspec, read_repo_file, safe_rel_path, ApiError};
+use crate::routes::{
+    find_repo, parse_revspec, read_repo_file, safe_rel_path, ApiError, RevResolver,
+};
 use crate::state::SharedState;
 use axum::extract::{Query, State};
 use axum::http::header;
@@ -140,6 +143,60 @@ fn side_from_read(rev: String, bytes: &[u8]) -> BlobSide {
     }
 }
 
+/// One side of the compare, resolved to a COMMIT ID — once, and through
+/// the ONE store-vs-work-tree decision,
+/// [`GitCtx::read_rev_with_fallback`], which applies
+/// [`crate::git::roots::is_store_authoritative`] PER REF CLASS. No class
+/// decision is re-derived here, so a side resolves exactly as a
+/// `GET /api/file` read of the same rev does:
+///
+/// * a full object id is content-addressed — the counted
+///   store-then-work-tree bridge, because whichever ODB answers it names
+///   the same commit;
+/// * a `refs/kbc/review/<id>/ps<n>` name resolves in the STORE ALONE, so
+///   a store miss is this side's 404 and never a silent answer from a
+///   clone still carrying the same name at a pre-store commit;
+/// * a class the store does not import — `refs/kbc/pr/<n>`, the
+///   re-fetchable forge cache the seed doc calls "NOT imported" — still
+///   resolves from the member work tree, which is where `pr fetch` puts
+///   it. That is the ORDINARY case, not an edge: the member import is
+///   asynchronous, so a `POST /api/prs/fetch` lands in the clone before
+///   the store holds the ref, and such a side must not kill a comparison
+///   the other side could otherwise have answered.
+///
+/// A rev that resolves in NEITHER root is still the typed 404
+/// [`unresolvable`] reports — the requirement that a compare names its
+/// unresolvable side is exactly what keeps both sides and the diff
+/// describing one pair of commits (see [`compare_file_route`]).
+fn resolve_side(ctx: &GitCtx, rev: &Revspec) -> Result<String, ApiError> {
+    let spec = rev.as_str();
+    let resolve = |root: &dyn GitRoot| {
+        crate::history::resolve_sha(root, spec).map_err(|e| unresolvable(spec, e))
+    };
+    // Ask a store only about a rev it could hold AT ALL: an ordinary name
+    // (`HEAD`, `main`) means something different in a bare store, so it
+    // stays on the work tree without spending a call or a counter.
+    if crate::git::roots::is_store_addressable(spec) {
+        ctx.read_rev_with_fallback(spec, resolve)
+    } else {
+        resolve(ctx.work_tree())
+    }
+}
+
+/// A well-formed revspec that resolves to nothing in the root its side
+/// was decided in — the same `unknown-ref` miss `read_repo_file`'s own ODB
+/// resolve reports (routes.rs), so this route's 404 shape is unchanged. A
+/// spawn failure keeps its own mapping.
+fn unresolvable(spec: &str, e: crate::history::HistoryError) -> ApiError {
+    match e {
+        crate::history::HistoryError::GitFailed { .. } => {
+            ApiError::not_found(format!("{spec}: unknown ref"))
+                .with_problem_type(frames::ERR_UNKNOWN_REF)
+        }
+        other => ApiError::from(other),
+    }
+}
+
 pub async fn compare_file_route(
     State(state): State<SharedState>,
     Query(params): Query<CompareFileParams>,
@@ -149,15 +206,42 @@ pub async fn compare_file_route(
     let a: Revspec = parse_revspec(&params.a)?;
     let b: Revspec = parse_revspec(&params.b)?;
 
-    let read_a = read_repo_file(repo, &path, Some(a.as_str()))?;
-    let read_b = read_repo_file(repo, &path, Some(b.as_str()))?;
-
-    let repo_root = repo.path.clone();
-    let path_for_task = path.clone();
+    // RS-U4 (S8 bridge) — ONE root decision for the WHOLE response. A side
+    // naming a full sha / `refs/kbc/*` is read through the review store
+    // first once it is ready (a class the store does not import still
+    // falls back to the work tree — [`resolve_side`]), but the three reads
+    // this response is built from (the two blobs and the diff) must all
+    // describe the SAME commits: a store holding `refs/kbc/review/7/ps1`
+    // at X while the clone still carries that legacy name at X' would
+    // otherwise answer `a` with the blob at X and a diff of X'..Y, and a
+    // caller could not tell which commit either side came from. So each
+    // side is resolved to a commit id exactly once ([`resolve_side`]) and
+    // both the blob reads and the diff run off those ids — which is what
+    // makes the agreement hold whichever root each side resolved in.
+    let git_ctx = if crate::git::roots::is_store_addressable(a.as_str())
+        || crate::git::roots::is_store_addressable(b.as_str())
+    {
+        GitCtx::resolve_entry(&state.store, repo).await
+    } else {
+        GitCtx::work_tree_only(WorkTreeRoot::of_repo(repo))
+    };
+    let ctx_for_task = git_ctx.clone();
     let a_for_task = a.clone();
     let b_for_task = b.clone();
-    let diff_text = tokio::task::spawn_blocking(move || {
-        diff_file(&repo_root, &a_for_task, Some(&b_for_task), &path_for_task)
+    let path_for_task = path.clone();
+    let (a_sha, b_sha, diff_text) = tokio::task::spawn_blocking(move || {
+        let a_sha = resolve_side(&ctx_for_task, &a_for_task)?;
+        let b_sha = resolve_side(&ctx_for_task, &b_for_task)?;
+        // Two OBJECT IDS: content-addressed, so whichever ODB answers it
+        // is the same diff — `read_with_fallback` here can only pick a root
+        // that HOLDS both commits, never a different pair. The same shape
+        // `review_finding_touches::parsed_hunks` uses for a patchset's two
+        // shas; with no ready store it is one call against the work tree.
+        let from = Revspec::trusted(a_sha.clone());
+        let to = Revspec::trusted(b_sha.clone());
+        let text = ctx_for_task
+            .read_with_fallback(|r| diff_file(r.git_path(), &from, Some(&to), &path_for_task))?;
+        Ok::<_, ApiError>((a_sha, b_sha, text))
     })
     .await
     .map_err(|e| {
@@ -166,6 +250,17 @@ pub async fn compare_file_route(
             format!("compare-file task panicked: {e}"),
         )
     })??;
+
+    let read_a = read_repo_file(
+        repo,
+        &path,
+        RevResolver::bridged(&git_ctx, Some(a_sha.as_str())),
+    )?;
+    let read_b = read_repo_file(
+        repo,
+        &path,
+        RevResolver::bridged(&git_ctx, Some(b_sha.as_str())),
+    )?;
 
     let hunks = parse_unified_hunks(&diff_text);
     let body = CompareFileResponse {

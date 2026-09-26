@@ -28,6 +28,31 @@ pub struct DaemonStats {
     pub started_at: String,
 }
 
+/// Per-corpus cost census on `GET /api/stats` and `GET /api/kb/{kb}/stats`.
+/// Built only from numbers this handler already computed — no new store.
+/// `hint` is omitted unless the numbers say so (`open_errors > 0` or
+/// `doc_count == 0`). It names that condition. It does not recommend
+/// pausing the corpus, and it does not suggest an embedding-model change.
+///
+/// `last_hybrid_error` is intentionally absent. This struct has no ring
+/// for a query-time failure, and this handler must not invent one. That
+/// store would live on `KbContext` in `crate::state` (`state.rs`), beside
+/// `last_reconcile`.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Serialize)]
+pub struct CostCensus {
+    pub doc_count: u64,
+    pub open_errors: u64,
+    /// Copied from the last reconcile snapshot when a pass has completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_reconcile_duration_ms: Option<u64>,
+    /// Observational. Absent when `doc_count > 0` and `open_errors == 0`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub hint: Option<&'static str>,
+}
+
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct KbStats {
@@ -63,6 +88,34 @@ pub struct KbStats {
     /// storage was opened. Nonzero means rows are being silently dropped
     /// from search/list results; see kb-core's `Storage::decode_skip_count`.
     pub decode_skips: u64,
+    /// Cost census over numbers this handler already has. Additive; clients
+    /// that only know the fields above still parse.
+    pub cost_census: CostCensus,
+}
+
+/// Names the condition the numbers already show. `None` when neither
+/// trigger holds. Never a pause recommendation and never a model-migration
+/// hint — those need signals this handler does not have.
+fn cost_hint(doc_count: u64, open_errors: u64) -> Option<&'static str> {
+    match (doc_count == 0, open_errors > 0) {
+        (false, false) => None,
+        (true, false) => Some("corpus has no documents"),
+        (false, true) => Some("corpus has open errors"),
+        (true, true) => Some("corpus has no documents and open errors"),
+    }
+}
+
+fn cost_census(
+    doc_count: u64,
+    open_errors: u64,
+    last_reconcile_duration_ms: Option<u64>,
+) -> CostCensus {
+    CostCensus {
+        doc_count,
+        open_errors,
+        last_reconcile_duration_ms,
+        hint: cost_hint(doc_count, open_errors),
+    }
 }
 
 pub async fn cross(State(state): State<Arc<KbHandles>>) -> Json<CrossStats> {
@@ -95,6 +148,11 @@ pub async fn cross(State(state): State<Arc<KbHandles>>) -> Json<CrossStats> {
                 last_reconcile_duration_ms: reconcile_snapshot.map(|s| s.duration_ms),
                 reconcile_secs: ctx.reconcile_secs,
                 decode_skips,
+                cost_census: cost_census(
+                    doc_count,
+                    errors.len() as u64,
+                    reconcile_snapshot.map(|s| s.duration_ms),
+                ),
             }
         }));
     }
@@ -143,6 +201,11 @@ pub async fn per_kb(State(state): State<Arc<KbHandles>>, Path(kb): Path<String>)
         last_reconcile_duration_ms: reconcile_snapshot.map(|s| s.duration_ms),
         reconcile_secs: ctx.reconcile_secs,
         decode_skips,
+        cost_census: cost_census(
+            doc_count,
+            errors.len() as u64,
+            reconcile_snapshot.map(|s| s.duration_ms),
+        ),
     })
     .into_response()
 }

@@ -70,33 +70,48 @@ test.describe("suggestion editor + apply (V4.S2)", () => {
 
     await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
     await expect(page.locator("[data-kbc-review-files]")).toBeVisible({ timeout: 10_000 });
+    // V80-F1 — the Files-tab row click NAVIGATES to the full-page diff now
+    // (the inline cockpit expansion is retired from this interaction).
     await page.locator(`[data-kbc-review-file-row="${FILE}"]`).click();
-    const diff = page.locator(`[data-kbc-review-file-diff="${FILE}"]`);
+    await expect(page).toHaveURL(new RegExp(`/diff/${FILE}(\\?|$)`));
+    const diff = page.locator(`[data-kbc-rdiff-file="${FILE}"]`);
     await expect(diff).toBeVisible({ timeout: 10_000 });
 
     // --- compose two threads on the same new-side line --------------------
+    // V80-F1 — this is the REAL full-page diff now, not the old inline
+    // preview: both composes DRAFT (V73-K2a) until published, so neither
+    // is a live `[data-kbc-review-thread]` yet — publish once, as ONE
+    // batch, after composing both (a closer match to the "ONE batch"
+    // contract than publishing twice would be).
     await diff.locator("[data-kbc-review-compose-new]").last().click();
     const composer = page.locator("[data-kbc-review-composer]");
     await expect(composer).toBeVisible();
     await composer.locator("[data-kbc-review-composer-body]").fill("first suggestion thread");
     await composer.locator("[data-kbc-review-composer-submit]").click();
-    const threadA = diff.locator("[data-kbc-review-thread]").first();
-    await expect(threadA).toBeVisible({ timeout: 10_000 });
-    await expect(threadA).toContainText("first suggestion thread");
-    const idA = await threadA.getAttribute("data-kbc-review-thread");
-    // threadA above is a LIVE .first() locator — once a second thread
-    // renders (line-bucket order, not creation order) it would re-resolve
-    // to the wrong thread. Rebind by id for everything that follows.
-    const threadARef = page
-      .locator(`[data-kbc-review-file-diff="README.md"]`)
-      .locator(`[data-kbc-review-thread="${idA}"]`);
-    expect(idA).toBeTruthy();
 
     await diff.locator("[data-kbc-review-compose-new]").last().click();
     const composer2 = page.locator("[data-kbc-review-composer]");
     await expect(composer2).toBeVisible();
     await composer2.locator("[data-kbc-review-composer-body]").fill("second suggestion thread");
     await composer2.locator("[data-kbc-review-composer-submit]").click();
+
+    // Composing auto-opens the tray (V73-K2a) — no toggle click needed.
+    await expect(page.locator("[data-kbc-rdiff-draft]")).toHaveCount(2);
+    await page.locator("[data-kbc-rdiff-drafts-publish]").click();
+
+    const threadA = diff
+      .locator("[data-kbc-review-thread]")
+      .filter({ hasText: "first suggestion thread" });
+    await expect(threadA).toBeVisible({ timeout: 10_000 });
+    const idA = await threadA.getAttribute("data-kbc-review-thread");
+    // threadA above is a LIVE `.filter()` locator — rebind by id for
+    // everything that follows (the suggestion-editor interactions below
+    // re-render the thread block, and a live filtered locator can drift).
+    const threadARef = page
+      .locator(`[data-kbc-rdiff-file="README.md"]`)
+      .locator(`[data-kbc-review-thread="${idA}"]`);
+    expect(idA).toBeTruthy();
+
     // Threads render in line-bucket order, not creation order — select by
     // text, never by index (first-run flake).
     const threadB = diff

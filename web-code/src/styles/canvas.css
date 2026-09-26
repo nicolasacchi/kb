@@ -9,34 +9,18 @@
   color: var(--ink);
 }
 
-.kbc-canvas__head {
+.kbc-canvas .kbc-page-head {
   flex: 0 0 auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: baseline;
-  justify-content: space-between;
   padding: 16px 16px 8px;
   border-bottom: 1px solid var(--rule);
-}
-
-.kbc-canvas__title {
-  font-size: 20px;
-  margin: 0;
-}
-
-.kbc-canvas__hint {
-  margin: 4px 0 0;
-  font-size: 13px;
-  color: var(--ink-mute);
-  max-width: 48em;
+  margin-bottom: 0;
 }
 
 .kbc-canvas__save {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   font-family: var(--font-mono, monospace);
 }
@@ -80,7 +64,7 @@
 
 .kbc-canvas__create input {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 6px 8px;
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -94,7 +78,7 @@
 .kbc-canvas__row-actions button,
 .kbc-canvas__search-hit {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 4px 8px;
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -134,7 +118,7 @@
 }
 
 .kbc-canvas__row-name {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--ink);
   text-decoration: none;
@@ -146,9 +130,10 @@
 }
 
 .kbc-canvas__row-meta {
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
 }
 
 .kbc-canvas__row-actions {
@@ -180,7 +165,7 @@
   flex: 1 1 160px;
   min-width: 120px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 6px 8px;
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -222,7 +207,7 @@
 .kbc-canvas__search-hit-path {
   color: var(--ink-mute);
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   margin-left: 6px;
 }
 
@@ -318,7 +303,7 @@
 .kbc-canvas__card-link {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--accent-soft);
   text-decoration: none;
   font-family: var(--font-mono, monospace);
@@ -339,7 +324,7 @@
 
 .kbc-canvas__card-actions button {
   padding: 2px 6px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 
 .kbc-canvas__card-body {
@@ -349,7 +334,7 @@
   padding: 8px;
   margin: 0;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
   color: var(--ink);
   white-space: pre;
@@ -360,13 +345,13 @@
 
 .kbc-canvas__card-stale {
   padding: 12px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--warn);
 }
 
 .kbc-canvas__card-loading {
   padding: 12px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 
@@ -377,17 +362,17 @@
   justify-content: center;
   padding: 32px;
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-body);
   text-align: center;
 }
 
 .kbc-canvas__muted {
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .kbc-canvas__error {
   color: var(--red);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 8px 12px;
 }

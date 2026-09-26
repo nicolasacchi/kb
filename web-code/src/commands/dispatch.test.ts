@@ -753,6 +753,7 @@ describe("scope goldens", () => {
       "t → diff.thread-next",
       "u → nav.back",
       "x → diff.collapse",
+      "z A → diff.tree-mode-toggle",
       "z O → diff.expand-all",
       "z V → diff.collapse-viewed",
       "z a → diff.fold-toggle",

@@ -6,18 +6,34 @@
  * state tokens rather than minting a second vocabulary: a `carried` step and
  * a `carried` board node are the same fact, and two palettes for one fact is
  * the drift the one-ladder rule exists to prevent.
+ *
+ * V80-R0: this file was written entirely against a token vocabulary that
+ * never existed in `tokens.css` (`--type-h1/h2/sm/xs`, `--sp-1..5`, plus
+ * `--fg-muted`/`--border-subtle`/`--border-strong`/`--bg-raised`/
+ * `--shadow-lg`/`--scrim`/`--danger-fg`/`--warn-fg`/`--warn-bg`/`--ok-fg`/
+ * `--ok-border`/`--warn-border`/`--accent-border`/`--bg-selected` — every
+ * `var()` in every declaration below was invalid at computed-value time,
+ * silently falling through to `inherit`/initial). Every one is now mapped
+ * to its real equivalent (`--fs-*`/`--pad-*` for the ramp/spacing per the
+ * brief; the rest found by grepping `tokens.css` while fixing the named
+ * ones — `--ink-mute`, `--rule`/`--rule-hi`, `--bg-card-hi`, `--shadow-
+ * lift`, `--backdrop`, `--red`/`--warn`/`--green`, `--accent-bor`/
+ * `--accent-bg`). `--warn-bg` had no direct equivalent; it's now
+ * `color-mix(in srgb, var(--warn) 16%, transparent)`, the same wash
+ * `review-room.css`'s `.kbc-chip--draft` uses. `--sp-5` (one caller) had no
+ * `--pad-5`; it's `calc(var(--pad-4) + var(--pad-1))`.
  */
 
 .kbc-tours,
 .kbc-tour {
-  padding: var(--sp-4);
+  padding: var(--pad-4);
   max-width: 72rem;
   margin: 0 auto;
 }
 
 .kbc-tours__title,
 .kbc-tour__title {
-  font-size: var(--type-h1);
+  font-size: var(--fs-hero);
   margin: 0;
 }
 
@@ -25,15 +41,15 @@
 .kbc-tour__desc,
 .kbc-tour__caption,
 .kbc-tours__row-meta {
-  color: var(--fg-muted);
-  font-size: var(--type-sm);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 .kbc-tours__controls {
   display: flex;
-  gap: var(--sp-3);
+  gap: var(--pad-3);
   align-items: center;
-  margin: var(--sp-3) 0;
+  margin: var(--pad-3) 0;
 }
 
 .kbc-tours__list {
@@ -44,10 +60,10 @@
 
 .kbc-tours__row {
   display: flex;
-  gap: var(--sp-3);
+  gap: var(--pad-3);
   align-items: baseline;
-  padding: var(--sp-2) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--pad-2) 0;
+  border-bottom: 1px solid var(--rule);
 }
 
 .kbc-tours__row-name {
@@ -55,123 +71,123 @@
 }
 
 .kbc-tours__status {
-  font-size: var(--type-xs);
-  border: 1px solid var(--border-subtle);
+  font-size: var(--fs-xs);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  padding: 0 var(--sp-2);
-  color: var(--fg-muted);
+  padding: 0 var(--pad-2);
+  color: var(--ink-mute);
 }
 
 .kbc-tours__status--accepted {
-  color: var(--ok-fg);
-  border-color: var(--ok-border);
+  color: var(--green);
+  border-color: var(--green);
 }
 
 .kbc-tours__status--pending {
-  color: var(--warn-fg);
-  border-color: var(--warn-border);
+  color: var(--warn);
+  border-color: var(--warn);
 }
 
 .kbc-tours__sibling,
 .kbc-tours__sibling p {
-  color: var(--fg-muted);
-  font-size: var(--type-sm);
-  margin-top: var(--sp-5);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  margin-top: calc(var(--pad-4) + var(--pad-1));
 }
 
 /* --- one tour --------------------------------------------------------- */
 
 .kbc-tour__title-row {
   display: flex;
-  gap: var(--sp-3);
+  gap: var(--pad-3);
   align-items: center;
 }
 
 .kbc-tour__census {
   list-style: none;
-  margin: var(--sp-2) 0;
+  margin: var(--pad-2) 0;
   padding: 0;
-  color: var(--fg-muted);
-  font-size: var(--type-sm);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 .kbc-tour__gate {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-tour__bar {
   display: flex;
-  gap: var(--sp-3);
+  gap: var(--pad-3);
   align-items: center;
   flex-wrap: wrap;
-  padding: var(--sp-2) 0;
-  border-top: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--pad-2) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
 }
 
 .kbc-tour__step {
-  padding: var(--sp-3) 0;
+  padding: var(--pad-3) 0;
 }
 
 .kbc-tour__step-title {
-  font-size: var(--type-h2);
-  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-title);
+  margin: 0 0 var(--pad-2);
 }
 
 .kbc-tour__step-foot {
   display: flex;
-  gap: var(--sp-3);
+  gap: var(--pad-3);
   align-items: center;
-  margin-top: var(--sp-2);
-  font-size: var(--type-sm);
+  margin-top: var(--pad-2);
+  font-size: var(--fs-sm);
 }
 
 .kbc-tour__strip {
   list-style: none;
-  margin: var(--sp-4) 0 0;
+  margin: var(--pad-4) 0 0;
   padding: 0;
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--pad-2);
   overflow-x: auto;
 }
 
 .kbc-tour__strip-item {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--pad-2);
   align-items: center;
-  background: var(--bg-raised);
-  border: 1px solid var(--border-subtle);
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  padding: var(--sp-1) var(--sp-2);
+  padding: var(--pad-1) var(--pad-2);
   color: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .kbc-tour__strip-item.is-current {
-  border-color: var(--accent-border);
-  background: var(--bg-selected);
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
 }
 
 .kbc-tour__strip-state--orphan {
-  color: var(--danger-fg);
+  color: var(--red);
 }
 
 .kbc-tour__strip-state--carried {
-  color: var(--warn-fg);
+  color: var(--warn);
 }
 
 /* --- the recorder + composer ------------------------------------------ */
 
 .kbc-tourrec {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--pad-2);
   align-items: center;
-  padding: var(--sp-1) var(--sp-3);
-  background: var(--warn-bg);
-  color: var(--warn-fg);
-  font-size: var(--type-sm);
+  padding: var(--pad-1) var(--pad-3);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  font-size: var(--fs-sm);
 }
 
 .kbc-tourrec__dot {
@@ -185,18 +201,18 @@
   position: fixed;
   inset: 0;
   z-index: var(--z-drawer);
-  background: var(--scrim);
+  background: var(--backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .kbc-tourcomposer__panel {
-  background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule-hi);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  padding: var(--sp-4);
+  box-shadow: var(--shadow-lift);
+  padding: var(--pad-4);
   width: min(48rem, 92vw);
   max-height: 86vh;
   overflow-y: auto;
@@ -212,33 +228,33 @@
 .kbc-tourcomposer__note,
 .kbc-tourcomposer__step-note,
 .kbc-tourcomposer__cap {
-  color: var(--fg-muted);
-  font-size: var(--type-sm);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 .kbc-tourcomposer__field {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
-  margin: var(--sp-2) 0;
+  gap: var(--pad-1);
+  margin: var(--pad-2) 0;
 }
 
 .kbc-tourcomposer__steps {
   list-style: none;
-  margin: var(--sp-3) 0;
+  margin: var(--pad-3) 0;
   padding: 0;
 }
 
 .kbc-tourcomposer__steps > li {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  padding: var(--sp-2);
-  margin-bottom: var(--sp-2);
+  padding: var(--pad-2);
+  margin-bottom: var(--pad-2);
 }
 
 .kbc-tourcomposer__step-head {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--pad-2);
   align-items: center;
 }
 
@@ -248,24 +264,24 @@
 
 .kbc-tourcomposer__step-ref {
   display: block;
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  margin: var(--sp-1) 0;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  margin: var(--pad-1) 0;
 }
 
 .kbc-tourcomposer__problems {
-  color: var(--danger-fg);
-  font-size: var(--type-sm);
-  margin: var(--sp-2) 0;
-  padding-left: var(--sp-4);
+  color: var(--red);
+  font-size: var(--fs-sm);
+  margin: var(--pad-2) 0;
+  padding-left: var(--pad-4);
 }
 
 .kbc-tourcomposer__foot {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--pad-2);
   align-items: center;
   justify-content: flex-end;
-  margin-top: var(--sp-3);
+  margin-top: var(--pad-3);
 }
 
 /* --- the trail indicator + rail --------------------------------------- */
@@ -276,24 +292,24 @@
 
 .kbc-trailind__btn {
   display: inline-flex;
-  gap: var(--sp-1);
+  gap: var(--pad-1);
   align-items: center;
 }
 
 .kbc-trailind__label {
-  font-size: var(--type-xs);
+  font-size: var(--fs-xs);
 }
 
 .kbc-trailind__btn--recording {
-  color: var(--danger-fg);
+  color: var(--red);
 }
 
 .kbc-trailind__btn--paused {
-  color: var(--warn-fg);
+  color: var(--warn);
 }
 
 .kbc-trailind__btn--off {
-  color: var(--fg-muted);
+  color: var(--ink-mute);
 }
 
 .kbc-trailind__pop {
@@ -301,37 +317,37 @@
   right: 0;
   top: 100%;
   z-index: var(--z-popover);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule-hi);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  padding: var(--sp-3);
+  padding: var(--pad-3);
   width: 22rem;
 }
 
 .kbc-trailind__meta,
 .kbc-trailind__gate,
 .kbc-trailind__notes {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-trailind__actions {
   display: flex;
-  gap: var(--sp-2);
-  margin: var(--sp-2) 0;
+  gap: var(--pad-2);
+  margin: var(--pad-2) 0;
 }
 
 .kbc-trailrail__head {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--pad-2);
   align-items: center;
   justify-content: space-between;
 }
 
 .kbc-trailrail__mode {
-  font-size: var(--type-xs);
-  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
   text-transform: uppercase;
 }
 
@@ -339,46 +355,46 @@
 .kbc-trailrail__note,
 .kbc-trailrail__parent,
 .kbc-trailrail__dwell {
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-trailrail__steps {
   list-style: none;
-  margin: var(--sp-2) 0;
+  margin: var(--pad-2) 0;
   padding: 0;
 }
 
 .kbc-trailrail__steps > li {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--pad-2);
   align-items: baseline;
   flex-wrap: wrap;
-  padding: var(--sp-1) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--pad-1) 0;
+  border-bottom: 1px solid var(--rule);
 }
 
 .kbc-trailrail__steps > li.is-focused {
-  background: var(--bg-selected);
+  background: var(--accent-bg);
 }
 
 .kbc-trailrail__via {
-  font-size: var(--type-xs);
-  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 
 .kbc-trailrail__state--orphan {
-  color: var(--danger-fg);
+  color: var(--red);
 }
 
 .kbc-trailrail__state--carried {
-  color: var(--warn-fg);
+  color: var(--warn);
 }
 
 .kbc-trailrail__state {
-  font-size: var(--type-xs);
+  font-size: var(--fs-xs);
 }
 
 .kbc-trailrail__fork {
-  font-size: var(--type-xs);
+  font-size: var(--fs-xs);
 }

@@ -67,9 +67,13 @@
 #     hookEvent:"UserPromptSubmit") the kb-core memory_recalls parser
 #     (crates/kb-core/src/sessions/view.rs) consumes, carrying one
 #     reconstructed `<!--kb-recall/1 kb=<kb> id=<id>-->` marker line per
-#     recorded marker — lights up memory_recalls/recalled-by for omp
-#     sessions. Distinct from custom_message below: this is kb's OWN prior
-#     recall re-synthesized from durable marker data the extension recorded
+#     recorded marker. When the marker has a title, a
+#     `- <title>  [<kb>]  (id <id>)` bullet is emitted on the line before
+#     it so the free-text fallback grammar still parses; a title-less
+#     marker stays bare (view.rs counts one row per marker) and still
+#     lights up memory_recalls/recalled-by for omp sessions. Distinct
+#     from custom_message below: this is kb's OWN prior recall
+#     re-synthesized from durable marker data the extension recorded
 #     (kb.recall), never the free-text context kb injected.
 #   custom_message / role=custom entries    → dropped (kb's own injected
 #     recall/wake context must not echo back into the sessions corpus)
@@ -202,7 +206,15 @@ TRANSLATE='
      # from the durable marker data the extension recorded, never an echo
      # of the free-text context kb injected.
      (.data // {}) as $d |
-     ([$d.markers[]? | "<!--kb-recall/1 kb=" + (.kb // "") + " id=" + (.id // "") + "-->"]
+     # Title bullet (when recorded) keeps the free-text fallback alive.
+     # A title-less marker stays bare — one row per marker in view.rs.
+     ([$d.markers[]? |
+       (.kb // "") as $kb | (.id // "") as $id |
+       ((.title // "") | gsub("^\\s+|\\s+$"; "")) as $title |
+       (if $title != "" then
+          "- " + $title + "  [" + $kb + "]  (id " + $id + ")\n"
+        else "" end)
+       + "<!--kb-recall/1 kb=" + $kb + " id=" + $id + "-->"]
       | join("\n")) as $markers |
      select($markers != "") |
      {sessionId: $sid, timestamp: (.timestamp // "unknown"), cwd: $cwd, type: "attachment",

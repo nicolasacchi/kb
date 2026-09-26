@@ -16,10 +16,10 @@
 
 use super::{run_git_raw, HistoryError};
 use crate::entities::RouteContract;
+use crate::git::roots::GitRoot;
 use crate::git::Revspec;
 use crate::history::facts::{agent_class_for, AgentClass};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 pub const SCHEMA: &str = "scrub/1";
 pub const DEFAULT_LIMIT: usize = 100;
@@ -158,7 +158,7 @@ pub fn clamp_limit(limit: Option<usize>) -> ScrubResult<usize> {
 /// `before` includes stops at or before that unix second; the floor is
 /// always from the full history. `limit` is the validated page size.
 pub fn file_stops(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     path: &str,
     rev: Option<&Revspec>,
     limit: usize,
@@ -203,7 +203,7 @@ pub enum AtHit {
 
 /// Resolve `at` against the file's full (capped) stop list.
 pub fn file_at(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     path: &str,
     rev: Option<&Revspec>,
     at: i64,
@@ -236,7 +236,7 @@ pub fn before_floor_message(path: &str, floor: Option<&Floor>) -> String {
 }
 
 fn collect_stops(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     path: &str,
     rev: Option<&Revspec>,
     cap: usize,
@@ -362,6 +362,7 @@ pub fn parse_log_output(text: &str, request_path: &str, agent_emails: &[String])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::process::Command as StdCommand;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -475,7 +476,15 @@ A\told.txt\n\
             .unwrap();
         assert!(status.success());
 
-        let page = file_stops(dir, "renamed.txt", None, 100, None, &emails()).unwrap();
+        let page = file_stops(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "renamed.txt",
+            None,
+            100,
+            None,
+            &emails(),
+        )
+        .unwrap();
         assert!(!page.truncated);
         assert_eq!(page.total, 3);
         let subjects: Vec<&str> = page.stops.iter().map(|s| s.subject.as_str()).collect();
@@ -485,8 +494,15 @@ A\told.txt\n\
         assert_eq!(floor.sha, page.stops[2].sha);
         assert_eq!(floor.when, 1_700_000_000);
 
-        let before_rename =
-            file_stops(dir, "renamed.txt", None, 1, Some(1_700_001_000), &emails()).unwrap();
+        let before_rename = file_stops(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "renamed.txt",
+            None,
+            1,
+            Some(1_700_001_000),
+            &emails(),
+        )
+        .unwrap();
         assert_eq!(before_rename.stops[0].subject, "c2");
         assert_eq!(before_rename.stops[0].path, "a.txt");
         assert_eq!(before_rename.total, 2);
@@ -494,7 +510,7 @@ A\told.txt\n\
         assert_eq!(before_rename.floor.as_ref(), Some(&floor));
 
         let before_floor = file_stops(
-            dir,
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
             "renamed.txt",
             None,
             100,
@@ -515,7 +531,15 @@ A\told.txt\n\
         commit_at(dir, "a.txt", "1\n", "c1", 1_700_000_000);
         commit_at(dir, "a.txt", "2\n", "c2", 1_700_001_000);
         commit_at(dir, "a.txt", "3\n", "c3", 1_700_002_000);
-        let page = file_stops(dir, "a.txt", None, 2, None, &emails()).unwrap();
+        let page = file_stops(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "a.txt",
+            None,
+            2,
+            None,
+            &emails(),
+        )
+        .unwrap();
         assert_eq!(page.stops.len(), 2);
         assert!(page.truncated);
         assert_eq!(page.total, 3);
@@ -530,7 +554,15 @@ A\told.txt\n\
         commit_at(dir, "a.txt", "1\n", "c1", 1_700_000_000);
         commit_at(dir, "a.txt", "2\n", "c2", 1_700_001_000);
 
-        match file_at(dir, "a.txt", None, 1_700_001_000, &emails()).unwrap() {
+        match file_at(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "a.txt",
+            None,
+            1_700_001_000,
+            &emails(),
+        )
+        .unwrap()
+        {
             AtHit::Hit {
                 stop, resolution, ..
             } => {
@@ -539,7 +571,15 @@ A\told.txt\n\
             }
             AtHit::BeforeFloor { .. } => panic!("expected hit"),
         }
-        match file_at(dir, "a.txt", None, 1_700_000_500, &emails()).unwrap() {
+        match file_at(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "a.txt",
+            None,
+            1_700_000_500,
+            &emails(),
+        )
+        .unwrap()
+        {
             AtHit::Hit {
                 stop, resolution, ..
             } => {
@@ -548,7 +588,15 @@ A\told.txt\n\
             }
             AtHit::BeforeFloor { .. } => panic!("expected hit"),
         }
-        match file_at(dir, "a.txt", None, 1_699_999_999, &emails()).unwrap() {
+        match file_at(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "a.txt",
+            None,
+            1_699_999_999,
+            &emails(),
+        )
+        .unwrap()
+        {
             AtHit::BeforeFloor { floor } => {
                 assert_eq!(floor.unwrap().when, 1_700_000_000);
             }
@@ -572,7 +620,15 @@ A\told.txt\n\
             .unwrap();
         assert!(status.success());
 
-        match file_at(dir, "renamed.txt", None, 1_700_000_000, &emails()).unwrap() {
+        match file_at(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "renamed.txt",
+            None,
+            1_700_000_000,
+            &emails(),
+        )
+        .unwrap()
+        {
             AtHit::Hit { stop, .. } => {
                 assert_eq!(stop.subject, "c1");
                 assert_eq!(stop.path, "a.txt");
@@ -588,11 +644,27 @@ A\told.txt\n\
         commit_at(dir, "--all", "one\n", "file stop", 1_700_000_000);
         commit_at(dir, "other.txt", "other\n", "unrelated", 1_700_001_000);
 
-        let page = file_stops(dir, "--all", None, 100, None, &[]).unwrap();
+        let page = file_stops(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "--all",
+            None,
+            100,
+            None,
+            &[],
+        )
+        .unwrap();
         assert_eq!(page.total, 1);
         assert_eq!(page.stops[0].subject, "file stop");
         assert_eq!(page.floor.as_ref().unwrap().sha, page.stops[0].sha);
-        match file_at(dir, "--all", None, 1_700_001_000, &[]).unwrap() {
+        match file_at(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "--all",
+            None,
+            1_700_001_000,
+            &[],
+        )
+        .unwrap()
+        {
             AtHit::Hit {
                 stop,
                 resolution,

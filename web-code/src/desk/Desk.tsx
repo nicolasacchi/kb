@@ -517,6 +517,18 @@ export default function Desk(props: DeskProps) {
       data-desk-center-mode={centerMode}
       data-desk-zoom={zoom ?? ""}
       data-desk-dirty={state.dirty ? "1" : "0"}
+      // V80-R0 — `.kbc-desk__preset-chip`'s `right` used to clear only the
+      // fixed-width `.kbc-desk__stripe` (--desk-stripe-w), not the OPEN
+      // rail panel between it and the chip's floating position — the
+      // stripe is a permanent extra column beside the (independently
+      // resizable) rail, not a stand-in for it. That under-shot however
+      // wide the rail actually is, so the chip (and the Save-workspace
+      // button inside it) rendered on top of the rail's own content
+      // rather than beside it. `state.regions.rail.size` is this render's
+      // live rail width (percent of the desk's own width, the chip's
+      // `position:absolute` containing block) — 0 when collapsed, so this
+      // is a no-op in the (pre-existing, already-correct) collapsed case.
+      style={{ "--desk-rail-pct": railCollapsed ? 0 : state.regions.rail.size } as React.CSSProperties}
     >
       {chrome !== "present" && (
         <Stripe side="left" ariaLabel="workspace" buttons={leftButtons} footButtons={leftFoot} />

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import type { ReviewSummary, ReviewSummaryPr } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import AnalyticsSection from "../components/reviews/AnalyticsSection";
 import InboxList from "../components/reviews/InboxList";
 import StartReviewDialog from "../components/reviews/StartReviewDialog";
@@ -80,10 +81,11 @@ export default function Reviews() {
 
   return (
     <div className="kbc-reviews" id="main">
-      <header className="kbc-reviews__head">
-        <div className="kbc-reviews__head-row">
-          <h1 className="kbc-reviews__title">Review Room — {repo}</h1>
-          <div className="kbc-reviews__head-actions">
+      <PageHeader
+        title={`Review Room — ${repo}`}
+        lede="Local Gerrit-lite review sessions — patchset snapshots, viewed-file tracking, annotations."
+        actions={
+          <>
             <Link to={prsUrl(repo)} className="kbc-reviews__all-prs" data-kbc-reviews-all-prs>
               all PRs →
             </Link>
@@ -95,12 +97,9 @@ export default function Reviews() {
             >
               Start review
             </button>
-          </div>
-        </div>
-        <p className="kbc-reviews__hint">
-          Local Gerrit-lite review sessions — patchset snapshots, viewed-file tracking, annotations.
-        </p>
-      </header>
+          </>
+        }
+      />
 
       <section className="kbc-inbox" data-kbc-inbox>
         <h2 className="kbc-inbox__title">Inbox — needs a human</h2>
@@ -182,45 +181,52 @@ function ReviewRow({ repo, review }: { repo: string; review: ReviewSummary }) {
       <Link to={reviewUrl(repo, review.id)} className="kbc-reviews__row-title" data-kbc-reviews-row-link={review.id}>
         {title}
       </Link>
-      <span className="kbc-reviews__row-refs">
-        <code>{review.head_ref}</code>
-        <span aria-hidden="true">→</span>
-        <code>{review.base_ref}</code>
-      </span>
-      <span className="kbc-reviews__row-meta">
-        {review.latest_ps != null ? `ps${review.latest_ps}` : "no ps"}
-        {review.state === "closed" && <span className="kbc-reviews__badge kbc-reviews__badge--closed">closed</span>}
-        {review.verdict && (
-          <span
-            data-kbc-reviews-verdict={review.verdict.state}
-            data-kbc-reviews-verdict-stale={review.verdict_stale ? "true" : undefined}
-          >
-            <VerdictChip
-              verdict={review.verdict}
-              stale={review.verdict_stale}
-              latestPs={review.latest_ps}
-            />
+      {/* V80-R3 — verdict/refs/progress grouped onto ONE readable sub-line
+          below the title, all sharing the same `--fs-sm` scale (was a flat
+          flex-wrap of differently-sized fragments that read as scattered
+          fine print). Every existing `data-kbc-*` hook stays exactly where
+          it was — this only adds a wrapper. */}
+      <div className="kbc-reviews__row-line">
+        <span className="kbc-reviews__row-refs">
+          <code>{review.head_ref}</code>
+          <span aria-hidden="true">→</span>
+          <code>{review.base_ref}</code>
+        </span>
+        <span className="kbc-reviews__row-meta">
+          {review.latest_ps != null ? `ps${review.latest_ps}` : "no ps"}
+          {review.state === "closed" && <span className="kbc-reviews__badge kbc-reviews__badge--closed">closed</span>}
+          {review.verdict && (
+            <span
+              data-kbc-reviews-verdict={review.verdict.state}
+              data-kbc-reviews-verdict-stale={review.verdict_stale ? "true" : undefined}
+            >
+              <VerdictChip
+                verdict={review.verdict}
+                stale={review.verdict_stale}
+                latestPs={review.latest_ps}
+              />
+            </span>
+          )}
+        </span>
+        <div
+          className="kbc-reviews__progress"
+          title={`${viewed}/${files} viewed`}
+          data-kbc-reviews-progress={`${viewed}/${files}`}
+        >
+          <div className="kbc-reviews__progress-bar" style={{ width: `${pct}%` }} />
+          <span className="kbc-reviews__progress-label">
+            {viewed}/{files}
+          </span>
+        </div>
+        {review.open_annotations > 0 && (
+          <span className="kbc-reviews__ann-badge" data-kbc-reviews-ann={review.open_annotations}>
+            {review.open_annotations} open
           </span>
         )}
-      </span>
-      <div
-        className="kbc-reviews__progress"
-        title={`${viewed}/${files} viewed`}
-        data-kbc-reviews-progress={`${viewed}/${files}`}
-      >
-        <div className="kbc-reviews__progress-bar" style={{ width: `${pct}%` }} />
-        <span className="kbc-reviews__progress-label">
-          {viewed}/{files}
+        <span className="kbc-reviews__row-time" title={new Date(review.updated_at * 1000).toLocaleString()}>
+          {relativeTime(review.updated_at)}
         </span>
       </div>
-      {review.open_annotations > 0 && (
-        <span className="kbc-reviews__ann-badge" data-kbc-reviews-ann={review.open_annotations}>
-          {review.open_annotations} open
-        </span>
-      )}
-      <span className="kbc-reviews__row-time" title={new Date(review.updated_at * 1000).toLocaleString()}>
-        {relativeTime(review.updated_at)}
-      </span>
     </li>
   );
 }

@@ -80,7 +80,7 @@ export SLATE_FAIL=1
 base_out="$(run_wake "$TMPROOT/cache-base")"
 unset SLATE_FAIL
 case "$base_out" in
-  *"kb memory is available"*"Recent memories:"*"- T1  [main]"*)
+  *"kb memory is available"*"Relevant memories from kb"*"- T1  [main]"*)
     ok "baseline still carries the protocol + memory index" ;;
   *) bad "baseline still carries the protocol + memory index (got: $base_out)" ;;
 esac
@@ -90,7 +90,7 @@ export SLATE_JSON='{"text":"NOW v7  #1 [claude/aaa 2m]  doing the thing","head_s
 out1="$(run_wake "$TMPROOT/cache1")"
 unset SLATE_JSON
 case "$out1" in
-  *"Recent memories:"*"NOW v7"*"doing the thing"*)
+  *"Relevant memories from kb"*"NOW v7"*"doing the thing"*)
     ok "slate text appended after the memory index" ;;
   *) bad "slate text appended after the memory index (got: $out1)" ;;
 esac

@@ -28,18 +28,6 @@
   color: var(--ink);
 }
 
-.kbc-boards__head {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.kbc-boards__title {
-  font-size: var(--fs-lg);
-  margin: 0;
-}
-
-.kbc-boards__hint,
 .kbc-board__caption {
   color: var(--ink-dim);
   font-size: var(--fs-sm);
@@ -164,7 +152,7 @@
 }
 
 .kbc-board__title {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   margin: 0;
 }
 
@@ -176,7 +164,8 @@
   flex-direction: column;
   gap: 0.1rem;
   color: var(--ink-dim);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .kbc-board__walkthrough {

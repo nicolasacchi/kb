@@ -22,6 +22,7 @@
 //! resolution the read route performs — so a document that lints clean and
 //! then fails to compose would be one bug, not two surfaces disagreeing.
 
+use crate::git::roots::GitCtx;
 use crate::review_doc::cards::{self, Card, CardCtx};
 use crate::review_doc::lint::{self, LintOut};
 use crate::review_doc::render::{self, RenderCtx};
@@ -37,7 +38,6 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::path::Path;
 
 pub const RENDER_SCHEMA: &str = "review-render/1";
 
@@ -280,8 +280,11 @@ pub struct RepoInputs {
     changed_paths: HashSet<String>,
 }
 
-pub async fn repo_inputs(repo_root: &Path, ps: &ReviewPatchsetRow) -> Result<RepoInputs, ApiError> {
-    let root = repo_root.to_path_buf();
+pub async fn repo_inputs(
+    repo_root: &GitCtx,
+    ps: &ReviewPatchsetRow,
+) -> Result<RepoInputs, ApiError> {
+    let root = repo_root.clone();
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let changed = tokio::task::spawn_blocking(move || files_changed(&root, &base, &tip))
@@ -333,13 +336,14 @@ pub async fn load_doc_out(
         )
     })?;
 
-    let inputs = repo_inputs(&repo.path, &ps).await?;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
+    let inputs = repo_inputs(&git_ctx, &ps).await?;
     let out = build_doc_out(
         state,
         &review.repo,
         id,
         repo_id,
-        &repo.path,
+        &git_ctx,
         &ps,
         &row,
         revisions,
@@ -358,7 +362,7 @@ async fn build_doc_out(
     repo_name: &str,
     id: i64,
     repo_id: i64,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     ps: &ReviewPatchsetRow,
     row: &ReviewDocRow,
     revisions: usize,
@@ -369,7 +373,7 @@ async fn build_doc_out(
     let refs = review_doc::all_refs(doc);
     let doc_c = doc.clone();
     let ps_c = ps.clone();
-    let root_c = repo_root.to_path_buf();
+    let root_c = repo_root.clone();
     let changed_paths = inputs.changed_paths.clone();
     let changed_rows: Vec<(String, String)> = {
         let mut by_path: std::collections::BTreeMap<String, String> =
@@ -616,13 +620,14 @@ pub async fn lint_review_doc(
             ps.ps_number
         )));
     };
-    let inputs = repo_inputs(&repo.path, &ps).await?;
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
+    let inputs = repo_inputs(&git_ctx, &ps).await?;
     let tier = Tier::parse(&row.tier).unwrap_or(Tier::Minimal);
     let out = lint_document(
         &state,
         id,
         repo_id,
-        &repo.path,
+        &git_ctx,
         &ps,
         &inputs,
         &row.doc_md,
@@ -643,7 +648,7 @@ pub async fn lint_document(
     state: &SharedState,
     id: i64,
     repo_id: i64,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     ps: &ReviewPatchsetRow,
     inputs: &RepoInputs,
     doc_md: &str,
@@ -678,7 +683,7 @@ pub async fn lint_and_resolve(
     state: &SharedState,
     id: i64,
     repo_id: i64,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     ps: &ReviewPatchsetRow,
     inputs: &RepoInputs,
     doc_md: &str,
@@ -710,7 +715,7 @@ pub async fn lint_and_resolve(
     ));
 
     let ps_c = ps.clone();
-    let root_c = repo_root.to_path_buf();
+    let root_c = repo_root.clone();
     let changed_paths = inputs.changed_paths.clone();
     let doc_ci = doc.ci.clone();
     let question_count = doc.questions.len();
@@ -1057,7 +1062,7 @@ pub async fn prepare_doc(
     state: &SharedState,
     id: i64,
     repo_id: i64,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     ps: &ReviewPatchsetRow,
     doc_md: &str,
     tier: Tier,

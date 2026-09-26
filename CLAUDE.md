@@ -129,6 +129,22 @@ crates/
                        workspaces v0 — all of it, with the invariants,
                        in [crates/kb-code-server/CLAUDE.md](crates/kb-code-server/CLAUDE.md);
                        read that before touching any of them.**
+                       **v8.0 "The Margin" (2026-09-18/19)** — the human turn:
+                       review comments are annotations rows bound at create
+                       OR after the fact (`PUT`/`DELETE /api/annotations/{id}/
+                       review`, batch `bind_review`/`unbind_review`; a rebind
+                       emits `annotation.changed` for BOTH reviews) and every
+                       `GET /reviews/{id}/comments` group carries `in_diff` —
+                       a per-read caption, never a filter, never stored;
+                       `GET /api/identity` carries `review_mutations_admitted`
+                       (computed per request from the gate's own peer
+                       classification, so the SPA can disable-with-caption
+                       BEFORE a refused write); inbox rows carry `human_open`;
+                       findings may adopt a bound human comment
+                       (`from_annotation_id`, origin manual) and carry a
+                       derived `touched_in` (later patchsets whose hunks
+                       overlap the finding's lines — surfaced, never a
+                       verdict). Full text: crates/kb-code-server/CLAUDE.md.
   kb-lip/          bin (`kb-lip`) — generic LSP→HTTP adapter (lip/1):
                        wraps ANY language server (config argv, stdio
                        JSON-RPC) behind identity/hover/definition/references/
@@ -176,7 +192,7 @@ crates/
                        instead of kb-server + everything downstream. BIN-only
                        consumers (kb-cli); kb-server takes the stamp at
                        runtime via `set_build_stamp` (unset ⇒ 0.0.0-dev/
-                       unknown, the SPA drift guard's no-op value).
+                       unknown; the SPA names that "stamp missing", not a silent no-op).
 web/               React 18 + Vite + TypeScript SPA
   src/             routes, components, hooks, api, styles
   dist/            vite output (gitignored; daemon serves via ServeDir)
@@ -228,6 +244,23 @@ web-code/          kb-code's own SPA (React 18 + Vite + TS, mirrors web/'s
                        invariants, in [web-code/CLAUDE.md](web-code/CLAUDE.md).
                        Its keyboard-dispatch section is load-bearing for
                        every future bare-key binding; read it first.**
+                       **v8.0 "The Margin"**: the reading contract everywhere —
+                       ONE type ramp (`tokens.css` 12/13/14/15 · body 15 ·
+                       title 20 · hero 28; compact = one step down, never
+                       below 14/12) with an explicit html base, ONE density
+                       pref (the Room's `?density=` mirrors it), `PageHeader`
+                       + `MetaLine` on every dock page, labelled toolbar
+                       clusters (Search, reader, review diff — one line at
+                       ≥1280px), the Room's findings rail at body scale;
+                       plus the marginalia: the review diff renders ANY file
+                       whole at the patchset tip (`?files=all`), the reader
+                       composer binds to a review (current review =
+                       browser state + `?review=` on reader URLs, the
+                       daemon knows nothing), the rail's Review tab lists
+                       the file's threads, the Room sections threads In the
+                       diff / Outside the diff / General, human comments
+                       promote to findings. Every `var()` must resolve
+                       (`lint:css-vars`). Full text: web-code/CLAUDE.md.
                        `just ci-code-spa` (build + vitest);
                        web-code/e2e/ Playwright harness (`just ci-code-e2e`)
 corpus/canon/      4 sample artifacts (frozen — copied from research)
@@ -315,7 +348,7 @@ in [crates/kb-core/CLAUDE.md](crates/kb-core/CLAUDE.md); kb-code's own (server
 [crates/kb-code-server/CLAUDE.md](crates/kb-code-server/CLAUDE.md) and
 [web-code/CLAUDE.md](web-code/CLAUDE.md).
 
- 1. **Arrow version pinning** — lance + arrow MUST share one version (`=57.3.1`) or RecordBatch types won't unify.
+ 1. **Arrow version pinning** — lance + arrow MUST share one version (the pins in `Cargo.toml` `[workspace.dependencies]`) or RecordBatch types won't unify.
  2. **Doc↔code bridge: kb extracts HINTS, kb-code mints CLASSES, nothing is cached (DCB v1)** — `kb_core::coderefs` is a pure, LLM-free, corpus-local extractor over `EnrichCtx::html` (Markdown + HTML uniformly; `TEXT_SKIP_TAGS` skips the kb-prompt template, #5) with a CLOSED grammar (whitelisted-extension paths ± `:line`/`:a-b`/`:a,b,c` · `Namespace::Class` with the `::` REQUIRED, never a bare CapWord · `Class#method` · `path#member` · gem/vendor ⇒ `external` · issues from `<a href>` only), golden-pinned, written to its OWN `code_refs`/`code_refs_docs` tables (never `edges` — that PK is artifact↔artifact and every consumer assumes `get_by_id` resolves the dst) and NEVER bumping the index generation (`UpsertChunks` precedent, #15). Every kb-side field is named `*_hint`: kb has no tree and no symbols and must be structurally unable to mint a trust class. Classification lives in kb-code's `codelens/1` (`path_state`/`line_state`/`symbol_state` — its OWN vocabulary, never `resolve.rs`'s `CLASS_*`), is computed per request and is NEVER persisted; W3 stores CLAIMS only, re-validated on read. ONE live call direction: kb-code→kb; kb knows kb-code only as an inert `[kb.*] code_url`. **kb-sibling/1** governs that pair: `sibling_protocol`/`sibling_major`/`schema_epoch`/`build_sha` ride `GET /api/identity` (`/healthz` stays pure liveness), `kb_core::sibling::refuse_if_volume_ahead` REFUSES BOOT when a sqlite volume's refinery epoch exceeds the binary's (`Db::open` per kb · kb-code's `Store::open`, before migrations run — the 13.5h kbc rollback outage), and `KbClient` handshakes once per process, failing CLOSED on a mismatch (`kb_sibling_mismatch`, distinct from unreachable) but grandfathering an ABSENT Hello (legacy peer, rolling deploys) and never caching an unreached probe. `code_refs` is registered in ALL THREE artifact-id lifecycle registries (`CASCADE_STEPS` + `SWEEP_TABLES` + the `cascade_relocate_doc` rekey tx) — none fires on an omission, and #27/F3 relocate never re-indexes, so a missing entry strands refs under a dead id forever.
  3. **`ConnectInfo` from request extensions** — read it from extensions, not as an extractor; a missing one fails CLOSED (not loopback).
  4. **Loopback bypass everywhere security applies** — trusted-hop gate first, then XFF walked right-to-left; `trusted_proxies` empty by default. **Fail-closed on a token-less public bind**: `serve_with_paths` refuses a non-loopback bind with no token (override `KB_ALLOW_NO_AUTH=1`); `auth_bearer` 401s a token-less non-loopback request rather than bypassing. — resolved ONCE per request inside `auth_bearer` (ladder: registry token [`Authorization` or `X-Kb-Token`] > trusted-hop identity header > legacy shared token→operator > loopback→operator), lowercase-folded via `kb_core::identity::normalize_username`, inserted as `Extension<Identity>`; **no route re-reads an identity header**. An untrusted peer's `Remote-User` is NEVER read (same fail-closed peer gate as XFF, #4) and the ADMISSION/401 surface is byte-identical to pre-v0.34 — a token registry is additive and must never *tighten* `KB_ALLOW_NO_AUTH` (the upstream-proxy-is-the-gate posture). The ONLY identity-gated verbs are comment/reply body-edit + delete (owner-only, 403 `urn:kb:errors:not-owner`, legacy no-`user` rows owned by the configured operator) — enforced on the direct routes AND the batch path; resolve/reply/attach/reanchor stay open. Usernames are plain lowercase strings — no users table (Authelia is the identity store); per-user rows key the resolved string; `''` = pre-v0.34 rows, rewritten to the operator by a marker-gated backfill at boot.

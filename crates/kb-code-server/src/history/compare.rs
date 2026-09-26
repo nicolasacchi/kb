@@ -22,9 +22,9 @@ use super::{
     diff_files, merge_base, parse_log_summary_line, resolve_sha, run_git_raw, totals_for,
     CommitSummary, FileTotals, Resolved, Result, LOG_SUMMARY_FMT,
 };
+use crate::git::roots::GitRoot;
 use crate::git::Revspec;
 use crate::numstat::FileChange;
-use std::path::Path;
 
 /// Commit-list cap — `commits_truncated` is set once more than this many
 /// exist; mirrors `routes::search::MAX_SYMBOL_MATCHES`'s own "plain fixed
@@ -45,7 +45,7 @@ pub struct Compare {
 /// newest-first (git log's own default order), `+1` so the caller can tell
 /// "there were MORE than `limit`" apart from "exactly `limit`."
 fn commit_list(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     revspec: &str,
     limit: usize,
 ) -> Result<(Vec<CommitSummary>, bool)> {
@@ -74,7 +74,12 @@ fn commit_list(
 /// legitimately contain `~`/`^`). Identical `from`/`to` degrade to empty
 /// `commits`/`files` through ordinary git behaviour (an empty range), not
 /// a special case here.
-pub fn compare(repo_root: &Path, from: &Revspec, to: &Revspec, three_dot: bool) -> Result<Compare> {
+pub fn compare(
+    repo_root: &dyn GitRoot,
+    from: &Revspec,
+    to: &Revspec,
+    three_dot: bool,
+) -> Result<Compare> {
     // V70-A2 (SEC-17) — validated at the type boundary; the two
     // `reject_dash_prefixed` calls that used to open this fn are subsumed
     // by `Revspec`'s only constructor.
@@ -120,6 +125,7 @@ pub fn compare(repo_root: &Path, from: &Revspec, to: &Revspec, three_dot: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn rs(s: &str) -> Revspec {
         Revspec::parse(s).expect("fixture revspec parses")
@@ -193,7 +199,13 @@ mod tests {
     fn compare_two_dot_lists_only_commits_on_to_not_reachable_from_from() {
         let (tmp, _base, feature_sha, main_sha) = diverged_fixture();
         let dir = tmp.path();
-        let cmp = compare(dir, &rs("main"), &rs("feature"), false).unwrap();
+        let cmp = compare(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &rs("main"),
+            &rs("feature"),
+            false,
+        )
+        .unwrap();
         assert_eq!(cmp.resolved.to_sha, feature_sha);
         assert_eq!(cmp.resolved.from_sha, main_sha);
         assert!(cmp.resolved.merge_base.is_some());
@@ -205,7 +217,13 @@ mod tests {
     fn compare_three_dot_ranges_from_the_merge_base() {
         let (tmp, base_sha, _feature_sha, _main_sha) = diverged_fixture();
         let dir = tmp.path();
-        let cmp = compare(dir, &rs("main"), &rs("feature"), true).unwrap();
+        let cmp = compare(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &rs("main"),
+            &rs("feature"),
+            true,
+        )
+        .unwrap();
         assert_eq!(cmp.resolved.merge_base.as_deref(), Some(base_sha.as_str()));
         let subjects: Vec<&str> = cmp.commits.iter().map(|c| c.subject.as_str()).collect();
         assert_eq!(subjects, vec!["feature two", "feature one"]);
@@ -222,7 +240,13 @@ mod tests {
     fn compare_identical_refs_yields_empty_commits_and_files() {
         let (tmp, _base, _feature_sha, _main_sha) = diverged_fixture();
         let dir = tmp.path();
-        let cmp = compare(dir, &rs("main"), &rs("main"), false).unwrap();
+        let cmp = compare(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &rs("main"),
+            &rs("main"),
+            false,
+        )
+        .unwrap();
         assert!(cmp.commits.is_empty());
         assert!(cmp.files.is_empty());
         assert_eq!(cmp.totals.files, 0);
@@ -254,7 +278,13 @@ mod tests {
     fn compare_reports_file_totals_across_the_range() {
         let (tmp, ..) = diverged_fixture();
         let dir = tmp.path();
-        let cmp = compare(dir, &rs("main"), &rs("feature"), false).unwrap();
+        let cmp = compare(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &rs("main"),
+            &rs("feature"),
+            false,
+        )
+        .unwrap();
         assert_eq!(cmp.totals.files, cmp.files.len());
         assert_eq!(
             cmp.totals.insertions,

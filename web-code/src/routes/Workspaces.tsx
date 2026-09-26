@@ -4,6 +4,7 @@ import { fetchSet } from "../api/client";
 import type { SetGroupOut, SetSummary } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useCreateSet, useDeleteSet, usePatchSet, useWorkspaceGroups } from "../hooks/useSets";
 import { codeUrl } from "../lib/codeUrl";
@@ -129,23 +130,27 @@ export default function Workspaces() {
 
   return (
     <div className="kbc-sets" id="main">
-      <header className="kbc-sets__head">
-        <h1 className="kbc-sets__title">Workspaces — {repo}</h1>
-        <p className="kbc-sets__hint">
-          Saved open-file sets — the "Save workspace" action in the reader (
-          <code>desk.save-workspace</code>) creates one.
-        </p>
-        {refFilter && (
-          <button
-            type="button"
-            className="kbc-sets__row-name"
-            onClick={() => setSearchParams({})}
-            data-kbc-workspaces-clear-ref
-          >
-            showing only <code>{refFilter}</code> · show all
-          </button>
-        )}
-      </header>
+      <PageHeader
+        title={`Workspaces — ${repo}`}
+        lede={
+          <>
+            Saved open-file sets — the "Save workspace" action in the reader (
+            <code>desk.save-workspace</code>) creates one.
+          </>
+        }
+        actions={
+          refFilter && (
+            <button
+              type="button"
+              className="kbc-sets__row-name"
+              onClick={() => setSearchParams({})}
+              data-kbc-workspaces-clear-ref
+            >
+              showing only <code>{refFilter}</code> · show all
+            </button>
+          )
+        }
+      />
 
       {groups.isLoading ? (
         <div className="kbc-reader__hint">Loading workspaces…</div>

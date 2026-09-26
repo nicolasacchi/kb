@@ -27,13 +27,13 @@ function comment(overrides: Partial<ReviewComment> = {}): ReviewComment {
   };
 }
 
-function out(groups: { path: string; comments: ReviewComment[] }[]): ReviewCommentsOut {
+function out(groups: { path: string; in_diff: boolean; comments: ReviewComment[] }[]): ReviewCommentsOut {
   return { schema: "review-comments/1", review_id: 1, repo: "r", ps: 1, groups };
 }
 
 describe("unappliedSuggestionRows", () => {
   it("is empty when no comment carries a suggestion", () => {
-    const resp = out([{ path: "a.rb", comments: [comment()] }]);
+    const resp = out([{ path: "a.rb", in_diff: true, comments: [comment()] }]);
     expect(unappliedSuggestionRows(resp)).toEqual([]);
   });
 
@@ -41,6 +41,7 @@ describe("unappliedSuggestionRows", () => {
     const resp = out([
       {
         path: "a.rb",
+        in_diff: true,
         comments: [
           comment({ suggestion: { replacement: "x", original: "y", applied: true, applied_at: 5 } }),
         ],
@@ -53,6 +54,7 @@ describe("unappliedSuggestionRows", () => {
     const resp = out([
       {
         path: "app/models/order.rb",
+        in_diff: true,
         comments: [
           comment({
             id: "ann9",
@@ -73,6 +75,7 @@ describe("unappliedSuggestionRows", () => {
     const resp = out([
       {
         path: "a.rb",
+        in_diff: true,
         comments: [comment({ suggestion: { replacement: long, original: "y", applied: false, applied_at: null } })],
       },
     ]);
@@ -85,6 +88,7 @@ describe("unappliedSuggestionRows", () => {
     const resp = out([
       {
         path: "a.rb",
+        in_diff: true,
         comments: [
           comment({
             resolution: { line: null, line_end: null, orphaned: true, resolved_against: { ps: 1, sha: "sha1" } },
@@ -99,8 +103,8 @@ describe("unappliedSuggestionRows", () => {
   it("flattens across multiple path groups", () => {
     const s = { replacement: "x", original: "y", applied: false, applied_at: null };
     const resp = out([
-      { path: "a.rb", comments: [comment({ id: "a1", suggestion: s })] },
-      { path: "b.rb", comments: [comment({ id: "b1", suggestion: s })] },
+      { path: "a.rb", in_diff: true, comments: [comment({ id: "a1", suggestion: s })] },
+      { path: "b.rb", in_diff: false, comments: [comment({ id: "b1", suggestion: s })] },
     ]);
     expect(unappliedSuggestionRows(resp).map((r) => r.id)).toEqual(["a1", "b1"]);
   });
@@ -112,6 +116,7 @@ describe("unappliedSuggestionById", () => {
     const resp = out([
       {
         path: "a.rb",
+        in_diff: true,
         comments: [
           comment({ id: "keep", suggestion: s }),
           comment({ id: "no-suggestion", suggestion: null }),

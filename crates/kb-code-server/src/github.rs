@@ -705,19 +705,40 @@ fn token_from_file(cfg: &GithubSection) -> Option<String> {
 /// Credential ladder: `token_file` (0600) > env `KB_CODE_GITHUB_TOKEN` >
 /// CLI-supplied token > none. Pure in the env/cli arguments so tests do
 /// not have to mutate process environment.
+///
+/// RS-U2: this is the review store's API slot. The CLI-supplied rung
+/// (`--gh-token-from-cli` → `CreateReviewPrBody.gh_token`) is the
+/// CALLER-SUPPLIED api credential
+/// (`review_store::cred::ApiCredentialSource::CallerSupplied`) and stays
+/// exactly as it is; the daemon's own `gh-cli` read
+/// (`review_store::cred::ApiCredential::from_gh_cli`) is a new rung a later
+/// unit wires in here. Neither ever fills the store's FETCH slot.
 pub fn resolve_github_token(
     cfg: &GithubSection,
     env_token: Option<&str>,
     cli_token: Option<&str>,
 ) -> Option<String> {
+    resolve_github_token_with(cfg, env_token, None, cli_token)
+}
+
+/// RS-U6 — the full api-slot ladder (README §8): `token_file` > env
+/// `KB_CODE_GITHUB_TOKEN` > the daemon's own `gh-cli` read
+/// (`review_store::cred::ApiCredential`, pinned account, memory only) >
+/// the CALLER-supplied token (`--gh-token-from-cli`) > none.
+pub fn resolve_github_token_with(
+    cfg: &GithubSection,
+    env_token: Option<&str>,
+    gh_cli_token: Option<&str>,
+    cli_token: Option<&str>,
+) -> Option<String> {
     if let Some(t) = token_from_file(cfg) {
         return Some(t);
     }
-    if let Some(t) = env_token.map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
-    }
-    if let Some(t) = cli_token.map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(t.to_string());
+    for t in [env_token, gh_cli_token, cli_token].into_iter().flatten() {
+        let t = t.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
     }
     None
 }
@@ -749,6 +770,9 @@ pub struct GithubClient {
     cfg: GithubSection,
     /// Set only by [`Self::with_cli_token`] for a single `start-pr` call.
     cli_token: Option<String>,
+    /// RS-U6 — the daemon's own `gh-cli` api credential, set only by
+    /// [`Self::with_api_credential`] for one request.
+    api_cred: Option<crate::review_store::ApiCredential>,
     client: std::result::Result<reqwest::Client, String>,
 }
 
@@ -760,6 +784,10 @@ impl std::fmt::Debug for GithubClient {
             .field(
                 "cli_token",
                 &self.cli_token.as_ref().map(|_| redact_secret("x")),
+            )
+            .field(
+                "api_cred",
+                &self.api_cred.as_ref().map(|c| c.source().clone()),
             )
             .finish()
     }
@@ -775,6 +803,7 @@ impl GithubClient {
         Self {
             cfg: cfg.clone(),
             cli_token: None,
+            api_cred: None,
             client,
         }
     }
@@ -785,14 +814,37 @@ impl GithubClient {
         Self {
             cfg: self.cfg.clone(),
             cli_token: token,
+            api_cred: self.api_cred.clone(),
             client: self.client.clone(),
         }
     }
 
-    /// Request-time credential resolution (file > env > cli).
+    /// RS-U6 — overlay the daemon's own `gh-cli` api credential (README
+    /// §8) for one request: below file/env, above the caller's token.
+    pub fn with_api_credential(&self, cred: Option<crate::review_store::ApiCredential>) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            cli_token: self.cli_token.clone(),
+            api_cred: cred,
+            client: self.client.clone(),
+        }
+    }
+
+    /// Is a file or env token configured (the rungs above `gh-cli`)?
+    pub fn has_ambient_token(&self) -> bool {
+        let env = std::env::var(GITHUB_TOKEN_ENV).ok();
+        resolve_github_token_with(&self.cfg, env.as_deref(), None, None).is_some()
+    }
+
+    /// Request-time credential resolution (file > env > gh-cli > cli).
     pub fn resolve_token(&self) -> Option<String> {
         let env = std::env::var(GITHUB_TOKEN_ENV).ok();
-        resolve_github_token(&self.cfg, env.as_deref(), self.cli_token.as_deref())
+        resolve_github_token_with(
+            &self.cfg,
+            env.as_deref(),
+            self.api_cred.as_ref().map(|c| c.bearer_token()),
+            self.cli_token.as_deref(),
+        )
     }
 
     pub fn has_credentials(&self) -> bool {
@@ -1194,6 +1246,186 @@ impl GithubClient {
         })
     }
 }
+
+// ── RS-U10b (review sync/status) — begin ──
+
+/// RS-U10b — the PR facts `kb-code review sync` / `review status` compare a
+/// review against: GitHub's own state, target, head and file count. NOT
+/// ts-exported (it rides the sync/status `serde_json` envelopes, whose
+/// shapes are documented in `crate::review_sync`), so adding it changes no
+/// generated binding. `changed_files` is `None` on a LIST answer (GitHub
+/// only computes it on the single-PR endpoint).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PrSyncOut {
+    pub number: u64,
+    pub title: String,
+    /// `open` | `closed` (GitHub's own field; merged PRs are `closed` +
+    /// `merged: true`).
+    pub state: String,
+    pub merged: bool,
+    pub merged_at: Option<String>,
+    pub head_sha: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub changed_files: Option<u64>,
+    /// RS-U10b review fix — GitHub's `updated_at` (RFC 3339): the closed
+    /// listing is sorted by it, and a merge inside a `--merged-since`
+    /// window always updates it, so paging stops once it falls behind.
+    pub updated_at: Option<String>,
+}
+
+/// `GET /repos/{o}/{r}/pulls/{n}` AND each element of the list endpoint,
+/// read for [`PrSyncOut`]. Every field beyond the identity is defaulted so
+/// the one struct serves both endpoints (the list omits `merged` and
+/// `changed_files`; `merged_at` is on both).
+#[derive(Debug, Deserialize)]
+struct GhPullSync {
+    number: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    merged: Option<bool>,
+    #[serde(default)]
+    merged_at: Option<String>,
+    head: GhPullDetailHead,
+    base: GhRef,
+    #[serde(default)]
+    changed_files: Option<u64>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+impl From<GhPullSync> for PrSyncOut {
+    fn from(p: GhPullSync) -> Self {
+        // The list endpoint carries no `merged` flag: `merged_at` set IS
+        // the merge on that shape.
+        let merged = p.merged.unwrap_or(p.merged_at.is_some());
+        Self {
+            number: p.number,
+            title: p.title,
+            state: p.state,
+            merged,
+            merged_at: p.merged_at,
+            head_sha: p.head.sha,
+            head_ref: p.head.r,
+            base_ref: p.base.r,
+            changed_files: p.changed_files,
+            updated_at: p.updated_at,
+        }
+    }
+}
+
+/// How many PRs one `review sync --open` listing reads at most (per state).
+pub const MAX_SYNC_PULLS: usize = 300;
+
+impl GithubClient {
+    /// RS-U10b — `GET {api_base}/repos/{owner}/{repo}/pulls/{n}` as
+    /// [`PrSyncOut`] (incl. `changed_files`, `merged_at`). Same
+    /// degrade/refusal classification as [`Self::get_pull`].
+    pub async fn get_pull_sync(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> ApiResult<PrSyncOut> {
+        let client = self.client()?;
+        let path = format!("/repos/{owner}/{repo}/pulls/{number}");
+        let url = format!("{}{}", self.cfg.api_base.trim_end_matches('/'), path);
+        let resp = self
+            .get(client, &path)
+            .send()
+            .await
+            .map_err(|e| GithubApiError::Unreachable(url, e.to_string()))?;
+        Self::classify_status(&resp)?;
+        let p: GhPullSync = resp
+            .json()
+            .await
+            .map_err(|e| GithubApiError::Parse(e.to_string()))?;
+        Ok(p.into())
+    }
+
+    /// RS-U10b — the OPEN PR list for `review sync --open`. Follows
+    /// `Link: rel="next"` up to [`MAX_SYNC_PULLS`]; `truncated` says more
+    /// open PRs existed than one sync reads.
+    pub async fn list_open_pulls_sync(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> ApiResult<(Vec<PrSyncOut>, bool)> {
+        let client = self.client()?;
+        let path = format!("/repos/{owner}/{repo}/pulls?state=open&per_page=100");
+        let (rows, truncated): (Vec<GhPullSync>, bool) =
+            self.fetch_paginated(client, &path, MAX_SYNC_PULLS).await?;
+        Ok((rows.into_iter().map(PrSyncOut::from).collect(), truncated))
+    }
+
+    /// RS-U10b — the CLOSED PRs updated at or after `since` (unix seconds),
+    /// most recently updated first, for `review sync --open --merged-since`.
+    /// Pages stop as soon as a page reaches a PR updated BEFORE the window
+    /// (a merge inside the window always bumps `updated_at`, so nothing
+    /// older can qualify). `truncated` = the [`MAX_SYNC_PULLS`] cap cut the
+    /// listing while still INSIDE the window.
+    pub async fn list_closed_pulls_since(
+        &self,
+        owner: &str,
+        repo: &str,
+        since: i64,
+    ) -> ApiResult<(Vec<PrSyncOut>, bool)> {
+        let client = self.client()?;
+        let mut next_url = Some(format!(
+            "{}/repos/{owner}/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100",
+            self.cfg.api_base.trim_end_matches('/')
+        ));
+        let mut out: Vec<PrSyncOut> = Vec::new();
+        while let Some(url) = next_url.take() {
+            let resp = self
+                .get_url(client, &url)
+                .send()
+                .await
+                .map_err(|e| GithubApiError::Unreachable(url.clone(), e.to_string()))?;
+            Self::classify_status(&resp)?;
+            let link_next = resp
+                .headers()
+                .get(reqwest::header::LINK)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_link_next);
+            let page: Vec<GhPullSync> = resp
+                .json()
+                .await
+                .map_err(|e| GithubApiError::Parse(e.to_string()))?;
+            let mut left_window = false;
+            for p in page {
+                let p = PrSyncOut::from(p);
+                if !updated_within(p.updated_at.as_deref(), since) {
+                    left_window = true;
+                    break;
+                }
+                if out.len() >= MAX_SYNC_PULLS {
+                    return Ok((out, true));
+                }
+                out.push(p);
+            }
+            if left_window {
+                break;
+            }
+            next_url = link_next;
+        }
+        Ok((out, false))
+    }
+}
+
+/// Is an RFC 3339 `updated_at` at or after `since`? An unparseable or
+/// missing stamp counts as inside (never silently skip a PR). Pure.
+pub fn updated_within(updated_at: Option<&str>, since: i64) -> bool {
+    match updated_at.map(chrono::DateTime::parse_from_rfc3339) {
+        Some(Ok(d)) => d.timestamp() >= since,
+        _ => true,
+    }
+}
+
+// ── RS-U10b — end ──
 
 #[cfg(test)]
 mod tests {

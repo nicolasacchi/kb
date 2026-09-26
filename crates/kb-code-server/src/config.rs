@@ -22,7 +22,8 @@
 //! (The enumeration above names the sections a hand-written `kb-code.toml`
 //! is expected to carry; several more — `[kb_daemon]`, `[backfill]`,
 //! `[github]`, `[occurrences]`, `[scopes]`, `[review]`, `[behavioral]`,
-//! `[scip]` — have accreted since and are documented on their own structs
+//! `[scip]`, `[indexer]` (V77-P3 — the boot walk's `walk_workers` fan-out
+//! bound) — have accreted since and are documented on their own structs
 //! below.)
 
 use kb_core::{Error, Result};
@@ -35,6 +36,12 @@ use std::time::Duration;
 pub struct KbCodeConfig {
     #[serde(default)]
     pub server: ServerSection,
+
+    /// `[indexer]` — V77-P3's bounded PARALLEL boot-walk knob
+    /// (`sink::step_boot_job`'s per-chunk fan-out over
+    /// `ingest::extract_pure`). See [`IndexerSection`].
+    #[serde(default)]
+    pub indexer: IndexerSection,
 
     /// `[[repos]]` — the repos kb-code browses. Empty by default (a
     /// freshly-installed kb-code has nothing configured yet); `load`
@@ -281,6 +288,52 @@ impl Default for WatcherSection {
     fn default() -> Self {
         Self {
             mode: Self::default_mode(),
+        }
+    }
+}
+
+/// `[indexer]` — V77-P3's bounded parallel boot-walk knob. The boot
+/// HEAD-tree walk (`sink::step_boot_job`) fans the pure per-blob work
+/// (read + parse/extract + highlight, `ingest::extract_pure`) out across
+/// this many bounded blocking tasks per chunk; the write side stays a
+/// single writer regardless (see `crates/kb-code-server/CLAUDE.md`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexerSection {
+    /// Bounded concurrency for the boot walk's parallel extraction fan-out.
+    /// `0` is coerced to `1` (see [`Self::resolved_walk_workers`]) — never
+    /// zero concurrency.
+    #[serde(default = "IndexerSection::default_walk_workers")]
+    pub walk_workers: usize,
+}
+
+impl IndexerSection {
+    /// `min(available cores, 4)` — mirrors kb-core's own
+    /// `embedder_cpu_cap` default (`crates/kb-core/src/embed_ipc.rs`): the
+    /// root CLAUDE.md's own build rules call this box IO-bound (HDD
+    /// RAID5), so unlike a pure CPU-bound workload there is little to gain
+    /// from saturating every core on the parse pass, and real cost in
+    /// disk-seek contention against sibling processes on a shared box. The
+    /// E6 large-repo re-measure (docs/configuration.md) is what decides
+    /// whether this default should move.
+    fn default_walk_workers() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(4)
+    }
+
+    /// The configured value, coerced to at least 1 — a `walk_workers = 0`
+    /// misconfiguration must never wedge the boot walk with zero
+    /// concurrency (mirrors `ServerSection::resolved_git_fanout`).
+    pub fn resolved_walk_workers(&self) -> usize {
+        self.walk_workers.max(1)
+    }
+}
+
+impl Default for IndexerSection {
+    fn default() -> Self {
+        Self {
+            walk_workers: Self::default_walk_workers(),
         }
     }
 }
@@ -1306,7 +1359,74 @@ pub struct ReviewSection {
     /// template bytes to the loopback-only twin.
     #[serde(default)]
     pub doc_templates: std::collections::BTreeMap<String, std::path::PathBuf>,
+    // ── RS-U3 (review store) — begin ─────────────────────────────────
+    /// RS-U3 — `[review.store]`: the kb-owned internal review store
+    /// (`crate::review_store`, README §11). See [`ReviewStoreSection`].
+    #[serde(default)]
+    pub store: ReviewStoreSection,
+    /// RS-U3 — `[[review.repos]]`: per-repo store settings (base URL,
+    /// fetch credential). `name` is a `[[repos]]` name; members of one
+    /// store may each set these. Enum values are TOLERANT: an unknown
+    /// value warns and falls back to the default
+    /// (`review_store::settings`). See [`ReviewRepoEntry`].
+    #[serde(default)]
+    pub repos: Vec<ReviewRepoEntry>,
+    // ── RS-U3 (review store) — end ───────────────────────────────────
 }
+
+// ── RS-U3 (review store) — begin ─────────────────────────────────────
+/// `[review.store]` (README §11). All optional.
+///
+/// ```toml
+/// [review.store]
+/// root = "~/.local/state/kb/kb-code/git"   # keys/ and ssh/ never follow this
+/// seed_on_boot = true
+/// allow_inherited_credentials = true
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReviewStoreSection {
+    /// Store root. `None` = `<state>/git` (`<state>` is the daemon's own
+    /// `kb-code` state dir). `~` is expanded.
+    pub root: Option<PathBuf>,
+    /// Seed stores in the background at boot, local-only, for repos that
+    /// have reviews (D4).
+    pub seed_on_boot: bool,
+    /// Whether the ambient-environment (`inherit`) credential rung may be
+    /// used (D7: flips to `false` with the first shipped service unit).
+    pub allow_inherited_credentials: bool,
+}
+
+impl Default for ReviewStoreSection {
+    fn default() -> Self {
+        Self {
+            root: None,
+            seed_on_boot: true,
+            allow_inherited_credentials: true,
+        }
+    }
+}
+
+/// One `[[review.repos]]` entry (README §11). Enum-valued keys are kept
+/// as strings here and parsed tolerantly by `review_store::settings`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReviewRepoEntry {
+    /// A `[[repos]]` name.
+    pub name: String,
+    /// Skip the registration ladder (rung 2).
+    pub base_url: Option<String>,
+    /// `auto|gh-cli|deploy-key|token|anonymous|inherit|none`.
+    pub credential: Option<String>,
+    /// gh-cli: which gh account must answer (D12).
+    pub gh_user: Option<String>,
+    /// `credential = token`: an owner-only token file. `~` is expanded.
+    pub token_file: Option<PathBuf>,
+    pub default_branch: Option<String>,
+    /// `auto|github|gitlab|gitea|forgejo|bitbucket-server|none`.
+    pub forge: Option<String>,
+}
+// ── RS-U3 (review store) — end ───────────────────────────────────────
 
 impl ReviewSection {
     fn default_patchset_capture() -> bool {
@@ -1324,6 +1444,8 @@ impl Default for ReviewSection {
             max_patchsets: Self::default_max_patchsets(),
             remote_mutations: false,
             doc_templates: std::collections::BTreeMap::new(),
+            store: ReviewStoreSection::default(),
+            repos: Vec::new(),
         }
     }
 }
