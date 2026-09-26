@@ -484,9 +484,19 @@ async fn collect_kb(
     items
 }
 
+/// `(open, total)` comment counts for one handoff artifact.
+///
+/// LEAK GUARD (agent-facing counts) — `kb desk` is what the agent reads, and
+/// these numbers must agree with the `comments.updated` SSE payload, which is
+/// public-only too. `open_count()` is public-only in kb-core; `total` is
+/// computed here and must match it, or a private note shows up as the gap
+/// between the two numbers — which proves one exists.
 fn comment_counts_for(review_dir: &FsPath, id: &str) -> (u64, u64) {
     match kb_core::review::load(&review_dir.join(format!("{id}.json"))) {
-        Ok(Some(f)) => (f.open_count() as u64, f.comments.len() as u64),
+        Ok(Some(f)) => {
+            let total = f.visible(kb_core::review::Visibility::Public).len();
+            (f.open_count() as u64, total as u64)
+        }
         _ => (0, 0),
     }
 }
@@ -571,6 +581,41 @@ mod tests {
             item("d", "in_progress", false),
         ];
         assert_eq!(attention_count(&items), 2);
+    }
+
+    /// `kb desk` is agent-readable, and these two numbers are the count the
+    /// agent reconciles against the `comments.updated` SSE payload — which is
+    /// public-only. A private note must therefore move NEITHER: if `total`
+    /// counted it, `total - open` would grow by exactly the number of
+    /// private notes on the artifact, which is a readable existence count.
+    #[test]
+    fn comment_counts_for_excludes_private_notes_from_both_numbers() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let kb_name = kb_core::types::KbName::new("smoke").expect("valid kb name");
+        let mut file = kb_core::review::ReviewFile::empty_skeleton(&kb_name, "aaaaaaaaaaaa", "t");
+        for (body, private) in [("public open", false), ("a private note", true)] {
+            file.add_comment(kb_core::review::NewComment {
+                file: "aaaaaaaaaaaa".to_string(),
+                file_label: "main".to_string(),
+                anchor: kb_core::review::Anchor::File,
+                author: kb_core::review::Author::Claude,
+                body: body.to_string(),
+                choices: Vec::new(),
+                attachments: Vec::new(),
+                user: None,
+                tags: Vec::new(),
+                private,
+            });
+        }
+        let path = tmp.path().join("aaaaaaaaaaaa.json");
+        kb_core::review::save_atomic(&path, &file, None).expect("save review fixture");
+
+        let (open, total) = comment_counts_for(tmp.path(), "aaaaaaaaaaaa");
+        assert_eq!(
+            (open, total),
+            (1, 1),
+            "the private note moves neither number"
+        );
     }
 
     fn item(id: &str, read_state: &str, changed: bool) -> DeskListItem {

@@ -1869,13 +1869,21 @@ export type Anchor =
 /// GET /api/kb/{kb}/review/{id}. Returns `null` when the file doesn't
 /// exist yet (404 → no comments — the SPA serves an empty skeleton).
 /// All other errors throw.
+///
+/// `?visibility=all` is REQUIRED here and is the SPA's only way to see a
+/// private note. The daemon defaults to `public` for every reader, so
+/// omitting it silently hides the operator's own notes from their own UI —
+/// the failure is invisible, not loud. Kept as a literal on the single call
+/// path (the only `fetchReview` caller is `useReview`) rather than a
+/// parameter, so a future call site cannot forget it. The agent-facing
+/// readers (`kb comments list` / `export` / the inbox) never send it.
 export async function fetchReview(
   kb: string,
   id: string,
   signal?: AbortSignal,
 ): Promise<{ file: ReviewFile; etag: string } | null> {
   const r = await fetch(
-    `${currentDaemonBase()}/api/kb/${encodeURIComponent(kb)}/review/${encodeURIComponent(id)}`,
+    `${currentDaemonBase()}/api/kb/${encodeURIComponent(kb)}/review/${encodeURIComponent(id)}?visibility=all`,
     { headers: { Accept: "application/json" }, signal },
   );
   if (r.status === 404) return null;
@@ -1948,6 +1956,19 @@ export type AddCommentInput = {
   choices?: Choice[];
   /// Y-track — staged attachment ids to adopt onto the new comment.
   attachment_ids?: string[];
+  /// v0.40 TN1 — COMMENT tags, sent RAW: the daemon's
+  /// `normalize_comment_tags` is the one normaliser (slug / dedupe / sort)
+  /// and it runs on the create route, so the response already carries the
+  /// effective values. OMITTED entirely for a comment with no tags — the
+  /// daemon's `AddCommentBody` is `#[serde(default)]` on both new keys, so
+  /// a plain add's payload must stay byte-identical to the pre-TN one.
+  tags?: string[];
+  /// v0.40 TN2 — create this comment as a PRIVATE NOTE (invisible to every
+  /// agent-facing surface). It has to ride the CREATE, not a follow-up
+  /// PATCH: a comment created public is a public comment forever in the
+  /// history ledger, and the note's EXISTENCE would stay countable by an
+  /// agent. `undefined`/false ⇒ an ordinary public comment, key omitted.
+  private?: boolean;
 };
 
 /// POST …/comments → 201 + the created Comment (server-assigned id).

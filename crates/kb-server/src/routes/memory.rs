@@ -421,10 +421,17 @@ fn fetch_review_marks(paths: &kb_core::paths::KbPaths, hits: &[RecallResult]) ->
         };
         let mut flagged = false;
         let mut drift: u32 = 0;
-        for c in &file.comments {
+        for c in file.visible(kb_core::review::Visibility::Public) {
             if c.status != kb_core::review::CommentStatus::Open {
                 continue;
             }
+            // LEAK GUARD (agent-facing recall marks) — `flagged` renders a
+            // "⚑ N flagged" suffix on a recall hit and `drift_open` a "⚠ N
+            // drift-flagged citation(s)" one. Both are agent-readable, and
+            // either would betray a private note's existence (and, for
+            // `[kb-flag]`, its reason, since the mark is only a bit but the
+            // queue at `flagged_reasons_in_dir` shows the string). Public-
+            // only, no opt-in parameter.
             if kb_core::memory::is_flag_comment(&c.body) {
                 flagged = true;
             }
@@ -3249,10 +3256,17 @@ fn flagged_reasons_in_dir(dir: &std::path::Path) -> HashMap<String, String> {
             continue;
         };
         let mut best: Option<&kb_core::review::Comment> = None;
-        for c in &file.comments {
+        for c in file.visible(kb_core::review::Visibility::Public) {
             if c.status != kb_core::review::CommentStatus::Open {
                 continue;
             }
+            // LEAK GUARD (agent-facing reason string) — `flag_reason` is
+            // rendered verbatim in the hygiene queue, so a private
+            // `[kb-flag]` note would surface its own reason text to the
+            // agent. Skipped in the `best` search, not at the insert: a
+            // private comment must never WIN the "oldest open flag" race
+            // and then be dropped, because the next public one would then
+            // be shadowed by it. Public-only, no opt-in.
             if !kb_core::memory::is_flag_comment(&c.body) {
                 continue;
             }
@@ -3857,6 +3871,7 @@ mod tests {
         id: &str,
         body: &str,
         status: kb_core::review::CommentStatus,
+        private: bool,
     ) {
         let kb_name = KbName::new(kb).expect("valid kb name");
         let path = paths.kb_review_file(&kb_name, id);
@@ -3872,6 +3887,8 @@ mod tests {
                 choices: Vec::new(),
                 attachments: Vec::new(),
                 user: None,
+                tags: Vec::new(),
+                private,
             })
             .id
             .clone();
@@ -3897,6 +3914,7 @@ mod tests {
             "aaaaaaaaaaaa",
             "[kb-flag] this contradicts the newer memory",
             kb_core::review::CommentStatus::Open,
+            false,
         );
         write_review_with_comment(
             &paths,
@@ -3904,6 +3922,7 @@ mod tests {
             "bbbbbbbbbbbb",
             "[kb-flag] already handled",
             kb_core::review::CommentStatus::Resolved,
+            false,
         );
         write_review_with_comment(
             &paths,
@@ -3911,6 +3930,7 @@ mod tests {
             "cccccccccccc",
             "just an ordinary comment, not a flag",
             kb_core::review::CommentStatus::Open,
+            false,
         );
         let hits = vec![
             hit("notes", "aaaaaaaaaaaa"),
@@ -3928,6 +3948,47 @@ mod tests {
         assert!(
             marks.drift_open.is_empty(),
             "no [kb-drift] comments anywhere — no drift entries"
+        );
+    }
+
+    /// The recall marks (`flagged` bit, `drift_open` count) are rendered
+    /// onto recall hits the agent reads, so a PRIVATE note's flag comment
+    /// must produce no mark at all: neither the bit (existence) nor the
+    /// count. A public flag on a sibling artifact still marks, so this
+    /// isn't a blanket "the filter broke everything".
+    #[test]
+    fn fetch_review_marks_never_marks_a_private_note() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = test_paths(tmp.path());
+        write_review_with_comment(
+            &paths,
+            "notes",
+            "aaaaaaaaaaaa",
+            "[kb-flag] private concern the agent must not see",
+            kb_core::review::CommentStatus::Open,
+            true,
+        );
+        write_review_with_comment(
+            &paths,
+            "notes",
+            "bbbbbbbbbbbb",
+            "[kb-drift] rotted, but public",
+            kb_core::review::CommentStatus::Open,
+            false,
+        );
+
+        let hits = vec![hit("notes", "aaaaaaaaaaaa"), hit("notes", "bbbbbbbbbbbb")];
+        let marks = fetch_review_marks(&paths, &hits);
+
+        assert!(
+            marks.flagged.is_empty(),
+            "a private [kb-flag] note must not set the recall flag bit: {:?}",
+            marks.flagged
+        );
+        assert_eq!(
+            marks.drift_open,
+            HashMap::from([(("notes".to_string(), "bbbbbbbbbbbb".to_string()), 1u32)]),
+            "the public [kb-drift] sibling still marks"
         );
     }
 
@@ -3957,6 +4018,8 @@ mod tests {
                     choices: Vec::new(),
                     attachments: Vec::new(),
                     user: None,
+                    tags: Vec::new(),
+                    private: false,
                 })
                 .id
                 .clone();
@@ -3994,6 +4057,7 @@ mod tests {
             "bbbbbbbbbbbb",
             "[kb-drift] web/src/api.ts — rotted",
             kb_core::review::CommentStatus::Open,
+            false,
         );
 
         let hits = vec![hit("notes", "aaaaaaaaaaaa"), hit("notes", "bbbbbbbbbbbb")];
@@ -4252,6 +4316,7 @@ mod tests {
             "aaaaaaaaaaaa",
             "[kb-flag] the salience is stale",
             kb_core::review::CommentStatus::Open,
+            false,
         );
         write_review_with_comment(
             &paths,
@@ -4259,6 +4324,7 @@ mod tests {
             "bbbbbbbbbbbb",
             "[kb-flag] resolved already",
             kb_core::review::CommentStatus::Resolved,
+            false,
         );
         write_review_with_comment(
             &paths,
@@ -4266,6 +4332,7 @@ mod tests {
             "cccccccccccc",
             "not a flag at all",
             kb_core::review::CommentStatus::Open,
+            false,
         );
 
         let kb_name = KbName::new("notes").expect("valid kb name");
@@ -4275,6 +4342,60 @@ mod tests {
         assert_eq!(
             out.get("aaaaaaaaaaaa").map(String::as_str),
             Some("the salience is stale")
+        );
+    }
+
+    /// The hygiene queue prints `flag_reason` VERBATIM, so a private
+    /// `[kb-flag]` note's reason text must never reach it. The mixed file is
+    /// the load-bearing half: whichever comment wins the "oldest open flag"
+    /// race, the answer must be the public reason — a private comment must
+    /// not be able to WIN and then be dropped, which would let it shadow the
+    /// public one it was racing.
+    #[test]
+    fn flagged_reasons_in_dir_never_surfaces_a_private_note_reason() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = test_paths(tmp.path());
+        write_review_with_comment(
+            &paths,
+            "notes",
+            "aaaaaaaaaaaa",
+            "[kb-flag] private reason the agent must not read",
+            kb_core::review::CommentStatus::Open,
+            true,
+        );
+        let kb_name = KbName::new("notes").expect("valid kb name");
+        let path = paths.kb_review_file(&kb_name, "bbbbbbbbbbbb");
+        std::fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir .review");
+        let mut file = kb_core::review::ReviewFile::empty_skeleton(&kb_name, "bbbbbbbbbbbb", "t");
+        for (body, private) in [
+            ("[kb-flag] the public reason", false),
+            ("[kb-flag] private rider", true),
+        ] {
+            file.add_comment(kb_core::review::NewComment {
+                file: "bbbbbbbbbbbb".to_string(),
+                file_label: "main".to_string(),
+                anchor: kb_core::review::Anchor::File,
+                author: kb_core::review::Author::Claude,
+                body: body.to_string(),
+                choices: Vec::new(),
+                attachments: Vec::new(),
+                user: None,
+                tags: Vec::new(),
+                private,
+            });
+        }
+        kb_core::review::save_atomic(&path, &file, None).expect("save review fixture");
+
+        let out = flagged_reasons_in_dir(&paths.kb_review_dir(&kb_name));
+
+        assert!(
+            !out.contains_key("aaaaaaaaaaaa"),
+            "a private-only flag note must contribute no reason at all: {out:?}"
+        );
+        assert_eq!(
+            out.get("bbbbbbbbbbbb").map(String::as_str),
+            Some("the public reason"),
+            "the private comment must not win the best-flag race: {out:?}"
         );
     }
 

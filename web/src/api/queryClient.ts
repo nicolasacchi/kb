@@ -79,6 +79,15 @@ export const queryClient = new QueryClient({
 //                                  invalidate(["inbox"]) below already
 //                                  refreshes this variant too — no bridge
 //                                  change needed
+//   ["review-notes", ...filters]   v0.40 TN — the private-note browser
+//                                  (`GET /api/review-notes?kb=&tag=&tag=&q=
+//                                  &status=`). A comment mutation is the
+//                                  ONLY thing that moves it, and it already
+//                                  arrives on `comments.updated` (the
+//                                  `verdict` precedent — no new SSE kind),
+//                                  so the handler below prefix-invalidates
+//                                  it. A tag or private flag edit is a comment
+//                                  mutation like any other.
 //   ["notes"]                      notes store (daemon-wide)
 //   ["lists"]                      reading-list index (cross-kb)
 //   ["list", kb, listId]           one list's detail (ordered entries)
@@ -455,6 +464,11 @@ export function startSseInvalidationBridge(): () => void {
     inboxGate("inbox");
     // Resurface strip — open-comment counts are half its score.
     invalidate(kb ? ["resurface", kb] : ["resurface"]);
+    // v0.40 TN — the operator's private-note browser rides the SAME event
+    // (a tag / private-flag edit IS a comment mutation), so it needs no
+    // subscription of its own — see the key contract above. Direct, not
+    // burst-gated: tagging a comment is a one-click-per-human-action rate.
+    invalidate(["review-notes"]);
   });
   for (const t of ["note.created", "note.updated", "note.deleted"]) {
     on(t, () => invalidate(["notes"]));

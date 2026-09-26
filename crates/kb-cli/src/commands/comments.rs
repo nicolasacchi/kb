@@ -1,13 +1,24 @@
-//! `kb comments {list,show,export,add,reply,resolve,unresolve,edit,delete,keep}`
+//! `kb comments {list,show,export,add,reply,resolve,unresolve,edit,delete,`
+//! `keep,tag,untag,notes,tags}`
 //! — every verb talks to the daemon over HTTP (R6). No verb reads or
 //! writes `.review/*.json` on disk: reads go through `GET /reviews` +
-//! `GET /review/{id}` + `POST .../export`, mutations through the R5
-//! fine-grained endpoints. This makes the CLI a first-class client at
-//! parity with the SPA and lets it work against a remote `--daemon`.
+//! `GET /review/{id}` + `POST .../export` + `GET /review-notes`, mutations
+//! through the R5 fine-grained endpoints. This makes the CLI a first-class
+//! client at parity with the SPA and lets it work against a remote
+//! `--daemon`.
 //!
 //! `--path <file>` is an alternative to the 12-hex `<artifact_id>` on
 //! every verb; it's resolved to an id via `/api/kb/{kb}/lookup`. `--kb`
 //! is optional when only one kb is configured.
+//!
+//! **Private notes.** A comment can be flagged private — a note for the
+//! human only, which every agent-facing surface omits (inbox, the Claude
+//! prompt, the md/json exports, `/reviews`, `GET /review/{id}`). Those
+//! routes answer PUBLIC-ONLY here, and no read verb below grew a
+//! `--private`/`--all` flag to lift that: these verbs are agent-reachable
+//! too, so such a flag would reopen the exact hole the flag exists to
+//! close. `notes`/`tags` are the one exception — they ARE the note browser
+//! (`GET /review-notes`, private notes by definition).
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -139,6 +150,83 @@ async fn resolve_target_auto(
                 ),
             }
         }
+    }
+}
+
+/// Like [`resolve_target_auto`], with ONE extra fallback: when a bare id
+/// (no `--kb`, no `--path`) doesn't resolve, ask the private-note index who
+/// owns `comment_id`.
+///
+/// Why: `resolve_target_auto` scans `/reviews?status=all`, which the daemon
+/// answers public-only, so a private note's artifact id is deliberately
+/// invisible to it — by design, since that scan is also what an agent runs.
+/// `GET /api/review-notes` is the one read that lists notes, so it is what
+/// makes the operator's own notes addressable from a shell. An explicit
+/// `--kb`/`--path` never reaches the fallback (the caller already named the
+/// artifact), and the original error wins when the notes index doesn't own
+/// the id either, so an ordinary typo still gets its ordinary message.
+///
+/// Stated plainly: the fallback asks for `bodies=false`, the index's
+/// METADATA-ONLY projection — `comment_id`/`kb`/`artifact_id`/tags, the whole
+/// of what identity resolution needs. So no note body is ever FETCHED here;
+/// the guarantee is not "the bodies cross the wire and nothing prints them",
+/// it is that the bytes never reach this process at all. Nor is it narrow:
+/// ANY id the public scan cannot see reaches it, typo or moved artifact
+/// alike. What makes that acceptable is the projection plus the caller —
+/// the operator's own shell, naming their own comment by id.
+async fn resolve_comment_target(
+    kb: Option<&str>,
+    artifact_id: Option<&str>,
+    path: Option<&str>,
+    comment_id: &str,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<(String, String)> {
+    match resolve_target_auto(kb, artifact_id, path, daemon, bearer).await {
+        Ok(target) => Ok(target),
+        Err(primary) if kb.is_some() || path.is_some() => Err(primary),
+        Err(primary) => match resolve_note_owner(comment_id, daemon, bearer).await? {
+            Some(target) => Ok(target),
+            None => Err(primary),
+        },
+    }
+}
+
+/// The `(kb, artifact_id)` owning `comment_id` per `GET /api/review-notes`,
+/// or `None` when no note carries that id. `status=all`, so a note the
+/// operator already resolved is still addressable — you must be able to
+/// untag a note you closed. `bodies=false`: the whole fleet's index, but
+/// metadata only, so no note body is on the wire to be read here.
+async fn resolve_note_owner(
+    comment_id: &str,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<Option<(String, String)>> {
+    let body = fetch_review_notes(daemon, bearer, None, &[], None, "all", false).await?;
+    let mut owners: Vec<(String, String)> = Vec::new();
+    for n in body["notes"].as_array().into_iter().flatten() {
+        if n["comment_id"].as_str() != Some(comment_id) {
+            continue;
+        }
+        let (Some(kb), Some(artifact_id)) = (n["kb"].as_str(), n["artifact_id"].as_str()) else {
+            continue;
+        };
+        let owner = (kb.to_string(), artifact_id.to_string());
+        if !owners.contains(&owner) {
+            owners.push(owner);
+        }
+    }
+    match owners.len() {
+        1 => Ok(owners.pop()),
+        0 => Ok(None),
+        _ => anyhow::bail!(
+            "note {comment_id} exists in multiple kbs ({}); pass --kb to pick one",
+            owners
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -928,7 +1016,13 @@ pub async fn import(
 // --- add -------------------------------------------------------------------
 
 /// `kb comments add [<kb>] [<artifact_id>] --body … [--anchor …]
-/// [--author you|claude] [--page SRC] [--choice-json …]`.
+/// [--author you|claude] [--page SRC] [--choice-json …] [--tag T]… [--note]`.
+///
+/// `--tag` labels the comment (repeatable; the daemon slug-normalises,
+/// dedupes and sorts them) and `--note` makes it a PRIVATE note — the
+/// human-only comment the agent never sees. The note shows up in
+/// `kb comments notes` and in the SPA's note browser; it stays out of every
+/// agent-facing read.
 #[allow(clippy::too_many_arguments)]
 pub async fn add(
     kb: Option<&str>,
@@ -940,6 +1034,8 @@ pub async fn add(
     choice_specs: &[String],
     page: Option<&str>,
     attach_files: &[String],
+    tags: &[String],
+    private: bool,
     daemon: Option<&str>,
     bearer: Option<&str>,
 ) -> Result<()> {
@@ -980,6 +1076,14 @@ pub async fn add(
     if !attachment_ids.is_empty() {
         payload["attachment_ids"] = json!(attachment_ids);
     }
+    // Both keys are omitted when unset, so a plain `kb comments add` sends
+    // byte-for-byte the payload it always sent.
+    if !tags.is_empty() {
+        payload["tags"] = json!(tags);
+    }
+    if private {
+        payload["private"] = json!(true);
+    }
     let url = format!(
         "{}/api/kb/{}/review/{}/comments",
         base_url(daemon),
@@ -993,8 +1097,18 @@ pub async fn add(
     } else {
         format!(" with {} attachment(s)", attachment_ids.len())
     };
+    let tagged = if tags.is_empty() {
+        String::new()
+    } else {
+        format!(" · tags: {}", tags.join(", "))
+    };
+    let noted = if private {
+        " · private note (invisible to the agent)".to_string()
+    } else {
+        String::new()
+    };
     println!(
-        "✓ added {} to {kb}/{id}{extra}",
+        "✓ added {} to {kb}/{id}{extra}{tagged}{noted}",
         created["id"].as_str().unwrap_or("?")
     );
     Ok(())
@@ -1439,8 +1553,8 @@ pub async fn delete(
 /// `kb comments keep <comment_id> [--kb …] [--artifact-id …|--path …]` —
 /// queue a `kb-proposal/1` from one comment
 /// (`POST .../comments/{cid}/keep`). Does not approve and does not delete
-/// the comment. Clap registration is in `main.rs` (`CommentsAction::Keep`);
-/// this crate cannot edit that file.
+/// the comment. A private note cannot be kept — a proposal is agent-readable
+/// work, so the daemon answers 409; read such a comment with `comments notes`.
 pub async fn keep(
     kb: Option<&str>,
     artifact_id: Option<&str>,
@@ -1462,6 +1576,416 @@ pub async fn keep(
     let pid = out["id"].as_str().unwrap_or("?");
     println!("✓ queued proposal {pid} from {comment_id} in {kb}/{id} (not approved)");
     Ok(())
+}
+
+// --- tags + private notes ---------------------------------------------------
+
+/// `kb comments tag <comment_id> --tag <t>... [--kb …] [--artifact-id …|
+/// --path …]`
+/// — label a comment (or a private note) so like things group together.
+///
+/// `/meta` is a FULL REPLACE, not a delta, so this reads the comment's
+/// current tags, unions the new ones, and PATCHes the whole set; PATCHing
+/// only the new tags would silently wipe the rest. The daemon
+/// slug-normalises (`Fleet Doc` → `fleet-doc`), dedupes and sorts, caps at
+/// 8 tags × 48 chars, and returns the effective values — which is what gets
+/// printed, so the shell sees exactly what was stored.
+///
+/// A PRIVATE note's id resolves through the note index when neither `--kb`
+/// nor `--path` is given (the public `/reviews` scan cannot see one); with
+/// several kbs configured, pass `--kb` to pick one.
+#[allow(clippy::too_many_arguments)]
+pub async fn tag(
+    kb: Option<&str>,
+    artifact_id: Option<&str>,
+    comment_id: &str,
+    path_input: Option<&str>,
+    tags: &[String],
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    let (kb, id) =
+        resolve_comment_target(kb, artifact_id, path_input, comment_id, daemon, bearer).await?;
+    let current = fetch_comment_tags(&kb, &id, comment_id, daemon, bearer).await?;
+    let next = merge_tags(&current, tags);
+    let out = patch_comment_tags(&kb, &id, comment_id, &next, daemon, bearer).await?;
+    report_meta(&out, "tagged", comment_id, &kb, &id);
+    Ok(())
+}
+
+/// `kb comments untag <comment_id> --tag <t>... [--kb …] [--artifact-id …|
+/// --path …]`
+/// — drop label(s) and leave the rest of the set alone.
+///
+/// Because `/meta` replaces the whole set, the current tags are read first
+/// and only the named ones are removed; that read-modify-write is the whole
+/// reason this verb can't be a bare PATCH. Names are compared in SLUG form
+/// (stored tags are slugs, and `untag c_x "Fleet Doc"` has to hit the
+/// stored `fleet-doc`) using the repo's single `slugify_tag`. A name that
+/// slugifies to nothing is an error, not a silent no-op — a removal that
+/// never happened must not read as one that did.
+#[allow(clippy::too_many_arguments)]
+pub async fn untag(
+    kb: Option<&str>,
+    artifact_id: Option<&str>,
+    comment_id: &str,
+    path_input: Option<&str>,
+    tags: &[String],
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    for t in tags {
+        if kb_core::parser::slugify_tag(t).is_empty() {
+            anyhow::bail!("--tag {t:?} has no letters or digits to form a tag from");
+        }
+    }
+    let (kb, id) =
+        resolve_comment_target(kb, artifact_id, path_input, comment_id, daemon, bearer).await?;
+    let current = fetch_comment_tags(&kb, &id, comment_id, daemon, bearer).await?;
+    let next = remove_tags(&current, tags);
+    let out = patch_comment_tags(&kb, &id, comment_id, &next, daemon, bearer).await?;
+    report_meta(&out, "untagged", comment_id, &kb, &id);
+    Ok(())
+}
+
+/// The comment's current tag set, for `/meta`'s full-replace PATCH. The
+/// public review file answers first (one request, and the common case); the
+/// note index is the fallback, because a private note is not in that view
+/// at all — `GET /review/{id}` is public-only. Comment ids are unique, so
+/// the order only decides cost, never the answer. The fallback asks for
+/// `bodies=false`: a tag set is a tag set, so the note index is read as
+/// metadata and the note's own words are never fetched into this process.
+///
+/// A comment in neither is an ERROR, not an empty set: treating an unknown
+/// id as "no tags" would let a mistyped id wipe some other comment's labels
+/// on the very next PATCH.
+async fn fetch_comment_tags(
+    kb: &str,
+    artifact_id: &str,
+    comment_id: &str,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<Vec<String>> {
+    let review = fetch_review_value(daemon, kb, artifact_id, bearer).await?;
+    for c in review["comments"].as_array().into_iter().flatten() {
+        if c["id"].as_str() == Some(comment_id) {
+            return Ok(string_array(&c["tags"]));
+        }
+    }
+    let body = fetch_review_notes(daemon, bearer, Some(kb), &[], None, "all", false).await?;
+    for n in body["notes"].as_array().into_iter().flatten() {
+        if n["comment_id"].as_str() == Some(comment_id) {
+            return Ok(string_array(&n["tags"]));
+        }
+    }
+    anyhow::bail!(
+        "no comment {comment_id} on {kb}/{artifact_id} — wrong id, or a private note \
+         past the daemon's note-index cap (pass --kb/--path to narrow)"
+    )
+}
+
+/// PATCH `.../comments/{cid}/meta` with the FULL new tag set. Returns the
+/// daemon's response, whose `tags` are the effective (normalised) values
+/// and whose `changed` is false for a no-op — the daemon then skips the
+/// save and the `comments.updated` event, so there is nothing to wait for.
+async fn patch_comment_tags(
+    kb: &str,
+    artifact_id: &str,
+    comment_id: &str,
+    tags: &[String],
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<Value> {
+    let url = format!(
+        "{}/api/kb/{}/review/{}/comments/{}/meta",
+        base_url(daemon),
+        encode_path_segment(kb),
+        encode_path_segment(artifact_id),
+        encode_path_segment(comment_id),
+    );
+    let client = client_with_timeout_and_bearer(5, bearer)?;
+    send_json(
+        client.patch(&url).json(&json!({ "tags": tags })),
+        "set comment tags",
+    )
+    .await
+}
+
+/// `current` ∪ `add`, order-preserving, exact duplicates dropped. The daemon
+/// re-normalises (slug/dedupe/sort) what it stores, so this only keeps the
+/// request readable; the printed list is the daemon's effective value, never
+/// this one.
+fn merge_tags(current: &[String], add: &[String]) -> Vec<String> {
+    let mut out = current.to_vec();
+    for t in add {
+        if !out.contains(t) {
+            out.push(t.clone());
+        }
+    }
+    out
+}
+
+/// `current` minus every tag named in `remove`, matched in SLUG form on
+/// both sides — stored tags are already slugs, and a shell user types
+/// `Fleet Doc`. Slugging goes through the repo's one `slugify_tag` (the same
+/// call the `/meta` route makes), never a second implementation.
+fn remove_tags(current: &[String], remove: &[String]) -> Vec<String> {
+    let named: Vec<String> = remove
+        .iter()
+        .map(|t| kb_core::parser::slugify_tag(t))
+        .filter(|s| !s.is_empty())
+        .collect();
+    current
+        .iter()
+        .filter(|t| !named.contains(t))
+        .cloned()
+        .collect()
+}
+
+/// One confirmation line built from the daemon's `/meta` response: the
+/// EFFECTIVE tags (not what we asked for — the daemon normalises them) and
+/// whether the file actually changed. A no-op answers `changed:false` and
+/// gets a `·` rather than a `✓`, so re-running an identical `tag` doesn't
+/// claim a write it didn't make.
+fn report_meta(out: &Value, verb: &str, comment_id: &str, kb: &str, artifact_id: &str) {
+    let changed = out["changed"].as_bool().unwrap_or(true);
+    let mark = if changed { "✓" } else { "·" };
+    let unchanged = if changed { "" } else { " (no change)" };
+    println!(
+        "{mark} {verb} {comment_id} in {kb}/{artifact_id} → tags: {}{unchanged}",
+        join_tags(out)
+    );
+}
+
+/// `kb comments notes [--kb NAME] [--tag T]… [--q SUBSTR]
+/// [--status open|resolved|all] [--json]` — the operator's note browser:
+/// every PRIVATE note across the configured kbs, newest activity first.
+/// `--status` defaults to `all` (a note browser wants the notes you already
+/// closed, the opposite of `comments list`), `--tag` repeats and ANDs, and
+/// `--q` is a case-insensitive body substring.
+///
+/// Reads `GET /api/review-notes`. The human table is `kb · artifact · status
+/// · age · replies · tags · excerpt`, followed by the tag-facet line that
+/// drives the next `--tag`; `--json` dumps the raw
+/// `{notes,tags,total,truncated,tags_truncated}` so `| jq` works.
+///
+/// This and `tags` are the ONLY reads in this file that can surface a
+/// private note — every other read rides a route that is public-only.
+#[allow(clippy::too_many_arguments)]
+pub async fn notes(
+    kb: Option<&str>,
+    tags: &[String],
+    q: Option<&str>,
+    status: &str,
+    json_out: bool,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    let body = fetch_review_notes(daemon, bearer, kb, tags, q, status, true).await?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+
+    let rows = body["notes"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        println!("(no private notes)");
+    } else {
+        println!(
+            "{:<10} {:<22} {:<9} {:<4} {:<4} {:<20} NOTE",
+            "KB", "ARTIFACT", "STATUS", "AGE", "REPL", "TAGS"
+        );
+        for n in &rows {
+            let artifact = n["artifact_title"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| n["source_relative"].as_str())
+                .unwrap_or_else(|| n["artifact_id"].as_str().unwrap_or(""));
+            let stale_mark = if n["stale"].as_bool().unwrap_or(false) {
+                " ⚠"
+            } else {
+                ""
+            };
+            println!(
+                "{:<10} {:<22} {:<9} {:<4} {:<4} {:<20} {}{}",
+                truncate(n["kb"].as_str().unwrap_or(""), 10),
+                truncate(artifact, 22),
+                n["status"].as_str().unwrap_or("?"),
+                fmt_age(n["updated_at"].as_i64().unwrap_or(0)),
+                n["reply_count"].as_u64().unwrap_or(0),
+                truncate(&join_tags(n), 20),
+                truncate_one_line(n["body"].as_str().unwrap_or(""), 60),
+                stale_mark,
+            );
+        }
+    }
+    // Printed even when no row matched: the daemon counts facets BEFORE the
+    // --tag/--q filter, so this line is what names the other `--tag` worth
+    // trying when a filter comes back empty.
+    print_tag_facets(&body);
+    let shown = rows.len() as u64;
+    let total = body["total"].as_u64().unwrap_or(shown);
+    if shown < total {
+        println!("\n{shown} of {total} note(s) — narrow with --kb/--tag/--q");
+    } else {
+        println!("\n{total} note(s)");
+    }
+    Ok(())
+}
+
+/// `kb comments tags [--json]` — the comment-tag index: every tag in use,
+/// with the number of notes carrying it, heaviest first. Backed by the same
+/// `GET /api/review-notes` facet list, so these are NOTE counts — comment
+/// tags are their own namespace, unrelated to an artifact's `kb-tags`.
+/// Fleet-wide, like `notes` with no `--kb`.
+///
+/// The human table is `count · tag`; `--json` dumps the raw response, whose
+/// `.tags` array carries the index:
+/// `kb comments tags --json | jq -r '.tags[] | "\(.count)\t\(.name)"'`.
+pub async fn tags(json_out: bool, daemon: Option<&str>, bearer: Option<&str>) -> Result<()> {
+    let body = fetch_review_notes(daemon, bearer, None, &[], None, "all", true).await?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+
+    let facets = body["tags"].as_array().cloned().unwrap_or_default();
+    if facets.is_empty() {
+        println!("(no comment tags yet — add one with `kb comments tag <comment_id> --tag <t>`)");
+        return Ok(());
+    }
+    println!("{:<6} TAG", "COUNT");
+    for f in &facets {
+        println!(
+            "{:<6} {}",
+            f["count"].as_u64().unwrap_or(0),
+            f["name"].as_str().unwrap_or("?")
+        );
+    }
+    println!(
+        "\n{} tag(s) across {} note(s)",
+        facets.len(),
+        body["total"].as_u64().unwrap_or(0)
+    );
+    if body["tags_truncated"].as_bool().unwrap_or(false) {
+        println!("(the daemon capped the facet list)");
+    }
+    Ok(())
+}
+
+/// The query pairs for `GET /api/review-notes`. Absent filters stay ABSENT
+/// (never sent as an empty value): a filter the server never saw and one it
+/// saw as `?tag=` are different requests, and it rejects the latter by
+/// design. `tag` repeats — the server ANDs repeats.
+///
+/// `bodies=false` is the only spelling of that knob, because `true` is the
+/// route's own default: it drops `body` from every row, leaving the
+/// metadata (id/kb/artifact/status/tags/…) an identity lookup needs. Sent
+/// only where a body is never used; the note-browser verbs leave it off and
+/// get the bodies they exist to show.
+fn review_notes_query(
+    kb: Option<&str>,
+    tags: &[String],
+    q: Option<&str>,
+    status: &str,
+    bodies: bool,
+) -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    if let Some(k) = kb {
+        out.push(("kb", k.to_string()));
+    }
+    for t in tags {
+        out.push(("tag", t.clone()));
+    }
+    if let Some(s) = q {
+        out.push(("q", s.to_string()));
+    }
+    out.push(("status", status.to_string()));
+    if !bodies {
+        out.push(("bodies", "false".to_string()));
+    }
+    out
+}
+
+/// GET `/api/review-notes` → the daemon's private-note index
+/// (`{notes,tags,total,truncated,tags_truncated}`). Rows are PRIVATE NOTES
+/// ONLY — that is the route, not a filter here. A non-2xx surfaces the
+/// daemon's problem+json `detail` (the 400 on an unknown `?status=` or a
+/// `?tag=` with nothing sluggable in it).
+///
+/// `bodies` chooses the projection: `true` (the default) returns each row's
+/// `body`, `false` omits the key entirely. Only the note-browser verbs
+/// (`notes`, `tags`) ask for `true`; every identity/tag path passes `false`
+/// so no note text is fetched into this process at all.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_review_notes(
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+    kb: Option<&str>,
+    tags: &[String],
+    q: Option<&str>,
+    status: &str,
+    bodies: bool,
+) -> Result<Value> {
+    let url = format!("{}/api/review-notes", base_url(daemon));
+    let client = client_with_timeout_and_bearer(5, bearer)?;
+    send_json(
+        client
+            .get(&url)
+            .query(&review_notes_query(kb, tags, q, status, bodies)),
+        "list review notes",
+    )
+    .await
+}
+
+/// The tag facet line under a notes listing: `{name} ({count})` pairs. A
+/// capped list says so — `tags_truncated` must never read as a complete one.
+fn print_tag_facets(body: &Value) {
+    let facets = body["tags"].as_array().cloned().unwrap_or_default();
+    if facets.is_empty() {
+        return;
+    }
+    let rendered: Vec<String> = facets
+        .iter()
+        .map(|f| {
+            format!(
+                "{} ({})",
+                f["name"].as_str().unwrap_or("?"),
+                f["count"].as_u64().unwrap_or(0)
+            )
+        })
+        .collect();
+    let cap = if body["tags_truncated"].as_bool().unwrap_or(false) {
+        " (capped)"
+    } else {
+        ""
+    };
+    println!("tags: {}{cap}", rendered.join(", "));
+}
+
+/// The TAGS cell: a row's `tags` array joined for the column, `-` when empty
+/// so the column never collapses. Used for both a note row and the `/meta`
+/// response's effective values.
+fn join_tags(row: &Value) -> String {
+    let joined = string_array(&row["tags"]).join(", ");
+    if joined.is_empty() {
+        "-".into()
+    } else {
+        joined
+    }
+}
+
+/// A JSON array of strings → `Vec<String>`, tolerating absent/null (a
+/// pre-tags sidecar and an absent key are the same case here: no tags).
+fn string_array(v: &Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // --- anchor / choice parsing (used by `add`) -------------------------------
@@ -1583,6 +2107,82 @@ fn truncate_one_line(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, Write};
+    use std::sync::mpsc::{self, Receiver};
+
+    /// A stub daemon that records every request target and answers from
+    /// `routes` — first prefix match on the path (query string ignored),
+    /// `(prefix, status, body)`. An unmatched request still gets a 200 `{}`
+    /// so a test whose code path grew an extra call completes and FAILS on
+    /// the assertion instead of hanging on a refused connection. Returns the
+    /// base URL and the request log.
+    ///
+    /// Hand-rolled over `TcpListener` because the assertion these tests need
+    /// is the wire: which URLs the CLI builds, in order, verbatim. `routes`
+    /// is an owned `Vec` because the serving thread outlives this call; the
+    /// log is a channel rather than a shared `Mutex<Vec<_>>` — the test owns
+    /// the receiver and only ever drains it after the calls it made have
+    /// returned, so there is no shared mutable state to synchronise.
+    fn spawn_stub_daemon(
+        routes: Vec<(&'static str, u16, &'static str)>,
+    ) -> (String, Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { continue };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                // Drain the headers: leaving them in the socket buffer
+                // desynchronises the next keep-alive request on it.
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                        break;
+                    }
+                }
+                let target = line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                let (status, body) = routes
+                    .iter()
+                    .find(|(prefix, _, _)| target.starts_with(prefix))
+                    .map(|(_, status, body)| (*status, *body))
+                    .unwrap_or((200, "{}"));
+                let _ = tx.send(target);
+                let reason = if (200..300).contains(&status) {
+                    "OK"
+                } else {
+                    "Not Found"
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    /// Every request target the stub has seen, in arrival order.
+    fn requests(rx: &Receiver<String>) -> Vec<String> {
+        rx.try_iter().collect()
+    }
+
+    fn requests_to(rx: &Receiver<String>, prefix: &str) -> Vec<String> {
+        requests(rx)
+            .into_iter()
+            .filter(|t| t.starts_with(prefix))
+            .collect()
+    }
 
     #[test]
     fn truncate_handles_short_strings() {
@@ -1679,5 +2279,190 @@ mod tests {
         assert_eq!(json["css_path"], "article > p:nth-child(2)");
         assert_eq!(json["offset"], 42);
         assert_eq!(json["snippet"], "the body");
+    }
+
+    /// The note-index filter is the operator's only way to narrow the
+    /// browser, so a dropped pair silently WIDENS the result. Pinned: each
+    /// filter is sent when given, `tag` repeats, and an absent filter is
+    /// absent (never `?q=` / `?kb=`), while `status` is always explicit.
+    /// `bodies` follows the same rule inverted — the route defaults it to
+    /// `true`, so only `false` is ever spelled.
+    #[test]
+    fn review_notes_query_sends_every_filter_and_omits_the_absent() {
+        let full = review_notes_query(
+            Some("canon"),
+            &["wording".to_string(), "fleet-doc".to_string()],
+            Some("retry"),
+            "open",
+            true,
+        );
+        assert_eq!(
+            full,
+            vec![
+                ("kb", "canon".to_string()),
+                ("tag", "wording".to_string()),
+                ("tag", "fleet-doc".to_string()),
+                ("q", "retry".to_string()),
+                ("status", "open".to_string()),
+            ]
+        );
+        assert_eq!(
+            review_notes_query(None, &[], None, "all", true),
+            vec![("status", "all".to_string())]
+        );
+        // The metadata projection appends the knob LAST, so it can never
+        // be mistaken for one of the narrowing filters.
+        assert_eq!(
+            review_notes_query(None, &[], None, "all", false),
+            vec![
+                ("status", "all".to_string()),
+                ("bodies", "false".to_string())
+            ]
+        );
+    }
+
+    /// `untag`'s read-modify-write is the whole verb: a `/meta` PATCH
+    /// replaces the set, so anything the filter drops here is gone from the
+    /// comment forever. Names are matched in the daemon's slug form, since
+    /// that is what is stored.
+    #[test]
+    fn remove_tags_drops_only_the_named_ones() {
+        let current = vec![
+            "fleet-doc".to_string(),
+            "wording".to_string(),
+            "todo".to_string(),
+        ];
+        assert_eq!(
+            remove_tags(&current, &["wording".to_string()]),
+            vec!["fleet-doc".to_string(), "todo".to_string()]
+        );
+        // A human types the label; the sidecar holds its slug.
+        assert_eq!(
+            remove_tags(&current, &["Fleet Doc".to_string()]),
+            vec!["wording".to_string(), "todo".to_string()]
+        );
+        // Removing the last tag empties the set; removing an absent tag is
+        // the identity (the daemon answers `changed:false`).
+        assert!(remove_tags(
+            &current,
+            &["a".to_string(), "b".to_string(), "c".to_string()]
+        )
+        .is_empty());
+        assert_eq!(remove_tags(&current, &["nope".to_string()]), current);
+    }
+
+    #[test]
+    fn merge_tags_unions_onto_the_existing_set() {
+        let current = vec!["wording".to_string()];
+        assert_eq!(
+            merge_tags(&current, &["wording".to_string(), "fleet-doc".to_string()]),
+            vec!["wording".to_string(), "fleet-doc".to_string()]
+        );
+        assert_eq!(merge_tags(&[], &["a".to_string()]), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn join_tags_renders_a_dash_for_an_empty_or_absent_set() {
+        assert_eq!(join_tags(&json!({ "tags": ["a", "b"] })), "a, b");
+        assert_eq!(join_tags(&json!({ "tags": [] })), "-");
+        // A pre-tags sidecar has no key at all; same meaning here.
+        assert_eq!(join_tags(&json!({})), "-");
+    }
+
+    /// The `tag`/`untag` fallback reads the whole fleet's note index, so the
+    /// only thing standing between a typo'd comment id and 500 note bodies in
+    /// this process is the `bodies=false` projection. Asserted on the wire,
+    /// not on the query builder: a call site that forgot to thread the flag
+    /// would still pass a pure query test. Two kbs so the public scan fails
+    /// (a typo resolves in exactly one kb without any scan) and the fallback
+    /// actually runs.
+    #[tokio::test]
+    async fn note_owner_fallback_asks_for_the_metadata_projection() {
+        let (base, rx) = spawn_stub_daemon(vec![
+            ("/api/kbs", 200, r#"[{"name":"canon"},{"name":"other"}]"#),
+            ("/api/kb/canon/reviews", 200, r#"{"comments":[]}"#),
+            ("/api/kb/other/reviews", 200, r#"{"comments":[]}"#),
+            ("/api/kb/canon/docs/", 404, r#"{"detail":"not found"}"#),
+            ("/api/kb/other/docs/", 404, r#"{"detail":"not found"}"#),
+            (
+                "/api/review-notes",
+                200,
+                r#"{"notes":[{"comment_id":"c1","kb":"canon","artifact_id":"a-moved","tags":["wording"]}],
+                    "tags":[{"name":"wording","count":1}],"total":1}"#,
+            ),
+        ]);
+        // A bare id the public scan cannot see → the note index is asked who
+        // owns it, and the id resolves.
+        let owner = resolve_comment_target(None, Some("a-moved"), None, "c1", Some(&base), None)
+            .await
+            .unwrap();
+        assert_eq!(owner, ("canon".to_string(), "a-moved".to_string()));
+
+        let index = requests_to(&rx, "/api/review-notes");
+        assert_eq!(index.len(), 1, "expected one note-index read: {index:?}");
+        assert!(
+            index[0].contains("bodies=false"),
+            "fallback must ask for the metadata-only projection: {}",
+            index[0]
+        );
+    }
+
+    /// The counterweight: `notes`/`tags` exist to SHOW note bodies, so they
+    /// must keep the route's `true` default. A `bodies=false` here would
+    /// render an empty NOTE column with no error anywhere.
+    #[tokio::test]
+    async fn note_browser_verbs_keep_the_bodies_default() {
+        let (base, rx) = spawn_stub_daemon(vec![(
+            "/api/review-notes",
+            200,
+            r#"{"notes":[{"comment_id":"c1","kb":"canon","artifact_id":"a1","body":"secret"}],
+                "tags":[{"name":"wording","count":1}],"total":1}"#,
+        )]);
+        notes(None, &[], None, "all", true, Some(&base), None)
+            .await
+            .unwrap();
+        tags(true, Some(&base), None).await.unwrap();
+
+        let index = requests_to(&rx, "/api/review-notes");
+        assert_eq!(index.len(), 2, "expected one read per verb: {index:?}");
+        for target in index {
+            assert!(
+                !target.contains("bodies="),
+                "the note browser must not narrow the projection: {target}"
+            );
+        }
+    }
+
+    /// The happy path must not touch the note index at all — not even for
+    /// metadata. `resolve_target_auto` already resolved the artifact, so
+    /// every byte of the read is redundant. The stub's note index names a
+    /// DIFFERENT owner for the same comment id, so a fallback that ran
+    /// would both answer wrongly and show up in the request log.
+    #[tokio::test]
+    async fn public_resolution_issues_no_note_index_request() {
+        let (base, rx) = spawn_stub_daemon(vec![
+            ("/api/kbs", 200, r#"[{"name":"canon"},{"name":"other"}]"#),
+            (
+                "/api/kb/canon/reviews",
+                200,
+                r#"{"comments":[{"id":"c1"}]}"#,
+            ),
+            ("/api/kb/other/reviews", 200, r#"{"comments":[]}"#),
+            (
+                "/api/review-notes",
+                200,
+                r#"{"notes":[{"comment_id":"c1","kb":"other","artifact_id":"a1"}],"total":1}"#,
+            ),
+        ]);
+        let owner = resolve_comment_target(None, Some("a1"), None, "c1", Some(&base), None)
+            .await
+            .unwrap();
+        assert_eq!(owner, ("canon".to_string(), "a1".to_string()));
+        assert_eq!(requests(&rx).len(), 3, "expected /api/kbs + 2 review scans");
+        assert!(
+            requests_to(&rx, "/api/review-notes").is_empty(),
+            "a resolvable id must not read the private-note index: {:?}",
+            requests(&rx)
+        );
     }
 }

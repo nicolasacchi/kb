@@ -19,6 +19,21 @@
 //!   POST   …/comments/{id}/keep                   keep comment as memory
 //!   GET    …/reviews                              list/query comments
 //!
+//! v0.40 TN1/TN2 adds one route and two request fields:
+//!   PATCH  …/review/{id}/comments/{cid}/meta      set tags and/or private
+//!
+//! `add` accepts `tags` and `private`; `/meta` is the only way to change
+//! them afterwards. "Private" means a NOTE: a comment no agent may see,
+//! through any surface, ever. The default rule this file implements is
+//! one sentence — every read, list and COUNT here shows only
+//! `!c.private` rows and takes no opt-in parameter; the only ways a note
+//! is ever visible are the `?visibility=all` operator reads in
+//! `routes::review` / `list_reviews`, the `GET /api/review-notes` index,
+//! and the two lossless transports (`embed_into_html` / `…/import`).
+//! `keep` and `keep_memory` refuse a note with 409, because a proposal and
+//! a memory artifact are both agent-readable and promoting a note is the
+//! worst promotion in the system.
+//!
 //! `keep` copies one open or resolved comment into the proposal queue
 //! (`source: "comment"`). It does not approve, does not ingest a memory,
 //! and does not rewrite or delete the comment. `keep_memory` is the other
@@ -76,6 +91,44 @@ pub struct AddCommentBody {
     /// `#[serde(default)]` so existing clients are unaffected.
     #[serde(default)]
     pub attachment_ids: Vec<String>,
+    /// v0.40 TN1 — comment-scoped labels. `#[serde(default)]` so an
+    /// agent's existing `kb comments add` payload is byte-for-byte
+    /// unaffected, and normalised through the ONE normalizer
+    /// (`kb_core::review::normalize_comment_tags`) at the write edge — the
+    /// batch path (`BatchOp::AddComment`) runs the same function, so the
+    /// route and the batch can never diverge.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// v0.40 TN2 — create the comment as a PRIVATE NOTE: invisible to every
+    /// agent-facing surface, by design. NOT an access control — `kb comments
+    /// add --note` sends `private: true` from the CLI, and any caller that
+    /// can reach the daemon can POST the same body. The flag is a statement
+    /// of the operator's INTENT ("this is for me, not for the agent"), and
+    /// the note hides itself from agents rather than being kept from them;
+    /// there is nothing to authenticate here, only a rendering rule.
+    ///
+    /// Absent is indistinguishable from `false` on disk
+    /// (`skip_serializing_if = "is_false"`), so a legacy sidecar re-saves
+    /// byte-identically and an existing client's payload is unaffected.
+    #[serde(default)]
+    pub private: bool,
+}
+
+/// v0.40 TN1/TN2 — body of `PATCH …/review/{id}/comments/{cid}/meta`.
+/// Tri-state on purpose: `None` means "don't touch", which is what lets the
+/// handler tell a real change (save + `comments.updated`) from a no-op
+/// (neither, per G8). A body setting NEITHER field is a 400, not a silent
+/// no-op — a filter the caller believed it applied is a lie.
+#[derive(Debug, Deserialize)]
+pub struct CommentMetaBody {
+    /// Replaces the WHOLE tag set (normalised: slugified, deduped, sorted).
+    /// `Some([])` clears the tags; `None` leaves them alone.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// `Some(false)` un-privates the comment, which makes the whole thread
+    /// readable by every agent-facing surface again.
+    #[serde(default)]
+    pub private: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +179,14 @@ pub struct ReviewsQuery {
     /// Narrow to a single artifact id (the CLI resolves `--path` to an id
     /// first, then passes it here).
     pub artifact_id: Option<String>,
+    /// v0.40 TN2 — `public` (DEFAULT) | `all`. Absent means public, never
+    /// "everything": a note the operator hid must not surface because the
+    /// reader forgot the param. `all` is the operator opt-in the SPA sends;
+    /// the CLI never does, so every CLI read inherits the public default
+    /// (the CLI is operator-run but agent-reachable). An unrecognised value
+    /// is a 400 — `Visibility::from_query` returns `None` and we refuse
+    /// rather than guess, mirroring `ExportFormat::from_query`.
+    pub visibility: Option<String>,
 }
 
 /// One row of `GET /reviews` — a strict superset of the pre-R6 `kb comments
@@ -152,6 +213,15 @@ struct ReviewRow {
     folder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_relative: Option<String>,
+    /// v0.40 TN1 — comment-scoped labels (slug-normalised + sorted on
+    /// disk). Always emitted as an array, never omitted, so a `| jq`
+    /// consumer can read `.tags` without a null check. NOT the artifact's
+    /// `kb-tags`: a different namespace that is deliberately never mirrored.
+    tags: Vec<String>,
+    /// v0.40 TN2 — this row is a private note. Only ever `true` on a read
+    /// that passed `?visibility=all`; the default public read cannot
+    /// produce one.
+    private: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -224,7 +294,7 @@ pub(crate) fn emit_updated_by(
             "kb": kb_name.as_str(),
             "artifact_id": id,
             "open_count": file.open_count(),
-            "total_count": file.comments.len(),
+            "total_count": public_count(file),
             "verdict": file.verdict,
         });
         if let Some(u) = user {
@@ -232,6 +302,21 @@ pub(crate) fn emit_updated_by(
         }
         ctx.bus.emit("comments.updated", payload);
     }
+}
+
+/// v0.40 TN2 — the number of comments in `file` an AGENT may see.
+///
+/// Counts lie in one direction only: every count any agent can reach —
+/// this SSE payload included, the batch/delete/import response bodies — is
+/// public-only. Undercounting is a cosmetic lie; overcounting would PROVE a
+/// hidden note exists, which is exactly the leak the flag prevents. The
+/// operator's exact count comes from the review file the SPA refetches on
+/// this same event, never from here.
+///
+/// Reads through `Comment::is_private`, the ONE visibility predicate, so no
+/// route hand-rolls a second spelling that can disagree with it.
+fn public_count(file: &ReviewFile) -> usize {
+    file.comments.iter().filter(|c| !c.is_private()).count()
 }
 
 /// Ownership for comment/reply body EDIT + DELETE (v0.34 Y1 attribution
@@ -344,6 +429,15 @@ pub async fn add_comment(
         .unwrap_or_default();
 
     let user = identity.user.clone();
+    // v0.40 TN1 — normalise BEFORE the lock, through the same function
+    // `BatchOp::AddComment::apply_to` runs, so the HTTP route and the batch
+    // path cannot store two different tag sets for the same input. An
+    // over-limit / over-long request is a 400 here, never a silent
+    // truncation.
+    let tags = match review::normalize_comment_tags(&payload.tags) {
+        Ok(t) => t,
+        Err(e) => return error_to_problem_json(&e),
+    };
     let mut spec = NewComment {
         file: payload.file.unwrap_or_else(|| id.clone()),
         file_label: payload.file_label.unwrap_or_else(|| "main".to_string()),
@@ -354,6 +448,9 @@ pub async fn add_comment(
         attachments: Vec::new(),
         // v0.34 Y1 — stamp resolved identity (client-sent `user` ignored).
         user: Some(user.clone()),
+        // v0.40 TN1/TN2.
+        tags,
+        private: payload.private,
     };
     // Attachment limits (read before the lock; only used when adopting).
     let (_, max_per, grace_hours) = crate::routes::attachments::attachment_limits(&state).await;
@@ -408,23 +505,37 @@ pub async fn add_comment(
 
     // Record a history row for the new comment + emit `history.recorded`
     // (mirrors the whole-doc POST path; only brand-new comments do this).
-    let now_unix = Utc::now().timestamp();
-    if let Ok(history_id) = ctx
-        .storage
-        .history_record_comment(id.clone(), created.id.clone(), now_unix, user.clone())
-        .await
-    {
-        ctx.bus.emit(
-            "history.recorded",
-            json!({
-                "kb": kb_name.as_str(),
-                "kind": "comment",
-                "id": history_id,
-                "artifact_id": id,
-                "comment_id": created.id,
-                "user": user,
-            }),
-        );
+    //
+    // v0.40 TN2 — a PRIVATE note gets NO ledger row, deliberately. The
+    // ledger is read by four agent-facing surfaces (`daycard`'s comments
+    // lane, `timeline`'s id list, and the `kind='comment'` counts in
+    // `timeline` + `history`), and it carries no visibility bit — so a row
+    // written here would render a note's existence (and later its title)
+    // to every agent. Skipping the write is the single decision that keeps
+    // those four surfaces consistent for free; post-filtering them would
+    // need a second `.review/` walk per surface AND would leave counts
+    // that disagree with the id list. Stated consequence: the ledger is an
+    // event log, not a derived index, so un-privating a note does not
+    // backfill its history row.
+    if !created.is_private() {
+        let now_unix = Utc::now().timestamp();
+        if let Ok(history_id) = ctx
+            .storage
+            .history_record_comment(id.clone(), created.id.clone(), now_unix, user.clone())
+            .await
+        {
+            ctx.bus.emit(
+                "history.recorded",
+                json!({
+                    "kb": kb_name.as_str(),
+                    "kind": "comment",
+                    "id": history_id,
+                    "artifact_id": id,
+                    "comment_id": created.id,
+                    "user": user,
+                }),
+            );
+        }
     }
 
     let body = match to_value(&created) {
@@ -623,7 +734,8 @@ async fn set_status(
 /// `POST …/review/{id}/comments/{cid}/keep` — copy one comment into the
 /// proposal queue as `kb-proposal/1` with `source: "comment"`. Open and
 /// resolved comments are both eligible. Does not approve, does not ingest
-/// a memory, and does not delete or rewrite the comment.
+/// a memory, and does not delete or rewrite the comment. v0.40 TN2: a
+/// PRIVATE note is refused with 409 (see `keep_comment_as_proposal`).
 ///
 /// Wire in `router.rs` (not edited here), beside `resolve`:
 /// `.route("/kb/{kb}/review/{id}/comments/{cid}/keep", post(routes::comments::keep))`.
@@ -671,6 +783,14 @@ pub async fn keep(
 /// Read one comment and enqueue a proposal through
 /// [`super::proposals::enqueue_proposal`]. Does not approve, does not
 /// write a memory artifact, and does not mutate the review file.
+///
+/// v0.40 TN2 — refuses a PRIVATE note with `Error::Conflict` (409). A
+/// proposal is a work item the agent is handed on the next session, so
+/// `keep` on a note is the single worst promotion in the system: it would
+/// turn "the agent must never see this" into "the agent's next task".
+/// The guard sits between the read and `enqueue_proposal`, so the only
+/// thing that happened before the 409 is a `review::load` — no
+/// `.proposals/<id>.json` is written and no proposal row is emitted.
 fn keep_comment_as_proposal(
     review_path: &std::path::Path,
     proposals_dir: &std::path::Path,
@@ -692,6 +812,11 @@ fn keep_comment_as_proposal(
         .ok_or_else(|| {
             kb_core::Error::NotFound(format!("no comment {comment_id} on artifact {artifact_id}"))
         })?;
+    if comment.is_private() {
+        return Err(kb_core::Error::Conflict(format!(
+            "comment {comment_id} is a private note; un-private it before keeping it as a proposal"
+        )));
+    }
     let title = super::proposals::truncate_proposal_title(&comment.body);
     if title.is_empty() {
         return Err(kb_core::Error::BadRequest(
@@ -926,6 +1051,18 @@ fn find_comment(review_dir: &FsPath, comment_id: &str) -> kb_core::Result<FoundC
             continue;
         };
         if let Some(comment) = file.comments.iter().find(|c| c.id == comment_id) {
+            // v0.40 TN2 — a PRIVATE note is refused here, the single read
+            // both keep-memory paths funnel through. A memory artifact is
+            // agent-readable FOREVER (`kb recall` surfaces it on every
+            // future prompt), so promoting a note into one is irreversible
+            // in the worst way. Because this returns before
+            // `insert_keep_once` runs, no keep record is written and the
+            // ingest closure is never called.
+            if comment.is_private() {
+                return Err(kb_core::Error::Conflict(format!(
+                    "comment {comment_id} is a private note; un-private it before keeping it as a memory"
+                )));
+            }
             return Ok(FoundComment {
                 comment_id: comment.id.clone(),
                 artifact_id: file.artifact.id.clone(),
@@ -1198,12 +1335,14 @@ pub async fn apply_batch(
         // persisted and the on-disk file is untouched.
         Err(e) => return error_to_problem_json(&e),
     };
+    // v0.40 TN2 — the counts an agent sees are public-only, on the same rule
+    // as the `comments.updated` payload.
     let summary = json!({
         "applied": report.applied,
         "created_comment_ids": report.created_comment_ids,
         "created_reply_ids": report.created_reply_ids,
         "open_count": file.open_count(),
-        "total_count": file.comments.len(),
+        "total_count": public_count(&file),
     });
     if !report.mutated {
         // Batch of pure no-ops (e.g. resolving already-resolved comments):
@@ -1220,9 +1359,17 @@ pub async fn apply_batch(
     // Note: apply_ops itself does not yet stamp `user` on NewComment inside
     // the batch ops (ops schema is pre-Y); history attribution uses the
     // request Identity. Follow-up for Z: thread user into apply_ops adds.
+    // v0.40 TN2 — a PRIVATE note created by this batch gets NO ledger row,
+    // exactly as in `add_comment`. `apply_ops` reports ids, not comments, so
+    // the visibility bit is read back off the (already-mutated, already-
+    // saved) `file` — a missing id is left to record, since every created
+    // id is present in the file it was created in.
     let now_unix = Utc::now().timestamp();
     let hist_user = identity.user.clone();
     for cid in &report.created_comment_ids {
+        if file.comments.iter().any(|c| &c.id == cid && c.is_private()) {
+            continue;
+        }
         if let Ok(history_id) = ctx
             .storage
             .history_record_comment(id.clone(), cid.clone(), now_unix, hist_user.clone())
@@ -1286,11 +1433,26 @@ pub async fn import(
     let lock = state.review_lock_for(&kb_name);
     let guard = lock.lock().await;
     match review::load(&path) {
-        Ok(Some(existing)) if !existing.comments.is_empty() && !q.force => {
-            return error_to_problem_json(&kb_core::Error::BadRequest(format!(
-                "{kb_name}/{id} already has {} comment(s); pass force=true to overwrite",
-                existing.comments.len()
-            )));
+        // v0.40 TN2 (KB-TN-LEAK-002) — the refusal keys off the PUBLIC count,
+        // not `!comments.is_empty()`. Both halves had to move together: with
+        // the private-inclusive guard, a sidecar holding ONLY notes still
+        // answers 400 where an empty one answers 200, and the status code
+        // alone is a per-artifact existence oracle — worse than the count
+        // alone, since the message cannot even be read without arithmetic.
+        // A notes-only sidecar must NOT refuse: the refusal is itself proof
+        // that a hidden comment exists, and an operator restoring a backup
+        // over their own notes is a legitimate case this now allows.
+        //
+        // The WRITE stays lossless either way — private notes in the payload
+        // are saved verbatim (see the success body below). Only the decision
+        // and the number are public-only.
+        Ok(Some(existing)) if !q.force => {
+            let n = public_count(&existing);
+            if n > 0 {
+                return error_to_problem_json(&kb_core::Error::BadRequest(format!(
+                    "{kb_name}/{id} already has {n} comment(s); pass force=true to overwrite"
+                )));
+            }
         }
         Ok(_) => {}
         Err(e) => return error_to_problem_json(&e),
@@ -1304,7 +1466,12 @@ pub async fn import(
         StatusCode::OK,
         Json(json!({
             "ok": true,
-            "imported": incoming.comments.len(),
+            // v0.40 TN2 — public-only, on the same rule as every other
+            // agent-visible count. The IMPORT ITSELF is lossless: private
+            // notes in the payload are written verbatim, because this route
+            // is a restore/move transport and silently dropping operator
+            // data is a worse failure than the leak it would prevent.
+            "imported": public_count(&incoming),
             "open_count": incoming.open_count(),
         })),
     )
@@ -1407,6 +1574,161 @@ pub async fn edit_reply(
     drop(guard);
     emit_updated_by(&state, &kb_name, &id, &file, Some(&identity.user));
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+// --- comment meta: tags + private flag (v0.40 TN1/TN2) ----------------------
+
+/// `PATCH …/review/{id}/comments/{cid}/meta` — set a comment's labels and/or
+/// its private-note flag. Modelled on `with_review_mut` (NOT `set_anchor`)
+/// because there is no sidecar to sequence: the mutation is the whole
+/// contract, so the shared load → mutate → save path handles the 404s and,
+/// crucially, the G8 no-op branch.
+///
+/// G8 is load-bearing here, and is why this is not just another PATCH: the
+/// SPA's tag chips and the 🔒 toggle are both idempotent controls, and a
+/// handler that rewrote the file + re-emitted `comments.updated` on every
+/// click would churn the mtime (and therefore the ETag) and re-notify every
+/// open tab for nothing. `set_comment_meta` returns `Ok(false)` when neither
+/// field actually moved, and `with_review_mut` then skips BOTH the
+/// `save_atomic` and the SSE.
+///
+/// The response carries the EFFECTIVE post-normalisation values, copying
+/// `patch_meta`'s "Effective values" shape in `routes::artifacts.rs`. This
+/// is not a convenience: `["A","a"]` is stored as `["a"]`, and a client
+/// that re-derived the normalisation itself would drift from the server the
+/// moment the rules changed. The server's answer is the only one.
+///
+/// Ownership: gated by the same `forbid_if_not_owner` policy as body EDIT and
+/// DELETE, because `private: false` is a disclosure — it hands the whole
+/// thread back to every agent-facing surface. It is expressed as
+/// `Error::Forbidden` (still a 403 problem+json) because the check runs
+/// inside the `with_review_mut` closure, where the shared helper's
+/// pre-rendered `Response` cannot be threaded out through
+/// `kb_core::Result<…>`.
+pub async fn set_comment_meta(
+    State(state): State<Arc<KbHandles>>,
+    Extension(identity): Extension<Identity>,
+    Path((kb, id, cid)): Path<(String, String, String)>,
+    Json(payload): Json<CommentMetaBody>,
+) -> Response<Body> {
+    let kb_name = match validate(&state, &kb, &id) {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+    if let Err(resp) = check_subid(&cid, "comment id") {
+        return resp;
+    }
+    if payload.tags.is_none() && payload.private.is_none() {
+        return error_to_problem_json(&kb_core::Error::BadRequest(
+            "comment meta patch must set at least one of: tags, private".to_string(),
+        ));
+    }
+
+    let operator = state.operator_user().to_string();
+    let req_tags = payload.tags;
+    let req_private = payload.private;
+    // v0.40 TN2 — set when this PATCH turns an ALREADY-PUBLIC comment into a
+    // note, which is the one transition that has to un-write history. Lifted
+    // out of the mutation closure (which is sync) so the ledger delete can
+    // happen below, against the actor. `Arc<AtomicBool>` rather than a
+    // `Cell`: the flag is read after an `.await`, and a `Cell` borrowed into
+    // the closure would make this handler's future `!Send`, which axum
+    // rejects at the router.
+    let became_note = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let became_note_flag = Arc::clone(&became_note);
+    // `cid` moves into the mutation closure below; the ledger delete runs
+    // after it, so it gets its own copy.
+    let cid_row = cid.clone();
+    let resp = with_review_mut(&state, &kb_name, &id, StatusCode::OK, move |file| {
+        // Same ownership rule as `forbid_if_not_owner`: a row with no
+        // stamped `user` belongs to the operator. A MISSING comment falls
+        // through to `set_comment_meta`, which raises the canonical 404 —
+        // this handler never invents a second spelling of "no such comment".
+        let row_user = file
+            .comments
+            .iter()
+            .find(|c| c.id == cid_row)
+            .map(|c| c.user.clone());
+        if let Some(row_user) = row_user {
+            let owner = row_user.as_deref().unwrap_or(operator.as_str());
+            if identity.user != owner {
+                return Err(kb_core::Error::Forbidden(format!(
+                    "only the owner ({owner}) may retag or re-privatise this comment; identity is {}",
+                    identity.user
+                )));
+            }
+        }
+        // Read the visibility bit off the loaded file BEFORE the mutation, so
+        // the predicate is a real transition and not "is it private now".
+        let was_public = file
+            .comments
+            .iter()
+            .any(|c| c.id == cid_row && !c.is_private());
+        let changed = file.set_comment_meta(&cid_row, req_tags.as_deref(), req_private)?;
+        if was_public
+            && file
+                .comments
+                .iter()
+                .any(|c| c.id == cid_row && c.is_private())
+        {
+            became_note_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Effective values — what is on disk NOW, after normalisation.
+        // Read back off the file rather than recomputed, so the response
+        // cannot disagree with the bytes that were just written.
+        let (tags, private) = match file.comments.iter().find(|c| c.id == cid_row) {
+            Some(c) => (c.tags.clone(), c.private),
+            None => (Vec::new(), false),
+        };
+        Ok((
+            json!({ "ok": true, "changed": changed, "tags": tags, "private": private }),
+            changed,
+        ))
+    })
+    .await;
+
+    // v0.40 TN2 — a note gets NO history-ledger row (the same rule
+    // `add_comment` applies to a note born private, and for the same
+    // reason: `history` carries no visibility bit, so the four surfaces that
+    // read it unfiltered — daycard's `pivot_activity` comments lane, the
+    // history calendar's per-day count, the `kind='comment'` list and the
+    // timeline — would keep proving the note exists, and one overcounted
+    // agent-facing number is the whole leak). So the row a public comment
+    // wrote at creation time is deleted HERE, on the flip.
+    //
+    // Deliberately NOT mirrored in the other direction: un-privating does
+    // NOT backfill a row. The ledger is an event log ("a comment was
+    // authored at T"), not a derived index, and the operator's own note
+    // list is built from the sidecar's `created_at` — so a backfill would
+    // invent an event that never happened rather than restore one.
+    //
+    // Ordering: the delete runs AFTER `with_review_mut` has saved and
+    // released the review lock, so the review lock is never held across an
+    // actor round-trip. A failed delete does NOT fail the PATCH: the sidecar
+    // file is the source of truth and it now says `private: true`, so a 500
+    // would report a mutation as failed when it in fact landed, and the
+    // client's retry would find no transition left to act on — turning a
+    // transient storage error into a permanent, silent leak. A surviving row
+    // over-counts, which is the leaking direction, so the error is logged at
+    // `warn` (loudly, with the artifact + comment id) rather than swallowed.
+    if became_note.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(ctx) = state.kbs.get(&kb_name) {
+            if let Err(e) = ctx
+                .storage
+                .history_forget_comment(id.clone(), cid.clone())
+                .await
+            {
+                tracing::warn!(
+                    kb = kb_name.as_str(),
+                    artifact = id.as_str(),
+                    comment = cid.as_str(),
+                    error = %e,
+                    "comment is now a private note but its history row could not be deleted"
+                );
+            }
+        }
+    }
+    resp
 }
 
 // --- re-point a comment's anchor (R9) --------------------------------------
@@ -1863,6 +2185,23 @@ pub async fn list_reviews(
         .filter(|s| !s.is_empty())
         .and_then(kb_core::identity::normalize_username);
     let want_stale = q.stale.unwrap_or(false);
+    // v0.40 TN2 — visibility. An ABSENT `?visibility=` means `Public`, never
+    // "everything": this route is the CLI's `kb comments list` backend and
+    // the CLI never passes the param, so the default is what every
+    // agent-reachable read inherits. `Visibility::from_query` returning
+    // `None` is a 400 rather than a guess — same rule as
+    // `ExportFormat::from_query` on the export route.
+    let visibility = match q.visibility.as_deref() {
+        None => review::Visibility::Public,
+        Some(raw) => match review::Visibility::from_query(raw) {
+            Some(v) => v,
+            None => {
+                return error_to_problem_json(&kb_core::Error::BadRequest(format!(
+                    "visibility {raw:?} not one of public|all"
+                )))
+            }
+        },
+    };
 
     let review_dir = state.paths.kb_review_dir(&kb_name);
 
@@ -1911,6 +2250,14 @@ pub async fn list_reviews(
             };
             let mut kept: Vec<(review::Comment, bool)> = Vec::new();
             for c in file.comments {
+                // v0.40 TN2 — the visibility gate. `Visibility::includes`
+                // IS the predicate, so this row can never disagree with
+                // `Comment::is_private`; `Public` (the default) drops every
+                // private note here, which is why the CLI and every agent
+                // read of this list cannot see one.
+                if !visibility.includes(&c) {
+                    continue;
+                }
                 if let Some(s) = want_status {
                     if c.status != s {
                         continue;
@@ -1986,6 +2333,12 @@ pub async fn list_reviews(
                 stale: is_stale,
                 folder: folder.clone(),
                 source_relative: source_relative.clone(),
+                // v0.40 TN1/TN2 — additive, per the row's stated contract
+                // ("a strict superset of the pre-R6 `kb comments list
+                // --json` keys"). `private` can only be `true` when the
+                // request passed `?visibility=all`.
+                tags: c.tags,
+                private: c.private,
             });
         }
     }
@@ -2043,6 +2396,8 @@ mod tests {
             choices: Vec::new(),
             attachments: Vec::new(),
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let cid = file.comments[0].id.clone();
         file.set_comment_status(&cid, CommentStatus::Resolved)
@@ -2121,6 +2476,8 @@ mod tests {
             choices: Vec::new(),
             attachments: Vec::new(),
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let cid = file.comments[0].id.clone();
         review::save_atomic(&review_path, &file, None).unwrap();

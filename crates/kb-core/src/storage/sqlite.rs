@@ -1509,6 +1509,36 @@ impl Db {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// v0.40 TN2 — delete the ledger row for ONE comment: the exact inverse
+    /// of [`Self::history_record_comment`], and the only per-row delete in
+    /// this file (everything else here is a purge or a retention window).
+    /// It fires on the one transition that must un-write history — a comment
+    /// raised PUBLIC and later flipped to a private note.
+    ///
+    /// Why a delete rather than a filter on the read side: the ledger row
+    /// carries no visibility bit, and the surfaces that count
+    /// `kind = 'comment'` — daycard's `pivot_activity`, the history
+    /// calendar's per-day grid, the `kind=` list, the timeline — are all
+    /// deliberately unfiltered because they have no `.review/` to join
+    /// against. A row left behind keeps proving the note exists on every one
+    /// of them, and an overcount is the direction that leaks.
+    ///
+    /// `artifact_id` is part of the predicate, not decoration: comment ids
+    /// are minted per artifact, and the delete must not reach into another
+    /// artifact that happens to carry the same id. Returns the rows deleted;
+    /// `0` is the normal answer for a note that was created private and
+    /// therefore never got a row.
+    pub fn history_forget_comment(&mut self, artifact_id: &str, comment_id: &str) -> Result<usize> {
+        // No index on `comment_id`, so this is a scan of the retention-bounded
+        // `history` table — one row per visit/comment, pruned by
+        // `retention_prune`, and hit once per note transition (not per read).
+        Ok(self.conn.execute(
+            "DELETE FROM history
+             WHERE kind = 'comment' AND artifact_id = ?1 AND comment_id = ?2",
+            params![artifact_id, comment_id],
+        )?)
+    }
+
     /// Newest-first list of history rows. `limit` clamps the page size;
     /// `before_unix` (exclusive cursor on `started_at`) and `kind_filter`
     /// are optional. Pass `kind_filter = None` for the full timeline.
@@ -9540,6 +9570,38 @@ mod tests {
         // Newest first.
         assert_eq!(rows[0].comment_id.as_deref(), Some("c-2"));
         assert_eq!(rows[1].comment_id.as_deref(), Some("c-1"));
+    }
+
+    /// v0.40 TN2 — the delete that keeps a private note off the ledger. The
+    /// predicate is the whole contract: it must remove ONLY that artifact's
+    /// row for that comment id, must not touch another artifact that happens
+    /// to carry the same comment id, and must not touch the `open`/`search`
+    /// rows that share the table.
+    #[test]
+    fn history_forget_comment_removes_only_that_comments_row() {
+        let mut db = db();
+        db.history_record_comment("art", "c-1", 1_700_000_000, "operator")
+            .unwrap();
+        db.history_record_comment("art", "c-2", 1_700_000_010, "operator")
+            .unwrap();
+        db.history_record_comment("other", "c-1", 1_700_000_020, "operator")
+            .unwrap();
+        db.history_record_open("art", 1_700_000_030, None, "operator")
+            .unwrap();
+
+        assert_eq!(db.history_forget_comment("art", "c-1").unwrap(), 1);
+        let rows = db.history_list(10, None, Some("comment"), None).unwrap();
+        assert_eq!(rows.len(), 2, "one row per remaining comment: {rows:?}");
+        assert!(rows.iter().all(|r| {
+            r.comment_id.as_deref() != Some("c-1") || r.artifact_id.as_deref() == Some("other")
+        }));
+        // The `open` row for the same artifact is untouched, and a repeat
+        // delete is a 0-row no-op (the transition can only fire once).
+        assert_eq!(
+            db.history_list(10, None, Some("open"), None).unwrap().len(),
+            1
+        );
+        assert_eq!(db.history_forget_comment("art", "c-1").unwrap(), 0);
     }
 
     #[test]

@@ -192,7 +192,14 @@ pub(crate) async fn collect_open(
                 _ => continue,
             };
             let mut items: Vec<InboxItem> = Vec::new();
-            for c in &file.comments {
+            // LEAK GUARD (matrix rows #8-#10) — the ONE open-comments
+            // collector: `/api/inbox`, `routes::resurface` and the
+            // context pack all ride this iterator, so this single filter
+            // hides private notes from all three. It takes no opt-in
+            // parameter on purpose — the absence of one IS the guarantee.
+            // Reads through `visible(Visibility::Public)` so a future
+            // `is_open` change cannot disagree with the visibility rule.
+            for c in file.visible(kb_core::review::Visibility::Public) {
                 if c.status != kb_core::review::CommentStatus::Open {
                     continue;
                 }

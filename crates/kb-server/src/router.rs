@@ -392,6 +392,16 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // fanned out (#28). Sibling of /anchors + /sessions (plain api tree
         // auth + loopback bypass; no rate-limit bucket).
         .route("/inbox", get(routes::inbox::list))
+        // v0.40 TN1/TN2 — the private-NOTE browser. Cross-kb like /inbox
+        // (fanned out, invariant #28) and lists PRIVATE COMMENTS ONLY: there
+        // is no `visibility` param on this route and there must never be one,
+        // because a note is by definition what the agent must not see. The
+        // filter axes are `?kb=`, repeatable-AND `?tag=`, `?q=` and
+        // `?status=` — the SPA's `/review-notes` page, not `/notes` (which is
+        // kb Markdown note artifacts, a different entity). Same auth posture
+        // as `/inbox` (plain api tree + loopback bypass, no rate-limit
+        // bucket).
+        .route("/review-notes", get(routes::review_notes::list))
         // Desk v2 — federated handoff aggregate. Cross-kb read of indexed
         // `handoff/` docs (invariant #28 fan-out). Same auth posture as
         // `/inbox` (plain api tree + loopback bypass, no rate-limit bucket).
@@ -878,6 +888,15 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .route(
             "/kb/{kb}/review/{id}/comments/{cid}/anchor",
             patch(routes::comments::set_anchor),
+        )
+        // v0.40 TN1/TN2 — set a comment's tags and/or its private-note
+        // flag. Beside `/anchor` because both are "re-point this comment at
+        // something" PATCHes on the same row; a no-op (G8) skips the save
+        // and the SSE, so the SPA's tag chips and 🔒 toggle are free to
+        // re-fire without churning the file or re-notifying every tab.
+        .route(
+            "/kb/{kb}/review/{id}/comments/{cid}/meta",
+            patch(routes::comments::set_comment_meta),
         )
         .route(
             "/kb/{kb}/review/{id}/comments/{cid}/resolve",

@@ -55,6 +55,11 @@ export type UseReview = {
       author?: "you" | "claude";
       choices?: Choice[];
       attachmentIds?: string[];
+      /// v0.40 TN1/TN2 — comment tags + the private-note flag, carried on
+      /// the CREATE (see the create call below). `undefined` keeps the key
+      /// off the wire entirely, so a plain add's body is byte-unchanged.
+      tags?: string[];
+      private?: boolean;
     },
   ) => Promise<Comment>;
   addReply: (
@@ -217,6 +222,8 @@ export function useReview(kb: string, artifactId: string): UseReview {
         author,
         choices: opts?.choices,
         attachment_ids: opts?.attachmentIds,
+        tags: opts?.tags,
+        private: opts?.private,
       });
       // Optimistic splice — show the server-assigned comment immediately
       // (dedup-guarded so the SSE refetch can't double it).
