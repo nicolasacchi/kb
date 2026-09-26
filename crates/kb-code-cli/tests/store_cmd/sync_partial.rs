@@ -111,7 +111,13 @@ fn member_problems_alone_exits_7() {
     // The daemon's own verdict is unchanged and must be reported as-is:
     // the pass still said `ready`, and that is exactly what makes the
     // degraded flag load-bearing.
-    assert_eq!(env["data"]["report"]["member_errors"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        env["data"]["report"]["member_errors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
     assert_eq!(
         env["data"]["report"]["member_problems"][0],
         "work-7: no common git dir"

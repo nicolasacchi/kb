@@ -113,14 +113,7 @@ fn exit_3_conflict_on_a_refused_apply() {
         let d = stub(gc_answer(reason, false, 3, false));
         let a = kb()
             .args([
-                "store",
-                "gc",
-                "--repo",
-                REPO,
-                "--yes",
-                "--json",
-                "--daemon",
-                &d.url,
+                "store", "gc", "--repo", REPO, "--yes", "--json", "--daemon", &d.url,
             ])
             .assert()
             .code(EXIT_CONFLICT);
@@ -170,12 +163,11 @@ fn a_refusal_outranks_a_partial() {
     // partial pass (which the daemon can also set on the same report)
     // must not win the exit code.
     let d = stub(gc_answer("backup-failed", false, 3, true));
-    kb()
-        .args([
-            "store", "gc", "--repo", REPO, "--yes", "--json", "--daemon", &d.url,
-        ])
-        .assert()
-        .code(EXIT_CONFLICT);
+    kb().args([
+        "store", "gc", "--repo", REPO, "--yes", "--json", "--daemon", &d.url,
+    ])
+    .assert()
+    .code(EXIT_CONFLICT);
 }
 
 #[test]
@@ -198,21 +190,24 @@ fn yes_with_dry_run_is_a_usage_error_without_a_round_trip() {
     // is the operator's to resolve, and it is resolved WITHOUT a daemon
     // round trip — `max = 0` means this stub never accepts, so a stray
     // request would fail the transport rather than pass.
-    let d = StubDaemon::json(&gc_answer("dry-run", false, 3, false), 0, Duration::from_secs(1));
-    kb()
-        .args([
-            "store",
-            "gc",
-            "--repo",
-            REPO,
-            "--yes",
-            "--dry-run",
-            "--json",
-            "--daemon",
-            &d.url,
-        ])
-        .assert()
-        .code(EXIT_USAGE);
+    let d = StubDaemon::json(
+        &gc_answer("dry-run", false, 3, false),
+        0,
+        Duration::from_secs(1),
+    );
+    kb().args([
+        "store",
+        "gc",
+        "--repo",
+        REPO,
+        "--yes",
+        "--dry-run",
+        "--json",
+        "--daemon",
+        &d.url,
+    ])
+    .assert()
+    .code(EXIT_USAGE);
     assert_eq!(d.join(), 0, "a usage error must not reach the daemon");
 }
 
@@ -225,9 +220,9 @@ fn benign_no_apply_outcomes_exit_0() {
     // bug these tests exist to prevent.
     let cases: [(&str, bool, bool, i32); 4] = [
         // reason,            applied, --yes, expected exit
-        ("dry-run", false, false, EXIT_OK),      // no flag: nothing requested
+        ("dry-run", false, false, EXIT_OK), // no flag: nothing requested
         ("nothing-to-do", false, true, EXIT_OK), // --yes, nothing to delete
-        ("applied", true, true, EXIT_OK),        // --yes, the apply landed
+        ("applied", true, true, EXIT_OK),   // --yes, the apply landed
         // The allowlist's `"dry-run"` entry is only reachable as an ANSWER
         // to `--yes` (without `--yes` the `apply && …` guard short-circuits
         // before the reason is read), so this is the one invocation that
