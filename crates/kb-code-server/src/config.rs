@@ -1381,7 +1381,7 @@ pub struct ReviewSection {
 /// [review.store]
 /// root = "~/.local/state/kb/kb-code/git"   # keys/ and ssh/ never follow this
 /// seed_on_boot = true
-/// allow_inherited_credentials = true
+/// allow_inherited_credentials = false
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1393,7 +1393,23 @@ pub struct ReviewStoreSection {
     /// have reviews (D4).
     pub seed_on_boot: bool,
     /// Whether the ambient-environment (`inherit`) credential rung may be
-    /// used (D7: flips to `false` with the first shipped service unit).
+    /// used. DEFAULT `false` (D7, landed): `inherit` is the WEAKEST rung —
+    /// the only one that neither `env_clear()`s nor resets
+    /// `credential.helper`, so it hands the call to the operator's ambient
+    /// gitconfig helper chain, `ssh-agent` and `~/.netrc`. An unconfigured
+    /// daemon must not start there, so the rung is off unless an operator
+    /// asks for it. Setting it to `true` is still a supported, fully
+    /// recorded posture: the rung resolves amber (`cred_kind = inherit`,
+    /// `credential-inherit` in `doctor`, `inherit` in the recorded
+    /// `cred_reason`) rather than silently.
+    ///
+    /// Turn it back on when the store is deliberately driven by a human's
+    /// own git identity (a personal single-user install fetching a private
+    /// repo over SSH, say) and no scoped credential can be minted. Under
+    /// `auto` the ladder then SKIPS this rung with the reason
+    /// `allow_inherited_credentials = false`; an explicit
+    /// `credential = "inherit"` on a repo is a REFUSED ERROR, not a
+    /// fall-through (`review_store::cred.rs`).
     pub allow_inherited_credentials: bool,
 }
 
@@ -1402,7 +1418,7 @@ impl Default for ReviewStoreSection {
         Self {
             root: None,
             seed_on_boot: true,
-            allow_inherited_credentials: true,
+            allow_inherited_credentials: false,
         }
     }
 }

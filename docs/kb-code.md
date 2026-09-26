@@ -1079,11 +1079,14 @@ leave a store a dead process left `seeding` wedged for good.
 
 `[review.store]` keys: `root` (default `<state>/git`, `~` expanded),
 `seed_on_boot` (default `true`), `allow_inherited_credentials` (default
-`true`). A store root that sits inside a browsed repo disables the store
-for the whole boot (SEC-13/15) and reads fall back; the reason is a
-doctor finding, never a silent degradation. Enum-valued keys are
-TOLERANT: an unknown value warns and falls back to the default, so a typo
-never stops the daemon.
+**`false`** — the weakest credential rung is opt-in, so an unconfigured
+daemon never falls through to the operator's ambient gitconfig helpers,
+ssh-agent and `~/.netrc`; see "### `inherit` and its knob" below). A store
+root that sits inside a browsed repo — its work tree, its `.git` directory,
+or its shared git common dir — disables the store for the whole boot
+(SEC-13/15) and reads fall back; the reason is a doctor finding, never a
+silent degradation. Enum-valued keys are TOLERANT: an unknown value warns
+and falls back to the default, so a typo never stops the daemon.
 
 ### GC attribution
 
@@ -1276,9 +1279,15 @@ credential.
    never a fall-through;
 2. **`gh-cli`** — the operator's `gh` login;
 3. **deploy key** — Phase 2; recorded as a skipped rung;
-4. **`token_file`** — an owner-only (0600/0400) file, HTTPS;
+4. **`token_file`** — an owner-only (0600/0400) file, HTTPS. Reachable on
+   the DEFAULT posture, not only under an explicit `token` pin: with no
+   `gh_user` pinned and no `cred_account` recorded, `auto` opens the file
+   here too. The file is still only ever OPENED when it is owner-only; a
+   group/world-readable one is refused unread, so it just never yields a
+   credential.
 5. **anonymous HTTPS** — only if a scrubbed `ls-remote … HEAD` succeeds;
-6. **`inherit`** — only if `allow_inherited_credentials`; amber;
+6. **`inherit`** — only if `allow_inherited_credentials` (default `false`);
+   amber;
 7. **`none`**.
 
 Under `auto`, a rung that does not apply is skipped WITH a recorded
@@ -1364,13 +1373,19 @@ ones, and plus the same hardening, the timeout, and
 neither `GIT_SSH_COMMAND` nor `GIT_SSH` is set and a probe
 definitively found no `core.sshCommand`.
 
-`[review.store] allow_inherited_credentials` (default `true`) gates
+`[review.store] allow_inherited_credentials` (default **`false`**) gates
 whether the rung may be used at all. **`false` REMOVES the rung from the
-ladder entirely**: the auto ladder skips it, and an explicit
-`credential = "inherit"` is then a REFUSED ERROR
+ladder entirely** — which is now the default posture, because `inherit` is
+the one rung that neither clears the environment nor resets
+`credential.helper`: under `auto` the ladder skips it (recorded reason
+`allow_inherited_credentials = false`), and an explicit
+`credential = "inherit"` is a REFUSED ERROR
 ("credential = inherit but [review.store] allow_inherited_credentials =
-false"), not a downgrade. When the rung does apply it is shown amber —
-`cred_kind = inherit` is `amber: true` on the credentials card, a
+false"), not a downgrade. Set the key to `true` to opt back IN — the
+deliberately ambient-identity install, a personal single-user daemon
+fetching a private repo over SSH where no scoped credential can be minted.
+It is a supported posture, not a hole: when the rung does apply it is shown
+amber — `cred_kind = inherit` is `amber: true` on the credentials card, a
 `credential-inherit` warning in `doctor`, and `inherit` in the reason.
 
 ### Security invariants

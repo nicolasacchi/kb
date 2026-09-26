@@ -36,6 +36,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::git::{GitArgs, GitCall, StoreGit, StoreGitError};
+use super::url::RefName;
 use crate::reviews::{parse_kbc_ref, KbcRef};
 use crate::store::{Result as StoreResult, Store};
 
@@ -119,14 +120,31 @@ pub fn keep_set(
 /// `refs/remotes/work-<repo_id>/<branch>` → `repo_id`. `None` for anything
 /// else, including `refs/remotes/base/*` (never a GC candidate — it is the
 /// credentialed base fetch's own namespace).
+///
+/// The BRANCH half is validated by [`RefName`], the same parser the
+/// `refs/kbc/*` namespace, the seeding path and the bundle writer go
+/// through — not by a second rule set written here. Without it, a name
+/// this function cannot classify still reached `attribute` and became an
+/// attributed ref whose name is the verbatim `for-each-ref` string, which
+/// then went into the `update-ref --stdin` transaction and came back as an
+/// opaque `backup-failed`: one bad ref wedged every future `store gc
+/// --yes` on that store, and the error never named the offender. A ref
+/// this module cannot classify is never a candidate at all, which is the
+/// module's own rule; a name that is not a legal git refname in the first
+/// place is only plantable by an actor with write access to the store
+/// directory.
 pub fn work_repo_id(refname: &str) -> Option<i64> {
     let rest = refname.strip_prefix("refs/remotes/work-")?;
-    let (id_s, _branch) = rest.split_once('/')?;
+    let (id_s, branch) = rest.split_once('/')?;
     if id_s.is_empty() || !id_s.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let id: i64 = id_s.parse().ok()?;
-    (id >= 1 && id_s == id.to_string()).then_some(id)
+    if id < 1 || id_s != id.to_string() {
+        return None;
+    }
+    RefName::branch(branch).ok()?;
+    Some(id)
 }
 
 /// Pure: classify every listed ref (`(oid, refname)`, as
@@ -240,8 +258,10 @@ mod tests {
         format!("{b:02x}").repeat(20)
     }
 
+    /// The id component AND the branch half must both classify; a name
+    /// this module cannot parse is never a candidate.
     #[test]
-    fn work_repo_id_parses_only_the_shape() {
+    fn work_repo_id_parses_the_id_and_a_legal_branch() {
         assert_eq!(work_repo_id("refs/remotes/work-7/main"), Some(7));
         assert_eq!(work_repo_id("refs/remotes/work-7/release/2026.09"), Some(7));
         for bad in [
@@ -254,6 +274,38 @@ mod tests {
         ] {
             assert!(work_repo_id(bad).is_none(), "{bad}");
         }
+    }
+
+    /// A branch half the ref-name parser rejects is SKIPPED, not
+    /// attributed — otherwise the verbatim listing string reaches the
+    /// `update-ref --stdin` transaction, the bundle writer refuses it, and
+    /// the refusal (a `backup-failed` on every future `store gc --yes`)
+    /// never names the ref that caused it.
+    #[test]
+    fn an_unclassifiable_work_ref_is_never_a_delete_candidate() {
+        let keep = kb(&[], &[], &[10]);
+        let refs = vec![
+            (sha(1), "refs/remotes/work-99/main".to_string()),
+            (sha(2), "refs/remotes/work-99/release/2026.09".to_string()),
+            (sha(3), "refs/remotes/work-99/x y".to_string()),
+            (sha(4), "refs/remotes/work-99/".to_string()),
+            (sha(5), "refs/remotes/work-99/a..b".to_string()),
+            (sha(6), "refs/remotes/work-99/main.lock".to_string()),
+        ];
+        let attributed = attribute(&refs, &keep);
+        let classified: Vec<&str> = attributed.iter().map(|r| r.refname.as_str()).collect();
+        assert_eq!(
+            classified,
+            vec![
+                "refs/remotes/work-99/main",
+                "refs/remotes/work-99/release/2026.09"
+            ]
+        );
+        let del = delete_candidates(&attributed);
+        assert_eq!(del.len(), 2, "{del:?}");
+        assert!(del
+            .iter()
+            .all(|c| c.refname.starts_with("refs/remotes/work-99/")));
     }
 
     /// README §15.1: two members, reviews in both — GC from either never

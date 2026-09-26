@@ -943,9 +943,9 @@ working tree. The whole table is optional and is resolved **once at boot**
 
 | key | type | default | meaning |
 |---|---|---|---|
-| `root` | string (path) | `<state_dir>/git` | Where the stores live. `~` is expanded (`settings.rs:141`); absent ⇒ the daemon's own `kb-code` state dir joined with `git` (`config.rs:1391`, `settings.rs:15`). Every store is one bare repo at `<root>/<uuid>.git` (`seed::store_dir`, `review_store/seed.rs:233`) — nothing else lives under `root`, and the `keys/`/`ssh/` directories the section's own doc comment names (`config.rs:1382`) deliberately do **not** follow it. (This build creates neither directory: its fetch ladder has no deploy-key rung — see `credential` below.) **Must be absolute, and must neither sit inside nor contain any configured `[[repos]] path`** — see "the store-disabled guard" below. |
+| `root` | string (path) | `<state_dir>/git` | Where the stores live. `~` is expanded (`settings.rs:141`); absent ⇒ the daemon's own `kb-code` state dir joined with `git` (`config.rs:1391`, `settings.rs:15`). Every store is one bare repo at `<root>/<uuid>.git` (`seed::store_dir`, `review_store/seed.rs:233`) — nothing else lives under `root`, and the `keys/`/`ssh/` directories the section's own doc comment names (`config.rs:1382`) deliberately do **not** follow it. (This build creates neither directory: its fetch ladder has no deploy-key rung — see `credential` below.) **Must be absolute, and must neither sit inside nor contain any configured `[[repos]]` entry or its git directories** (work tree, `.git`, shared common dir) — see "the store-disabled guard" below. |
 | `seed_on_boot` | bool | `true` | Seed `absent` stores in the background after boot, for repos that already have reviews (`config.rs:1394`). **Local only — no credential, no network**: a boot seed never fetches, and base branches arrive with the first explicit `store sync` or capture (`review_store/boot.rs:15-18`). |
-| `allow_inherited_credentials` | bool | `true` | Whether the ambient-environment (`inherit`) rung of the fetch ladder may be used at all (`config.rs:1397`). `false` does not merely mark that rung amber: under `auto` it is **skipped** with the recorded reason `allow_inherited_credentials = false` (`review_store/cred.rs:1080-1092`), and an explicit `credential = "inherit"` is a **refused error**, not a fall-through to another rung (`cred.rs:983-988`). |
+| `allow_inherited_credentials` | bool | `false` | Whether the ambient-environment (`inherit`) rung of the fetch ladder may be used at all (`config.rs:1413`). **`false` (the default) REMOVES the rung**: under `auto` it is **skipped** with the recorded reason `allow_inherited_credentials = false` (`review_store/cred.rs:1080-1092`), and an explicit `credential = "inherit"` is a **refused error**, not a fall-through to another rung (`cred.rs:983-988`). `inherit` is the weakest rung — the only one that neither clears the environment nor resets `credential.helper` — so an unconfigured daemon does not start there; set this to `true` to opt back in (a deliberately ambient-identity install), which resolves amber rather than silently (`cred_kind = inherit`, a `credential-inherit` doctor warning). |
 
 ### `[[review.repos]]`
 
@@ -963,7 +963,7 @@ at resolve time, not by the deserializer.
 | `base_url` | string | none | Rung 2 of the registration base-URL ladder (`review_store/ladder.rs:6-7`) — below the explicit `store set-base-url` rung, so an operator statement always wins. Must name a forge project URL; anything else is refused as `base-url-invalid` (`ladder.rs:142-168`). If the repo already has a store and the URL normalizes to a different store key, that is a **doctor error** — "a store is never re-keyed" (`review_store/routes.rs:228-235`) — not a silent re-key. |
 | `credential` | enum | `auto` | `auto \| gh-cli \| deploy-key \| token \| anonymous \| inherit \| none` (`config.rs:1420`; `cred.rs:694-701`). A pinned rung that fails is an error, never a fall-through. `deploy-key` **parses but is refused at resolve time in this build** — "deploy keys are Phase 2" (`cred.rs:958-960`); under `auto` that rung is recorded as skipped, not tried (`cred.rs:1040-1045`). Unknown value: warning + `auto`. |
 | `gh_user` | string | none | Which `gh` account must answer, for the `gh-cli` rung (`config.rs:1422`; `cred.rs:519-526`). Setting it **binds the store to that account**: with a pinned `gh_user` or a recorded `cred_account`, any gh-cli failure — logged out, `gh` missing, keyring locked, `gh` too old — **stops the ladder** rather than falling through to `token_file`/`anonymous`/`inherit`, which would silently swap the identity the store fetches as (`cred.rs:1009-1014`). A different account answering later is a typed `credential-account-mismatch` (`cred.rs:114-117`, `cred.rs:548-552`). |
-| `token_file` | string (path) | none | An owner-only token file for the `token` rung; `~` is expanded (`config.rs:1424`; `settings.rs:195-199`). **Only read when `credential = "token"`**, and only if the file is owner-only — mode `0600`/`0400`, the same rule as `[github] token_file`; anything group- or world-readable is refused unread (`cred.rs:866-897`). |
+| `token_file` | string (path) | none | An owner-only token file for the `token` rung; `~` is expanded (`config.rs:1440`; `settings.rs:195-199`). **Read on the `token` rung AND on rung 4 of the `auto` ladder** — the latter whenever `token_file` is configured, the remote has an https form, and no `gh_user` is pinned and no account is recorded. That is the DEFAULT posture (neither `gh_user` nor a recorded `cred_account` is set unless you set them), so configuring `token_file` alone and leaving `credential = "auto"` DOES open the file on every fetch. Only if the file is owner-only — mode `0600`/`0400`, the same rule as `[github] token_file`; anything group- or world-readable is refused unread (`cred.rs:866-897`). |
 | `default_branch` | string | none | Pins the project's default branch (`config.rs:1425`). Read as the first rung of the default-branch ladder, ahead of the store's cached forge symref and its `refs/remotes/base/*` candidates; when it is set the forge `ls-remote --symref` probe is skipped entirely (`review_base/capture.rs:1013-1032`, `review_base.rs:687-723`). Also the documented fix for the `default-branch-guessed` / ambiguous-default refusals (`review_base.rs:709-721`). |
 | `forge` | enum | `auto` | `auto \| github \| gitlab \| gitea \| forgejo \| bitbucket-server \| none` (`config.rs:1427`; `settings.rs:46-63`). Unknown value: warning + `auto`. `auto` is resolved against the store key's host and detects **only** `github.com`, `gitlab.com` and `codeberg.org` (→ `forgejo`); every other host is *unknown* and must be named with `forge = …` (`settings.rs:77-91`). **GitHub is the only forge verified in this build** (`settings.rs:93-96`). |
 
@@ -1006,6 +1006,17 @@ written after one of those headers is read as a key of that subtable and the
   when its `name` matches no configured `[[repos]]`, or when the same `name`
   appears twice (first entry wins) — `settings.rs:157-173`. None of the three
   is a boot error.
+- **What the `auto` ladder actually reads.** `auto` is not "try nothing
+  unless pinned". Rung 4 opens `token_file` whenever it is configured, the
+  remote has an https form, and no `gh_user` is pinned and no account is
+  recorded (`cred.rs:1047-1059`; the binding predicate is `cred.rs:1014`) — and
+  that last condition is the DEFAULT, since neither key is set unless you
+  set it. So `token_file` is read on the default path, not only on
+  `credential = "token"`. Pin `gh_user` (or let a first successful fetch
+  record `cred_account`) to make a gh-cli failure stop the ladder at rung 2
+  instead of reaching the token file. The file is only ever OPENED if it is
+  owner-only; a group- or world-readable one is refused unread, so a
+  mispermissioned file leaks nothing — it just never produces a credential.
 - **The `[[repos]]` dependency.** `name` is a `[[repos]]` name, so
   `[[review.repos]]` only has meaning next to a `[[repos]]` table of
   `{ name, path }` entries (`config.rs:432-435`) — this file cross-references
@@ -1013,10 +1024,12 @@ written after one of those headers is read as a key of that subtable and the
   nothing configured is ignored, so a typo in a repo name degrades to "no
   store settings for that repo", not to a boot failure.
 - **The store-disabled guard.** A `root` that is not absolute, or that
-  overlaps any configured `[[repos]]` path **in either direction** (both sides
-  canonicalised first, so a symlinked path cannot sneak past), sets
+  overlaps any configured `[[repos]]` entry — its work tree, its `.git`
+  directory, or its shared git COMMON DIR, the directory the store actually
+  fetches from — in either direction (both sides canonicalised first, so
+  `..` and a symlinked parent cannot sneak past) sets
   `StoreSettings::disabled` with the reason
-  (`settings.rs:144-154`, `settings.rs:241-257`). The store is then disabled
+  (`settings.rs:160-174`, `settings.rs:280-318`). The store is then disabled
   for that boot and `store doctor` reports it as a `store-disabled` error
   beside the warnings (`review_store/routes.rs:156-162`); reads fall back to
   the user repo exactly as they did before the store existed.

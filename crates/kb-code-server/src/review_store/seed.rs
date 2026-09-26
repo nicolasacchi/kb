@@ -555,6 +555,15 @@ pub fn import_member(
 /// are not in `wanted`. kb owns that namespace, so this never touches a
 /// ref anything else wrote. One `update-ref --stdin` transaction, each
 /// delete guarded by the old value.
+///
+/// A MIRROR PRUNE, not a GC, and the difference is load-bearing for the
+/// cruft cooldown: this runs on every seed/sync/import with no dry run and
+/// no pre-apply bundle, so it orphans objects without moving
+/// `state_json.last_gc_apply` — and that timestamp is the only thing
+/// `super::maint`'s monthly expiring-cruft repack consults. See the
+/// cooldown's recorded scope note there. The behaviour is deliberately not
+/// changed here: kb owns this namespace, the prune is what keeps the mirror
+/// from growing without bound, and it is recoverable by re-fetching.
 fn prune_work_refs(
     git: &StoreGit,
     git_dir: &Path,

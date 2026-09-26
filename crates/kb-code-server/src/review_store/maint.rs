@@ -569,6 +569,9 @@ pub fn run_weekly(git: &StoreGit, git_dir: &Path) -> Result<(), StoreGitError> {
 /// Below this many seconds since the store's last recorded REAL GC apply
 /// (`state_json.last_gc_apply`), [`run_monthly`] must not expire any cruft
 /// object (review finding B3 — see the module doc's "Cadence choices").
+/// The mark it is measured against is written ONLY by a real GC apply; the
+/// work-ref mirror prune orphans objects without moving it (see
+/// [`run_monthly`]'s "Recorded scope of that premise").
 pub const CRUFT_EXPIRE_COOLDOWN_SECS: i64 = 14 * DAY_SECS;
 
 /// Monthly: `repack --cruft -d --cruft-expiration=<…>` plus
@@ -599,6 +602,19 @@ pub const CRUFT_EXPIRE_COOLDOWN_SECS: i64 = 14 * DAY_SECS;
 /// gets `--cruft-expiration=never`, "first pass never expires"). This
 /// function does not consult `state_json` itself — being handed the
 /// decision keeps it a pure git-argv builder, testable without a `Store`.
+///
+/// **Recorded scope of that premise (review finding, informational):**
+/// `last_gc_apply` is the cooldown's ONLY clock, and it is written only by a
+/// real GC apply. The work-ref MIRROR PRUNE
+/// (`super::seed::prune_work_refs`, run on every seed/sync/import) also
+/// orphans objects — it deletes `refs/remotes/work-<id>/*` refs the member no
+/// longer has, with no dry run and no pre-apply bundle — and deliberately
+/// does NOT move the mark, so a mirror prune orphans objects without
+/// restarting the cooldown. That is accepted rather than fixed: the prune
+/// is correctly scoped (kb owns that namespace) and recoverable by
+/// re-fetching, and the objects it orphans are ones the REMOTE no longer
+/// offers, so nothing recoverable is at risk. Stated here so the cooldown's
+/// reasoning is not read as claiming it covers every orphaning path.
 pub fn run_monthly(
     git: &StoreGit,
     git_dir: &Path,
