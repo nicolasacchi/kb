@@ -1718,11 +1718,22 @@ pub(crate) async fn github_with_gh_cli(
     .0
 }
 
-/// [`github_with_gh_cli`] with an explicit `gh` and the D12 surface: an
-/// answering account that is not the pinned/recorded one is a
-/// `credential-account-mismatch` WARNING (never a silent fall-through to
-/// "no credentials"). Any other gh failure (not installed, not logged in)
-/// simply leaves the rung unused.
+/// [`github_with_gh_cli`] with an explicit `gh` and the D12 surface.
+///
+/// A store BOUND to a gh account — `gh_user` pinned, or a `cred_account`
+/// recorded — is the same `bound` predicate the fetch ladder uses
+/// ([`crate::review_store::cred::resolve_fetch_credential`]). For such a
+/// store an ambient token (`[github] token_file`, `KB_CODE_GITHUB_TOKEN`)
+/// is not a rung at all: the daemon FETCHES as the pinned account and must
+/// not READ the forge as somebody else, so the ambient short-circuit does
+/// not fire and the request resolves through the store's own gh-cli
+/// credential alone. Every way that credential can fail to appear — a
+/// different account answering (`credential-account-mismatch`), gh missing,
+/// gh logged out, a locked keyring, a refused scope — is a WARNING naming
+/// the [`FailureClass`](crate::review_store::FailureClass), never a silent
+/// fall-through to "no credentials".
+/// An UNBOUND store keeps the pre-store posture exactly: the ambient token
+/// is honoured, and a gh failure simply leaves the rung unused.
 pub(crate) async fn github_with_gh_cli_warned(
     state: &SharedState,
     github: crate::github::GithubClient,
@@ -1730,8 +1741,9 @@ pub(crate) async fn github_with_gh_cli_warned(
     repo_name: &str,
     gh: crate::review_store::GhCli,
 ) -> (crate::github::GithubClient, Vec<BaseWarningOut>) {
-    use crate::review_store::{ApiCredential, CredError, CredentialPin, RemoteUrl};
-    if github.has_ambient_token() || handle.forge_kind.as_deref() != Some("github") {
+    use crate::github::ApiBinding;
+    use crate::review_store::{ApiCredential, CredentialPin, RemoteUrl};
+    if handle.forge_kind.as_deref() != Some("github") {
         return (github, vec![]);
     }
     let Some(url) = handle
@@ -1748,6 +1760,9 @@ pub(crate) async fn github_with_gh_cli_warned(
     ) {
         return (github, vec![]);
     }
+    // Read before the rung runs: whether an ambient token may answer at all
+    // is decided by the store's binding, not by the token's presence.
+    let has_ambient = github.has_ambient_token();
     let st = state.clone();
     let id = handle.id;
     let res = tokio::task::spawn_blocking(move || {
@@ -1757,32 +1772,61 @@ pub(crate) async fn github_with_gh_cli_warned(
             .ok()
             .flatten()
             .and_then(|r| r.cred_account);
-        match ApiCredential::from_gh_cli(
+        let bound = settings.gh_user.is_some() || recorded.is_some();
+        let binding = if bound {
+            ApiBinding::Bound
+        } else {
+            ApiBinding::Unbound
+        };
+        if !bound && has_ambient {
+            return (binding, None, vec![]);
+        }
+        let account = settings.gh_user.as_deref().or(recorded.as_deref());
+        let (cred, warnings) = match ApiCredential::from_gh_cli(
             &gh,
             &url,
             settings.gh_user.as_deref(),
             recorded.as_deref(),
         ) {
             Ok(c) => (Some(c), vec![]),
-            Err(CredError::AccountMismatch {
-                host,
-                expected,
-                found,
-            }) => (
-                None,
-                vec![crate::review_base::warning(
-                    crate::review_base::warn::CREDENTIAL_ACCOUNT_MISMATCH,
-                    format!(
-                        "gh answers for {host} as {found:?}, not the pinned/recorded account {expected:?} — the forge API was not read with it (gh auth switch, or set [[review.repos]] gh_user)"
-                    ),
-                )],
-            ),
-            Err(_) => (None, vec![]),
-        }
+            // Unbound: a gh fault is a skip, exactly as before.
+            Err(_) if !bound => (None, vec![]),
+            Err(e) => (None, vec![bound_gh_warning(&e, account, url.host())]),
+        };
+        (binding, cred, warnings)
     })
     .await
-    .unwrap_or((None, vec![]));
-    (github.with_api_credential(res.0), res.1)
+    .unwrap_or((ApiBinding::Unbound, None, vec![]));
+    (github.with_api_credential(res.1, res.0), res.2)
+}
+
+/// D12 — the warning a BOUND store's api slot carries when its gh-cli rung
+/// could not answer. The code IS the
+/// [`FailureClass`](crate::review_store::FailureClass) slug, the same
+/// vocabulary the fetch ladder records a skip with, and `is_auth` separates
+/// "your gh login could not be read" from "that was not a credential fault
+/// at all" — both of which stop the rung for a bound store, and neither of
+/// which may be answered with another identity's token.
+fn bound_gh_warning(
+    e: &crate::review_store::CredError,
+    account: Option<&str>,
+    host: &str,
+) -> BaseWarningOut {
+    let class = e.class();
+    let who = account.unwrap_or("<unrecorded>");
+    let why = if class.is_auth() {
+        "the forge API was NOT read as another account, and not anonymously either"
+    } else {
+        "not a credential fault, but a store bound to an account may not fall through"
+    };
+    crate::review_base::warning(
+        class.slug(),
+        format!(
+            "gh could not produce a token for the store's account {who:?} on {host} \
+             ({}: {e}) — {why}. Fix: `gh auth login --hostname {host} --git-protocol https --account {who}`",
+            class.slug()
+        ),
+    )
 }
 
 /// RS-U6 — the forge project (`owner/name`) of a GitHub review store, from
@@ -4039,7 +4083,7 @@ async fn reuse_pr_review(
                     &handle,
                     &repo.name,
                     pr_number,
-                    github.with_api_credential(None),
+                    github.with_api_credential(None, crate::github::ApiBinding::Unbound),
                     crate::review_store::GhCli::from_process_env(),
                 )
                 .await
@@ -4596,7 +4640,9 @@ async fn create_review_pr_in_store(
     })
     .await??;
     if !gh_warnings.is_empty() {
-        prepared.status.code = Some(crate::review_base::warn::CREDENTIAL_ACCOUNT_MISMATCH.into());
+        // The envelope's code is the gh failure's own class slug (the
+        // account mismatch, or whatever else stopped a bound store's rung).
+        prepared.status.code = Some(gh_warnings[0].code.clone());
         prepared.warnings.extend(gh_warnings);
     }
     let review = insert_store_review(
@@ -6466,5 +6512,40 @@ mod tests {
         assert_eq!(row["repo"], "r");
         assert_eq!(row["pr_number"], 9);
         assert_eq!(row["has_report"], false);
+    }
+
+    /// D12 — a BOUND store's api slot reports a gh failure in the fetch
+    /// ladder's own vocabulary (the `FailureClass` slug) and names the
+    /// account it could not produce, instead of falling through to "no
+    /// credentials" with nothing on the envelope.
+    #[test]
+    fn a_bound_gh_failure_warns_with_the_failure_class_and_the_account() {
+        use crate::review_store::CredError;
+        let w = bound_gh_warning(
+            &CredError::GhNotLoggedIn {
+                host: "github.com".into(),
+            },
+            Some("alice"),
+            "github.com",
+        );
+        assert_eq!(w.code, "credential-unavailable");
+        assert!(w.message.contains("\"alice\""), "{}", w.message);
+        assert!(w.message.contains("github.com"), "{}", w.message);
+        assert!(
+            w.message.contains("NOT read as another account"),
+            "{}",
+            w.message
+        );
+        let m = bound_gh_warning(
+            &CredError::AccountMismatch {
+                host: "github.com".into(),
+                expected: "alice".into(),
+                found: "mallory".into(),
+            },
+            Some("alice"),
+            "github.com",
+        );
+        assert_eq!(m.code, "credential-account-mismatch");
+        assert!(m.message.contains("mallory"), "{}", m.message);
     }
 }

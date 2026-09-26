@@ -10,7 +10,11 @@
 //!   the on-disk location, not the credentials.
 //! * `GET  /api/repos/{name}/credentials` — the fetch credential as last
 //!   RESOLVED (`kbc-credentials/1`): kind, account, reason, and the D9
-//!   "broader than needed" flag. Never secret bytes; never runs `gh`.
+//!   "broader than needed" flag. Never secret bytes; never runs `gh`. The
+//!   `config` block also names the member entry the STORE resolved with
+//!   (`settings_repo`) and any disagreement between members
+//!   (`credential_disagreement`) — a store-wide pin is never read off one
+//!   member in db order silently.
 //! * `POST /api/repos/{name}/store/sync` — LOOPBACK-ONLY. Registers the
 //!   repo if needed, seeds an `absent` store (with the base fetch unless
 //!   `?offline=1`), or syncs a `ready` one. A `seeding` store refuses with
@@ -32,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use super::cred::{FetchCredential, ProfileKind};
 use super::key::{split_key, store_key_for_url};
 use super::registry::{
-    state_code, Registration, ReviewStores, StoreRefusal, StoreUnavailable,
+    state_code, Registration, ReviewStores, StoreCredentialSource, StoreRefusal, StoreUnavailable,
     BROADER_THAN_NEEDED_MARK,
 };
 use super::seed;
@@ -258,6 +262,14 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
                     "fetches use the ambient environment (legacy, amber)",
                 ));
             }
+            // D12 — a store-wide pin read off ONE member, chosen by db
+            // order, is the account-confusion axis itself: reported, and no
+            // credential resolved on a guess.
+            if let StoreCredentialSource::Disagreement(detail) =
+                rs.credential_source_for(store, r.id)
+            {
+                doctor.push(finding("warn", "credential-settings-conflict", detail));
+            }
             if r.cred_reason
                 .as_deref()
                 .is_some_and(|s| s.ends_with(BROADER_THAN_NEEDED_MARK))
@@ -346,10 +358,31 @@ pub async fn credentials_route(
     }
     let st = state.clone();
     let n = name.clone();
-    let row = match tokio::task::spawn_blocking(move || st.store.store_for_repo_name(&n)).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return internal(e),
+    let rs = state.review_stores.clone();
+    let (row, source) = match tokio::task::spawn_blocking(move || {
+        let row = st.store.store_for_repo_name(&n);
+        // Which member's `[[review.repos]]` entry the STORE resolves with —
+        // not necessarily this repo's, and never silently (D12).
+        let source = row
+            .as_ref()
+            .ok()
+            .flatten()
+            .map(|r| rs.credential_source_for(&st.store, r.id));
+        (row, source)
+    })
+    .await
+    {
+        Ok(v) => v,
         Err(e) => return internal(e),
+    };
+    let row = match row {
+        Ok(r) => r,
+        Err(e) => return internal(e),
+    };
+    let (settings_repo, disagreement) = match &source {
+        Some(StoreCredentialSource::Member(m)) => ((!m.is_empty()).then(|| m.clone()), None),
+        Some(StoreCredentialSource::Disagreement(d)) => (None, Some(d.clone())),
+        None => (None, None),
     };
     let cfg = state.review_stores.settings().repo(&name);
     let (kind, reason, account, host) = match &row {
@@ -383,6 +416,10 @@ pub async fn credentials_route(
             "gh_user": cfg.gh_user,
             "token_file_configured": cfg.token_file.is_some(),
             "allow_inherited_credentials": state.review_stores.settings().allow_inherited_credentials,
+            // Which member's entry the store actually used, and whether its
+            // members disagreed (then nothing was resolved at all).
+            "settings_repo": settings_repo,
+            "credential_disagreement": disagreement,
         },
     }))
     .into_response()
