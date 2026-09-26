@@ -3987,13 +3987,19 @@ impl StartPrParams {
     }
 }
 
-/// Reuse an existing PR-bound review: optionally reopen, fetch the PR ref,
-/// capture a patchset if the `(tip, merge-base)` pair moved, stamp
-/// `pr_head_sha`. Returns 200 with `reused: true`. Lives inside
-/// [`create_review_pr_value`] so the async job path gets the same
-/// behaviour. RS-U6: with a ready review store the fetch (base branch + PR
-/// head) lands in the store, a PR retarget is followed when `set_by=auto`
+/// Reuse an existing PR-bound review: fetch the PR ref, capture a patchset
+/// if the `(tip, merge-base)` pair moved, stamp `pr_head_sha`, and —
+/// `reopen` — reopen a closed review. Returns 200 with `reused: true`.
+/// Lives inside [`create_review_pr_value`] so the async job path gets the
+/// same behaviour. RS-U6: with a ready review store the fetch (base branch +
+/// PR head) lands in the store, a PR retarget is followed when `set_by=auto`
 /// (D15), and `minted` is the pair dedup's own answer.
+///
+/// RS-U10b review fix: the reopen is written only AFTER a successful
+/// capture — a failed fetch or a typed refusal (`base-vanished`) leaves the
+/// review closed. `known_forge_base` = the forge's `base.ref` the caller
+/// already read (`review sync`), so the API is not asked twice; `None` =
+/// read it here.
 async fn reuse_pr_review(
     state: &SharedState,
     repo: &RepoEntry,
@@ -4001,37 +4007,10 @@ async fn reuse_pr_review(
     pr_number: u32,
     reopen: bool,
     github: &crate::github::GithubClient,
+    known_forge_base: Option<Option<String>>,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let id = existing.id;
-    if reopen && existing.state != "open" {
-        let now = now_unix();
-        let opened = state
-            .store
-            .run_blocking(move |store| -> Result<bool, ApiError> {
-                match store.update_review(id, None, Some("open"), now) {
-                    Ok(v) => Ok(v),
-                    Err(e) => {
-                        let msg = e.to_string();
-                        if msg.to_ascii_lowercase().contains("unique") {
-                            Err(ApiError::new(
-                                StatusCode::CONFLICT,
-                                format!(
-                                    "cannot reopen review {id}: another OPEN review is already bound to this PR — close or delete it first, or pass on_closed=new"
-                                ),
-                            )
-                            .with_problem_type(ERR_REVIEW_CLOSED))
-                        } else {
-                            Err(e.into())
-                        }
-                    }
-                }
-            })
-            .await?;
-        if !opened {
-            return Err(ApiError::not_found(format!("no such review: {id}")));
-        }
-        emit_review_changed(&state.bus, id, &existing.repo, "meta", false);
-    }
+    let reopen = reopen && existing.state != "open";
 
     if let Some(handle) = admit_store(state, &existing.repo).await? {
         let review = state
@@ -4042,15 +4021,20 @@ async fn reuse_pr_review(
                     .ok_or_else(|| ApiError::not_found(format!("no such review: {id}")))
             })
             .await?;
-        let (forge_base_ref, api_warnings) = forge_pr_base_ref(
-            state,
-            &handle,
-            &repo.name,
-            pr_number,
-            github.with_api_credential(None),
-            crate::review_store::GhCli::from_process_env(),
-        )
-        .await;
+        let (forge_base_ref, api_warnings) = match known_forge_base {
+            Some(known) => (known, vec![]),
+            None => {
+                forge_pr_base_ref(
+                    state,
+                    &handle,
+                    &repo.name,
+                    pr_number,
+                    github.with_api_credential(None),
+                    crate::review_store::GhCli::from_process_env(),
+                )
+                .await
+            }
+        };
         let member = store_member(state, &review.repo)?;
         let review2 = review.clone();
         let rc = Recapture {
@@ -4074,6 +4058,9 @@ async fn reuse_pr_review(
             &r.status,
             Some(&r.outcome.ps.base_sha),
         );
+        if reopen {
+            reopen_review(state, &existing).await?;
+        }
         return reuse_envelope(state, id, pr_number, &r.outcome, base, r.warnings).await;
     }
 
@@ -4133,7 +4120,44 @@ async fn reuse_pr_review(
         .await?;
     let (base, warnings) =
         review_base_block_async(state, &review, &repo.path, Some(out.ps.base_sha.clone())).await;
+    if reopen {
+        reopen_review(state, &existing).await?;
+    }
     reuse_envelope(state, id, pr_number, &out, base, warnings).await
+}
+
+/// Reopen a closed review (the V76-R1b `on_closed=reopen` write). A unique
+/// violation = another OPEN review already binds this PR → 409.
+async fn reopen_review(state: &SharedState, existing: &ReviewRow) -> Result<(), ApiError> {
+    let id = existing.id;
+    let now = now_unix();
+    let opened = state
+        .store
+        .run_blocking(move |store| -> Result<bool, ApiError> {
+            match store.update_review(id, None, Some("open"), now) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.to_ascii_lowercase().contains("unique") {
+                        Err(ApiError::new(
+                            StatusCode::CONFLICT,
+                            format!(
+                                "cannot reopen review {id}: another OPEN review is already bound to this PR — close or delete it first, or pass on_closed=new"
+                            ),
+                        )
+                        .with_problem_type(ERR_REVIEW_CLOSED))
+                    } else {
+                        Err(e.into())
+                    }
+                }
+            }
+        })
+        .await?;
+    if !opened {
+        return Err(ApiError::not_found(format!("no such review: {id}")));
+    }
+    emit_review_changed(&state.bus, id, &existing.repo, "meta", false);
+    Ok(())
 }
 
 /// The 200 `reused: true` envelope (shared by both reuse paths).
@@ -4231,6 +4255,9 @@ pub async fn create_review_pr(
     if params.wants_async() {
         return crate::review_jobs::start_or_attach(state, body, on_closed).await;
     }
+    // RS-U10b review fix — the same per-repo lock `review sync` holds, so
+    // the duplicate-binding check-then-insert cannot race a sync.
+    let _serial = crate::review_sync::repo_guard(&state, &body.repo).await;
     let (status, value) = create_review_pr_value(&state, body, None, on_closed).await?;
     Ok(start_pr_value_response(status, value))
 }
@@ -4278,6 +4305,19 @@ pub(crate) async fn create_review_pr_value(
     job: Option<crate::review_jobs::JobHandle>,
     on_closed: Option<OnClosed>,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    create_review_pr_value_known(state, body, job, on_closed, None).await
+}
+
+/// [`create_review_pr_value`] with the forge's `base.ref` already read by
+/// the caller (`review sync`, RS-U10b): the reuse path does not ask the API
+/// again. `None` = read it here, as start-pr does.
+pub(crate) async fn create_review_pr_value_known(
+    state: &SharedState,
+    body: CreateReviewPrBody,
+    job: Option<crate::review_jobs::JobHandle>,
+    on_closed: Option<OnClosed>,
+    known_forge_base: Option<Option<String>>,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
     // V76-R1c — request-time credential ladder (file > env > the admitted
     // CLI token > none); the same client serves the sync and the job path.
     let github = state.github.with_cli_token(body.gh_token.clone());
@@ -4295,14 +4335,32 @@ pub(crate) async fn create_review_pr_value(
         .await?
     {
         if existing.state == "open" {
-            return reuse_pr_review(state, repo, existing, body.pr_number, false, &github).await;
+            return reuse_pr_review(
+                state,
+                repo,
+                existing,
+                body.pr_number,
+                false,
+                &github,
+                known_forge_base,
+            )
+            .await;
         }
         match on_closed {
             None => {
                 return Ok((StatusCode::CONFLICT, review_closed_error_body(existing.id)));
             }
             Some(OnClosed::Reopen) => {
-                return reuse_pr_review(state, repo, existing, body.pr_number, true, &github).await;
+                return reuse_pr_review(
+                    state,
+                    repo,
+                    existing,
+                    body.pr_number,
+                    true,
+                    &github,
+                    known_forge_base,
+                )
+                .await;
             }
             Some(OnClosed::New) => {
                 // Fall through and mint a new review id. The closed row

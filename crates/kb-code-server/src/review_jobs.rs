@@ -75,6 +75,14 @@ pub struct ReviewJob {
     /// a measured-looking guess.
     pub stage: &'static str,
     pub created: Instant,
+    /// RS-U10b review fix — when the job settled (`done`/`failed`); the
+    /// TTL runs from HERE, and a running job is never swept.
+    pub settled: Option<Instant>,
+    /// RS-U10b review fix — a fingerprint of the request (sync: dry_run,
+    /// open, merged_since, base, title, reopen). A request only attaches to
+    /// a running job with the SAME key; a different one is a 409
+    /// `job-conflict` naming the running job.
+    pub key: String,
     pub review_id: Option<i64>,
     /// The full creation envelope on success (what the synchronous route
     /// returns as its body); also kept for a non-success `(status, body)`
@@ -111,13 +119,21 @@ pub fn set_stage(job: &Option<JobHandle>, stage: &'static str) {
     }
 }
 
-/// Drop every entry older than [`JOB_TTL_SECS`]. Called on admission and
-/// on every read — O(map), and the map is tiny by construction (one entry
-/// per in-flight or recently-settled start-pr).
+/// Drop every SETTLED entry whose result has been readable for
+/// [`JOB_TTL_SECS`]. A RUNNING job is never swept (RS-U10b review fix: a
+/// `sync --open` loop may legitimately run past an hour — dropping it
+/// mid-run lost the result and let a rerun start a second loop). Called on
+/// admission and on every read — O(map), and the map is tiny by
+/// construction.
 fn sweep(jobs: &ReviewJobs) {
     let ttl = Duration::from_secs(JOB_TTL_SECS);
-    jobs.lock().retain(|_, j| j.created.elapsed() < ttl);
+    jobs.lock()
+        .retain(|_, j| j.settled.is_none_or(|t| t.elapsed() < ttl));
 }
+
+/// The `urn:kb:errors:job-conflict` URN: a running job of the same kind for
+/// the same `(repo, pr)` was started with a DIFFERENT request.
+pub const URN_JOB_CONFLICT: &str = "urn:kb:errors:job-conflict";
 
 /// The `?async=1` half of `POST /api/reviews/pr` — attach to a running
 /// job for the same `(repo, pr_number)` or mint one and spawn the work.
@@ -135,7 +151,9 @@ pub async fn start_or_attach(
         "start-pr",
         repo,
         pr_number,
+        String::new(),
         move |st, handle| async move {
+            let _serial = crate::review_sync::repo_guard(&st, &body.repo).await;
             crate::reviews::create_review_pr_value(&st, body, Some(handle), on_closed).await
         },
     )
@@ -153,6 +171,7 @@ pub async fn start_job<F, Fut>(
     kind: &'static str,
     repo: String,
     pr_number: u32,
+    key: String,
     run: F,
 ) -> Result<Response, ApiError>
 where
@@ -168,7 +187,7 @@ where
     // gets a fresh job, and a caller re-POSTing after success runs the
     // work again (start-pr: OPEN → reuse 200; CLOSED → 409 unless
     // `on_closed=reopen|new`; sync: idempotent by construction).
-    let attached = {
+    let running = {
         let jobs = state.review_jobs.lock();
         jobs.values()
             .find(|j| {
@@ -177,9 +196,24 @@ where
                     && j.repo == repo
                     && j.pr_number == pr_number
             })
-            .map(|j| j.id.clone())
+            .map(|j| (j.id.clone(), j.key == key))
     };
-    if let Some(job_id) = attached {
+    if let Some((job_id, false)) = &running {
+        return Ok((
+            StatusCode::CONFLICT,
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({
+                "error": format!(
+                    "a {kind} job for {repo} #{pr_number} is already running with a different request ({job_id}); wait for it or poll it"
+                ),
+                "type": URN_JOB_CONFLICT,
+                "job_id": job_id,
+                "kind": kind,
+            })),
+        )
+            .into_response());
+    }
+    if let Some((job_id, true)) = running {
         return Ok((
             StatusCode::ACCEPTED,
             [(header::CACHE_CONTROL, "no-store")],
@@ -204,6 +238,8 @@ where
                 kind,
                 repo,
                 pr_number,
+                settled: None,
+                key,
                 status: "running",
                 stage: "fetch",
                 created: Instant::now(),
@@ -224,6 +260,7 @@ where
         // One lock, dropped before this task ends — never across an await.
         let mut jobs = state2.review_jobs.lock();
         if let Some(j) = jobs.get_mut(&id2) {
+            j.settled = Some(Instant::now());
             match outcome {
                 Ok((status, value)) if status.is_success() => {
                     j.status = "done";
@@ -351,11 +388,13 @@ mod tests {
     }
 
     #[test]
-    fn the_sweep_drops_only_entries_older_than_the_ttl() {
+    fn the_sweep_drops_only_settled_entries_past_the_ttl() {
         let jobs: ReviewJobs = parking_lot::Mutex::new(HashMap::new());
         let fresh = ReviewJob {
             id: "job_fresh".into(),
             kind: "start-pr",
+            settled: None,
+            key: String::new(),
             repo: "r".into(),
             pr_number: 1,
             status: "running",
@@ -367,14 +406,29 @@ mod tests {
             error_type: None,
             error_status: None,
         };
+        let long_ago = Instant::now() - Duration::from_secs(JOB_TTL_SECS + 1);
+        // Running for over an hour: a long `sync --open` — never swept.
+        let mut long_running = fresh.clone();
+        long_running.id = "job_long".into();
+        long_running.created = long_ago;
+        // Settled over an hour ago: swept.
         let mut stale = fresh.clone();
         stale.id = "job_stale".into();
-        stale.created = Instant::now() - Duration::from_secs(JOB_TTL_SECS + 1);
-        jobs.lock().insert(fresh.id.clone(), fresh);
-        jobs.lock().insert(stale.id.clone(), stale);
+        stale.status = "done";
+        stale.created = long_ago;
+        stale.settled = Some(long_ago);
+        // Created long ago but settled just now: the TTL runs from settle.
+        let mut just_done = stale.clone();
+        just_done.id = "job_just_done".into();
+        just_done.settled = Some(Instant::now());
+        for j in [fresh, long_running, stale, just_done] {
+            jobs.lock().insert(j.id.clone(), j);
+        }
         sweep(&jobs);
         let jobs = jobs.lock();
         assert!(jobs.contains_key("job_fresh"));
+        assert!(jobs.contains_key("job_long"));
+        assert!(jobs.contains_key("job_just_done"));
         assert!(!jobs.contains_key("job_stale"));
     }
 
@@ -387,6 +441,8 @@ mod tests {
             ReviewJob {
                 id: "job_x".into(),
                 kind: "start-pr",
+                settled: None,
+                key: String::new(),
                 repo: "r".into(),
                 pr_number: 1,
                 status: "running",
