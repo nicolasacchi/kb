@@ -156,15 +156,25 @@ impl CredError {
 /// characters — a newline would inject lines into the credential
 /// protocol.
 ///
-/// Length is deliberately NOT validated here. A short token is still a
-/// working credential, and refusing one is a hazard rather than a
-/// protection: the fetch ladder treats a `token_file` refusal as "that
-/// rung does not apply" and continues, so a 6-byte token would fetch
-/// the store as a DIFFERENT IDENTITY (anonymous, then `inherit` by
-/// default) with no error raised anywhere. Redaction needs no help
-/// from a length check: every secret held here reaches the redactor as
-/// an EXPLICIT known literal ([`super::redact::redact_with`]), which
-/// strips a literal of any non-zero length.
+/// Length is deliberately NOT validated here, and the reason is the
+/// ladder's own behaviour, not a guess at it. Every refusal raised
+/// below is `CredError::Invalid`, and the fetch ladder STOPS on that
+/// class (rung 4) exactly as it stops on a gh account that is not the
+/// pinned/recorded one — so a 6-byte token is an ERROR the operator is
+/// told about, on a store that is not brought up, and never a rung
+/// quietly stepped over in favour of another identity. (The identity
+/// swap the older version of this paragraph described is gone twice
+/// over: `CredError::Invalid` no longer falls through at all, and
+/// `inherit` is skipped unless `allow_inherited_credentials = true`.)
+///
+/// A length check here would therefore turn a credential that WORKS
+/// into one no rung is allowed to answer for, and would refuse before
+/// the store ever learned which rung would have. Do not reinstate one.
+///
+/// Redaction needs no help from a length check either: every secret
+/// held here reaches the redactor as an EXPLICIT known literal
+/// ([`super::redact::redact_with`]), which strips a literal of any
+/// non-zero length.
 #[derive(Clone)]
 pub struct SecretToken(Zeroizing<String>);
 
@@ -1051,13 +1061,13 @@ pub fn resolve_fetch_credential(
     // reason, like an unusable gh login. But `CredError::Invalid` is
     // raised only AFTER all of those checks passed and the file was
     // read to the end: the operator configured a credential and it is
-    // broken (not UTF-8, empty, control characters, a bad token
-    // username). Swallowing that and continuing falls through to
-    // anonymous and then to `inherit` — default-on — and the store
-    // would be fetched as a DIFFERENT IDENTITY with nothing but a
-    // skipped-rung note. That is what D12 forbids, so it stops the
-    // ladder exactly like `AccountMismatch` does for gh-cli: a fatal
-    // error carrying the real reason.
+    // broken (not UTF-8, empty, control characters, too long, a bad
+    // token username). Swallowing that and continuing falls through to
+    // anonymous and then to `inherit` wherever the operator has that
+    // rung enabled, and the store would be fetched as a DIFFERENT
+    // IDENTITY with nothing but a skipped-rung note. That is what D12
+    // forbids, so it stops the ladder exactly like `AccountMismatch`
+    // does for gh-cli: a fatal error carrying the real reason.
     if let (Some(path), Some(h)) = (cfg.token_file.as_deref(), &https) {
         match probes.token_file(path, username, h) {
             Ok(c) => {
