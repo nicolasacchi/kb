@@ -40,6 +40,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use super::classify::FailureClass;
 use super::cred::{
     resolve_fetch_credential, CredError, FetchCredential, GhCli, LiveProbes, Resolution,
 };
@@ -312,6 +313,92 @@ pub fn base_branch_of(
         }
     }
     Some(r.to_string())
+}
+
+/// One member of a store, as `[[review.repos]]` declares it (or not).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberSettings {
+    pub repo: String,
+    /// Does this member have a `[[review.repos]]` entry at all? A member
+    /// without one contributes its DEFAULTS (`auto`, no `gh_user`), which
+    /// is why it cannot silently out-vote a member that declares a pin.
+    pub declared: bool,
+    pub credential: super::cred::CredentialPin,
+    pub gh_user: Option<String>,
+}
+
+/// Which member's `[[review.repos]]` entry a store's credential comes
+/// from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreCredentialSource {
+    /// `repo`'s entry drives the store.
+    Member(String),
+    /// More than one member declares a store-wide credential setting and
+    /// they do not agree — the `String` names EVERY member's value. No
+    /// credential is resolved on a guess: a store-wide pin read off one
+    /// member is exactly how repo B's `gh_user` gets silently ignored
+    /// (D12 binds the store, not the member).
+    Disagreement(String),
+}
+
+/// The member that drives a store's credential resolution, or the
+/// disagreement that stops one being chosen.
+///
+/// Members are visited in store-member (repo id) order, which is NOT an
+/// operator-visible priority: with a `[[review.repos]]` entry on repo A
+/// (id 1) and a `gh_user` pin on repo B, "first entry wins" binds the
+/// store to whatever A resolves — unbound, and so free to fall through.
+/// So when the DECLARED members disagree on `credential` or `gh_user`,
+/// none is chosen and every member's value is named.
+pub fn credential_source(members: &[MemberSettings]) -> StoreCredentialSource {
+    let declared: Vec<&MemberSettings> = members.iter().filter(|m| m.declared).collect();
+    let first = declared.first().copied().or_else(|| members.first());
+    let Some(first) = first else {
+        return StoreCredentialSource::Member(String::new());
+    };
+    let same = |m: &MemberSettings| {
+        m.credential == first.credential
+            && match (&m.gh_user, &first.gh_user) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                (None, None) => true,
+                _ => false,
+            }
+    };
+    if declared.len() < 2 || declared.iter().all(|m| same(m)) {
+        return StoreCredentialSource::Member(first.repo.clone());
+    }
+    let values: Vec<String> = members
+        .iter()
+        .map(|m| {
+            format!(
+                "{} credential={} gh_user={}",
+                m.repo,
+                m.credential_slug(),
+                m.gh_user.as_deref().unwrap_or("<unset>")
+            )
+        })
+        .collect();
+    StoreCredentialSource::Disagreement(format!(
+        "this store's members declare different credential settings ({}) — no \
+         credential is resolved until they agree (db order, not priority: \
+         `{}` would otherwise have won silently)",
+        values.join("; "),
+        first.repo
+    ))
+}
+
+impl MemberSettings {
+    fn credential_slug(&self) -> &'static str {
+        match self.credential {
+            super::cred::CredentialPin::Auto => "auto",
+            super::cred::CredentialPin::GhCli => "gh-cli",
+            super::cred::CredentialPin::DeployKey => "deploy-key",
+            super::cred::CredentialPin::Token => "token",
+            super::cred::CredentialPin::Anonymous => "anonymous",
+            super::cred::CredentialPin::Inherit => "inherit",
+            super::cred::CredentialPin::None => "none",
+        }
+    }
 }
 
 impl ReviewStores {
@@ -844,6 +931,12 @@ impl ReviewStores {
             pr_slugs: &slugs,
             remotes: &remotes,
             existing_keys: &keys,
+            // Rung 6 is inert, so a fork-shaped clone refuses with
+            // `base-url-ambiguous` and the operator sets `base_url`. See
+            // `NoForkCheck`'s doc for the two things that have to exist
+            // first (a `GET /repos/{o}/{r}` fork read on `GithubClient`,
+            // and a way to reach the api credential from this
+            // sync, `&Store`-only, pre-store-row path).
             fork_check: &NoForkCheck,
         });
         let (key, base_url, source) = match outcome {
@@ -1094,20 +1187,48 @@ impl ReviewStores {
         Ok(res)
     }
 
-    /// The first member with a `[[review.repos]]` entry, else the first
-    /// member — whose settings drive store-wide credential resolution.
-    pub fn settings_repo_for(&self, store: &Store, store_id: i64) -> Option<String> {
-        let names: Vec<String> = store
+    /// The member whose `[[review.repos]]` entry drives store-wide
+    /// credential resolution — or the DISAGREEMENT that stops one being
+    /// chosen (see [`credential_source_for`]).
+    pub fn credential_source_for(&self, store: &Store, store_id: i64) -> StoreCredentialSource {
+        let members: Vec<MemberSettings> = store
             .store_members(store_id)
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|id| self.repo_by_id(id).map(|r| r.name.clone()))
+            .filter_map(|id| self.repo_by_id(id))
+            .map(|r| {
+                let s = self.settings.repo(&r.name);
+                MemberSettings {
+                    repo: r.name.clone(),
+                    declared: self.settings.repos.contains_key(&r.name),
+                    credential: s.credential,
+                    gh_user: s.gh_user,
+                }
+            })
             .collect();
-        names
-            .iter()
-            .find(|n| self.settings.repos.contains_key(*n))
-            .or(names.first())
-            .cloned()
+        credential_source(&members)
+    }
+
+    /// The store's credential settings, refusing to guess when members
+    /// disagree. Returns the member name to resolve with, or a
+    /// [`StoreCredentialSource::Disagreement`] naming every member's value
+    /// — reported (tracing + the store card), never resolved on.
+    pub fn resolve_settings_member(
+        &self,
+        store: &Store,
+        row: &ReviewStoreRow,
+    ) -> Result<String, String> {
+        match self.credential_source_for(store, row.id) {
+            StoreCredentialSource::Member(name) => Ok(name),
+            StoreCredentialSource::Disagreement(detail) => {
+                tracing::warn!(
+                    store = %row.store_key,
+                    warning = %detail,
+                    "review store config"
+                );
+                Err(detail)
+            }
+        }
     }
 
     /// Seed store `store_id` (README §5.2). `network = false` is the boot
@@ -1238,11 +1359,17 @@ impl ReviewStores {
         };
         let mut cred_note = None;
         let cred = if network && plan.base_url.is_some() {
-            let who = self.settings_repo_for(store, row.id).unwrap_or_default();
-            match self.resolve_credential(store, &row, &who) {
-                Ok(r) => Some(r.credential),
-                Err(e) => {
-                    cred_note = Some(e.class().slug());
+            match self.resolve_settings_member(store, &row) {
+                Ok(who) => match self.resolve_credential(store, &row, &who) {
+                    Ok(r) => Some(r.credential),
+                    Err(e) => {
+                        cred_note = Some(e.class().slug());
+                        None
+                    }
+                },
+                // Members disagree: no credential is resolved on a guess.
+                Err(_) => {
+                    cred_note = Some(FailureClass::NoCredentials.slug());
                     None
                 }
             }
@@ -1360,16 +1487,21 @@ impl ReviewStores {
                 code: "offline".into(),
             }
         } else {
-            let who = self.settings_repo_for(store, row.id).unwrap_or_default();
-            match self.resolve_credential(store, &row, &who) {
-                Ok(r) => seed::fetch_base_branches(
-                    git,
-                    &handle.git_dir,
-                    &plan.base_branches,
-                    &r.credential,
-                ),
-                Err(e) => BaseFetch::Skipped {
-                    code: e.class().slug().into(),
+            match self.resolve_settings_member(store, &row) {
+                Ok(who) => match self.resolve_credential(store, &row, &who) {
+                    Ok(r) => seed::fetch_base_branches(
+                        git,
+                        &handle.git_dir,
+                        &plan.base_branches,
+                        &r.credential,
+                    ),
+                    Err(e) => BaseFetch::Skipped {
+                        code: e.class().slug().into(),
+                    },
+                },
+                // Members disagree: no credential is resolved on a guess.
+                Err(_) => BaseFetch::Skipped {
+                    code: FailureClass::NoCredentials.slug().into(),
                 },
             }
         };
@@ -1467,7 +1599,90 @@ pub fn state_code(state_json: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::cred::CredentialPin;
     use super::*;
+
+    fn member(
+        repo: &str,
+        declared: bool,
+        credential: CredentialPin,
+        gh_user: Option<&str>,
+    ) -> MemberSettings {
+        MemberSettings {
+            repo: repo.to_string(),
+            declared,
+            credential,
+            gh_user: gh_user.map(str::to_string),
+        }
+    }
+
+    /// D12 — one member's entry drives a store-wide credential, and it is
+    /// the one that DECLARES one (a member without an entry contributes
+    /// defaults and never out-votes a member that pins an account).
+    #[test]
+    fn the_declaring_member_drives_the_store() {
+        assert_eq!(
+            credential_source(&[
+                member("a", false, CredentialPin::Auto, None),
+                member("b", true, CredentialPin::GhCli, Some("alice")),
+            ]),
+            StoreCredentialSource::Member("b".into())
+        );
+        // No member declares an entry: the first member's defaults, as
+        // before.
+        assert_eq!(
+            credential_source(&[
+                member("a", false, CredentialPin::Auto, None),
+                member("b", false, CredentialPin::Auto, None),
+            ]),
+            StoreCredentialSource::Member("a".into())
+        );
+    }
+
+    /// The reported defect: repo A (id 1) has an entry with no pin, repo B
+    /// pins `gh_user`. "First entry wins" binds the store to whatever A
+    /// resolves — unbound, and so free to fall through. No member is
+    /// chosen; every member's value is named.
+    #[test]
+    fn a_pin_on_a_later_member_is_never_silently_dropped() {
+        let src = credential_source(&[
+            member("a", true, CredentialPin::Auto, None),
+            member("b", true, CredentialPin::Auto, Some("alice")),
+        ]);
+        let StoreCredentialSource::Disagreement(detail) = src else {
+            panic!("a store-wide pin must not be resolved off another member");
+        };
+        assert!(
+            detail.contains("a credential=auto gh_user=<unset>"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("b credential=auto gh_user=alice"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn only_a_real_disagreement_stops_a_resolution() {
+        // The same pin, spelled differently, is agreement (D12 compares
+        // logins case-insensitively).
+        assert_eq!(
+            credential_source(&[
+                member("a", true, CredentialPin::GhCli, Some("alice")),
+                member("b", true, CredentialPin::GhCli, Some("ALICE")),
+            ]),
+            StoreCredentialSource::Member("a".into())
+        );
+        // A different `credential` IS a disagreement, pin or not.
+        let src = credential_source(&[
+            member("a", true, CredentialPin::GhCli, Some("alice")),
+            member("b", true, CredentialPin::Token, Some("alice")),
+        ]);
+        let StoreCredentialSource::Disagreement(detail) = src else {
+            panic!("two members pinning different rungs must not be resolved");
+        };
+        assert!(detail.contains("b credential=token"), "{detail}");
+    }
 
     #[test]
     fn uuids_are_v4_shaped_and_distinct() {

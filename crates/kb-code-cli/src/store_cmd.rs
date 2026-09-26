@@ -241,6 +241,35 @@ fn fail(json: bool, status: reqwest::StatusCode, body: &Value) -> ! {
     std::process::exit(exit)
 }
 
+/// Is `report.base` an UPSTREAM failure (exit 6), as opposed to a pass
+/// that simply had nothing to fetch?
+///
+/// A `failed` base fetch has always been upstream. A `skipped` one is
+/// upstream only when the skip was caused by a CREDENTIAL: the daemon
+/// turns a credential-resolution error into `Skipped { code }` (it
+/// cannot fetch with a credential it does not have), and D12 says a
+/// wrong-account answer is an error, not a warning — the same condition
+/// the CAPTURE path already surfaces as a `credential-account-mismatch`
+/// warning plus a `base_status.code`. Reading every skip as benign made
+/// that a silent exit 0 on one route and a visible failure on the other.
+///
+/// The class set is `FailureClass::is_auth`'s (kb-code-server's), read off
+/// the wire slug — not a list spelled out here — so the structural skips
+/// (`no-base-remote`, `offline-seed`, `adopted-existing`) and the
+/// network classes stay benign. `store sync --offline` is a supported,
+/// successful operation and must keep exiting 0.
+fn base_is_upstream(base: &Value) -> bool {
+    use kb_code_server::review_store::FailureClass;
+    match base["state"].as_str().unwrap_or("") {
+        "failed" => true,
+        "skipped" => base["code"]
+            .as_str()
+            .and_then(FailureClass::from_slug)
+            .is_some_and(FailureClass::is_auth),
+        _ => false,
+    }
+}
+
 fn s(v: &Value) -> String {
     match v {
         Value::Null => "-".into(),
@@ -443,7 +472,7 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
             let partial = ["member_errors", "member_problems"]
                 .iter()
                 .any(|k| report[*k].as_array().is_some_and(|a| !a.is_empty()));
-            let upstream = base_state == "failed";
+            let upstream = base_is_upstream(&report["base"]);
             if json {
                 envelope::print_ok("kbc-store-sync/1", &body, vec![], partial || upstream, None);
             } else {

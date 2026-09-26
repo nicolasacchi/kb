@@ -96,6 +96,23 @@ fn gh_url() -> RemoteUrl {
 }
 
 #[test]
+fn an_explicit_default_port_is_the_same_credential_scope() {
+    // git normalises the default port out of a remote before it fills a
+    // credential query, so a scope spelled `github.com:443` could never
+    // match the helper's exact `host=github.com` test — a semantically
+    // correct remote presenting as a credential fault. Fails closed, which
+    // is why it is easy to mistake for a real one.
+    let bare = RemoteUrl::parse_remote("https://github.com/acme/widgets.git").unwrap();
+    let ported = RemoteUrl::parse_remote("https://github.com:443/acme/widgets.git").unwrap();
+    let scope = |u: &RemoteUrl| CredentialScope::for_url(u).unwrap();
+    assert_eq!(scope(&ported), scope(&bare));
+    assert_eq!(scope(&ported).authority(), "github.com");
+    // A non-default port is a different endpoint and keeps its own scope.
+    let custom = RemoteUrl::parse_remote("https://github.com:8443/acme/widgets.git").unwrap();
+    assert_eq!(scope(&custom).authority(), "github.com:8443");
+}
+
+#[test]
 fn pinned_user_reads_that_accounts_token_even_when_another_is_active() {
     let f = FakeGh::new(&[("alice", false, "repo"), ("bob", true, "repo")]);
     let c = GhCliCredential::acquire(&f.gh(), &gh_url(), Some("alice"), None).unwrap();
