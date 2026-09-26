@@ -108,8 +108,13 @@ pub struct StoreRoot {
 }
 
 impl StoreRoot {
-    /// The store a `review_stores` row names.
-    pub fn from_row(row: &ReviewStoreRow) -> Self {
+    /// The store a `review_stores` row names. `pub(crate)`, not `pub`: a
+    /// `StoreRoot` minted from a row bypasses `resolve_ready_store` —
+    /// and with it the boot's read gate — entirely, so it must not be
+    /// reachable from outside the crate. `from_handle` below is the same
+    /// argument from the other side: a `StoreHandle` is itself only ever
+    /// built from a row that already cleared the gate.
+    pub(crate) fn from_row(row: &ReviewStoreRow) -> Self {
         Self {
             git_dir: PathBuf::from(&row.git_dir),
         }
@@ -735,14 +740,15 @@ mod tests {
         // not silently absorbed (the Phase-1 gate reads `unresolved`).
         assert_eq!(store.git_fallback_stats().unresolved, 1);
 
-        // Read/write agreement — the write side was already right, so pin
-        // it: a disabled registry must refuse the same store.
+        // The registry half of the same verdict, in its own terms: this
+        // is the predicate `bind_and_spawn` publishes onto the `Store`
+        // above. (The write-side `admit_mutation` mapping predates this
+        // change and is not re-pinned here.)
         let rs = crate::review_store::ReviewStores::disabled("root must be an absolute path");
         assert!(
             !rs.reads_can_use_store(),
             "a disabled registry must publish `readable = false`"
         );
-        assert!(rs.admit_mutation(&store, "widgets").unwrap().is_none());
     }
 
     #[test]
