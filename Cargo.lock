@@ -5415,6 +5415,7 @@ dependencies = [
  "kb-server",
  "lance-index",
  "lancedb",
+ "libc",
  "notify",
  "notify-debouncer-full",
  "nucleo",
@@ -5450,6 +5451,7 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "ts-rs",
+ "zeroize",
 ]
 
 [[package]]
