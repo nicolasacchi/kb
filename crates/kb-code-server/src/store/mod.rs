@@ -301,9 +301,20 @@ pub struct Store {
     /// deliberate: a `Store` opened with no `ReviewStores` at all — the
     /// CLI, benches, fixtures — keeps the pre-existing read behaviour
     /// exactly, and a disabled boot is a *configured* refusal, not a
-    /// default to guess. `Relaxed` is right because the write lands
-    /// during boot, before any request-serving task can reach
-    /// `GitCtx::for_repo`.
+    /// default to guess.
+    ///
+    /// `Release`/`Acquire`, NOT the `Relaxed` used by the counters above:
+    /// there a stale read costs one cache rebuild, but here it is a GATE —
+    /// a stale `true` serves a read from a store root the operator
+    /// refused for this boot, which is the whole defect this flag
+    /// exists to close. The edge the ordering buys is
+    /// publish→observe: the release store in `bind_and_spawn` happens
+    /// after that `Store` is fully opened, and any task spawned after it
+    /// (or any request on the server it spawns) acquires the flag before
+    /// resolving a root, so it cannot observe the pre-publish default
+    /// once the publish has run. The cost is one fence per boot and one
+    /// acquire per `GitCtx` construction — once per route entry, not
+    /// once per git subprocess.
     review_store_readable: AtomicBool,
 }
 
@@ -491,12 +502,21 @@ impl Store {
         std::sync::Arc::clone(&self.git_fallbacks)
     }
 
-    pub(crate) fn set_review_store_readable(&self, readable: bool) {
-        self.review_store_readable.store(readable, Ordering::Relaxed);
+    /// Publish the boot's read verdict. The `Release` store pairs with
+    /// the `Acquire` load in [`Self::review_store_readable`]; see the
+    /// field doc for why a gate cannot be `Relaxed`.
+    pub fn set_review_store_readable(&self, readable: bool) {
+        self.review_store_readable.store(readable, Ordering::Release);
     }
 
+    /// `pub(crate)`: every read-side consumer is in-crate
+    /// (`git::roots::resolve_ready_store`). The setter above is `pub`
+    /// only because out-of-crate `AppState` builders — integration
+    /// tests, embedding crates — construct their own `ReviewStores` and
+    /// would otherwise silently keep the permissive `true` default while
+    /// their own `AppState` refuses the store.
     pub(crate) fn review_store_readable(&self) -> bool {
-        self.review_store_readable.load(Ordering::Relaxed)
+        self.review_store_readable.load(Ordering::Acquire)
     }
 
     fn lock(&self) -> parking_lot::MutexGuard<'_, Connection> {

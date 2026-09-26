@@ -1537,4 +1537,42 @@ mod tests {
         assert_eq!(StoreUnavailable::Seeding.code(), "store-seeding");
         assert_eq!(URN_STORE_SEEDING, "urn:kb:errors:store-seeding");
     }
+
+    #[test]
+    fn reads_can_use_store_is_false_on_every_refusal_arm() {
+        // Arm 1 — the CONFIGURED refusal: the documented defect this whole
+        // predicate exists for. A relative/overlapping
+        // `[review.store] root` sets `disabled` with no spawner involved.
+        assert!(
+            !ReviewStores::disabled("fixture").reads_can_use_store(),
+            "a configured refusal must stop reads resolving a store root"
+        );
+
+        // Arm 2 — an unbuildable store git spawner with NOTHING
+        // configured wrong: `git` is `None` and the error is carried
+        // separately, exactly as `unavailable_reason` reports it
+        // (`Disabled`). This arm is a deliberate, PINNED behaviour change
+        // for reads: reads shell out through `history::run_git_raw` with
+        // the ambient environment and never use the scrubbed `StoreGit`,
+        // so a `read_store_only` `refs/kbc/*` lookup that used to resolve
+        // off a stale `ready` row now falls back to the user repo and
+        // misses. Mirroring `unavailable_reason` is the point; leaving it
+        // unpinned is not.
+        let settings =
+            StoreSettings::resolve(&ReviewSection::default(), Path::new("/nonexistent"), &[]);
+        assert!(
+            settings.disabled.is_none(),
+            "control: this arm is about the spawner, not a configured refusal"
+        );
+        let unbuildable = ReviewStores::from_parts(
+            settings,
+            None,
+            Some("store git spawner unavailable".to_string()),
+            Vec::new(),
+        );
+        assert!(
+            !unbuildable.reads_can_use_store(),
+            "a store whose git spawner could not be built must not resolve for reads"
+        );
+    }
 }

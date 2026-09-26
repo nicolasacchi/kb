@@ -124,7 +124,9 @@ pub struct StoreSettings {
     pub warnings: Vec<String>,
     /// `Some(reason)` = the store is disabled for this boot (e.g. the root
     /// sits inside a browsed repo — SEC-13/15). Reads fall back to the
-    /// user repo exactly as before the store existed.
+    /// user repo; for a post-store install that means the store-only
+    /// `refs/kbc/*` names MISS, because those refs live only in the store,
+    /// not in the user repo.
     /// Enforced on the read side by `Store::review_store_readable`,
     /// published at boot from `ReviewStores::reads_can_use_store`.
     pub disabled: Option<String>,
