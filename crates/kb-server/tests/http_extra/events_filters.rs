@@ -30,6 +30,7 @@ fn kb_section(path: std::path::PathBuf) -> KbSection {
         atlas: None,
         templates: BTreeMap::new(),
         memory_scope: None,
+        project_slugs: Vec::new(),
         default_search_category: None,
         code_url: None,
         decay_policy: None,
@@ -41,6 +42,7 @@ fn kb_section(path: std::path::PathBuf) -> KbSection {
         capture_dir: None,
         resurface: None,
         slo: None,
+        id_patterns: Vec::new(),
     }
 }
 

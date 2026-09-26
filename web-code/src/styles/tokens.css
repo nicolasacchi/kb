@@ -195,13 +195,24 @@
   --radius-lg: 14px;
   --radius-pill: 999px;
 
-  /* Type ramp — static px (do NOT port web's `--density` machinery). */
-  --fs-xs: 10px;
-  --fs-sm: 11px;
-  --fs-md: 12px;
-  --fs-lg: 13px;
-  --fs-title: 18px;
-  --fs-hero: 24px;
+  /* Type ramp — static px. V80-R0 re-based the whole ramp up (the reading
+   * contract, D16, deferred this at the time) — every page's captions/
+   * chips/table cells inherit from these, one change moves every page.
+   * `--fs-body`/`--lh-body` set the HTML base (below); `--lh-tight` is for
+   * dense single-line rows (chip/badge/table-cell) that don't want the
+   * body line-height. COMPACT density now steps this ramp down one notch
+   * too (`[data-density="compact"]` below) — no longer a "do NOT port"
+   * (that warned off web's full density machinery, not a one-step type
+   * override). */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+  --fs-title: 20px;
+  --fs-hero: 28px;
+  --fs-body: 15px;
+  --lh-body: 1.5;
+  --lh-tight: 1.3;
 
   /* Spacing — static, matching web's undensified pad steps. */
   --pad-1: 4px;
@@ -500,6 +511,24 @@
    * which nothing defined, so the code-lens chips silently rendered
    * `system-ui` instead of the app font. */
   --font-ui: var(--font-sans);
+  /* V80-R4 — a THIRD and FOURTH dead cascade, the widest of the set:
+   * `--fg`/`--fg-dim` are referenced ~65 times combined across reviews.css/
+   * usages.css/branches.css/commands.css/nav.css (every review-diff
+   * caption/chip/meta line this unit touches — map census, chapter
+   * labels, hunk-strip chips, drafts tray body + captions, the ctx/noise
+   * notes) but neither was ever DEFINED anywhere. `color` is an inherited
+   * property, so a guaranteed-invalid `var()` reference doesn't fall back
+   * to black/transparent — it makes the whole declaration invalid at
+   * computed-value time, which for an inherited property means "inherit
+   * from the parent," i.e. every one of those lines was silently
+   * rendering at whatever colour its container happened to have instead
+   * of the intended full-strength/dimmed ink. Aliased to `--ink`/
+   * `--ink-mute`, the tokens the SAME files already use for the identical
+   * roles (e.g. `.kbc-rthread__body`/`.kbc-rthread__meta`) — never
+   * `--ink-dim`, which is reserved for decorative/disabled-only text
+   * (`--ink-faint`'s own comment above). */
+  --fg: var(--ink);
+  --fg-dim: var(--ink-mute);
 
   /* --- Rosé-Pine highlight levels (selection / occurrence / search) ---- */
   --hl-low: var(--rule);
@@ -614,6 +643,18 @@
 :root[data-density="compact"] {
   --density-pad: var(--pad-1);
   --density-row: 20px;
+
+  /* V80-R0 — compact is one step DOWN the ramp too, not just tighter
+   * padding. Floors: body text never drops below 14px, captions never
+   * below 12px (readability floor, not merely "smaller"). `--fs-xs` is
+   * already at its floor so it's unchanged; `html`'s `font-size:
+   * var(--fs-body)` (above) recomputes from this same element. */
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-title: 18px;
+  --fs-hero: 24px;
+  --fs-body: 14px;
 }
 
 /* The reading contract's OPT-IN. `--measure` is deliberately not imposed on
@@ -661,6 +702,11 @@
 
 * {
   box-sizing: border-box;
+}
+
+html {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
 }
 
 html,

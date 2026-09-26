@@ -97,22 +97,33 @@
 .kbc-reviews__row-title:hover {
   color: var(--accent);
 }
+/* V80-R3 — verdict/refs/progress/ann-badge/time, grouped onto one readable
+   sub-line below the title (was five loose flex children at 12px/11px —
+   the smallest text on the ~reviews list). All at `--fs-sm`, the row's own
+   floor. */
+.kbc-reviews__row-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  flex: 1 1 100%;
+}
 .kbc-reviews__row-refs {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-reviews__row-refs code {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   background: var(--bg);
   padding: 1px 5px;
   border-radius: 3px;
 }
 .kbc-reviews__row-meta,
 .kbc-reviews__row-time {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-reviews__badge {
@@ -217,11 +228,47 @@
   border-color: var(--accent-bor);
   color: var(--accent-soft);
 }
+/* V80-R3 — the Room hero's primary actions read as ONE button group (a
+   bounded, low-chrome toolbar) rather than a loose scatter of individually
+   bordered pills — visually distinct from the verdict row that follows it
+   (`.kbc-verdict`'s own top divider, below). Scoped to THIS container only
+   (`.kbc-review__actions .kbc-review__action`, never the bare
+   `.kbc-review__action` class) — that base class is shared by several
+   OTHER toolbars (`ReviewDiffToolbar`, `DocPanel`, `ReadingOrderPanel`,
+   `DraftsTray`, `TimelinePanel`) that are not wrapped in this container and
+   must keep their own independent-pill look untouched.
+   Fix-up: `display: inline-flex` made this box INLINE-LEVEL, so with
+   nothing rendered between it and the preceding `.kbc-review__refs`
+   (also `inline-flex`, hence also inline-level — the meta line's
+   `ps1 @ <sha> · N commits`) — e.g. no PR chip, no staleness banner —
+   the two shared one inline line and the meta line's tail got clipped
+   behind the button group. `display: flex` + `width: fit-content` keeps
+   the same content-hugging bounded box WITHOUT the inline sharing: a
+   flex container is still a normal block box by default, so it always
+   starts its own line; `width: fit-content` is what was actually doing
+   the "hug the buttons, don't stretch full width" work. */
 .kbc-review__actions {
   display: flex;
+  width: fit-content;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 0;
   margin-top: 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.kbc-review__actions .kbc-review__action {
+  border: none;
+  border-right: 1px solid var(--rule);
+  border-radius: 0;
+}
+.kbc-review__actions .kbc-review__action:last-child {
+  border-right: none;
+}
+.kbc-review__actions .kbc-review__action.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
 }
 .kbc-review__body {
   display: grid;
@@ -446,6 +493,27 @@
 }
 .kbc-review__risk[open] .kbc-review__risk-sum {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+/* V80-R7 — touch-target hit-slop (padding + canceling negative margin, the
+ * same recipe as `.kbc-review__file-viewed` in mobile.css). Declared HERE,
+ * not in mobile.css: this file is dynamic-imported per route
+ * (`ReviewDetail.tsx`/`ReviewDiff.tsx`/`Reviews.tsx`), so its `<link>`
+ * lands in `<head>` AFTER the eagerly-bundled main-chunk stylesheet that
+ * carries mobile.css — for the SAME property on the SAME selector at equal
+ * specificity, the later stylesheet wins regardless of which one is
+ * conditioned on `@media (pointer: coarse)`. The `padding: 1px 8px`
+ * immediately above is exactly that conflict; overriding it here, later in
+ * THIS file, wins on ordinary same-file source order instead. */
+@media (pointer: coarse) {
+  .kbc-review__risk-sum {
+    /* Horizontal padding restores the base rule's own `8px` (this shorthand
+     * fully replaces the base rule's, including the axis we don't want to
+     * change) — only the vertical axis grows, and only invisibly (negative
+     * margin only on that axis, since horizontal is back to its original
+     * visual size). */
+    padding: 13px 8px;
+    margin: -13px 0;
+  }
 }
 .kbc-review__risk-terms {
   position: absolute;
@@ -712,19 +780,198 @@
   display: flex;
   flex-direction: column;
   min-height: 100%;
+  /* V80-R0 — the toolbar below is `flex-wrap: wrap`: at narrower widths (or
+   * with the bigger V80-R0 type ramp — every chip/button/select in it grew
+   * ~15-20%) its controls no longer fit one line at 1280px and it wraps to
+   * two. `--topbar-h` (44px) is the GLOBAL app TopBar's height (outside
+   * `.kbc-approute` entirely) — three descendants below used to reuse that
+   * SAME constant, by coincidence, as a stand-in for "this toolbar's own
+   * height" back when the toolbar was reliably single-line. Now that the
+   * toolbar can wrap, that coincidence breaks: the sticky map header and
+   * the hunk `scroll-margin-top` under-clear it by however tall the second
+   * line is, so a scrollIntoView (or Playwright's fixed drag-point-from-
+   * boundingBox math, review-file-tree.spec.ts) lands under the still-
+   * sticky, now-taller toolbar instead of on the content below it. This
+   * variable is its own budget — twice the single-line height plus a
+   * little breathing room — sized for "the toolbar wraps to at most two
+   * lines", not tied to the unrelated global constant.
+   */
+  --rdiff-toolbar-h: calc(2 * var(--topbar-h) + var(--pad-2));
 }
 .kbc-rdiff__toolbar {
   position: sticky;
   top: 0;
   z-index: var(--z-bar);
   display: flex;
-  flex-wrap: wrap;
+  /* V80-R4 — was `wrap`. `flex-wrap: wrap` decides which items fit a LINE
+   * using each item's un-shrunk hypothetical size (the flexbox line-
+   * breaking step runs BEFORE flex-shrink is resolved), so a bare `wrap`
+   * toolbar never actually shrinks anything — it just moves whole items
+   * to line 2 the moment line 1's UNSHRUNK content overflows, which is
+   * exactly how this toolbar ended up two lines even well above 1280px
+   * (cffe0ac's finding) and is why grouping alone did not fix it (see the
+   * comment on `.kbc-rdiff__cluster` below). `nowrap` makes the title +
+   * every cluster share the SAME single line and lets flex-shrink (each
+   * shrinkable item's own `min-width: 0`) do real work — the title
+   * truncates via its existing ellipsis before anything else gives, and
+   * `--rdiff-toolbar-h` (this file, below) is retuned to the resulting
+   * true single-line height. */
+  flex-wrap: nowrap;
   align-items: center;
-  gap: var(--pad-2);
+  gap: var(--pad-1);
   min-height: var(--topbar-h);
   padding: var(--pad-1) var(--pad-3);
   background: var(--bg-panel);
   border-bottom: 1px solid var(--rule);
+}
+/* V80-R4 — `nowrap` (above) means every button/select in here competes
+ * for the SAME line's shrink budget; only the title is meant to degrade
+ * (its own ellipsis). A plain-text button with no `white-space: nowrap`
+ * silently WRAPS onto a second line instead of overflowing when its box
+ * is squeezed narrower than its text — invisible in a screenshot at a
+ * wide viewport, then very visible ("Tour" → "T\nour", the second line
+ * clipped by the row's fixed height) once the shrink budget actually
+ * gets tight. Scoped under `.kbc-rdiff__toolbar` — an ADDITIVE
+ * descendant rule, never touching `.kbc-review__action`'s own shared
+ * base (Reviews list/Room, R3 territory). */
+.kbc-rdiff__toolbar button,
+.kbc-rdiff__toolbar .kbc-rdiff__overlay-counts,
+.kbc-rdiff__toolbar .kbc-rdiff__tour-progress {
+  white-space: nowrap;
+}
+/* V80-R4 — `.kbc-review__action`'s shared `7px 14px` padding (Reviews
+ * list/Room) is generous text-button padding; scoped tighter here (an
+ * ADDITIVE descendant rule, the shared base untouched) for the plain
+ * one-word toolbar buttons (Noise/Map/Drafts/Exit) that don't need it —
+ * part of the same one-line-at-1280px width budget as the rules above. */
+.kbc-rdiff__toolbar .kbc-review__action:not(.kbc-review__action--icon) {
+  padding: 5px 8px;
+}
+/* V80-R4 — the toolbar's ~17 controls, grouped into THREE labelled
+ * clusters (Navigate / View / Overlays — `ReviewDiffToolbar.tsx`'s own
+ * doc) instead of one flat unbroken row. At `>= 1200px` a cluster is a
+ * thin-ruled group (no extra chrome, no width cost beyond the divider —
+ * the group's own `aria-label` carries the name for a screen reader,
+ * `.kbc-rdiff__cluster-label` stays visually hidden) so the existing
+ * controls keep almost the SAME total width as the flat row; below that,
+ * each cluster collapses to its icon `kbc-rdiff__cluster-trigger` and its
+ * body becomes a floating popover — the "icon+overflow menus" the brief
+ * asks for. Every wrapped control keeps its pre-existing `data-kbc-*`
+ * attribute and stays mounted at ALL widths; only visibility/position
+ * change.
+ *
+ * The breakpoint is 1200px, not the brief's literal 1100px: measured
+ * (`e2e`'s own scratch harness, not a committed spec) against THIS
+ * content, the fully-expanded clusters' true combined floor — after
+ * every width cut in this file and `ReviewDiffToolbar.tsx`/
+ * `PatchsetSwitcher.tsx` — sits at ~1182px. A collapse threshold at 1100
+ * would leave a genuine 1101–1181px dead zone where the toolbar is
+ * neither collapsed (that only engages at <=1100) NOR able to fit its
+ * fully-expanded content on one line — real overflow, title pushed to
+ * zero width, the help button clipped past the right edge. 1200 clears
+ * that floor with an honest margin; the brief's hard requirement (one
+ * line at >= 1280px) holds either way, and "collapses under 1100px" is
+ * still true, it just ALSO collapses a bit above it. */
+.kbc-rdiff__cluster {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  /* V80-R4 — deliberately NOT `min-width: 0`. A cluster's own children
+   * (native `<select>`s, fixed-text buttons) mostly have no shrink give
+   * of their own (root CLAUDE.md's honesty rules rule out clipping a
+   * word mid-render), so the AUTOMATIC min-width (content-based, the
+   * default) is exactly the floor the outer toolbar-level shrink must
+   * respect — this cluster's box can never be squeezed narrower than
+   * what its own children truly need. Overriding this to 0 (an earlier
+   * version of this rule did) let the outer shrink push a cluster BELOW
+   * that floor, and the excess spilled into the NEXT cluster's box
+   * rather than the title's — the same silent-overlap failure mode as
+   * the missing `white-space: nowrap` above, one level up. Only the
+   * title (its own `min-width: 0` + `max-width` + ellipsis) is meant to
+   * absorb the toolbar's shrink pressure.
+   */
+  flex: 0 1 auto;
+}
+.kbc-rdiff__cluster:not(:last-of-type) {
+  padding-right: var(--pad-1);
+  border-right: 1px solid var(--rule);
+}
+.kbc-rdiff__cluster-trigger {
+  display: none;
+}
+.kbc-rdiff__cluster-label {
+  display: none;
+}
+.kbc-rdiff__cluster-body {
+  display: flex;
+  align-items: center;
+  /* V80-R4 — `nowrap` at >= 1200px: with the toolbar itself `nowrap` (see
+   * `.kbc-rdiff__toolbar`'s own comment), a cluster's own row shrinks as
+   * ONE unit rather than reflowing its controls onto a second internal
+   * row (which would defeat "one line"). Below 1200px this is irrelevant
+   * — the popover sizes itself and CAN wrap (its own media-query rule
+   * below sets `flex-wrap: wrap` back on, since the popover has real
+   * width to spend and reads better wrapped than horizontally scrolled). */
+  flex-wrap: nowrap;
+  /* V80-R4 — deliberately NOT `min-width: 0` either, for the SAME reason
+   * as `.kbc-rdiff__cluster` just above: this row's floor must stay its
+   * children's true combined min-content, or the outer shrink can push
+   * it (and them) narrower than that and the last child spills into the
+   * next cluster. */
+  /* V80-R4 — tighter than the old flat row's `--pad-2` (8px) between EVERY
+   * control: a cluster's own controls are already grouped by the divider,
+   * so a slightly denser gap inside one reads as "related," not cramped,
+   * and buys back the width the divider/border itself costs. */
+  gap: var(--pad-1);
+}
+@media (max-width: 1200px) {
+  .kbc-rdiff__cluster {
+    border-right: none;
+    padding-right: 0;
+  }
+  .kbc-rdiff__cluster-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm, 4px);
+    background: var(--bg-card-hi, var(--bg-panel-2));
+    color: var(--ink-mute);
+    cursor: pointer;
+  }
+  .kbc-rdiff__cluster-trigger:hover,
+  .kbc-rdiff__cluster.is-open .kbc-rdiff__cluster-trigger {
+    color: var(--ink);
+    border-color: var(--accent);
+  }
+  .kbc-rdiff__cluster-label {
+    display: block;
+    flex: 1 1 100%;
+    margin-bottom: var(--pad-1);
+    color: var(--fg-dim);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .kbc-rdiff__cluster-body {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: var(--z-popover);
+    min-width: 260px;
+    max-width: min(360px, calc(100vw - 32px));
+    padding: var(--pad-2);
+    background: var(--bg-panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm, 4px);
+    box-shadow: var(--shadow, 0 6px 24px rgb(0 0 0 / 35%));
+  }
+  .kbc-rdiff__cluster.is-open .kbc-rdiff__cluster-body {
+    display: flex;
+  }
 }
 .kbc-rdiff__back {
   display: inline-flex;
@@ -742,6 +989,15 @@
   font-size: var(--fs-title);
   flex: 1 1 auto;
   min-width: 0;
+  /* V80-R4 — capped (was unbounded `flex:1 1 auto` on its own, which let a
+   * long title's PREFERRED width dominate the toolbar's flex-basis sum —
+   * with `nowrap`, that basis sum, not any one item's shrink floor, is
+   * what decides whether the OTHER floored controls (native selects,
+   * fixed-text buttons) overflow past the toolbar's right edge). Capping
+   * this one item's basis is what buys them the room; the full title is
+   * one hover away via the native `title` attribute (`ReviewDiffToolbar
+   * .tsx`). */
+  max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -749,11 +1005,47 @@
 .kbc-rdiff__nav {
   display: inline-flex;
   gap: var(--pad-1);
+  flex: 0 0 auto;
+}
+/* V80-R4 — the ctx dial and the patchset switcher's two `<select>`s had
+ * NO styling of their own (unlike `.kbc-rdiff__overlay-select select`,
+ * `--fs-sm`/`2px 6px`), so they rendered at the BROWSER's native default
+ * select padding/font — visually inconsistent with every other control in
+ * the toolbar and measurably wider for it. This is the SAME compact rule
+ * `.kbc-rdiff__overlay-select select` already uses. */
+.kbc-rdiff__dial select,
+.kbc-rdiff__psw select {
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 2px 4px;
+}
+/* V80-R4 — icon-only Prev/Next (`.kbc-review__action`'s own 7px/14px
+ * padding is generous text-button padding; a bare 12px chevron glyph
+ * wants a small square hit target instead). Additive modifier — the
+ * shared `.kbc-review__action` base rule (Reviews list/Room, R3
+ * territory) is untouched. */
+.kbc-review__action--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  min-width: 28px;
+}
+.kbc-rdiff__chevron--prev {
+  transform: scaleX(-1);
 }
 .kbc-rdiff__jump {
   position: relative;
-  flex: 0 1 220px;
-  min-width: 140px;
+  /* V80-R4 — narrowed from 220/140 so the Navigate cluster's flat row (now
+   * carrying the ps chip/switcher/progress/prev/next alongside it) fits
+   * one line at 1280px; the dropdown list (`.kbc-rdiff__jump-list`) is
+   * absolutely positioned and unaffected by the input's own width. */
+  flex: 0 1 150px;
+  min-width: 56px;
 }
 .kbc-rdiff__jump-input {
   width: 100%;
@@ -811,6 +1103,16 @@
   color: var(--ink);
   border-color: var(--accent);
 }
+/* V80-R7 — see the identical comment on `.kbc-review__risk-sum` above:
+ * this file's own unconditional `min-width`/`min-height: 28px` just above
+ * wins over mobile.css's `@media (pointer: coarse)` rule on chunk-load
+ * order, so the touch-target floor is set here instead. */
+@media (pointer: coarse) {
+  .kbc-rdiff__help {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 
 /* --- PRR-U3 — findings overlay selector (design-ui.md §S3) --------------- */
 
@@ -831,10 +1133,26 @@
   padding: 2px 6px;
 }
 
+/* V80-R4 — icon + number per lane (was "Findings N · Comments N · GitHub
+ * N" as plain words, the single widest string in the toolbar); the
+ * `aria-label` on this element (`ReviewDiffToolbar.tsx`) still spells the
+ * words out for a screen reader. */
 .kbc-rdiff__overlay-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
   font-size: var(--fs-sm);
   color: var(--ink-mute);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.kbc-rdiff__overlay-counts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.kbc-rdiff__overlay-counts svg {
+  color: var(--fg-dim);
 }
 
 /* --- PRR-U3 — keyboard disposition menu (§6) ------------------------------
@@ -920,11 +1238,36 @@
    * never the hunk strips (V76-R2b.2). --z-bar here painted the file-level
    * viewed checkbox over data-kbc-hunk-viewed-toggle. */
   isolation: isolate;
+  /* V80-R0 — the "all-files `file` query hint" effect (ReviewDiff.tsx)
+   * scrolls this section into view (start-aligned) once it exists, same
+   * as `pickFile()`'s own fallback branch in ReviewDiffCenter.tsx when no
+   * `onOpenFile` is supplied. With no scroll-margin, start-alignment aims
+   * for scrollTop equal to this section's flow offset exactly (flush to
+   * the scroller's own top) — parking it directly under the still-sticky
+   * `.kbc-rdiff__toolbar` (see `--rdiff-toolbar-h`'s own comment on
+   * `.kbc-rdiff`). On a diff barely taller than the viewport the scroller's
+   * max scrollTop can be SMALLER than the toolbar's real, now-possibly-
+   * two-line height, so the browser clamps short and the toolbar visibly
+   * covers the section's top strip — no amount of scrolling can uncover
+   * it, it's just painted over. Reserving `--rdiff-toolbar-h` of
+   * clearance here makes that start-alignment stop short (or not move at
+   * all, clamped to zero) so the section's top always clears the
+   * toolbar's worst-case wrapped height. */
+  scroll-margin-top: var(--rdiff-toolbar-h);
 }
 .kbc-rdiff__section-head {
   position: sticky;
   /* Map closed: sticky ancestor is `.kbc-approute`; sit below the rdiff
-   * toolbar (min-height --topbar-h). Mapped override is below. */
+   * toolbar (min-height --topbar-h). Mapped override is below.
+   * V80-R0 note: this DOES share the same single-line-toolbar assumption
+   * `.kbc-rdiff__section`'s `scroll-margin-top` fix targets (see
+   * `--rdiff-toolbar-h`'s comment on `.kbc-rdiff`) — but map-closed mode
+   * isn't exercised by either failing spec, and swapping this `top` to
+   * the wrap-aware budget would over-reserve (and visibly gap) on any
+   * viewport wide enough for the toolbar to stay single-line, which
+   * neither of those specs runs at to catch. Left as-is; a map-closed
+   * repro would need its own real fix (or a live-measured height), not a
+   * guess ported over from the mapped-mode case. */
   top: var(--topbar-h);
   z-index: 1;
   display: flex;
@@ -943,6 +1286,59 @@
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: var(--fs-lg);
 }
+/* V80-R4 — per-file header cues, grouped (status+± | viewed+focus)
+ * instead of one flat run — a thin left rule between groups, the SAME
+ * divider language `ReviewDiffToolbar.tsx`'s clusters use, at header
+ * scale. */
+.kbc-rdiff__file-cues {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+  padding-left: var(--pad-2);
+  border-left: 1px solid var(--rule);
+  flex: 0 0 auto;
+}
+.kbc-rdiff__file-legend {
+  position: relative;
+  flex: 0 0 auto;
+}
+.kbc-rdiff__file-legend-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.kbc-rdiff__file-legend-btn:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.kbc-rdiff__file-legend-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: var(--z-popover);
+  width: min(320px, 80vw);
+  padding: var(--pad-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm, 4px);
+  box-shadow: var(--shadow, 0 6px 24px rgb(0 0 0 / 35%));
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: normal;
+}
+.kbc-rdiff__file-legend-pop b {
+  color: var(--ink);
+}
 .kbc-rdiff__collapse {
   display: inline-flex;
   align-items: center;
@@ -958,6 +1354,13 @@
 }
 .kbc-rdiff__collapse:hover {
   color: var(--ink);
+}
+/* V80-R7 — same chunk-load-order conflict as `.kbc-rdiff__help` above. */
+@media (pointer: coarse) {
+  .kbc-rdiff__collapse {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 .kbc-rdiff__focus {
   font-size: var(--fs-md);
@@ -1042,13 +1445,19 @@ a.kbc-review__action {
 
 /* --- V4.C4 — verdict bar + threads card -------------------------------- */
 
+/* V80-R3 — a dashed top rule sets the verdict row (`Comment · Approve ·
+   Request changes`, already its own joined segmented control below) apart
+   from the actions button group above it — the two now read as two
+   distinct clusters rather than one undifferentiated scatter of pills. */
 .kbc-verdict {
   position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--pad-2);
-  margin-top: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--rule);
 }
 
 .kbc-verdict__seg {
@@ -1112,7 +1521,7 @@ a.kbc-review__action {
 }
 
 .kbc-verdict-chip__stale {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   opacity: 0.75;
   margin-left: 2px;
 }
@@ -1175,7 +1584,22 @@ a.kbc-review__action {
   cursor: pointer;
 }
 
+/* V80-R3 — the thread filter row used to be ALL SEVEN chips (state +
+   both "awaiting" + GitHub) in one undifferentiated flex-wrap — the "Why"'s
+   third overcrowded chip row. `ReviewThreadsCard.tsx` now renders the
+   mutually-exclusive state segment (All/Open/Resolved/Orphaned, still this
+   class) and the "awaiting"/GitHub toggles (`.kbc-rthreads__awaiting`,
+   below) as two visually separate groups — same shared `filter` state,
+   same `data-kbc-review-threads-filter` hooks on every button, just
+   grouped for scanability. */
 .kbc-rthreads__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.kbc-rthreads__awaiting {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -1209,6 +1633,13 @@ a.kbc-review__action {
   border-left: 2px solid var(--rule);
 }
 
+/* V80-R3 — the thread's own BODY text reads at a step above its
+   author/time meta (which stays at the row's `--fs-sm`) — the "Why"'s
+   complaint that the rail is uniformly the smallest text on the site. */
+.kbc-rthreads__text {
+  font-size: var(--fs-md);
+}
+
 .kbc-rthreads__row:hover {
   color: var(--accent);
 }
@@ -1219,6 +1650,124 @@ a.kbc-review__action {
 
 .kbc-rthreads__row.is-orphaned {
   opacity: 0.7;
+}
+
+/* V80-M4 — "the Room reads human threads first-class": the section
+   count line above the filters, the In-the-diff/Outside-the-diff/General
+   section headings, and the per-thread wrapper that lets "open in diff"
+   and the new "open in reader" sit as SIBLING links (never nested
+   anchors). */
+.kbc-rthreads__section-counts {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  margin: 0 0 8px;
+}
+
+.kbc-rthreads__section + .kbc-rthreads__section {
+  margin-top: 10px;
+}
+
+.kbc-rthreads__section-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 4px;
+}
+
+.kbc-rthreads__thread {
+  margin: 0 0 4px;
+}
+
+.kbc-rthreads__thread .kbc-rthreads__row {
+  margin: 0;
+}
+
+.kbc-rthreads__reader-link {
+  display: inline-block;
+  margin: 2px 0 0 8px;
+  padding-left: 8px;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  text-decoration: none;
+}
+
+.kbc-rthreads__reader-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* ── V80-M5 (D6) — "Promote to finding": a small toggle/form sibling of
+   the thread row, never nested inside its `<Link>` (same "sibling, not
+   nested" rule the reader link above follows). ──────────────────────── */
+
+.kbc-promote-finding__toggle {
+  display: inline-block;
+  margin: 2px 0 0 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+
+.kbc-promote-finding__toggle:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kbc-promote-finding__toggle:disabled {
+  color: var(--ink-dim);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.kbc-promote-finding {
+  margin: 6px 0 0 8px;
+  padding: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kbc-promote-finding__hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-promote-finding__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.kbc-promote-finding__row label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+
+.kbc-promote-finding__blocking {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 4px !important;
+}
+
+.kbc-promote-finding__title {
+  width: 100%;
+}
+
+.kbc-promote-finding__actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* ── PRR-U4 (§4 — "the question/answer loop") ──────────────────────────── */
@@ -1579,11 +2128,17 @@ span.kbc-diff__impact-chip {
 .kbc-rmap__title {
   font-weight: 600;
 }
+/* V80-R4 — map-column CAPTIONS (the overview line, the honest-degrade
+ * notes) read at `--fs-sm`; SECTION LABELS (the chapter headings below —
+ * "Modified", "The review itself", "Outside the diff") stay at `--fs-xs`
+ * but are now actually uppercase (see `.kbc-rmap__chapter-head` below) —
+ * two visually distinct roles instead of one undifferentiated tiny size
+ * for everything (web-code/CLAUDE.md § Review diff v2, V80-R4). */
 .kbc-rmap__census {
   flex: 1 1 auto;
   min-width: 0;
   color: var(--fg-dim);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }
 .kbc-rmap__close {
   display: inline-flex;
@@ -1598,12 +2153,20 @@ span.kbc-diff__impact-chip {
 .kbc-rmap__note {
   margin: var(--pad-2) 0;
   color: var(--fg-dim);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   line-height: 1.4;
+}
+.kbc-rmap__chapter--outside .kbc-rmap__chapter-head {
+  color: var(--ink-mute);
 }
 .kbc-rmap__chapter {
   margin-top: var(--pad-2);
 }
+/* V80-R4 — was `text-transform: none` since V73-K2a (a plain override that
+ * left every chapter heading in sentence case); the brief's "section
+ * labels are uppercase" is a deliberate visual grouping cue distinguishing
+ * a label ROW ("MODIFIED", "OUTSIDE THE DIFF") from the file rows under
+ * it, which stay natural-case (they're paths). */
 .kbc-rmap__chapter-head {
   display: flex;
   align-items: baseline;
@@ -1612,7 +2175,8 @@ span.kbc-diff__impact-chip {
   color: var(--fg-dim);
   font-size: var(--fs-xs);
   font-weight: 600;
-  text-transform: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 .kbc-rmap__chapter-n {
   margin-left: auto;
@@ -1729,6 +2293,12 @@ span.kbc-diff__impact-chip {
   border-left-color: var(--accent);
   background: var(--bg-panel-2);
 }
+/* V80-M1 — "All files": unchanged rows render plain, dimmed relative to a
+ * changed row's full-strength path text (the changed/unchanged distinction
+ * the brief asks the tree to keep visible without a status letter). */
+.kbc-ftree__row--plain .kbc-ftree__path {
+  color: var(--ink-mute);
+}
 .kbc-ftree__twist {
   display: inline-flex;
   width: 12px;
@@ -1746,14 +2316,6 @@ span.kbc-diff__impact-chip {
   align-items: center;
   justify-content: center;
   color: var(--fg-dim);
-}
-.kbc-ftree__kind-abbr {
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  line-height: 1;
 }
 .kbc-ftree__name,
 .kbc-ftree__path {
@@ -1780,14 +2342,29 @@ span.kbc-diff__impact-chip {
   color: var(--accent-soft);
   background: var(--bg-panel-2);
   border-left: 2px solid transparent;
-  font-size: var(--fs-xs);
+  /* V80-R4 — the strip's baseline is its META size (fold/expand buttons,
+   * noise/draft/viewed chips); `.kbc-hunkstrip__header` below is the
+   * hunk's own body-like `@@ … @@` context line and reads at `--fs-md`. */
+  font-size: var(--fs-sm);
   min-width: 0;
   position: relative;
   z-index: 2;
-  /* Map-closed: sticky ancestor is `.kbc-approute`. Leave room for the
-   * toolbar + section-head so scrollIntoView / Playwright do not park the
-   * first strip under the file-level viewed checkbox. */
-  scroll-margin-top: calc(var(--topbar-h) + var(--pad-2) * 2 + 1.75em);
+  /* Leave room for the toolbar + section-head so scrollIntoView /
+   * Playwright do not park the first strip under the file-level viewed
+   * checkbox. This rule is UNCONDITIONAL (map-open and map-closed alike)
+   * — it's what ReviewDiff.tsx's "first hunk in view" effect actually
+   * scrolls to (via `scrollIntoView`, block start) after a map-row click
+   * (`.kbc-rdiff__section` itself is a DIFFERENT effect's target, the
+   * all-files `file` query-param hint, single-mode-only guarded off).
+   * V80-R0: the `--topbar-h` term stood in for the review toolbar's own
+   * height (a single-line-toolbar assumption — see `--rdiff-toolbar-h`'s
+   * comment on `.kbc-rdiff`); swapped for that wrap-aware budget, since
+   * the toolbar is ALSO sticky (and equally tall) in map-open mode —
+   * review-file-tree.spec.ts's drag-the-separator failure is this exact
+   * strip landing under the still-sticky, now-two-line toolbar. The rest
+   * (`--pad-2 * 2 + 1.75em`) approximates the section-head's own height
+   * stacked on top of it, unaffected by this fix. */
+  scroll-margin-top: calc(var(--rdiff-toolbar-h) + var(--pad-2) * 2 + 1.75em);
 }
 .kbc-hunkstrip--current {
   border-left-color: var(--accent);
@@ -1801,6 +2378,7 @@ span.kbc-diff__impact-chip {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-md);
 }
 .kbc-hunkstrip__spacer {
   flex: 1 1 auto;
@@ -1884,7 +2462,10 @@ span.kbc-diff__impact-chip {
 }
 
 /* --- the toolbar dials -------------------------------------------------- */
-.kbc-rdiff__dials,
+/* V80-R4 — `.kbc-rdiff__dials` (the old ctx/noise/map wrapper `<div>`)
+ * was retired when those controls moved into the View cluster's own
+ * `.kbc-rdiff__cluster-body` (`ReviewDiffToolbar.tsx`); `.kbc-rdiff__psw`
+ * (PatchsetSwitcher's own wrapper) keeps the shared rule. */
 .kbc-rdiff__psw {
   display: inline-flex;
   align-items: center;
@@ -1897,6 +2478,57 @@ span.kbc-diff__impact-chip {
 .kbc-rdiff__noise-census {
   color: var(--fg-dim);
   font-size: var(--fs-xs);
+  /* V80-R4 — these are the two longest free-text sentences in the
+   * toolbar ("interdiff — the interdiff wire carries…", "1/9 hunks
+   * labelled · large 1"); a visual ellipsis caps their WIDTH without
+   * touching either string's actual text — `noiseCensusText`'s output
+   * stays byte-identical (`diffNoise.test.ts` reads the pure function,
+   * never the DOM) and `title` (native, set on the wrapping element by
+   * the caller when present) still shows the full sentence on hover. */
+  /* Explicit (not relying on the overflow-based automatic-minimum
+   * reduction alone) — this is a LEAF span with no descendants of its
+   * own, so unlike `.kbc-rdiff__cluster`'s own doc above, there is no
+   * child floor this could hide. */
+  min-width: 0;
+  max-width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* V80-R4 — "Changed (N) | All files" (V80-M1), moved here from the map
+ * column header: it also widens the jump palette and the "outside the
+ * diff" group with the map CLOSED (`ReviewDiff.tsx`'s own doc on
+ * `filesMode`), so a control that lived only inside the map column was
+ * unreachable exactly when it mattered — a toolbar-level View control is
+ * discoverable regardless of whether the map is open. Same two-button
+ * active-toggle shape `.kbc-diff__modes`/`.kbc-diff__mode` already use
+ * (diff.css); `data-kbc-rdiff-files-mode` is unchanged so
+ * review-diff-anyfile.spec.ts (V80-M1) needed no edit. */
+.kbc-rdiff__files-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-card-hi, var(--bg-panel-2));
+}
+.kbc-rdiff__files-mode-btn {
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  border-radius: var(--radius-sm, 4px);
+}
+.kbc-rdiff__files-mode-btn:hover {
+  color: var(--ink);
+  background: var(--bg-card-hi, var(--bg-panel-2));
+}
+.kbc-rdiff__files-mode-btn.is-active,
+.kbc-rdiff__files-mode-btn[aria-pressed="true"] {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 /* --- the drafts tray ---------------------------------------------------- */
@@ -1949,6 +2581,10 @@ span.kbc-diff__impact-chip {
   padding: var(--pad-2) 0;
   border-bottom: 1px dotted var(--rule);
 }
+/* V80-R4 — the tray's META (where/intent/empty/note) reads at `--fs-sm`;
+ * a draft's own composed BODY text is the one thing in this tray a
+ * reviewer actually reads at length, so it gets the body size,
+ * `--fs-md` (web-code/CLAUDE.md § Review diff v2). */
 .kbc-drafts__where {
   display: flex;
   flex-direction: column;
@@ -1957,7 +2593,7 @@ span.kbc-diff__impact-chip {
   background: none;
   border: 0;
   cursor: pointer;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }
 .kbc-drafts__path {
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -1971,7 +2607,7 @@ span.kbc-diff__impact-chip {
   background: var(--bg-panel-2);
   border-left: 2px dotted var(--accent);
   border-radius: var(--radius-1, 4px);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }
 .kbc-drafts__intent--question {
   border-left-style: dashed;
@@ -1980,14 +2616,14 @@ span.kbc-diff__impact-chip {
   grid-column: 1 / -1;
   margin: 2px 0 0;
   color: var(--fg);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
   white-space: pre-wrap;
 }
 .kbc-drafts__empty,
 .kbc-drafts__note {
   margin: 0;
   color: var(--fg-dim);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   line-height: 1.4;
 }
 .kbc-drafts__foot {
@@ -2021,7 +2657,9 @@ span.kbc-diff__impact-chip {
   display: inline-flex;
   align-items: center;
   padding: 0 6px;
-  font-size: 10px;
+  /* V80-R4 — was a naked 10px, under the ramp's 12px caption floor
+   * (tokens.css's own V80-R0 comment). */
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   background: none;
   border: 1px dashed var(--rule-hi);

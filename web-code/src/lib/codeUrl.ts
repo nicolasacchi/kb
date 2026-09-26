@@ -419,6 +419,11 @@ export interface ReviewDiffHrefOpts {
   expanded?: readonly string[];
   /// V76-R2c — `?hexpanded=` viewed-but-open hunk ids. Omitted when empty.
   hexpanded?: readonly string[];
+  /// V80-M1 — `?files=all` — the file tree/map lists the tip sha's WHOLE
+  /// tree rather than only `files_changed`. Omitted for the default
+  /// `"changed"`, appended LAST per this interface's own rule (every
+  /// pre-V80 golden stays byte-identical).
+  files?: "changed" | "all";
 }
 
 /// `?ps=` — one patchset number, or an inclusive `from..to` interdiff
@@ -479,6 +484,12 @@ export function parseDiffMap(raw: string | null): boolean {
   return raw !== "0";
 }
 
+/// Parse `?files=`. TOTAL — anything other than the literal `"all"`
+/// (absent, junk, `"changed"` itself) degrades to the default `"changed"`.
+export function parseDiffFiles(raw: string | null): "changed" | "all" {
+  return raw === "all" ? "all" : "changed";
+}
+
 /// `reviewDiffHref(repo, id, file?, opts?)` → `/r/{repo}/~reviews/{id}/diff
 /// [/file]` `[?finding=][&overlay=][&ps=][&ctx=][&noise=][&map=][&file=]
 /// [&hunk=][&expanded=][&hexpanded=]`. `opts` params are appended LAST (the
@@ -511,6 +522,7 @@ export function reviewDiffHref(
   if (expanded) params.push(`expanded=${expanded}`);
   const hexpanded = opts?.hexpanded ? formatExpandedParam(opts.hexpanded) : null;
   if (hexpanded) params.push(`hexpanded=${hexpanded}`);
+  if (opts?.files === "all") params.push("files=all");
   return params.length > 0 ? `${withFile}?${params.join("&")}` : withFile;
 }
 
@@ -961,4 +973,41 @@ export function isReaderFilePath(pathname: string): boolean {
   if (!m) return false;
   const rest = m[1] ?? "";
   return !rest.split("/").some((s) => s.startsWith("~"));
+}
+
+// --- V80-M3 — "the current review travels with the reader" ----------------
+//
+// `?review=<id>` is a READER-URL-ONLY mirror of the browser-only "current
+// review" marker (`lib/currentReview.ts` — the daemon has no notion of it;
+// see that module's header doc for the full posture). This is the `pane2`/
+// `sym`/`ent`/`trail` precedent again: a function that appends/parses ONE
+// scalar param on a finished URL string, so `nav/location.ts`'s `encode`
+// reader branch can call it without `codeUrl` itself growing a `review`
+// option that every OTHER `codeUrl()` call site (breadcrumbs, the tree,
+// Reader.tsx's own internal pane navigations, …) would have to start
+// threading through by hand. Appended LAST among the reader's own params —
+// after `ent`, itself after `sym`, itself after `pane2` (the module header's
+// own order) — so every pre-M3 golden stays byte-for-byte unchanged; `trail`
+// stays the true last thing on the wire, applied by `appendTrail` outside
+// this function entirely (`encode`'s own tail call), same as it already is
+// for every other mode.
+
+/// Append `?review=<id>` (or `&review=<id>` if the URL already has a query)
+/// to an already-built URL. `id` absent/empty ⇒ the URL is returned
+/// UNCHANGED — the byte-identical-when-absent rule every builder in this
+/// module follows.
+export function appendReviewParam(url: string, id: string | undefined): string {
+  if (!id) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}review=${encodeURIComponent(id)}`;
+}
+
+/// Parse a `?review=` value (already URL-decoded, e.g. via
+/// `URLSearchParams.get`). TOTAL: `null` for absent, empty, or
+/// whitespace-only — a blank `review=` names no review, and returning `""`
+/// would set the current-review marker to a review that doesn't exist.
+export function parseReviewIdParam(v: string | null): string | null {
+  if (v === null) return null;
+  const t = v.trim();
+  return t === "" ? null : t;
 }

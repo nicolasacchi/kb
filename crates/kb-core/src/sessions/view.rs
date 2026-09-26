@@ -849,23 +849,31 @@ impl ViewCarry {
         let preview = match ty {
             "hook_additional_context" => {
                 let body = attachment_text(att, "content").unwrap_or_default();
-                if body.trim_start().starts_with("Relevant memories from kb") {
+                // The recall hook's block starts on this header. The wake
+                // hook's SessionStart additionalContext starts with the
+                // protocol and only later carries the same header — the
+                // gate has to find that line, not require it at byte 0,
+                // or a wake injection never opens.
+                let mut lines = body.lines();
+                let opened = lines
+                    .by_ref()
+                    .any(|l| l.trim_start().starts_with("Relevant memories from kb"));
+                if opened {
                     // Each hit is one `- <title> ...` line; kb-recall.sh may
-                    // append a `↳ <summary>` continuation line right after it
-                    // (plugins/kb-memory/hooks/kb-recall.sh). Fold any such
-                    // line into the PRECEDING hit (joined with `\n`) rather
-                    // than letting it become its own standalone item — a
-                    // flat per-line walk would otherwise turn one recalled
-                    // hit into two `items[]` entries, double-counting it for
-                    // any consumer that treats `items.len()` as "hits
-                    // injected" (the injection-ledger census, W1.1).
+                    // append a `↳ <summary>` continuation and a
+                    // `<!--kb-recall/1 …-->` marker. Fold those into the
+                    // PRECEDING hit (joined with `\n`) so `items.len()`
+                    // stays one entry per hit. The hit list never contains
+                    // a blank line — scent, slate, and the wake tail all
+                    // ride after one — so the first empty line ends the
+                    // walk. Filtering empties and continuing counted those
+                    // tails as failed hits.
                     let mut items: Vec<String> = Vec::new();
-                    for line in body
-                        .lines()
-                        .skip(1)
-                        .map(str::trim)
-                        .filter(|l| !l.is_empty())
-                    {
+                    for line in lines {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            break;
+                        }
                         if let Some(summary) = line.strip_prefix('↳') {
                             if let Some(last) = items.last_mut() {
                                 last.push('\n');
@@ -882,17 +890,22 @@ impl ViewCarry {
                             // CT-A3 machine marker — folds into the
                             // preceding hit exactly like the `↳` summary
                             // above, so `items.len()` stays one entry PER
-                            // HIT (the injection-ledger census, W1.1) even
-                            // though the marker is a physically separate
-                            // line.
+                            // HIT. A marker must never fold into an item
+                            // that already holds one: a bare-marker block
+                            // (header + markers, no title bullet — what
+                            // kb-capture-omp.sh reconstructs) would
+                            // otherwise collapse N hits into 1, and
+                            // parse_recall_marker only reads the first.
                             if let Some(last) = items.last_mut() {
-                                last.push('\n');
-                                last.push_str(line);
-                                continue;
+                                if !last.contains(RECALL_MARKER_PREFIX) {
+                                    last.push('\n');
+                                    last.push_str(line);
+                                    continue;
+                                }
                             }
-                            // Orphan marker with no preceding hit — keep as
-                            // its own item rather than silently dropping
-                            // data (mirrors the `↳` orphan path above).
+                            // Orphan marker, or the next marker of a
+                            // bare-marker block — keep as its own item
+                            // rather than silently dropping data.
                         }
                         items.push(line.trim_start_matches('-').trim().to_string());
                     }
@@ -2809,6 +2822,16 @@ pub struct DerivedRecalls {
 /// [`parse_recall_item_parts`] (the marker carries no title); a
 /// marker-parsed hit whose human line doesn't parse degrades to
 /// id-matching alone.
+///
+/// Verifier of served rows, not the only record. A live
+/// `GET /api/memory/recall?session=` writes one row per returned hit at
+/// serve time; harnesses whose transcripts never carry a `kb-recall/1`
+/// marker would otherwise look like they never recalled. This function
+/// still only re-reads what a later capture folded into
+/// [`Item::MemoryInjection`]. It does not invent rows, and it does not
+/// stamp an observed/served flag: [`DerivedRecall`] has no such field,
+/// and `memory_recalls` has no observed column. Setting that flag is a
+/// schema change outside this file.
 pub fn derive_memory_recalls(view: &SessionView) -> DerivedRecalls {
     let mut out = DerivedRecalls::default();
     for (turn_idx, turn) in view.turns.iter().enumerate() {
@@ -3550,6 +3573,107 @@ mod tests {
             "the beta hit fell back to the text grammar"
         );
         assert_eq!(derived.failed, 0);
+    }
+
+    /// The recall hook packs hits, then a blank line, then a scent line,
+    /// then a blank line, then a slate delta, all under the recall header.
+    /// Scent and slate are not hits. The walk stops at the first empty
+    /// line, so neither becomes a `failed` row.
+    #[test]
+    fn derive_memory_recalls_stops_before_scent_and_slate() {
+        let jsonl = [
+            r#"{"parentUuid":null,"isSidechain":false,"attachment":{"type":"hook_additional_context","content":["Relevant memories from kb (recall — these persist across sessions):\n- alpha fact  [notes]\n    ↳ alpha summary\n<!--kb-recall/1 kb=notes id=aaaaaaaaaaaa pos=1-->\n- beta fact  [notes]\n<!--kb-recall/1 kb=notes id=bbbbbbbbbbbb pos=2-->\n\nkb has prior context for this task — 4 prior sessions.\nCounts only (nothing episodic is auto-injected).\n\nNOW  —  kb-code v8 shipped"],"hookName":"UserPromptSubmit","toolUseID":"UserPromptSubmit","hookEvent":"UserPromptSubmit"},"type":"attachment","uuid":"41000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:05.000Z","sessionId":"scent-slate-1"}"#,
+            r#"{"isSidechain":false,"type":"user","message":{"role":"user","content":"go"},"uuid":"41000002-0000-4000-8000-000000000002","parentUuid":"41000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:25.000Z","sessionId":"scent-slate-1"}"#,
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let derived = derive_memory_recalls(&v);
+        assert_eq!(derived.rows.len(), 2, "scent and slate are not hits");
+        assert_eq!(derived.marker_parsed, 2);
+        assert_eq!(derived.fallback_parsed, 0);
+        assert_eq!(derived.failed, 0, "scent and slate must not be failed hits");
+        assert_eq!(
+            derived
+                .rows
+                .iter()
+                .map(|r| r.memory_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+        );
+        assert_eq!(
+            derived.rows.iter().map(|r| r.pos).collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+    }
+
+    /// kb-capture-omp.sh reconstructs a header plus marker lines and no
+    /// title bullet when the ledger row has no title. Each marker is its
+    /// own row; folding every marker into `items.last_mut()` collapsed N
+    /// hits into 1 (`parse_recall_marker` is a find_map of the first).
+    #[test]
+    fn derive_memory_recalls_bare_marker_block_is_one_row_per_marker() {
+        let jsonl = [
+            r#"{"parentUuid":null,"isSidechain":false,"attachment":{"type":"hook_additional_context","content":["Relevant memories from kb (recall — these persist across sessions):\n<!--kb-recall/1 kb=notes id=aaaaaaaaaaaa-->\n<!--kb-recall/1 kb=notes id=bbbbbbbbbbbb-->\n<!--kb-recall/1 kb=memory id=cccccccccccc pos=3-->"],"hookName":"UserPromptSubmit","toolUseID":"UserPromptSubmit","hookEvent":"UserPromptSubmit"},"type":"attachment","uuid":"42000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:05.000Z","sessionId":"bare-marker-1"}"#,
+            r#"{"isSidechain":false,"type":"user","message":{"role":"user","content":"go"},"uuid":"42000002-0000-4000-8000-000000000002","parentUuid":"42000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:25.000Z","sessionId":"bare-marker-1"}"#,
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let derived = derive_memory_recalls(&v);
+        assert_eq!(
+            derived.rows.len(),
+            3,
+            "one row per marker, not one folded item"
+        );
+        assert_eq!(derived.marker_parsed, 3);
+        assert_eq!(derived.fallback_parsed, 0);
+        assert_eq!(derived.failed, 0);
+        assert_eq!(
+            derived
+                .rows
+                .iter()
+                .map(|r| (r.memory_kb.as_str(), r.memory_id.as_str(), r.pos))
+                .collect::<Vec<_>>(),
+            vec![
+                ("notes", "aaaaaaaaaaaa", None),
+                ("notes", "bbbbbbbbbbbb", None),
+                ("memory", "cccccccccccc", Some(3)),
+            ]
+        );
+    }
+
+    /// A SessionStart wake attachment is the protocol, then a blank line,
+    /// then the canonical recall header and one marker per hit. The gate
+    /// must open on that header even though the body does not start with
+    /// it, and the protocol / pending-distill tail must not become hits.
+    #[test]
+    fn derive_memory_recalls_sees_a_wake_injection_after_the_protocol() {
+        let jsonl = [
+            r#"{"parentUuid":null,"isSidechain":false,"attachment":{"type":"hook_additional_context","content":["kb memory is available — durable facts persist.\n\nRelevant memories from kb (recall — these persist across sessions):\n- alpha fact  [notes]\n    ↳ alpha summary\n<!--kb-recall/1 kb=notes id=aaaaaaaaaaaa-->\n- beta fact  [notes]\n<!--kb-recall/1 kb=notes id=bbbbbbbbbbbb-->\n\nPending distill (grok): 1 session(s) with commits but no curated memory"],"hookName":"SessionStart","toolUseID":"SessionStart","hookEvent":"SessionStart"},"type":"attachment","uuid":"43000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:05.000Z","sessionId":"wake-inject-1"}"#,
+            r#"{"isSidechain":false,"type":"user","message":{"role":"user","content":"go"},"uuid":"43000002-0000-4000-8000-000000000002","parentUuid":"43000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:25.000Z","sessionId":"wake-inject-1"}"#,
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let derived = derive_memory_recalls(&v);
+        assert_eq!(
+            derived.rows.len(),
+            2,
+            "wake hits are visible past the protocol"
+        );
+        assert_eq!(derived.marker_parsed, 2);
+        assert_eq!(derived.fallback_parsed, 0);
+        assert_eq!(
+            derived.failed, 0,
+            "protocol and pending-distill are not hits"
+        );
+        assert_eq!(
+            derived
+                .rows
+                .iter()
+                .map(|r| r.memory_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+        );
+        assert!(derived.rows.iter().all(|r| r.pos.is_none()));
     }
 
     // --- CT-C5: injection efficacy (used) ----------------------------------

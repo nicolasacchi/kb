@@ -4,6 +4,8 @@ import type { ReviewSummaryPr } from "../api/types";
 import { ApiError, postPrFetch } from "../api/client";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import { useCreateReviewPr, useReviews } from "../hooks/useReviews";
 import { usePrs } from "../hooks/usePrs";
 import { compareUrl, reviewUrl } from "../lib/codeUrl";
@@ -113,7 +115,7 @@ export default function Prs() {
 
   return (
     <div className="kbc-prs">
-      <h1 className="kbc-branches__title">Pull requests</h1>
+      <PageHeader title="Pull requests" />
       {data.unavailable_reason && (
         <div className="kbc-prs__unavailable" role="status" data-kbc-prs-unavailable>
           {data.unavailable_reason}
@@ -132,7 +134,6 @@ export default function Prs() {
             const bound = boundReviews.get(pr.number);
             return (
               <li key={pr.number} className="kbc-prs__row" data-kbc-prs-row={pr.number}>
-                <span className="kbc-prs__number">#{pr.number}</span>
                 <span className="kbc-prs__title">{pr.title}</span>
                 {pr.draft && (
                   <span className="kbc-prs__draft-badge" data-kbc-prs-draft>
@@ -140,10 +141,20 @@ export default function Prs() {
                   </span>
                 )}
                 <span className="kbc-prs__author">{pr.author}</span>
-                <span className="kbc-prs__refs">
+                <span className="kbc-prs__refs" title={`${pr.head_ref} → ${pr.base_ref}`}>
                   {pr.head_ref} → {pr.base_ref}
                 </span>
-                <span className="kbc-prs__updated">{relativeTime(Date.parse(pr.updated_at) / 1000)}</span>
+                {/* V80-R5 — PR number + updated-time grouped as one
+                    `MetaLine` (was two fragments at opposite ends of the
+                    row: number leading, time trailing just before the CTA
+                    cluster). */}
+                <MetaLine
+                  className="kbc-prs__row-meta"
+                  items={[
+                    <span className="kbc-prs__number">#{pr.number}</span>,
+                    <span data-kbc-prs-updated>{relativeTime(Date.parse(pr.updated_at) / 1000)}</span>,
+                  ]}
+                />
                 <span className="kbc-prs__cta-group">
                   {bound ? (
                     <Link

@@ -9,7 +9,8 @@
 // forbids, in this route's shape.
 import type { MutableRefObject } from "react";
 import type { GithubThread, PseudoFile, ReviewFileRow } from "../../api/types";
-import ReviewMapColumn from "../../components/reviews/ReviewMapColumn";
+import FileHeaderLegend from "../../components/diff/FileHeaderLegend";
+import ReviewMapColumn, { type OutsideDiffFile } from "../../components/reviews/ReviewMapColumn";
 import ReviewMapSplit, { type ReviewMapSplitHandle } from "../../components/reviews/ReviewMapSplit";
 import type { ReviewFileTreeHandle } from "../../components/reviews/ReviewFileTree";
 import PseudoFileView from "../../components/reviews/PseudoFileView";
@@ -48,6 +49,10 @@ export interface ReviewDiffCenterProps {
   overlay: OverlayMode;
   flashThreadId: string | null;
   githubThreads: GithubThread[] | undefined;
+  /// V80-M1 — the resolved patchset number (never `"latest"`), threaded
+  /// down to every `FileDiffBody` for the whole-file caption's "at ps N"
+  /// clause. `null`/absent degrades the caption honestly.
+  psNumber?: number | null;
   onHunks: (path: string, n: number) => void;
   onGoFile: (idx: number) => void;
   onSetMapOpen: (next: boolean) => void;
@@ -69,6 +74,11 @@ export interface ReviewDiffCenterProps {
   /// Navigate to single-file focus. Map click uses this so the center
   /// actually opens THAT file (V76-R2b); `]f`/`[f` keep using `onGoFile`.
   onOpenFile?: (path: string) => void;
+  /// V80-M1 — "Changed (N) | All files", threaded to the map column so it
+  /// renders the right tree. The TOGGLE itself lives in the toolbar's View
+  /// cluster (V80-R4) — this component only reads the mode, never writes it.
+  filesMode: "changed" | "all";
+  outsideDiffFiles?: readonly OutsideDiffFile[];
 }
 
 export default function ReviewDiffCenter({
@@ -96,6 +106,7 @@ export default function ReviewDiffCenter({
   overlay,
   flashThreadId,
   githubThreads,
+  psNumber,
   onHunks: onHunks,
   onGoFile: goFile,
   onSetMapOpen: setMapOpen,
@@ -113,6 +124,8 @@ export default function ReviewDiffCenter({
   treeRef,
   splitRef,
   onOpenFile,
+  filesMode,
+  outsideDiffFiles,
 }: ReviewDiffCenterProps) {
   const pseudoName = pseudoNameFromPath(focusPath);
 
@@ -142,6 +155,10 @@ export default function ReviewDiffCenter({
       onPick={pickFile}
       onClose={() => setMapOpen(false)}
       treeRef={treeRef}
+      repo={repo}
+      tipSha={tipSha}
+      filesMode={filesMode}
+      outsideDiffFiles={outsideDiffFiles}
     />
   ) : null;
 
@@ -155,15 +172,24 @@ export default function ReviewDiffCenter({
             branch honest even if that invariant ever loosens. */}
         {pseudoName ? (
           <PseudoFileView repo={repo} reviewId={id} name={pseudoName} ps={psQuery} />
-        ) : ordered.length === 0 ? (
+        ) : ordered.length === 0 && !single ? (
+          // V80-M1 — an EMPTY patchset (zero changed files) still must not
+          // block a single-file deep link to a path outside the diff: that
+          // link depends on `single`/`focusPath`, never on `ordered`.
           <div className="kbc-reader__hint">No files in this patchset.</div>
         ) : single ? (
           <>
             {(() => {
-              const file = ordered.find((f) => f.path === focusPath) ?? {
+              // V80-M1 — `knownRow` is `undefined` for a path outside the
+              // diff (the "All files" tree, or a deep link the diff never
+              // touched); the synthetic fallback's `status: ""` says so
+              // honestly rather than guessing "M" — `FileDiffBody`'s
+              // `fileStatus` prop below reads the REAL row, never this one.
+              const knownRow = ordered.find((f) => f.path === focusPath);
+              const file = knownRow ?? {
                 path: focusPath,
                 old_path: null,
-                status: "M",
+                status: "",
                 additions: 0,
                 deletions: 0,
                 blob_sha: "",
@@ -179,21 +205,26 @@ export default function ReviewDiffCenter({
                 >
                   <header className="kbc-rdiff__section-head" data-kbc-rdiff-section={file.path}>
                     <span className="kbc-rdiff__section-path">{file.path}</span>
-                    <span className="kbc-review__file-stats">
-                      <span className="kbc-review__file-add">+{file.additions}</span>{" "}
-                      <span className="kbc-review__file-del">−{file.deletions}</span>
+                    <span className="kbc-rdiff__file-cues kbc-rdiff__file-cues--status">
+                      <span className="kbc-review__file-stats">
+                        <span className="kbc-review__file-add">+{file.additions}</span>{" "}
+                        <span className="kbc-review__file-del">−{file.deletions}</span>
+                      </span>
                     </span>
                     {file.blob_sha && (
-                      <label className="kbc-review__file-viewed">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => void toggleViewed(file)}
-                          aria-label={checked ? "mark unviewed" : "mark viewed"}
-                          data-kbc-review-viewed={file.path}
-                        />
-                      </label>
+                      <span className="kbc-rdiff__file-cues kbc-rdiff__file-cues--viewed">
+                        <label className="kbc-review__file-viewed">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => void toggleViewed(file)}
+                            aria-label={checked ? "mark unviewed" : "mark viewed"}
+                            data-kbc-review-viewed={file.path}
+                          />
+                        </label>
+                      </span>
                     )}
+                    <FileHeaderLegend />
                   </header>
                   <FileDiffBody
                     repo={repo}
@@ -209,6 +240,8 @@ export default function ReviewDiffCenter({
                     overlay={overlay}
                     githubThreads={githubThreads}
                     v2={v2For(file.path)}
+                    fileStatus={knownRow?.status ?? null}
+                    psNumber={psNumber}
                   />
                 </section>
               );
@@ -269,6 +302,7 @@ export default function ReviewDiffCenter({
               onToggleCollapse={() => onToggleFileSection(file.path, viewed, fc.collapsed)}
               v2={v2For(file.path)}
               eager={eagerPath === file.path}
+              psNumber={psNumber}
             />
             );
           })

@@ -146,6 +146,10 @@ jobs:
           # `github.event.workflow_run.head_sha`: the exact sha the
           # upstream ci.yml run graded. Never substitute GITHUB_SHA here.
           ref: ${{ github.event.workflow_run.head_sha }}
+          # describe (below) needs tags and ancestry. Depth 1 would fall
+          # back to a raw sha. This ref is still the graded commit.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Free disk space (drop preinstalled SDKs)
         # A runner starts with only ~14 GB free on /, and this leg builds the
@@ -218,13 +222,21 @@ jobs:
           set -euo pipefail
           IMAGE="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
           SHA="${HEAD_SHA:0:12}"
+          # Same filter kb-buildstamp's build.rs uses (`--match v[0-9]*`) so
+          # a kb-code-* tag cannot hijack the stamp. `--always` keeps a
+          # tag-less checkout non-empty. Strip one leading v; build.rs does
+          # the same, and identity.version is conventionally bare.
+          VERSION="$(git describe --tags --match 'v[0-9]*' --always --dirty)"
+          VERSION="${VERSION#v}"
           {
             echo "image=${IMAGE}"
             echo "sha=${SHA}"
+            echo "version=${VERSION}"
           } >> "$GITHUB_OUTPUT"
 
-      # The Dockerfile takes KB_GIT_SHA as a build arg because its
-      # .dockerignore drops .git — it cannot probe the sha itself. It also
+      # The Dockerfile takes KB_GIT_SHA and KB_BUILD_VERSION as build args
+      # because its .dockerignore drops .git — it cannot probe either itself,
+      # and both are required (no "unknown" default). It also
       # already carries the OCI labels (title/description/source/licenses/
       # version), including
       # org.opencontainers.image.source=https://github.com/nicolasacchi/kb,
@@ -249,7 +261,9 @@ jobs:
           target: ${{ matrix.target }}
           push: true
           provenance: false
-          build-args: KB_GIT_SHA=${{ steps.img.outputs.sha }}
+          build-args: |
+            KB_GIT_SHA=${{ steps.img.outputs.sha }}
+            KB_BUILD_VERSION=${{ steps.img.outputs.version }}
           tags: ${{ steps.img.outputs.image }}${{ matrix.suffix }}:main-${{ steps.img.outputs.sha }}
 
       - name: Report what was published

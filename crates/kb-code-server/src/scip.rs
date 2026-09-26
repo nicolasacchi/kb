@@ -372,6 +372,21 @@ mod tests {
         let (_daemon_tmp, base) = boot(repo_tmp.path()).await;
         let client = reqwest::Client::new();
 
+        // The daemon must have already indexed `a.rs` (so `store.get_file`
+        // returns a REAL `files` row with the genuine blob hash) before we
+        // post a deliberately-wrong hash for it — otherwise this races the
+        // boot walk: hit before it lands, `get_file` returns `None`, and
+        // the handler reports the path `"untracked"` (`stale: false`)
+        // rather than `"stale"` (`stale: true`), which is what tripped this
+        // test up once on GitHub-hosted runners (V80-C2). Same wait
+        // `fresh_blob_is_accepted_and_written` above already uses (real
+        // hash instead of a fake one), factored out below as
+        // `wait_for_repo0` and reused here.
+        wait_for_repo0(&client, &base, std::time::Duration::from_secs(20), |r| {
+            r["file_count"].as_u64().unwrap_or(0) > 0
+        })
+        .await;
+
         let resp = client
             .post(format!("{base}/api/scip/ingest"))
             .json(&serde_json::json!({

@@ -9,6 +9,7 @@ import { effectiveIntelProviders } from "../../lib/diagnostics";
 import { shortSha } from "../../lib/format";
 import { fullSearchUrl } from "../../lib/searchLanes";
 import { splitPath } from "../../lib/workingSet";
+import MetaLine from "../MetaLine";
 import AttributionCard from "../history/AttributionCard";
 import { BranchAhead, BranchBehind } from "../history/BranchAheadBehind";
 
@@ -104,6 +105,15 @@ export default function RepoCard({ repo }: RepoCardProps) {
         >
           {repo.watcher}
         </span>
+        {repo.catching_up && (
+          <span
+            className="kbc-home-card__catching-up"
+            data-kbc-catching-up
+            title="Still walking this repo's HEAD tree or reconciling a recent git operation — some search results may be incomplete until it settles."
+          >
+            catching up…
+          </span>
+        )}
       </header>
       <div className="kbc-home-card__subhead">
         <HeadChip repoName={repo.name} head={repo.head} />
@@ -207,18 +217,23 @@ export default function RepoCard({ repo }: RepoCardProps) {
         )}
       </section>
 
+      {/* V80-R1 fix — the six footer links are a `MetaLine` (its own
+          "·"-separated caption row) INSIDE the `<footer>` that used to wrap
+          them directly: the `<footer>` is what computes to the `contentinfo`
+          landmark `e2e/regions.spec.ts`'s "home" template pins (a bare
+          `MetaLine` has no landmark role of its own), so dropping the
+          wrapper silently deleted that landmark from the page. */}
       <footer className="kbc-home-card__footer">
-        <Link to={branchesUrl(repo.name)}>Branches</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={`${codeBasePath(repo.name, "")}/~compare`}>Compare</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={`${codeBasePath(repo.name, "")}/~todos`}>TODOs</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={hotspotsUrl(repo.name)}>Hotspots</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={reviewsUrl(repo.name)}>Reviews</Link>
-        <span aria-hidden="true">·</span>
-        <Link to={fullSearchUrl("", repo.name)}>Search in {repo.name}</Link>
+        <MetaLine
+          items={[
+            <Link to={branchesUrl(repo.name)}>Branches</Link>,
+            <Link to={`${codeBasePath(repo.name, "")}/~compare`}>Compare</Link>,
+            <Link to={`${codeBasePath(repo.name, "")}/~todos`}>TODOs</Link>,
+            <Link to={hotspotsUrl(repo.name)}>Hotspots</Link>,
+            <Link to={reviewsUrl(repo.name)}>Reviews</Link>,
+            <Link to={fullSearchUrl("", repo.name)}>Search in {repo.name}</Link>,
+          ]}
+        />
       </footer>
     </div>
   );

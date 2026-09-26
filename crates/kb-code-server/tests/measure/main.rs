@@ -7,6 +7,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod haml_highlight_bench;
 mod latency;
 mod occurrences_bench;
 mod semantic_e2e;

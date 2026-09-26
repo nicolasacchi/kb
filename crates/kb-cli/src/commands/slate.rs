@@ -34,7 +34,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::io::Read;
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1349,14 +1349,202 @@ pub(crate) fn watch_query(slug: &str) -> String {
     )
 }
 
-/// `kb slate watch [--once] [--timeout S] [--json]`.
+/// Why a watch loop should stop instead of opening another SSE stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WatchStop {
+    /// `--parent-pid` was set and that process is no longer alive, or no
+    /// pid was named and a non-TTY watch has been reparented to init.
+    ParentDead,
+    /// Stdout could not be written, or the pipe is already hung up.
+    StdoutClosed,
+}
+
+/// Pure exit decision for `kb slate watch`. `parent_alive` is `None` when
+/// `--parent-pid` was not passed — that poll is optional and must not fire.
+/// Reparent-to-init with no named pid is `orphaned_pipe_stop`, not this
+/// function. A stdout failure always stops: reconnecting after the pipe
+/// closed is how a watcher holds an SSE subscription for days (ops-08).
+pub(crate) fn watch_stop(parent_alive: Option<bool>, stdout_ok: bool) -> Option<WatchStop> {
+    if parent_alive == Some(false) {
+        return Some(WatchStop::ParentDead);
+    }
+    if !stdout_ok {
+        return Some(WatchStop::StdoutClosed);
+    }
+    None
+}
+
+/// Stop for reparent-to-init only when no `--parent-pid` was named and
+/// stdout is not a TTY. A named pid is polled on its own — a live one must
+/// not be abandoned because ppid is already 1. An interactive TTY watch
+/// keeps running.
+pub(crate) fn orphaned_pipe_stop(
+    parent_named: bool,
+    stdout_is_tty: bool,
+    ppid_is_init: bool,
+) -> bool {
+    !parent_named && !stdout_is_tty && ppid_is_init
+}
+
+/// How often to re-check `--parent-pid`, a reparent to init, and stdout
+/// hangup while the SSE stream is quiet. PDEATHSIG is immediate; this poll
+/// is the backup for a named pid that is not ppid, for a pipe child whose
+/// parent died before `prctl`, and for a pipe that closed with no post to
+/// write. Five seconds cannot hold a subscription for days.
+const PARENT_POLL_SECS: u64 = 5;
+
+/// Arm `SIGTERM` for parent death. Linux only — other targets compile the
+/// no-op stub. Does not exit: a `getppid()==1` race (parent died after
+/// fork and before `prctl`, so PDEATHSIG will not be delivered for that
+/// death) is decided in `current_stop`, which still honors a live
+/// `--parent-pid` and an interactive TTY.
+#[cfg(target_os = "linux")]
+fn install_parent_death_signal() -> Result<()> {
+    // SAFETY: no pointers. arg2 is the signal as unsigned long, which is
+    // what the kernel reads; a bare `c_int` in the variadic slot is the
+    // wrong width on some ABIs.
+    let rc = unsafe {
+        libc::prctl(
+            libc::PR_SET_PDEATHSIG,
+            libc::SIGTERM as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error()).context("prctl(PR_SET_PDEATHSIG, SIGTERM)");
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_parent_death_signal() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    // `kill -0`: 0 means the process exists, EPERM means it exists but
+    // we cannot signal it, ESRCH means it is gone.
+    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if ret == 0 {
+        return true;
+    }
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    errno == libc::EPERM
+}
+
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> bool {
+    // No portable liveness check. Assume alive so a set `--parent-pid`
+    // does not force-exit on a target we do not ship.
+    true
+}
+
+/// `true` when stdout is a pipe/socket whose reader is already gone.
+/// A later write would fail; detecting it here ends an idle watcher
+/// instead of reconnecting the SSE stream forever.
+#[cfg(unix)]
+fn stdout_broken() -> bool {
+    let mut fd = libc::pollfd {
+        fd: libc::STDOUT_FILENO,
+        events: libc::POLLHUP,
+        revents: 0,
+    };
+    // SAFETY: one stack `pollfd`, timeout 0, no retained pointer.
+    let rc = unsafe { libc::poll(&mut fd, 1, 0) };
+    if rc < 0 {
+        return false;
+    }
+    let hangup = libc::POLLHUP | libc::POLLERR | libc::POLLNVAL;
+    (fd.revents & hangup) != 0
+}
+
+#[cfg(not(unix))]
+fn stdout_broken() -> bool {
+    false
+}
+
+/// `true` when this process has been reparented to init. Unix only; other
+/// targets have no pid-1 convention to honor.
+#[cfg(unix)]
+fn ppid_is_init() -> bool {
+    unsafe { libc::getppid() == 1 }
+}
+
+#[cfg(not(unix))]
+fn ppid_is_init() -> bool {
+    false
+}
+
+/// Interactive `kb slate watch` keeps running when ppid is 1. A pipe
+/// (omp's stdio, a redirect) does not.
+fn stdout_is_tty() -> bool {
+    std::io::stdout().is_terminal()
+}
+
+fn note_watch(msg: &str) {
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "[kb slate watch] {msg}");
+}
+
+fn note_stop(stop: WatchStop) {
+    note_watch(match stop {
+        WatchStop::ParentDead => "parent pid is gone; exiting",
+        WatchStop::StdoutClosed => "stdout closed; exiting",
+    });
+}
+
+fn current_stop(parent_pid: Option<u32>) -> Option<WatchStop> {
+    if let Some(stop) = watch_stop(parent_pid.map(pid_is_alive), !stdout_broken()) {
+        return Some(stop);
+    }
+    // No named pid: the poll above must not fire. A non-TTY already
+    // reparented to init will never get PDEATHSIG for that death.
+    if orphaned_pipe_stop(parent_pid.is_some(), stdout_is_tty(), ppid_is_init()) {
+        return Some(WatchStop::ParentDead);
+    }
+    None
+}
+
+fn write_stdout_line(line: &str) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{line}")?;
+    // Pipes are block-buffered. Flush so a closed reader surfaces as a
+    // write error now, not after another reconnect.
+    out.flush()
+}
+
+/// `kb slate watch [--once] [--timeout S] [--parent-pid PID] [--json]`.
 ///
 /// Seed-then-diff: the seen set is seeded from the CURRENT head, and every
 /// wake-up refetches `…/posts?since=<last>` rather than trusting the event
 /// payload — so the connect-time replay is idempotent by construction and a
 /// reconnect gap can never swallow a post. Your OWN session's posts are
 /// skipped, which is what stops the loop reacting to itself.
-pub async fn watch(ctx: &Ctx, once: bool, timeout_secs: Option<u64>) -> Result<()> {
+///
+/// The loop must not outlive its parent (ops-08 / agent-13). On Linux the
+/// parent-death signal is armed before the first request; arming does not
+/// exit. `--parent-pid` is optional and polled, so a spawner that is not
+/// ppid can still be named — a live named pid keeps the watch even when
+/// this process was already reparented to init. With no `--parent-pid`, a
+/// non-TTY stdout and `getppid()==1` is a stop. An interactive TTY watch
+/// keeps running. A stdout write error — or a pipe that is already hung
+/// up — is a clean exit: reconnecting would hold the SSE subscription
+/// forever.
+pub async fn watch(
+    ctx: &Ctx,
+    once: bool,
+    timeout_secs: Option<u64>,
+    parent_pid: Option<u32>,
+) -> Result<()> {
+    install_parent_death_signal()?;
+    if let Some(stop) = current_stop(parent_pid) {
+        note_stop(stop);
+        return Ok(());
+    }
+
     let mut last: u64 = {
         let head = get(ctx, "", &[("all", "1".to_string())]).await?;
         head.get("head_seq").and_then(Value::as_u64).unwrap_or(0)
@@ -1368,12 +1556,19 @@ pub async fn watch(ctx: &Ctx, once: bool, timeout_secs: Option<u64>) -> Result<(
     let query = watch_query(&ctx.slug);
     let mut backoff = 1u64;
     loop {
+        if let Some(stop) = current_stop(parent_pid) {
+            note_stop(stop);
+            return Ok(());
+        }
         let stream = open_events_stream(&ctx.base, ctx.bearer.as_deref(), None, &query).await;
         let resp = match stream {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("[kb slate watch] {e}; retrying in {backoff}s …");
-                if sleep_or_done(deadline, backoff).await {
+                if sleep_or_done(deadline, backoff, parent_pid).await {
+                    if let Some(stop) = current_stop(parent_pid) {
+                        note_stop(stop);
+                    }
                     return Ok(());
                 }
                 backoff = (backoff * 2).min(30);
@@ -1383,13 +1578,17 @@ pub async fn watch(ctx: &Ctx, once: bool, timeout_secs: Option<u64>) -> Result<(
         backoff = 1;
         let mut reader = FrameReader::from_response(resp);
         // Drain whatever landed while we were away, then follow.
-        if drain(ctx, &mut last, &mut seen, once).await? && once {
+        if drain_ends(drain(ctx, &mut last, &mut seen, once).await?, once) {
             return Ok(());
         }
         loop {
             let frame = tokio::select! {
                 biased;
                 _ = sleep_until_opt(deadline) => return Ok(()),
+                stop = wait_stop(parent_pid) => {
+                    note_stop(stop);
+                    return Ok(());
+                }
                 f = reader.next_frame() => f?,
             };
             let Some(frame) = frame else { break };
@@ -1402,21 +1601,46 @@ pub async fn watch(ctx: &Ctx, once: bool, timeout_secs: Option<u64>) -> Result<(
             if payload.get("slug").and_then(Value::as_str) != Some(ctx.slug.as_str()) {
                 continue;
             }
-            if drain(ctx, &mut last, &mut seen, once).await? && once {
+            if drain_ends(drain(ctx, &mut last, &mut seen, once).await?, once) {
                 return Ok(());
             }
         }
         eprintln!("[kb slate watch] stream closed; reconnecting in {backoff}s …");
-        if sleep_or_done(deadline, backoff).await {
+        if sleep_or_done(deadline, backoff, parent_pid).await {
+            if let Some(stop) = current_stop(parent_pid) {
+                note_stop(stop);
+            }
             return Ok(());
         }
         backoff = (backoff * 2).min(30);
     }
 }
 
+enum DrainStatus {
+    Quiet,
+    Emitted,
+    StdoutClosed,
+}
+
+fn drain_ends(status: DrainStatus, once: bool) -> bool {
+    match status {
+        DrainStatus::StdoutClosed => {
+            note_stop(WatchStop::StdoutClosed);
+            true
+        }
+        DrainStatus::Emitted => once,
+        DrainStatus::Quiet => false,
+    }
+}
+
 /// Fetch everything past `last` and emit what this session hasn't seen.
-/// Returns true when anything was emitted.
-async fn drain(ctx: &Ctx, last: &mut u64, seen: &mut HashSet<u64>, once: bool) -> Result<bool> {
+/// `StdoutClosed` is a clean stop, not an error: the pipe is gone.
+async fn drain(
+    ctx: &Ctx,
+    last: &mut u64,
+    seen: &mut HashSet<u64>,
+    once: bool,
+) -> Result<DrainStatus> {
     let rows = get(ctx, "/posts", &[("since", last.to_string())]).await?;
     let rows = rows.as_array().cloned().unwrap_or_default();
     let mut emitted = false;
@@ -1434,24 +1658,37 @@ async fn drain(ctx: &Ctx, last: &mut u64, seen: &mut HashSet<u64>, once: bool) -
         if mine {
             continue;
         }
-        if ctx.json {
-            println!("{}", serde_json::to_string(&p)?);
+        let line = if ctx.json {
+            serde_json::to_string(&p)?
         } else {
-            println!("{}", render_post_row(&p));
+            render_post_row(&p)
+        };
+        if write_stdout_line(&line).is_err() {
+            return Ok(DrainStatus::StdoutClosed);
         }
         emitted = true;
         if once {
-            return Ok(true);
+            return Ok(DrainStatus::Emitted);
         }
     }
-    Ok(emitted)
+    Ok(if emitted {
+        DrainStatus::Emitted
+    } else {
+        DrainStatus::Quiet
+    })
 }
 
-/// Sleep `secs`, or return true when the idle deadline fires first.
-async fn sleep_or_done(deadline: Option<tokio::time::Instant>, secs: u64) -> bool {
+/// Sleep `secs`, or return true when the idle deadline or a stop
+/// condition (dead `--parent-pid`, hung-up stdout) fires first.
+async fn sleep_or_done(
+    deadline: Option<tokio::time::Instant>,
+    secs: u64,
+    parent_pid: Option<u32>,
+) -> bool {
     tokio::select! {
         biased;
         _ = sleep_until_opt(deadline) => true,
+        _ = wait_stop(parent_pid) => true,
         _ = tokio::time::sleep(Duration::from_secs(secs)) => false,
     }
 }
@@ -1460,6 +1697,18 @@ async fn sleep_until_opt(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(d) => tokio::time::sleep_until(d).await,
         None => std::future::pending::<()>().await,
+    }
+}
+
+/// Completes when `--parent-pid` is dead, stdout is hung up, or (no named
+/// pid, non-TTY) the process has been reparented to init. Pends while
+/// none of those is true.
+async fn wait_stop(parent_pid: Option<u32>) -> WatchStop {
+    loop {
+        if let Some(stop) = current_stop(parent_pid) {
+            return stop;
+        }
+        tokio::time::sleep(Duration::from_secs(PARENT_POLL_SECS)).await;
     }
 }
 
@@ -2189,6 +2438,30 @@ mod tests {
     fn watch_subscribes_with_the_slug_filter_token_sl2_added() {
         assert_eq!(watch_query("kb"), "types=slate.updated&filter=slug:kb");
         assert_eq!(watch_query("a/b"), "types=slate.updated&filter=slug:a%2Fb");
+    }
+
+    #[test]
+    fn watch_exits_on_a_dead_parent_or_a_stdout_error_and_not_while_alive() {
+        assert_eq!(watch_stop(Some(false), true), Some(WatchStop::ParentDead));
+        assert_eq!(watch_stop(Some(true), false), Some(WatchStop::StdoutClosed));
+        assert_eq!(watch_stop(None, false), Some(WatchStop::StdoutClosed));
+        assert_eq!(watch_stop(Some(true), true), None);
+        assert_eq!(watch_stop(None, true), None);
+    }
+
+    #[test]
+    fn orphaned_pipe_stops_only_without_a_named_parent_and_a_tty() {
+        assert!(orphaned_pipe_stop(false, false, true));
+        assert!(
+            !orphaned_pipe_stop(true, false, true),
+            "a named parent is polled on its own; ppid 1 must not abandon it"
+        );
+        assert!(
+            !orphaned_pipe_stop(false, true, true),
+            "an interactive TTY watch keeps running when ppid is 1"
+        );
+        assert!(!orphaned_pipe_stop(false, false, false));
+        assert!(!orphaned_pipe_stop(true, true, false));
     }
 
     #[test]

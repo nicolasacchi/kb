@@ -66,6 +66,7 @@ fn fixture_corpus_with(
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -77,6 +78,7 @@ fn fixture_corpus_with(
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -295,7 +297,7 @@ async fn metrics_endpoint_coarse_always_detailed_null_when_off() {
     assert!(body["requests_total"].as_u64().is_some());
     assert!(body["storage_channel_capacity"].as_u64().is_some());
     let routes = body["routes"].as_array().expect("routes array");
-    assert_eq!(routes.len(), 8, "one entry per RouteKind");
+    assert_eq!(routes.len(), 9, "one entry per RouteKind");
     assert!(routes.iter().any(|r| r["kind"] == "search"));
     assert!(
         routes[0]["buckets"].as_array().is_some(),
@@ -2831,6 +2833,7 @@ async fn folders_route_returns_tree_with_counts() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -2842,6 +2845,7 @@ async fn folders_route_returns_tree_with_counts() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -3274,6 +3278,7 @@ async fn boot_with_cross_link_corpus() -> (tempfile::TempDir, std::net::SocketAd
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -3285,6 +3290,7 @@ async fn boot_with_cross_link_corpus() -> (tempfile::TempDir, std::net::SocketAd
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -3511,6 +3517,7 @@ async fn boot_with_same_folder_cohabiting_corpus(
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -3522,6 +3529,7 @@ async fn boot_with_same_folder_cohabiting_corpus(
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -4768,6 +4776,7 @@ async fn boot_with_nested_fixture() -> (tempfile::TempDir, std::net::SocketAddr)
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -4779,6 +4788,7 @@ async fn boot_with_nested_fixture() -> (tempfile::TempDir, std::net::SocketAddr)
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -4958,6 +4968,7 @@ async fn boot_with_deep_nested_fixture() -> (tempfile::TempDir, std::net::Socket
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -4969,6 +4980,7 @@ async fn boot_with_deep_nested_fixture() -> (tempfile::TempDir, std::net::Socket
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -5197,6 +5209,7 @@ async fn boot_with_walk_up_shadowing_fixture() -> (tempfile::TempDir, std::net::
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -5208,6 +5221,7 @@ async fn boot_with_walk_up_shadowing_fixture() -> (tempfile::TempDir, std::net::
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -5313,6 +5327,7 @@ async fn boot_with_walk_up_root_only_assets_fixture() -> (tempfile::TempDir, std
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -5324,6 +5339,7 @@ async fn boot_with_walk_up_root_only_assets_fixture() -> (tempfile::TempDir, std
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -5469,6 +5485,7 @@ async fn boot_with_walk_up_cohabit_fixture() -> (tempfile::TempDir, std::net::So
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -5480,6 +5497,7 @@ async fn boot_with_walk_up_cohabit_fixture() -> (tempfile::TempDir, std::net::So
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -5626,6 +5644,7 @@ async fn boot_with_walk_up_two_kb_fixture() -> (tempfile::TempDir, std::net::Soc
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -5637,6 +5656,7 @@ async fn boot_with_walk_up_two_kb_fixture() -> (tempfile::TempDir, std::net::Soc
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     kb_map.insert(
@@ -5653,6 +5673,7 @@ async fn boot_with_walk_up_two_kb_fixture() -> (tempfile::TempDir, std::net::Soc
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -5664,6 +5685,7 @@ async fn boot_with_walk_up_two_kb_fixture() -> (tempfile::TempDir, std::net::Soc
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -6036,6 +6058,7 @@ async fn boot_with_two_kbs() -> (
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -6047,6 +6070,7 @@ async fn boot_with_two_kbs() -> (
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     kb_map.insert(
@@ -6063,6 +6087,7 @@ async fn boot_with_two_kbs() -> (
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -6074,6 +6099,7 @@ async fn boot_with_two_kbs() -> (
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -7276,6 +7302,7 @@ async fn lookup_reports_ambiguity_with_candidates() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -7287,6 +7314,7 @@ async fn lookup_reports_ambiguity_with_candidates() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -7553,6 +7581,7 @@ async fn daemon_brings_up_two_kbs_with_different_disk_dims() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -7564,6 +7593,7 @@ async fn daemon_brings_up_two_kbs_with_different_disk_dims() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     kb_map.insert(
@@ -7580,6 +7610,7 @@ async fn daemon_brings_up_two_kbs_with_different_disk_dims() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -7591,6 +7622,7 @@ async fn daemon_brings_up_two_kbs_with_different_disk_dims() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -7682,6 +7714,7 @@ async fn daemon_startup_fails_when_kb_dim_mismatches_configured_model() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -7693,6 +7726,7 @@ async fn daemon_startup_fails_when_kb_dim_mismatches_configured_model() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -7777,6 +7811,7 @@ async fn daemon_resolves_defaults_embedding_model_for_dim_check() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -7788,6 +7823,7 @@ async fn daemon_resolves_defaults_embedding_model_for_dim_check() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -7867,6 +7903,7 @@ async fn daemon_per_kb_embedding_model_wins_over_defaults() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -7878,6 +7915,7 @@ async fn daemon_per_kb_embedding_model_wins_over_defaults() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -8107,6 +8145,7 @@ async fn boot_with_multifolder_fixture() -> (tempfile::TempDir, std::net::Socket
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -8118,6 +8157,7 @@ async fn boot_with_multifolder_fixture() -> (tempfile::TempDir, std::net::Socket
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -8458,6 +8498,7 @@ async fn boot_memory_corpora_with_code_url(
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: Some("global".into()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: code_url.map(str::to_string),
             decay_policy: None,
@@ -8469,6 +8510,7 @@ async fn boot_memory_corpora_with_code_url(
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     kb_map.insert(
@@ -8485,6 +8527,7 @@ async fn boot_memory_corpora_with_code_url(
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: Some("project".into()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -8496,6 +8539,7 @@ async fn boot_memory_corpora_with_code_url(
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -8966,6 +9010,7 @@ async fn atlas_points_omits_memory_fields_for_non_memory_scoped_kb() {
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -8977,6 +9022,7 @@ async fn atlas_points_omits_memory_fields_for_non_memory_scoped_kb() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -10751,6 +10797,7 @@ async fn boot_with_tagged_fixture() -> (tempfile::TempDir, std::net::SocketAddr)
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -10762,6 +10809,7 @@ async fn boot_with_tagged_fixture() -> (tempfile::TempDir, std::net::SocketAddr)
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -11600,6 +11648,7 @@ async fn boot_kb_with_default_search_category(
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: default_search_category.map(str::to_string),
             code_url: None,
             decay_policy: None,
@@ -11611,6 +11660,7 @@ async fn boot_kb_with_default_search_category(
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -11804,6 +11854,7 @@ async fn default_search_category_does_not_leak_into_scope_all() {
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: Some("global".into()),
+            project_slugs: Vec::new(),
             // The kb under test DOES have a configured default — the point
             // of this test is proving it never reaches scope=all.
             default_search_category: Some("memory-session".into()),
@@ -11817,6 +11868,7 @@ async fn default_search_category_does_not_leak_into_scope_all() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -14861,6 +14913,7 @@ async fn boot_links_fixture() -> (tempfile::TempDir, std::net::SocketAddr) {
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: Some("global".into()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -14872,6 +14925,7 @@ async fn boot_links_fixture() -> (tempfile::TempDir, std::net::SocketAddr) {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     for (name, dir) in [("alpha", alpha), ("beta", beta)] {
@@ -14889,6 +14943,7 @@ async fn boot_links_fixture() -> (tempfile::TempDir, std::net::SocketAddr) {
                 atlas: None,
                 templates: BTreeMap::new(),
                 memory_scope: None,
+                project_slugs: Vec::new(),
                 default_search_category: None,
                 code_url: None,
                 decay_policy: None,
@@ -14900,6 +14955,7 @@ async fn boot_links_fixture() -> (tempfile::TempDir, std::net::SocketAddr) {
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             },
         );
     }
@@ -16093,6 +16149,7 @@ async fn boot_git_corpus() -> (tempfile::TempDir, std::net::SocketAddr, String) 
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -16104,6 +16161,7 @@ async fn boot_git_corpus() -> (tempfile::TempDir, std::net::SocketAddr, String) 
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -16271,6 +16329,7 @@ async fn boot_git_corpus_nested() -> (tempfile::TempDir, std::net::SocketAddr, S
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -16282,6 +16341,7 @@ async fn boot_git_corpus_nested() -> (tempfile::TempDir, std::net::SocketAddr, S
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -18807,6 +18867,7 @@ fn fixture_inbox_kbs() -> (tempfile::TempDir, KbConfig, KbPaths) {
                 atlas: None,
                 templates: std::collections::BTreeMap::new(),
                 memory_scope: None,
+                project_slugs: Vec::new(),
                 default_search_category: None,
                 code_url: None,
                 decay_policy: None,
@@ -18818,6 +18879,7 @@ fn fixture_inbox_kbs() -> (tempfile::TempDir, KbConfig, KbPaths) {
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             },
         );
     }
@@ -19577,6 +19639,7 @@ async fn relocate_folder_rename_remaps_nested_docs() {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -19588,6 +19651,7 @@ async fn relocate_folder_rename_remaps_nested_docs() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -20102,6 +20166,7 @@ async fn boot_memory_corpus_scoring_v2(
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: Some("global".into()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -20113,6 +20178,7 @@ async fn boot_memory_corpus_scoring_v2(
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {
@@ -20697,6 +20763,7 @@ async fn tombstone_era_route_returns_the_persisted_marker() {
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: Some("global".into()),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -20708,6 +20775,7 @@ async fn tombstone_era_route_returns_the_persisted_marker() {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

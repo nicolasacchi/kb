@@ -407,9 +407,46 @@ impl Ctx<'_> {
     }
 }
 
+// V77-P4b — test-only, per-THREAD count of how many times `parse_str` has
+// run. A `thread_local`, not a process-global `AtomicUsize`, for the same
+// reason `frameworks::rails::i18n`'s own test-only build counter stopped
+// being one (see that module's `CachedLocaleIndex::builds` doc): under
+// parallel test execution a global counter would be bumped by every OTHER
+// test that happens to parse HAML concurrently (this module's own tests,
+// `ingest.rs`, `tests/haml_corpus.rs`), and a shared-parse assertion like
+// "exactly one call for this ONE `index_file` invocation" would flake on
+// foreign activity it has no way to exclude. i18n's fix was to key its
+// counter by the cache's own key (`repo_root`); `parse_str` has no such key
+// to scope by — it is a plain function, not a cache lookup — so this
+// reaches for the OTHER standard fix instead: libtest gives every `#[test]`
+// fn its own OS thread by default, so a thread-local counter is already
+// isolated from concurrent siblings with no key needed. (A doc comment
+// can't attach to this `thread_local!` invocation itself — rustdoc doesn't
+// document macro calls — hence a plain `//` block instead of `///`.)
+#[cfg(test)]
+thread_local! {
+    static PARSE_STR_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Test-only: zero this thread's [`PARSE_STR_CALLS`] counter before the
+/// call sequence under test.
+#[cfg(test)]
+pub fn test_reset_parse_count() {
+    PARSE_STR_CALLS.with(|c| c.set(0));
+}
+
+/// Test-only: how many times [`parse_str`] has run on THIS thread since the
+/// last [`test_reset_parse_count`] (or since thread start).
+#[cfg(test)]
+pub fn test_parse_count() -> usize {
+    PARSE_STR_CALLS.with(|c| c.get())
+}
+
 /// Parse `src` (already known-valid UTF-8; [`super::scan`] owns the
 /// bytes→str step and its own diagnostic).
 pub fn parse_str(src: &str) -> Document {
+    #[cfg(test)]
+    PARSE_STR_CALLS.with(|c| c.set(c.get() + 1));
     let lines = lexer::split_lines(src);
     let mut ctx = Ctx {
         src,
@@ -881,11 +918,8 @@ fn find_interpolations(ctx: &mut Ctx, start: usize, end: usize) -> Vec<Span> {
 }
 
 fn line_of(ctx: &Ctx, offset: usize) -> u32 {
-    ctx.lines
-        .iter()
-        .rev()
-        .find(|l| (l.start as usize) <= offset)
-        .map(|l| l.line_no)
+    line_index_for_offset(&ctx.lines, offset)
+        .map(|i| ctx.lines[i].line_no)
         .unwrap_or(1)
 }
 
@@ -1095,8 +1129,24 @@ fn continuation_cap(ctx: &Ctx, i: usize) -> usize {
         .unwrap_or(ctx.src.len())
 }
 
+/// The index of the LAST physical line whose `start` is `<= offset`, over a
+/// slice already sorted ascending by `start` ([`lexer::split_lines`]'s own
+/// output order). A binary search rather than the linear
+/// `.iter().rposition(...)` this replaced (V77-P4): `parse_tag` calls this
+/// once per TAG line, and a HAML template is mostly tag lines, so an O(n)
+/// scan here made the whole parse O(lines²) — the quadratic half of the
+/// scanner's ~46x-per-byte regression against tree-sitter.
+fn line_index_for_offset(lines: &[PhysLine], offset: usize) -> Option<usize> {
+    // `partition_point`'s predicate must be true for a PREFIX and false
+    // after — true here because `start` is monotonically non-decreasing,
+    // which is exactly what makes the old rightmost-match linear scan and
+    // this binary search agree on every input.
+    let idx = lines.partition_point(|l| (l.start as usize) <= offset);
+    idx.checked_sub(1)
+}
+
 fn line_index_at(ctx: &Ctx, offset: usize) -> Option<usize> {
-    ctx.lines.iter().rposition(|l| (l.start as usize) <= offset)
+    line_index_for_offset(&ctx.lines, offset)
 }
 
 /// `name="value"` / `name='value'` pairs inside an HTML-style group.

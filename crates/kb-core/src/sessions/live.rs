@@ -23,9 +23,9 @@
 //! which is the validated Python spike's `tail_records` shape (§12), not
 //! `tail::read_bootstrap_window`'s additional trailing-line trim (that
 //! helper feeds `session_view`, which needs a clean line-bounded window to
-//! join against; this module tolerates — and silently skips — a torn
+//! join against; this module tolerates — and skips with a warn — a torn
 //! trailing line instead, since JSON parse failure already IS the "skip
-//! it" signal here).
+//! it" signal here). A valid suffix is not recovered.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 
 use super::constants::{ABANDON_AFTER_SECS, COLD_AFTER_SECS, LIVE_TAIL_BYTES, STALL_AFTER_SECS};
 use super::HARNESS_DEFAULT;
+use crate::session_scrub::{scrub_transcript, ScrubOptions};
 
 /// Who holds the conversational ball. `Ended` is reserved for an explicit
 /// end signal (design §4's Claude Code `SessionEnd` hook, L3) — the
@@ -290,8 +291,9 @@ pub(crate) fn clamp_last_activity_unix(mtime_unix: i64, now_unix: i64) -> i64 {
 /// Returns `Some(vec![])` for an empty file (never an error) — the
 /// robustness contract [`classify_claude_transcript`] depends on. Trailing
 /// content — including a torn, still-being-written final line — is
-/// returned as-is; a torn line simply fails to parse as JSON later and is
-/// silently skipped, exactly like any other unparseable line.
+/// returned as-is; a torn line fails to parse as JSON later and is
+/// warned and counted, exactly like any other unparseable line. A valid
+/// suffix is not recovered.
 ///
 /// `pub(crate)` (LSC-5) — the sibling harness adapters under
 /// `super::live_adapters` reuse this exact bounded-tail discipline rather
@@ -317,6 +319,57 @@ pub(crate) fn read_tail_lines(path: &Path) -> Option<Vec<String>> {
             .filter(|l| !l.trim().is_empty())
             .collect(),
     )
+}
+
+/// How many characters of a bad JSONL line a warn may carry.
+const JSONL_WARN_EXCERPT_CHARS: usize = 80;
+/// Prefix fed to the secret scrubber before the excerpt is cut, so a token
+/// that begins inside the first 80 characters can still match. This is not
+/// a parse window: nothing in it is decoded as JSON, and a `{...}` suffix
+/// past the excerpt is not recovered.
+const JSONL_WARN_SCRUB_CHARS: usize = 512;
+
+/// Identity a skipped-line warn can name from this adapter.
+///
+/// `kb` is absent on purpose: [`classify_claude_transcript`] is direct-disk,
+/// and no caller in this file has a kb name to pass. The signature stays
+/// unchanged. `session_id` is the file stem (invariant #11).
+struct SkippedJsonlWarn {
+    session_id: String,
+    excerpt: String,
+}
+
+/// Fields for a skipped-line warn. Does not parse `line` and does not
+/// search it for a valid JSON suffix.
+fn skipped_jsonl_warn(path: &Path, line: &str) -> SkippedJsonlWarn {
+    SkippedJsonlWarn {
+        session_id: path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string(),
+        excerpt: jsonl_line_excerpt(line),
+    }
+}
+
+/// First [`JSONL_WARN_EXCERPT_CHARS`] of `line`, after known secret shapes
+/// in a bounded prefix are redacted. Never a recovered suffix.
+fn jsonl_line_excerpt(line: &str) -> String {
+    let window: String = line.chars().take(JSONL_WARN_SCRUB_CHARS).collect();
+    let (scrubbed, _) = scrub_transcript(&window, &ScrubOptions::secrets_only());
+    scrubbed.chars().take(JSONL_WARN_EXCERPT_CHARS).collect()
+}
+
+/// Warn and count. The caller still skips the line; this does not parse it.
+fn warn_skipped_jsonl(path: &Path, line: &str, skipped: u32) {
+    let note = skipped_jsonl_warn(path, line);
+    tracing::warn!(
+        path = %path.display(),
+        session_id = %note.session_id,
+        excerpt = %note.excerpt,
+        skipped,
+        "skipping unparseable JSONL line"
+    );
 }
 
 /// Classify one Claude Code transcript file into a [`LiveSession`], reading
@@ -375,12 +428,15 @@ pub fn classify_claude_transcript(
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut version: Option<String> = None;
+    let mut skipped: u32 = 0;
 
     for line in &lines {
         // A torn/partial final line (the writer is mid-append right now),
-        // or any other unparseable line, is skipped silently — never an
-        // error, never a panic.
+        // or any other unparseable line, is warned and counted, then
+        // skipped — never parsed, never a recovered suffix, never a panic.
         let Ok(rec) = serde_json::from_str::<Value>(line) else {
+            skipped = skipped.saturating_add(1);
+            warn_skipped_jsonl(path, line, skipped);
             continue;
         };
         match rec.get("type").and_then(Value::as_str).unwrap_or("") {
@@ -1049,8 +1105,8 @@ mod tests {
         content.push_str(r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#);
         content.push('\n');
         // A torn/partial line — the writer is mid-append. No trailing
-        // newline: this must be skipped silently, and the valid record
-        // above must still classify successfully.
+        // newline: this must be skipped (warned, not parsed), and the
+        // valid record above must still classify successfully.
         content.push_str(r#"{"type":"assistant","message":{"stop_reason":"end_"#);
         let p = write_file(tmp.path(), "sid-torn.jsonl", &content);
         let got = classify_claude_transcript(&p, 100_000_000, &LivePolicy::default()).unwrap();
@@ -1160,5 +1216,41 @@ mod tests {
         let missing = tmp.path().join("does-not-exist");
         let got = scan_claude_projects(&missing, 100_000_000, &LivePolicy::default(), 86_400);
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn skipped_jsonl_warn_names_session_id_and_a_redacted_prefix() {
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        let line = format!("not-json {secret} trailing-garbage");
+        let note = skipped_jsonl_warn(Path::new("/tmp/proj/sid-torn.jsonl"), &line);
+        assert_eq!(note.session_id, "sid-torn");
+        assert!(note.excerpt.chars().count() <= 80, "{}", note.excerpt);
+        assert!(!note.excerpt.contains(secret), "{}", note.excerpt);
+        assert!(
+            note.excerpt.contains("[redacted:api-key]"),
+            "{}",
+            note.excerpt
+        );
+        assert_eq!(
+            skipped_jsonl_warn(Path::new("/"), "x").session_id,
+            "",
+            "a path with no file stem still warns, with an empty session id"
+        );
+    }
+
+    #[test]
+    fn skipped_jsonl_warn_does_not_salvage_a_valid_suffix() {
+        let suffix = r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#;
+        let line = format!("{}{}", "x".repeat(90), suffix);
+        let note = skipped_jsonl_warn(Path::new("sid.jsonl"), &line);
+        assert_eq!(note.excerpt.chars().count(), 80);
+        assert!(note.excerpt.chars().all(|c| c == 'x'), "{}", note.excerpt);
+        assert!(!note.excerpt.contains("end_turn"));
+        assert!(!note.excerpt.contains('{'));
+        // A torn prefix is not completed into parseable JSON.
+        let torn = r#"{"type":"assistant","message":{"stop_reason":"end_"#;
+        let torn_note = skipped_jsonl_warn(Path::new("sid.jsonl"), torn);
+        assert_eq!(torn_note.excerpt, torn);
+        assert!(serde_json::from_str::<Value>(&torn_note.excerpt).is_err());
     }
 }

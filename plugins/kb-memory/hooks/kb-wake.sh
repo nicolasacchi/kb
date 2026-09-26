@@ -83,20 +83,28 @@ extra=()
 # the payload cwd rather than this hook's own process cwd. `--scope all`
 # is DROPPED — the CLI falls back to that same fleet-wide behaviour on its
 # own outside a repo or against a daemon too old to know "auto".
+# The index uses the same header + `<!--kb-recall/1-->` marker grammar
+# kb-recall.sh emits, so a SessionStart capture opens ingest_attachment's
+# recall gate. Selection is unchanged (`kb recall '' --limit 10`).
 recall_args=()
 [ -n "$cwd" ] && recall_args+=(--cwd "$cwd")
 index="$(kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
   | jq -r '(.hits // [])
       | map("- \(.title)  [\(.kb)]"
-          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160]) else "" end))
-      | if length == 0 then empty else "Recent memories:\n" + join("\n") end' \
+          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160]) else "" end)
+          + "\n<!--kb-recall/1 kb=\(.kb) id=\(.id)-->")
+      | if length == 0 then empty
+        else "Relevant memories from kb (recall — these persist across sessions):\n" + join("\n")
+        end' \
   2>/dev/null)" || index=""
 
 # MI-W0.3 — surface + consume the distill-pending ledger (queued by
-# kb-capture-grok.sh's queue_distill_pending / kb-distill-nudge-kimi.sh
-# when a HEADLESS or kimi session commits without a successful kb
-# remember — nothing reads a Stop-time nudge there, so the relay lands
-# here instead, at the next INTERACTIVE session's start). The label names
+# kb-capture-grok.sh's queue_distill_pending, kb-distill-nudge-kimi.sh,
+# and kb-distill-nudge.sh as `grok|kimi|claude <sid> <epoch>`). A
+# Stop-time nudge lands in a session that is already over, so the relay
+# lands here, at the next interactive SessionStart. Field 1 is the
+# harness; claude lines are surfaced the same way as grok/kimi (no
+# allowlist). The label names
 # the harness(es) of the surfaced entries (ledger field 1). Drop entries older than 14 days, surface
 # up to the 3 newest, then rewrite the ledger to hold only what wasn't
 # surfaced (both the surfaced AND the stale entries are gone afterward —

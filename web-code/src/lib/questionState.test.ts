@@ -212,14 +212,14 @@ describe("threadToastLabel", () => {
   });
 });
 
-function commentsOut(groups: { path: string; comments: ReviewComment[] }[]): ReviewCommentsOut {
+function commentsOut(groups: { path: string; in_diff: boolean; comments: ReviewComment[] }[]): ReviewCommentsOut {
   return { schema: "review-comments/1", review_id: 7, repo: "r", ps: 1, groups };
 }
 
 describe("diffAgentReplies", () => {
   it("seedOnly never emits toasts, but still seeds the watermark map", () => {
     const data = commentsOut([
-      { path: "a.rb", comments: [comment({ id: "t1", path: "a.rb", replies: [reply("claude", 200)] })] },
+      { path: "a.rb", in_diff: true, comments: [comment({ id: "t1", path: "a.rb", replies: [reply("claude", 200)] })] },
     ]);
     const { toasts, nextByThread } = diffAgentReplies(new Map(), data, new Map(), true);
     expect(toasts).toEqual([]);
@@ -228,7 +228,7 @@ describe("diffAgentReplies", () => {
 
   it("emits a toast for a NEW agent voice not seen in prevByThread's watermark", () => {
     const data = commentsOut([
-      { path: "a.rb", comments: [comment({ id: "t1", path: "a.rb", replies: [reply("claude", 200)] })] },
+      { path: "a.rb", in_diff: true, comments: [comment({ id: "t1", path: "a.rb", replies: [reply("claude", 200)] })] },
     ]);
     const { toasts } = diffAgentReplies(new Map([["t1", 100]]), data, new Map(), false);
     expect(toasts).toEqual([{ threadId: "t1", label: "a.rb:10" }]);
@@ -236,7 +236,7 @@ describe("diffAgentReplies", () => {
 
   it("does not re-toast a voice already at or before the watermark", () => {
     const data = commentsOut([
-      { path: "a.rb", comments: [comment({ id: "t1", path: "a.rb", replies: [reply("claude", 200)] })] },
+      { path: "a.rb", in_diff: true, comments: [comment({ id: "t1", path: "a.rb", replies: [reply("claude", 200)] })] },
     ]);
     const { toasts } = diffAgentReplies(new Map([["t1", 200]]), data, new Map(), false);
     expect(toasts).toEqual([]);
@@ -244,7 +244,7 @@ describe("diffAgentReplies", () => {
 
   it("never toasts a human (your own) action — dedupe via author", () => {
     const data = commentsOut([
-      { path: "a.rb", comments: [comment({ id: "t1", author: "you", replies: [reply("you", 200)] })] },
+      { path: "a.rb", in_diff: true, comments: [comment({ id: "t1", author: "you", replies: [reply("you", 200)] })] },
     ]);
     const { toasts } = diffAgentReplies(new Map([["t1", 100]]), data, new Map(), false);
     expect(toasts).toEqual([]);
@@ -252,7 +252,7 @@ describe("diffAgentReplies", () => {
 
   it("labels a finding-backed thread's toast with its slug", () => {
     const t = comment({ id: "a1", replies: [reply("claude", 200)] });
-    const data = commentsOut([{ path: "a.rb", comments: [t] }]);
+    const data = commentsOut([{ path: "a.rb", in_diff: true, comments: [t] }]);
     const findings = new Map([["a1", finding({ slug: "f-pagy", origin: "import" })]]);
     const { toasts } = diffAgentReplies(new Map([["a1", 100]]), data, findings, false);
     expect(toasts).toEqual([{ threadId: "a1", label: "f-pagy" }]);
