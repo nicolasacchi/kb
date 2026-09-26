@@ -49,6 +49,8 @@ function patchset(overrides: Partial<ReviewPatchset> = {}): ReviewPatchset {
     base_sha_full: "b".repeat(40),
     captured_at: 1000,
     commit_count: 1,
+    kind: null,
+    base_tip_sha: null,
     ...overrides,
   };
 }
