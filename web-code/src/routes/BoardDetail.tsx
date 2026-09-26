@@ -464,7 +464,7 @@ export default function BoardDetail() {
 
       {walkthrough && (
         <div className="kbc-board__walkthrough" data-kbc-board-walkthrough-bar>
-          <span data-kbc-board-step-counter>
+          <span data-kbc-board-step-counter style={{ fontVariantNumeric: "tabular-nums" }}>
             step {(stepIndex ?? 0) + 1} of {steps.length}
           </span>
           <span className="kbc-board__caption" data-kbc-board-step-caption>

@@ -74,6 +74,51 @@ pub struct Fragment {
     pub line: u32,
 }
 
+/// A precomputed table of physical-line START offsets, for O(log lines)
+/// line lookups (V77-P4). [`line_at`] alone recounts `\n` bytes from the
+/// start of `src` on every call, which is fine for the rare, one-off
+/// caller (a diagnostic, a test) but was quietly quadratic inside
+/// [`ProgramBuilder`]: one lookup per Ruby fragment (a script line, every
+/// `#{…}`, every attribute hash), each rescanning the whole file prefix —
+/// O(bytes) per fragment times O(fragments) fragments, both of which scale
+/// with the file. Built ONCE per document walk; every fragment after that
+/// pays O(log lines) instead. *V77-P4b:* [`outline`]'s [`compute_last_lines`]
+/// reuses the SAME structure for the same reason, one caller lower — see
+/// that function's own doc.
+struct LineIndex {
+    /// `starts[i]` is the byte offset where physical line `i + 1` begins;
+    /// `starts[0] == 0` always. Ascending by construction (one entry per
+    /// `\n`, in source order), which is what makes the binary search below
+    /// agree with [`line_at`]'s own "count the newlines before `offset`"
+    /// definition.
+    starts: Vec<u32>,
+    len: u32,
+}
+
+impl LineIndex {
+    fn new(src: &str) -> Self {
+        let mut starts = Vec::with_capacity(src.len() / 40 + 1);
+        starts.push(0u32);
+        starts.extend(
+            src.bytes()
+                .enumerate()
+                .filter(|&(_, b)| b == b'\n')
+                .map(|(i, _)| (i + 1) as u32),
+        );
+        LineIndex {
+            starts,
+            len: src.len() as u32,
+        }
+    }
+
+    /// Identical contract to [`line_at`], computed in O(log lines) rather
+    /// than O(offset).
+    fn line_at(&self, offset: usize) -> u32 {
+        let offset = (offset as u32).min(self.len);
+        self.starts.partition_point(|&s| s <= offset) as u32
+    }
+}
+
 /// Every Ruby fragment in `doc`, in document order.
 pub fn ruby_fragments(doc: &Document, src: &str) -> Vec<Fragment> {
     let mut out = Vec::new();
@@ -112,6 +157,11 @@ pub fn ruby_program(doc: &Document, src: &str) -> RubyProgram {
 
 struct ProgramBuilder<'a> {
     src: &'a str,
+    /// Built once in [`ProgramBuilder::new`] and reused for every
+    /// fragment's line lookup — see [`LineIndex`]'s own doc for why a
+    /// per-fragment call to the free [`line_at`] function was the
+    /// quadratic half of V77-P4's fix.
+    lines: LineIndex,
     emit: bool,
     out: String,
     map: Vec<Option<u32>>,
@@ -121,6 +171,7 @@ impl<'a> ProgramBuilder<'a> {
     fn new(src: &'a str, emit: bool) -> Self {
         ProgramBuilder {
             src,
+            lines: LineIndex::new(src),
             emit,
             out: String::new(),
             map: Vec::new(),
@@ -200,7 +251,7 @@ impl<'a> ProgramBuilder<'a> {
             let Some(text) = s.slice(self.src) else {
                 continue;
             };
-            let line = line_at(self.src, s.start as usize);
+            let line = self.lines.line_at(s.start as usize);
             self.frag(
                 out,
                 FragmentKind::Interpolation,
@@ -291,7 +342,7 @@ impl<'a> ProgramBuilder<'a> {
             let Some(text) = group.inner.slice(self.src) else {
                 continue;
             };
-            let line = line_at(self.src, group.inner.start as usize);
+            let line = self.lines.line_at(group.inner.start as usize);
             match group.form {
                 AttrForm::RubyHash => self.frag(
                     out,
@@ -319,7 +370,7 @@ impl<'a> ProgramBuilder<'a> {
         }
         match &tag.inline {
             Some(Inline::Script(s)) => {
-                let line = line_at(self.src, s.span.start as usize);
+                let line = self.lines.line_at(s.span.start as usize);
                 self.script(out, s, line);
             }
             Some(Inline::Text(t)) => {
@@ -331,7 +382,13 @@ impl<'a> ProgramBuilder<'a> {
     }
 }
 
-/// The 1-based line containing byte `offset`.
+/// The 1-based line containing byte `offset`, by counting `\n` bytes from
+/// the START of `src` every call — O(offset), fine for a one-off caller
+/// (a diagnostic, a test) but NOT for a loop that calls it once per
+/// node/fragment/token; that caller wants [`LineIndex`] instead (built
+/// once, O(log lines) per lookup — see its own doc for the V77-P4
+/// regression this distinction fixes, and [`compute_last_lines`]'s doc for
+/// the V77-P4b one).
 pub fn line_at(src: &str, offset: usize) -> u32 {
     let upto = offset.min(src.len());
     1 + src.as_bytes()[..upto]
@@ -355,6 +412,8 @@ pub const KIND_FILTER: &str = "filter";
 /// crate's oracle bar, applied to a lane that would otherwise be tempted
 /// to call `- items.each do |i|` a definition).
 pub fn outline(doc: &Document, src: &str) -> Vec<Symbol> {
+    let lines = LineIndex::new(src);
+    let last_lines = compute_last_lines(doc, &lines);
     let mut out = Vec::new();
     for id in doc.preorder() {
         let node = doc.node(id);
@@ -364,7 +423,7 @@ pub fn outline(doc: &Document, src: &str) -> Vec<Symbol> {
             _ => continue,
         };
         let container = container_of(doc, id);
-        let line_end = subtree_last_line(doc, id, src);
+        let line_end = last_lines[id];
         out.push(Symbol {
             ordinal: out.len() as u32,
             name,
@@ -412,15 +471,50 @@ fn container_of(doc: &Document, id: usize) -> Option<String> {
     None
 }
 
-fn subtree_last_line(doc: &Document, id: usize, src: &str) -> u32 {
-    let node = doc.node(id);
-    let mut last = node
-        .line
-        .max(line_at(src, node.span.end.saturating_sub(1) as usize));
-    for c in &node.children {
-        last = last.max(subtree_last_line(doc, *c, src));
+/// Every node's LAST line, computed bottom-up in ONE pass over the whole
+/// document (V77-P4b). The function this replaced, `subtree_last_line`,
+/// walked a node's entire subtree FROM SCRATCH on every call, and `outline`
+/// called it once per ELEMENT/FILTER node encountered in `doc.preorder()`
+/// — so a node sitting under `k` enclosing tags/filters had its own
+/// descendants re-walked by all `k` of THEIR calls. On a deep or long
+/// linear nesting chain that is O(n²): quadrupling the nesting depth
+/// quadruples both the node count AND the per-node work.
+///
+/// This instead computes every id's answer EXACTLY ONCE, children before
+/// parents, so folding a parent is an O(1) max over its own children's
+/// already-final answers — O(n) node visits total, plus one [`LineIndex`]
+/// lookup per node (O(log lines), never the O(offset) rescan [`line_at`]
+/// alone does — see that fn's own doc), which is why [`outline`] builds
+/// the index once and passes it in rather than calling `line_at` itself.
+fn compute_last_lines(doc: &Document, lines: &LineIndex) -> Vec<u32> {
+    let n = doc.nodes.len();
+    let mut last_line = vec![0u32; n];
+    if n == 0 {
+        return last_line;
     }
-    last
+    // A stack walk that visits every node BEFORE its children (children
+    // pushed in their own left-to-right order, so a LIFO pop visits them
+    // right-to-left) — reversed, that visitation order is a valid
+    // POSTORDER (every child appears before its parent), which is exactly
+    // the property the fold below needs: by the time a node is folded,
+    // every one of its children's `last_line` entries is already final.
+    let mut stack: Vec<usize> = doc.roots.clone();
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    while let Some(id) = stack.pop() {
+        order.push(id);
+        stack.extend(doc.nodes[id].children.iter().copied());
+    }
+    for &id in order.iter().rev() {
+        let node = &doc.nodes[id];
+        let mut last = node
+            .line
+            .max(lines.line_at(node.span.end.saturating_sub(1) as usize));
+        for c in &node.children {
+            last = last.max(last_line[*c]);
+        }
+        last_line[id] = last;
+    }
+    last_line
 }
 
 // ── highlight spans ───────────────────────────────────────────────────────

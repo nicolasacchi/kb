@@ -54,6 +54,21 @@ import "../styles/lanes.css";
 // editor's extensions (which would force a full view recreation just to
 // toggle a feature).
 //
+// V80-R2 — audited what draws a hollow "○" that a doc-heavy file (e.g. a
+// module opened at a `//!` block) can show on every VISIBLE line: it is
+// gutter slot four, `commentMarkersFrom`'s `.kbc-comment-dot--<kind>` fill,
+// title="prose" (`styles/provenance.css`'s comment: "reading texture, not
+// an alert" — five of the eight comments/1 kinds share that same neutral
+// outline by design). It IS information, not a placeholder default: the
+// mark is present ONLY for lines `lib/comments.ts::commentGutterMarkers`
+// puts inside a scanned comment block's `[line_start, line_end]` — an
+// ordinary code line gets no gutter-four mark at all. The visual
+// uniformity in that screenshot is an artifact of the viewport being one
+// long prose comment (every visible line really is "prose"), not a sign
+// the mark ignores its input. Left unchanged: the default mode is `all`
+// (`lib/prefs.ts`), and `e2e/comments.spec.ts` pins that default, so
+// narrowing it to `quiet` belongs to a unit that owns that golden.
+//
 // A3 (kb-code v2): the buffer is now the reader's PRIMARY focus surface —
 // `vimReader` (visible reading cursor + modal keymap, `editor/vimReader.ts`)
 // is always in the extension set, the parent can imperatively `focus()` the
@@ -234,8 +249,10 @@ export interface CodeViewProps {
   /// extension (no per-keystroke facet to re-read from a ref).
   wrap?: boolean;
   /// Persisted CM6 buffer font-size in px (`lib/prefs.ts` clamps to
-  /// `[READER_FONT_SIZE_MIN, READER_FONT_SIZE_MAX]`; default 13 here matches
-  /// the pre-SH.C3 hardcoded value for callers that don't pass it).
+  /// `[CODE_FONT_SIZE_MIN, CODE_FONT_SIZE_MAX]`; default 13 here matches
+  /// the pre-SH.C3 hardcoded value for callers that don't pass it). Set as
+  /// the `--code-font-size` CSS variable on `.kbc-codeview-wrap` (below),
+  /// which is what `readerThemeExtension`'s generated stylesheet reads.
   fontSize?: number;
 
   // --- V72-I2 — the annotaterb schema fold -------------------------------
@@ -356,13 +373,19 @@ function firstVisibleLineOf(view: EditorView): number {
   return view.state.doc.lineAt(from).number;
 }
 
-/// SH.C3 — the reader's base theme, parameterized on the persisted font
-/// size. Re-built (not patched) on every font-size change and pushed
-/// through `fontSizeCompartment.reconfigure` — cheaper than it sounds,
-/// `EditorView.theme` just builds a StyleModule.
-function readerThemeExtension(px: number) {
+/// SH.C3/V80-R2 — the reader's base theme. The actual pixel value lives in
+/// ONE place, a CSS custom property set on the CodeView root
+/// (`--code-font-size`, `.kbc-codeview-wrap`'s inline style below) rather
+/// than baked into this generated stylesheet — so a preset's `1.25em`
+/// scale (`styles/desk.css`'s Present-mode `.cm-content`/`.cm-gutters`
+/// rule) and any future CSS consumer of the code font size read the SAME
+/// number this theme paints with, no second source of truth. `px` is kept
+/// as the effect's dependency (still forces `fontSizeCompartment.reconfigure`,
+/// which is what makes CM6 remeasure line/gutter metrics on a change) even
+/// though the STYLE TEXT this produces no longer varies with it.
+function readerThemeExtension() {
   return EditorView.theme({
-    "&": { height: "100%", fontSize: `${px}px` },
+    "&": { height: "100%", fontSize: "var(--code-font-size, 13px)" },
     ".cm-scroller": { fontFamily: "var(--font-mono, monospace)", overflow: "auto" },
   });
 }
@@ -742,7 +765,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
           // below) instead of forcing this whole `new EditorView` to re-run.
           wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
           schemaFoldCompartment.of(schemaFoldExtension(schemaFold ?? null)),
-          fontSizeCompartment.of(readerThemeExtension(fontSize)),
+          fontSizeCompartment.of(readerThemeExtension()),
         ],
       }),
     });
@@ -883,7 +906,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    view.dispatch({ effects: fontSizeCompartment.reconfigure(readerThemeExtension(fontSize)) });
+    view.dispatch({ effects: fontSizeCompartment.reconfigure(readerThemeExtension()) });
   }, [fontSize, fontSizeCompartment]);
 
   // V72-I2 — the schema fold, reconfigured in place. `schemaFoldKey` is the
@@ -928,7 +951,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
   }, []);
 
   return (
-    <div className="kbc-codeview-wrap">
+    <div className="kbc-codeview-wrap" style={{ ["--code-font-size" as string]: `${fontSize}px` }}>
       <StickyContext
         symbols={symbols ?? []}
         firstVisibleLine={firstVisibleLine}

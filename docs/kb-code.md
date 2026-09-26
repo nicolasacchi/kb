@@ -33,6 +33,80 @@ reading for humans and agents") and its implementation plan live as
 artifacts in the `research` kb corpus (outside this repo) rather than under
 `docs/research/` here.
 
+**Binding a comment to a review after the fact (V80-M0).** Review-scoped
+comments were previously reachable ONLY at create time
+(`CreateAnnotationBody.review_id`/`ps`/`side`); `kb-code annotate bind <ID>
+--review N [--ps N] [--side old|new]` (`PUT /api/annotations/{id}/review`)
+and `kb-code annotate unbind <ID>` (`DELETE`, idempotent) let a human, from
+the plain file reader, write a working-tree note and attach it to a
+review — or move an existing comment between reviews — so it shows in
+that review's Room beside the agent's findings. Validation mirrors
+create's (`review` exists, belongs to the same repo, `ps` defaults to
+latest); binding ALSO refuses onto a `closed` review (`409
+urn:kb:errors:review-closed`), a check create does not make. A REPLY has
+no scope of its own (it always inherits its parent's) and 400s naming
+`parent_id`. Binding never refuses because the path/line is absent at the
+target patchset's pinned sha — the daemon's usual rule holds here too ("a
+wrong line is worse than an honest orphan"): the row lazily resolves as an
+`orphaned` thread on the next `GET /api/reviews/{id}/comments`, exactly
+like any other carry-forward miss. A rebind onto a DIFFERENT review emits
+a SECOND `annotation.changed` SSE frame naming the OLD review id, so both
+Rooms invalidate. The same `bind_review`/`unbind_review` ops exist on
+`POST /api/annotations/batch`. `GET /api/reviews/{id}/comments` additionally
+captions each path group `in_diff: true|false` — whether that path is one
+`files_changed(base_sha, tip_sha)` touched at the target patchset — so the
+Room (and `kb-code review comments ID`'s human output, grouped under `in
+the diff` / `outside the diff` / `general`) can tell a comment that lands
+on a changed file from one that does not. It is a per-read caption, never
+a filter: every comment is still listed either way.
+
+**The SPA reader, over the same routes (V80-M2).** The plain file
+reader's own composer (`AnnotationsPanel`, opened by `a`) and the Commit/
+Compare pages' diff-line composer both gained a "Review" selector: pick
+one of the repo's open reviews (preselecting whichever one the browser's
+"current review" marker — `V80-M3` — names) and the comment posts
+review-scoped, same as a Room composer's own comment would. Every
+top-level annotation card in the Notes panel shows its binding as a chip
+linking to the Room, with bind/rebind/unbind actions riding this
+section's `PUT`/`DELETE /api/annotations/{id}/review`. The reader rail's
+Review tab lists the current review's threads for the open file (same
+`GET /api/reviews/{id}/comments` read, filtered to that path) with the
+same `in_diff` caption this section documents, and a "Comment here" door
+into the same composer.
+
+**The Room reads human threads first-class (V80-M4).** `ReviewThreadsCard`
+(the Room's rail) sections its Threads list into **In the diff** / **Outside
+the diff** / **General**, from M0's own `in_diff` caption — a section
+renders only when it has rows, but the header line above always names all
+three counts (e.g. "8 in the diff · 2 outside · 1 general"), never hiding a
+class of thread by omission. Every thread keeps its existing "open in diff"
+link (into the review diff, M1's any-file diff so an out-of-diff file still
+opens) and gains **"open in reader"** — the SAME thread in the plain code
+reader at the active patchset's tip sha, with `?review=<id>` (M3) so the
+reader picks the review up as current; a review-level "General" thread has
+no file and so has no reader link. The Report hero's counts row gains an
+"N open questions from you" chip, and the guided tour (`?tour=1`) adds one
+stop per open human thread on a file (alongside its existing one-stop-per-
+finding walk) — both derive from `lib/reviewRoom.ts`'s `humanOpenThreads`,
+ONE client-side definition ("every unresolved top-level thread whose opener
+is not an agent name") shared by both renderers, computed over the SAME
+`GET /reviews/{id}/comments` fetch the rail already made (no second
+request). `GET /api/reviews/inbox` and the federated `GET /api/inbox`
+mirror the same concept SERVER-side as an additive `human_open` field on
+each review row (`review_inbox.rs`) — cheaper than a per-review comment
+fetch on an inbox load, computed from the SAME batched annotation rows
+`unanswered_questions` already reads, classifying "agent" via
+`review_timeline::AGENT_AUTHOR_NAMES` (the closed harness vocabulary, so it
+can never disagree with the timeline). Unlike `unanswered_questions`
+(intent-scoped to `question`, and about "whose turn is it"), `human_open`
+covers every intent and only asks "did a human raise something here that is
+still open" — a resolved question or an agent-opened question both excluded,
+a still-open plain note included. The `~reviews`/`~inbox` landing pages'
+"Reviews awaiting you" rows surface it as a "🙋 N from you" chip
+(`lib/reviewInbox.ts`'s `inboxReasonChips`), deliberately placed LAST among
+that row's chips since — unlike the others — it plays no part in
+`inbox_score` at all (surfaced-never-scored).
+
 **`kb-code review distill <ID> [--json]`** (CT-E7, `GET
 /api/reviews/{id}/distill`, `review-distill/1`) composes one completed
 review's full local record — meta, every patchset, files touched at the
@@ -174,11 +248,46 @@ position resolved via the SAME `resolve_for_ps_with_content` ladder
 `/comments`/`/distill` use, so a finding can never disagree with what a
 human sees in the browser. `kb-code review findings add ID --severity S
 --category C --path P {--line N|--lines A-B|--whole-file} -m TITLE
---rationale R` (`POST /api/reviews/{id}/findings`, LOOPBACK-ONLY, addendum
-§E) lets a human author one finding directly. `kb-code review disposition ID
+--rationale R [--act A] [--blocking]` (`POST /api/reviews/{id}/findings`,
+LOOPBACK-ONLY, addendum §E) lets a human author one finding directly.
+`--act` (findings v2's speech-act axis — `issue`|`question`|`suggestion`|
+`nitpick`|`praise`|`note`|`todo`|`chore`, default `issue`) and `--blocking`
+(the reviewer's own call, never derived from `severity`) were previously
+hardcoded to `"issue"`/`false`; V80-M5 threads them through like every other
+manual-finding field.
+
+**Promoting a comment (V80-M5, D6).** A human's OWN review comment (M0/M2's
+bind surface — a top-level, review-bound annotation) is a PEER of the
+agent's imported findings, not a second class: `kb-code review findings add
+ID --from-comment ANNOTATION_ID --severity S [--act A] [--blocking]` ADOPTS
+that comment's `annotations` row as the new finding's thread instead of
+anchoring a fresh one — `--category`/`--path`/`-m`/`--rationale` are all
+OPTIONAL on this form (the server derives `category: "other"`, `title` from
+the comment's first line (≤80 chars), `rationale` from its whole body, and
+`location` from the comment's own anchor). Validation: the annotation must
+exist (`404`), be the thread's own top-level comment, not a reply (`400`),
+be bound to THIS review (`400`), and not already back another finding
+(`review_findings.annotation_id`'s own UNIQUE index — a race is a `409`,
+never a raw constraint error). A path-less, review-level "General" comment
+(`anchor_kind: "review"`) has no line for a finding to anchor against and
+400s by name — only a `line`/`range`-anchored (i.e. file-scoped) comment can
+be promoted. The SPA surfaces this as "Promote to finding" on every bound
+human thread in the Room (`ReviewThreadsCard`) and the reader's Review rail
+(`ReviewFileThreadsPanel`); a successful promotion re-renders that thread as
+a finding card (`origin: "manual"`, a `you` chip) in place, and the Report
+tab's derived totals gain an "authored by you: N" line. `kb-code review disposition ID
 SLUG {agree|dispute|waive|fix-later|clear} [-m NOTE]` (`PUT`/`DELETE
 /api/reviews/{id}/findings/{slug}/disposition`, LOOPBACK-ONLY) records the
-human's verdict on each finding. `GET /api/reviews/{id}/findings/recurrence`
+human's verdict on each finding. Every finding also carries `own_ps` (the
+patchset it was raised against, from its linked annotation's `ps_number`)
+and `touched_in` — V80-F3's `[{ps, hunks, overlap: "exact"|"adjacent"}]`,
+one entry per LATER patchset whose diff (own-ps tip -> that ps tip) touched
+the finding's cited lines, capped at 20 later patchsets
+(`touched_in_capped: true` when more existed). Derived per read, never
+stored, never a disposition — evidence the author acted near the location,
+never a claim that anything was "fixed"; `kb-code review findings list`
+prints it as `touched ps3 (exact)` after the location. `GET
+/api/reviews/{id}/findings/recurrence`
 (bearer, route-only — no dedicated CLI verb yet) surfaces which of a
 review's own findings recur across the repo's other reviews, off the same
 `recurrence_pairs` query `review analytics` uses.
@@ -496,6 +605,31 @@ bool` for capability discovery (never required reading — every route
 enforces the gate itself); the SPA renders a small "Remote review
 mutations: on/off" chip on Home when present.
 
+**The loopback pre-probe (V80-F2, `review_mutations_admitted`).** A
+standing v0.37 deferral: `remote_mutations` above answers "is the flag
+on", not "would the gate admit ME" — a non-loopback caller with the flag
+off and a loopback caller both read `remote_mutations: false`/`true`
+identically regardless of which one they are, so the Room's VerdictBar
+and every other gated control only learned they were refused AFTER a
+submit hit the byte-identical 404. `GET /api/identity` additionally
+carries `review_mutations_admitted: bool`, computed PER REQUEST from the
+EXACT SAME peer classification `review_mutations_gate` itself runs
+(`kb_server::middleware::is_loopback_origin` over `ConnectInfo` +
+`state.auth.trusted_proxies`) — `true` unconditionally for a loopback
+caller, else it mirrors `remote_mutations`. Nothing is cached, so the
+field can never disagree with the 404/200 the gate would actually return
+to that same caller on its very next request. SPA:
+`hooks/useReviewMutationsAdmitted.ts` reads it off the shared identity
+query; `VerdictBar`, the diff finding composer
+(`components/diff/DiffLineComposerV2.tsx`'s finding-mode submit) and both
+disposition-control call sites (`components/reviews/DispositionMenu.tsx`
+in the Room, `components/diff/DiffThread.tsx` inline in the diff) render
+their control DISABLED with an inline caption + matching tooltip when it
+is `false` — never hidden, and never pre-empting a request the daemon
+would actually admit. `kb-code identity`'s human-readable output prints
+`review writes admitted: true|false|?` (`?` on a daemon old enough to
+omit the field).
+
 **Wire types (V76-R4a).** kb-code-server exports a curated set of HTTP
 wire structs through ts-rs (the same generator kb-server uses, not
 schemars) behind the `ts-export` cargo feature. `just gen-ts-code` writes
@@ -537,6 +671,7 @@ paste to someone else — reproduces the view exactly.
 | `map` | `0` | hide the file-map column. Absent = shown. |
 | `file` | a path | the map cursor / all-files scroll hint. |
 | `hunk` | a hunk id | the hunk cursor, content-addressed (below). |
+| `files` | `all` | the file map/tree lists the tip sha's WHOLE tree, not only `files_changed`. Absent = `changed`. |
 
 **The file map column.** The review's files as a left column, grouped into
 chapters. The chapters are DERIVED from `GET /reviews/{id}/reading-order`'s
@@ -573,6 +708,26 @@ asks for. The daemon stores the id opaquely and does not parse diffs; the
 addressing scheme can therefore version (a `kbc-hunkid/2`) with no
 migration, and an id minted under an older scheme simply stops matching —
 a viewed hunk reads UNVIEWED, never the reverse.
+
+**Any file, not only a changed one (v8.0, V80-M1).** `?files=all` widens
+the map/tree to the tip sha's whole tree (walked client-side over
+`GET /api/tree`, capped at 4000 leaf paths — a capped walk says so rather
+than truncating silently); changed files keep their real status chip,
+everything else renders plain. Opening any such path — from the tree, from
+the jump palette, or from a bare `?file=`/`?thread=` deep link (the Room's
+own `threadHref` needs exactly this) — no longer bails with "No textual
+difference": `GET /api/file?ref=<patchset tip>` (the SAME fetch the context
+dial already uses) is spliced into ONE synthetic whole-file hunk, rendered
+through the ordinary hunk view, gutter, comment buttons and fold/viewed
+affordances included — a comment on a file outside the diff is something
+the server already accepted (`assemble_top_level_annotation` only needs the
+path to exist at the pinned sha); this unit is what makes it visible.
+Deleted / binary / absent-at-tip files keep an honest caption instead
+("deleted in this patchset", "binary", "not present at ps N tip") and no
+composer. Threads anchored outside the diff surface in a small "outside the
+diff" group in the map column even in `Changed` mode, so one is never
+undiscoverable just because its file has no hunks. Key: `z A` toggles the
+tree mode.
 
 **The patchset switcher.** A base→head pair in the diff header. Head picks
 `GET /reviews/{id}/files?ps=N`; choosing a base patchset switches to
@@ -1470,7 +1625,10 @@ the current `highlight_salt`.
 
 Batch: `{ items: [{ id, lang, text, path? }, …] }` — at most 64 items,
 at most 1 MiB total text, unique ids. One unknown item does not 500
-the batch. Schema `highlight-batch/1`.
+the batch. One OVERSIZE item does refuse the WHOLE batch — a 400 naming
+the item id and its size, not a partial result — so a caller that cannot
+bound its own items must send one request per item. Schema
+`highlight-batch/1`.
 
 CLI: `kb-code highlight --lang ruby --file snippet.rb --json`. Omit
 `--lang` and the daemon infers from `--path` or the file's name.
@@ -1480,11 +1638,60 @@ The SPA has one painter (`web-code/src/lib/paintSpans.ts`) and one class
 table (`.kbc-hl-*`). The live suggestion editor stays CM6; every other
 read-only surface paints these spans.
 
-Not in that unit, by design: new grammars (SCSS/CSS/Markdown), the
-injection-aware pipeline, the universal `outline/1` contract, and the
-`symbol_salt`/`highlight_salt` split. `highlight_only` therefore shipped as
-a mechanism with no production row (SCSS became the first, in V72-H2a); the
-salt split is V72-H2b, below.
+**What paints in a diff, and what deliberately does not (V80-H1).** A diff
+paints BOTH sides whenever the daemon can supply the bytes for them. A diff
+rendered WITHOUT a `to` is not a diff with no new side: `GET /api/diff`'s
+own contract says an omitted `to` means "diff `from` against the CURRENT
+WORKING TREE" (`crates/kb-code-server/src/routes.rs:2087-2090`), mirroring
+`GET /api/file`'s "no `ref` = working tree" default, and the reader's
+compare strip (`web-code/src/routes/Reader.tsx:4528`) and its `~diff` route's
+optional `?to=` (`web-code/src/routes/Reader.tsx:501`) mostly pass no `to` at
+all. So the new side is read at the working tree and every ADDED line
+paints like any other. The one case with nothing to read is a DELETED file,
+which has no working-tree blob: it issues no request and paints nothing.
+A side the daemon cannot supply (no file spans) is reconstructed from the
+parsed diff and POSTed here instead, and a
+line is coloured only when its text byte-equals the file's line at that
+number — the per-line integrity guard in
+`web-code/src/lib/diffHighlight.ts:5`. That guard is why the two surfaces
+that cannot honour it stay plain rather than guess:
+
+- the **suggestion composer's DRAFT rows** — the draft is not the blob's
+  text, so the guard refuses them; the anchored ORIGINAL rows beside them
+  do paint, from the blob the editor already has open
+  (`web-code/src/components/diff/SuggestionEditor.tsx:78-83`);
+- the **uncommitted originating change** in the blame panel
+  (`web-code/src/components/provenance/OriginatingChange.tsx:52-62`) — it
+  has no commit and therefore no blob, so both refs are withheld rather
+  than invented.
+
+Plain, never wrong: a colour on a line that is not the file's text is a
+worse failure than no colour at all. Four surfaces that used to render raw
+text now paint — the interdiff panel (real `from_tip`/`to_tip` shas), the
+blame panel's originating change, the suggestion composer's preview, and
+the apply-preview's working-tree slice, the last out of the `GET /api/file`
+body it already holds rather than a second request for the same bytes. A
+side over `MAX_SNIPPET_BYTES` (256 KiB,
+`crates/kb-code-server/src/highlight.rs:424`) is dropped before it is
+enqueued rather than sent — the batch refusal above would otherwise strip
+the OTHER side's legitimate paint with it — so an oversize side degrades to
+plain text.
+
+**Both `POST /api/highlight` handlers parse off the async worker (V80-H1).**
+`highlight_snippet` builds a fresh `tree_sitter::Parser` and runs a full
+parse per item — up to 64 per batch. Both handlers now run that inside
+`tokio::task::spawn_blocking` (`highlight.rs:798-835`), the same discipline
+`routes::diff_route` uses for its `git diff` subprocess (`routes.rs:2116`).
+This is invisible in the contract: response bodies, status codes, the
+`no-store` header and every cap refusal are unchanged, because the caps are
+checked inside the hop rather than in front of it. The one new outcome is a
+500 naming a panicked task.
+
+Not in `highlight/1`'s own unit (V76-C1), by design: new grammars
+(SCSS/CSS/Markdown), the injection-aware pipeline, the universal
+`outline/1` contract, and the `symbol_salt`/`highlight_salt` split.
+`highlight_only` therefore shipped as a mechanism with no production row
+(SCSS became the first, in V72-H2a); the salt split is V72-H2b, below.
 
 **The salt split, the highlight cache gate and the eighteen roles
 (V72-H2b, D7 + D16).** One salt used to key every derived row per file, so
@@ -1601,6 +1808,26 @@ milliseconds scaled by `total bytes / sampled bytes`, with the scale factor
 printed. There is deliberately no verb that PERFORMS a re-extract: bumping
 a salt is an edit to `lang.rs` plus a deploy, and the mirror re-derives
 itself through the ordinary two gates on the next visit to each file.
+
+**The budget rule (V77-P3, the E6 finding).** Every language is timed
+against a SHARED 20-second ceiling (`SAMPLE_BUDGET`), but the ceiling is now
+split into one ALLOTMENT per language rather than one clock every language
+races against in `files_by_lang` order. A large-repo re-measure found this
+list walked ALPHABETICALLY, so a small-but-early language (HAML) could burn
+the whole budget before a repo's actual DOMINANT language (Ruby,
+alphabetically later) was ever reached — every language after it reported
+"not timed" for no reason a reader could see from the bill alone. Two
+changes close it: `files_by_lang` now orders BY BYTES DESCENDING (tie-broken
+by language name), so the repo's biggest language is sampled first
+regardless of the alphabet; and each language's allotment is computed ONCE,
+up front, as a floor (10% of the budget, split evenly across every
+billable language — so nothing is ever silently skipped) plus a share of
+the rest proportional to that language's bytes. The per-language allotment
+is surfaced on every row as `sample_allotment_ms`, so a "not timed" row's
+honesty is checkable against a real number, not just the total budget — a
+language that genuinely exceeds ITS OWN slice still stops honestly (a
+partial sample, the same wording as before), but no longer at the cost of
+whatever language happens to come after it in the list.
 
 **`haml/1` (V72-H3, D7) — the first-party HAML scanner.** HAML is the one
 file type kb-code parses with code it owns rather than a tree-sitter
@@ -3228,6 +3455,39 @@ different subject.
 `GET /api/repos` gains `workspace_id` and `worktree_id` **additively**,
 read off `repos` rather than recomputed, so the two surfaces cannot
 disagree. Both are `null` until resolution has run.
+
+### Live-first ingest and the `catching_up` signal (V77-P2)
+
+E6's finding: a single-file edit was searchable in ~2.7s when the daemon
+was idle, but could sit behind an ENTIRE boot walk (~9 minutes, measured,
+on a large mirror) with `GET /api/repos` reporting nothing to explain
+why — a live edit made during boot used to bypass the sink's own queue
+entirely (a second, un-fair walker racing the sink worker for `Store`'s
+mutex). There is now exactly ONE walker and ONE queue: a FAST lane
+(individual live-edit upserts/removes/HEAD moves) and a SLOW lane (a full
+reconcile, and the boot HEAD-tree walk itself), the slow lane chunked into
+bounded sub-batches and fairly interleaved with the fast lane — a live-edit
+storm is serviced promptly but can never starve the slow job forever. See
+`crates/kb-code-server/src/sink.rs`'s module doc for the exact scheduling
+contract.
+
+`GET /api/repos` gains two more additive fields, in-memory only (never
+persisted — a restart re-derives the same state from a fresh boot walk):
+
+- `catching_up` (`bool`) — this repo's sink worker still has slow-lane
+  work outstanding (a queued/in-progress `FullReconcile` or boot walk).
+  Scoped to the SLOW lane only: an ordinary live edit completing in a
+  couple of seconds never flips this on — it answers "queued behind a
+  long walk", not "is anything at all happening right now".
+- `settled_at` (unix timestamp, or `null`) — when this repo last finished
+  catching up. `null` while `catching_up` is `true`, and also `null` for a
+  repo the daemon has never run slow-lane work for at all (an honest
+  "nothing to catch up on", never a missing value standing in for
+  "settled").
+
+The web UI shows a "catching up…" chip beside the existing watcher badge
+(`RepoCard`/`RepoPill`, `data-kbc-catching-up`) whenever `catching_up` is
+`true`; it disappears once the repo settles.
 
 ### `@ref` frames (D14)
 

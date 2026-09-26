@@ -218,6 +218,9 @@ async fn unified_inbox_composes_reviews_and_annotations_lanes_and_filters_intent
     assert_eq!(reviews[0]["unresolved_findings"], 1);
     // The review-scoped question is counted HERE, not in `annotations`.
     assert_eq!(reviews[0]["unanswered_questions"], 1);
+    // V80-M4 — the SAME review-level question, authored by "you", is also
+    // the row's one open human thread.
+    assert_eq!(reviews[0]["human_open"], 1);
 
     let annotations = body["annotations"].as_array().unwrap();
     let intents: Vec<&str> = annotations

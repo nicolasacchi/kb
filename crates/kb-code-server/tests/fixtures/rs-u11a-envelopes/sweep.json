@@ -1,0 +1,29 @@
+{
+  "rows": [
+    {
+      "checks": {
+        "fail": "number",
+        "pass": "number",
+        "pending": "number",
+        "warn": "number"
+      },
+      "head_drift": "bool",
+      "new_head_commits": "number",
+      "pr_number": "number",
+      "pr_state": "string",
+      "review_decision": "string",
+      "review_id": "number",
+      "suggest_close": "bool",
+      "unanswered_questions": "number",
+      "unavailable_reason": "null",
+      "verdict_stale": "bool"
+    }
+  ],
+  "schema": "string",
+  "summary": {
+    "refreshed": "number",
+    "suggest_close": "number",
+    "swept": "number",
+    "unavailable": "number"
+  }
+}

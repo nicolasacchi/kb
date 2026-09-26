@@ -112,6 +112,15 @@ export default function RepoPill() {
                   >
                     {r.watcher}
                   </span>
+                  {r.catching_up && (
+                    <span
+                      className="kbc-repopopover__catching-up"
+                      data-kbc-catching-up
+                      title="Still walking this repo's HEAD tree or reconciling a recent git operation — some search results may be incomplete until it settles."
+                    >
+                      catching up…
+                    </span>
+                  )}
                 </Link>
               </li>
             ))

@@ -12,6 +12,32 @@
  * carried by LINE STYLE (`--kbc-trust-style`, V70-A7's Lane Budget), never by
  * hue, which is why the scent card and the peek widget reuse the shared
  * `.kbc-trust-*` classes instead of inventing tints.
+ *
+ * V80-R0: every `font-size` below was a raw rem literal (0.66rem–0.8rem,
+ * off the OLD caption-scale ramp, predating the ramp rebase) instead of a
+ * `--fs-*` token; now bucketed onto the ramp (`--fs-sm` for the
+ * 0.74–0.8rem tier, `--fs-xs` for 0.66–0.72rem), so this file actually
+ * moves with the ramp like every other page. `--space-*`/`--radius-*`/
+ * `--shadow-*`/`--z-hint` are a SEPARATE pre-existing spacing/elevation
+ * token layer this file uses with literal inline fallbacks
+ * (`var(--space-2, 8px)`) — nothing declares them in `tokens.css`, but the
+ * literal fallback always resolves to a real value in every theme, so they
+ * are left as-is (a real but separate normalization onto `--pad-N` etc.).
+ *
+ * V80-C1: `--surface`/`--surface-2`/`--surface-3`/`--border`/
+ * `--border-subtle`/`--fg-subtle` were the SAME dead-cascade bug as R4's
+ * `--fg`/`--fg-dim` and R5's `--line`/`--bg-raised`/`--bg-input` — no
+ * fallback (or a fallback chaining to another undefined name), so every
+ * `background`/`border`/`color` declaration using them was silently
+ * rendering transparent/no-border/inherited instead of the intended
+ * surface, ever since the initial import. Mapped onto the real tokens:
+ * `--surface`→`--bg-panel` (floating overlay, matches `.kbc-repopopover`),
+ * `--surface-2`→`--bg-panel-2` (recessed inline block: scent--inline,
+ * trailbar, inpeek), `--surface-3`→`--bg-card-hi` (hover/target row),
+ * `--border`/`--border-subtle`→`--rule` (no separate "subtle" rule token
+ * exists), `--fg-subtle`→`--ink-mute` (matches R4's `--fg-dim` mapping).
+ * `npm run lint:css-vars` (web-code/scripts/css-undefined-vars.mjs) is the
+ * permanent gate against this bug class returning.
  */
 
 /* ── the scent card (the Ramp's hover rung) ───────────────────────────── */
@@ -22,12 +48,12 @@
    * competing with the modal/drawer layer. */
   z-index: var(--z-hint, 50);
   width: min(420px, calc(100vw - 24px));
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-2, 8px);
   box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
   padding: var(--space-2, 8px) var(--space-3, 12px);
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   pointer-events: none;
 }
 
@@ -36,7 +62,7 @@
   width: auto;
   margin: var(--space-1, 4px) 0 var(--space-2, 8px);
   box-shadow: none;
-  background: var(--surface-2, var(--surface));
+  background: var(--bg-panel-2);
 }
 
 .kbc-scent__head {
@@ -48,15 +74,15 @@
 
 .kbc-scent__where {
   font-family: var(--font-mono, monospace);
-  font-size: 0.76rem;
-  color: var(--fg-subtle);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
   overflow-wrap: anywhere;
 }
 
 .kbc-scent__sig {
   display: block;
   font-family: var(--font-mono, monospace);
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   white-space: pre-wrap;
   margin-bottom: var(--space-2, 8px);
 }
@@ -72,28 +98,28 @@
 }
 
 .kbc-scent__label {
-  color: var(--fg-subtle);
-  font-size: 0.72rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-scent__value {
-  font-size: 0.74rem;
+  font-size: var(--fs-sm);
 }
 
 /* An ABSENT field is dimmed and italic — it still says its name, because a
  * blank card and a card about a symbol with no signature must never look the
  * same (the module doc's honesty rule). */
 .kbc-scent__field--absent .kbc-scent__value {
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   font-style: italic;
 }
 
 .kbc-scent__keys {
   margin-top: var(--space-2, 8px);
   padding-top: var(--space-1, 4px);
-  border-top: 1px solid var(--border-subtle, var(--border));
-  color: var(--fg-subtle);
-  font-size: 0.7rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 /* ── per-pane history arrows + the pane chrome strip ──────────────────── */
@@ -103,9 +129,9 @@
   align-items: center;
   gap: var(--space-2, 8px);
   padding: 2px var(--space-2, 8px);
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--rule);
   min-height: 22px;
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
 }
 
 /* The provisional pane's LOUD signal: a coloured left edge, not italics.
@@ -145,13 +171,13 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-1, 4px);
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   cursor: pointer;
   padding: 1px 3px;
 }
 
 .kbc-panehist__btn:hover:not(:disabled) {
-  border-color: var(--border);
+  border-color: var(--rule);
   color: var(--fg);
 }
 
@@ -168,7 +194,7 @@
 
 .kbc-panehist__count {
   font-variant-numeric: tabular-nums;
-  font-size: 0.66rem;
+  font-size: var(--fs-xs);
 }
 
 /* ── the trail origin chip ────────────────────────────────────────────── */
@@ -178,15 +204,15 @@
   align-items: center;
   gap: var(--space-2, 8px);
   padding: 2px var(--space-3, 12px);
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-  background: var(--surface-2, var(--surface));
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel-2);
 }
 
 .kbc-trailchip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1, 4px);
-  font-size: 0.74rem;
+  font-size: var(--fs-sm);
 }
 
 .kbc-trailchip__back {
@@ -194,7 +220,7 @@
   align-items: center;
   gap: var(--space-1, 4px);
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-1, 4px);
   color: var(--fg);
   cursor: pointer;
@@ -203,23 +229,23 @@
 }
 
 .kbc-trailchip__key {
-  color: var(--fg-subtle);
-  font-size: 0.68rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-trailchip__tabs {
-  color: var(--fg-subtle);
-  font-size: 0.7rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 /* ── the inline peek block widget ─────────────────────────────────────── */
 
 .kbc-inpeek {
   margin: var(--space-1, 4px) 0 var(--space-1, 4px) 2.5em;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-2, 8px);
-  background: var(--surface-2, var(--surface));
+  background: var(--bg-panel-2);
   overflow: hidden;
   font-size: 0.86em;
 }
@@ -234,13 +260,13 @@
   align-items: center;
   gap: var(--space-1, 4px);
   padding: 2px var(--space-2, 8px);
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--rule);
   font-size: 0.78em;
 }
 
 .kbc-inpeek__sep,
 .kbc-inpeek__crumb {
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
 }
 
 .kbc-inpeek__crumb:last-of-type {
@@ -249,7 +275,7 @@
 
 .kbc-inpeek__trust {
   border-bottom: 1px var(--kbc-trust-style, solid) currentcolor;
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   font-size: 0.9em;
 }
 
@@ -264,7 +290,7 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-1, 4px);
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   cursor: pointer;
   font: inherit;
   line-height: 1;
@@ -273,7 +299,7 @@
 
 .kbc-inpeek__dialbtn:hover,
 .kbc-inpeek__close:hover {
-  border-color: var(--border);
+  border-color: var(--rule);
   color: var(--fg);
 }
 
@@ -293,16 +319,16 @@
 }
 
 .kbc-inpeek__line:hover {
-  background: var(--surface-3, var(--surface));
+  background: var(--bg-card-hi);
 }
 
 .kbc-inpeek__line--target {
-  background: var(--surface-3, var(--surface));
+  background: var(--bg-card-hi);
   box-shadow: inset 2px 0 0 0 var(--accent);
 }
 
 .kbc-inpeek__num {
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
   min-width: 3.5ch;
   text-align: right;
@@ -310,7 +336,7 @@
 }
 
 .kbc-inpeek__msg {
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   padding: var(--space-2, 8px);
 }
 
@@ -322,8 +348,8 @@
   display: flex;
   gap: var(--space-2, 8px);
   padding: 2px var(--space-2, 8px);
-  border-top: 1px solid var(--border-subtle, var(--border));
-  color: var(--fg-subtle);
+  border-top: 1px solid var(--rule);
+  color: var(--ink-mute);
   font-size: 0.74em;
 }
 
@@ -336,7 +362,7 @@
 .kbc-hovertip {
   max-width: 460px;
   padding: var(--space-2, 8px);
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
 }
 
 .kbc-hovertip__sig {
@@ -351,8 +377,8 @@
   align-items: center;
   gap: var(--space-2, 8px);
   margin-top: var(--space-1, 4px);
-  color: var(--fg-subtle);
-  font-size: 0.72rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-hovertip__trust {
@@ -362,14 +388,14 @@
 .kbc-hovertip__doc {
   margin: var(--space-1, 4px) 0 0;
   white-space: pre-wrap;
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
 }
 
 .kbc-hovertip__prov,
 .kbc-hovertip__empty {
   margin-top: var(--space-1, 4px);
-  color: var(--fg-subtle);
-  font-size: 0.72rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-hovertip__empty {
@@ -379,9 +405,9 @@
 .kbc-hovertip__keys {
   margin-top: var(--space-1, 4px);
   padding-top: 2px;
-  border-top: 1px solid var(--border-subtle, var(--border));
-  color: var(--fg-subtle);
-  font-size: 0.68rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 /* ── Recent Locations: code rows + the `via` filter chips ─────────────── */
@@ -391,17 +417,17 @@
   flex-wrap: wrap;
   gap: var(--space-1, 4px);
   padding: var(--space-1, 4px) var(--space-3, 12px);
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--rule);
 }
 
 .kbc-recent-locs__viachip {
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-radius: 999px;
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   cursor: pointer;
   font: inherit;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0 var(--space-2, 8px);
 }
 
@@ -411,15 +437,15 @@
 }
 
 .kbc-recent-locs__via {
-  color: var(--fg-subtle);
-  font-size: 0.68rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
   margin-left: var(--space-2, 8px);
 }
 
 .kbc-recent-locs__snippet {
   font-family: var(--font-mono, monospace);
-  font-size: 0.74rem;
-  color: var(--fg-subtle);
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

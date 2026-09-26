@@ -77,8 +77,8 @@ const KBCODE = whichBin("kb-code");
 /** Hard cap on any tool result handed back to the model. */
 const TOOL_RESULT_CAP = 30_000;
 
-/** The CT-A3 machine-readable recall marker kb-recall.sh folds into each hit. */
-const RECALL_MARKER_RE = /<!--kb-recall\/1 kb=([^\s>]+) id=([0-9a-f]{6,})-->/g;
+/** CT-A3 marker. Body is an unordered key=value bag — `kb` and `id` required, `pos` and unknown pairs accepted — same grammar as view.rs `parse_recall_marker`. Layout v2's trailing `pos=` must match. */
+const RECALL_MARKER_RE = /<!--kb-recall\/1\s+([^>]*?)-->/g;
 
 /** EXACT customType — a downstream capture-phase reader is built against it. */
 const RECALL_LEDGER_TYPE = "kb.recall";
@@ -497,12 +497,23 @@ export default function kbMemoryOmp(pi: {
     }).catch(() => {});
   }
 
-  /** Every `<!--kb-recall/1 kb=… id=…-->` marker in an injected block. */
+  /** Every `<!--kb-recall/1 …-->` marker in an injected block. */
   function recallMarkers(text: string): { raw: string; kb: string; id: string }[] {
     const out: { raw: string; kb: string; id: string }[] = [];
     try {
       for (const m of text.matchAll(RECALL_MARKER_RE)) {
-        out.push({ raw: m[0], kb: m[1], id: m[2] });
+        let kb = "";
+        let id = "";
+        for (const pair of (m[1] ?? "").trim().split(/\s+/)) {
+          const eq = pair.indexOf("=");
+          if (eq <= 0) continue;
+          const key = pair.slice(0, eq);
+          const value = pair.slice(eq + 1);
+          if (key === "kb") kb = value;
+          else if (key === "id") id = value;
+        }
+        if (!kb || !/^[0-9a-f]{6,}$/.test(id)) continue;
+        out.push({ raw: m[0], kb, id });
         if (out.length >= 64) break;
       }
     } catch {}
@@ -1125,6 +1136,8 @@ export default function kbMemoryOmp(pi: {
     state: SlatePushState;
     timer: ReturnType<typeof setTimeout> | null;
     stopped: boolean;
+    /** Backoff timer is armed. `child` is already null; do not spawn again. */
+    restarting: boolean;
     inFlight: boolean;
     restarts: number;
     backoffMs: number;
@@ -1238,6 +1251,9 @@ export default function kbMemoryOmp(pi: {
     const args = ["slate", "watch", "--json", "--harness", "omp"];
     if (p.cwd) args.push("--cwd", p.cwd);
     if (p.sid) args.push("--session-id", p.sid);
+    // This process, not ppid: a watcher already reparented to init must
+    // still follow omp while omp is alive.
+    args.push("--parent-pid", String(process.pid));
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(KB, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -1267,10 +1283,12 @@ export default function kbMemoryOmp(pi: {
       if (p.stopped) return;
       if (p.restarts >= PUSH_MAX_RESTARTS) {
         p.stopped = true;
+        p.restarting = false;
         p.note = `push gave up after ${p.restarts} restarts${p.note ? ` — ${p.note}` : ""}`;
         return;
       }
       p.restarts++;
+      p.restarting = true;
       // A watch that died in seconds is a real failure (no daemon, no git
       // repo at this cwd, no `kb`) and earns the backoff; one that ran for a
       // while is an ordinary stream close and retries at the floor.
@@ -1278,6 +1296,7 @@ export default function kbMemoryOmp(pi: {
       const delay = lived > 60_000 ? 5_000 : p.backoffMs;
       p.backoffMs = lived > 60_000 ? 5_000 : Math.min(p.backoffMs * 2, 60_000);
       const t = setTimeout(() => {
+        p.restarting = false;
         if (!p.stopped) spawnWatch(p);
       }, delay);
       (t as any)?.unref?.();
@@ -1309,6 +1328,7 @@ export default function kbMemoryOmp(pi: {
           state: { pendingSince: null, lastEventAt: 0, lastDeliveredAt: 0 },
           timer: null,
           stopped: false,
+          restarting: false,
           inFlight: false,
           restarts: 0,
           backoffMs: 5_000,
@@ -1320,7 +1340,7 @@ export default function kbMemoryOmp(pi: {
         };
         pushers.set(info.sid, p);
       }
-      if (p.child || p.stopped) return;
+      if (p.child || p.stopped || p.restarting) return;
       spawnWatch(p);
     } catch {}
   };

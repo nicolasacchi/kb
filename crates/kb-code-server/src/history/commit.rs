@@ -36,8 +36,8 @@
 //! this module's own tests); it is a no-op for every other commit.
 
 use super::{diff_files, HistoryError, Person, Result, Trailer};
+use crate::git::roots::GitRoot;
 use crate::numstat::FileChange;
-use std::path::Path;
 use std::process::Command;
 
 /// `%H` (full sha) `%x1f` `%an` `%x1f` `%ae` `%x1f` `%at` `%x1f` `%cn`
@@ -136,10 +136,10 @@ fn parse_commit_meta(stdout: &str) -> Option<CommitMeta> {
 /// well-formed-but-unresolvable sha is the near-exclusive real-world cause
 /// (`sha` already passed `join::ladder::is_plausible_sha`'s shape gate
 /// before reaching here, per `routes::commit_route`).
-pub fn commit_meta(repo_root: &Path, sha: &str) -> Result<CommitMeta> {
+pub fn commit_meta(repo_root: &dyn GitRoot, sha: &str) -> Result<CommitMeta> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
         .args(["show", "-s", &format!("--format={COMMIT_META_FMT}")])
         .arg(sha)
         .output()
@@ -156,7 +156,7 @@ pub fn commit_meta(repo_root: &Path, sha: &str) -> Result<CommitMeta> {
 /// FULL sha [`commit_meta`] already resolved (not a possibly-short caller
 /// prefix), so this and `commit_meta` never disagree about which commit
 /// they're describing.
-pub fn commit_files(repo_root: &Path, sha: &str) -> Result<Vec<FileChange>> {
+pub fn commit_files(repo_root: &dyn GitRoot, sha: &str) -> Result<Vec<FileChange>> {
     diff_files(
         repo_root,
         "diff-tree",
@@ -167,6 +167,7 @@ pub fn commit_files(repo_root: &Path, sha: &str) -> Result<Vec<FileChange>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::process::Command as StdCommand;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -256,7 +257,8 @@ mod tests {
         assert!(status.success());
         let sha = git_out(dir, &["rev-parse", "HEAD"]);
 
-        let meta = commit_meta(dir, &sha[..8]).unwrap();
+        let meta =
+            commit_meta(&crate::git::roots::WorkTreeRoot::user_clone(dir), &sha[..8]).unwrap();
         assert_eq!(meta.sha, sha, "a short prefix must resolve to the FULL sha");
         assert_eq!(meta.subject, "the subject");
         assert_eq!(meta.author.name, "Test");
@@ -299,7 +301,7 @@ mod tests {
         );
         let sha = git_out(dir, &["rev-parse", "HEAD"]);
 
-        let meta = commit_meta(dir, &sha).unwrap();
+        let meta = commit_meta(&crate::git::roots::WorkTreeRoot::user_clone(dir), &sha).unwrap();
         assert_eq!(meta.parents.len(), 2);
     }
 
@@ -311,7 +313,11 @@ mod tests {
         git(dir, &["add", "a.txt"]);
         git(dir, &["commit", "-q", "-m", "c1"]);
 
-        let err = commit_meta(dir, "deadbeefdeadbeefdead").unwrap_err();
+        let err = commit_meta(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "deadbeefdeadbeefdead",
+        )
+        .unwrap_err();
         assert!(matches!(err, HistoryError::NotFound(_)), "got: {err:?}");
     }
 
@@ -324,7 +330,7 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "root"]);
         let sha = git_out(dir, &["rev-parse", "HEAD"]);
 
-        let files = commit_files(dir, &sha).unwrap();
+        let files = commit_files(&crate::git::roots::WorkTreeRoot::user_clone(dir), &sha).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "a.txt");
         assert_eq!(files[0].status, "A");
@@ -346,7 +352,7 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "rename it"]);
         let sha = git_out(dir, &["rev-parse", "HEAD"]);
 
-        let files = commit_files(dir, &sha).unwrap();
+        let files = commit_files(&crate::git::roots::WorkTreeRoot::user_clone(dir), &sha).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "renamed.txt");
         assert_eq!(files[0].old_path.as_deref(), Some("a.txt"));
@@ -362,7 +368,7 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "add binary"]);
         let sha = git_out(dir, &["rev-parse", "HEAD"]);
 
-        let files = commit_files(dir, &sha).unwrap();
+        let files = commit_files(&crate::git::roots::WorkTreeRoot::user_clone(dir), &sha).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].binary);
         assert_eq!(files[0].insertions, 0);

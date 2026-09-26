@@ -42,16 +42,30 @@ pub const SCHEMA: &str = "kb-proposal/1";
 /// just a backstop so an unreviewed backlog can't blow out one response.
 const FLEET_CAP: usize = 200;
 
-/// Who authored the candidate. The daemon always stamps `Agent` on
-/// [`submit`] today (the route is the agent-layer submit verb); `Human` is
-/// carried in the schema for a future SPA-compose path, per the recon's
-/// forward-compatible field list.
+/// Longest proposal `title`, in Unicode scalars. Comment-keep truncates
+/// the comment body to this. `submit` does not impose it — an agent passes
+/// an explicit title. 160 matches the memory derive-title cap so an
+/// approved keep still lands as a one-line memory title.
+pub const TITLE_LIMIT: usize = 160;
+
+/// Trim `text` and hard-cut at [`TITLE_LIMIT`] Unicode scalars.
+/// Whitespace-only input returns `""` (callers must not enqueue that).
+pub(crate) fn truncate_proposal_title(text: &str) -> String {
+    text.trim().chars().take(TITLE_LIMIT).collect()
+}
+
+/// Who authored the candidate. [`submit`] stamps [`ProposalSource::Agent`];
+/// comment-keep stamps [`ProposalSource::Comment`] and leaves the candidate
+/// queued (never auto-approved). `Human` is carried for a future
+/// SPA-compose path, per the recon's forward-compatible field list.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProposalSource {
     Agent,
     Human,
+    /// Kept from a review comment. Serializes as `"comment"`.
+    Comment,
 }
 
 /// One queued memory candidate — the `kb-proposal/1` on-disk shape. Field
@@ -99,7 +113,7 @@ pub struct Proposal {
     pub note: Option<String>,
 }
 
-fn default_category() -> String {
+pub(crate) fn default_category() -> String {
     "memory-user".to_string()
 }
 
@@ -201,11 +215,7 @@ pub async fn submit(
 
     let global = body.global.unwrap_or(body.linked_kbs.is_empty());
     let salience = body.salience.map(|s| s.clamp(0.0, 1.0));
-    let proposal = Proposal {
-        id: new_proposal_id(),
-        schema: SCHEMA.to_string(),
-        created_at: chrono::Utc::now().timestamp(),
-        session_id: body.session_id.clone(),
+    let spec = EnqueueProposal {
         title: title.to_string(),
         body: body.body.clone(),
         category: body.category.clone(),
@@ -214,18 +224,20 @@ pub async fn submit(
         linked_kbs: body.linked_kbs.clone(),
         salience,
         supersedes: body.supersedes.clone(),
+        session_id: body.session_id.clone(),
         source: ProposalSource::Agent,
         note: body.note.clone(),
     };
 
-    let path = state.paths.kb_proposal_file(&kb_name, &proposal.id);
+    let dir = state.paths.kb_proposals_dir(&kb_name);
     let lock = state.proposal_lock_for(&kb_name);
     let guard = lock.lock().await;
-    let saved = save_proposal_atomic(&path, &proposal);
+    let saved = enqueue_proposal(&dir, spec);
     drop(guard);
-    if let Err(e) = saved {
-        return error_to_problem_json(&e);
-    }
+    let proposal = match saved {
+        Ok(p) => p,
+        Err(e) => return error_to_problem_json(&e),
+    };
 
     ctx.bus.emit(
         "proposal.created",
@@ -553,6 +565,51 @@ fn save_proposal_atomic(path: &std::path::Path, proposal: &Proposal) -> kb_core:
     Ok(())
 }
 
+/// Caller-supplied fields for [`enqueue_proposal`]. The queue assigns
+/// `id`, `schema`, and `created_at`.
+pub(crate) struct EnqueueProposal {
+    pub title: String,
+    pub body: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub global: bool,
+    pub linked_kbs: Vec<String>,
+    pub salience: Option<f32>,
+    pub supersedes: Option<String>,
+    pub session_id: Option<String>,
+    pub source: ProposalSource,
+    pub note: Option<String>,
+}
+
+/// Write one queued `kb-proposal/1` under `dir`
+/// (`<state>/<kb>/.proposals`). Caller holds the per-kb proposal lock.
+/// Does not approve, does not call memory ingest, and does not delete
+/// the proposal file.
+pub(crate) fn enqueue_proposal(
+    dir: &std::path::Path,
+    spec: EnqueueProposal,
+) -> kb_core::Result<Proposal> {
+    let proposal = Proposal {
+        id: new_proposal_id(),
+        schema: SCHEMA.to_string(),
+        created_at: chrono::Utc::now().timestamp(),
+        session_id: spec.session_id,
+        title: spec.title,
+        body: spec.body,
+        category: spec.category,
+        tags: spec.tags,
+        global: spec.global,
+        linked_kbs: spec.linked_kbs,
+        salience: spec.salience,
+        supersedes: spec.supersedes,
+        source: spec.source,
+        note: spec.note,
+    };
+    let path = dir.join(format!("{}.json", proposal.id));
+    save_proposal_atomic(&path, &proposal)?;
+    Ok(proposal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,6 +738,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ProposalSource::Human).unwrap(),
             serde_json::json!("human")
+        );
+        assert_eq!(
+            serde_json::to_value(ProposalSource::Comment).unwrap(),
+            serde_json::json!("comment")
         );
     }
 }

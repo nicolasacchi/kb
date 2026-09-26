@@ -1,7 +1,7 @@
 //! Async-worker-starvation regression test.
 //!
 //! Ties directly to the 2026-08-31 prod incident documented in the module
-//! doc of `crates/kb-code-server/src/store.rs`: `Store` wraps ONE
+//! doc of `crates/kb-code-server/src/store/mod.rs`: `Store` wraps ONE
 //! `rusqlite::Connection` behind a `std::sync::Mutex`. Before the
 //! `StoreBlocking::run_blocking` fix, a route handler that called a `Store`
 //! method INLINE inside an `async fn` blocked its tokio async-worker thread
@@ -110,13 +110,19 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
     let comment_keywords = Arc::new(kb_code_server::comments::KeywordSet::from_config(
         &config.comments.keywords,
     ));
-    let (index_sink, _sink_worker) = kb_code_server::sink::spawn(
+    // V77-P2 — `sink::spawn` now also takes the shared `SymbolIndex` (it
+    // warms it once a repo's boot-walk job finishes) and returns the
+    // `RepoActivity` registry `AppState::repo_activity` reads.
+    let symbol_index = Arc::new(kb_code_server::search::SymbolIndex::new());
+    let (index_sink, repo_activity, _sink_worker) = kb_code_server::sink::spawn(
         store.clone(),
         repo_ids.clone(),
         bus.clone(),
         config.occurrences.clone(),
         is_rails_by_repo,
         (*comment_keywords).clone(),
+        symbol_index.clone(),
+        config.indexer.resolved_walk_workers(),
     );
     let watch_mode = kb_code_server::mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == kb_code_server::mirror::WatchMode::Poll {
@@ -158,12 +164,16 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
     let scopes = config.scopes.clone();
     let scip_cfg = config.scip.clone();
     let review_cfg = config.review.clone();
+    let review_stores = std::sync::Arc::new(kb_code_server::review_store::ReviewStores::disabled(
+        "starvation fixture",
+    ));
     let _auto_capture = kb_code_server::reviews::spawn_auto_capture_worker(
         store.clone(),
         bus.clone(),
         config.repos.clone(),
         review_cfg.max_patchsets,
         review_cfg.patchset_capture,
+        review_stores.clone(),
     );
     let doclens_cfg = config.doclens.clone();
     let behavioral_cfg = config.behavioral.clone();
@@ -190,8 +200,9 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         bus,
         watch_mode: watch_mode_label,
         watcher: Arc::new(watcher),
+        repo_activity,
         file_index: Arc::new(kb_code_server::search::FileIndex::new()),
-        symbol_index: Arc::new(kb_code_server::search::SymbolIndex::new()),
+        symbol_index,
         search_factors: config.search.factors(),
         lanes: config.lanes.clone(),
         trails: config.trails.clone(),
@@ -228,6 +239,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
             kb_code_server::history::facts::BaseCache::default(),
         )),
         review_jobs: std::sync::Arc::new(kb_code_server::review_jobs::ReviewJobs::default()),
+        review_stores,
     }))
 }
 

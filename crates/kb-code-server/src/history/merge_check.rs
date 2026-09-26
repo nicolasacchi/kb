@@ -41,6 +41,7 @@
 //! touches the working tree" guarantee holds regardless of the outcome.
 
 use super::{merge_base, resolve_sha, HistoryError, Resolved, Result};
+use crate::git::roots::GitRoot;
 use crate::git::{RefRange, Revspec};
 use crate::history::branches::ahead_behind;
 use crate::history::scratch::ScratchOdb;
@@ -71,7 +72,7 @@ pub struct MergeCheck {
 /// ordinary "conflicts found" signal, not a subprocess failure) — see the
 /// module doc.
 fn run_merge_tree(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     scratch_root: &Path,
     from: &Revspec,
     to: &Revspec,
@@ -79,7 +80,7 @@ fn run_merge_tree(
     let scratch = ScratchOdb::create(repo_root, scratch_root)?;
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
         // SEC-15 — write the would-be result tree into a PER-REQUEST
         // scratch object directory instead of the browsed repo's own ODB.
         // Both vars are load-bearing and neither works alone:
@@ -145,7 +146,7 @@ fn parse_merge_tree(status: i32, stdout: &[u8], stderr: &[u8]) -> Result<(bool, 
 /// `to` get the same dash-prefix injection guard every other caller-
 /// supplied revspec in this crate does.
 pub fn merge_check(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     scratch_root: &Path,
     from: &Revspec,
     to: &Revspec,
@@ -295,7 +296,13 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "feature change"]);
 
         let scratch = tempfile::tempdir().unwrap();
-        let mc = merge_check(dir, scratch.path(), &rs("main"), &rs("feature")).unwrap();
+        let mc = merge_check(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            scratch.path(),
+            &rs("main"),
+            &rs("feature"),
+        )
+        .unwrap();
         assert!(mc.clean);
         assert!(mc.conflicts.is_empty());
         assert_eq!(mc.ahead, 1);
@@ -322,7 +329,13 @@ mod tests {
 
         let scratch = tempfile::tempdir().unwrap();
         let objects_before = loose_object_count(dir);
-        let mc = merge_check(dir, scratch.path(), &rs("main"), &rs("feature")).unwrap();
+        let mc = merge_check(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            scratch.path(),
+            &rs("main"),
+            &rs("feature"),
+        )
+        .unwrap();
         assert!(!mc.clean);
         assert_eq!(
             mc.conflicts,
@@ -380,7 +393,13 @@ mod tests {
         git(dir, &["commit", "-q", "-m", "c1"]);
 
         let scratch = tempfile::tempdir().unwrap();
-        let err = merge_check(dir, scratch.path(), &rs("main"), &rs("does-not-exist")).unwrap_err();
+        let err = merge_check(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            scratch.path(),
+            &rs("main"),
+            &rs("does-not-exist"),
+        )
+        .unwrap_err();
         assert!(
             matches!(err, HistoryError::GitFailed { .. }),
             "got: {err:?}"

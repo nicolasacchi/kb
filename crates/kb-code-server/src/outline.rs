@@ -323,7 +323,12 @@ pub async fn outline_route(
     Query(params): Query<OutlineParams>,
 ) -> Result<Response, crate::routes::ApiError> {
     let (repo, _repo_id) = crate::routes::find_repo(&state, &params.repo)?;
-    let read = crate::routes::read_repo_file(repo, &params.path, params.rev.as_deref())?;
+    let git_ctx = crate::routes::bridge_ctx(&state, repo, params.rev.as_deref()).await;
+    let read = crate::routes::read_repo_file(
+        repo,
+        &params.path,
+        crate::routes::RevResolver::maybe_bridged(git_ctx.as_ref(), params.rev.as_deref()),
+    )?;
     let row = crate::syntax::row_for_path(&params.path, Some(&read.bytes));
     let symbols = match row.and_then(|r| r.info) {
         Some(li) => {

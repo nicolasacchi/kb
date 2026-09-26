@@ -2,8 +2,13 @@
  * `components/home/RepoCard.tsx`). Same token discipline as every other
  * kb-code stylesheet (`reader.css`'s own header comment) — every color
  * reaches for a `tokens.css` variable. `.kbc-empty*` (Home's own no-repos
- * state) lives in `reader.css` — it's the shared cross-view component, not
- * something Home owns. */
+ * state, and every `EmptyState` nested in an inbox lane below) lives in
+ * `reader.css` — it's the shared cross-view component, not something Home
+ * owns. `.kbc-home` (the page container) also stays in `reader.css`; V80-R1
+ * moved Home's OWN header (`.kbc-home__head`/`__title`/`__head-row`) onto
+ * `PageHeader`/`MetaLine` (`components/page.css`) and deleted the now-dead
+ * rules — `.kbc-home__hint`/`__inbox-link` survive here (below) since
+ * `PageHeader` has no slot for either. */
 
 .kbc-home__grid {
   display: grid;
@@ -13,31 +18,66 @@
 
 /* V70-A3S — the two repo-LESS lanes above the repo grid (design doc
  * §Decisions D23): the "One Inbox" summary + the cross-repo "Continue where
- * you left off" card. `.kbc-home__section*` are deliberately NEW class
- * names distinct from `reader.css`'s pre-existing `.kbc-home__head`/
- * `__title`/`__hint`/`__summary`/`__capability`/`__inbox-link` (that file
- * owns Home's header chrome; this file owns everything below it). */
-.kbc-home__lanes {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
+ * you left off" card.
+ *
+ * V80-R1 — `reader.css`'s pre-existing `.kbc-home__head`/`__title`/`__hint`/
+ * `__summary`/`__capability`/`__inbox-link` block is GONE (Home's header is
+ * now `PageHeader` + `MetaLine`, both from `components/page.css`; `__hint`
+ * and `__inbox-link` survive here as the two bits `PageHeader` has no slot
+ * for — the loading/error one-liners and the Inbox `<Link>` handed to its
+ * `actions` prop). The two lanes below no longer share a 260px-min grid row
+ * — Home's Inbox summary is the page's own first-class FIRST section, full
+ * width, and Continue-where-you-left-off is its own full-width section
+ * under it (both were previously squeezed side by side). */
+.kbc-home__hint {
+  color: var(--ink-mute);
+  margin: 0 0 16px;
+}
+.kbc-home__hint kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 1px 5px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--ink-dim);
+}
+.kbc-home__inbox-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  flex: 0 0 auto;
+}
+.kbc-home__inbox-link:hover {
+  color: var(--accent-soft);
+}
+.kbc-home__meta {
   margin-bottom: 20px;
+}
+
+.kbc-home__lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 .kbc-home__section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   background: var(--bg-card);
   border: 1px solid var(--rule);
   border-radius: var(--radius-md);
-  padding: 14px 16px;
+  padding: 16px 18px;
 }
 .kbc-home__section-title {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 .kbc-home__section-title a {
@@ -48,13 +88,64 @@
   color: var(--accent-soft);
 }
 .kbc-home__section-badge {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--accent-bg);
   color: var(--accent-soft);
+  font-variant-numeric: tabular-nums;
 }
-.kbc-home__inbox-lanes,
+
+/* ── the Inbox summary's own lanes — an `h3` per lane (Reviews/Open
+   questions/Desk/Comments), each either the counted link or an
+   EmptyState-SHAPED caption (`.kbc-home__inbox-lane-empty` — NOT the
+   shared `EmptyState` component; `InboxSummaryLane`'s own doc in
+   `routes/Home.tsx` says why: this Home summary must never carry a
+   `[data-kbc-empty]` element, since `e2e/home.spec.ts`'s own "F6
+   EmptyState sweep" asserts there are ZERO on a configured Home).
+   A responsive grid rather than a stacked list — there is a full-width
+   section to fill now that this is no longer sharing a 260px-min column
+   with Continue-reading. ── */
+.kbc-home__inbox-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+.kbc-home__inbox-lane-title {
+  margin: 0 0 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+.kbc-home__inbox-lane-link {
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: var(--fs-sm);
+}
+.kbc-home__inbox-lane-link:hover {
+  color: var(--accent-soft);
+}
+.kbc-home__inbox-lane-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-sm);
+}
+.kbc-home__inbox-lane-empty-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--ink-dim);
+}
+.kbc-home__inbox-lane-empty-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
 .kbc-home__continue-list {
   list-style: none;
   margin: 0;
@@ -63,20 +154,16 @@
   flex-direction: column;
   gap: 4px;
 }
-.kbc-home__inbox-lanes a,
 .kbc-home__continue-row {
   color: var(--ink-mute);
   text-decoration: none;
-  font-size: 12px;
-}
-.kbc-home__inbox-lanes a:hover,
-.kbc-home__continue-row:hover {
-  color: var(--accent-soft);
-}
-.kbc-home__continue-row {
+  font-size: var(--fs-sm);
   display: flex;
   gap: 6px;
   align-items: baseline;
+}
+.kbc-home__continue-row:hover {
+  color: var(--accent-soft);
 }
 .kbc-home__continue-repo {
   font-weight: 600;
@@ -108,7 +195,10 @@
 .kbc-home-card__name {
   font-family: var(--font-mono);
   font-weight: 600;
-  font-size: 15px;
+  /* V80-R1 — was a raw `15px`; `--fs-body` is now 15px too (comfortable
+   * density), so this is a zero-diff token conversion that also picks up
+   * the compact-density step (14px) the raw value never could. */
+  font-size: var(--fs-body);
   color: var(--ink);
   text-decoration: none;
 }
@@ -121,7 +211,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
 a.kbc-home-card__head {
@@ -145,6 +235,22 @@ a.kbc-home-card__head:hover {
   text-transform: uppercase;
 }
 .kbc-home-card__counts {
+  white-space: nowrap;
+}
+
+/* V77-P2 (E6) — the "catching up" chip beside the watcher badge in the
+ * card header. kbc-theme/1: a DASHED border carries the "in progress, not
+ * yet settled" meaning (the same line-style the Rails lens's `likely`
+ * trust class uses, web-code/CLAUDE.md) rather than relying on the
+ * `--warn` hue alone. */
+.kbc-home-card__catching-up {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 10px;
   white-space: nowrap;
 }
 
@@ -289,14 +395,16 @@ a.kbc-home-card__head:hover {
   width: 50%;
 }
 
+/* V80-R1 — the six links are now a `MetaLine` (`components/page.css`'s
+ * `.kbc-metaline`, which already supplies `display:flex`/font-size/color)
+ * INSIDE this `<footer>` (fix, same unit: a bare `MetaLine` has no landmark
+ * role of its own, so the `<footer>` wrapper — which is what computes to
+ * `contentinfo`, the landmark `e2e/regions.spec.ts`'s "home" template pins
+ * — has to stay). This rule owns only the box model `.kbc-metaline`
+ * doesn't: the divider above the row and its own top padding. */
 .kbc-home-card__footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   border-top: 1px solid var(--rule);
   padding-top: 8px;
-  font-size: 11px;
-  color: var(--ink-dim);
 }
 .kbc-home-card__footer a {
   color: var(--ink-mute);

@@ -25,13 +25,26 @@
 // would double the rows. `?github=` here maps straight to the server
 // param.
 //
+// V80-F3 REVIVES that same merge shape, but only for `mergeTimelineRows` —
+// `findingTouchTimelineRows` derives rows from a finding's own
+// `touched_in` field, which has no server `kind` at all (root CLAUDE.md
+// #10's surfaced-never-scored posture: computed per read, never
+// persisted, so there is nothing for a `review-timeline/2` lane to carry).
+// The merge happens ONLY at the final `displayRows` step, built from
+// `visibleRows` (never `rows`), so `visibleRows`'s own index-aligned
+// `hiddenLanes` filter (`rows.filter((_, i) => data.events[i]…)`) stays
+// exactly as fragile-but-correct as before — a finding-touch row is not a
+// server lane and is never hidden by the lane toggle.
+//
 // Purely a renderer over `lib/reviewTimeline.ts`'s `timelineRows` for the
 // row SHAPE — this file never branches on a raw event `kind` itself, so an
 // unrecognized future kind can't crash it.
 import type { SVGProps } from "react";
 import { useMemo, useState } from "react";
 import type { ReviewTimelineLaneState } from "../../api/types";
-import { useReviewTimeline } from "../../hooks/useReviews";
+import { mergeTimelineRows } from "../../lib/githubThreads";
+import { useReview, useReviewFindings, useReviewTimeline } from "../../hooks/useReviews";
+import { findingTouchTimelineRows } from "../../lib/findingTouches";
 import { formatUnixSeconds, relativeTime } from "../../lib/format";
 import { timelineRows, type TimelineIconKind } from "../../lib/reviewTimeline";
 import { cycleLaneStep, laneLabel, TIMELINE_LANES, toggleLane } from "../../lib/timelineLanes";
@@ -59,6 +72,10 @@ const ICONS: Record<TimelineIconKind, (p: SVGProps<SVGSVGElement>) => JSX.Elemen
   claim: Icon.Spark,
   turn: Icon.Terminal,
   github: Icon.PullRequest,
+  // V80-F3 — "author touched f-slug's lines in ps N" (client-derived, see
+  // this file's own module doc). `Swap` reads as "changed", distinct from
+  // `patchset`'s `Layers` (a new capture) even though both concern a ps.
+  finding_touch: Icon.Swap,
   unknown: Icon.More,
 };
 
@@ -138,6 +155,33 @@ export default function TimelinePanel({ repo, reviewId, prBound }: TimelinePanel
   const visibleRows = useMemo(
     () => rows.filter((_, i) => !hiddenLanes.has(String(data?.events[i]?.lane ?? ""))),
     [rows, hiddenLanes, data],
+  );
+
+  // V80-F3 — `touched_in` rides the findings fetch, not the timeline one
+  // (root CLAUDE.md #10: it is computed per read from `GET
+  // .../findings`, never a `review-timeline/2` server kind). Both
+  // `reviewDetailQ` (`patchsets`, for each row's `at`) and `findingsQ`
+  // (`{}` — the review's LATEST ps, the same default `ReportPanel`'s own
+  // `useReviewFindings(repo, review.id, { ps })` resolves to when a
+  // caller hasn't picked an older one) share their query KEYS with
+  // whichever other Report-tab/side-panel component mounted first, so
+  // this is a cache hit in the common case rather than a genuinely new
+  // round trip.
+  const reviewDetailQ = useReview(repo, reviewId);
+  const findingsQ = useReviewFindings(repo, reviewId, {});
+  const touchRows = useMemo(
+    () =>
+      findingTouchTimelineRows(
+        findingsQ.data?.findings ?? [],
+        reviewDetailQ.data?.patchsets ?? [],
+        repo,
+        reviewId,
+      ),
+    [findingsQ.data, reviewDetailQ.data, repo, reviewId],
+  );
+  const displayRows = useMemo(
+    () => mergeTimelineRows(visibleRows, touchRows),
+    [visibleRows, touchRows],
   );
 
   function cycleLane() {
@@ -270,7 +314,7 @@ export default function TimelinePanel({ repo, reviewId, prBound }: TimelinePanel
         </label>
       </div>
 
-      {visibleRows.length === 0 ? (
+      {displayRows.length === 0 ? (
         <p className="kbc-review__card-empty" data-kbc-timeline-empty>
           {rows.length === 0
             ? "Nothing has happened on this review yet."
@@ -278,7 +322,7 @@ export default function TimelinePanel({ repo, reviewId, prBound }: TimelinePanel
         </p>
       ) : (
         <ol className="kbc-timeline__spine">
-          {visibleRows.map((row, i) => {
+          {displayRows.map((row, i) => {
             const IconCmp = ICONS[row.icon];
             return (
               <li

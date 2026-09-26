@@ -6,6 +6,7 @@ import type { RecipeCatalogEntry, RecipeItem } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import RecipeAutoForm from "../components/recipes/RecipeAutoForm";
 import RecipeHome from "../components/recipes/RecipeHome";
 import RecipeResultViews from "../components/recipes/RecipeResultViews";
@@ -92,13 +93,15 @@ export default function Recipes() {
   if (!urlState.slug) {
     return (
       <div className="kbc-recipes kbc-recipe-page" id="main" data-kbc-recipes>
-        <header className="kbc-recipes__head">
-          <h1 className="kbc-recipes__title">Recipes — {repo}</h1>
-          <p className="kbc-recipes__hint" data-kbc-recipes-hint>
-            Named, parameterised questions over this repo's own indexes — pick one below, or run a
-            legacy attention query further down.
-          </p>
-        </header>
+        <PageHeader
+          title={`Recipes — ${repo}`}
+          lede={
+            <span data-kbc-recipes-hint>
+              Named, parameterised questions over this repo's own indexes — pick one below, or run
+              a legacy attention query further down.
+            </span>
+          }
+        />
         <RecipeHomeSection repo={repo} />
         <LegacyRecipesPanel repo={repo} legacyUrlState={legacyUrlState} />
       </div>
@@ -520,17 +523,19 @@ function RecipeReplay({ repo, id }: { repo: string; id: string }) {
 
 function RunHeader({ repo, run }: { repo: string; run: KbcRunOut }) {
   return (
-    <header className="kbc-recipes__head">
-      <h1 className="kbc-recipes__title" data-kbc-recipe-run-title={run.recipe}>
-        {run.title}
-      </h1>
-      <p className="kbc-recipes__hint">
-        <RecipeTrustBadge state={run.trust} /> · {run.home} · {run.repo}
-      </p>
-      <Link to={recipeRunUrl(repo)} className="kbc-recipes__back-link">
-        ← All recipes
-      </Link>
-    </header>
+    <PageHeader
+      kicker={
+        <Link to={recipeRunUrl(repo)} className="kbc-recipes__back-link">
+          ← All recipes
+        </Link>
+      }
+      title={<span data-kbc-recipe-run-title={run.recipe}>{run.title}</span>}
+      lede={
+        <>
+          <RecipeTrustBadge state={run.trust} /> · {run.home} · {run.repo}
+        </>
+      }
+    />
   );
 }
 
@@ -740,20 +745,28 @@ function RecipeRunPage({ repo, slug }: { repo: string; slug: string }) {
 
   return (
     <div className="kbc-recipes kbc-recipe-page" id="main" onKeyDown={onKeyDown} data-kbc-recipes>
-      <header className="kbc-recipes__head">
-        <Link to={recipeRunUrl(repo)} className="kbc-recipes__back-link">
-          ← All recipes
-        </Link>
-        <h1 className="kbc-recipes__title" data-kbc-recipe-run-title={slug}>
-          {spec?.title ?? slug}
-        </h1>
-        {spec && (
-          <p className="kbc-recipes__hint">
-            <RecipeTrustBadge state={spec.trust} /> · {spec.home}
-          </p>
-        )}
-        {spec?.description_md && <p className="kbc-recipes__hint">{spec.description_md}</p>}
-      </header>
+      <PageHeader
+        kicker={
+          <Link to={recipeRunUrl(repo)} className="kbc-recipes__back-link">
+            ← All recipes
+          </Link>
+        }
+        title={<span data-kbc-recipe-run-title={slug}>{spec?.title ?? slug}</span>}
+        lede={
+          <>
+            {spec && (
+              <span className="kbc-recipes__hint">
+                <RecipeTrustBadge state={spec.trust} /> · {spec.home}
+              </span>
+            )}
+            {spec?.description_md && (
+              <span className="kbc-recipes__hint kbc-recipes__hint--block">
+                {spec.description_md}
+              </span>
+            )}
+          </>
+        }
+      />
 
       {trustBlocksRun && spec && (
         <div className="kbc-recipe-trust-gate" data-kbc-recipe-trust-gate={trust}>

@@ -58,6 +58,18 @@ test.describe("branches page", () => {
   }) => {
     await page.goto(`${BASE}/r/${REPO_NAME}/~branches`);
 
+    // V80-R5 — the raw table (`BrowseAllBranches`) is now closed by
+    // default regardless of branch count (was open whenever rows.length
+    // <= 5); open it explicitly, same as `branches-landing.spec.ts`'s own
+    // "browse-all toggles" test already does.
+    const browse = page.locator("[data-kbc-browse]");
+    await expect(browse).toBeVisible();
+    const browseTable = browse.locator(".kbc-branches__table");
+    if (await browseTable.isHidden()) {
+      await browse.locator("[data-kbc-browse-toggle]").click();
+    }
+    await expect(browseTable).toBeVisible();
+
     const mainRow = page.locator('[data-kbc-branch-row="main"]');
     await expect(mainRow).toBeVisible();
     await expect(mainRow.locator("[data-kbc-branch-head]")).toBeVisible();

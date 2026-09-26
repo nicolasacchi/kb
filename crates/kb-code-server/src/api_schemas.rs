@@ -52,7 +52,12 @@ use crate::routes::ApiError;
 
 /// Mirrors `routes::IdentityResponse`'s agent-relevant fields (drops the
 /// kb-sibling/1 handshake fields this schema's own consumer doesn't need
-/// to introspect — `kb_public_url`/`remote_mutations`).
+/// to introspect — `kb_public_url`/`remote_mutations`). V80-F2 adds
+/// `review_mutations_admitted` — unlike `remote_mutations` (the raw
+/// config flag, dropped above), this one IS agent-relevant: it is the
+/// per-request answer to "would the daemon admit a review-mutation write
+/// from me right now", so a schema reader building the loopback pre-probe
+/// finds it here rather than needing the full `IdentityResponse`.
 #[derive(Debug, JsonSchema)]
 pub struct IdentitySchema {
     pub name: String,
@@ -63,6 +68,8 @@ pub struct IdentitySchema {
     pub schema_epoch: u32,
     /// V75-M1 — `pending` | `running` | `done`.
     pub rekey: String,
+    /// V80-F2 — see [`crate::routes::IdentityResponse::review_mutations_admitted`].
+    pub review_mutations_admitted: bool,
     pub repos: Vec<RepoSummarySchema>,
 }
 
@@ -106,6 +113,11 @@ pub struct RepoEntrySchema {
     // background re-key resolves them.
     pub workspace_id: Option<String>,
     pub worktree_id: Option<String>,
+    // V77-P2 — the E6 honesty signal `RepoListEntry` gained: whether the
+    // sink worker still has slow-lane (`FullReconcile`/boot-walk) work
+    // outstanding for this repo, and when it last finished.
+    pub catching_up: bool,
+    pub settled_at: Option<i64>,
 }
 
 /// The registry's name set — `GET /api/schemas`' `names` field and
@@ -143,6 +155,7 @@ fn example_json(name: &str) -> Option<serde_json::Value> {
             "sibling_major": 1,
             "schema_epoch": 38,
             "rekey": "done",
+            "review_mutations_admitted": true,
             "repos": [{
                 "name": "kb",
                 "path": "/home/user/project/kb",
@@ -162,6 +175,8 @@ fn example_json(name: &str) -> Option<serde_json::Value> {
             "is_worktree": false,
             "workspace_id": "ws_4f2a19c0b3de",
             "worktree_id": "(main)",
+            "catching_up": false,
+            "settled_at": 1757000000,
         })),
         _ => None,
     }

@@ -1,0 +1,15 @@
+{
+  "base_ref": "string",
+  "base_sha": "string",
+  "created_at": "number",
+  "head_ref": "string",
+  "id": "number",
+  "latest_ps": "number",
+  "repo": "string",
+  "schema": "string",
+  "session_id": "null",
+  "state": "string",
+  "tip_sha": "string",
+  "title": "string",
+  "updated_at": "number"
+}

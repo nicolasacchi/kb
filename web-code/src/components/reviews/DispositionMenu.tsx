@@ -4,15 +4,25 @@
 // the server, see `api/types.ts`'s `FindingDispositionState` doc).
 import { useSyncExternalStore } from "react";
 import type { FindingDispositionState, ReviewFinding } from "../../api/types";
+import {
+  REVIEW_MUTATIONS_ADMITTED_HINT,
+  useReviewMutationsAdmitted,
+} from "../../hooks/useReviewMutationsAdmitted";
 import { useDispositionMutation } from "../../hooks/useReviews";
-import { isLoopbackRefusal, LOOPBACK_HINT, msg } from "./ReviewHeader";
+import { isLoopbackRefusal, msg } from "./ReviewHeader";
 import { toast } from "../../lib/toast";
 
 /// Session-wide latch — mirrors `components/diff/DiffThread.tsx`'s
 /// `applyLoopbackLatched` idiom EXACTLY: one 404 from a disposition write
-/// hides every disposition control for the rest of this SPA session
+/// disables every disposition control for the rest of this SPA session
 /// (module-scoped `useSyncExternalStore`, not component state, so a remount
-/// doesn't retry a call already known to be loopback-only-refused).
+/// doesn't retry a call already known to be refused). V80-F2: this is now
+/// the FALLBACK signal — `useReviewMutationsAdmitted` below is read FIRST
+/// and disables the controls proactively, before any submit, so this latch
+/// only ever fires for the rare case the two disagree (a config reload
+/// mid-session). Either way the controls stay VISIBLE-but-disabled with an
+/// inline caption — never replaced/hidden (root CLAUDE.md's honesty rule:
+/// "a filter names what it hides").
 let dispositionLoopbackLatched = false;
 const dispositionLoopbackListeners = new Set<() => void>();
 
@@ -66,11 +76,13 @@ export interface DispositionMenuProps {
 
 export default function DispositionMenu({ repo, reviewId, finding }: DispositionMenuProps) {
   const mutate = useDispositionMutation(repo);
+  const { admitted } = useReviewMutationsAdmitted();
   const loopback = useDispositionLoopbackLatched();
+  const refused = !admitted || loopback;
   const current = finding.disposition?.state ?? null;
 
   async function onClick(clicked: FindingDispositionState) {
-    if (loopback || mutate.isPending) return;
+    if (refused || mutate.isPending) return;
     const next = nextDispositionClick(current, clicked);
     try {
       await mutate.mutateAsync({
@@ -87,31 +99,34 @@ export default function DispositionMenu({ repo, reviewId, finding }: Disposition
     }
   }
 
-  if (loopback) {
-    return (
-      <span className="kbc-finding__foot-loopback" data-kbc-finding-disposition-loopback title={LOOPBACK_HINT}>
-        {LOOPBACK_HINT}
-      </span>
-    );
-  }
-
   return (
-    <div className="kbc-finding__dispo-row" role="group" aria-label="disposition" data-kbc-finding-disposition={finding.slug}>
-      {DISPOSITIONS.map((d) => (
-        <button
-          key={d.key}
-          type="button"
-          className={"kbc-dispo" + (current === d.key ? ` kbc-dispo--active-${d.key}` : "")}
-          aria-pressed={current === d.key}
-          title={d.hint}
-          disabled={mutate.isPending}
-          onClick={() => void onClick(d.key)}
-          data-kbc-finding-disposition-btn={d.key}
+    <div className="kbc-finding__dispo" data-kbc-finding-disposition-wrap={finding.slug}>
+      <div className="kbc-finding__dispo-row" role="group" aria-label="disposition" data-kbc-finding-disposition={finding.slug}>
+        {DISPOSITIONS.map((d) => (
+          <button
+            key={d.key}
+            type="button"
+            className={"kbc-dispo" + (current === d.key ? ` kbc-dispo--active-${d.key}` : "")}
+            aria-pressed={current === d.key}
+            title={refused ? REVIEW_MUTATIONS_ADMITTED_HINT : d.hint}
+            disabled={refused || mutate.isPending}
+            onClick={() => void onClick(d.key)}
+            data-kbc-finding-disposition-btn={d.key}
+          >
+            {current === d.key ? "✓ " : ""}
+            {d.label}
+          </button>
+        ))}
+      </div>
+      {refused && (
+        <span
+          className="kbc-finding__foot-loopback"
+          data-kbc-finding-disposition-loopback
+          title={REVIEW_MUTATIONS_ADMITTED_HINT}
         >
-          {current === d.key ? "✓ " : ""}
-          {d.label}
-        </button>
-      ))}
+          {REVIEW_MUTATIONS_ADMITTED_HINT}
+        </span>
+      )}
     </div>
   );
 }
