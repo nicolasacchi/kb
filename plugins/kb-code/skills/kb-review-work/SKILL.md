@@ -27,12 +27,27 @@ calls GitHub's write API — you do, deliberately, at the end.
   ladder-verified), and every posted item is recorded back via
   `kb-code review publish` so nothing double-posts.
 
-**Addressing.** The resolve-grammar verbs — `find`, `diff`, `log`, `cat`,
-`verify`, `sync`, `status`, `retrack` — take `<id>`, `pr:<N>` or `<id>/ps<n>`,
-inferring the repo from the store when `pr:<N>` is unique (`--repo` to
-disambiguate). The older verbs (`show`, `comments`, `findings list`,
-`timeline`, `github-threads`, `export-github`, `publish`, `distill`) take a
-numeric `<id>`; get it once from `find`/`status` and reuse it.
+**Addressing.** One parser (`parse_review_ref`) knows `<id>`, `pr:<N>`,
+`<id>/ps<n>` and `pr:<N>/ps<n>`, inferring the repo from the store when
+`pr:<N>` is unique (`--repo` to disambiguate) — but NOT every verb takes
+every form, and guessing wrong costs you a clap error, a usage error, or a
+silently-ignored patchset:
+
+- `diff`, `log`, `cat`, `verify` take the FULL address, `/ps<n>` included
+  (`--ps N` is the equivalent flag; giving both with different values is a
+  usage error naming both).
+- `status` takes `<id>` or `pr:<N>` ONLY. A `/ps<n>` address is a USAGE
+  ERROR — status answers about the whole review, against the latest
+  patchset.
+- `retrack` takes `<id>` or `pr:<N>`. A `/ps<n>` suffix parses and is then
+  SILENTLY DROPPED, so never write one.
+- `find` takes NO address at all — the PR number is the `--pr N` flag.
+- `sync` takes NO address either — it is `--repo R --pr N`, or
+  `--repo R --open`.
+
+The older verbs (`show`, `comments`, `findings list`, `timeline`,
+`github-threads`, `export-github`, `publish`, `distill`) take a numeric
+`<id>`; get it once from `find`/`status` and reuse it.
 
 ## The loop
 
@@ -49,10 +64,17 @@ numeric `<id>`; get it once from `find`/`status` and reuse it.
    `review show <id>` · `review findings list <id>` (dispositions + resolution
    confidence) · `review timeline <id>` · `review github-threads <id>` (what
    was already said ON GitHub). To look at a change set use
-   `review diff <ref> --stat` / `--path P` / `--budget N` — computed in the
-   store against the patchset's own base, and it works with no `refs/kbc/*` in
-   the clone. There is no `git -C` path to the PR any more; the store owns
-   those refs.
+   `review diff <ref> --stat` (per-file counts, the default), or `--path P`
+   to narrow it, or `--patch` for unified text — three SEPARATE invocations,
+   never one combined line. `--budget N` belongs to the PATCH view: it cuts
+   the diff text and IMPLIES `--patch` only when neither `--stat` nor
+   `--name-only` was given, so alongside either of those it is silently
+   inert. All of it is computed in the store against the patchset's own
+   base, and it works with no `refs/kbc/*` in the clone. For a repo whose
+   review store is READY there is no `git -C` path to the PR any more — the
+   store owns those refs. Before the store is ready (`absent`, `seeding`,
+   `broken`, or disabled) the pre-store fallback still fetches
+   `refs/kbc/pr/<n>` into the clone, so the ref may be there.
 3. **Read the patchset, not the clone.** `review log <ref>` for the patchset's
    commits, and `review cat <ref> <path> --side old|new` for one file at its
    base (`old`) or tip (`new`, the default). Secret-denylisted paths are
@@ -112,7 +134,11 @@ numeric `<id>`; get it once from `find`/`status` and reuse it.
    `gh pr review {n} --approve|--request-changes|--comment -b …` for the
    event). After each successful post: `kb-code review publish <id> <slug>
    --url <html_url>` (and `--verdict` for the review event). Skipped
-   orphans stay skipped unless the operator opts into file-level.
+   orphans stay in `skipped_orphaned` — there is no file-level granularity
+   in the export payload. The ONE opt-in is the named flag
+   `--include-orphaned-as-general` on `export-github`, which moves each
+   orphan into `general_comments` instead (post it with
+   `gh pr review {n} --comment -b …`, no line to aim at).
 9. **Close out.** Summarize what changed (replies, fixes, syncs, published) in
    your final message. If the review reached a natural end,
    `kb-code review distill <id> --json` and — an explicit judgment call —
@@ -155,8 +181,14 @@ design's §13 table — `3 = not found`, `4 = conflict` — was NOT adopted, and
 | 5 | unreachable (daemon down) |
 | 6 | upstream (a forge fetch/API call failed) |
 | 7 | partial (`degraded: true`) |
-| 8 | not found |
+| 8 | not found — EVERY HTTP 404, whatever the body |
 
-Branch on the difference between 3 and 8 rather than guessing. A 404 is
-structurally ambiguous — loopback-only routes deliberately 404 a non-loopback
-caller — so 8 is used only where the body is an unambiguous not-found.
+Branch on the difference between 3 and 8 rather than guessing.
+`AgentError::from_http` matches on the STATUS alone: every 404 exits 8, with
+no body inspection deciding it. That is deliberate — a loopback-only route
+deliberately 404s a non-loopback caller (hiding the route's existence is
+the point), the same posture as an ordinary "no such id" — so the two cases
+are structurally indistinguishable from the exit code. The ONLY signal
+separating them is the hint an EMPTY-body 404 carries ("an empty 404 is also
+what a loopback-only route answers off-loopback"). Never conclude "no such
+review" from 8 alone: read the body's `code`/`message` and that hint first.
