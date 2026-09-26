@@ -60,11 +60,26 @@ fn generate_api_route_table() {
                 // `route_layer`, see router.rs). Both are documented in the
                 // prose preamble, not the /api table; don't prefix either
                 // with /api or count them toward the route total.
-                if path != "/healthz" && path != "/capture" {
+                //
+                // `/metrics` is skipped the same way. Prometheus text is
+                // top-level `GET /metrics` (mounted from metrics.rs today, so
+                // this file does not see it). An inline `.route("/metrics"`
+                // in router.rs must not be prefixed — that would document
+                // `/api/metrics` and clobber the JSON row. The nest snapshot
+                // is itself `.route("/metrics", get(routes::metrics::get))`
+                // and still has to be prefixed; a path-only skip would drop
+                // that row from the table below.
+                let rest = &span[q1 + 1 + q2..];
+                let nest_metrics = path == "/metrics"
+                    && method_re
+                        .captures_iter(rest)
+                        .any(|m| &m[2] == "routes::metrics::get");
+                if path != "/healthz" && path != "/capture" && (path != "/metrics" || nest_metrics)
+                {
                     // Everything else declared through `.route` in router.rs
-                    // lives under the nested /api tree (the only other non-/api
-                    // surfaces are the dispatch fallback and `/capture`, both in
-                    // the prose below).
+                    // lives under the nested /api tree (other non-/api
+                    // surfaces: the dispatch fallback, `/capture`, `/healthz`,
+                    // and a top-level `/metrics` Prometheus mount).
                     let full = format!("/api{path}");
                     for m in method_re.captures_iter(&span[q1 + 1 + q2..]) {
                         table

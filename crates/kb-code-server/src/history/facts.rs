@@ -87,9 +87,9 @@
 //! `git_fanout` semaphore, exactly like the rest of `history`.
 
 use super::{merge_base, run_git_raw, Result};
+use crate::git::roots::GitRoot;
 use crate::git::Revspec;
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
 
 /// Wire schema name.
 pub const SCHEMA: &str = "branch-facts/1";
@@ -345,7 +345,7 @@ fn is_full_sha(s: &str) -> bool {
 /// sha) adds `%(ahead-behind:<sha>)`; an older git rejects the atom
 /// outright, so one retry without it is the documented degrade.
 pub fn enumerate(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     default_sha: Option<&str>,
 ) -> Result<(Vec<RawRef>, AheadBehindSource)> {
     let ab_sha = default_sha.filter(|s| is_full_sha(s));
@@ -455,8 +455,15 @@ pub fn upstream_is_own_mirror(branch_name: &str, upstream: &str) -> bool {
 ///
 /// Costs at most ONE subprocess (`merge-base --fork-point`), and only when
 /// rung 1 does not apply.
+///
+/// RS-U4 (design §6 S7, dual root) — rungs 1 and 3 are object/ref reads
+/// and run against `repo_root` (a review store once a caller has one);
+/// rung 2 (fork-point) consults the default branch's REFLOG, which only a
+/// user clone has, so it always runs against `work`. The one caller today
+/// (`branches.rs`, a work-tree route) passes the work tree for both.
 pub fn detect_base(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
+    work: &crate::git::roots::WorkTreeRoot,
     raw: &RawRef,
     default_ref: Option<&str>,
     default_sha: Option<&str>,
@@ -490,7 +497,7 @@ pub fn detect_base(
     if raw.remote.is_none() {
         if let (Ok(d), Ok(b)) = (Revspec::parse(default_ref), Revspec::parse(&raw.full_ref)) {
             if let Ok(out) = run_git_raw(
-                repo_root,
+                work,
                 &["merge-base", "--fork-point", d.as_str(), b.as_str()],
             ) {
                 let sha = String::from_utf8_lossy(&out).trim().to_string();
@@ -516,7 +523,7 @@ pub fn detect_base(
     }
 }
 
-fn resolve_ref_sha(repo_root: &Path, spec: &str) -> Option<String> {
+fn resolve_ref_sha(repo_root: &dyn GitRoot, spec: &str) -> Option<String> {
     let r = Revspec::parse(spec).ok()?;
     let out = run_git_raw(
         repo_root,
@@ -590,7 +597,7 @@ pub fn parse_cherry(bytes: &[u8]) -> Option<u32> {
 }
 
 /// One `git cherry` probe. Blocking; the caller caps how many run.
-pub fn patch_id_merged(repo_root: &Path, base: &Revspec, head: &Revspec) -> Option<u32> {
+pub fn patch_id_merged(repo_root: &dyn GitRoot, base: &Revspec, head: &Revspec) -> Option<u32> {
     let out = run_git_raw(repo_root, &["cherry", base.as_str(), head.as_str()]).ok()?;
     parse_cherry(&out)
 }
@@ -989,7 +996,7 @@ fn short(sha: &str) -> String {
 ///
 /// The pathspec is caller-supplied and is passed AFTER an explicit `--`
 /// (SEC-17's third rule; asserted by `tests/security/git_argv_lint.rs`).
-pub fn touches_path(repo_root: &Path, base_sha: &str, tip_sha: &str, path: &str) -> bool {
+pub fn touches_path(repo_root: &dyn GitRoot, base_sha: &str, tip_sha: &str, path: &str) -> bool {
     let range = format!("{base_sha}..{tip_sha}");
     let Ok(out) = run_git_raw(repo_root, &["diff", "--name-only", &range, "--", path]) else {
         return false;
@@ -1031,7 +1038,7 @@ impl MineIdentity {
 /// `git config --get <key>` for the two identity keys. A missing key is
 /// `None`, never an empty-string match (which would make EVERY unauthored
 /// row "mine").
-pub fn mine_identity(repo_root: &Path) -> MineIdentity {
+pub fn mine_identity(repo_root: &dyn GitRoot) -> MineIdentity {
     let get = |key: &str| -> Option<String> {
         let out = run_git_raw(repo_root, &["config", "--get", key]).ok()?;
         let s = String::from_utf8_lossy(&out).trim().to_string();

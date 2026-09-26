@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { cssClassFor, makeByteToUtf16Mapper, spansToDecorationRanges } from "./decorations";
+import {
+  cssClassFor,
+  makeByteToUtf16Mapper,
+  spansToDecorationRanges,
+  utf8LengthOf,
+} from "./decorations";
 import type { Span } from "../api/types";
 
 describe("makeByteToUtf16Mapper", () => {
@@ -100,5 +105,61 @@ describe("cssClassFor", () => {
     expect(cssClassFor("string-special")).toBe("kbc-hl-string-special");
     expect(cssClassFor("constant-builtin")).toBe("kbc-hl-constant-builtin");
     expect(cssClassFor("punctuation-special")).toBe("kbc-hl-punctuation-special");
+  });
+});
+
+describe("utf8LengthOf", () => {
+  it("counts an empty string as zero", () => {
+    expect(utf8LengthOf("")).toBe(0);
+  });
+
+  it("counts one byte per ASCII scalar", () => {
+    expect(utf8LengthOf("fn main() {}")).toBe(12);
+    // A newline is one byte like any other — a diff side is line-oriented
+    // and must be measured whole, terminators included.
+    expect(utf8LengthOf("a\nb\n")).toBe(4);
+  });
+
+  it("counts two bytes per Latin-1/Cyrillic scalar", () => {
+    // "é" is 2 bytes, "д" is 2 bytes — both ONE UTF-16 unit, so a
+    // `.length`-based measurement under-counts every one of them.
+    expect(utf8LengthOf("café")).toBe(5);
+    expect(utf8LengthOf("ддд")).toBe(6);
+  });
+
+  it("counts three bytes per CJK scalar", () => {
+    expect(utf8LengthOf("漢")).toBe(3);
+    expect(utf8LengthOf("漢字")).toBe(6);
+  });
+
+  it("counts four bytes for an astral scalar, not its two UTF-16 units", () => {
+    // THE separating case: "😀" is 4 UTF-8 bytes but `.length` is 2, so an
+    // implementation that walks code units instead of scalars reports half
+    // the real size and a snippet twice this big sails under a byte cap.
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+    expect(utf8LengthOf(emoji)).toBe(4);
+    expect(utf8LengthOf(`a${emoji}b`)).toBe(6);
+  });
+
+  it("sums mixed scripts the way the server's `str::len()` would", () => {
+    expect(utf8LengthOf("// café 🎉\n漢 = 1;\n")).toBe(23);
+  });
+
+  it("short-circuits an over-cap string to a value the caller's cap test rejects", () => {
+    // `cap` is the early-out: UTF-8 bytes are never fewer than UTF-16 units,
+    // so `.length > cap` already proves "over". The result must be strictly
+    // OVER the cap, not equal — a `=== cap` answer would pass a `<= cap` test.
+    expect(utf8LengthOf("abcdef", 3)).toBe(4);
+    expect(utf8LengthOf("abcdef", 3) <= 3).toBe(false);
+  });
+
+  it("still measures exactly when the cap short-circuit does not fire", () => {
+    // `.length` equals the cap here, so the early-out cannot decide it: the
+    // CJK bytes are what actually decide, and they are over.
+    expect(utf8LengthOf("漢漢", 2)).toBe(6);
+    expect(utf8LengthOf("漢漢", 2) <= 2).toBe(false);
+    // Under the cap, the exact number is still the answer.
+    expect(utf8LengthOf("漢漢", 6)).toBe(6);
   });
 });

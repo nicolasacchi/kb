@@ -389,8 +389,8 @@ pub use kb_core::scrub::{CompiledRule, OutboundCache};
 /// reaches the middleware — including OPTIONS preflight + 404s.
 ///
 /// P3+P4: per-route-family counters + lock-free latency histogram
-/// (13 logarithmic buckets per route). Total memory: 8 routes ×
-/// (8 + 8 + 13 × 8) = ~900 bytes. The histogram is approximate but
+/// (13 logarithmic buckets per route). Total memory: 9 routes ×
+/// (8 + 8 + 13 × 8) = 1080 bytes. The histogram is approximate but
 /// stable: cumulative bucket counts let `percentile` walk the
 /// distribution and linearly interpolate within the spanning bucket.
 #[derive(Debug, Default)]
@@ -518,7 +518,7 @@ impl RequestMetrics {
 /// `crate::state::{percentile_ms, LATENCY_BUCKET_COUNT, …}` paths.
 pub use kb_core::metrics::{percentile_ms, LatencyHist, LATENCY_BUCKETS_MS, LATENCY_BUCKET_COUNT};
 
-pub const ROUTE_KIND_COUNT: usize = 8;
+pub const ROUTE_KIND_COUNT: usize = 9;
 
 /// P3: HTTP route family. Coarse enough to surface at-a-glance
 /// "which subsystem is busy" without dragging an unbounded per-path
@@ -534,7 +534,8 @@ pub enum RouteKind {
     Events = 4,
     Read = 5,
     Ops = 6,
-    Other = 7,
+    Sessions = 7,
+    Other = 8,
 }
 
 impl RouteKind {
@@ -546,6 +547,7 @@ impl RouteKind {
         RouteKind::Events,
         RouteKind::Read,
         RouteKind::Ops,
+        RouteKind::Sessions,
         RouteKind::Other,
     ];
 
@@ -558,6 +560,7 @@ impl RouteKind {
             RouteKind::Events => "events",
             RouteKind::Read => "read",
             RouteKind::Ops => "ops",
+            RouteKind::Sessions => "sessions",
             RouteKind::Other => "other",
         }
     }
@@ -586,6 +589,11 @@ pub fn classify_route(path: &str) -> RouteKind {
     if p == "queries" || p.starts_with("queries/") {
         return RouteKind::Read;
     }
+    // Sessions surface (`/api/sessions…`). Per-kb `/api/kb/{kb}/sessions…`
+    // is classified in the segment match below — do not steal search/review.
+    if p == "sessions" || p.starts_with("sessions/") {
+        return RouteKind::Sessions;
+    }
     // /kb/{kb}/<segment> — peek at the trailing segment.
     if let Some(rest) = p.strip_prefix("kb/") {
         // skip the kb name, find the segment after the next '/'
@@ -595,6 +603,7 @@ pub fn classify_route(path: &str) -> RouteKind {
             "atlas" => RouteKind::Atlas,
             "history" => RouteKind::History,
             "review" => RouteKind::Review,
+            "sessions" => RouteKind::Sessions,
             // Read-side: surfaces the corpus to humans / SPAs.
             "docs" | "artifact" | "graph" | "edges" | "tags" | "folders" | "stats" | "runs"
             | "queries" => RouteKind::Read,
@@ -1358,12 +1367,24 @@ mod tests {
             classify_route("/api/events/schema/index.file/1"),
             RouteKind::Events
         );
+        assert_eq!(classify_route("/api/sessions"), RouteKind::Sessions);
+        assert_eq!(
+            classify_route("/api/sessions/live-status"),
+            RouteKind::Sessions
+        );
+        // Prefix, not substring: a sibling path stays in the catch-all.
+        assert_eq!(classify_route("/api/session"), RouteKind::Other);
         assert_eq!(classify_route("/api/unknown"), RouteKind::Other);
         assert_eq!(classify_route("/api/queries/zero-hit"), RouteKind::Read);
+        assert_eq!(RouteKind::ALL.len(), ROUTE_KIND_COUNT);
+        assert_eq!(RouteKind::Sessions as usize, 7);
+        assert_eq!(RouteKind::Other as usize, 8);
+        assert_eq!(*RouteKind::ALL.last().unwrap(), RouteKind::Other);
     }
 
     #[test]
     fn classify_route_per_kb_segments() {
+        // Per-kb search stays Other — not reclassified into Search or Sessions.
         assert_eq!(classify_route("/api/kb/canon/search"), RouteKind::Other);
         assert_eq!(
             classify_route("/api/kb/canon/atlas/recompute"),
@@ -1380,6 +1401,14 @@ mod tests {
         assert_eq!(
             classify_route("/api/kb/canon/review/abc123/export"),
             RouteKind::Review
+        );
+        assert_eq!(
+            classify_route("/api/kb/canon/sessions"),
+            RouteKind::Sessions
+        );
+        assert_eq!(
+            classify_route("/api/kb/canon/sessions/sid/view"),
+            RouteKind::Sessions
         );
         assert_eq!(classify_route("/api/kb/canon/docs"), RouteKind::Read);
         assert_eq!(
@@ -1484,6 +1513,11 @@ mod tests {
         assert_eq!(classify_route("/identity"), RouteKind::Read);
         assert_eq!(classify_route("/metrics"), RouteKind::Read);
         assert_eq!(classify_route("/events"), RouteKind::Events);
+        assert_eq!(classify_route("/sessions"), RouteKind::Sessions);
+        assert_eq!(classify_route("/sessions/folders"), RouteKind::Sessions);
+        assert_eq!(classify_route("/kb/canon/sessions"), RouteKind::Sessions);
+        assert_eq!(classify_route("/kb/canon/review/abc"), RouteKind::Review);
+        assert_eq!(classify_route("/kb/canon/search"), RouteKind::Other);
     }
 
     #[test]

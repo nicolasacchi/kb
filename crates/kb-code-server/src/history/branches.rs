@@ -20,11 +20,11 @@
 //! the default branch itself (defined as 0 ahead / 0 behind of itself).
 
 use super::{run_git_raw, HistoryError, Result};
+use crate::git::roots::GitRoot;
 use crate::git::RefRange;
 #[cfg(test)]
 use crate::git::Revspec;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 /// Branch-list cap — `routes::branches_route` truncates to this many
 /// (name-sort: by name before the cap; suggested: cheap-rank then cap)
@@ -110,7 +110,7 @@ pub struct AheadBehind {
 /// `<left>\t<right>`: LEFT counts commits reachable from `default` but not
 /// `branch` (how far `branch` is BEHIND `default`); RIGHT counts the
 /// reverse (how far `branch` is AHEAD of `default`).
-pub fn ahead_behind(repo_root: &Path, range: &RefRange) -> Result<AheadBehind> {
+pub fn ahead_behind(repo_root: &dyn GitRoot, range: &RefRange) -> Result<AheadBehind> {
     // V70-A2 (SEC-17) — the `{default}...{branch}` string this fn used to
     // interpolate by hand is now a `RefRange` the CALLER validated
     // endpoint-wise; `as_arg` reassembles it from the validated parts, so
@@ -143,6 +143,7 @@ fn malformed_left_right_count(text: &str) -> HistoryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::process::Command as StdCommand;
 
     /// `<a>...<b>` from two fixture branch names — the shape
@@ -200,7 +201,11 @@ mod tests {
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-q", "-m", "m1"]);
 
-        let ab = ahead_behind(dir, &three_dot("main", "feature")).unwrap();
+        let ab = ahead_behind(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &three_dot("main", "feature"),
+        )
+        .unwrap();
         assert_eq!(ab.ahead, 2, "feature has 2 commits main lacks");
         assert_eq!(ab.behind, 1, "feature lacks main's 1 own commit");
     }
@@ -213,7 +218,11 @@ mod tests {
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-q", "-m", "base"]);
 
-        let ab = ahead_behind(dir, &three_dot("main", "main")).unwrap();
+        let ab = ahead_behind(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &three_dot("main", "main"),
+        )
+        .unwrap();
         assert_eq!(
             ab,
             AheadBehind {

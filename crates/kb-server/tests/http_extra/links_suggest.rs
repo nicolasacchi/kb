@@ -63,6 +63,7 @@ async fn boot(files: &[(&str, &str)]) -> (tempfile::TempDir, std::net::SocketAdd
             atlas: None,
             templates: BTreeMap::new(),
             memory_scope: None,
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -74,6 +75,7 @@ async fn boot(files: &[(&str, &str)]) -> (tempfile::TempDir, std::net::SocketAdd
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         },
     );
     let cfg = KbConfig {

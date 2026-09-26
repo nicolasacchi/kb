@@ -1021,7 +1021,7 @@ pub async fn review_timeline_route(
     // --- working-tree comments on this review's own files -------------------
     let (wt_events, wt_lane) = match &ps {
         Some(ps) => {
-            let root = repo_root.clone();
+            let root = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
             let base = ps.base_sha.clone();
             let tip = ps.tip_sha.clone();
             let store = state.store.clone();

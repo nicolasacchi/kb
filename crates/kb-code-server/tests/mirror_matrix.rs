@@ -829,8 +829,8 @@ fn confirmed_checkout_switch_triggers_head_moved_via_the_existing_watcher() {
     // (SEC-17): it takes a validated `Revspec`, the same type the route
     // parses `?ref=` into.
     let target = kb_code_server::git::Revspec::parse("feature").expect("fixture revspec parses");
-    let outcome =
-        kb_code_server::checkout::switch_repo(&dir, &target).expect("clean tree switches cleanly");
+    let outcome = kb_code_server::checkout::switch_repo(&dir, &target, None)
+        .expect("clean tree switches cleanly");
     assert_eq!(outcome.target, "feature");
     assert!(!outcome.detached);
 

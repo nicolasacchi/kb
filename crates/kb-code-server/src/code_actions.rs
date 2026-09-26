@@ -151,7 +151,7 @@ async fn code_actions_for(
         return CodeActionsOut::unavailable("no_provider_configured");
     };
     let provider_name = client.name().to_string();
-    let Ok(read) = read_repo_file(repo, &body.path, None) else {
+    let Ok(read) = read_repo_file(repo, &body.path, crate::routes::RevResolver::work_tree()) else {
         return CodeActionsOut {
             provider: Some(provider_name),
             ..CodeActionsOut::unavailable("file_unreadable")
