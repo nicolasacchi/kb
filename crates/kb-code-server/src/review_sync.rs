@@ -12,14 +12,23 @@
 //!    the daemon's own `gh-cli` login for a ready store, the caller's
 //!    loopback-only `gh_token`);
 //! 2. a MERGED PR with a review is FINAL: nothing is fetched or captured
-//!    (`reason: merged-final`). A closed-unmerged PR with a review is
-//!    likewise left alone (`reason: unchanged` + a `pr-closed` warning);
-//! 3. otherwise it runs [`reviews::create_review_pr_value`] — the SAME
+//!    (`reason: merged-final`). A closed-unmerged PR is likewise left
+//!    alone — with or without a review; none is created for it —
+//!    (`reason: unchanged` + a `pr-closed` warning). A merged PR with NO
+//!    review still gets one (the changelog loop reviews what landed);
+//! 3. a CLOSED review is never reopened unattended: without `reopen` it
+//!    answers `unchanged` + `review-closed-pr-open` (or `review-closed`
+//!    when the forge cannot say the PR is open) and captures nothing; with
+//!    `reopen` (PR known open) the reopen is written only AFTER a
+//!    successful capture, so a failed fetch or a typed refusal leaves it
+//!    closed;
+//! 4. otherwise it runs [`reviews::create_review_pr_value_known`] — the SAME
 //!    create-or-reuse start-pr runs — which creates the review if missing
 //!    (the base chain + one fetch of base and head), or re-fetches base +
 //!    head into the store and snapshots ONLY when the `(tip, merge-base)`
 //!    pair changed (D13), following a PR retarget when `set_by=auto`
-//!    (D15). A closed review whose PR is open again is reopened.
+//!    (D15). The forge's `base.ref` read in step 1 rides through, so the
+//!    reuse path never asks the API twice.
 //!
 //! The answer (`kbc-review-sync/1`, see [`SYNC_SCHEMA`]) names WHY:
 //! `created | head-moved | base-moved | retargeted | unchanged |
@@ -97,6 +106,11 @@ pub mod sync_warn {
     pub const BASE_IGNORED: &str = "base-ignored";
     pub const PR_CLOSED: &str = "pr-closed";
     pub const WOULD_REOPEN: &str = "would-reopen";
+    /// The review is closed but the PR is open again; sync never reopens
+    /// unattended — re-run with `--reopen`.
+    pub const REVIEW_CLOSED_PR_OPEN: &str = "review-closed-pr-open";
+    /// The review is closed and the forge cannot say the PR is open.
+    pub const REVIEW_CLOSED: &str = "review-closed";
     pub const FETCH_UNAVAILABLE: &str = "fetch-unavailable";
     pub const FETCH_FAILED: &str = "fetch-failed";
 }
@@ -369,6 +383,47 @@ fn sync_lock(root: &Path) -> Arc<tokio::sync::Mutex<()>> {
     map.lock().entry(root.to_path_buf()).or_default().clone()
 }
 
+/// The per-repo sync lock, owned — `start-pr`'s create path takes it too
+/// (RS-U10b review fix), so its duplicate-binding check-then-insert can
+/// never race a `review sync` of the same repo. `None` = unknown repo (the
+/// caller's own lookup answers that).
+pub(crate) async fn repo_guard(
+    state: &SharedState,
+    repo: &str,
+) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    let root = find_repo(state, repo).ok()?.0.path.clone();
+    Some(sync_lock(&root).lock_owned().await)
+}
+
+// --- the forge answer cache (status) ------------------------------------------------------
+
+/// How long `review status` reuses a forge answer for the same `(repo,
+/// PR)`. `review sync` always asks fresh and writes its answer through.
+pub const FORGE_CACHE_SECS: u64 = 60;
+
+type ForgeEntry = (std::time::Instant, ForgeOut, Vec<BaseWarningOut>);
+type ForgeCache = parking_lot::Mutex<HashMap<(PathBuf, u32), ForgeEntry>>;
+
+fn forge_cache() -> &'static ForgeCache {
+    static CACHE: OnceLock<ForgeCache> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn forge_cache_get(root: &Path, pr: u32) -> Option<(ForgeOut, Vec<BaseWarningOut>)> {
+    let ttl = std::time::Duration::from_secs(FORGE_CACHE_SECS);
+    let mut map = forge_cache().lock();
+    map.retain(|_, (t, _, _)| t.elapsed() < ttl);
+    map.get(&(root.to_path_buf(), pr))
+        .map(|(_, f, w)| (f.clone(), w.clone()))
+}
+
+fn forge_cache_put(root: &Path, pr: u32, forge: &ForgeOut, warnings: &[BaseWarningOut]) {
+    forge_cache().lock().insert(
+        (root.to_path_buf(), pr),
+        (std::time::Instant::now(), forge.clone(), warnings.to_vec()),
+    );
+}
+
 // --- one PR ---------------------------------------------------------------------------
 
 /// One `review sync --pr N`.
@@ -380,6 +435,9 @@ pub struct SyncRequest {
     /// with `review retrack`).
     pub base: Option<String>,
     pub dry_run: bool,
+    /// Reopen a CLOSED review whose PR is open again. Without it sync never
+    /// reopens (orchestrator ruling): `unchanged` + `review-closed-pr-open`.
+    pub reopen: bool,
     pub gh_token: Option<String>,
 }
 
@@ -400,6 +458,7 @@ pub(crate) async fn sync_one(
 
     crate::review_jobs::set_stage(&job, "forge");
     let (forge, mut warnings) = forge_pr(state, &repo, req.pr, req.gh_token.clone()).await;
+    forge_cache_put(&repo.path, req.pr, &forge, &warnings);
     if !forge.available {
         warnings.push(forge_warning(req.pr, &forge));
     }
@@ -418,34 +477,103 @@ pub(crate) async fn sync_one(
             ),
         ));
     }
+    let pr_closed_warning = warning(
+        sync_warn::PR_CLOSED,
+        format!(
+            "PR #{} is closed without merging; nothing was fetched or captured",
+            req.pr
+        ),
+    );
+
+    let Some(ex) = &existing else {
+        // No review yet. A closed-unmerged PR gets none (a merged one
+        // does: the changelog loop reviews what landed).
+        if forge.is_closed_unmerged() {
+            warnings.push(pr_closed_warning);
+            return Ok(no_review_value(
+                &repo.name,
+                req.pr,
+                SyncReason::Unchanged,
+                req.dry_run,
+                forge,
+                &warnings,
+            ));
+        }
+        if req.dry_run {
+            return Ok(no_review_value(
+                &repo.name,
+                req.pr,
+                SyncReason::Created,
+                true,
+                forge,
+                &warnings,
+            ));
+        }
+        return create_or_reuse(state, &repo, &req, false, None, job, forge, warnings).await;
+    };
 
     // A merged (or closed-unmerged) PR with a review is final.
-    if let Some(ex) = &existing {
-        if forge.is_merged() || forge.is_closed_unmerged() {
-            let reason = if forge.is_merged() {
-                SyncReason::MergedFinal
-            } else {
+    if forge.is_merged() || forge.is_closed_unmerged() {
+        let reason = if forge.is_merged() {
+            SyncReason::MergedFinal
+        } else {
+            warnings.push(pr_closed_warning);
+            SyncReason::Unchanged
+        };
+        return finish(
+            state,
+            &repo,
+            Outcome::quiet(ex.id, req.pr, reason, req.dry_run),
+            forge,
+            warnings_json(&warnings),
+        )
+        .await;
+    }
+
+    // A closed review: never reopened unattended. With `--reopen` the
+    // reopen is written only after a successful capture (reviews.rs).
+    let mut on_closed = None;
+    if ex.state != "open" {
+        let pr_open = forge.state.as_deref() == Some("open");
+        if req.reopen && pr_open {
+            on_closed = Some(OnClosed::Reopen);
+            if req.dry_run {
                 warnings.push(warning(
-                    sync_warn::PR_CLOSED,
-                    format!(
-                        "PR #{} is closed without merging; nothing was fetched or captured",
-                        req.pr
-                    ),
+                    sync_warn::WOULD_REOPEN,
+                    format!("review {} is {}; this sync reopens it", ex.id, ex.state),
                 ));
-                SyncReason::Unchanged
-            };
+            }
+        } else if req.reopen && !req.dry_run {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                format!(
+                    "review {} for PR #{} is closed and the forge cannot confirm the PR is open — nothing reopened",
+                    ex.id, req.pr
+                ),
+            )
+            .with_problem_type(ERR_REVIEW_CLOSED));
+        } else {
+            warnings.push(if pr_open {
+                warning(
+                    sync_warn::REVIEW_CLOSED_PR_OPEN,
+                    format!(
+                        "review {} is {} but PR #{} is open again; sync does not reopen it unattended — re-run with --reopen",
+                        ex.id, ex.state, req.pr
+                    ),
+                )
+            } else {
+                warning(
+                    sync_warn::REVIEW_CLOSED,
+                    format!(
+                        "review {} is {} and the forge cannot say PR #{} is open; nothing was fetched or captured",
+                        ex.id, ex.state, req.pr
+                    ),
+                )
+            });
             return finish(
                 state,
                 &repo,
-                Outcome {
-                    review_id: ex.id,
-                    pr: req.pr,
-                    created: false,
-                    minted: false,
-                    reason,
-                    base: None,
-                    dry_run: req.dry_run,
-                },
+                Outcome::quiet(ex.id, req.pr, SyncReason::Unchanged, req.dry_run),
                 forge,
                 warnings_json(&warnings),
             )
@@ -454,36 +582,28 @@ pub(crate) async fn sync_one(
     }
 
     if req.dry_run {
-        return dry_run(state, &repo, &req, existing.as_ref(), forge, warnings).await;
+        return dry_run(state, &repo, &req, ex, forge, warnings).await;
     }
+    create_or_reuse(state, &repo, &req, true, on_closed, job, forge, warnings).await
+}
 
-    let on_closed = match &existing {
-        Some(ex) if ex.state != "open" => {
-            if forge.state.as_deref() == Some("open") {
-                Some(OnClosed::Reopen)
-            } else {
-                return Err(ApiError::new(
-                    StatusCode::CONFLICT,
-                    format!(
-                        "review {} for PR #{} is closed and the forge cannot confirm the PR is open — reopen it with `kb-code review start-pr --repo {} --pr {} --reopen`",
-                        ex.id, req.pr, req.repo, req.pr
-                    ),
-                )
-                .with_problem_type(ERR_REVIEW_CLOSED));
-            }
-        }
-        _ => None,
-    };
-
+/// The create-or-reuse capture (the start-pr engine) and its sync answer.
+#[allow(clippy::too_many_arguments)]
+async fn create_or_reuse(
+    state: &SharedState,
+    repo: &RepoEntry,
+    req: &SyncRequest,
+    existing: bool,
+    on_closed: Option<OnClosed>,
+    job: Option<JobHandle>,
+    forge: ForgeOut,
+    warnings: Vec<BaseWarningOut>,
+) -> Result<Value, ApiError> {
     crate::review_jobs::set_stage(&job, "fetch");
     let body = CreateReviewPrBody {
         repo: req.repo.clone(),
         pr_number: req.pr,
-        base_ref: if existing.is_none() {
-            req.base.clone()
-        } else {
-            None
-        },
+        base_ref: if !existing { req.base.clone() } else { None },
         title: req.title.clone().or_else(|| forge.title.clone()),
         session_id: None,
         // The chain's `caller` rung: the target the forge answered with
@@ -491,7 +611,11 @@ pub(crate) async fn sync_one(
         caller_base_ref: forge.base_ref.clone(),
         gh_token: req.gh_token.clone(),
     };
-    let (status, value) = reviews::create_review_pr_value(state, body, job, on_closed).await?;
+    // The forge's `base.ref` this sync already read rides through, so the
+    // reuse path does not ask the API a second time.
+    let known = forge.available.then(|| forge.base_ref.clone());
+    let (status, value) =
+        reviews::create_review_pr_value_known(state, body, job, on_closed, known).await?;
     if !status.is_success() {
         let mut e = ApiError::new(
             status,
@@ -521,7 +645,7 @@ pub(crate) async fn sync_one(
         .unwrap_or(status == StatusCode::CREATED);
     finish(
         state,
-        &repo,
+        repo,
         Outcome {
             review_id,
             pr: req.pr,
@@ -543,38 +667,10 @@ async fn dry_run(
     state: &SharedState,
     repo: &RepoEntry,
     req: &SyncRequest,
-    existing: Option<&ReviewRow>,
+    ex: &ReviewRow,
     forge: ForgeOut,
-    mut warnings: Vec<BaseWarningOut>,
+    warnings: Vec<BaseWarningOut>,
 ) -> Result<Value, ApiError> {
-    let Some(ex) = existing else {
-        return Ok(json!({
-            "schema": SYNC_SCHEMA,
-            "repo": repo.name,
-            "pr_number": req.pr,
-            "review_id": Value::Null,
-            "review_state": Value::Null,
-            "created": true,
-            "ps": Value::Null,
-            "minted": true,
-            "reason": SyncReason::Created.as_str(),
-            "kind": Value::Null,
-            "dry_run": true,
-            "base": Value::Null,
-            "head_sha": forge.head_sha,
-            "files_count": Value::Null,
-            "files_equal": Value::Null,
-            "forge": forge,
-            "verdict": Value::Null,
-            "warnings": warnings_json(&warnings),
-        }));
-    };
-    if ex.state != "open" {
-        warnings.push(warning(
-            sync_warn::WOULD_REOPEN,
-            format!("review {} is {}; a real sync reopens it", ex.id, ex.state),
-        ));
-    }
     let root = repo.path.clone();
     let review = ex.clone();
     let (latest_tip, base) = state
@@ -616,6 +712,39 @@ async fn dry_run(
     .await
 }
 
+/// The answer for a PR that has (and gets) no review: a dry run that would
+/// create one, or a closed-unmerged PR that never gets one.
+fn no_review_value(
+    repo: &str,
+    pr: u32,
+    reason: SyncReason,
+    dry_run: bool,
+    forge: ForgeOut,
+    warnings: &[BaseWarningOut],
+) -> Value {
+    let would_create = reason == SyncReason::Created;
+    json!({
+        "schema": SYNC_SCHEMA,
+        "repo": repo,
+        "pr_number": pr,
+        "review_id": Value::Null,
+        "review_state": Value::Null,
+        "created": would_create,
+        "ps": Value::Null,
+        "minted": would_create,
+        "reason": reason.as_str(),
+        "kind": Value::Null,
+        "dry_run": dry_run,
+        "base": Value::Null,
+        "head_sha": forge.head_sha,
+        "files_count": Value::Null,
+        "files_equal": Value::Null,
+        "forge": forge,
+        "verdict": Value::Null,
+        "warnings": warnings_json(warnings),
+    })
+}
+
 struct Outcome {
     review_id: i64,
     pr: u32,
@@ -625,6 +754,21 @@ struct Outcome {
     /// The capture's own `base{…}` block, when a capture ran.
     base: Option<Value>,
     dry_run: bool,
+}
+
+impl Outcome {
+    /// Nothing captured (final, closed, dry run of an unchanged PR).
+    fn quiet(review_id: i64, pr: u32, reason: SyncReason, dry_run: bool) -> Self {
+        Self {
+            review_id,
+            pr,
+            created: false,
+            minted: false,
+            reason,
+            base: None,
+            dry_run,
+        }
+    }
 }
 
 /// Compose the `kbc-review-sync/1` body from the stored rows.
@@ -732,13 +876,18 @@ fn error_code(e: &ApiError) -> String {
 /// `review sync --open [--merged-since DATE]`. See the module doc.
 pub(crate) async fn sync_open(
     state: &SharedState,
-    repo_name: &str,
-    merged_since: Option<String>,
-    dry_run: bool,
-    gh_token: Option<String>,
+    body: SyncBody,
     job: Option<JobHandle>,
 ) -> Result<Value, ApiError> {
-    let (repo, _) = find_repo(state, repo_name)?;
+    let SyncBody {
+        repo: repo_name,
+        merged_since,
+        dry_run,
+        reopen,
+        gh_token,
+        ..
+    } = body;
+    let (repo, _) = find_repo(state, &repo_name)?;
     let repo = repo.clone();
     let since = merged_since
         .as_deref()
@@ -766,20 +915,23 @@ pub(crate) async fn sync_open(
         )
         .with_problem_type(URN_FORGE_UNAVAILABLE)
     };
-    let (open, mut truncated) = client
-        .list_pulls_sync(&gh.owner, &gh.name, "open")
+    let (open, truncated_open) = client
+        .list_open_pulls_sync(&gh.owner, &gh.name)
         .await
         .map_err(listing_err)?;
+    let mut truncated_merged = false;
     let mut prs: Vec<(u32, &'static str)> = open
         .iter()
         .filter_map(|p| u32::try_from(p.number).ok().map(|n| (n, "open")))
         .collect();
     if let Some(since) = since {
-        let (closed, t) = client
-            .list_pulls_sync(&gh.owner, &gh.name, "closed")
+        // Paged most-recently-updated first; stops once a page leaves the
+        // window, so only a cut INSIDE the window truncates.
+        let (closed, cut) = client
+            .list_closed_pulls_since(&gh.owner, &gh.name, since)
             .await
             .map_err(listing_err)?;
-        truncated |= t;
+        truncated_merged = cut;
         prs.extend(
             closed
                 .iter()
@@ -800,6 +952,7 @@ pub(crate) async fn sync_open(
             title: None,
             base: None,
             dry_run,
+            reopen,
             gh_token: gh_token.clone(),
         };
         match sync_one(state, req, None).await {
@@ -830,7 +983,9 @@ pub(crate) async fn sync_open(
         "dry_run": dry_run,
         "count": items.len(),
         "failed": failed,
-        "truncated": truncated,
+        "truncated": truncated_open || truncated_merged,
+        "truncated_open": truncated_open,
+        "truncated_merged": truncated_merged,
         "items": items,
         "warnings": warnings_json(&list_warnings),
     }))
@@ -856,6 +1011,9 @@ pub struct SyncBody {
     pub base_ref: Option<String>,
     #[serde(default)]
     pub dry_run: bool,
+    /// Reopen a closed review whose PR is open again (never implied).
+    #[serde(default)]
+    pub reopen: bool,
     /// The CLI's `--gh-token-from-cli` value (loopback-only, never
     /// persisted — the start-pr rule).
     #[serde(default)]
@@ -881,6 +1039,21 @@ pub fn validate_sync_body(b: &SyncBody) -> Result<(), String> {
     Ok(())
 }
 
+/// The job-attach fingerprint: two requests attach to one running job only
+/// when every knob that changes the work or its answer agrees. Pure.
+pub fn sync_job_key(b: &SyncBody) -> String {
+    json!({
+        "pr": b.pr_number,
+        "open": b.open,
+        "merged_since": b.merged_since,
+        "title": b.title,
+        "base_ref": b.base_ref,
+        "dry_run": b.dry_run,
+        "reopen": b.reopen,
+    })
+    .to_string()
+}
+
 async fn run_sync(
     state: &SharedState,
     body: SyncBody,
@@ -896,23 +1069,14 @@ async fn run_sync(
                     title: body.title,
                     base: body.base_ref,
                     dry_run: body.dry_run,
+                    reopen: body.reopen,
                     gh_token: body.gh_token,
                 },
                 job,
             )
             .await
         }
-        None => {
-            sync_open(
-                state,
-                &body.repo,
-                body.merged_since,
-                body.dry_run,
-                body.gh_token,
-                job,
-            )
-            .await
-        }
+        None => sync_open(state, body, job).await,
     }
 }
 
@@ -940,12 +1104,20 @@ pub async fn sync_route(
     find_repo(&state, &body.repo)?;
     if params.wants_async() {
         let repo = body.repo.clone();
-        let key = body.pr_number.unwrap_or(0);
-        return crate::review_jobs::start_job(state, "sync", repo, key, move |st, h| async move {
-            run_sync(&st, body, Some(h))
-                .await
-                .map(|v| (StatusCode::OK, v))
-        })
+        let pr_key = body.pr_number.unwrap_or(0);
+        let key = sync_job_key(&body);
+        return crate::review_jobs::start_job(
+            state,
+            "sync",
+            repo,
+            pr_key,
+            key,
+            move |st, h| async move {
+                run_sync(&st, body, Some(h))
+                    .await
+                    .map(|v| (StatusCode::OK, v))
+            },
+        )
         .await;
     }
     let v = run_sync(&state, body, None).await?;
@@ -1054,6 +1226,7 @@ pub async fn review_status_route(
     let mut remote_source: Option<&'static str> = None;
     let mut fetched = false;
     let mut forge: Option<ForgeOut> = None;
+    let mut forge_cached = false;
     if let Some(n) = pr {
         if fetch {
             match fetch_into_store(&state, &review, n).await {
@@ -1084,7 +1257,23 @@ pub async fn review_status_route(
                 Err(e) => warnings.push(warning(sync_warn::FETCH_FAILED, e.message().to_string())),
             }
         }
-        let (f, cred_warnings) = forge_pr(&state, &repo, n, None).await;
+        // One forge lookup (and one credential resolution) per request,
+        // reused for FORGE_CACHE_SECS across status calls; `?fetch=1` asks
+        // fresh.
+        let cached = if fetch {
+            None
+        } else {
+            forge_cache_get(&repo.path, n)
+        };
+        forge_cached = cached.is_some();
+        let (f, cred_warnings) = match cached {
+            Some(hit) => hit,
+            None => {
+                let fresh = forge_pr(&state, &repo, n, None).await;
+                forge_cache_put(&repo.path, n, &fresh.0, &fresh.1);
+                fresh
+            }
+        };
         warnings.extend(cred_warnings);
         if f.available {
             if remote_head.is_none() {
@@ -1147,6 +1336,7 @@ pub async fn review_status_route(
         "findings_total": findings.len(),
         "open_findings": open_findings,
         "forge": forge,
+        "forge_cached": forge_cached,
         "warnings": warnings_json(&warnings),
     });
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response())

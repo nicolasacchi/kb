@@ -158,6 +158,48 @@ fn merged_since_accepts_a_date_or_rfc3339_and_filters_inclusively() {
     assert!(!merged_on_or_after(Some("2026-09-23T23:59:59Z"), day));
     assert!(!merged_on_or_after(None, day));
     assert!(!merged_on_or_after(Some("not a date"), day));
+    // An RFC 3339 timestamp keeps its own offset; a bare date is 00:00 UTC.
+    assert_eq!(
+        parse_since("2026-09-24T02:00:00+02:00").unwrap(),
+        day,
+        "02:00 at +02:00 is 00:00 UTC"
+    );
+}
+
+#[test]
+fn the_closed_listing_window_is_updated_at_inclusive() {
+    use crate::github::updated_within;
+    let day = parse_since("2026-09-24").unwrap();
+    assert!(updated_within(Some("2026-09-24T00:00:00Z"), day));
+    assert!(updated_within(Some("2026-09-25T00:00:00Z"), day));
+    assert!(!updated_within(Some("2026-09-23T23:59:59Z"), day));
+    // Never silently skip a PR whose stamp is missing or odd.
+    assert!(updated_within(None, day));
+    assert!(updated_within(Some("garbage"), day));
+}
+
+#[test]
+fn a_job_attaches_only_to_the_same_request() {
+    let k = |v: Value| sync_job_key(&body(v));
+    let real = k(json!({ "repo": "r", "pr_number": 7 }));
+    assert_eq!(real, k(json!({ "repo": "r", "pr_number": 7 })));
+    for other in [
+        json!({ "repo": "r", "pr_number": 7, "dry_run": true }),
+        json!({ "repo": "r", "pr_number": 7, "reopen": true }),
+        json!({ "repo": "r", "pr_number": 7, "base_ref": "main" }),
+        json!({ "repo": "r", "pr_number": 7, "title": "T" }),
+    ] {
+        assert_ne!(real, k(other.clone()), "{other}");
+    }
+    assert_ne!(
+        k(json!({ "repo": "r", "open": true })),
+        k(json!({ "repo": "r", "open": true, "merged_since": "2026-09-24" }))
+    );
+    // The token never enters the key (it is not part of the work).
+    assert_eq!(
+        real,
+        k(json!({ "repo": "r", "pr_number": 7, "gh_token": "ghp_FAKE" }))
+    );
 }
 
 fn body(v: Value) -> SyncBody {
@@ -197,6 +239,7 @@ fn the_forge_block_folds_merged_into_state() {
         head_ref: "feature".into(),
         base_ref: "main".into(),
         changed_files: Some(3),
+        updated_at: Some("2026-09-24T10:00:00Z".into()),
     };
     let f = ForgeOut::from_pr(&pr);
     assert!(f.available && f.is_merged() && !f.is_closed_unmerged());
