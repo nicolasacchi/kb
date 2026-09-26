@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HighlightSpan, Span } from "../api/types";
-import {
-  byteSpansToHighlightSpans,
-  classSequence,
-  offsetHighlightSpans,
-  padSnippetLines,
-  paintSpans,
-} from "./paintSpans";
+import { byteSpansToHighlightSpans, classSequence, paintSpans } from "./paintSpans";
 
 function hs(
   line: number,
@@ -61,15 +55,5 @@ describe("byteSpansToHighlightSpans", () => {
       { line: 1, start: 1, end: 2, role: "comment" },
       { line: 2, start: 0, end: 1, role: "comment" },
     ]);
-  });
-});
-
-describe("offsetHighlightSpans / padSnippetLines", () => {
-  it("shifts snippet lines onto a file line base", () => {
-    expect(offsetHighlightSpans([hs(1, 0, 3)], 40)).toEqual([hs(40, 0, 3)]);
-  });
-
-  it("pads so lines[n-1] is file line n", () => {
-    expect(padSnippetLines("a\nb", 3)).toEqual(["", "", "a", "b"]);
   });
 });

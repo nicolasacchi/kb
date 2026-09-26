@@ -1625,7 +1625,10 @@ the current `highlight_salt`.
 
 Batch: `{ items: [{ id, lang, text, path? }, …] }` — at most 64 items,
 at most 1 MiB total text, unique ids. One unknown item does not 500
-the batch. Schema `highlight-batch/1`.
+the batch. One OVERSIZE item does refuse the WHOLE batch — a 400 naming
+the item id and its size, not a partial result — so a caller that cannot
+bound its own items must send one request per item. Schema
+`highlight-batch/1`.
 
 CLI: `kb-code highlight --lang ruby --file snippet.rb --json`. Omit
 `--lang` and the daemon infers from `--path` or the file's name.
@@ -1635,11 +1638,60 @@ The SPA has one painter (`web-code/src/lib/paintSpans.ts`) and one class
 table (`.kbc-hl-*`). The live suggestion editor stays CM6; every other
 read-only surface paints these spans.
 
-Not in that unit, by design: new grammars (SCSS/CSS/Markdown), the
-injection-aware pipeline, the universal `outline/1` contract, and the
-`symbol_salt`/`highlight_salt` split. `highlight_only` therefore shipped as
-a mechanism with no production row (SCSS became the first, in V72-H2a); the
-salt split is V72-H2b, below.
+**What paints in a diff, and what deliberately does not (V80-H1).** A diff
+paints BOTH sides whenever the daemon can supply the bytes for them. A diff
+rendered WITHOUT a `to` is not a diff with no new side: `GET /api/diff`'s
+own contract says an omitted `to` means "diff `from` against the CURRENT
+WORKING TREE" (`crates/kb-code-server/src/routes.rs:2087-2090`), mirroring
+`GET /api/file`'s "no `ref` = working tree" default, and the reader's
+compare strip (`web-code/src/routes/Reader.tsx:4528`) and its `~diff` route's
+optional `?to=` (`web-code/src/routes/Reader.tsx:501`) mostly pass no `to` at
+all. So the new side is read at the working tree and every ADDED line
+paints like any other. The one case with nothing to read is a DELETED file,
+which has no working-tree blob: it issues no request and paints nothing.
+A side the daemon cannot supply (no file spans) is reconstructed from the
+parsed diff and POSTed here instead, and a
+line is coloured only when its text byte-equals the file's line at that
+number — the per-line integrity guard in
+`web-code/src/lib/diffHighlight.ts:5`. That guard is why the two surfaces
+that cannot honour it stay plain rather than guess:
+
+- the **suggestion composer's DRAFT rows** — the draft is not the blob's
+  text, so the guard refuses them; the anchored ORIGINAL rows beside them
+  do paint, from the blob the editor already has open
+  (`web-code/src/components/diff/SuggestionEditor.tsx:78-83`);
+- the **uncommitted originating change** in the blame panel
+  (`web-code/src/components/provenance/OriginatingChange.tsx:52-62`) — it
+  has no commit and therefore no blob, so both refs are withheld rather
+  than invented.
+
+Plain, never wrong: a colour on a line that is not the file's text is a
+worse failure than no colour at all. Four surfaces that used to render raw
+text now paint — the interdiff panel (real `from_tip`/`to_tip` shas), the
+blame panel's originating change, the suggestion composer's preview, and
+the apply-preview's working-tree slice, the last out of the `GET /api/file`
+body it already holds rather than a second request for the same bytes. A
+side over `MAX_SNIPPET_BYTES` (256 KiB,
+`crates/kb-code-server/src/highlight.rs:424`) is dropped before it is
+enqueued rather than sent — the batch refusal above would otherwise strip
+the OTHER side's legitimate paint with it — so an oversize side degrades to
+plain text.
+
+**Both `POST /api/highlight` handlers parse off the async worker (V80-H1).**
+`highlight_snippet` builds a fresh `tree_sitter::Parser` and runs a full
+parse per item — up to 64 per batch. Both handlers now run that inside
+`tokio::task::spawn_blocking` (`highlight.rs:798-835`), the same discipline
+`routes::diff_route` uses for its `git diff` subprocess (`routes.rs:2116`).
+This is invisible in the contract: response bodies, status codes, the
+`no-store` header and every cap refusal are unchanged, because the caps are
+checked inside the hop rather than in front of it. The one new outcome is a
+500 naming a panicked task.
+
+Not in `highlight/1`'s own unit (V76-C1), by design: new grammars
+(SCSS/CSS/Markdown), the injection-aware pipeline, the universal
+`outline/1` contract, and the `symbol_salt`/`highlight_salt` split.
+`highlight_only` therefore shipped as a mechanism with no production row
+(SCSS became the first, in V72-H2a); the salt split is V72-H2b, below.
 
 **The salt split, the highlight cache gate and the eighteen roles
 (V72-H2b, D7 + D16).** One salt used to key every derived row per file, so
