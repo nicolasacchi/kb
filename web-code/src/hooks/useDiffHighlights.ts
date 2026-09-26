@@ -30,6 +30,7 @@ import {
   type DiffHighlights,
   type LineSpan,
 } from "../lib/diffHighlight";
+import { utf8LengthOf } from "../lib/decorations";
 import type { ParsedDiff } from "../lib/diff";
 import { loadDiffSyntaxHighlight } from "../lib/prefs";
 import { wireSpansToLineMap } from "../lib/paintSpans";
@@ -191,11 +192,11 @@ export function useDiffHighlights(
       // An oversize side is DROPPED, not sent: the server refuses the whole
       // batch, and the OTHER side has a legitimate paint to lose. UTF-8
       // BYTES, never `.length` — the server measures `item.text.len()`, so
-      // a non-ASCII side under-counts on a UTF-16 length.
-      if (
-        text &&
-        new TextEncoder().encode(text).length <= HIGHLIGHT_SNIPPET_MAX_BYTES
-      ) {
+      // a non-ASCII side under-counts on a UTF-16 length. The cap is handed
+      // to `utf8LengthOf` so a side long enough to be over it is settled by
+      // one comparison instead of encoding a 1.5 MiB copy of itself to
+      // learn a number.
+      if (text && utf8LengthOf(text, HIGHLIGHT_SNIPPET_MAX_BYTES) <= HIGHLIGHT_SNIPPET_MAX_BYTES) {
         items.push({
           id: "new",
           lang: tip.data?.lang ?? null,
@@ -214,10 +215,7 @@ export function useDiffHighlights(
           : parsed
             ? reconstructSide(parsed, "old")
             : null;
-      if (
-        text &&
-        new TextEncoder().encode(text).length <= HIGHLIGHT_SNIPPET_MAX_BYTES
-      ) {
+      if (text && utf8LengthOf(text, HIGHLIGHT_SNIPPET_MAX_BYTES) <= HIGHLIGHT_SNIPPET_MAX_BYTES) {
         items.push({
           id: "old",
           lang: base.data?.lang ?? null,
