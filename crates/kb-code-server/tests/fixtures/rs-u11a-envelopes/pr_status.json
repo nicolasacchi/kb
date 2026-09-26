@@ -1,0 +1,13 @@
+{
+  "commits_behind": "number",
+  "latest_local_ps_tip_sha": "string",
+  "local_matches_pr": "bool",
+  "pr_head_sha": "string",
+  "pr_number": "number",
+  "repo": "string",
+  "review_id": "number",
+  "review_snapshot_head_sha": "string",
+  "schema": "string",
+  "stale": "bool",
+  "unavailable_reason": "null"
+}

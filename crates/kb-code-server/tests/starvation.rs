@@ -164,12 +164,28 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
     let scopes = config.scopes.clone();
     let scip_cfg = config.scip.clone();
     let review_cfg = config.review.clone();
+    let review_stores = std::sync::Arc::new(kb_code_server::review_store::ReviewStores::disabled(
+        "starvation fixture",
+    ));
+    // The OTHER half of `ReviewStores::disabled(..)`'s promise, which
+    // `bind_and_spawn` and `build_state_for_test` both publish: an
+    // `AppState` that refuses the store must not leave its `Store` still
+    // resolving one. Without this line the fixture carries exactly the
+    // split-brain the read gate exists to remove — inert today (it drives
+    // only `/api/identity` and `/healthz` against a fresh tempdir with no
+    // `review_stores` rows), but one route addition away from serving a
+    // read from a store its own `AppState` refuses. The setter is `pub`
+    // for exactly this reason: an out-of-crate `AppState` builder cannot
+    // see the `pub(crate)` gate, and must not silently keep the
+    // permissive default.
+    store.set_review_store_readable(review_stores.reads_can_use_store());
     let _auto_capture = kb_code_server::reviews::spawn_auto_capture_worker(
         store.clone(),
         bus.clone(),
         config.repos.clone(),
         review_cfg.max_patchsets,
         review_cfg.patchset_capture,
+        review_stores.clone(),
     );
     let doclens_cfg = config.doclens.clone();
     let behavioral_cfg = config.behavioral.clone();
@@ -235,6 +251,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
             kb_code_server::history::facts::BaseCache::default(),
         )),
         review_jobs: std::sync::Arc::new(kb_code_server::review_jobs::ReviewJobs::default()),
+        review_stores,
     }))
 }
 

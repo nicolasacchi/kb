@@ -181,7 +181,8 @@ pub async fn review_impact_route(
         .await?;
     let path = safe_rel_path(&params.path)?.to_string();
 
-    let root = repo.path.clone();
+    let root = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
+    let git_ctx = root.clone();
     let base = target_ps.base_sha.clone();
     let tip = target_ps.tip_sha.clone();
     let tip_for_task = tip.clone();
@@ -191,12 +192,14 @@ pub async fn review_impact_route(
         // V70-A2 (SEC-17) — two patchset shas this daemon resolved itself,
         // never caller text, so `Revspec::trusted` is the honest
         // constructor for the type `diff_file` now takes.
-        let diff_text = crate::diff::diff_file(
-            &root,
-            &crate::git::Revspec::trusted(base.clone()),
-            Some(&crate::git::Revspec::trusted(tip_for_task.clone())),
-            &path_for_task,
-        )?;
+        let diff_text = root.read_with_fallback(|r| {
+            crate::diff::diff_file(
+                r.git_path(),
+                &crate::git::Revspec::trusted(base.clone()),
+                Some(&crate::git::Revspec::trusted(tip_for_task.clone())),
+                &path_for_task,
+            )
+        })?;
         Ok::<_, ApiError>((files, diff_text))
     })
     .await
@@ -209,7 +212,11 @@ pub async fn review_impact_route(
         )));
     }
 
-    let read = read_repo_file(repo, &path, Some(tip.as_str()))?;
+    let read = read_repo_file(
+        repo,
+        &path,
+        crate::routes::RevResolver::bridged(&git_ctx, Some(tip.as_str())),
+    )?;
     let lang = crate::lang::detect(&path, Some(&read.bytes));
     let Some(lang) = lang.filter(|l| hierarchy::supports_hierarchy(l.id)) else {
         return Ok((

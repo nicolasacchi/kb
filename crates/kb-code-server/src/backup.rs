@@ -8,12 +8,13 @@
 //! V\<n\>". The 13.5 h kbc outage was that sentence being true with no such
 //! backup in existence.
 //!
-//! So: the FIRST boot that would carry a volume across [`REKEY_EPOCH`]
-//! takes a `VACUUM INTO` snapshot beside the database, named for the epoch
-//! it can restore to, and records a receipt. If the snapshot cannot be
-//! written — no space, a read-only mount, a permissions change — the boot
-//! is REFUSED with the reason, rather than migrating a volume nobody can
-//! roll back.
+//! So: the FIRST boot that would carry a volume across any [`GATED_EPOCHS`]
+//! door (originally just the Workspace re-key, [`REKEY_EPOCH`]; V0045's
+//! review-store migration is the second entry) takes a `VACUUM INTO`
+//! snapshot beside the database, named for the epoch it can restore to, and
+//! records a receipt. If the snapshot cannot be written — no space, a
+//! read-only mount, a permissions change — the boot is REFUSED with the
+//! reason, rather than migrating a volume nobody can roll back.
 //!
 //! Three deliberate shapes:
 //!
@@ -54,24 +55,42 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-/// The migration version at which the Workspace re-key lands (V0040). A
-/// boot that carries a volume from BELOW this to at-or-above it is the
-/// crossing this gate guards.
+/// Every migration version that is a ONE-WAY DOOR for the volume: a boot
+/// that carries the volume from strictly below one of these to at-or-above
+/// it takes the automatic pre-migration snapshot (`ensure_for_epoch_crossing`)
+/// before the refinery runner touches a row.
 ///
-/// Deliberately a literal rather than `store::schema_epoch()`: the gate
-/// must keep firing for exactly this crossing after V0041, V0042 … land,
-/// and must NOT re-fire for every later migration (a routine additive
-/// migration is not a one-way door of this size). A future migration that
-/// IS one adds its own constant beside this one.
+/// * `40` — the Workspace re-key (V0040, formerly the sole [`REKEY_EPOCH`]).
+/// * `45` — the review-store migration (V0045, RS-U1): `review_stores`/
+///   `repo_stores` plus the base-tracking columns on `reviews`/
+///   `review_patchsets`. This crossing needs no paged backfill (every new
+///   column is nullable or constant-defaulted, V0044's own `mtime`
+///   precedent) — the snapshot exists purely so an operator can roll back
+///   to a pre-review-store binary, the same "one remedy" this gate has
+///   always existed to guarantee.
+///
+/// Deliberately literals rather than `store::schema_epoch()`: each entry
+/// must keep firing for exactly its own crossing and never re-fire for a
+/// routine additive migration that lands after it (V0041..V0044 landing
+/// after 40 must not re-trigger the gate; V0046 and on must not re-trigger
+/// 45). A future migration that IS a one-way door of this size appends its
+/// own entry here rather than replacing an existing one — the array is
+/// append-only for the same reason `REKEY_EPOCH` was never repurposed.
+pub const GATED_EPOCHS: &[u32] = &[40, 45];
+
+/// Back-compat alias for the array's first entry — kept because
+/// `crate::rekey`'s tests (the V0040 Workspace re-key unit, unrelated to
+/// this generalization) name it directly and are about that ONE crossing
+/// specifically, not "whichever gate fires first".
 pub const REKEY_EPOCH: u32 = 40;
 
 /// The receipt file, under the same directory as the database
 /// (`<state>/kb-code/`).
 pub const BACKUP_MARKER: &str = "backup.marker";
 
-/// Set to `1`/`true` to proceed across [`REKEY_EPOCH`] when the snapshot
-/// cannot be written. Logs a warning naming itself on every boot it is
-/// honoured.
+/// Set to `1`/`true` to proceed across a [`GATED_EPOCHS`] door when the
+/// snapshot cannot be written. Logs a warning naming itself on every boot
+/// it is honoured.
 pub const OVERRIDE_ENV: &str = "KB_CODE_I_HAVE_A_BACKUP";
 
 #[derive(Debug, thiserror::Error)]
@@ -452,15 +471,28 @@ pub fn take_at_current_epoch(db_path: &Path) -> Result<BackupReceipt, BackupErro
     take(db_path, epoch)
 }
 
-/// Whether this boot would carry `volume_epoch` across [`REKEY_EPOCH`].
+/// The [`GATED_EPOCHS`] entries this boot would carry `volume_epoch`
+/// across, ascending. Empty when there is nothing to cross — including a
+/// volume with NO history (`None`), which is a first boot: there is
+/// nothing to lose and nothing to restore.
+fn gated_epochs_crossed(volume_epoch: Option<u32>, binary_epoch: u32) -> Vec<u32> {
+    let Some(v) = volume_epoch else {
+        return Vec::new();
+    };
+    GATED_EPOCHS
+        .iter()
+        .copied()
+        .filter(|&e| v < e && binary_epoch >= e)
+        .collect()
+}
+
+/// Whether this boot would carry `volume_epoch` across any [`GATED_EPOCHS`]
+/// door (formerly just [`REKEY_EPOCH`]).
 ///
 /// A volume with NO history (`None`) is a first boot: there is nothing to
 /// lose and nothing to restore, so it is never a crossing.
 pub fn crosses_rekey(volume_epoch: Option<u32>, binary_epoch: u32) -> bool {
-    match volume_epoch {
-        None => false,
-        Some(v) => v < REKEY_EPOCH && binary_epoch >= REKEY_EPOCH,
-    }
+    !gated_epochs_crossed(volume_epoch, binary_epoch).is_empty()
 }
 
 /// The gate itself. Call on a freshly-opened connection AFTER
@@ -475,9 +507,17 @@ pub fn ensure_for_epoch_crossing(
     binary_epoch: u32,
 ) -> Result<Option<BackupReceipt>, BackupError> {
     let volume_epoch = kb_core::sibling::volume_epoch(conn).ok().flatten();
-    if !crosses_rekey(volume_epoch, binary_epoch) {
+    let crossed = gated_epochs_crossed(volume_epoch, binary_epoch);
+    // The highest door this boot passes through — the epoch named in the
+    // refusal message and error, since that is the one the volume actually
+    // lands on. A volume that is this far behind crosses every earlier door
+    // too (e.g. a pre-V0040 volume opened by a V0045+ binary), but ONE
+    // snapshot, named for the volume's CURRENT epoch (`snapshot_path`,
+    // unaffected by this), is the rollback target regardless of how many
+    // doors it passes through in one boot.
+    let Some(&highest_crossed) = crossed.last() else {
         return Ok(None);
-    }
+    };
     if let Some(existing) = read_receipt(db_path) {
         if is_fresh(&existing, db_path, volume_epoch) {
             tracing::info!(
@@ -495,8 +535,9 @@ pub fn ensure_for_epoch_crossing(
                 bytes = receipt.bytes,
                 from_epoch = ?volume_epoch,
                 to_epoch = binary_epoch,
-                "kb-code: took a pre-migration snapshot before crossing the Workspace re-key \
-                 epoch — an older binary will refuse this volume afterwards"
+                gated_epochs_crossed = ?crossed,
+                "kb-code: took a pre-migration snapshot before crossing a gated schema epoch \
+                 ({crossed:?}) — an older binary will refuse this volume afterwards"
             );
             Ok(Some(receipt))
         }
@@ -516,7 +557,7 @@ pub fn ensure_for_epoch_crossing(
             }
             Err(BackupError::Refused {
                 db: db_path.display().to_string(),
-                epoch: REKEY_EPOCH,
+                epoch: highest_crossed,
                 reason: e.to_string(),
                 env: OVERRIDE_ENV,
             })
@@ -723,5 +764,95 @@ mod tests {
             "{}",
             format_gb(5_249_728_512)
         );
+    }
+
+    // ── RS-U1: GATED_EPOCHS generalization (V0045) ───────────────────────
+
+    #[test]
+    fn gated_epochs_names_both_the_rekey_and_the_review_store_doors() {
+        assert_eq!(GATED_EPOCHS, &[40, 45]);
+        assert_eq!(
+            REKEY_EPOCH, GATED_EPOCHS[0],
+            "the alias must not drift from the array"
+        );
+    }
+
+    /// The V0045 door behaves exactly like the V0040 door did: no crossing
+    /// below it, a crossing exactly at the step over it, no re-firing once
+    /// the volume is already past it.
+    #[test]
+    fn only_the_step_over_the_review_store_epoch_is_a_crossing() {
+        const V45: u32 = 45;
+        assert!(crosses_rekey(Some(V45 - 1), V45));
+        assert!(crosses_rekey(Some(41), V45 + 2));
+        assert!(!crosses_rekey(Some(V45), V45 + 1), "already past it");
+        assert!(!crosses_rekey(Some(V45 + 1), V45 + 2));
+    }
+
+    /// A volume so old it crosses BOTH doors in one boot (e.g. a pre-V0040
+    /// volume opened directly by a V0045+ binary) is still exactly one
+    /// crossing as far as `crosses_rekey`/`ensure_for_epoch_crossing` are
+    /// concerned — one snapshot, not two — but `gated_epochs_crossed`
+    /// itself reports every door that was passed, ascending, which is what
+    /// the refusal message names (the highest / most recent one).
+    #[test]
+    fn a_volume_behind_both_doors_crosses_both_but_takes_one_snapshot() {
+        assert!(crosses_rekey(Some(30), 45));
+        assert_eq!(gated_epochs_crossed(Some(30), 45), vec![40, 45]);
+        assert_eq!(
+            gated_epochs_crossed(Some(30), 45).last().copied(),
+            Some(45),
+            "the refusal/log message names the highest door actually crossed"
+        );
+
+        let dir = tmp();
+        let path = db_with_epoch(dir.path(), Some(30));
+        let conn = Connection::open(&path).unwrap();
+        let receipt = ensure_for_epoch_crossing(&conn, &path, 45)
+            .unwrap()
+            .expect("a crossing takes a snapshot");
+        assert_eq!(receipt.volume_epoch, Some(30));
+        assert!(
+            receipt.backup_path.ends_with("index.db.pre-V0030.bak"),
+            "{}",
+            receipt.backup_path
+        );
+    }
+
+    /// V0044 -> V0045 specifically: the acceptance-gate shape from
+    /// BUILD-BRIEF.md U1 ("V0044→V0045 writes index.db.pre-V0045.bak"),
+    /// through the real gate function (not just the boolean predicate).
+    #[test]
+    fn crossing_v0045_from_v0044_writes_the_v0045_snapshot() {
+        let dir = tmp();
+        let path = db_with_epoch(dir.path(), Some(44));
+        let conn = Connection::open(&path).unwrap();
+        let receipt = ensure_for_epoch_crossing(&conn, &path, 45)
+            .unwrap()
+            .expect("V0044 -> V0045 is a crossing");
+        assert_eq!(receipt.volume_epoch, Some(44));
+        assert!(
+            receipt.backup_path.ends_with("index.db.pre-V0044.bak"),
+            "{}",
+            receipt.backup_path
+        );
+        assert!(std::path::Path::new(&receipt.backup_path).exists());
+    }
+
+    /// The refusal for a V0045 crossing specifically names V0045, not the
+    /// old hard-coded V0040 — the generalization must not leave the error
+    /// message stuck on the first door.
+    #[test]
+    fn a_refused_v0045_crossing_names_v0045_not_v0040() {
+        let dir = tmp();
+        let path = db_with_epoch(dir.path(), Some(44));
+        let conn = Connection::open(&path).unwrap();
+        std::fs::create_dir(snapshot_path(&path, Some(44))).unwrap();
+        let err = ensure_for_epoch_crossing(&conn, &path, 45)
+            .expect_err("an unwritable snapshot refuses");
+        let msg = err.to_string();
+        assert!(msg.contains("one-way door"), "{msg}");
+        assert!(msg.contains("V0045"), "{msg}");
+        assert!(!msg.contains("V0040"), "{msg}");
     }
 }

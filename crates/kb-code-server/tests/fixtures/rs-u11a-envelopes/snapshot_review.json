@@ -1,0 +1,8 @@
+{
+  "base_sha": "string",
+  "captured_at": "number",
+  "ps_number": "number",
+  "review_id": "number",
+  "schema": "string",
+  "tip_sha": "string"
+}

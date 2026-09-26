@@ -56,7 +56,7 @@ pub(in crate::store) use parking_lot::Mutex;
 pub(in crate::store) use rusqlite::{params, Connection, OptionalExtension, Transaction};
 pub(in crate::store) use std::collections::HashMap;
 pub(in crate::store) use std::path::Path;
-pub(in crate::store) use std::sync::atomic::{AtomicU64, Ordering};
+pub(in crate::store) use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub(in crate::store) use crate::extract::Symbol;
 pub(in crate::store) use crate::highlight::Span;
@@ -81,6 +81,7 @@ mod rails;
 mod reading;
 mod recipes;
 mod review_docs;
+mod review_stores;
 mod reviews;
 mod scip_runs;
 mod symbols;
@@ -288,6 +289,42 @@ pub struct Store {
     /// counter; `generation` keeps its original meaning ("the files/symbols
     /// candidate SET changed") untouched.
     opens_generation: AtomicU64,
+    /// RS-U4 — reads a `GitCtx` served from a user repo instead of a ready
+    /// review store (`crate::git::roots`). Shared (`Arc`) because every
+    /// `GitCtx` built against this store carries a handle to bump it.
+    git_fallbacks: std::sync::Arc<crate::git::roots::GitFallbackStats>,
+    /// RS — boot-published "may a READ resolve a store root for this
+    /// boot?". `git::roots::resolve_ready_store` sees only `&Store`, so
+    /// the `review_store::StoreSettings::disabled` verdict (and the
+    /// store git spawner being unbuildable) is pushed here once, by
+    /// `bind_and_spawn`, instead of pulled. The `true` default is
+    /// deliberate: a `Store` opened with no `ReviewStores` at all — the
+    /// CLI, benches, fixtures — keeps the pre-existing read behaviour
+    /// exactly, and a disabled boot is a *configured* refusal, not a
+    /// default to guess.
+    ///
+    /// `Release`/`Acquire`, NOT the `Relaxed` used by the counters
+    /// above: there a stale read costs one cache rebuild, but here it
+    /// is a GATE — a stale `true` serves a read from a store root the
+    /// operator refused for this boot, which is the whole defect this
+    /// flag exists to close.
+    ///
+    /// Defence in depth, NOT the mechanism. The flag is a lone
+    /// `AtomicBool` that publishes no other memory, so the Acquire load
+    /// synchronises with nothing an observer could act on. The edge
+    /// that actually holds is SPAWN ORDERING: the release store in
+    /// `bind_and_spawn` runs before any task that can construct a
+    /// `GitCtx` exists — the `[backfill] on_boot` spawn, the serve
+    /// spawn, the RS boot job, the maintenance worker, and
+    /// `run_blocking`'s dispatch of a route handler onto the blocking
+    /// pool. The load-bearing change was RELOCATING that backfill
+    /// block to after the publish (it used to sit up with the other
+    /// boot-time spawns, ahead of it). The stronger ordering is kept
+    /// because it costs nothing — one fence per boot, one acquire per
+    /// `GitCtx` construction, once per route entry and not once per git
+    /// subprocess — and because it stops the guarantee from depending
+    /// on that spawn order surviving the next edit.
+    review_store_readable: AtomicBool,
 }
 
 /// The ONE sanctioned way to touch the store from async context — see the
@@ -351,6 +388,16 @@ impl Store {
         // semantics.
         conn.set_prepared_statement_cache_capacity(128);
 
+        // RS-U9 — the review-store restore guard's automatic detector reads
+        // the volume's epoch BEFORE anything below touches it (the same
+        // point `refuse_if_volume_ahead`/`ensure_for_epoch_crossing` read
+        // it from, for the same reason: after the migration runner below,
+        // every volume reads back at `schema_epoch()` regardless of
+        // whether THIS boot's starting point was a restored older
+        // snapshot — see `review_store::maint::restore_guard`'s module
+        // doc). A read-only probe; never itself an error.
+        let volume_epoch_at_boot = kb_core::sibling::volume_epoch(&conn).ok().flatten();
+
         // kb-sibling/1 — HARD schema-epoch guard, BEFORE the migration run
         // (same posture, same helper, as `kb_core::storage::sqlite::Db::
         // open`): refinery only ever migrates FORWARD, so an older binary
@@ -374,6 +421,47 @@ impl Store {
         // succeeds — a failed migration must still have its rollback target.
         let pre_migration = crate::backup::ensure_for_epoch_crossing(&conn, path, schema_epoch())
             .map_err(|e| StoreError::BackupRequired(e.to_string()))?;
+
+        // RS-U9 — the restore guard's automatic detector: filesystem only
+        // (a sentinel read/write), no git, no network. Should-fix review
+        // finding — "NO git I/O on the boot path": the actual bundle
+        // backup this MAY warrant (a gated-epoch snapshot or a freshly
+        // detected restore, design-internal-store.md §8 / README §5.4's
+        // "on a gated-epoch snapshot … or a restore") is deferred to
+        // `spawn_boot_bundle_backup` (`lib.rs`, spawned AFTER the daemon
+        // binds) via a marker file — this function only ever WRITES that
+        // marker, never runs git itself.
+        {
+            let state_dir = path.parent().unwrap_or_else(|| Path::new("."));
+            let guard_path = crate::review_store::maint::restore_guard::path_for(state_dir);
+            let guard = crate::review_store::maint::restore_guard::observe_boot_epoch(
+                &guard_path,
+                volume_epoch_at_boot,
+                chrono::Utc::now().timestamp(),
+            );
+            if guard.just_flagged {
+                tracing::warn!(
+                    reason = ?guard.flagged_reason,
+                    "kb-code: review-store restore guard flagged — a real GC apply stays \
+                     refused per-store until an operator runs `kb-code store gc --repo R --yes`"
+                );
+            }
+            if pre_migration.is_some() || guard.just_flagged {
+                let reason = if pre_migration.is_some() {
+                    "gated-epoch-snapshot"
+                } else {
+                    "restore-detected"
+                };
+                if let Err(e) =
+                    crate::review_store::maint::mark_boot_backup_pending(state_dir, reason)
+                {
+                    tracing::warn!(
+                        error = %e,
+                        "kb-code: could not mark a boot-time review-store bundle backup pending"
+                    );
+                }
+            }
+        }
 
         // V72-B1 — one-time, narrowly-targeted repair for the ONE migration
         // checksum a 2026-09 public-repo scrub diverged. MUST run after the
@@ -406,7 +494,39 @@ impl Store {
             conn: Mutex::new(conn),
             generation: AtomicU64::new(0),
             opens_generation: AtomicU64::new(0),
+            git_fallbacks: Default::default(),
+            review_store_readable: AtomicBool::new(true),
         })
+    }
+
+    /// RS-U4 — read-only view of the review-store fallback counters (the
+    /// Phase-1 gate "0 fallback hits after ready" reads `odb_miss`).
+    pub fn git_fallback_stats(&self) -> crate::git::roots::GitFallbackSnapshot {
+        self.git_fallbacks.snapshot()
+    }
+
+    pub(crate) fn git_fallbacks_handle(
+        &self,
+    ) -> std::sync::Arc<crate::git::roots::GitFallbackStats> {
+        std::sync::Arc::clone(&self.git_fallbacks)
+    }
+
+    /// Publish the boot's read verdict. The `Release` store pairs with
+    /// the `Acquire` load in [`Self::review_store_readable`]; see the
+    /// field doc for why a gate cannot be `Relaxed`.
+    pub fn set_review_store_readable(&self, readable: bool) {
+        self.review_store_readable
+            .store(readable, Ordering::Release);
+    }
+
+    /// `pub(crate)`: every read-side consumer is in-crate
+    /// (`git::roots::resolve_ready_store`). The setter above is `pub`
+    /// only because out-of-crate `AppState` builders — integration
+    /// tests, embedding crates — construct their own `ReviewStores` and
+    /// would otherwise silently keep the permissive `true` default while
+    /// their own `AppState` refuses the store.
+    pub(crate) fn review_store_readable(&self) -> bool {
+        self.review_store_readable.load(Ordering::Acquire)
     }
 
     fn lock(&self) -> parking_lot::MutexGuard<'_, Connection> {
@@ -3632,5 +3752,116 @@ fn worktree_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<crate::workspace
         path_resolution: r.get(13)?,
         repo: r.get(14)?,
         created_by_daemon: r.get::<_, i64>(15)? != 0,
+    })
+}
+
+// ── RS-U1: review store + base model (V0045) ───────────────────────────
+//
+// Row types for `review_stores`/`repo_stores` (README §5.1/§5.5, D2/D3)
+// and two small row types for the new `reviews`/`review_patchsets`
+// base-model columns. Methods live in `store/review_stores.rs`; this file
+// stays the type surface, the same split `WorkspaceRow` above follows.
+//
+// `ReviewRow`/`ReviewPatchsetRow` (defined earlier in this file) are
+// DELIBERATELY left untouched: both are constructed as bare struct
+// literals outside this module (`reviews.rs`, `review_timeline.rs`'s test
+// fixtures), and widening them here would force every one of those call
+// sites to learn six new fields for a feature they don't use yet.
+// `ReviewBaseRow`/`PatchsetBaseFields` are read/written through their OWN
+// narrow queries instead — `Store::get_review_base`/`Store::
+// set_review_base`/`Store::insert_patchset_with_base` in
+// `store/review_stores.rs` — so the unit that actually wires the base
+// model into review creation/capture can widen the call sites it owns
+// without this migration's own tests needing to track them.
+
+/// One `review_stores` row (V0045 / RS-U1). See the migration's own header
+/// (`migrations/V0045__review_store.sql`) for what each column means and
+/// why `forge_verified`/`state` are CHECK-constrained while the rest are
+/// route-validated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewStoreRow {
+    pub id: i64,
+    pub uuid: String,
+    pub store_key: String,
+    pub git_dir: String,
+    pub base_url: Option<String>,
+    pub base_url_source: Option<String>,
+    pub forge_kind: Option<String>,
+    pub forge_host: Option<String>,
+    pub forge_slug: Option<String>,
+    pub forge_verified: String,
+    pub cred_kind: String,
+    pub cred_reason: Option<String>,
+    pub cred_account: Option<String>,
+    pub key_fingerprint: Option<String>,
+    pub key_read_only: Option<String>,
+    pub state: String,
+    pub state_json: Option<String>,
+    pub created_at: i64,
+}
+
+/// One `repo_stores` row (V0045 / RS-U1) — a single member's membership in
+/// its store. `repo_id` is the PRIMARY KEY (a repo belongs to exactly one
+/// store); many rows can share one `store_id` (D2's shared store, NOT
+/// UNIQUE on purpose — see the migration header).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoStoreRow {
+    pub repo_id: i64,
+    pub store_id: i64,
+    pub legacy_import_json: Option<String>,
+    pub legacy_refs_state: String,
+}
+
+/// The `reviews` base-model columns (V0045 / RS-U1), read/written
+/// separately from [`ReviewRow`] — see this section's own doc above for
+/// why. `objects_state` rides alongside since it is set by the same
+/// seeding/verification pass, even though it is not itself part of the
+/// base POLICY.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReviewBaseRow {
+    pub base_mode: Option<String>,
+    pub base_branch: Option<String>,
+    pub base_member: Option<i64>,
+    pub base_set_by: String,
+    pub base_status: Option<String>,
+    pub objects_state: Option<String>,
+}
+
+/// The two new `review_patchsets` columns (V0045 / RS-U1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PatchsetBaseFields {
+    pub base_tip_sha: Option<String>,
+    pub kind: Option<String>,
+}
+
+fn review_store_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewStoreRow> {
+    Ok(ReviewStoreRow {
+        id: r.get(0)?,
+        uuid: r.get(1)?,
+        store_key: r.get(2)?,
+        git_dir: r.get(3)?,
+        base_url: r.get(4)?,
+        base_url_source: r.get(5)?,
+        forge_kind: r.get(6)?,
+        forge_host: r.get(7)?,
+        forge_slug: r.get(8)?,
+        forge_verified: r.get(9)?,
+        cred_kind: r.get(10)?,
+        cred_reason: r.get(11)?,
+        cred_account: r.get(12)?,
+        key_fingerprint: r.get(13)?,
+        key_read_only: r.get(14)?,
+        state: r.get(15)?,
+        state_json: r.get(16)?,
+        created_at: r.get(17)?,
+    })
+}
+
+fn repo_store_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<RepoStoreRow> {
+    Ok(RepoStoreRow {
+        repo_id: r.get(0)?,
+        store_id: r.get(1)?,
+        legacy_import_json: r.get(2)?,
+        legacy_refs_state: r.get(3)?,
     })
 }

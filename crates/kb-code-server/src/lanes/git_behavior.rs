@@ -106,7 +106,11 @@ fn is_full_sha(s: &str) -> bool {
 /// The repo's current HEAD sha, or `None` when there is no commit yet (a
 /// freshly `git init`ed repo) or git failed.
 pub fn head_sha(repo_root: &Path) -> Option<String> {
-    let out = run_git_raw(repo_root, &["rev-parse", "HEAD"]).ok()?;
+    let out = run_git_raw(
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+        &["rev-parse", "HEAD"],
+    )
+    .ok()?;
     let s = String::from_utf8_lossy(&out).trim().to_string();
     is_full_sha(&s).then_some(s)
 }
@@ -154,7 +158,7 @@ fn derive(repo_root: &Path, path: &str, now_unix: i64) -> Vec<DerivedFact> {
 
     // (1) the commits in the window that touched this path.
     let log = run_git_raw(
-        repo_root,
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
         &[
             "log",
             "--no-merges",
@@ -213,7 +217,11 @@ fn co_change(repo_root: &Path, path: &str, shas: &[String], now_unix: i64) -> Op
     for s in shas {
         args.push(s.as_str());
     }
-    let out = run_git_raw(repo_root, &args).ok()?;
+    let out = run_git_raw(
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+        &args,
+    )
+    .ok()?;
     let text = String::from_utf8_lossy(&out);
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for chunk in text.split('\u{1e}').skip(1) {
@@ -256,7 +264,7 @@ fn co_change(repo_root: &Path, path: &str, shas: &[String], now_unix: i64) -> Op
 
 fn last_touch(repo_root: &Path, path: &str, now_unix: i64) -> Option<DerivedFact> {
     let out = run_git_raw(
-        repo_root,
+        &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
         &[
             "log",
             "-n",

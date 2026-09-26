@@ -134,6 +134,9 @@ fn collect_hits(git: &GitRepo, q: &str) -> Result<Vec<TypeaheadHit>, ApiError> {
         });
     }
 
+    // RS-U4 bypass — `refs/kbc/*` listed from the user clone through an
+    // untyped `GitRepo`; pinned by `review_store_bypass_tripwire`
+    // (tests/security/git_argv_lint.rs) until it reads the review store.
     for k in git.list_kbc_refs()? {
         if let Some(n) = k.full_name.strip_prefix("refs/kbc/pr/") {
             hits.push(TypeaheadHit {

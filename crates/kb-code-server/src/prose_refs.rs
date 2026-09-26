@@ -671,8 +671,11 @@ pub fn extract(text: &str) -> FieldRefs {
     // family; edge trim peels sentence punctuation and emphasis markers.
     let mut claimed: Vec<(usize, usize)> = Vec::new();
     let bytes = text.as_bytes();
+    // ASCII-only: `(b as char)` on a UTF-8 continuation byte is a Latin-1
+    // char, and 0x85/0xA0 (NEL/NBSP) count as whitespace — `à` is C3 A0 —
+    // which split tokens mid-character and panicked the slice below.
     let is_delim = |b: u8| -> bool {
-        (b as char).is_whitespace()
+        (b.is_ascii() && (b as char).is_whitespace())
             || matches!(
                 b,
                 b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'"' | b'\'' | b'`' | b';'
@@ -841,6 +844,10 @@ pub fn resolve_refs(store: &Store, ctx: &RefCtx, refs: &mut [ProseRef]) -> Resul
                 None => store.latest_patchset(id)?,
             }
             .ok_or_else(|| ApiError::not_found("review patchset not found"))?;
+            // RS-U4 bypass — a review read (the patchset tip) through the
+            // user clone, outside every typed `git::roots` door; pinned by
+            // `review_store_bypass_tripwire` (tests/security/git_argv_lint.rs)
+            // until it is moved onto `GitCtx`.
             let root = store
                 .repo_root(ctx.repo_id)?
                 .ok_or_else(|| ApiError::not_found("repo not found"))?;

@@ -18,6 +18,24 @@ export function shortSha(sha: string, len = 7): string {
   return sha.slice(0, len);
 }
 
+/// RS-U11 — a coarse, dependency-free byte count for the review store's
+/// disk facts (`packs`/`total_bytes`, `GET /api/repos/{name}/store`).
+/// Binary units (1024), one decimal place above the first, `0 B` for a
+/// non-positive count (a fresh, unseeded store) rather than `NaN`/`-0 B`.
+const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
+
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  let n = bytes;
+  let unit = 0;
+  while (n >= 1024 && unit < BYTE_UNITS.length - 1) {
+    n /= 1024;
+    unit += 1;
+  }
+  const digits = unit === 0 ? 0 : 1;
+  return `${n.toFixed(digits)} ${BYTE_UNITS[unit]}`;
+}
+
 /// `{divide duration by this to reach the NEXT unit, this unit's name}` —
 /// the standard "divide and conquer" relative-time recipe (each step's
 /// `amount` is how many of the CURRENT unit make one of the next):

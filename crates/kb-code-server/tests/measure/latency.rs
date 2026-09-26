@@ -691,12 +691,19 @@ fn pr_room_reads_meet_their_p50_latency_budget_on_a_multi_review_fixture() {
     }
 
     // (a) GET /api/reviews store path — `reviews::compose_review_list_rows`.
+    // RS-U4 — the route resolves its `GitCtx` once per request, outside the
+    // timed compose; mirrored here.
+    let git_ctx = kb_code_server::git::roots::GitCtx::for_repo(
+        &store,
+        "kb",
+        kb_code_server::git::roots::WorkTreeRoot::user_clone(&repo_root),
+    );
     {
         let rows = store.list_reviews("kb", None).unwrap();
         assert_eq!(rows.len(), N_REVIEWS);
         let _ = kb_code_server::reviews::compose_review_list_rows(
             &store,
-            &repo_root,
+            &git_ctx,
             repo_id,
             rows.clone(),
         );
@@ -710,7 +717,7 @@ fn pr_room_reads_meet_their_p50_latency_budget_on_a_multi_review_fixture() {
                 let start = Instant::now();
                 let rows = store.list_reviews("kb", None).unwrap();
                 let out = kb_code_server::reviews::compose_review_list_rows(
-                    &store, &repo_root, repo_id, rows,
+                    &store, &git_ctx, repo_id, rows,
                 )
                 .unwrap();
                 let elapsed = start.elapsed();

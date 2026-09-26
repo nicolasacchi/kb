@@ -422,6 +422,7 @@ pub mod rekey;
 pub mod repo_state;
 pub mod resolve;
 pub mod review_analytics;
+pub mod review_base;
 pub mod review_comments;
 pub mod review_distill;
 /// V73-K1 — `kbc-review/1`: the review document, its refs, cards, lint and
@@ -442,9 +443,18 @@ pub mod review_jobs;
 pub mod review_legacy;
 pub mod review_map;
 pub mod review_pseudo;
+// RS-U7 — `review retrack` single + bulk (README §10 step 4/§12, D17/D20).
+pub mod review_retrack;
+// RS-U2 — the internal review store's hardened git spawner + credential
+// profiles (`review_store::git::StoreGit`, `review_store::cred`).
+pub mod review_store;
 pub mod review_sweep;
+// RS-U10b — `review sync` / `review status` for agent reviewers.
+pub mod review_sync;
 pub mod review_timeline;
 pub mod review_turns;
+// RS-U10a — the review's own git views (diff/log/cat) + PR lookup.
+pub mod review_views;
 pub mod reviews;
 pub mod router;
 pub mod routes;
@@ -849,54 +859,12 @@ pub async fn bind_and_spawn(
     let lip_registry = Arc::new(lip::LipRegistry::new(config.intel.clone()));
 
     // W3.6 — the join ladder's PRECOMPUTE lookback, resolved ONCE here so
-    // both the optional on-boot background run below and `AppState::
+    // both the optional on-boot background run (spawned much further down,
+    // after the review-store read verdict is published) and `AppState::
     // backfill_depth` (read by `routes::backfill_route`) agree on the same
     // value for this boot's lifetime (no live-reload — see `AppState`'s own
     // doc).
     let backfill_depth = config.backfill.resolved_depth();
-
-    // W3.6 — the OPTIONAL background backfill (`[backfill] on_boot`, off by
-    // default — `kb-code backfill` / `POST /api/backfill` is the primary,
-    // explicit path; see `config::BackfillSection`'s doc). Spawned
-    // fire-and-forget: it never delays this fn's return, and a per-repo
-    // failure is logged, never fatal to daemon boot — same posture as the
-    // W1.6(a) initial-index spawn above.
-    if config.backfill.on_boot {
-        let store_bg = store.clone();
-        let kb_client_bg = kb_client.clone();
-        let repos_bg = config.repos.clone();
-        let repo_ids_bg = repo_ids.clone();
-        tokio::spawn(async move {
-            for repo in &repos_bg {
-                let Some(&repo_id) = repo_ids_bg.get(&repo.name) else {
-                    continue;
-                };
-                match join::backfill::backfill_repo(
-                    repo,
-                    repo_id,
-                    backfill_depth,
-                    &store_bg,
-                    &kb_client_bg,
-                )
-                .await
-                {
-                    Ok(stats) => tracing::info!(
-                        repo = %repo.name,
-                        total = stats.total,
-                        newly_cached = stats.newly_cached,
-                        upgraded = stats.upgraded,
-                        degraded = stats.degraded,
-                        duration_ms = stats.duration_ms,
-                        "kb-code: on-boot backfill complete",
-                    ),
-                    Err(e) => tracing::warn!(
-                        repo = %repo.name, error = %e,
-                        "kb-code: on-boot backfill failed",
-                    ),
-                }
-            }
-        });
-    }
 
     let watch_mode = mirror::parse_watch_mode(&config.watcher.mode);
     let watch_mode_label: &'static str = if watch_mode == mirror::WatchMode::Poll {
@@ -1068,13 +1036,9 @@ pub async fn bind_and_spawn(
     // `repo.head_moved` on the bus; capture work is spawn_blocking and
     // deliberately OUT of the mirror/sink hot loop).
     let review_cfg = config.review.clone();
-    let _auto_capture = reviews::spawn_auto_capture_worker(
-        store.clone(),
-        bus.clone(),
-        config.repos.clone(),
-        review_cfg.max_patchsets,
-        review_cfg.patchset_capture,
-    );
+    // RS-U6 — the auto-capture worker needs the review stores (built below,
+    // before `config.repos` moves); its spawn follows them.
+    let auto_capture_repos = config.repos.clone();
     // V3.2-B1 — behavioral incremental worker (subscribes to
     // `repo.head_moved`; spawn_blocking off the mirror hot loop).
     let doclens_cfg = config.doclens.clone();
@@ -1119,6 +1083,83 @@ pub async fn bind_and_spawn(
         n => tracing::info!(swept = n, "kb-code: removed orphaned git scratch dirs"),
     }
 
+    // RS-U3 (review store) — built before `config.repos` moves into
+    // `AppState`; no git I/O here (the boot job below does that).
+    let review_stores = Arc::new(review_store::ReviewStores::new(
+        &config.review,
+        &paths.state,
+        &config.repos,
+        &repo_ids,
+    ));
+    store.set_review_store_readable(review_stores.reads_can_use_store());
+
+    // W3.6 — the OPTIONAL background backfill (`[backfill] on_boot`, off by
+    // default — `kb-code backfill` / `POST /api/backfill` is the primary,
+    // explicit path; see `config::BackfillSection`'s doc). Spawned
+    // fire-and-forget: it never delays this fn's return, and a per-repo
+    // failure is logged, never fatal to daemon boot — same posture as the
+    // W1.6(a) initial-index spawn above.
+    //
+    // RS — DELIBERATELY spawned HERE, after the
+    // `set_review_store_readable` publish above, and not up with the
+    // other boot-time background spawns. This task resolves commits
+    // through `join::backfill` → `join/ladder.rs` `resolve_commit` →
+    // `GitCtx::resolve_entry` (the async twin of `for_repo`, same
+    // `resolve_ready_store` choke point), i.e. it reads `refs/kbc/*`
+    // exactly like a request does — so on a boot where the operator
+    // disabled the review store it must not be able to observe the
+    // `Store`'s pre-publish `readable = true` default. Spawning it here
+    // makes that publish the one happens-before edge every `GitCtx`
+    // consumer in this boot passes through (the server task is spawned
+    // later still, below). Body unchanged: everything it captures
+    // (`store`, `kb_client`, `config.repos`, `repo_ids`, `backfill_depth`)
+    // is still owned at this point — `config.repos`/`repo_ids` move into
+    // `AppState` below.
+    if config.backfill.on_boot {
+        let store_bg = store.clone();
+        let kb_client_bg = kb_client.clone();
+        let repos_bg = config.repos.clone();
+        let repo_ids_bg = repo_ids.clone();
+        tokio::spawn(async move {
+            for repo in &repos_bg {
+                let Some(&repo_id) = repo_ids_bg.get(&repo.name) else {
+                    continue;
+                };
+                match join::backfill::backfill_repo(
+                    repo,
+                    repo_id,
+                    backfill_depth,
+                    &store_bg,
+                    &kb_client_bg,
+                )
+                .await
+                {
+                    Ok(stats) => tracing::info!(
+                        repo = %repo.name,
+                        total = stats.total,
+                        newly_cached = stats.newly_cached,
+                        upgraded = stats.upgraded,
+                        degraded = stats.degraded,
+                        duration_ms = stats.duration_ms,
+                        "kb-code: on-boot backfill complete",
+                    ),
+                    Err(e) => tracing::warn!(
+                        repo = %repo.name, error = %e,
+                        "kb-code: on-boot backfill failed",
+                    ),
+                }
+            }
+        });
+    }
+
+    let _auto_capture = reviews::spawn_auto_capture_worker(
+        store.clone(),
+        bus.clone(),
+        auto_capture_repos,
+        review_cfg.max_patchsets,
+        review_cfg.patchset_capture,
+        review_stores.clone(),
+    );
     let state = Arc::new(AppState {
         version: version(),
         started_at,
@@ -1208,7 +1249,26 @@ pub async fn bind_and_spawn(
         // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
         branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
         review_jobs: Arc::new(crate::review_jobs::ReviewJobs::default()),
+        review_stores,
     });
+
+    // RS-U3 (review store) — D4's background boot seeding job: spawned,
+    // never awaited (no git I/O on the boot critical path).
+    let _review_store_boot = review_store::boot::spawn_boot_job(state.clone());
+
+    // RS-U9 — the scheduled store maintenance worker (README §5.4):
+    // daily/weekly/monthly git housekeeping, the store-wide GC + ref
+    // invariant pass (report-only — see `maint`'s module doc), jittered,
+    // under each store's own ops lock. Spawned UNCONDITIONALLY (idles out
+    // internally when the store is disabled), never on the boot critical
+    // path.
+    let _review_store_maint = review_store::maint::spawn_maintenance_worker(state.clone());
+    // RS-U9 Should-fix — the deferred boot-time bundle-backup check
+    // `Store::open` may have marked pending (a gated-epoch snapshot or a
+    // freshly detected restore): the ONLY git I/O that decision needs,
+    // spawned HERE (after bind) rather than inline in `Store::open`, so
+    // there is still no git I/O on the boot critical path.
+    let _review_store_boot_backup = review_store::maint::spawn_boot_bundle_backup(state.clone());
 
     // DCB W3.A — the doc_refs reverse-index sync. Spawned UNCONDITIONALLY,
     // deciding internally whether to idle out (`sync_interval_secs == 0`),
@@ -1305,6 +1365,8 @@ pub(crate) async fn build_state_for_test(
             .with_context(|| format!("register repo {:?} in the kb-code store", repo.name))?;
         repo_ids.insert(repo.name.clone(), id);
     }
+    // RS-U3 (review store) — `repo_ids` moves into `AppState` below.
+    let review_store_repo_ids = repo_ids.clone();
     // Same boot-time pin prune `bind_and_spawn` runs (DCB-W2.A), kept in
     // lock-step so an in-crate test sees the daemon's real pin posture.
     if let Err(e) = doclens::pins::prune_stale_pins(&store, &config.repos) {
@@ -1415,12 +1477,20 @@ pub(crate) async fn build_state_for_test(
     let scopes = config.scopes.clone();
     let scip_cfg = config.scip.clone();
     let review_cfg = config.review.clone();
+    let review_stores = Arc::new(review_store::ReviewStores::new(
+        &config_for_security.review,
+        &paths.state,
+        &config_for_security.repos,
+        &review_store_repo_ids,
+    ));
+    store.set_review_store_readable(review_stores.reads_can_use_store());
     let _auto_capture = reviews::spawn_auto_capture_worker(
         store.clone(),
         bus.clone(),
         config.repos.clone(),
         review_cfg.max_patchsets,
         review_cfg.patchset_capture,
+        review_stores.clone(),
     );
     let doclens_cfg = config.doclens.clone();
     let behavioral_cfg = config.behavioral.clone();
@@ -1491,6 +1561,9 @@ pub(crate) async fn build_state_for_test(
         // V75-M3 — `branch-facts/1`'s per-boot base cache (see `state.rs`).
         branch_base_cache: Arc::new(parking_lot::Mutex::new(history::facts::BaseCache::default())),
         review_jobs: Arc::new(crate::review_jobs::ReviewJobs::default()),
+        // RS-U3 (review store) — built from the same config; the fixture
+        // never spawns the boot job (tests drive `boot::run_boot` directly).
+        review_stores,
     }))
 }
 
@@ -1838,5 +1911,52 @@ mod tests {
     #[test]
     fn fuzzy_match_finds_subsequence() {
         assert!(fuzzy_ready());
+    }
+
+    // --- RS: the boot-time read gate is actually WIRED --------------------
+
+    /// `Store::review_store_readable` is only a gate if something
+    /// PUBLISHES the boot's verdict onto it, and the two publishers
+    /// (`bind_and_spawn`, `build_state_for_test`) are plain call lines:
+    /// delete either and the whole suite stays green with the daemon-side
+    /// defect — reads served from a store root the operator disabled —
+    /// fully restored. Only possible because the accessor is
+    /// `pub(crate)`.
+    #[tokio::test]
+    async fn booting_publishes_the_refused_read_gate_onto_the_store() {
+        // Same fixture style as `lip`/`code_actions`' `test_state`:
+        // `build_state_for_test` + `KbPaths::rooted_at` on a tempdir.
+        async fn booted_with_store_root(root: Option<std::path::PathBuf>) -> bool {
+            let cfg = crate::config::KbCodeConfig {
+                review: crate::config::ReviewSection {
+                    store: crate::config::ReviewStoreSection {
+                        root,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let tmp = tempfile::tempdir().unwrap();
+            let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "kb-code");
+            let state = crate::build_state_for_test(cfg, paths).await.unwrap();
+            state.store.review_store_readable()
+        }
+
+        // A RELATIVE `[review.store] root` is what makes
+        // `StoreSettings::disabled` `Some` — the cheapest configured
+        // refusal, with no repo-overlap fixture and no store on disk.
+        assert!(
+            !booted_with_store_root(Some("relative/store/root".into())).await,
+            "a boot whose store is disabled must publish read gate = false"
+        );
+        // Control, so the assertion above cannot pass for the wrong
+        // reason (e.g. a fixture that always publishes false): the
+        // default `root = None` resolves to an absolute `<state>/git`
+        // and stays readable.
+        assert!(
+            booted_with_store_root(None).await,
+            "a boot with a usable store root must publish read gate = true"
+        );
     }
 }

@@ -194,47 +194,57 @@ sweep {--repo R | --all-repos} [--include-closed]` (`POST
 `state=open`) and reconciles each against live GitHub — the cron/agent
 entry point for "every PR the LLM touched."
 
-**The `start-pr` base ladder and the stale-mirror refusal (v7.6,
-V76-R1a).** When `--base` is absent, `start-pr` no longer silently bases
-ps1 on the mirror's LOCAL default branch (a mirror that has not fetched
-for months produced a patchset spanning everything since — the review
-files then timed out and the review was ruined). The base is chosen by a
-three-rung ladder, and the rung taken rides the response as `base_source`
-(also merged into the stored `pr_meta_json` snapshot when that snapshot
-exists, carried forward by `review sweep`):
+**The base is a policy, not a commit.** A review does not store a base sha;
+it stores `track(B)`, `local(B)` or `pin(sha)` plus who set it, and every
+capture resolves that policy to a tip `T` and records `merge-base(T,
+head)`. `start-pr` no longer bases ps1 on the mirror's LOCAL default
+branch (a mirror that had not fetched for months produced a patchset
+spanning everything since — the review files then timed out and the review
+was ruined). And the v7.6 `409 urn:kb:errors:stale-mirror` REFUSAL is
+GONE: a local default branch more than 50 commits behind the just-fetched
+remote default is reported as a `stale-mirror` WARNING in the envelope's
+`warnings[]`, never a refusal — the base already comes from the freshly
+fetched remote tip, so a stale local branch no longer affects the diff
+(`reviews.rs`'s `start_pr_base`, whose own doc records the change; the
+`?async=1` job path agrees). The refusal AND its URN are gone: neither
+`urn:kb:errors:stale-mirror` nor `ERR_STALE_MIRROR` exists anywhere in the
+tree, so a client branching on that `error_type` sees nothing. Only the
+`stale-mirror` WARNING code survives, and only on the pre-store
+`start-pr` fallback (a repo with a ready store resolves its base through
+the store and never reaches it).
 
-1. **`explicit`** — `--base <ref>` was given. It wins outright and
-   bypasses the stale-mirror refusal.
-2. **`merge-base`** — no `--base`, and the repo has an `origin` remote:
-   the remote default branch is FETCHED first (`git fetch origin
-   +refs/heads/<d>:refs/remotes/origin/<d>`), and ps1's `base_sha` is the
-   merge-base of the PR head against the FRESH `refs/remotes/origin/<d>`
-   (stored as the review's `base_ref`). Exception: if the mirror's LOCAL
-   default branch is behind the fetched remote default by more than 50
-   commits, the route REFUSES with `409 urn:kb:errors:stale-mirror`; the
-   message carries the ahead/behind numbers and the exact retry command
-   (`kb-code review start-pr --repo R --pr N --base <merge-base-sha>`),
-   which reproduces the same patchset explicitly.
-3. **`local-default`** — no `--base` and no usable remote default (no
-   `origin` remote, the fetch failed, or the remote lacks the branch):
-   the pre-v7.6 answer, the mirror's local default branch.
+For a repo whose review store is ready the whole ladder is `review_base`'s
+resolution chain instead of the pre-store fallback — see **How kb-code
+picks and refreshes a base** below for the shipped grammar, the four live
+rungs, the refresh triggers, the warning codes, and the one stderr line.
 
 **`start-pr` as a daemon-side job.** The first `start-pr` against a cold
 mirror always outlived the CLI's old 10 s timeout in `git fetch` (the
 fetch finished server-side; the retry "succeeded" confusingly). `kb-code
 review start-pr` now posts `POST /api/reviews/pr?async=1`, which returns
 `202 {job_id, status: "running"}` immediately and runs the same flow as a
-job, then polls `GET /api/reviews/jobs/{id}` (bearer) every 2 s for up to
-600 s — progress lines go to stderr unless `--json`. A second `POST` for
+job, then polls `GET /api/reviews/jobs/{id}` (bearer) every 2 s.
+`--wait[=SECS]` (RS-U10a) bounds only how long THIS process polls: bare
+`--wait` means 600 s, `--wait=N` means N seconds, and `--wait=0` hands
+back the `job_id` at once for a caller that would rather poll the job
+itself; omitted, it is 600 s for one PR. Progress lines go to stderr
+unless `--json`. A second `POST` for
 the same `(repo, PR)` while the job runs ATTACHES to it (same `job_id`)
 instead of starting a second fetch. The settled job reports `{status:
 done|failed, progress: {stage}, review_id?, error?}` with the full
-creation envelope under `result`; a failure carries the refusal verbatim
+creation envelope under `result`; a failure carries the failure verbatim
 plus its `type` URN in `error_type`. Jobs are in-memory only and swept 1
 h after creation (an unknown or swept id 404s). The route's synchronous
 behaviour is unchanged for any caller that does not pass `?async=1`; the
 CLI's reqwest timeout for THIS verb is 600 s (every other verb keeps its
 own).
+
+RS-U10a also changed what `start-pr` PRINTS: it no longer emits a plain
+"✓ review N" line. It always emits the `kbc-review-start/1` envelope,
+carrying `id`, `minted`, the `base{…}` block and `warnings[]` — `id` is
+the REUSED review's id when the `(repo, PR)` already had an open review,
+and `minted: false` when the `(tip, merge-base)` pair was unchanged so no
+patchset was made.
 
 **Findings ledger (`kbc-findings/1`).** `kb-code review findings import ID
 {--from-file FILE|--stdin} [--mode full|additive]` (`POST
@@ -287,10 +297,11 @@ the finding's cited lines, capped at 20 later patchsets
 stored, never a disposition — evidence the author acted near the location,
 never a claim that anything was "fixed"; `kb-code review findings list`
 prints it as `touched ps3 (exact)` after the location. `GET
-/api/reviews/{id}/findings/recurrence`
-(bearer, route-only — no dedicated CLI verb yet) surfaces which of a
-review's own findings recur across the repo's other reviews, off the same
-`recurrence_pairs` query `review analytics` uses.
+`/api/reviews/{id}/findings/recurrence`
+(bearer) surfaces which of a review's own findings recur across the repo's
+other reviews, off the same `recurrence_pairs` query `review analytics`
+uses. It ships as a real CLI verb —
+`kb-code review findings recurrence <id> [--json]`.
 
 **Report + artifact.** `kb-code review report ID` (`GET
 /api/reviews/{id}/report`, bearer) reads the agent-authored review report;
@@ -320,11 +331,12 @@ key unchanged; see [The stream](#the-stream--timeline-v2-pseudo-files-claims-hun
 /api/reviews/analytics`, bearer) is the disposition calibration instrument —
 a severity×disposition matrix, acceptance rates, weekly buckets, latency,
 and recurrence, all over non-superseded findings only (`superseded_count` is
-reported separately, never silently dropped). `GET
-/api/reviews/{id}/impact?path=` (bearer, route-only — the SPA's "Reviewer
-X-ray" chips, no CLI verb) reports, per changed callable symbol in a file,
-how many of its callers are also in this review's own change set vs.
-elsewhere, capped at 20 symbols.
+reported separately, never silently dropped). `kb-code review impact ID
+--path P` (`GET /api/reviews/{id}/impact`, bearer — the SPA's "Reviewer
+X-ray" chips read the same route) reports, per changed callable symbol in a
+file, how many of its callers are also in this review's own change set vs.
+elsewhere, capped at 20 symbols. `--path` is required: the route's param is
+a bare `String`, so an omitted one 400s before the handler runs.
 
 **Export + publish (`kbc-github-export/1`).** `kb-code review export-github
 ID [--finding SLUG]... [--include-waived] [--include-orphaned-as-general]`
@@ -521,6 +533,1064 @@ entirely rather than downgraded. `[rails_lens]` in `kb-code.toml`
 (`repos`/`disabled_repos`) overrides the auto-detected default per repo —
 `disabled_repos` always wins; see
 [`configuration.md`](configuration.md#kb-codetoml-kb-code-daemon-config).
+
+## How kb-code picks and refreshes a base
+
+This is the single reference for the base model. Everything in it was
+read out of `crates/kb-code-server/src/review_base.rs` and its `capture`
+half on this build; where the design
+(`research/kb-code-review-base-2026-09/README.md` §3/§6/§12) and the code
+disagree, the code is printed and the drift is named.
+
+### A review stores a base policy, not a commit
+
+Migration `V0045__review_store.sql` added the policy columns alongside
+the old `reviews.base_ref`; the policy wins wherever it is set, and
+`base_ref` is still written as a git-resolvable display value
+(`BasePolicy::display_base_ref`: `refs/remotes/<R>/<B>` for `track`, R
+being the member remote that maps to the project, `refs/heads/<B>` for
+`local`, the sha for `pin`) so every pre-store reader keeps working.
+
+| column | values | meaning |
+|---|---|---|
+| `reviews.base_mode` | `track` · `local` · `pin`, or NULL | NULL is a pre-V0045 row: classified on read, never rewritten |
+| `reviews.base_branch` | a branch name | set for `track`/`local`; NULL for `pin` and legacy |
+| `reviews.base_member` | a `repos.id`, or NULL | whose member clone a `local` base follows; NULL = the review's own repo |
+| `reviews.base_set_by` | `auto` · `user` · `legacy`; column `DEFAULT 'legacy'` | `auto` may be re-resolved by kb, `user` only by a person |
+| `reviews.base_status` | JSON | `{state, source, last_fetch, fetched_at, via, code}` |
+| `reviews.objects_state` | NULL · `objects-missing` · `legacy-unverified` | the per-review connectivity verdict from seeding |
+| `review_patchsets.base_tip_sha` | a 40-hex, or NULL | the base branch's TIP at capture — not the merge-base |
+| `review_patchsets.kind` | a `PatchsetKind` slug, or NULL | why this patchset exists |
+
+None of the six `reviews` columns is CHECK-constrained, matching that
+table's own convention (`verdict` from V0023 and `state` from V0014 are
+closed-looking enums with no CHECK either): a review is route-validated
+end to end. `base_status.state` is documented as `ok` · `cached` ·
+`offline` · `refresh-failed` · `base-vanished` · `unavailable` ·
+`pinned`; `status_after` writes every one of those except `unavailable`,
+plus `legacy` for a row with no policy at all. `last_fetch` is one of
+`fetched` · `cached` · `failed` · `offline` · `skipped`. On the wire a
+`base{…}` block with no stored status at all reports `state: "pinned"`
+for a `pin` and `state: "unverified"` for anything else.
+
+`PatchsetKind` is `initial` · `push` · `rebase` · `base-moved` ·
+`base-corrected` · `retarget` · `forced` — `forced` being `snapshot
+--force` on an UNCHANGED `(tip, merge-base)` pair, marked as such rather
+than recorded as a push that never happened. NULL means "legacy
+patchset, predates the base model"; nothing is ever guessed into it, and
+the SPA's `PatchsetStrip` shows no badge for a NULL kind.
+
+`base_status.source` is one of `explicit` · `forge-api` · `caller` ·
+`merge-ref` · `default-assumed` · `upstream` · `stack-parent` ·
+`legacy`. **`merge-ref` is a label, not a rung** — nothing in this build
+ever produces it (see **Not built here**).
+
+The pre-RS-U6 `base_source` label (`explicit` | `merge-base` |
+`local-default`) still rides `start-pr`'s envelope and the stored
+`pr_meta_json`; `BasePolicy::legacy_base_source` maps the new source onto
+it (`explicit` → `explicit`, any `local` → `local-default`, everything
+else → `merge-base`).
+
+### The `--base` grammar
+
+`classify_base` is the ONE parser, shared by the CLI (which forwards the
+string verbatim) and every HTTP creation route. First match wins, and
+this is its table as the code writes it:
+
+| input | result |
+|---|---|
+| absent / `auto` | run the chain (`policy: None`) |
+| `pin:<rev>` / `local:<B>` / `track:<B>` | explicit mode, `user` |
+| 40-hex | `pin` + `base-pinned` |
+| `refs/remotes/<R>/<B>` / `<R>/<B>`, R mapping to the project | `track(B)` |
+| `refs/heads/<B>` | `local(B)` |
+| bare `<B>` on a PR | `track(B)` |
+| bare `<B>` otherwise | `local(B)` if the member has it, else `track(B)` if the forge has it |
+| any other rev (short sha, tag, `HEAD~3`) | `pin` + `base-pinned` |
+| otherwise | 400 `base-unresolved` |
+
+Three places the shipped table says more than the design's §6 table:
+
+* **`refs/heads/<B>` → `local(B)` is a shipped row the design's table does
+  not have at all.**
+* `absent` is a first-class input alongside `auto` — a bare
+  `classify_base(None, …)` runs the chain.
+* Two conditions the design leaves implicit are enforced: a 40-hex must
+  be a commit this repo knows (otherwise 400 "commit … is not known to
+  this repo"), and the `<R>/<B>` row is taken only when no LOCAL branch
+  has that literal name.
+
+Every policy the parser returns is `set_by: user`, `source: explicit`.
+Branch names are validated with `git check-ref-format --branch`
+semantics — `valid_branch_name` additionally rejects `HEAD`, a `refs/`
+prefix, `@{`, and anything `Revspec::parse` reads as option-shaped.
+A bare name on a PR is additionally flagged `from_bare`, which
+`resolve_pr_base` uses to recognise an older SPA build that sends the
+PR's own target as a bare branch.
+
+### The resolution chain
+
+For a PR or MR, `resolve_pr_base` walks, first match wins:
+
+1. **explicit** — the parser produced a policy;
+2. **forge API `base.ref`** → `track(B)`, `auto`, `forge-api`;
+3. **caller-supplied** (`caller_base_ref`) → `track(B)`, `auto`,
+   `caller`;
+4. **the default branch** → `track(B)`, `auto`, `default-assumed`, with
+   a loud `pr-target-assumed` warning naming the `--base`/retrack escape.
+
+**Four live rungs, not five.** The design's rung 4 is merge-ref
+inference (README §7, Phase 2) and is NOT in this build; the code's own
+doc comment marks it `[merge-ref inference: Phase 2]` and no call site
+constructs a `BaseSource::MergeRef`. The rung-4 name in the design is
+therefore the default-branch rung here.
+
+One deliberate exception inside rung 1: an older SPA build sends the
+PR's own target as a bare name; when that bare name equals the API's
+`base.ref`, kb recognises it as the FORGE rung and records it `auto` /
+`forge-api` rather than `user` / `explicit`. A bare name that does not
+match stays an explicit user policy.
+
+Every rung excludes the head's own branch. The default-branch rung is
+evaluated LAZILY (it is an `FnOnce` closure) because it can run
+`ls-remote` — it is reached only when every earlier rung missed.
+
+For a NON-PR review, `resolve_non_pr_base` walks explicit → stack parent
+(`local`, `stack-parent`) → the head branch's `@{upstream}` (`track`
+when that remote maps to the project, else `local`; `upstream`) → the
+default branch. D14: the default is the FORGE's default tracked, never
+the member's possibly-stale local `main` — the mode is `local` only when
+the project has no forge at all.
+
+A PR on a repo with no forge remote is `400
+urn:kb:errors:pr-refs-unsupported`, and the message names the
+alternative: "review the branch with `kb-code review start
+<remote>/<branch>`".
+
+**D15 retarget-follow.** On a re-capture, a PR whose API `base.ref` has
+moved retargets a review kb chose the base for (`set_by: auto`): the new
+policy is persisted, the patchset is hinted `retarget`, and a
+`retargeted` warning is raised. A `user` or `legacy` base is never moved
+under its owner; it gets a `pr-target-differs` warning instead, whose
+message says the PR targets one branch while the review still compares
+against another and points at `retrack`.
+
+### The default-branch ladder
+
+`pick_default_branch(config, symref, candidates, head_branch)`:
+
+1. the configured `[[review.repos]] default_branch` — but only if it is
+   a valid branch name AND is not the head's own branch;
+2. the forge's `HEAD` symref, read with `git ls-remote --symref base
+   HEAD` and CACHED in the store's `state_json` for
+   `DEFAULT_BRANCH_TTL_SECS` = 24 h, so the probe runs at most once a day
+   per store and never on a capture whose earlier rung already answered;
+3. exactly ONE of `main` / `master` / `trunk` / `develop` among the
+   store's `refs/remotes/base/*` — that one, with a
+   `default-branch-guessed` warning naming `[[review.repos]]
+   default_branch` as the key that pins it;
+4. otherwise REFUSE with 400 `urn:kb:errors:base-undetermined`, saying
+   either "no default branch could be determined (no forge HEAD, no
+   main/master/trunk/develop) — pass `--base <branch>`", or "the default
+   branch is ambiguous (main, master) — pass `--base <branch>` or set
+   `[[review.repos]] default_branch`".
+
+Two or more candidates is an AMBIGUITY refusal, never a preference order
+between them. The head's own branch is never an answer at any rung. With
+no forge at all the candidate set is the member's own branches, and the
+ladder still refuses rather than taking whatever happens to be checked
+out.
+
+### What the base commit is
+
+Always `merge-base(T, head)`, where `T` is the policy resolved to a tip
+INSIDE the review store. It is computed in `capture_at` BEFORE the skip
+check. It is never the forge API's value, and never a merge ref (there
+is no merge ref in this build). GitHub's own semantics are the target:
+`merge-base(current tip of the base branch, head)..head`, recomputed on
+every push, every rebase, and every base-branch move.
+
+`base_sha` on the patchset row is that merge-base. `base_tip_sha` is `T`,
+and because `T` is not necessarily an ancestor of the tip, every non-NULL
+`base_tip_sha` gets its own keep-alive ref
+`refs/kbc/review/<id>/ps<n>-base` alongside `ps<n>` — the same integrity
+invariant, extended to the base pin.
+
+A patchset is minted only when the PAIR `(head tip, merge-base)` changes
+(`decide_kind`); a base branch merely advancing never mints. The kind
+comes from the pair diff — tip and merge-base both → `rebase`, tip only
+→ `push`, merge-base only → `base-moved` — unless the caller supplies a
+hint (`retarget`, `base-corrected`) or `force` is set.
+
+### When the base refreshes
+
+| trigger | credentialed `base` fetch | notes |
+|---|---|---|
+| review creation (`review start`, `start-pr` creating the row) | yes | `StoreCtx::prepare_new` runs the chain, then fetches the tracked branch(es) and the PR head |
+| `start-pr` REUSING an open review | yes | the reuse path re-captures in the store |
+| `review snapshot` | yes | `--no-fetch` turns it off (see below) |
+| `review retrack` (both forms) | yes | the `--dry-run` form fetches and classifies but never captures |
+| `review sync` (RS-U10b) | yes | the same create-or-reuse path `start-pr` runs, with the API's `base.ref` already in hand so it is never asked twice |
+| `review status --fetch` | yes | `?fetch=1` fetches base + PR head INTO THE STORE ONLY and writes no row; the user clone is never written |
+| auto-capture (`head_moved` event) | **NO** | `Recapture { network: false }`: the member's `work-<id>` heads are imported locally and the base comes from what the store already holds. A `head_moved` NEVER touches the base's freshness |
+| `store sync` | yes | `seed::fetch_base_branches` re-fetches each requested branch from `base`; a branch the forge no longer has is reported in `vanished` and the rest are still fetched |
+| boot seeding | **NO** | local-only: no credential, no network. Base branches arrive with the first explicit `store sync` or capture |
+
+`--no-fetch` exists on `review snapshot` only (`fetch: false` on the
+body; `opts.fetch.unwrap_or(true)` is the default everywhere else). It
+turns the fetch report into `cached`, and the capture then resolves
+against what the store already holds.
+
+**The hint-safety rule.** `refs/remotes/base/<B>` is written ONLY by the
+credentialed fetch (`StoreCtx::fetch_forge` and `seed::fetch_base_branches`,
+both over the `base` remote, under the per-(store, remote) fetch lock),
+and a `track` policy resolves its tip ONLY from that namespace
+(`base_tip`). A member's own `refs/remotes/<R>/<B>` is consulted for
+EXISTENCE only — never as the base tip — so a user's refs can never
+silently become the base. A head or base that is neither a local nor a
+remote-tracking branch of the member (a sha, a tag, an expression) is
+imported BY OBJECT ID into the scratch hints
+`refs/kbc/hint/<repo_id>/_head` and `…/_base`, one per role,
+ overwritten each time; a member's `refs/remotes/<R>/<B>` is imported
+into `refs/kbc/hint/<repo_id>/<R>/<B>`. `refs/kbc/*` is never fetched
+from a member clone. **`cached-via-work` is NOT in this build.** The
+design (README §3, "Hint safety"; `design-internal-store.md` §4/§5)
+specifies an amber `cached-via-work` base state for a strictly-descendant
+hint used offline, and the SPA's chip vocabulary lists it; no code path
+here produces that state, writes it, or renders that chip. What ships is
+the safety property itself — a `track` base tip can only ever come from
+`refs/remotes/base/<B>` — and the amber base warnings that do exist are
+`base-pinned` and `base-upgraded`.
+
+### Warnings and errors
+
+Warning codes, verbatim from `review_base::warn` — every one rides the
+envelope's `warnings[]` as a `{code, message}` object and is also copied
+into `base_status.code` where a code applies:
+
+| code | raised when |
+|---|---|
+| `base-pinned` | the base is a `pin`: a 40-hex, a `pin:<rev>`, any other rev, or a legacy row's 40-hex `base_ref` |
+| `base-upgraded` | a legacy PR row whose bare `base_ref` now reads as `track(B)`; the message names `local:<B>` as the way to keep the local branch |
+| `pr-target-assumed` | the PR's target could not be read from the forge and the default branch was assumed |
+| `default-branch-guessed` | exactly one of main/master/trunk/develop was present |
+| `retargeted` | the PR's target moved and the review (or a vanished auto base) followed it |
+| `pr-target-differs` | the PR's target moved but a person set the base, so the review did not follow |
+| `stale-mirror` | the pre-store fallback only: the local default branch is > 50 commits behind the just-fetched remote default. A WARNING, never the 409 it used to be |
+| `base-refresh-failed` | the base fetch failed; the base is the store's last fetched copy |
+| `base-offline` | the forge could not be reached; the base is the store's last fetched copy |
+| `pr-refresh-failed` | the PR head could not be refreshed (the detail rides the message) |
+| `base-vanished` | a tracked base branch the forge no longer has |
+| `credential-account-mismatch` | the store's fetch would answer as a different gh account than the one pinned or recorded |
+
+Error URNs (`BaseError`, rendered RFC 7807 through `ApiError`):
+
+| URN | status | meaning |
+|---|---|---|
+| `urn:kb:errors:base-unresolved` | 400 | the grammar could not turn `--base` into a policy |
+| `urn:kb:errors:base-undetermined` | 400 | no rung produced a base and nothing may guess (the default-branch ladder refused) |
+| `urn:kb:errors:pr-refs-unsupported` | 400 | the store's forge has no PR head ref shape (`forge = "none"`, or no forge at all) |
+| `urn:kb:errors:pr-fetch-failed` | 400 | the PR head could not be fetched into the store |
+| `urn:kb:errors:head-unavailable` | 409 | the head would not resolve, or is not in the review store |
+| `urn:kb:errors:base-unavailable` | 409 | the policy's base tip is not in the store (never fetched, or gone from the forge) |
+| `urn:kb:errors:no-merge-base` | 400 | head and base share no history |
+| `urn:kb:errors:base-vanished` | 409 | a user-set (or legacy) base branch no longer exists on the forge and no replacement could be resolved |
+| `urn:kb:errors:capture-failed` | 500 | the capture itself failed (git or DB) |
+| `urn:kb:errors:store-disabled` | 503 | the store's git spawner is unavailable |
+
+`urn:kb:errors:stale-mirror` and `ERR_STALE_MIRROR` are GONE: RS-U6
+removed the refusal and the constants together, and neither string exists
+anywhere in the tree, so a client branching on that `error_type` sees
+nothing at all. Only the `stale-mirror` WARNING code in the table above
+survives, and only on the pre-store `start-pr` fallback.
+
+### The one stderr line
+
+`review_agent::base_line` renders `review start`, `review snapshot`,
+`review start-pr` and `review sync` onto stderr — stdout stays reserved
+for the document (and for JSON under `--json`). `eprint_base_line`
+prints it only when the daemon sent a `base{…}` block, and prints
+NOTHING when it did not. The format, from the function itself:
+
+```
+base: <head> (<source>) · merge-base <7 chars> · <fetch state>
+```
+
+where `<head>` is `tracking <branch>` for `mode: track`, `local <branch>`
+for `mode: local`, `pinned` for `mode: pin`, and `legacy base` for any
+other mode; `<source>` is `base.source` with five slugs spelled out
+(`forge-api` → `forge api`, `default-assumed` → `default branch,
+assumed`, `stack-parent` → `stack parent`, `merge-ref` → `merge ref`,
+`legacy` → `legacy row`); `<fetch state>` is one of `fetched via <via>`,
+`fetched`, `offline — cached base`, `fetch failed — cached base`, or
+`cached`, chosen from `last_fetch` and `fetched_via`. A `pin` appends
+`will not follow rebases; use --base <branch>`. The merge-base is
+printed for every mode whenever the daemon sent one; the SPA's chip is
+the surface that OMITS it for a `pin`, whose own label is already the
+pinned commit. A real example, taken from the code's own test:
+
+```
+base: tracking main (forge api) · merge-base 7c1ed0c · fetched via gh-cli (someone)
+```
+
+### The SPA half (RS-U11)
+
+The Room header renders a **base-policy chip**, not the raw `base_ref`:
+`components/reviews/BaseChip.tsx`, driven by the pure display helpers in
+`lib/reviewBase.ts`. The chip is a projection of the wire and derives no
+fact of its own.
+
+| `base.mode` | chip | tone |
+|---|---|---|
+| `track` | `tracking <branch>` | healthy |
+| `local` | `local <branch>` | healthy |
+| `pin` | `pinned <merge-base>` | amber — a deliberate freeze |
+| absent (a row `classify_base` could not turn into a policy) | `legacy` | amber |
+
+The `merge-base <sha>` suffix rides beside the chip for every mode EXCEPT
+`pin`, whose own label is already the pinned commit; `base.source` is the
+chip's hover title, spelled with the same labels the CLI's stderr line
+uses, and an unrecognised slug degrades to dashes-turned-spaces rather
+than a guess. A Retrack button is offered for exactly the `pin` and
+`legacy` variants — an actively tracked base needs no fixing — and it
+COPIES the CLI line rather than calling a route that would 404.
+
+`warnings[]` render as one chip per entry, all on the same amber tone,
+because `BaseWarningOut` carries no severity axis on the wire: the short
+label is the code with dashes turned to spaces (`base pinned`,
+`stale mirror`) and the full server-composed sentence is the `title`. A
+code this build does not know by name still renders.
+
+`PatchsetStrip` badges each patchset with its `kind` (`rebase`, `base
+moved`, `retarget`, … — a NULL kind is a legacy patchset and gets NO
+badge) and puts the patchset's own base in the chip's title: `base_tip_sha`
+when present, else the merge-base every patchset has always carried.
+
+Two other places the base model reaches the SPA:
+
+* **The start-review dialog no longer seeds a base.** `base_ref` is
+  never defaulted to the local HEAD branch — the field starts BLANK
+  unless a caller passes an explicit `initialBase`, and a blank field
+  sends NO `base_ref` at all, so the daemon's own resolution chain picks
+  it. An older SPA build that did send the PR's target as a bare name is
+  exactly the `from_bare` case the chain recognises.
+* **A `forge-unverified` chip** when the store's `forge_verified` is not
+  `verified` and a `forge_kind` is set — a STORE-level fact read off
+  `useReviewStoreCard`, not a per-review one.
+
+### Not built here
+
+* **Merge-ref target inference** (design §7) — the fourth rung of the
+  chain. `BaseSource::MergeRef` is a parseable slug and a display label
+  and nothing else. `refs/kbc/prm/<n>` exists as a ref-NAME builder and
+  parser for store-wide GC attribution; nothing fetches or writes it.
+* **A base watcher / rebase-aware interdiff.** `PatchsetStrip` has a
+  compare mode with two picked patchsets; the base model does not drive
+  it, and an interdiff is not rebase-aware.
+* **A `review explain-base` verb.** The resolution chain is a pure
+  function (`resolve_pr_base`, `classify_base`) and is fully tested, but
+  no HTTP route or CLI verb exposes "the chain as evaluated" today.
+
+## The internal review store
+
+### Why it exists
+
+Every clone of a project used to carry kb-code's own `.git` state — the
+design's §1 measurement is 198 `refs/kbc/*` refs in one clone
+(`rails-01`) alone. The review refs were written into the USER's
+repository, fetched into the user's `refs/remotes`, and inherited
+the user's remotes, refspecs, shallow and single-branch state, and
+their ssh-agent. A fleet of clones then drifts from itself — two clones
+of one project disagree about what `refs/kbc/pr/15790` points at, and
+the answer depends on which mirror the CLI happened to open. The store is
+kb-owned: one bare repository per forge PROJECT, one writer (a
+per-store `flock`), and the user's clone is never written again.
+
+### `store_key` and membership
+
+`store_key` is the normalized forge-project identity, `host[:port]/path`:
+
+* the host lower-cased; any userinfo DROPPED (it never reaches the key,
+  the DB or a log);
+* the scheme's default port dropped (https 443, http 80, ssh 22, git
+  9418), so the ssh and https forms of one project unify. A NON-default
+  port is kept — a Bitbucket Server `:7999` ssh remote and its `:7990`
+  https twin are deliberately NOT merged, because nothing here can know
+  they are the same project and a guess would fuse two stores;
+* leading/trailing `/`, a trailing `.git` and repeated `/` removed; the
+  path case preserved, EXCEPT on `github.com`, whose owner/name are
+  case-insensitive;
+* **any percent-encoding REFUSED** — git transmits a remote URL's path
+  undecoded while an HTTP forge may decode it, so one accepted form
+  could name two projects. A URL carrying `%` has no store key at all.
+
+Accepted: `https://`, `http://`, `ssh://`, `git://`, `git+ssh://` /
+`ssh+git://` and scp form (`[user@]host:path`). A local path or
+`file://` URL is not a forge project and yields `None`.
+
+A repo with no forge remote gets a `local:` store of its own, keyed
+`local:<the STORE's uuid>` — the design says `local:<repo uuid>`, but
+`repos` has no uuid column (only a reusable integer id), so the store's
+own uuid is used; it is minted once, at registration, and is what the
+manifest carries.
+
+**Joining** runs BEFORE the ladder: a repo whose remote normalizes to an
+EXISTING store's key joins that store as a MEMBER. `repo_stores` is
+deliberately not unique on `store_id` — many members, one store. When
+more than one remote matches an existing store, the ladder decides among
+them and its answer joins the matching store.
+
+### The base-URL ladder
+
+Runs ONCE per repo, at registration, and every rung is pure and
+unit-testable without git, a DB or the network:
+
+1. explicit input (`kb-code store set-base-url --repo R <URL>`);
+2. `[[review.repos]] base_url`;
+3. the `owner/name` slug shared by the repo's existing PR bindings
+   (`reviews.pr_repo_slug`, recorded from `origin` at `start-pr` bind
+   time) — matched against the repo's OWN remotes, so the host comes
+   from a real remote and is never a guess;
+4. the remote carrying `remote.<R>.gh-resolved = base` (what
+   `gh repo set-default` marked);
+5. the repo's single forge remote;
+6. `upstream`, only when the forge API verifies `origin` is a fork of
+   it;
+7. otherwise REFUSE with `base-url-ambiguous` (or `base-url-invalid`).
+   **There is no guessing.**
+
+The answer rides `review_stores.base_url_source`, whose slugs are
+`explicit` · `config` · `member` · `pr-slug` · `gh-resolved` · `single`
+· `upstream-verified` · `local`. The V0045 migration's own comment lists
+`origin` and `guessed` there instead of `member`; the code writes the
+eight above and never those two.
+
+**Rung 6 does not run in this build.** Verifying a fork needs an API
+GET through the api slot, and the daemon's `ForkCheck` is still
+`NoForkCheck` — it honestly answers "could not ask", so a repo that
+would need rung 6 refuses with `base-url-ambiguous`, which the operator
+resolves in one line of config or one `store set-base-url`.
+
+`[[review.repos]] name` keys on a `[[repos]]` name; `[[repos]]` itself
+is enumerated but not documented in
+[configuration.md](configuration.md#kb-codetoml-kb-code-daemon-config), so
+read the two together. TOML ordering matters: `[review] remote_mutations`
+must come BEFORE any `[review.store]` / `[[review.repos]]` header or
+serde reads it under the wrong table.
+
+### On-disk layout
+
+```
+<root>/<uuid>.git/                      # one per forge PROJECT
+<root>/<uuid>.git/kb-code-store.json    # kb-code-store/1 manifest
+```
+
+`<root>` defaults to `<state>/git`; the manifest carries `{schema,
+format, uuid, store_key, created_at}` and is checked against the DB row's
+`uuid` + `store_key` every time a store is opened — a mismatch is a
+manifest problem, not a store. The store is named by a UUID, never by
+`repos.id` or a repo name, and the uuid is validated as a kb-minted v4
+before a DB-held value becomes a path. `git_home`, `backups/` and the
+restore-guard sentinel all live under the daemon's state dir, NEVER
+under the (overridable) store root.
+
+Ref namespaces inside the store:
+
+| namespace | written by | shared? |
+|---|---|---|
+| `refs/kbc/review/<id>/ps<n>` and `…/ps<n>-base` | capture | keyed by the globally unique review id, so members never collide |
+| `refs/kbc/pr/<n>` | the PR-head fetch | SHARED — same project, same PR, one fetch |
+| `refs/kbc/prm/<n>` | nothing in this build | name only (GC attribution) |
+| `refs/kbc/hint/<repo_id>/<name>` | by-sha / remote-tracking import | per member |
+| `refs/remotes/work-<repo_id>/<branch>` | the member clone (local fetch) | per member |
+| `refs/remotes/base/<branch>` | the credentialed forge fetch | per store |
+
+`HEAD` points at `refs/kbc/none`, and every remote carries `pushurl =
+kbcode-no-push://refused`.
+
+### Seeding
+
+`seed_store` is synchronous (run under `spawn_blocking`), never writes
+into a member clone, and takes no shortcuts: **D3 forbids hardlinks** —
+seeding is by FETCH.
+
+1. `git init --bare <root>/.seed-<uuid>.tmp` and kb's store config
+   (`gc.auto=0`, `maintenance.auto=false`, `fetch.prune=false`,
+   `core.hooksPath=/dev/null`, `protocol.version=2`,
+   `fetch.unpackLimit=1`, `uploadpack.allowAnySHA1InWant=true`,
+   `HEAD -> refs/kbc/none`, `pushurl` refused on every remote).
+2. Per member, a LOCAL no-credential fetch of its `refs/heads/*` into
+   `refs/remotes/work-<repo_id>/*` (forced) and its `refs/kbc/review/*`
+   into itself (NOT forced — review ids are globally unique, so a clash
+   is a real conflict and is reported, never overwritten). The refspec
+   list is ENUMERATED from the member and fed on stdin; no wildcard
+   refspec is ever passed. **Legacy `refs/kbc/pr/*` is deliberately NOT
+   imported** — it is a re-fetchable cache and two clones may disagree
+   about it.
+3. Optionally, the base branches of open reviews from `base`, over the
+   network, with the store's resolved credential. Offline-degradable: a
+   failure is recorded and seeding continues.
+4. Connectivity: every patchset tip / base sha the DB knows for the
+   members' reviews is checked with `cat-file --batch-check`. A missing
+   tip is re-fetched BY SHA from each member (up to 64 attempts), and
+   whatever is still missing marks that review `objects-missing` — the
+   STORE still goes `ready`. Present shas whose keep-alive refs are
+   absent get them recreated (create-only).
+5. The manifest is written and fsynced, then the directory is renamed to
+   `<uuid>.git`. ANY failure before the rename removes the `.tmp`
+   immediately.
+
+The first local fetch copies a whole object graph, so it gets a
+one-hour deadline (`SEED_FETCH_TIMEOUT`), not the 120 s an incremental
+work fetch gets.
+
+### States and the boot sweep
+
+`review_stores.state` is CHECK-constrained to `absent` · `seeding` ·
+`ready` · `broken`.
+
+* **Reads** need only a `ready`, manifest-verified, flock-held store. Any
+  other state falls back to the user repo EXACTLY as before the store
+  existed — that is the whole point of the fallback, and it is what
+  `absent`/`seeding`/`broken`/`locked-elsewhere`/`member-pending`/
+  `git-too-old` each degrade to.
+* **Mutations** go through `admit_mutation`, and a `seeding` store
+  refuses with **503 `urn:kb:errors:store-seeding`** plus
+  `retry_after: 30` and a `Retry-After` header. `not-registered` and
+  `locked-elsewhere` are 409s; the rest are 409s too, and an internal
+  error is a 500.
+
+The boot job is spawned AFTER `AppState` is built and never awaited — no
+git I/O is on the boot critical path. In order, on a blocking thread:
+
+1. sweep `.seed-*.tmp` leftovers whose lock is free (a crash mid-seed);
+2. put stores a dead process left `seeding` back to `absent`;
+3. register every configured repo that HAS REVIEWS (repos without
+   reviews register lazily, on their first store action);
+4. open every `ready` store (manifest check + lifetime `flock`) and, when
+   `[review.store] seed_on_boot` is set (the default), seed every
+   `absent` one — **LOCAL ONLY: no credential, no network.** Base
+   branches arrive with the first explicit `store sync` or capture, not
+   at boot.
+
+Steps 1–2 are crash RECOVERY and run BEFORE the git-spawner gate that
+guards steps 3–4; skipping them when the spawner is unavailable would
+leave a store a dead process left `seeding` wedged for good.
+
+`[review.store]` keys: `root` (default `<state>/git`, `~` expanded),
+`seed_on_boot` (default `true`), `allow_inherited_credentials` (default
+**`false`** — the weakest credential rung is opt-in, so an unconfigured
+daemon never falls through to the operator's ambient gitconfig helpers,
+ssh-agent and `~/.netrc`; see "### `inherit` and its knob" below). A store
+root that sits inside a browsed repo — its work tree, its `.git` directory,
+or its shared git common dir — disables the store for the whole boot
+(SEC-13/15) and reads fall back; the reason is a doctor finding, never a
+silent degradation. Enum-valued keys are TOLERANT: an unknown value warns
+and falls back to the default, so a typo never stops the daemon.
+
+### GC attribution
+
+GC runs across the WHOLE STORE, never per member repo — that is the
+whole point of the shared store (a per-member engine is how a shared
+store deletes another clone's refs). The keep-set is:
+
+* `refs/kbc/review/<id>/ps<n>[-base]` kept iff review `id` exists in the
+  DB, from whichever member it belongs to;
+* `refs/kbc/pr/<n>` and `refs/kbc/prm/<n>` kept iff some OPEN review in
+  ANY member binds `(store, n)` — a closed-only binding does not keep
+  the ref;
+* `refs/remotes/work-<id>/*` and the `refs/kbc/hint/<id>/*` cache kept
+  iff `id` is a CURRENTLY REGISTERED member — removed only on
+  unregistration, never because one member's reviews closed while
+  another's are still open.
+
+Anything else, including `refs/remotes/base/*` and a foreign ref the scan
+was never asked about, is silently skipped — not an orphan, not bound,
+just out of scope. A ref the parser cannot classify is NEVER a delete
+candidate. The apply is ONE `update-ref --stdin` transaction, every line
+old-value-guarded so a fetch or capture racing the GC can never be
+clobbered, taken under the store's ops lock.
+
+**The dry-run-before-delete rule is absolute.** `gc::apply` has exactly
+ONE production caller, and that caller has exactly TWO entry points:
+the operator's `kb-code store gc --repo R --yes`, and the legacy
+`kb-code review refs gc --repo R --apply` route, which hands its
+candidates to the same pass rather than being a second, looser engine.
+(A second, NON-production caller exists: `super::seed`'s end-to-end GC
+test calls `apply` directly so its delete/sibling-invariance assertions
+stay clear of the guard plumbing — so the count is one production
+caller plus that test, and the compiler enforces only the production
+half, since the test sits inside the subtree that may mint the token.)
+Each takes the ops lock FIRST, re-checks readiness and the restore guard
+UNDER it, runs the unconditional (never `--yes`-bypassable) DB-truth
+check that no candidate names a review id newer than this volume has
+ever assigned, and only then takes a fresh bundle backup and applies.
+**The scheduler never applies GC** — it computes the candidate list as a
+dry run and records it in `state_json.last_gc_dry_run`.
+
+### Maintenance and backup
+
+Three git-housekeeping cadences, per store, each with a per-cadence
+retry backoff recorded in `state_json.last_maint` (so a restart never
+runs a cadence early and a persistently failing task is not retried every
+tick):
+
+| cadence | work |
+|---|---|
+| daily | `git maintenance run` over `loose-objects` / `commit-graph` / `pack-refs`, plus a sweep of stale `objects/pack/tmp_pack_*`; the ref invariant check (`verify_connectivity`); and the report-only GC dry run |
+| weekly | `repack --geometric=2 -d --write-midx` |
+| monthly | `repack --cruft …` + `reflog expire --expire=14.days` |
+
+The monthly cruft pass takes an explicit `allow_expire` the caller
+computes from `state_json.last_gc_apply`. The design's original
+reasoning — "objects are not reclaimed until the cruft pass's 2-week
+window" — was wrong and is recorded as such: a packed object keeps its
+PACK's mtime, so an object sitting in an old pack reads as months-old to
+`--cruft-expiration` and could be pruned by the very same pass.
+
+**Backup bundles** land in `<state>/backups/store-<uuid>-<ts>.bundle`,
+on a gated-epoch snapshot, on `kb-code backup`, on a detected restore, or
+immediately before every real apply; the last 3 per store are kept. The
+ROUTINE shape is `refs/kbc/*` minus everything `refs/remotes/base/*`
+reaches (those objects are re-fetchable from the base remote). The
+PRE-APPLY shape is that PLUS every ref the apply is about to delete,
+whatever namespace it lives in — because the candidate set is not
+confined to `refs/kbc/*`. The invariant that buys: **no ref is ever
+deleted by an apply whose pre-apply bundle did not cover it.** A "nothing
+to bundle" pass is a recorded no-op (git refuses an empty bundle), with
+the ref names and oids still written to a `.refs` manifest beside it.
+
+**The restore guard** is per-store. The automatic detector persists the
+highest schema epoch any earlier boot observed in a sentinel file
+OUTSIDE the sqlite volume, so restoring `index.db` alone cannot roll it
+back; a boot whose PRE-MIGRATION epoch is below that high-water mark
+flags the guard. Three gaps are closed explicitly: a SAME-epoch restore
+is invisible to epoch comparison by construction and is caught instead
+by the unconditional DB-truth check against `reviews_high_water_id`; a
+whole-state-directory restore rolls the sentinel back too, but that check
+does not depend on the sentinel at all; and a corrupt, unreadable or
+unwritable sentinel reads as FLAGGED (for the process lifetime), never as
+unflagged. While the guard is flagged, scheduled GC is dry-run-only —
+and **`kb-code store gc --repo R --yes` is the ONLY acknowledgement
+path**: it applies and clears the flag, and it is per-store, so
+acknowledging repo R's suspicion never clears it for repo S.
+
+### The store CLI
+
+`kb-code store <verb> --repo R` talks to a running daemon. `--json`
+prints the D20 envelope; exit codes are the shipped table below.
+
+| verb | what it does |
+|---|---|
+| `show` | the store card (`GET /api/repos/R/store`): key, state, members, disk, doctor findings |
+| `members` | the clones sharing R's store |
+| `doctor` | the card's findings plus the fetch credential; **exits 1 when any finding is an `error`** |
+| `sync [--offline]` | seed an absent store or sync a ready one (loopback-only) |
+| `set-base-url <URL>` | the ladder's explicit rung; registers, or updates a member store's base URL when it names the SAME project — never a re-key (409 `base-url-key-mismatch`) |
+| `credentials [--test]` | the fetch credential as last resolved; `--test` walks the ladder LIVE (loopback-only; runs `gh`) |
+| `legacy-refs [--yes]` | delete a member clone's `refs/kbc/{pr,review}/*` ONLY where the store holds the same ref name at the same commit; a dry run unless `--yes` (there is no `--dry-run` flag) |
+| `gc [--dry-run\|--yes]` | the store-wide ref GC; dry run by default, `--yes` applies and acknowledges the restore guard |
+| `export-legacy` | write the store's `refs/kbc/{pr,review}/*` back into the clone, CREATE-ONLY |
+| `maintain [--task daily\|weekly\|monthly]` | run the housekeeping cadences now, or whatever is due |
+
+`store doctor`'s findings are typed `error` / `warn` / `info` with stable
+codes: `store-disabled`, `config`, `store-not-registered`, `store-broken`,
+`store-absent`, `store-locked`, `base-url-key-mismatch`,
+`base-url-invalid`, `forge-unverified`, `credential-inherit`,
+`credential-broader-than-needed`, `objects-missing`, plus a refused
+registration's own code.
+
+### The route gates
+
+Loopback-only is the store family's default posture. This is the COMPLETE
+map of that gate: one bearer route, every other row loopback.
+
+| route | gate | why |
+|---|---|---|
+| `GET /api/repos/{name}/store` | loopback | the card reports `store.git_dir` — the ABSOLUTE path of the daemon's internal state dir — plus `store.uuid` and internal store row ids. It carries no secret and no repo content; the gate is about the on-disk LOCATION |
+| `GET /api/repos/{name}/credentials` | bearer | kind, account, reason and the D9 "broader than needed" flag. Never secret bytes, and it never runs `gh` |
+| `POST …/store/sync` | loopback | seeds or syncs — a write, and one that runs git |
+| `POST …/store/base-url` | loopback | the ladder's explicit rung |
+| `POST …/credentials/test` | loopback | walks the ladder live and runs `gh` |
+| `POST …/store/legacy-refs` | loopback | deletes refs in the user clone — the one other sanctioned clone write besides `checkout::switch_repo`; manual only |
+| `POST …/store/export-legacy` | loopback | the same clone-write family, writing the store's refs back |
+| `POST …/store/gc` | loopback | the store-wide ref GC deletes; it also applies and acknowledges the restore guard |
+| `POST …/store/maintain` | loopback | the manual housekeeping-cadence trigger |
+
+No bearer route in this crate hands out a kb-internal path. Everything
+secret-adjacent — `cred_reason`, `cred_account`, `key_fingerprint`,
+`key_read_only` — never leaves the store DB.
+
+### The SPA half (RS-U11)
+
+The design's "Settings gets a Review store and a Fetch credential card"
+is a per-repo **dashboard** card, not a new Settings page — `web-code` has
+no dedicated Settings surface, and inventing a route would add a
+landmark and a keyboard scope for a chips-and-cards unit. The two
+sections ride the existing Home `RepoCard`
+(`components/home/ReviewStoreSection.tsx`, mounted from `RepoCard.tsx`),
+each an independent React Query consumer that renders a quiet inline note
+when its fetch fails rather than breaking the whole card.
+
+"Review store" reads the store card: state (a per-state CSS class), the
+`store_key`, the member count, the disk facts, the doctor findings mapped
+from their level to a class, plus the maintenance/GC facts that ride
+inside the opaque `state_json` and are parsed in
+`lib/reviewStore.ts` (`last_maint`, `last_gc_dry_run`, `last_gc_apply`).
+"Fetch credential" reads `…/credentials` and shows the kind, the
+account, the reason and the `amber` flag — never a secret. Both routes
+already existed (RS-U3); the SPA computes nothing beyond formatting and
+that one state_json parse.
+
+### Not built here
+
+* `store adopt` — there is no way to adopt an existing clone's `.git` as
+  a store; a store is always seeded by fetch.
+* A top-level `repo` noun, and `repo credential test` — the credential
+  card is `kb-code store credentials --test`.
+* `store key generate|test|rotate|revoke` and `store hostkey` — deploy
+  keys are Phase 2 and `credential = "deploy-key"` is refused at resolve
+  time, so there is nothing to manage. `key_fingerprint` / `key_read_only`
+  are columns reserved for it.
+* A rebase-aware interdiff, and any base watcher.
+
+## Credentials: the fetch slot and the api slot
+
+### Two independent slots
+
+Per store, the two slots are separate mechanisms, not one pool:
+
+* **`fetch`** — git transport INTO the store. A `FetchCredential`, chosen
+  by `resolve_fetch_credential` and handed to `StoreGit` as a
+  `FetchAuth`. Every fetch has a per-call deadline with a
+  process-group kill, and every captured stderr is redacted before it is
+  classified, returned or logged.
+* **`api`** — forge metadata (PR state, title, the authoritative
+  `base.ref`). An `ApiCredential`. The gh-cli token read for the fetch
+  slot can fill it too.
+
+The pre-existing `--gh-token-from-cli` relay (the CLI runs `gh auth
+token` itself and posts it in the request body, admitted loopback-only
+and never persisted) is the CALLER-SUPPLIED rung of the api ladder. **It
+never reaches the fetch slot** — a caller's token is not a store
+credential.
+
+### The fetch ladder
+
+`resolve_fetch_credential`, per store, per request:
+
+1. **explicit pin** — `credential = gh-cli | deploy-key | token |
+   anonymous | inherit | none`. A pinned rung that fails is an ERROR,
+   never a fall-through;
+2. **`gh-cli`** — the operator's `gh` login;
+3. **deploy key** — Phase 2; recorded as a skipped rung;
+4. **`token_file`** — an owner-only (0600/0400) file, HTTPS. Reachable on
+   the DEFAULT posture, not only under an explicit `token` pin: with no
+   `gh_user` pinned and no `cred_account` recorded, `auto` opens the file
+   here too. The file is still only ever OPENED when it is owner-only; a
+   group/world-readable one is refused unread, so it just never yields a
+   credential.
+5. **anonymous HTTPS** — only if a scrubbed `ls-remote … HEAD` succeeds;
+6. **`inherit`** — only if `allow_inherited_credentials` (default `false`);
+   amber;
+7. **`none`**.
+
+Under `auto`, a rung that does not apply is skipped WITH a recorded
+reason. Only the WINNING rung's single reason is persisted — that is all
+`cred_reason` ever holds, and the credentials card echoes it alone. The
+full per-rung reason list is NOT stored anywhere: it rides the resolution
+back to the caller and is rendered only by `store credentials --test`.
+**Two things stop the ladder with a typed error
+instead of falling through (D12):** `credential-account-mismatch`, and
+ANY gh-cli failure once the store is BOUND to an account — `gh_user`
+pinned, or a `cred_account` recorded from an earlier resolve. Falling
+through to `token_file`/`anonymous`/`inherit` would silently swap the
+identity the store fetches as, which is exactly the failure the binding
+exists to prevent.
+
+The `token_file` reader is careful on its own terms: it opens with
+`O_NOFOLLOW|O_CLOEXEC` and fstats the SAME descriptor (no
+stat-then-open race), refuses a symlink, requires a regular file owned
+by the daemon's euid, requires `mode & 0o077 == 0`, and caps the read at
+4096 bytes.
+
+### `gh-cli`, and why not `gh auth git-credential`
+
+The obvious implementation is `-c credential.helper='!gh auth
+git-credential'`. kb does not use it in production, because
+`gh auth git-credential` **always answers with whichever account is
+ACTIVE**, and the machine this was designed on has two
+(`nicolasacchi` and `1000farmacie-jira-bot`). That is a silent identity
+swap, not a convenience.
+
+Instead kb:
+
+1. runs `gh auth status --hostname H --json hosts` — logins, active
+   flag, scopes, and never the token;
+2. picks the account: the pinned `gh_user`, else the active one, which
+   must EQUAL the previously recorded `cred_account` if there is one;
+3. runs `gh auth token --hostname H --user <that login>`, so the token
+   read is bound to the account that was checked — no
+   switch-in-between race;
+4. hands git the token through **kb's own in-memory credential
+   helper**: a `pipe2(O_CLOEXEC)` carrying
+   `username=…\npassword=…\n`, whose read end is `dup2`'d onto fd 3
+   only inside the forked child (so any POSIX `sh`, dash included, can
+   redirect from it), answering a `get` for exactly the scope's
+   protocol + host and nothing else. The token exists in the daemon's
+   memory, in the pipe buffer, and in git's memory — never in
+   `/proc/<pid>/cmdline`, never in `/proc/<pid>/environ`, never on disk.
+   The pipe is one-shot: git caches the credential for the rest of its
+   run.
+
+`gh` runs with a cleared environment plus a small allowlist (it needs
+`HOME`/XDG dirs and the D-Bus session to reach its keyring).
+`GH_TOKEN`, `GITHUB_TOKEN` and the enterprise variants are deliberately
+NOT passed: they would override the keyring and make `--user`
+meaningless.
+
+**Scope honesty.** A `gh` token carries `admin:org, repo, workflow, …`.
+kb uses it READ-ONLY — fetch and GET only; there is no push path and
+`pushurl` is refused — and the credentials card labels it *broader than
+needed* (`credential-broader-than-needed` in `doctor`, the
+`[broader-than-needed]` mark on `cred_reason`). The upgrade path is a
+deploy key for `fetch` plus a fine-grained read-only PAT for `api`.
+
+### `deploy-key`: real, and refused
+
+`credential = "deploy-key"` is a parsed, real `[[review.repos]]` key —
+it is not ignored and not a typo. It is **refused at resolve time**:
+`CredError::Refused("credential = deploy-key is Phase 2; not available
+in this build")`, which is a `no-credentials` failure class, never a
+silent fall-through to the next rung. The same is true of the
+auto-ladder's rung 3, which records a `SkippedRung` with the reason
+"deploy keys are Phase 2". Deploy keys give no API access anyway: PR
+state, title, threads, checks and the authoritative target branch need
+a token, or a caller who passes them in.
+
+### `inherit` and its knob
+
+`inherit` is the legacy ambient-environment profile: the user's
+ssh-agent, credential helpers and `~/.ssh/config` aliases, minus the
+git plumbing variables that would retarget a call, the prompting/debug
+ones, and plus the same hardening, the timeout, and
+`GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"` only when
+neither `GIT_SSH_COMMAND` nor `GIT_SSH` is set and a probe
+definitively found no `core.sshCommand`.
+
+`[review.store] allow_inherited_credentials` (default **`false`**) gates
+whether the rung may be used at all. **`false` REMOVES the rung from the
+ladder entirely** — which is now the default posture, because `inherit` is
+the one rung that neither clears the environment nor resets
+`credential.helper`: under `auto` the ladder skips it (recorded reason
+`allow_inherited_credentials = false`), and an explicit
+`credential = "inherit"` is a REFUSED ERROR
+("credential = inherit but [review.store] allow_inherited_credentials =
+false"), not a downgrade. Set the key to `true` to opt back IN — the
+deliberately ambient-identity install, a personal single-user daemon
+fetching a private repo over SSH where no scoped credential can be minted.
+It is a supported posture, not a hole: when the rung does apply it is shown
+amber — `cred_kind = inherit` is `amber: true` on the credentials card, a
+`credential-inherit` warning in `doctor`, and `inherit` in the reason.
+
+### Security invariants
+
+* **A secret never reaches argv, a URL, the DB, a log, or an envelope.**
+  URLs carrying userinfo are rejected outright (a token in a URL is
+  visible in `/proc/<pid>/cmdline` and in every error git prints);
+  the token lives in a `SecretToken` (zeroized on drop, redacting
+  `Debug`/`Display`, no `Serialize`); captured stderr is redacted before
+  classification; and the store row's `cred_reason` / `cred_account`
+  never leave the store DB.
+* **The store can never push.** There is no push method, `GitArgs`
+  carrying the push family is refused at run time, a source lint refuses
+  it, and every remote carries `pushurl = kbcode-no-push://refused`.
+* **The URL allowlist** admits exactly `https://host[:port]/path` (no
+  userinfo) and `ssh://git@host[:port]/path` / scp-form `git@host:path`
+  (the user must be `git`). Everything else is rejected: `file://`, plain
+  `http://`, any `<transport>::<address>` remote-helper form, control
+  characters and whitespace, IPv6 literals, and percent-encoding anywhere
+  in the path. A rejected URL is never echoed — the error carries only
+  the rule it broke. A local seed source goes through a SEPARATE
+  constructor (`RemoteUrl::local_seed`): an absolute path, used only
+  with the `file`-only protocol allowance.
+* **Every git call gets a scrubbed environment**: `env_clear` plus an
+  explicit allowlist, `GIT_CONFIG_NOSYSTEM=1`, a store-owned
+  `GIT_CONFIG_GLOBAL` holding only `safe.directory`,
+  `GIT_TERMINAL_PROMPT=0`, empty `GIT_ASKPASS`/`SSH_ASKPASS`,
+  `GIT_OPTIONAL_LOCKS=0`, and `GIT_ALLOW_PROTOCOL` set to exactly the
+  profile's transports (never `ext`/`fd`), with `-c` hardening in argv
+  (every inherited `credential.helper` reset, `core.hooksPath=/dev/null`,
+  `protocol.allow=never`, `gc.auto=0`, `maintenance.auto=false`).
+
+### The credential card
+
+`kb-code store credentials --repo R [--test]` (`GET
+/api/repos/R/credentials`, `kbc-credentials/1`) reports the fetch
+credential as last RESOLVED: kind, account, the reason, the D9
+`broader_than_needed` flag, and `amber: true` for `inherit`. Its `fetch{}`
+block carries NO `skipped[]` — the skipped rungs with their classes appear
+only in the `--test` answer.
+It never carries secret bytes and never runs `gh` — except with
+`--test`, which walks the ladder live (loopback-only), persists the
+answer, and asks the credential chain whether it answers for the forge
+host without fetching anything.
+
+## The agent-facing review CLI
+
+Everything in this section is the RS-U10a/U10b contract, from
+`crates/kb-code-cli/src/envelope.rs`, `review_agent.rs`, `review_sync.rs`
+and `retrack_cmd.rs`.
+
+### The `--json` envelope
+
+Under `--json`, stdout carries ONE pretty-printed versioned envelope and
+nothing else; diagnostics, progress and the base line all go to stderr.
+
+```json
+{"schema": "<the DATA's own shape>", "ok": true,
+ "data": { … }, "warnings": ["…"], "degraded": false,
+ "empty_reason": null, "next": [["kb-code", "review", "diff", "12"]]}
+```
+
+`schema` names the DATA's shape — the daemon's own `kbc-review-*/1`
+string where one exists (`kbc-review-start/1`, `kbc-review-snapshot/1`,
+`kbc-review-verify/1`, `kbc-review-sync/1`, `kbc-review-status/1`,
+`kbc-review-job/1`, …), not a second name for the same shape.
+`degraded: true` rides the envelope for a partly-succeeded verb, and
+`empty_reason` explains a legitimately empty `data` rather than leaving a
+bare `[]` to be read as "nothing found". `next` is a list of argv
+VECTORS — never shell strings — so an agent can exec one without
+quoting rules.
+
+### The typed error
+
+Failures print to STDERR (stdout stays reserved for the document), as:
+
+```json
+{"ok": false, "error": {"code": "urn:kb:errors:<slug>",
+ "message": "…", "hint": "…", "next": [["kb-code", "review", "find", "--pr", "7"]]}}
+```
+
+`code` is a URN, not a number or a bare status: a daemon body carrying a
+`type` URN keeps its own code; otherwise the status names it
+(`bad-request`, `refused`, `not-found`, `conflict`, `unavailable`,
+`daemon-error`). An ambiguous address adds a `candidates` array. A 404
+whose body is empty also gets the hint that "an empty 404 is also what a
+loopback-only route answers off-loopback" — see the exit-code table for
+why that case is not distinguished.
+
+### Addressing
+
+One grammar, one parser (`parse_review_ref`): `<id>`, `<id>/ps<n>`,
+`pr:<N>`, `pr:<N>/ps<n>`. Digits only — no sign, no whitespace, no
+leading `+` — so an address can never smuggle anything into a URL path.
+`<ref>/ps<n>` and `--ps N` must agree; passing both with different
+values is a usage error naming both.
+
+Not every verb accepts every form, and the parser is not the constraint:
+`diff`/`log`/`cat`/`verify` take the full address; `status` takes `<id>` or
+`pr:<N>` only and refuses a `/ps<n>` with a client-side USAGE error
+(exit 2 — it always answers against the latest patchset); `retrack` takes
+`<id>` or `pr:<N>`, and a `/ps<n>` suffix is parsed and then SILENTLY
+DROPPED; and `find` (`--pr N`) and `sync` (`--repo R --pr N` /
+`--repo R --open`) take NO positional address at all.
+
+`pr:<N>` resolves through `GET /api/reviews/find`: inferred when exactly
+one repo has a review bound to PR N, else narrowed by `--repo`. Two or
+more repos match is a typed `ambiguous-ref` error (exit 2) listing the
+candidate reviews and suggesting a `find` per repo. No match at all is
+`review-not-found` (exit 8) with a `start-pr` suggestion.
+
+### Exit codes
+
+This is the shipped table from `envelope.rs` (`EXIT_OK` … `EXIT_NOT_FOUND`)
+and `AgentError::from_http`. **It supersedes design §13's table, which
+was NOT adopted**: the design numbered `3 = not found` and `4 = conflict`;
+the shipped CLI uses `3 = conflict` and `4 = refused` and adds `8 = not
+found`. The code says so itself — `review_agent.rs`'s test
+`exit_codes_are_the_shipped_numbers` carries the comment "README §13's
+table was NOT adopted; these are envelope.rs's".
+
+| code | meaning | when |
+|---|---|---|
+| 0 | ok | |
+| 1 | generic | an unclassified failure — the byte-identical pre-RS-U10a default |
+| 2 | usage | a clap parse error, a malformed `<id>`/`pr:<N>`/`<id>/ps<n>` address, an ambiguous `pr:<N>`, or a daemon 400 |
+| 3 | conflict | HTTP 409, HTTP 503 (including a store still seeding), a `verify` that FAILS, and a `lint` ERROR — the request was fine, the state refuses it |
+| 4 | refused | an UNAMBIGUOUS 401/403 bearer-auth failure, including the secret denylist |
+| 5 | unreachable | the daemon could not be reached at all — connection refused, DNS failure, timeout; never got as far as an HTTP status |
+| 6 | upstream | an upstream the daemon depends on failed: a forge fetch/API call that is offline, unauthenticated or vanished (`store sync`, a `sync` job whose forge leg failed) |
+| 7 | partial | the verb partly succeeded — `sync --open` synced some PRs and failed others, `store sync` fetched some members and not all. The envelope carries `degraded: true` |
+| 8 | not found | EVERY HTTP 404 — the status alone decides it, never the body |
+
+Why 404 is not folded in, and why 8 does not mean "definitely absent": a
+loopback-only route deliberately 404s a non-loopback caller — hiding the
+route's existence is the point, the same posture as an ordinary "no such
+id" — so a 404 is STRUCTURALLY ambiguous between "this route doesn't exist
+for you" and "this resource doesn't exist", and the daemon does not tell
+the two apart. `AgentError::from_http` reflects that by mapping EVERY 404
+to exit 8 on the status alone, with no body inspection: a non-loopback
+caller hitting a loopback-only route gets exactly the code a genuinely
+missing review gets. The ONLY signal separating the two is the hint an
+EMPTY-body 404 carries ("an empty 404 is also what a loopback-only route
+answers off-loopback", **The typed error** above) — so read the body's
+`code`/`message` and that hint; never conclude "no such review" from 8
+alone. The same reasoning is why 503 shares the conflict slot: it is a
+state refusal, not a category error.
+
+### The verbs
+
+| verb | what it does |
+|---|---|
+| `review find --pr N [--repo R]` | every review bound to PR N, across every configured repo unless `--repo` narrows it |
+| `review diff <REF> [--ps N] [--stat\|--name-only\|--patch] [--path P] [--budget TOKENS]` | the patchset's change set against its OWN base. `--stat`/`--name-only`/`--patch` are three separate views, not one combined invocation; `--budget` cuts the PATCH text and implies `--patch` only when neither `--stat` nor `--name-only` is given (alongside either, it is silently inert) |
+| `review log <REF> [--ps N]` | the patchset's commits |
+| `review cat <REF> <PATH> [--ps N] [--side old\|new]` | one file at the patchset's base (`old`) or tip (`new`); secret-denylisted paths are refused |
+| `review verify <REF> [--ps N] [--min-findings N]` | the post-compose gate: the document is present and lints clean, the findings count, every anchor resolves, the verdict sits on the latest patchset. **Exits 3 when any check fails** |
+| `review sync --repo R {--pr N [--title T] [--base SPEC] \| --open [--merged-since DATE]} [--dry-run] [--wait[=SECS]] [--reopen]` | ONE idempotent daemon operation per PR: create the review if missing, fetch base + head into the store, snapshot ONLY when `(tip, merge-base)` changed. A merged PR is final (`reason: merged-final`). `--open` runs it for every open PR, SEQUENTIALLY under the per-repo lock, and exits 7 when some failed |
+| `review status <REF> [--fetch]` | has the PR head moved past the LATEST patchset tip? base state, file-count drift against the forge, verdict staleness, open findings. Read-only; `--fetch` fetches into the store first and writes no row |
+| `review retrack <ID\|pr:N> [--base SPEC] [--dry-run]` | one review: classify against a FRESHLY resolved target and re-capture when something would mint |
+| `review retrack --all [--repo R] [--pinned\|--legacy] --dry-run\|--yes` | every review in scope. `--yes` is required to write; it applies ONLY `stale-pin` rows. `custom` rows (a pin that is not an ancestor of the target) are always left for a human, `equivalent` rows need nothing |
+| `review compose ID {--from-file FILE\|--stdin}` / `--doc review.md` | the one-shot authoring transaction (see **Review — `kbc-review/1`** above) |
+| `review start-pr --repo R --pr N [--base] [--wait[=SECS]]` | create or reuse the review; always returns the `kbc-review-start/1` envelope with `id`, `minted`, `base{…}`, `warnings[]` |
+| `review snapshot ID [--force] [--no-fetch]` | an explicit capture; an unchanged `(tip, merge-base)` pair is skipped (`minted: false`) unless `--force` |
+| `review sweep {--repo R \| --all-repos} [--include-closed] [--close --yes]` | walk every PR-bound review and reconcile it against the live forge |
+| `review lint ID [--doc FILE]` | lint the stored document, or a CANDIDATE one (`compose` with `dry_run`, which writes nothing). **Exits 3 on any lint ERROR** — the same slot an HTTP 409 uses, and the one `verify` reads |
+
+`diff`, `log` and `cat` are computed BY THE DAEMON from the patchset's
+own base and tip — never `git -C <clone>` in the CLI — which is why they
+keep working once the review refs live only in the internal store.
+
+`retrack`'s dry-run vocabulary is `equivalent` · `stale-pin` · `custom` ·
+`unknown`. The last one is a `track`/`local` review that WOULD mint: the
+equivalent/stale-pin/custom words are about FROZEN bases specifically, so
+such a row is reported honestly rather than mis-labelled.
+
+### Not built here
+
+The design's Phase-2/3 verbs have no CLI and no HTTP route on this
+build:
+
+* `review explain-base <ref>` — the resolution chain as evaluated;
+* `review context <ref> --budget N` — the token-budgeted pack;
+* `review since <ref> [--from verdict\|psN]` — changes since the last
+  verdict (and, in the design, the rebase-aware Phase-3 form);
+* `store adopt`, `repo credential test`, `store key generate|test|
+  rotate|revoke`, `store hostkey` — see **The internal review store** →
+  **Not built here**.
+
+Both of the other recurrence reads ship as verbs, not route-only reads:
+`kb-code review findings recurrence <id> [--json]` (`GET
+/api/reviews/{id}/findings/recurrence`) and `kb-code review analytics
+[--repo R] [--from UNIX] [--to UNIX] [--json]` (`GET
+/api/reviews/analytics`).
+
+The SPA's Retrack affordance reflects the same boundary: `BaseChip`'s
+button COPIES the `kb-code review retrack <id> --dry-run` line rather
+than calling a route that would 404 — the same "copy the exact line an
+agent would run" posture `lib/reviewDoc.ts`'s `composeCommandLine`
+documents for the loopback-only authoring path.
 
 ## One Inbox
 

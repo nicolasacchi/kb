@@ -5,6 +5,12 @@
  */
 export type CreateReviewPrBody = { repo: string, pr_number: number, base_ref?: string, title?: string, session_id?: string, 
 /**
+ * RS-U6 — the PR's target branch as the CALLER knows it (an agent
+ * that already holds `gh`): the resolution chain's `caller` rung,
+ * below the forge API and above the assumed default branch.
+ */
+caller_base_ref?: string, 
+/**
  * V76-R1c — the CLI `--gh-token-from-cli` path. The CLI runs
  * `gh auth token` itself and sends the value here. Loopback-only,
  * never persisted, never logged. Refused off loopback even if this
