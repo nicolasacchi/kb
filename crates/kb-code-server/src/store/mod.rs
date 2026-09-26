@@ -303,18 +303,27 @@ pub struct Store {
     /// exactly, and a disabled boot is a *configured* refusal, not a
     /// default to guess.
     ///
-    /// `Release`/`Acquire`, NOT the `Relaxed` used by the counters above:
-    /// there a stale read costs one cache rebuild, but here it is a GATE —
-    /// a stale `true` serves a read from a store root the operator
-    /// refused for this boot, which is the whole defect this flag
-    /// exists to close. The edge the ordering buys is
-    /// publish→observe: the release store in `bind_and_spawn` happens
-    /// after that `Store` is fully opened, and any task spawned after it
-    /// (or any request on the server it spawns) acquires the flag before
-    /// resolving a root, so it cannot observe the pre-publish default
-    /// once the publish has run. The cost is one fence per boot and one
-    /// acquire per `GitCtx` construction — once per route entry, not
-    /// once per git subprocess.
+    /// `Release`/`Acquire`, NOT the `Relaxed` used by the counters
+    /// above: there a stale read costs one cache rebuild, but here it
+    /// is a GATE — a stale `true` serves a read from a store root the
+    /// operator refused for this boot, which is the whole defect this
+    /// flag exists to close.
+    ///
+    /// Defence in depth, NOT the mechanism. The flag is a lone
+    /// `AtomicBool` that publishes no other memory, so the Acquire load
+    /// synchronises with nothing an observer could act on. The edge
+    /// that actually holds is SPAWN ORDERING: the release store in
+    /// `bind_and_spawn` runs before any task that can construct a
+    /// `GitCtx` exists — the `[backfill] on_boot` spawn, the serve
+    /// spawn, the RS boot job, the maintenance worker, and
+    /// `run_blocking`'s dispatch of a route handler onto the blocking
+    /// pool. The load-bearing change was RELOCATING that backfill
+    /// block to after the publish (it used to sit up with the other
+    /// boot-time spawns, ahead of it). The stronger ordering is kept
+    /// because it costs nothing — one fence per boot, one acquire per
+    /// `GitCtx` construction, once per route entry and not once per git
+    /// subprocess — and because it stops the guarantee from depending
+    /// on that spawn order surviving the next edit.
     review_store_readable: AtomicBool,
 }
 
@@ -506,7 +515,8 @@ impl Store {
     /// the `Acquire` load in [`Self::review_store_readable`]; see the
     /// field doc for why a gate cannot be `Relaxed`.
     pub fn set_review_store_readable(&self, readable: bool) {
-        self.review_store_readable.store(readable, Ordering::Release);
+        self.review_store_readable
+            .store(readable, Ordering::Release);
     }
 
     /// `pub(crate)`: every read-side consumer is in-crate

@@ -2307,4 +2307,242 @@ mod tests {
         assert!(!dbg.contains(TOKEN), "{dbg}");
         assert!(dbg.contains("[redacted]"), "{dbg}");
     }
+
+    // --- GithubClient::list_closed_pulls_since (RS-U10b) ---------------------
+    //
+    // `review sync --open --merged-since DATE` is the ONLY consumer of
+    // this listing and the ONLY place the `truncated_merged` flag on the
+    // wire comes from. The integration test
+    // (`tests/review/rs_u10b_sync.rs`) mocks a single page with NO `Link`
+    // header, so without these two tests the multi-page continuation and
+    // the `MAX_SYNC_PULLS` cap are both unpinned: revert either one to a
+    // single `per_page=100` fetch and the whole suite stays green.
+
+    /// A closed-PR row as the list endpoint returns it. `GhPullSync`
+    /// requires only `number`, `head` and `base`; the rest default.
+    fn closed_pull(n: u64, updated_at: &str) -> serde_json::Value {
+        serde_json::json!({
+            "number": n,
+            "state": "closed",
+            "merged_at": updated_at,
+            "updated_at": updated_at,
+            "head": { "ref": format!("feature-{n}"), "sha": format!("{n:040x}") },
+            "base": { "ref": "main" },
+        })
+    }
+
+    /// The `--merged-since` window every case below pages inside.
+    const WINDOW: &str = "2026-09-24T00:00:00Z";
+
+    fn window_start() -> i64 {
+        chrono::DateTime::parse_from_rfc3339(WINDOW)
+            .unwrap()
+            .timestamp()
+    }
+
+    /// Serve `router` on an ALREADY-bound `listener` and hand back the
+    /// base URL it is reachable at — a GitHub `Link` target is always
+    /// ABSOLUTE, so the caller has to know the port before it can bake
+    /// the header, which is why these bind the listener themselves
+    /// rather than going through `mock_kb_server`.
+    async fn serve_with_listener(listener: tokio::net::TcpListener, router: Router) -> String {
+        let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// Page 1 carries `Link: rel="next"` to page 2; page 2 carries none,
+    /// so the walk must stop there. A third route exists purely to make
+    /// "followed exactly one header" observable: the rows on page 2 can
+    /// ONLY have come from following it.
+    fn two_page_router(
+        addr: std::net::SocketAddr,
+        page1: Vec<serde_json::Value>,
+        page2: Vec<serde_json::Value>,
+    ) -> Router {
+        let page2_next = format!(r#"<http://{addr}/repos/acme/widget/pulls3>; rel="next""#);
+        Router::new()
+            .route(
+                "/repos/acme/widget/pulls",
+                get(move || {
+                    let next = page2_next.clone();
+                    let page = serde_json::Value::Array(page1.clone());
+                    async move { ([(axum::http::header::LINK, next)], Json(page)) }
+                }),
+            )
+            .route(
+                "/repos/acme/widget/pulls2",
+                get(move || {
+                    let page = serde_json::Value::Array(page2.clone());
+                    async move { Json(page) }
+                }),
+            )
+            .route(
+                "/repos/acme/widget/pulls3",
+                get(|| async { Json(serde_json::json!([])) }),
+            )
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_follows_link_next_to_the_last_page() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = two_page_router(
+            addr,
+            vec![
+                closed_pull(7, "2026-09-25T00:00:00Z"),
+                closed_pull(6, WINDOW),
+            ],
+            vec![closed_pull(5, WINDOW)],
+        );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        let numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+        assert_eq!(numbers, [7, 6, 5], "PR 5 exists only on page 2");
+        assert!(!truncated, "the window closed before the cap: {numbers:?}");
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_stops_reading_once_a_page_leaves_the_window() {
+        // The listing is sorted by `updated_at` DESC, so the first PR
+        // behind the window ends the walk. Page 3 is a trap: if the walk
+        // did not break, it would be fetched and its PR (in-window, and
+        // so the one thing a caller must NOT silently lose) counted.
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits2 = hits.clone();
+        let hits3 = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let next2 = format!(r#"<http://{addr}/repos/acme/widget/pulls2>; rel="next""#);
+        let next3 = format!(r#"<http://{addr}/repos/acme/widget/pulls3>; rel="next""#);
+        let router = Router::new()
+            .route(
+                "/repos/acme/widget/pulls",
+                get(move || {
+                    let next2 = next2.clone();
+                    async move {
+                        (
+                            [(axum::http::header::LINK, next2)],
+                            Json(serde_json::json!([closed_pull(7, "2026-09-25T00:00:00Z")])),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/repos/acme/widget/pulls2",
+                get(move || {
+                    let next3 = next3.clone();
+                    let hits = hits2.clone();
+                    async move {
+                        hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        (
+                            [(axum::http::header::LINK, next3)],
+                            // A day older than the window: the walk stops
+                            // here. The second row is unreachable in
+                            // practice (the list is sorted), and pinning
+                            // that it is NOT read is the contract.
+                            Json(serde_json::json!([
+                                closed_pull(6, "2026-09-23T00:00:00Z"),
+                                closed_pull(5, WINDOW),
+                            ])),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/repos/acme/widget/pulls3",
+                get(move || {
+                    let hits = hits3.clone();
+                    async move {
+                        hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Json(serde_json::json!([closed_pull(4, WINDOW)]))
+                    }
+                }),
+            );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        let numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+        assert_eq!(
+            numbers,
+            [7],
+            "the out-of-window row ends the walk: {numbers:?}"
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "page 2 was read, page 3 was never requested"
+        );
+        assert!(!truncated, "leaving the window is not truncation");
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_reports_truncated_when_the_cap_cuts_inside_the_window() {
+        // One page of `MAX_SYNC_PULLS + 1` in-window rows: the cap fires
+        // on the 301st, so the caller is told the answer is partial
+        // (`truncated_merged` on the wire) rather than handed a silent
+        // 300-row window.
+        let rows: Vec<serde_json::Value> = (0..=MAX_SYNC_PULLS as u64)
+            .map(|i| closed_pull(i + 1, WINDOW))
+            .collect();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let router = Router::new().route(
+            "/repos/acme/widget/pulls",
+            get(move || {
+                let rows = serde_json::Value::Array(rows.clone());
+                async move { Json(rows) }
+            }),
+        );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), MAX_SYNC_PULLS);
+        assert!(
+            truncated,
+            "{} rows existed inside the window",
+            MAX_SYNC_PULLS + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_is_not_truncated_at_exactly_the_cap() {
+        // The other side of the same predicate: a listing that ends
+        // exactly ON the cap is complete, and reporting it truncated
+        // would send every caller hunting a PR that does not exist.
+        let rows: Vec<serde_json::Value> = (0..MAX_SYNC_PULLS as u64)
+            .map(|i| closed_pull(i + 1, WINDOW))
+            .collect();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let router = Router::new().route(
+            "/repos/acme/widget/pulls",
+            get(move || {
+                let rows = serde_json::Value::Array(rows.clone());
+                async move { Json(rows) }
+            }),
+        );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), MAX_SYNC_PULLS);
+        assert!(!truncated, "the last row is the cap, not past it");
+    }
 }

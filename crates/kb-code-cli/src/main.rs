@@ -28784,9 +28784,7 @@ mod tests {
                 // Verbatim, hint included — the CLI adds nothing and
                 // re-words nothing.
                 assert_eq!(error, hint);
-                assert!(
-                    error.contains("kb-code review start-pr --repo widget --pr 42 --reopen")
-                );
+                assert!(error.contains("kb-code review start-pr --repo widget --pr 42 --reopen"));
                 assert_eq!(error_type.as_deref(), Some("urn:kb:errors:review-closed"));
             }
             _ => panic!("a failed job must classify as Failed"),

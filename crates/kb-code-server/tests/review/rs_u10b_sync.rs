@@ -548,6 +548,17 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
     assert_eq!(v["schema"], "kbc-review-sync-open/1");
     assert_eq!(v["count"], 4, "{v:#}");
     assert_eq!(v["failed"], 1, "{v:#}");
+    // The truncation flags are part of the `kbc-review-sync-open/1`
+    // contract and nothing else pins them: this mock answers ONE page
+    // with no `Link` header and stays under `MAX_SYNC_PULLS`, so all
+    // three must be present and `false`. Drop them from the envelope and
+    // the rest of this suite stays green, while a caller reading a
+    // PARTIAL answer as a complete one has no way to notice. (The
+    // paging and the cap that SET these flags are pinned in
+    // `crate::github`'s own `list_closed_pulls_since` tests.)
+    assert_eq!(v["truncated"], false, "{v:#}");
+    assert_eq!(v["truncated_open"], false, "{v:#}");
+    assert_eq!(v["truncated_merged"], false, "{v:#}");
     let items = v["items"].as_array().unwrap();
     let by_pr: HashMap<u64, &Value> = items
         .iter()
