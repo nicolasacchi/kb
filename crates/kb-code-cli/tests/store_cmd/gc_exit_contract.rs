@@ -188,12 +188,17 @@ fn a_partial_apply_exits_7() {
 fn yes_with_dry_run_is_a_usage_error_without_a_round_trip() {
     // Pre-existing guard, pinned so it cannot regress: the contradiction
     // is the operator's to resolve, and it is resolved WITHOUT a daemon
-    // round trip — `max = 0` means this stub never accepts, so a stray
-    // request would fail the transport rather than pass.
+    // round trip.
+    //
+    // The stub stays bound for far longer than the CLI process can take
+    // to start (it links scip/protobuf/tree-sitter/gix), and `join()`
+    // stops it only once the process has exited — so a stray request
+    // cannot hide in a closed window: it would be accepted, counted, and
+    // answered with the "dry-run" report, which exits 0, not EXIT_USAGE.
     let d = StubDaemon::json(
         &gc_answer("dry-run", false, 3, false),
-        0,
-        Duration::from_secs(1),
+        1,
+        Duration::from_secs(120),
     );
     kb().args([
         "store",

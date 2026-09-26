@@ -24,10 +24,11 @@
 //! [`keep_set`] gathers the DB half (pure data, one round trip per
 //! member); [`attribute`] is the pure classification (unit-tested with NO
 //! git process — every case in README §15.1 is a plain in-memory table);
-//! [`delete_candidates`] filters it; [`apply`] is the one
+//! [`delete_candidates`] filters it; `apply` is the one
 //! `update-ref --stdin` transaction, each line old-value-guarded so a
 //! fetch or capture racing the GC can never be clobbered — call it under
-//! the store's `ops` lock (README §5.4/§4.2). A ref this module's parser
+//! the store's `ops` lock (README §5.4/§4.2) and behind an
+//! `ApplyGuard`. A ref this module's parser
 //! (`crate::reviews::parse_kbc_ref`) or [`work_repo_id`] cannot classify is
 //! NEVER a delete candidate (same "never guess" posture as the parser
 //! itself).
@@ -184,7 +185,7 @@ pub fn attribute(refs: &[(String, String)], keep: &GcKeepSet) -> Vec<AttributedS
     out
 }
 
-/// The orphan subset of [`attribute`]'s output, ready for [`apply`].
+/// The orphan subset of [`attribute`]'s output, ready for `apply`.
 pub fn delete_candidates(attributed: &[AttributedStoreRef]) -> Vec<GcCandidate> {
     attributed
         .iter()
@@ -196,6 +197,26 @@ pub fn delete_candidates(attributed: &[AttributedStoreRef]) -> Vec<GcCandidate> 
         .collect()
 }
 
+/// Proof that the caller ran the three guards [`apply`] cannot run for
+/// itself (restore-guard, DB-truth high-water, pre-apply bundle).
+///
+/// The field is private and the only constructor is [`ApplyGuard::mint`],
+/// which is `pub(in crate::review_store)`: a caller OUTSIDE that subtree —
+/// `reviews.rs`, the CLI, a downstream crate — cannot mint a token, and
+/// `apply` being `pub(crate)` keeps them from reaching it at all. Inside
+/// `review_store` the token is a statement of intent the reviewer can read
+/// at the one call site that is allowed to make it:
+/// [`super::maint::apply_gc_candidates`].
+pub(crate) struct ApplyGuard {
+    _private: (),
+}
+
+impl ApplyGuard {
+    pub(in crate::review_store) fn mint() -> Self {
+        Self { _private: () }
+    }
+}
+
 /// Delete every [`GcCandidate`] in ONE `update-ref --stdin` transaction,
 /// each line guarded by the old value the scan observed — git refuses the
 /// WHOLE transaction if any guard has gone stale (a fetch or a capture
@@ -203,11 +224,21 @@ pub fn delete_candidates(attributed: &[AttributedStoreRef]) -> Vec<GcCandidate> 
 /// ref that just became live again. Call under the store's `ops` lock.
 ///
 /// Deliberately UN-guarded — there is no bundle, no restore-guard check and
-/// no high-water check in here, only the old-value guards. Every apply
-/// MUST therefore go through `super::maint::apply_gc_candidates` (which
-/// installs all three) via `super::maint::run_gc_pass`; this function has
-/// no other caller.
-pub fn apply(git: &StoreGit, git_dir: &Path, delete: &[GcCandidate]) -> Result<(), StoreGitError> {
+/// no high-water check in here, only the old-value guards — so this is
+/// `pub(crate)`, NOT `pub`, and it takes an [`ApplyGuard`] it cannot
+/// obtain for itself. The ONLY production minter of that token is
+/// [`super::maint::apply_gc_candidates`], which installs all three guards
+/// after checking them; an unguarded apply from anywhere outside
+/// `review_store` is therefore a COMPILE ERROR, not a convention a later
+/// caller can quietly break. The only other minter is `super::seed`'s
+/// end-to-end GC test, which drives the transaction directly to keep its
+/// delete/sibling-invariance assertions clear of the guard plumbing.
+pub(crate) fn apply(
+    _guard: &ApplyGuard,
+    git: &StoreGit,
+    git_dir: &Path,
+    delete: &[GcCandidate],
+) -> Result<(), StoreGitError> {
     if delete.is_empty() {
         return Ok(());
     }

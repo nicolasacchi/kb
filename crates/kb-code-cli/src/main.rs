@@ -7820,6 +7820,60 @@ fn http_client() -> Result<reqwest::Client> {
         .context("build http client")
 }
 
+/// The shared HTTP helpers' non-2xx answer, rendered for a human.
+///
+/// These used to hand the response to reqwest's CONSUMING
+/// `error_for_status()`, which collapses a typed
+/// `application/problem+json` body into an error whose `Display` is only
+/// `HTTP status client error (404 Not Found) for url (…)` — so the daemon's
+/// own `type`/`title`/`detail` never reached the operator. A revspec that
+/// parsed but does not resolve answers 404 `urn:kb:errors:unknown-ref` with
+/// `error: "<spec>: unknown ref"`, and all of that used to be dropped for a
+/// bare status line.
+///
+/// `err` is that status error, kept as this error's CAUSE deliberately:
+/// [`envelope::exit_code_for`] reads its table (401/403 → `EXIT_REFUSED`,
+/// 409 → `EXIT_CONFLICT`, 5 unreachable) off the `reqwest::Error` in the
+/// chain, so dropping it would move every exit code without anything in
+/// this crate noticing. Keeping the error also leaves reqwest's status line
+/// in the `Caused by:` section — the body only ADDS the reason beside it.
+///
+/// A body with no human key at all (a loopback gate's bare 404, an HTML
+/// error page) keeps the pre-existing `"{method} {url}"` message, byte for
+/// byte.
+fn daemon_status_error(
+    method: &str,
+    url: &str,
+    err: reqwest::Error,
+    body_text: &str,
+) -> anyhow::Error {
+    let body = json_body_or_null(body_text);
+    // The daemon's own words, most specific first: `ApiError`'s `error`
+    // summary, then RFC 7807's `detail`, then `title` — the only human key
+    // a body that omits `error` carries (`reviews::report_shape_error`).
+    let summary = ["error", "detail", "title"]
+        .into_iter()
+        .find_map(|k| body[k].as_str());
+    let Some(summary) = summary else {
+        return anyhow::Error::new(err).context(format!("{method} {url}"));
+    };
+    let mut out = format!("{method} {url} — {summary}");
+    // `detail` beside the `error` summary when a route sends both: a store
+    // refusal carries the class in `error` and the specific cause only in
+    // `detail` (`review_store::registry::StoreRefusal`).
+    if let Some(detail) = body["detail"].as_str().filter(|d| *d != summary) {
+        out.push_str(&format!(" — {detail}"));
+    }
+    // `recipe_api_error`'s exact ordering: message, status, then the URN.
+    if let Some(status) = err.status() {
+        out.push_str(&format!(" (HTTP {})", status.as_u16()));
+    }
+    if let Some(problem_type) = body["type"].as_str() {
+        out.push_str(&format!(" [{problem_type}]"));
+    }
+    anyhow::Error::new(err).context(out)
+}
+
 async fn get_json(
     client: &reqwest::Client,
     daemon: &str,
@@ -7827,15 +7881,23 @@ async fn get_json(
     query: &[(&str, &str)],
 ) -> Result<serde_json::Value> {
     let url = format!("{}{path}", daemon.trim_end_matches('/'));
-    client
+    let resp = client
         .get(&url)
         .query(query)
         .send()
         .await
-        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url}"))?
-        .json()
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?;
+    // `error_for_status_ref` — not the consuming `error_for_status` it
+    // replaces — hands the status error over WITHOUT taking the response,
+    // so the body underneath it is still readable. The `.err()` is its own
+    // statement on purpose: that `Result` borrows `resp`, and the temporary
+    // has to die before `resp` is moved. The JSON path is untouched, so a
+    // decode failure still reports "parse {url} …".
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
+    resp.json()
         .await
         .with_context(|| format!("parse {url} response as JSON"))
 }
@@ -7878,9 +7940,14 @@ async fn get_json_warming_aware(
             ))
         }
     })?;
-    resp.error_for_status()
-        .with_context(|| format!("GET {url}"))?
-        .json()
+    // As in `get_json`: the status error comes off the response without
+    // consuming it, so the daemon's own reason is still readable. The
+    // timeout/connect mapping above is untouched.
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
+    resp.json()
         .await
         .with_context(|| format!("parse {url} response as JSON"))
 }
@@ -7894,15 +7961,17 @@ async fn post_json(
     query: &[(&str, &str)],
 ) -> Result<serde_json::Value> {
     let url = format!("{}{path}", daemon.trim_end_matches('/'));
-    client
+    let resp = client
         .post(&url)
         .query(query)
         .send()
         .await
-        .with_context(|| format!("POST {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("POST {url}"))?
-        .json()
+        .with_context(|| format!("POST {url} — is kb-code-server running at {daemon}?"))?;
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("POST", &url, status_err, &text));
+    }
+    resp.json()
         .await
         .with_context(|| format!("parse {url} response as JSON"))
 }
@@ -11805,10 +11874,12 @@ fn recipe_client() -> Result<reqwest::Client> {
 }
 
 /// V74-L3a repair (D11's "error bodies surfaced"). `get_json`'s blanket
-/// `error_for_status()` threw away the server's own message, so a caller
-/// who forgot a required param got `HTTP status client error (400 Bad
+/// `error_for_status()` used to throw the server's own message away, so a
+/// caller who forgot a required param got `HTTP status client error (400 Bad
 /// Request)` while the SPA rendered `p.since: required (string)`. Two
 /// surfaces, one server, two qualities of answer. This renders the body.
+/// `get_json` renders it now too, via `daemon_status_error`; the recipe
+/// family keeps its own because it reads the status off `get_json_raw`.
 fn recipe_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> anyhow::Error {
     let msg = body["error"]
         .as_str()
@@ -12806,9 +12877,14 @@ async fn board_export_cmd(
         .query(&query_pairs(&q))
         .send()
         .await
-        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url}"))?;
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?;
+    // An unknown slug, a wrong `repo`, a `format` the daemon refuses: each
+    // answers the same typed body, and it is worth reading BEFORE the export
+    // document — otherwise the error body itself gets written to `--out`.
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
     let body = resp.text().await.context("read the export body")?;
     match out {
         Some(p) => {
@@ -13175,9 +13251,13 @@ async fn tour_export_cmd(
         .query(&query_pairs(&q))
         .send()
         .await
-        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url}"))?;
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?;
+    // `board_export_cmd`'s treatment, for the same reason: the typed refusal
+    // must not be written out as the export document.
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
     let body = resp.text().await.context("read the export body")?;
     match out {
         Some(p) => {
@@ -13604,8 +13684,12 @@ async fn board_sweep_cmd(
 
 /// Status-preserving `GET` — the doc-lens routes answer `{"error", "reason"}`
 /// on every non-2xx (R12) and the whole point of the `reason` field is that a
-/// client can render the DEGRADE STATE, not just an HTTP number. `get_json`'s
-/// `error_for_status` would throw that body away.
+/// client can render the DEGRADE STATE, not just an HTTP number. The status
+/// comes back to the CALLER, which needs it: `doclens_api_error` and
+/// `recipe_api_error` each build their own `…: … (HTTP nnn)` message from it,
+/// and `store_cmd`'s `fail` picks an `EXIT_*` with it. `get_json` returns no
+/// status to branch on — it collapses every non-2xx into
+/// `daemon_status_error`'s single line.
 async fn get_json_raw(
     client: &reqwest::Client,
     daemon: &str,
@@ -14178,11 +14262,13 @@ fn print_backfill_stats(body: &serde_json::Value) {
 // --- annotations (W4.6; D3 — full CLI parity for annotations v2) -----------
 
 /// `POST` counterpart to [`post_json`] that sends a JSON BODY rather than
-/// query params, RETAINING the response body on a non-2xx status (unlike
-/// [`post_json`]'s blanket `error_for_status()`, which discards it) — every
-/// annotation-creation kind (D3's `--symbol`/`--sha`/`--to` in particular)
-/// needs its daemon-side validation failure's `{"error": …}` text rendered
-/// as a friendly message, not swallowed into an opaque reqwest error.
+/// query params, RETAINING the response body AND the status on a non-2xx
+/// (unlike [`post_json`], which hands back only `daemon_status_error`'s one
+/// rendered line) — every annotation-creation kind (D3's
+/// `--symbol`/`--sha`/`--to` in particular) needs its daemon-side validation
+/// failure's `{"error": …}` text rendered as a friendly message keyed off the
+/// status, since `loopback_or_api_error` tells a bare 404 from a real
+/// not-found by exactly that pair.
 /// Mirrors `checkout_cmd`'s own manual status-check style.
 async fn post_json_raw(
     client: &reqwest::Client,
@@ -14829,9 +14915,9 @@ async fn annotate_unbind_cmd(daemon: &str, id: &str, json: bool) -> Result<()> {
 /// `kb-code checkout <ref> --repo NAME` — `POST /api/checkout` (W4.7): the
 /// daemon's confirmed, only working-tree mutation. A dirty refusal (409)
 /// prints every dirty path and exits non-zero — deliberately NOT routed
-/// through [`post_json`] (its blanket `error_for_status()` would surface
-/// the refusal as an opaque HTTP-error message instead of the structured
-/// path list the route actually returns).
+/// through [`post_json`], which hands back a rendered error and no status:
+/// the structured path list the route actually returns IS the answer here,
+/// and a 409 has to be recognised as a 409 rather than flattened.
 async fn checkout_cmd(daemon: &str, repo: &str, target: &str, json: bool) -> Result<()> {
     let client = http_client()?;
     let url = format!("{}/api/checkout", daemon.trim_end_matches('/'));
@@ -15770,8 +15856,20 @@ async fn review_refs_gc_cmd(daemon: &str, repo: &str, apply: bool, json: bool) -
         &serde_json::json!({}),
     )
     .await?;
+    // Exit contract for agent callers — the same one `store gc` uses. The
+    // route answers HTTP 200 for a REFUSED apply (restore guard,
+    // `restore-suspected` high-water, `backup-failed`) and says so in the
+    // body as `applied: false` + `reason` + `detail`. Honouring only the
+    // HTTP status would print `✓ deleted N orphan ref(s)` and exit 0 while
+    // every candidate ref is still in the store. Only `dry-run` (nothing
+    // requested) and `nothing-to-do` (nothing to delete) are benign
+    // no-apply outcomes; any other reason fails closed. The route emits no
+    // `partial` field, so there is no partial signal to honour here.
+    let applied = body["applied"] == true;
+    let refused =
+        apply && !applied && !matches!(body["reason"].as_str(), Some("dry-run" | "nothing-to-do"));
     if json {
-        envelope::print_ok("review-refs/1", &body, Vec::new(), false, None);
+        envelope::print_ok("review-refs/1", &body, Vec::new(), refused, None);
     }
     if !status.is_success() {
         return Err(loopback_or_api_error(
@@ -15783,18 +15881,34 @@ async fn review_refs_gc_cmd(daemon: &str, repo: &str, apply: bool, json: bool) -
     }
     if !json {
         let n = body["deleted_count"].as_u64().unwrap_or(0);
-        if body["dry_run"].as_bool().unwrap_or(true) {
+        if refused {
+            // Every stdout line this could print reads like success, so the
+            // refusal goes to stderr only — reason, detail, and the fact
+            // that nothing was deleted.
+            eprintln!(
+                "{repo}: review refs gc REFUSED — {} ({n} candidate(s); nothing deleted)",
+                body["reason"].as_str().unwrap_or("unknown"),
+            );
+            if let Some(detail) = body["detail"].as_str() {
+                eprintln!("  {detail}");
+            }
+        } else if body["dry_run"].as_bool().unwrap_or(true) {
             println!("dry-run: would delete {n} orphan ref(s) in {repo} (pass --apply)");
         } else {
             println!("✓ deleted {n} orphan ref(s) in {repo}");
         }
-        if let Some(arr) = body["deleted"].as_array() {
-            for r in arr {
-                if let Some(s) = r.as_str() {
-                    println!("  {s}");
+        if !refused {
+            if let Some(arr) = body["deleted"].as_array() {
+                for r in arr {
+                    if let Some(s) = r.as_str() {
+                        println!("  {s}");
+                    }
                 }
             }
         }
+    }
+    if refused {
+        std::process::exit(envelope::EXIT_CONFLICT);
     }
     Ok(())
 }

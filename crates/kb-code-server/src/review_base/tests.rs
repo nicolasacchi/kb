@@ -1586,7 +1586,6 @@ fn a_deleted_reviews_refs_stay_gone_when_another_review_captures() {
         &fx.store,
         &fx.bus,
         &fx.with(|c| c.root()),
-        None,
         &review_a,
         crate::reviews::PrRefScope::StoreWide,
     )

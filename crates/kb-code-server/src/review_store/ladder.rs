@@ -17,6 +17,14 @@
 //!    [`NoForkCheck`] until the api slot is wired — see its doc);
 //! 7. otherwise REFUSE with `base-url-ambiguous`. No guessing.
 //!
+//! A remote that was REFUSED as unsafe (percent escape, control
+//! character, transport-helper form, malformed) is never silently
+//! dropped: if no other remote is a forge URL, the ladder refuses with
+//! `remote-url-refused` and the reason, because "this remote is not a
+//! forge URL" and "this remote is not a URL kb-code will fetch from"
+//! are different answers for the operator. Only a remote that is
+//! genuinely not a forge remote (a local path) is classified away.
+//!
 //! **Membership** (README §5.1 "Joining"): before rungs 3–7 run, a repo
 //! whose remote normalizes to an EXISTING store's key joins that store.
 //! Rungs 1–2 are operator statements and run first — an operator who
@@ -27,7 +35,7 @@
 //! Pure: every input is passed in, so every rung is unit-testable
 //! without git, a DB, or the network.
 
-use super::key::{key_matches_slug, store_key_for_url};
+use super::key::{classify_url, key_matches_slug, store_key_for_url, NoStoreKey};
 
 /// One `remote.<name>` of a member clone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,8 +50,9 @@ pub struct RemoteInfo {
 }
 
 impl RemoteInfo {
-    fn key(&self) -> Option<String> {
-        store_key_for_url(&self.url)
+    /// The remote's store key, or why it has none.
+    fn classify(&self) -> Result<String, NoStoreKey> {
+        classify_url(&self.url)
     }
 }
 
@@ -126,10 +135,12 @@ pub enum LadderOutcome {
         /// The remote the answer came from (rungs 3–6, membership).
         remote: Option<String>,
     },
-    /// No forge remote at all → a `local:` store.
+    /// No forge remote at all → a `local:` store. Only ever returned
+    /// when every remote is genuinely not a network remote — a refused
+    /// URL is [`LadderOutcome::Refused`], never this.
     NoForgeRemote,
     /// Refused. `code` is a stable slug (`base-url-ambiguous`,
-    /// `base-url-invalid`).
+    /// `base-url-invalid`, `remote-url-refused`).
     Refused {
         code: &'static str,
         reason: String,
@@ -141,6 +152,10 @@ pub enum LadderOutcome {
 pub const BASE_URL_AMBIGUOUS: &str = "base-url-ambiguous";
 /// An explicit/config `base_url` that does not normalize to a forge key.
 pub const BASE_URL_INVALID: &str = "base-url-invalid";
+/// A remote URL refused as unsafe rather than found not to be a forge
+/// URL. Distinct from [`LadderOutcome::NoForgeRemote`] so an in-place
+/// forge project is never filed as a healthy `local:` store.
+pub const REMOTE_URL_REFUSED: &str = "remote-url-refused";
 
 /// Run the ladder. See the module doc.
 pub fn resolve(input: &LadderInput<'_>) -> LadderOutcome {
@@ -170,12 +185,40 @@ pub fn resolve(input: &LadderInput<'_>) -> LadderOutcome {
         }
     }
 
-    let forge: Vec<(&RemoteInfo, String)> = input
-        .remotes
-        .iter()
-        .filter_map(|r| r.key().map(|k| (r, k)))
-        .collect();
+    // Two lists, never one: a remote with no key because it is a local
+    // path is not evidence of anything, while a remote REFUSED as
+    // unsafe is the operator's problem. Folding the second into the
+    // first is how a percent-encoded forge URL ended up reported as a
+    // repo with no forge remote at all.
+    let mut forge: Vec<(&RemoteInfo, String)> = Vec::with_capacity(input.remotes.len());
+    let mut refused: Vec<(&RemoteInfo, NoStoreKey)> = Vec::new();
+    for r in input.remotes {
+        match r.classify() {
+            Ok(k) => forge.push((r, k)),
+            Err(why) if why.is_refusal() => refused.push((r, why)),
+            Err(_) => {}
+        }
+    }
     if forge.is_empty() {
+        if let Some((r, why)) = refused.first() {
+            let more = refused.len() - 1;
+            return LadderOutcome::Refused {
+                code: REMOTE_URL_REFUSED,
+                reason: format!(
+                    "remote `{}` was refused, so this repo's forge project could not be \
+                     identified: {}{}; rewrite the remote URL, or name the project with \
+                     [[review.repos]] base_url or `kb-code store set-base-url`",
+                    r.name,
+                    why.reason(),
+                    if more > 0 {
+                        format!(" (and {more} other refused remote(s))")
+                    } else {
+                        String::new()
+                    },
+                ),
+                candidates: vec![],
+            };
+        }
         return LadderOutcome::NoForgeRemote;
     }
     let resolved = |r: &RemoteInfo, k: &str, source| LadderOutcome::Resolved {
