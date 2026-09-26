@@ -149,6 +149,31 @@ impl BaseFetch {
 pub struct SeedReport {
     pub git_dir: PathBuf,
     pub members: Vec<MemberImport>,
+    /// Members of this store that are NOT in it, while the store still
+    /// goes `ready`: DROPPED from the seed plan because their repo is no
+    /// longer configured or their worktree no longer resolves to a git
+    /// dir, or never imported because their fetch hard-failed. Their refs
+    /// are neither imported nor connectivity-checked — so this list is the
+    /// only thing in a `store/sync` response that says the pass was not
+    /// complete.
+    ///
+    /// Deliberately the same key and the same array-of-strings shape as
+    /// `registry::SyncReport::member_problems`: the `store/sync` response
+    /// has two report shapes and a caller must not have to know which one it
+    /// got before it can read this.
+    ///
+    /// ALWAYS EMPTY in the report [`seed_store`] returns — a `SeedPlan` only
+    /// ever carries the members it KEPT, so a dropped member is invisible to
+    /// it. `ReviewStores::seed` fills this from the `problems` that `plan_for`
+    /// returns beside the plan, plus the per-member reasons
+    /// `ReviewStores::import_pending_members` returns for a member it
+    /// could not import. The store row's `state_json` carries the plan's
+    /// half (the adopted-existing path carries none), so a member only the
+    /// catch-up reported — a repo that joined while the seed ran — is
+    /// response-only; it stays PENDING, and the next boot pass or route
+    /// trigger retries it. The adopted-existing path re-verifies an
+    /// on-disk store rather than re-seeding it, hence no `state_json`.
+    pub member_problems: Vec<String>,
     pub base: BaseFetch,
     /// Review ids with at least one patchset commit missing.
     pub objects_missing: Vec<i64>,
@@ -834,6 +859,10 @@ pub fn seed_store(
             Ok(SeedReport {
                 git_dir: fin,
                 members,
+                // A `SeedPlan` carries only the members it kept; who was
+                // dropped from it is the CALLER's `problems`, which
+                // `ReviewStores::seed` folds in. Never invented here.
+                member_problems: vec![],
                 base,
                 objects_missing: missing,
                 objects_ok: ok,

@@ -13,7 +13,8 @@
 //! * leading/trailing `/`, a trailing `.git` and repeated `/` removed,
 //! * the PATH case preserved — except on `github.com`, whose owner/name
 //!   are case-insensitive, so `Acme/Widgets` and `acme/widgets` are one
-//!   project there.
+//!   project there. That fold happens BEFORE the `.git` strip, so
+//!   `widgets.GIT` and `widgets.git` are one key and not two.
 //! * any percent-encoding REFUSED (`%` is not a path character): git
 //!   transmits a remote URL's path UNDECODED while an HTTP forge may
 //!   decode it, so `acme/..%2F..%2Fwidgets/secret` and `widgets/secret`
@@ -23,9 +24,16 @@
 //!
 //! Accepted forms: `https://`, `http://`, `ssh://`, `git://`,
 //! `git+ssh://`/`ssh+git://` URLs and scp form (`[user@]host:path`). A
-//! local path or `file://` URL is not a forge project and yields `None` —
-//! a repo with only local remotes gets a `local:<uuid>` store of its own
-//! ([`local_store_key`]).
+//! local path or `file://` URL is not a forge project and yields
+//! [`NoStoreKey::NotAForge`] — a repo with only local remotes gets a
+//! `local:<uuid>` store of its own ([`local_store_key`]).
+//!
+//! "No key" is not one thing: [`classify_url`] separates a URL that is
+//! simply not a forge remote ([`NoStoreKey::NotAForge`] — nothing to
+//! report) from one REFUSED as unsafe ([`NoStoreKey::is_refusal`] — the
+//! operator wrote something this module will not silently drop), so the
+//! ladder can refuse loudly instead of classifying an in-place forge
+//! project as a `local:` store.
 //!
 //! Pure and allocation-light: no network, no git, safe to call anywhere.
 
@@ -48,16 +56,75 @@ pub fn is_local_key(key: &str) -> bool {
     key.starts_with(LOCAL_PREFIX)
 }
 
-/// Normalize a remote URL (as written in a clone's `remote.<name>.url`, or
-/// given by an operator) to its `store_key`. `None` for local paths,
+/// Normalize a remote URL (as written in a clone's `remote.<name>.url`,
+/// or given by an operator) to its `store_key`. `None` for local paths,
 /// `file://`, transport-helper forms (`ext::…`), and anything malformed.
+/// Use [`classify_url`] when the REASON matters.
 pub fn store_key_for_url(raw: &str) -> Option<String> {
-    let s = raw.trim();
-    if s.is_empty() || s.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return None;
+    classify_url(raw).ok()
+}
+
+/// Why a remote URL has no store key. Carries no part of the URL, so a
+/// reason is always safe to show an operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoStoreKey {
+    /// Not a network remote at all: an absolute/relative path or a
+    /// `file://` URL. A repo whose only remotes are these legitimately
+    /// has no forge project (`local:` store) — there is nothing to
+    /// refuse and nothing to report.
+    NotAForge,
+    /// `<transport>::<address>` remote-helper form.
+    TransportHelper,
+    /// A percent escape in the path — see the module doc.
+    PercentEncoded,
+    /// A control character or whitespace.
+    ControlCharacter,
+    /// Malformed: unknown scheme, no path, a `..`/`.` segment, an
+    /// unusable host or port.
+    Malformed,
+}
+
+impl NoStoreKey {
+    /// The rule the URL broke, in operator words. Never quotes the URL.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::NotAForge => "it is a local path, not a network remote",
+            Self::TransportHelper => {
+                "it is a `<transport>::<address>` remote-helper URL; kb-code fetches over \
+                 https/ssh only and never runs a helper protocol"
+            }
+            Self::PercentEncoded => {
+                "its path carries a percent escape, which is refused because the literal \
+                 and the decoded reading name two different projects"
+            }
+            Self::ControlCharacter => "it carries a control character or whitespace",
+            Self::Malformed => "it is not a well-formed forge project URL",
+        }
     }
+
+    /// Must the operator be told? True for everything except
+    /// [`NoStoreKey::NotAForge`]: a refused remote is dropped from the
+    /// ladder's candidates either way, and dropping it SILENTLY is how a
+    /// repo with a real forge remote is classified as having none.
+    pub fn is_refusal(self) -> bool {
+        !matches!(self, Self::NotAForge)
+    }
+}
+
+/// [`store_key_for_url`] that says why there is no key.
+pub fn classify_url(raw: &str) -> Result<String, NoStoreKey> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(NoStoreKey::Malformed);
+    }
+    // `<transport>::<address>` remote-helper form — checked before the
+    // character rules so the reason names the helper, not whatever
+    // quoting it happens to carry.
     if s.contains("::") {
-        return None; // `<transport>::<address>` remote-helper form
+        return Err(NoStoreKey::TransportHelper);
+    }
+    if s.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(NoStoreKey::ControlCharacter);
     }
     let (host, port, path) = if let Some((scheme, rest)) = s.split_once("://") {
         let scheme = scheme.to_ascii_lowercase();
@@ -66,26 +133,25 @@ pub fn store_key_for_url(raw: &str) -> Option<String> {
             "http" => "80",
             "ssh" | "git+ssh" | "ssh+git" => "22",
             "git" => "9418",
-            _ => return None, // file://, ext, unknown
+            "file" => return Err(NoStoreKey::NotAForge),
+            _ => return Err(NoStoreKey::Malformed), // ext, unknown
         };
-        let (authority, path) = match rest.split_once('/') {
-            Some((a, p)) => (a, p),
-            None => return None,
-        };
+        let (authority, path) = rest.split_once('/').ok_or(NoStoreKey::Malformed)?;
         // Drop userinfo — rightmost `@` (a password may itself contain one).
         let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-        let (host, port) = split_port(hostport)?;
+        let (host, port) = split_port(hostport).ok_or(NoStoreKey::Malformed)?;
         let port = port.filter(|p| *p != default_port);
         (host, port, path)
     } else {
         // scp form: `[user@]host:path`. git's own rule: it is scp form only
         // when a `:` comes before any `/`; a leading `/` or `.` is a path.
         if s.starts_with('/') || s.starts_with('.') || s.starts_with('~') {
-            return None;
+            return Err(NoStoreKey::NotAForge);
         }
-        let colon = s.find(':')?;
+        let colon = s.find(':').ok_or(NoStoreKey::Malformed)?;
         if s[..colon].contains('/') {
-            return None;
+            // `dir/with:colon` — a relative path that merely contains a colon.
+            return Err(NoStoreKey::NotAForge);
         }
         let userhost = &s[..colon];
         let host = userhost.rsplit_once('@').map_or(userhost, |(_, h)| h);
@@ -94,15 +160,10 @@ pub fn store_key_for_url(raw: &str) -> Option<String> {
     };
     let host = host.to_ascii_lowercase();
     if !host_ok(&host) {
-        return None;
+        return Err(NoStoreKey::Malformed);
     }
-    let path = normalize_path(path)?;
-    let path = if host == "github.com" {
-        path.to_ascii_lowercase()
-    } else {
-        path
-    };
-    Some(match port {
+    let path = normalize_path(path, &host)?;
+    Ok(match port {
         Some(p) => format!("{host}:{p}/{path}"),
         None => format!("{host}/{path}"),
     })
@@ -140,6 +201,17 @@ pub fn key_matches_slug(key: &str, slug: &str) -> bool {
         return false;
     };
     let slug = slug.trim().trim_matches('/');
+    // github.com folds to lower case before the `.git` strip, so the
+    // slug must fold the same way or `Acme/Widgets.GIT` would match
+    // nothing. Everywhere else path case is significant and exact.
+    let folded;
+    let slug = match host {
+        "github.com" => {
+            folded = slug.to_ascii_lowercase();
+            folded.as_str()
+        }
+        _ => slug,
+    };
     let slug = slug.strip_suffix(".git").unwrap_or(slug);
     if host == "github.com" {
         path.eq_ignore_ascii_case(slug)
@@ -179,17 +251,26 @@ fn host_ok(h: &str) -> bool {
         && !h.contains("..")
 }
 
-fn normalize_path(p: &str) -> Option<String> {
+fn normalize_path(p: &str, host: &str) -> Result<String, NoStoreKey> {
     let segs: Vec<&str> = p.split('/').filter(|s| !s.is_empty()).collect();
     if segs.is_empty() || segs.iter().any(|s| *s == ".." || *s == ".") {
-        return None;
+        return Err(NoStoreKey::Malformed);
     }
     let mut out = segs.join("/");
+    // github.com's owner/name are case-insensitive, so this host's path
+    // folds to lower case BEFORE the `.git` strip — otherwise
+    // `widgets.GIT` keeps its suffix (`widgets.git`) while `widgets.git`
+    // loses it (`widgets`), and one project gets two store keys and two
+    // independent stores. Every other host keeps its path case, so
+    // `Acme/Widgets` and `acme/widgets` stay distinct there.
+    if host == "github.com" {
+        out = out.to_ascii_lowercase();
+    }
     if let Some(stripped) = out.strip_suffix(".git") {
         out = stripped.trim_end_matches('/').to_string();
     }
     if out.is_empty() {
-        return None;
+        return Err(NoStoreKey::Malformed);
     }
     // `%` is deliberately NOT a path character. A `..%2F..%2F` segment
     // passes the `..` check above — it is ONE segment, not two — while
@@ -200,11 +281,20 @@ fn normalize_path(p: &str) -> Option<String> {
     // `…/acme/..%2F..%2Fwidgets/secret` and `…/widgets/secret` would
     // address one project. Decoding here cannot repair that (which
     // reading the FORGE honours is its own business), so the only rule
-    // that keeps the derivation injective is to refuse the escape.
+    // that keeps the derivation injective is to refuse the escape —
+    // loudly, as [`NoStoreKey::PercentEncoded`], never by dropping the
+    // remote.
+    if out.contains('%') {
+        return Err(NoStoreKey::PercentEncoded);
+    }
     let ok = out
         .bytes()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-' | b'/' | b'~' | b'+'));
-    ok.then_some(out)
+    if ok {
+        Ok(out)
+    } else {
+        Err(NoStoreKey::Malformed)
+    }
 }
 
 #[cfg(test)]

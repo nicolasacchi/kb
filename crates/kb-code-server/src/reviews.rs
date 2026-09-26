@@ -1856,9 +1856,11 @@ pub enum PrRefScope {
     /// A ready store: the store's OWN (shared) `refs/kbc/pr/<n>` is never
     /// touched here. "Don't delete" is always the safe direction — the
     /// store-wide GC pass ([`crate::review_store::maint::run_gc_pass`],
-    /// which is also the ONLY way to reach `review_store::gc::apply`)
-    /// computes the keep-set across EVERY member and cleans up what this
-    /// call correctly declined to.
+    /// the only route that can apply a store-wide ref delete at all —
+    /// `review_store::gc::apply` is `pub(crate)` and reachable only
+    /// behind a guard token `review_store` mints) computes the keep-set
+    /// across EVERY member and cleans up what this call correctly
+    /// declined to.
     StoreWide,
 }
 
@@ -1873,23 +1875,26 @@ pub enum PrRefScope {
 /// `refs/kbc/pr/<n>` is only ever deleted under [`PrRefScope::PerRepo`]
 /// (see that type's doc).
 ///
-/// `legacy_work_tree` — RS-U5 review fix. RS-U6: capture and the PR-head
-/// fetch now write ONLY the store once it is ready, so the delete route no
-/// longer passes it (a ready store's delete never writes the user clone —
-/// legacy copies wait for the explicit `store legacy-refs`, D19); the
-/// parameter stays for an explicit legacy cleanup caller. Its original
-/// rationale: before RS-U6 capture ALWAYS wrote `ps<n>` into the work tree
-/// and `github.rs`'s PR-head fetch still wrote `refs/kbc/pr/<n>`
-/// there. With `Some`, refs are ALSO deleted from that work tree — the PR
-/// ref's work-tree copy on `remaining == 0` regardless of `pr_ref_scope`,
-/// since a work-tree ref is inherently this-repo-only. Pass `None` when
-/// `repo_root` already IS the work tree, or when the user clone must not
-/// be written (every store-primary route).
+/// `repo_root` is the ONE root this ever writes: the store, when a
+/// mutation was admitted against it (`WriteRoot`), otherwise the member's
+/// work tree. The user clone is never a SECOND root — a ready store's
+/// delete must not write it (D19), and the legacy `refs/kbc/*` copies a
+/// pre-RS-U6 capture left there are reclaimed by the explicit, MANUAL
+/// `store legacy-refs` ([`crate::review_store::legacy_refs`]), the one
+/// sanctioned user-clone ref write beside `checkout::switch_repo` (see
+/// [`delete_refs_transactional`]'s own doc for that inventory).
+///
+/// RS-U5 briefly took a second `legacy_work_tree: Option<&WorkTreeRoot>`
+/// root for exactly that clone-side sweep. RS-U6 made it unreachable from
+/// every production route: capture and the PR-head fetch write ONLY the
+/// store once it is ready, so no new clone copy can appear, and on the
+/// no-store branch `repo_root` already IS the work tree. With no caller
+/// that could pass `Some`, the parameter and both clone-side arms are
+/// gone (2026-09-26 review).
 pub fn delete_review_with_refs(
     store: &Store,
     bus: &EventBus,
     repo_root: &dyn GitRoot,
-    legacy_work_tree: Option<&WorkTreeRoot>,
     review: &ReviewRow,
     pr_ref_scope: PrRefScope,
 ) -> Result<(), ReviewGitError> {
@@ -1903,16 +1908,6 @@ pub fn delete_review_with_refs(
                 ps_number: ps.ps_number,
             },
         );
-        if let Some(wt) = legacy_work_tree {
-            let _ = delete_patchset_ref(wt, review.id, ps.ps_number);
-            let _ = delete_kbc_ref(
-                wt,
-                KbcRef::PatchsetBase {
-                    review_id: review.id,
-                    ps_number: ps.ps_number,
-                },
-            );
-        }
     }
     let pr_number = store
         .get_review_pr_binding(review.id)
@@ -1933,9 +1928,6 @@ pub fn delete_review_with_refs(
             if remaining == 0 {
                 if pr_ref_scope == PrRefScope::PerRepo {
                     let _ = delete_pr_ref(repo_root, n as u32);
-                }
-                if let Some(wt) = legacy_work_tree {
-                    let _ = delete_pr_ref(wt, n as u32);
                 }
             }
         }
@@ -2928,14 +2920,13 @@ pub async fn delete_review(
         // to serialize against.
         let ops_lock = write_root.ops_lock(&review_stores);
         let _ops_guard = ops_lock.as_ref().map(|l| l.blocking_lock());
-        // RS-U6 — `legacy_work_tree` stays `None` (see
-        // `delete_review_with_refs`' doc: pass `None` when `repo_root`
-        // already IS the work tree). That is now true on the non-store
-        // branch, so the clone-side sweep — the one that reclaims a
-        // clone-minted `ps<n>` — is reachable exactly when it is needed
-        // instead of being dead code. On the store branch the clone is
-        // left alone: legacy copies wait for `store legacy-refs` (D19).
-        delete_review_with_refs(&store, &bus, write_root.primary(), None, &review, scope)?;
+        // ONE root, never two: the admitted store when there is one, the
+        // work tree otherwise. The user clone is never written by this
+        // route — not even to sweep the `ps<n>`/`pr/<n>` copies a
+        // pre-RS-U6 capture left there; those wait for the explicit,
+        // MANUAL `store legacy-refs` (D19 — see
+        // `delete_review_with_refs`' doc).
+        delete_review_with_refs(&store, &bus, write_root.primary(), &review, scope)?;
         Ok(())
     })
     .await
@@ -5448,9 +5439,12 @@ struct GcReviewRefsOutcome {
 /// [`crate::review_store::maint::run_gc_pass`] — the same entry point
 /// `kb-code store gc --yes` uses — which takes the store's `ops` lock
 /// itself for the whole list -> keep-set -> classify -> guard-check ->
-/// bundle -> apply -> timestamp sequence, and is the ONLY route to
-/// [`crate::review_store::gc::apply`]. RS-U5 originally called `gc::apply`
-/// from here directly, which meant this route deleted refs across the
+/// bundle -> apply -> timestamp sequence, and the only PRODUCTION route to a
+/// ref-delete apply at all: `review_store::gc::apply` is `pub(crate)` and
+/// takes a guard token only `review_store` mints, so this module could not
+/// call it directly even if it tried.
+/// RS-U5 originally called `gc::apply` from here directly, which meant this
+/// route deleted refs across the
 /// WHOLE store with no pre-apply bundle, no restore-guard check, no
 /// DB-truth high-water check, and without recording
 /// `state_json.last_gc_apply` (so the monthly cruft cooldown was judged

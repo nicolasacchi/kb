@@ -213,9 +213,10 @@ impl GitRoot for BridgedWorkTree {
 /// Per-`Store` counters of reads that did NOT come from a review store.
 /// `unresolved`: a [`GitCtx`] was built for a repo with no `ready` store
 /// (no row, seeding, broken, member import pending, or the store
-/// subsystem off for this boot). `odb_miss`: a store WAS ready but a
-/// content-addressed read had to be served by the user repo (the gate-3
-/// number, README §14 (c)).
+/// subsystem off for this boot). `odb_miss`: a store WAS ready but the
+/// read had to be served by the member work tree — a content-addressed
+/// sha the store has not fetched, or a `refs/kbc/*` class it does not
+/// import ([`is_store_authoritative`]) (the gate-3 number, README §14 (c)).
 #[derive(Debug, Default)]
 pub struct GitFallbackStats {
     unresolved: AtomicU64,
@@ -378,10 +379,14 @@ impl GitCtx {
     /// no ready store this is exactly one call against the work tree. A
     /// store miss served by the work tree is counted as `odb_miss`.
     ///
-    /// CONTENT-ADDRESSED READS ONLY — the chain is sound because a full
-    /// sha means the same object in either ODB. A caller holding a rev
-    /// NAME must not come here; use [`Self::read_rev_with_fallback`],
-    /// which applies [`is_store_authoritative`].
+    /// The chain is SOUND for a content-addressed sha (a full sha means
+    /// the same object in either ODB) and for a `refs/kbc/*` class the
+    /// store does not import ([`is_store_authoritative`]). A caller
+    /// holding any other NAME — `HEAD`, `main`, `HEAD~1` — must not come
+    /// here: such a name means something different in a bare store than in
+    /// a user clone, and a miss there is not one the work tree should
+    /// repair. Use [`Self::read_rev_with_fallback`], the one place the
+    /// store-vs-work-tree rule is applied to a name.
     pub fn read_with_fallback<T, E>(
         &self,
         mut f: impl FnMut(&dyn GitRoot) -> Result<T, E>,
@@ -395,10 +400,14 @@ impl GitCtx {
         f(&self.work)
     }
 
-    /// Run a READ against the STORE ALONE — no retry, no `odb_miss`: once
-    /// ready, the store is the whole answer for a `refs/kbc/*` name. With
-    /// no ready store this is one call against the work tree, which is the
-    /// only place such a ref can be (a pre-store install).
+    /// Run a READ against the STORE ALONE — no retry, no `odb_miss`. Once
+    /// ready, the store is the whole answer for a rev of a class it is
+    /// AUTHORITATIVE for ([`is_store_authoritative`]): a
+    /// `refs/kbc/review/*` or `refs/kbc/hint/*` name, where a store miss
+    /// is a miss and never a cue to read a clone's stale copy of the same
+    /// name. With no ready store this is one call against the work tree,
+    /// which is then the only place such a ref can be (a pre-store
+    /// install).
     pub fn read_store_only<T, E>(
         &self,
         mut f: impl FnMut(&dyn GitRoot) -> Result<T, E>,
@@ -409,12 +418,13 @@ impl GitCtx {
         }
     }
 
-    /// [`Self::read_with_fallback`] for a caller-supplied `rev` that
-    /// [`is_store_addressable`] admitted — the ONE place the
-    /// store-vs-work-tree rule is applied to a name. A content-addressed
-    /// sha takes the ODB chain; a `refs/kbc/*` NAME is
-    /// store-authoritative ([`is_store_authoritative`]) and a store miss
-    /// is returned as the error it is.
+    /// The ONE place the store-vs-work-tree rule is applied to a rev NAME,
+    /// for a caller-supplied `rev` that [`is_store_addressable`] admitted.
+    /// The per-REF-CLASS verdict is [`is_store_authoritative`]'s and is
+    /// re-derived nowhere else: a content-addressed sha, and every
+    /// `refs/kbc/*` class the store does not import, take the counted ODB
+    /// chain; a class the store IS authoritative for resolves in the store
+    /// alone, and its store miss is returned as the error it is.
     pub fn read_rev_with_fallback<T, E>(
         &self,
         rev: &str,
@@ -466,17 +476,51 @@ pub fn is_store_addressable(rev: &str) -> bool {
     is_object_id(rev) || rev.starts_with("refs/kbc/")
 }
 
-/// `true` for a store-ADDRESSABLE rev the store is AUTHORITATIVE for: a
-/// kb-minted `refs/kbc/*` name. Such a name names exactly one review, and
-/// a user clone may still carry a STALE ref of the same name — pre-store
-/// installs wrote `refs/kbc/*` into clones, and the clone-side copy
-/// outlives a delete until `store legacy-refs` sweeps it. So a store miss
-/// on a name is a miss, never a cue to read the clone: the same rule
-/// `crate::checkout::resolve_target_via_store` applies. A full sha is
-/// NOT authoritative (either ODB answers it identically), which is why
-/// this is `addressable && !is_object_id` and not just "not an oid".
+/// `true` for a store-ADDRESSABLE rev the store is AUTHORITATIVE for,
+/// decided PER REF CLASS. The store is a shared bare repo that imports
+/// SOME `refs/kbc/*` classes and deliberately leaves the rest in the
+/// member work tree, so "is it a `refs/kbc/*` name" is the wrong test —
+/// the class is the whole question. The authority is the seed doc
+/// ([`crate::review_store::seed`], README §5.2 step 2), which states both
+/// halves of the split in consecutive sentences: it fetches
+/// "`refs/kbc/review/*` into itself (NOT forced: review ids are globally
+/// unique, …)" and then, of the same namespace, "Legacy `refs/kbc/pr/*`
+/// is NOT imported: it is a re-fetchable cache, and two clones may
+/// disagree on it (§15.2)". Step 4 additionally RECREATES a
+/// `refs/kbc/review/<id>/ps<n>[-base]` from a present tip, so the store's
+/// copy of the review class is the whole truth and a clone-side copy of
+/// the same name can only ever be stale (pre-store installs wrote
+/// `refs/kbc/*` into clones, and `store legacy-refs` is what sweeps them):
+/// a store miss on that class is a miss, never a cue to read the clone —
+/// the same rule `crate::checkout::resolve_target_via_store` applies.
+///
+/// A full sha is NOT authoritative (either ODB answers it identically),
+/// and neither is a name outside `refs/kbc/*` at all — `HEAD`, `main`,
+/// `HEAD~1` mean something different in a bare store than in a user clone.
 pub fn is_store_authoritative(rev: &str) -> bool {
-    is_store_addressable(rev) && !is_object_id(rev)
+    if is_object_id(rev) {
+        return false;
+    }
+    let Some(class) = rev.strip_prefix("refs/kbc/") else {
+        return false;
+    };
+    // The sub-namespace IS the class; the rest of the name is only its id.
+    match class.split_once('/').map_or("", |(head, _rest)| head) {
+        // Imported, and recreated on connect: the store's copy is the truth.
+        "review" => true,
+        // The store-only "via-work hint" (README §5.3) — never fetched from
+        // a member clone, so no clone is a candidate root for it.
+        "hint" => true,
+        // NOT imported: a re-fetchable forge cache, and a member import is
+        // asynchronous, so "the store does not have it yet" is ordinary.
+        "pr" => false,
+        // The same forge family, equally never imported.
+        "prm" => false,
+        // The store's own `refs/kbc/none` HEAD placeholder, and any class
+        // this daemon does not own: kb only writes those into a store, so
+        // a work-tree retry could only be a second miss counted as a hit.
+        _ => true,
+    }
 }
 
 #[cfg(test)]
