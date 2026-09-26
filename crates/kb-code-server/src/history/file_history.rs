@@ -12,7 +12,7 @@
 //! by the `--` convention).
 
 use super::{parse_log_summary_line, run_git_raw, CommitSummary, Result, LOG_SUMMARY_FMT};
-use std::path::Path;
+use crate::git::roots::GitRoot;
 
 pub const DEFAULT_LIMIT: usize = 100;
 pub const MAX_LIMIT: usize = 500;
@@ -22,7 +22,7 @@ pub const MAX_LIMIT: usize = 500;
 /// already-clamped value (`[1, MAX_LIMIT]`); `before_unix` (when given) is
 /// passed as git's `@<epoch>` approxidate form.
 pub fn file_history(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     path: &str,
     limit: usize,
     before_unix: Option<i64>,
@@ -49,6 +49,7 @@ pub fn file_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::process::Command as StdCommand;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -108,7 +109,13 @@ mod tests {
             .unwrap();
         assert!(status.success());
 
-        let (entries, truncated) = file_history(dir, "renamed.txt", 100, None).unwrap();
+        let (entries, truncated) = file_history(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "renamed.txt",
+            100,
+            None,
+        )
+        .unwrap();
         assert!(!truncated);
         let subjects: Vec<&str> = entries.iter().map(|e| e.subject.as_str()).collect();
         assert_eq!(
@@ -126,7 +133,13 @@ mod tests {
         commit_at(dir, "a.txt", "2\n", "c2", 1_700_001_000);
         commit_at(dir, "a.txt", "3\n", "c3", 1_700_002_000);
 
-        let (entries, truncated) = file_history(dir, "a.txt", 2, None).unwrap();
+        let (entries, truncated) = file_history(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "a.txt",
+            2,
+            None,
+        )
+        .unwrap();
         assert_eq!(entries.len(), 2);
         assert!(truncated);
         assert_eq!(entries[0].subject, "c3");
@@ -140,7 +153,13 @@ mod tests {
         commit_at(dir, "a.txt", "1\n", "c1", 1_700_000_000);
         commit_at(dir, "a.txt", "2\n", "c2", 1_700_100_000);
 
-        let (entries, truncated) = file_history(dir, "a.txt", 100, Some(1_700_050_000)).unwrap();
+        let (entries, truncated) = file_history(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "a.txt",
+            100,
+            Some(1_700_050_000),
+        )
+        .unwrap();
         assert!(!truncated);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].subject, "c1");
@@ -152,7 +171,13 @@ mod tests {
         let dir = tmp.path();
         commit_at(dir, "a.txt", "1\n", "c1", 1_700_000_000);
 
-        let (entries, truncated) = file_history(dir, "never-existed.txt", 100, None).unwrap();
+        let (entries, truncated) = file_history(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            "never-existed.txt",
+            100,
+            None,
+        )
+        .unwrap();
         assert!(entries.is_empty());
         assert!(!truncated);
     }

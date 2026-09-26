@@ -26,7 +26,7 @@
   border: 1px solid var(--warn);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-hotspots__filters {
   display: flex;
@@ -49,7 +49,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-hotspots__limit,
@@ -79,17 +79,27 @@
 .kbc-hotspots__table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
+/* V80-R5 — the canonical thead, shared with `.kbc-branches__table th` and
+   `.kbc-rangediff__table th` (history.css): uppercase ink-dim label at the
+   --fs-xs FLOOR, never smaller than the body cells beneath it. */
 .kbc-hotspots__table th {
   text-align: left;
   padding: 8px 10px;
   border-bottom: 1px solid var(--rule);
-  color: var(--ink-mute);
-  font-weight: 500;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   background: var(--bg-panel);
   white-space: nowrap;
+}
+.kbc-hotspots__table th[data-kbc-col-numeric],
+.kbc-hotspots__table td[data-kbc-col-numeric] {
+  text-align: right;
 }
 .kbc-hotspots__table td {
   padding: 8px 10px;
@@ -99,6 +109,9 @@
 }
 .kbc-hotspots__row:last-child td {
   border-bottom: none;
+}
+.kbc-hotspots__row:hover td {
+  background: var(--bg-card-hi);
 }
 .kbc-hotspots__path {
   font-family: var(--font-mono);
@@ -121,7 +134,7 @@
   color: var(--accent-soft);
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   padding: 2px 8px;
   cursor: pointer;
 }
@@ -129,7 +142,7 @@
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .kbc-hotspots__score-chev {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kbc-hotspots__terms {
@@ -138,7 +151,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -165,11 +178,11 @@
   margin-top: 6px;
 }
 .kbc-hotspots__spark-muted {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kbc-hotspots__spark-trunc {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   font-family: var(--font-mono);
 }

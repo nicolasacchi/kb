@@ -591,6 +591,33 @@ kb remember <text> [--title T] [--summary S]
                                     ?tags=outcome-failed). SURFACED, NEVER
                                     SCORED — a failed memory ranks exactly
                                     like an ordinary one.
+kb propose --title T --body TEXT|-
+   [--kb NAME] [--tags T,T]
+   [--global | --link KB,KB]
+   [--salience 0..1] [--session-id ID]
+   [--daemon URL] [--json]
+                                    W2.15b: queue a memory candidate for
+                                    human review instead of writing it
+                                    (`kb remember` still writes now).
+                                    Approve via `kb proposals approve`.
+                                    --body - reads stdin. Neither --global
+                                    nor --link (the default) makes the
+                                    eventual memory recallable from every
+                                    kb, mirroring `kb remember`; --link
+                                    scopes it and conflicts with --global.
+                                    POST /api/kb/{kb}/proposals.
+kb proposals [list] [--kb NAME]
+   [--json] [--daemon URL]
+                                    the proposal inbox. Bare `kb proposals`
+                                    defaults to list — fleet-wide unless
+                                    --kb narrows it. GET /api/proposals.
+kb proposals approve <id>
+   [--kb NAME] [--json] [--daemon URL]
+                                    write the memory (the exact `kb remember`
+                                    path) and drop the candidate.
+kb proposals reject <id> [--kb NAME]
+   [--daemon URL]
+                                    discard the candidate; writes nothing.
 kb recall <query> [--scope auto|all|global|project] [--project NAME]
    [--cwd PATH] [--limit N] [--for-kb NAME] [--no-floor] [--explain]
    [--daemon URL] [--json]
@@ -732,6 +759,41 @@ kb slate watch [--once] [--timeout S] | stats | ls | doctor
                                     session) — counts, never a verdict.
                                     `doctor` is a structural lint. See
                                     `## kb slate` below.
+kb desk {offer,update,ls,wait,expire,promote}
+                                    ephemeral LLM↔human handoff. Offer a
+                                    draft, wait for comments, re-push, or
+                                    graduate it out of handoff/.
+                                    offer <FILE|-> --as SLUG [--kb NAME]
+                                    [--title T] [--tags T,T] [--ttl DUR]
+                                    [--sanitize] [--open] [--json]
+                                    [--daemon URL]: POST .../desk to
+                                    handoff/<slug>.<ext> (stable name,
+                                    overwrites; `draft` always added).
+                                    `-` reads Markdown from stdin. --ttl is
+                                    Nm/Nh/Nd (`45m`, `24h`, `7d`), stamped
+                                    as display-only kb-expires-at.
+                                    --sanitize opts into HTML sanitize
+                                    (default off). --open best-effort
+                                    xdg-opens the permalink.
+                                    update <id|path> <FILE> [--kb NAME]
+                                    [--json] [--daemon URL]: replace bytes.
+                                    ls [--kb NAME | --all] [--json]
+                                    [--daemon URL]: GET /api/desk. --all is
+                                    fleet-wide and conflicts with --kb.
+                                    wait [--path P] [--once] [--timeout S]
+                                    [--json] [--kb NAME] [--daemon URL]:
+                                    you-authored comments (delegates to
+                                    `kb comments watch`; default path
+                                    handoff).
+                                    expire <id|path> [--force] [--yes]
+                                    [--kb NAME] [--json] [--daemon URL]:
+                                    hard-delete. Refuses open comments
+                                    unless --force; --yes skips confirm.
+                                    promote <id|path> --to DEST
+                                    [--category C] [--keep-draft-tag]
+                                    [--kb NAME] [--json] [--daemon URL]:
+                                    relocate out of handoff/ and drop
+                                    `draft`. --to must not be under handoff/.
 kb forget <id> [--kb NAME] [--purge] [--daemon URL]
                                     v0.9 M5, MI-W2.3: forget a memory by id.
                                     Default SOFT-forgets (tombstones —
@@ -753,6 +815,29 @@ kb recollect [<query>] [--similar-to SESSION_ID] [--folder NAME]
                                     DIGESTS, surfacing recency/staleness,
                                     errors, and commits per hit. Pull-only;
                                     never asserted as truth (unlike recall).
+kb resurface [--kb NAME] [--limit N]
+   [--explain] [--json] [--daemon URL]
+                                    pull-only queue: open comments +
+                                    unfinished reads, scored, reasons on
+                                    every item. --limit defaults to 8
+                                    (daemon clamps 1-50). --explain prints
+                                    the scoring arithmetic. Nothing pushes;
+                                    acting on an item clears it. GET
+                                    /api/kb/{kb}/resurface.
+kb daycard [--kb NAME]
+   [--day DATE | --since WHEN]
+   [--html] [--json] [--daemon URL]
+                                    day-at-a-glance: worth picking back up
+                                    + today's activity + recent and
+                                    never-opened artifacts. --day is
+                                    YYYY-MM-DD UTC (default today). --since
+                                    is unix seconds or YYYY-MM-DD ("while I
+                                    was away"); mutually exclusive with
+                                    --day. No relative forms (`3d`/`12h`).
+                                    --html prints the e-ink panel's bytes
+                                    (--html wins over --json). No streak, no
+                                    goal, no --watch. GET
+                                    /api/kb/{kb}/daycard.
 kb reading <id|path>                RP-track: reading-progress for an artifact —
   [--kb N] [--json] [--lite]        how far it was read, per-section read vs
                                     skimmed vs unseen, where the reader stopped,

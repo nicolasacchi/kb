@@ -40,6 +40,11 @@ export interface ReviewSidePanelProps {
   docCards?: ReviewDocCard[];
   focusedRef?: string | null;
   onFocusRef?: (ref: string) => void;
+  /// V80-M4 — the active patchset's tip sha, threaded to
+  /// `ReviewThreadsCard`'s "open in reader" link. Absent ⇒ that link is
+  /// simply not rendered yet (the review's files/patchsets query hasn't
+  /// resolved).
+  tipSha?: string;
   /// V76-R2a — the rail dock's desktop header: density toggle + collapse
   /// buttons (the mouse doors for `review.density-toggle` /
   /// `review.rail.toggle`), and the lifted findings severity filter the
@@ -65,6 +70,7 @@ export default function ReviewSidePanel({
   docCards,
   focusedRef = null,
   onFocusRef,
+  tipSha,
   density,
   onToggleDensity,
   onCollapseRail,
@@ -152,6 +158,7 @@ export default function ReviewSidePanel({
         prNumber={prNumber}
         sevFilter={findingSeverityFilter}
         onSevFilter={onFindingSeverityFilter}
+        tipSha={tipSha}
       />
 
       <AskAgentCard repo={repo} reviewId={id} />

@@ -26,6 +26,9 @@ mod refs;
 /// V70-A2 (SEC-17) — the validated revspec/range TYPES every git helper in
 /// this crate takes instead of a bare `&str`. See that module's doc.
 pub mod revspec;
+/// RS-U4 — `StoreRoot`/`WorkTreeRoot`/`GitCtx`: the review-store type
+/// split every review git read goes through. See that module's doc.
+pub mod roots;
 mod tree;
 
 pub use blob::DEFAULT_BLOB_SIZE_CAP;

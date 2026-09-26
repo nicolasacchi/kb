@@ -4,6 +4,7 @@ import {
   buildLineSpans,
   paintLine,
   reconstructSide,
+  shouldFallbackToSnippet,
   spansForLine,
   splitContentLines,
   type DiffHighlights,
@@ -185,5 +186,28 @@ describe("reconstructSide — new-file fallback", () => {
     );
     expect(reconstructSide(parsed, "new")).toBe("def x\nend");
     expect(reconstructSide(parsed, "old")).toBeNull();
+  });
+});
+
+describe("shouldFallbackToSnippet — V77-P4.1 (the /api/file 404 race)", () => {
+  it("does not fall back on a failed read (404/5xx/network)", () => {
+    expect(shouldFallbackToSnippet({ isLoading: false, isError: true }, false)).toBe(false);
+    // Even in the (impossible in practice) case a failed query somehow
+    // reported usable data, an error must still win — a failed read never
+    // triggers the snippet fetch.
+    expect(shouldFallbackToSnippet({ isLoading: false, isError: true }, true)).toBe(false);
+  });
+
+  it("falls back once the read succeeded with no usable stored highlights", () => {
+    expect(shouldFallbackToSnippet({ isLoading: false, isError: false }, false)).toBe(true);
+  });
+
+  it("does not fall back once the read succeeded WITH usable highlights", () => {
+    expect(shouldFallbackToSnippet({ isLoading: false, isError: false }, true)).toBe(false);
+  });
+
+  it("does not fall back while still loading", () => {
+    expect(shouldFallbackToSnippet({ isLoading: true, isError: false }, false)).toBe(false);
+    expect(shouldFallbackToSnippet({ isLoading: true, isError: false }, true)).toBe(false);
   });
 });

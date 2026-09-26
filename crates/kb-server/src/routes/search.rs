@@ -138,6 +138,11 @@ pub struct Params {
     /// flags) in one round-trip. Absent — the fast `Cmd+K` popup — and
     /// every hit serializes byte-identically to the slim contract.
     pub detail: Option<String>,
+    /// Optional federated-search budget in milliseconds. An arm that misses
+    /// it is dropped and named in `degraded` (`error_class: timeout`);
+    /// absent means no cap. `scope=one` does not swallow, so this only
+    /// bounds the federated fan-out.
+    pub deadline_ms: Option<u64>,
 }
 
 fn default_mode() -> String {
@@ -474,6 +479,14 @@ pub struct SearchResponse {
     pub embed_ms: u64,
     /// True when the query-embedding LRU served this request.
     pub cache_hit: bool,
+    /// Swallowed per-corpus failures. Absent when empty so a healthy
+    /// search stays byte-identical. Populated only by the federated fan-out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "ts-export",
+        ts(as = "Option<Vec<crate::routes::context::DegradedLane>>", optional)
+    )]
+    pub degraded: Vec<crate::routes::context::DegradedLane>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -1028,6 +1041,7 @@ pub async fn get(
             ms,
             embed_ms: 0,
             cache_hit: false,
+            degraded: Vec::new(),
         })
         .into_response();
     }
@@ -1310,6 +1324,7 @@ pub async fn get(
         ms,
         embed_ms,
         cache_hit,
+        degraded: Vec::new(),
     })
     .into_response()
 }
@@ -1388,6 +1403,31 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
         std::collections::HashMap::new();
     let mut total_embed_ms: u64 = 0;
     let mut any_cache_hit = false;
+    let deadline = crate::routes::context::deadline_at(params.deadline_ms);
+    if deadline.is_some_and(|d| {
+        d.saturating_duration_since(std::time::Instant::now())
+            .is_zero()
+    }) {
+        let degraded = state
+            .kbs
+            .keys()
+            .map(|name| {
+                crate::routes::context::degraded_of(
+                    name.as_str(),
+                    "search",
+                    crate::routes::context::QueryErrorClass::Timeout,
+                )
+            })
+            .collect();
+        return Json(SearchResponse {
+            hits: Vec::new(),
+            ms: started.elapsed().as_millis() as u64,
+            embed_ms: 0,
+            cache_hit: false,
+            degraded,
+        })
+        .into_response();
+    }
 
     // Q-track — federated BROWSE (empty query): list+filter+sort across every
     // corpus, merged by the chosen sort (no relevance signal). Mirrors the
@@ -1402,12 +1442,14 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
             source_path: std::path::PathBuf,
             rollup: Option<std::collections::HashMap<String, kb_core::reading::ReadRollup>>,
             rows: Vec<kb_core::storage::lance::DocSummary>,
+            degraded: Option<crate::routes::context::DegradedLane>,
         }
         let filters = &filters;
         let mut futs: Vec<ArmFut<'_, BrowseArm>> = Vec::new();
         for (name, ctx) in state.kbs.iter() {
             let user = user.clone();
             futs.push(Box::pin(async move {
+                let work = async move {
                 let rollup = if needs_rollup {
                     ctx.storage.reading_rollup(user).await.ok()
                 } else {
@@ -1443,27 +1485,62 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                     } else {
                         None
                     };
-                let mut rows = Vec::new();
-                for r in ctx.storage.list_docs(u32::MAX).await.unwrap_or_default() {
-                    if !filters.keep(&r, &ctx.source_path) {
-                        continue;
+                let listed = ctx.storage.list_docs(u32::MAX).await;
+                let (rows, list_degraded) = match listed {
+                    Ok(docs) => {
+                        let mut rows = Vec::new();
+                        for r in docs {
+                            if !filters.keep(&r, &ctx.source_path) {
+                                continue;
+                            }
+                            if list_ids.as_ref().is_some_and(|s| !s.contains(&r.id)) {
+                                continue;
+                            }
+                            if read_window_ids.as_ref().is_some_and(|s| !s.contains(&r.id)) {
+                                continue;
+                            }
+                            rows.push(r);
+                        }
+                        (rows, None)
                     }
-                    if list_ids.as_ref().is_some_and(|s| !s.contains(&r.id)) {
-                        continue;
+                    Err(e) => {
+                        tracing::warn!(kb = %name, error = %e, "federated search: list_docs failed; skipping corpus");
+                        (
+                            Vec::new(),
+                            Some(crate::routes::context::degraded_of(
+                                name.as_str(),
+                                "search",
+                                crate::routes::context::classify_query_error(&e.to_string()),
+                            )),
+                        )
                     }
-                    if read_window_ids.as_ref().is_some_and(|s| !s.contains(&r.id)) {
-                        continue;
-                    }
-                    rows.push(r);
-                }
+                };
                 (
                     name,
                     BrowseArm {
                         source_path: ctx.source_path.clone(),
                         rollup,
                         rows,
+                        degraded: list_degraded,
                     },
                 )
+                };
+                match crate::routes::context::within_deadline(deadline, work).await {
+                    Ok(v) => v,
+                    Err(()) => (
+                        name,
+                        BrowseArm {
+                            source_path: ctx.source_path.clone(),
+                            rollup: None,
+                            rows: Vec::new(),
+                            degraded: Some(crate::routes::context::degraded_of(
+                                name.as_str(),
+                                "search",
+                                crate::routes::context::QueryErrorClass::Timeout,
+                            )),
+                        },
+                    ),
+                }
             }));
         }
         // PF-R1 — the operator-configurable `[server] fanout_cap` (default
@@ -1473,8 +1550,12 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
         // no separate `id_to_kb` lookup map (and no first-wins collision
         // when two corpora share an id) is needed downstream.
         let mut merged: Vec<(String, kb_core::storage::lance::DocSummary)> = Vec::new();
+        let mut degraded = Vec::new();
         for (name, arm) in arms {
             let kb = name.to_string();
+            if let Some(d) = arm.degraded {
+                degraded.push(d);
+            }
             src_paths.insert(kb.clone(), arm.source_path);
             if let Some(r) = arm.rollup {
                 rollup.extend(r.into_iter().map(|(id, rr)| (hit_key(&kb, &id), rr)));
@@ -1540,6 +1621,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
             ms,
             embed_ms: 0,
             cache_hit: false,
+            degraded,
         })
         .into_response();
     }
@@ -1555,11 +1637,9 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     if wants_vector {
         for (_, ctx) in state.kbs.iter() {
             if let Some(emb) = &ctx.embedder {
-                let model = emb
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .model_name()
-                    .to_string();
+                // Cached beside the mutex; do not lock just to read the name.
+                // A cold slot's guard drops inside the helper, before the await.
+                let model = crate::embed_cache::embedder_model_name(emb).to_string();
                 if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
                     if let Ok(out) =
                         crate::embed_cache::embed_query(&state.embed_cache, emb, &params.q).await
@@ -1577,7 +1657,8 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     // then fold in BTreeMap order: src_paths/rollup always, the arm pushed
     // (tagged with its kb name) only on success (skip-on-error preserved). No
     // std::sync::Mutex guard is held across an await (invariant 15): the
-    // embedder lock is released after reading model_name, before any await.
+    // model name comes from the cache beside the embedder mutex, so this
+    // fan-out never locks it.
     struct HybridArm {
         source_path: std::path::PathBuf,
         rollup: Option<std::collections::HashMap<String, kb_core::reading::ReadRollup>>,
@@ -1586,6 +1667,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
         /// before fusion (empty when the mode never ran that arm here).
         bm25_rank: std::collections::HashMap<String, u32>,
         vec_rank: std::collections::HashMap<String, u32>,
+        degraded: Option<crate::routes::context::DegradedLane>,
     }
     let filters = &filters;
     let vec_by_model = &vec_by_model;
@@ -1593,6 +1675,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     for (name, ctx) in state.kbs.iter() {
         let user = user.clone();
         futs.push(Box::pin(async move {
+            let work = async move {
             // Fan-out: ensure Err skips this corpus (invariant #28 — one
             // corpus never 500s the fleet) rather than swallowing into a
             // less-specific query failure. Single-kb path surfaces via
@@ -1607,6 +1690,11 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                         hits: None,
                         bm25_rank: std::collections::HashMap::new(),
                         vec_rank: std::collections::HashMap::new(),
+                        degraded: Some(crate::routes::context::degraded_of(
+                            name.as_str(),
+                            "search",
+                            crate::routes::context::classify_query_error(&e.to_string()),
+                        )),
                     },
                 );
             }
@@ -1628,14 +1716,15 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                                 hits: None,
                                 bm25_rank: std::collections::HashMap::new(),
                                 vec_rank: std::collections::HashMap::new(),
+                                degraded: Some(crate::routes::context::degraded_of(
+                                    name.as_str(),
+                                    "search",
+                                    crate::routes::context::classify_query_error(&e.to_string()),
+                                )),
                             },
                         );
                     }
-                    let model = emb
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .model_name()
-                        .to_string();
+                    let model = crate::embed_cache::embedder_model_name(emb).to_string();
                     vec_by_model.get(&model).cloned()
                 } else {
                     None
@@ -1726,7 +1815,8 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
             let mut hits = match result {
                 Ok(h) => h,
                 // A corpus that errors is skipped, not fatal to the fan-out.
-                Err(_) => {
+                Err(e) => {
+                    tracing::warn!(kb = %name, error = %e, "federated search: query failed; skipping corpus");
                     return (
                         name,
                         HybridArm {
@@ -1737,6 +1827,11 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                             hits: None,
                             bm25_rank: std::collections::HashMap::new(),
                             vec_rank: std::collections::HashMap::new(),
+                            degraded: Some(crate::routes::context::degraded_of(
+                                name.as_str(),
+                                "search",
+                                crate::routes::context::classify_query_error(&e.to_string()),
+                            )),
                         },
                     );
                 }
@@ -1795,8 +1890,28 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                     hits: Some(hits),
                     bm25_rank,
                     vec_rank,
+                    degraded: None,
                 },
             )
+            };
+            match crate::routes::context::within_deadline(deadline, work).await {
+                Ok(v) => v,
+                Err(()) => (
+                    name,
+                    HybridArm {
+                        source_path: ctx.source_path.clone(),
+                        rollup: None,
+                        hits: None,
+                        bm25_rank: std::collections::HashMap::new(),
+                        vec_rank: std::collections::HashMap::new(),
+                        degraded: Some(crate::routes::context::degraded_of(
+                            name.as_str(),
+                            "search",
+                            crate::routes::context::QueryErrorClass::Timeout,
+                        )),
+                    },
+                ),
+            }
         }));
     }
     // Q-track (board B1) — global per-arm rank maps, merged across corpora.
@@ -1809,8 +1924,12 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
     let arms_out = super::buffered_join(futs, state.fanout_cap).await;
+    let mut degraded = Vec::new();
     for (name, arm) in arms_out {
         let kb = name.to_string();
+        if let Some(d) = arm.degraded {
+            degraded.push(d);
+        }
         src_paths.insert(kb.clone(), arm.source_path);
         if let Some(r) = arm.rollup {
             rollup.extend(r.into_iter().map(|(id, rr)| (hit_key(&kb, &id), rr)));
@@ -1943,6 +2062,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
         ms,
         embed_ms: total_embed_ms,
         cache_hit: any_cache_hit,
+        degraded,
     })
     .into_response()
 }
@@ -2129,6 +2249,7 @@ mod tests {
             read_to: None,
             list: None,
             detail: None,
+            deadline_ms: None,
         }
     }
 

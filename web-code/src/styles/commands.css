@@ -5,6 +5,29 @@
  * Everything here is token-driven (no literal colours) so the twelve theme
  * families and the contrast slider keep working, and everything transient
  * respects `prefers-reduced-motion`.
+ *
+ * V80-R0: every `font-size` in this file was a raw rem literal (0.7rem–
+ * 0.82rem, off the OLD caption-scale ramp) instead of a `--fs-*` token;
+ * bucketed onto the ramp the same way `nav.css` was (`--fs-sm` for the
+ * 0.75–0.82rem tier, `--fs-xs` for 0.7–0.72rem).
+ *
+ * V80-C1: despite the "no literal colours" claim above, `--surface`/
+ * `--surface-2`/`--border`/`--border-subtle`/`--fg-subtle`/
+ * `--highlight-low` were never-defined names (the exact dead-cascade bug
+ * R4 fixed for `--fg`/`--fg-dim` and R5 fixed for `--line`/`--bg-raised`/
+ * `--bg-input`) — every `background`/`border`/`color` using them was
+ * silently rendering transparent/no-border/inherited instead of the
+ * intended surface. Mapped onto the real tokens: `--surface`→`--bg-panel`
+ * (floating overlay, matches `.kbc-repopopover`), `--surface-2`→`--bg-card`
+ * (the `<select>` form control, matches rails.css's `--bg-input`→
+ * `--bg-card` precedent), `--highlight-low`→`--bg-card-hi` (active row,
+ * matches the hover-row convention), `--border`/`--border-subtle`→
+ * `--rule`, `--fg-subtle`→`--ink-mute` (matches R4's `--fg-dim` mapping).
+ * `--space-*`/`--radius-*`/`--shadow-*` keep their literal inline
+ * fallbacks (`var(--space-2, 8px)`) — always resolve to a real value in
+ * every theme, so left as a separate normalization onto `--pad-N` etc.
+ * `npm run lint:css-vars` (web-code/scripts/css-undefined-vars.mjs) is the
+ * permanent gate against this bug class returning.
  */
 
 /* ── which-key ──────────────────────────────────────────────────────────
@@ -22,12 +45,12 @@
   max-height: 42vh;
   overflow-y: auto;
   pointer-events: none;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-2, 8px);
   box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
   padding: var(--space-2, 8px) var(--space-3, 12px);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
 }
 
 .kbc-whichkey__head {
@@ -35,7 +58,7 @@
   align-items: center;
   gap: var(--space-2, 8px);
   padding-bottom: var(--space-1, 4px);
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--rule);
   margin-bottom: var(--space-1, 4px);
 }
 
@@ -45,14 +68,14 @@
 }
 
 .kbc-whichkey__scope {
-  color: var(--fg-subtle);
-  font-size: 0.75rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 .kbc-whichkey__esc {
   margin-left: auto;
-  color: var(--fg-subtle);
-  font-size: 0.72rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 
 .kbc-whichkey__rows {
@@ -76,8 +99,8 @@
 
 .kbc-whichkey__group {
   flex: 0 0 100%;
-  color: var(--fg-subtle);
-  font-size: 0.7rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-top: var(--space-1, 4px);
@@ -91,7 +114,7 @@
 
 /* A group node is a promise of more keys, not an action — say so. */
 .kbc-whichkey__label.is-group {
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   font-style: italic;
 }
 
@@ -112,7 +135,7 @@
   color: var(--accent-fg, #fff);
   border-radius: var(--radius-1, 4px);
   padding: 1px 5px;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   font-family: var(--font-mono);
   box-shadow: var(--shadow-1, 0 2px 8px rgb(0 0 0 / 0.3));
@@ -139,7 +162,7 @@
 }
 
 .kbc-omnibox__cmdrow.is-active {
-  background: var(--highlight-low, var(--surface-2));
+  background: var(--bg-card-hi);
 }
 
 .kbc-omnibox__cmdrow.is-unavailable {
@@ -160,8 +183,8 @@
 
 .kbc-omnibox__cmdgroup,
 .kbc-omnibox__cmdwhy {
-  color: var(--fg-subtle);
-  font-size: 0.75rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
@@ -182,10 +205,10 @@
   padding: var(--space-1, 4px);
   background: none;
   border: 0;
-  border-top: 1px dashed var(--border);
-  color: var(--fg-subtle);
+  border-top: 1px dashed var(--rule);
+  color: var(--ink-mute);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 
@@ -195,21 +218,21 @@
 
 .kbc-omnibox__scope {
   margin-left: auto;
-  color: var(--fg-subtle);
-  font-size: 0.75rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 .kbc-omnibox__legend {
   display: inline-block;
   margin-top: var(--space-2, 8px);
-  color: var(--fg-subtle);
-  font-size: 0.78rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 /* ── the `?` sheet's new chrome ─────────────────────────────────────────── */
 .kbc-kbdhelp__scopename {
-  color: var(--fg-subtle);
-  font-size: 0.8rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
   font-weight: 400;
 }
 
@@ -219,14 +242,14 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1, 4px);
-  color: var(--fg-subtle);
-  font-size: 0.78rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 .kbc-kbdhelp__preset select {
-  background: var(--surface-2, var(--surface));
+  background: var(--bg-card);
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-1, 4px);
   padding: 1px 4px;
   font: inherit;
@@ -235,7 +258,7 @@
 /* A row with no key in this preset is still listed — "reachable from the
  * palette, not from the keyboard here" is a real answer. */
 .kbc-kbdhelp__nokey {
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
 }
 
 .kbc-kbdhelp__row.is-planned {
@@ -243,17 +266,17 @@
 }
 
 .kbc-kbdhelp__planned {
-  color: var(--fg-subtle);
-  font-size: 0.72rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .kbc-kbdhelp__foot {
   padding: var(--space-2, 8px) var(--space-3, 12px);
-  border-top: 1px solid var(--border);
-  color: var(--fg-subtle);
-  font-size: 0.76rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
 }
 
 /* ── day one (D24) ──────────────────────────────────────────────────────
@@ -264,8 +287,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1, 4px);
-  color: var(--fg-subtle);
-  font-size: 0.76rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
@@ -275,12 +298,12 @@
   bottom: var(--space-4, 16px);
   z-index: var(--z-hint);
   max-width: 340px;
-  background: var(--surface);
+  background: var(--bg-panel);
   border: 1px solid var(--accent);
   border-radius: var(--radius-2, 8px);
   box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
   padding: var(--space-3, 12px);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   animation: kbc-coach-in 160ms ease-out;
 }
 
@@ -313,7 +336,7 @@
   margin-left: auto;
   background: none;
   border: 0;
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
   font: inherit;
   cursor: pointer;
 }
@@ -326,5 +349,5 @@
 }
 
 .kbc-coachmark__ramp span {
-  color: var(--fg-subtle);
+  color: var(--ink-mute);
 }

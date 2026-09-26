@@ -111,6 +111,12 @@ pub struct BlameOptions<'a> {
     /// Optional `-L start,end` (1-based, inclusive) — narrows the subprocess
     /// itself to that range rather than computing the whole file.
     pub line_range: Option<(u32, u32)>,
+    /// RS-U4 (design §6 S8) — a READ-ONLY alternate object directory (a
+    /// ready review store's `objects/`) this one invocation may consult,
+    /// via the per-process `GIT_ALTERNATE_OBJECT_DIRECTORIES`; nothing is
+    /// written to the repo's own `objects/info/alternates`. `None` (every
+    /// caller until a store is ready) leaves the invocation unchanged.
+    pub alternates: Option<&'a Path>,
 }
 
 fn build_args(opts: &BlameOptions<'_>) -> Vec<OsString> {
@@ -150,6 +156,10 @@ pub fn run_streaming(
     let mut child = Command::new("git")
         .arg("-C")
         .arg(opts.repo_root)
+        .envs(
+            opts.alternates
+                .map(|dir| ("GIT_ALTERNATE_OBJECT_DIRECTORIES", dir)),
+        )
         .args(&args)
         .stdin(if opts.contents.is_some() {
             Stdio::piped()
@@ -610,6 +620,7 @@ filename f.txt
             contents: None,
             ignore_revs_file: None,
             line_range: None,
+            alternates: None,
         };
         let regions = run_collect(&opts).unwrap();
 
@@ -644,6 +655,7 @@ filename f.txt
             contents: None,
             ignore_revs_file: None,
             line_range: Some((2, 3)),
+            alternates: None,
         };
         let regions = run_collect(&opts).unwrap();
         assert_eq!(regions.len(), 1);
@@ -666,6 +678,7 @@ filename f.txt
             contents: None,
             ignore_revs_file: None,
             line_range: None,
+            alternates: None,
         };
         let regions = run_collect(&opts).unwrap();
         assert!(!regions.is_empty());
@@ -713,6 +726,7 @@ filename f.txt
             contents: None,
             ignore_revs_file: None,
             line_range: None,
+            alternates: None,
         })
         .unwrap();
         assert!(without.iter().all(|r| r.author == "Eve"));
@@ -726,6 +740,7 @@ filename f.txt
             contents: None,
             ignore_revs_file: Some(&ignore_file),
             line_range: None,
+            alternates: None,
         })
         .unwrap();
         assert!(
@@ -753,6 +768,7 @@ filename f.txt
             contents: Some(live),
             ignore_revs_file: None,
             line_range: None,
+            alternates: None,
         };
         let regions = run_collect(&opts).unwrap();
 
@@ -780,6 +796,7 @@ filename f.txt
             contents: None,
             ignore_revs_file: None,
             line_range: None,
+            alternates: None,
         };
         let err = run_collect(&opts).unwrap_err();
         match err {
@@ -804,6 +821,7 @@ filename f.txt
             contents: None,
             ignore_revs_file: None,
             line_range: None,
+            alternates: None,
         };
         let mut count = 0usize;
         run_streaming(&opts, |_region| count += 1).unwrap();

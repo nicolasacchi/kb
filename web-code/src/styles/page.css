@@ -1,0 +1,87 @@
+/* V80-R0 — the ONE shared page-header shape (`PageHeader.tsx`) + the ONE
+ * shared "·"-separated caption row (`MetaLine.tsx`). Every page used to
+ * hand-roll its own near-identical `<header className="kbc-X__head">` +
+ * `<h1 className="kbc-X__title">` block (Reviews, Todos, Sets, Inbox,
+ * Branches all had one, each with slightly different raw px font-sizes —
+ * `.kbc-reviews__title`/`.kbc-review__title` were `24px`, `.kbc-reviews__
+ * hint`/`.kbc-review__hint` `13px`). This unit adopts the two components
+ * on exactly those five callers; the per-page `__head`/`__title` rules in
+ * reviews.css/todos.css/sets.css/inbox.css/branches.css are UNCHANGED
+ * (they still apply to routes that keep their own hand-rolled header, and
+ * to `.kbc-review__*`'s OTHER user, `ReviewDetail.tsx`, which this unit
+ * does not touch — that comma-selector still carries the review-detail
+ * cockpit's own title/hint). Later units (R1-R6) adopt PageHeader/
+ * MetaLine on the rest of the app and can retire what's now dead in those
+ * five pages' own stylesheets.
+ *
+ * Token discipline matches every other shared file: `--fs-*`/`--ink-*`
+ * only, no raw px/hex.
+ */
+
+.kbc-page-head {
+  margin-bottom: 16px;
+}
+
+.kbc-page-head__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.kbc-page-head__titlewrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.kbc-page-head__kicker {
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 2px;
+}
+
+.kbc-page-head__title {
+  font-size: var(--fs-hero);
+  line-height: var(--lh-tight);
+  margin: 0;
+}
+
+.kbc-page-head__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kbc-page-head__lede {
+  color: var(--ink-mute);
+  margin: 6px 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  max-width: var(--measure);
+}
+
+/* ── MetaLine: a caption row of "·"-separated facts (a count, a
+   timestamp, a path — the numeric-chip intent named alongside the type
+   ramp rebase). ── */
+.kbc-metaline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.kbc-metaline__item {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.kbc-metaline__sep {
+  color: var(--ink-faint);
+  margin: 0 6px;
+}

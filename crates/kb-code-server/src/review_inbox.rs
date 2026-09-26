@@ -36,6 +36,31 @@
 //! literal wording** — flagged here and in this unit's own report for the
 //! operator to correct if a different reading was intended.
 //!
+//! # `human_open` (V80-M4) — "the Room reads human threads first-class,"
+//! restated for the inbox row
+//!
+//! The Room's rail (`ReviewThreadsCard.tsx`) and Report hero derive "open
+//! questions from you" CLIENT-side, over the review's full comment tree
+//! (`GET /reviews/{id}/comments`, already fetched for the rail) — cheap,
+//! because that fetch already happened. The inbox route CANNOT afford that:
+//! one full comment-tree fetch per review, per inbox load, is exactly the
+//! "N-request storm" `pr_head_drift`'s own doc above refuses. `human_open`
+//! is the same concept computed from data THIS route already batch-loads
+//! (`ann_map`, one query for every review's annotations) rather than a
+//! second fetch: the count of OPEN (unresolved) top-level annotation
+//! threads whose `author` is a HUMAN name — i.e. NOT one of
+//! [`crate::review_timeline::AGENT_AUTHOR_NAMES`], the SAME closed
+//! vocabulary `review_timeline::author_for` classifies every timeline event
+//! author against, so this route can never disagree with the timeline about
+//! who counts as an agent. Unlike `unanswered_questions` (which is
+//! `intent`-scoped to `question` and keys off "who spoke last"), `human_open`
+//! covers every intent (a plain `note`/`issue` thread the human raised and
+//! never marked resolved is still something "from you" waiting on
+//! attention) and keys off the thread's own OPENER — the fact this route
+//! answers is "did a human raise something here that is still open," not
+//! "whose turn is it," which is a `intent`-agnostic, simpler, and cheaper
+//! question to answer from the same batched rows.
+//!
 //! # `pr_head_drift` — LOCAL-only, by design
 //!
 //! Design doc §2 row 13, verbatim: "`pr_head_drift` uses ONLY the cached
@@ -91,6 +116,8 @@ pub struct InboxRow {
     pub title: Option<String>,
     pub unresolved_findings: i64,
     pub unanswered_questions: i64,
+    /// V80-M4 — see the module doc's `human_open` section. Additive.
+    pub human_open: i64,
     pub verdict: serde_json::Value,
     pub verdict_stale: bool,
     pub pr_head_drift: Option<bool>,
@@ -127,6 +154,16 @@ pub(crate) fn thread_is_unanswered(asker: &str, replies: &[&AnnotationRow]) -> b
         Some(last) => last.author == asker,
         None => true,
     }
+}
+
+/// V80-M4 — `human_open`'s classifier. Delegates to
+/// [`crate::review_timeline::AGENT_AUTHOR_NAMES`] (the SAME closed
+/// vocabulary `review_timeline::author_for` uses) rather than a second
+/// list, so this route and the timeline can never disagree about who
+/// counts as an agent.
+pub(crate) fn is_agent_author(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    crate::review_timeline::AGENT_AUTHOR_NAMES.contains(&lower.as_str())
 }
 
 /// The per-repo scan + per-review scoring composition — the reusable HALF
@@ -209,7 +246,16 @@ pub fn compose_rows(
                 }
             }
             let mut unanswered_questions = 0i64;
+            // "human_open" (V80-M4) — see the module doc. Every open
+            // top-level thread OPENED by a human, any intent — a cheaper,
+            // intent-agnostic sibling of `unanswered_questions` above,
+            // computed from the SAME already-batched `by_id` map (no
+            // second query).
+            let mut human_open = 0i64;
             for (aid, ann) in &by_id {
+                if !ann.resolved && !is_agent_author(&ann.author) {
+                    human_open += 1;
+                }
                 if ann.intent != crate::annotations::INTENT_QUESTION || ann.resolved {
                     continue;
                 }
@@ -236,6 +282,7 @@ pub fn compose_rows(
                 title: review.title.clone(),
                 unresolved_findings,
                 unanswered_questions,
+                human_open,
                 verdict,
                 verdict_stale,
                 pr_head_drift,
@@ -258,6 +305,7 @@ pub(crate) fn inbox_row_to_json(r: &InboxRow) -> serde_json::Value {
         "title": r.title,
         "unresolved_findings": r.unresolved_findings,
         "unanswered_questions": r.unanswered_questions,
+        "human_open": r.human_open,
         "verdict": r.verdict,
         "verdict_stale": r.verdict_stale,
         "pr_head_drift": r.pr_head_drift,
@@ -333,6 +381,7 @@ mod tests {
             title: None,
             unresolved_findings: unresolved,
             unanswered_questions: unanswered,
+            human_open: 0,
             verdict: serde_json::Value::Null,
             verdict_stale: false,
             pr_head_drift: None,
@@ -427,5 +476,37 @@ mod tests {
         // Handed out of order — the fn must still pick `newest` as "last".
         assert!(thread_is_unanswered("you", &[&newest, &oldest]));
         assert!(!thread_is_unanswered("claude", &[&newest, &oldest]));
+    }
+
+    // --- V80-M4 — `human_open` --------------------------------------------
+
+    #[test]
+    fn is_agent_author_matches_the_closed_vocabulary_case_and_whitespace_insensitively() {
+        assert!(is_agent_author("claude"));
+        assert!(is_agent_author("  Claude  "));
+        assert!(is_agent_author("CODEX"));
+        assert!(is_agent_author("agent"));
+        assert!(!is_agent_author("you"));
+        assert!(!is_agent_author("nik"));
+        assert!(!is_agent_author(""));
+    }
+
+    #[test]
+    fn is_agent_author_tracks_review_timelines_own_vocabulary() {
+        // Same law `review_timeline`'s own
+        // `the_agent_author_set_tracks_kbs_harness_vocabulary` test pins —
+        // restated here so a change to either set is caught from both
+        // sides rather than only discovered when the two routes disagree.
+        for name in crate::review_timeline::AGENT_AUTHOR_NAMES {
+            assert!(is_agent_author(name), "{name} must classify as an agent");
+        }
+    }
+
+    #[test]
+    fn inbox_row_to_json_carries_human_open() {
+        let mut r = row(1, 0, 0, 0);
+        r.human_open = 3;
+        let json = inbox_row_to_json(&r);
+        assert_eq!(json["human_open"], 3);
     }
 }

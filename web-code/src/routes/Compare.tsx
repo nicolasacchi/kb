@@ -4,6 +4,8 @@ import FileChangeRow from "../components/history/FileChangeRow";
 import MergeCheckCard from "../components/history/MergeCheckCard";
 import PrCommentsStrip from "../components/history/PrCommentsStrip";
 import { Icon } from "../components/icons";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import RefTypeahead from "../components/RefTypeahead";
 import { useCompare } from "../hooks/useCompare";
 import { useRefs } from "../hooks/useRefs";
@@ -133,6 +135,7 @@ export default function Compare() {
 
   return (
     <div className="kbc-compare">
+      <PageHeader title="Compare" lede="Commits and file changes between two refs." />
       <form className="kbc-compare__head" onSubmit={onSubmit}>
         <RefTypeahead
           value={fromInput}
@@ -192,17 +195,22 @@ export default function Compare() {
       ) : data ? (
         <div className={prNumber !== null ? "kbc-compare__layout" : undefined}>
           <div className="kbc-compare__main">
-            <div className="kbc-compare__resolved" data-kbc-compare-resolved>
-              {shortSha(data.resolved.from_sha)}
-              {threeDot && data.resolved.merge_base && (
-                <>
-                  {" "}
-                  (merge-base <span className="kbc-compare__mergebase">{shortSha(data.resolved.merge_base)}</span>)
-                </>
-              )}
-              {" → "}
-              {shortSha(data.resolved.to_sha)}
-            </div>
+            {/* V80-R5 — the resolved from/to shas as a shared `MetaLine`
+                (was a hand-rolled 12px mono line). */}
+            <MetaLine
+              className="kbc-compare__resolved"
+              items={[
+                <span data-kbc-compare-resolved>
+                  {shortSha(data.resolved.from_sha)} → {shortSha(data.resolved.to_sha)}
+                </span>,
+                threeDot && data.resolved.merge_base && (
+                  <span>
+                    merge-base{" "}
+                    <span className="kbc-compare__mergebase">{shortSha(data.resolved.merge_base)}</span>
+                  </span>
+                ),
+              ]}
+            />
 
             <MergeCheckCard repo={repo} from={fromParam} to={toParam} />
 
@@ -326,10 +334,14 @@ export default function Compare() {
                 </section>
 
                 <section className="kbc-compare__files">
-                  <div className="kbc-compare__files-head">
-                    {data.totals.files} file{data.totals.files === 1 ? "" : "s"} changed · +
-                    {data.totals.insertions} -{data.totals.deletions}
-                  </div>
+                  <h2 className="kbc-compare__section-title">Files changed</h2>
+                  <MetaLine
+                    items={[
+                      `${data.totals.files} file${data.totals.files === 1 ? "" : "s"} changed`,
+                      <span className="kbc-filechange__additions">+{data.totals.insertions}</span>,
+                      <span className="kbc-filechange__deletions">-{data.totals.deletions}</span>,
+                    ]}
+                  />
                   {data.files.map((f) => (
                     <FileChangeRow
                       key={f.path}

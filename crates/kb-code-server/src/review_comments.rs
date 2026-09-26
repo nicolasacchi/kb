@@ -23,8 +23,9 @@
 //! line is worse than an honest orphan.
 
 use crate::annotations;
+use crate::git::roots::GitCtx;
 use crate::git::{GitError, GitRepo, DEFAULT_BLOB_SIZE_CAP};
-use crate::reviews::{require_review, resolve_ps};
+use crate::reviews::{changed_path_set, require_review, resolve_ps};
 use crate::routes::ApiError;
 use crate::state::SharedState;
 use crate::store::{AnnotationRow, ReviewPatchsetRow, Store, StoreBlocking};
@@ -35,7 +36,6 @@ use axum::Json;
 use kb_core::review::Anchor;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 
 pub const SCHEMA: &str = "review-comments/1";
 
@@ -117,7 +117,7 @@ fn combine_confidence(
 /// [`resolve_for_ps_with_content`] when a caller already has the bytes
 /// (the comments route caches one read per `(path, sha)`).
 pub fn resolve_for_ps(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     row: &AnnotationRow,
     target_ps: &ReviewPatchsetRow,
 ) -> ResolvedForPs {
@@ -240,13 +240,19 @@ pub fn resolve_for_ps_with_content(
 /// `pub(crate)` — PRR-R3's findings-list route (`crate::review_findings`)
 /// reuses this exact blob read (same per-`(path, sha)` caching convention
 /// as [`build_comment_groups`]) rather than a second copy.
-pub(crate) fn read_blob_text(repo_root: &Path, path: &str, sha: &str) -> Option<String> {
-    let git = GitRepo::open(repo_root).ok()?;
-    match git.read_blob(sha, path, DEFAULT_BLOB_SIZE_CAP) {
-        Ok(bytes) => String::from_utf8(bytes).ok(),
-        Err(GitError::PathNotFound { .. }) | Err(GitError::NotABlob { .. }) => None,
-        Err(_) => None,
-    }
+///
+/// RS-U4 (S6) — a review read at a patchset sha: the review store first
+/// once it is ready, then the member work tree's ODB
+/// (`GitCtx::read_opt_with_fallback`).
+pub(crate) fn read_blob_text(ctx: &GitCtx, path: &str, sha: &str) -> Option<String> {
+    ctx.read_opt_with_fallback(|root| {
+        let git = GitRepo::open(root.git_path()).ok()?;
+        match git.read_blob(sha, path, DEFAULT_BLOB_SIZE_CAP) {
+            Ok(bytes) => String::from_utf8(bytes).ok(),
+            Err(GitError::PathNotFound { .. }) | Err(GitError::NotABlob { .. }) => None,
+            Err(_) => None,
+        }
+    })
 }
 
 fn snippet_of(anchor: &Anchor) -> &str {
@@ -332,7 +338,7 @@ pub async fn review_comments(
     // groups` are all synchronous store work — one blocking-pool trip.
     let ps_param = params.ps.clone();
     let all = params.all;
-    let repo_root = repo.path.clone();
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let (target_ps, groups_out) = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
@@ -343,7 +349,14 @@ pub async fn review_comments(
                 review_id: Some(id),
                 ps_number: Some(target_ps.ps_number),
             };
-            let groups_out = build_comment_groups(store, &repo_root, &target_ps, rows, &ctx)?;
+            // V80-M0 — the `in_diff` caption's data source, ONE call
+            // (`crate::reviews::files_changed`, the same fn `review_
+            // distill`'s own `files_out` and every diff-listing route
+            // already shares — never a second `git diff` shell-out).
+            let changed_paths =
+                changed_path_set(&repo_root, &target_ps.base_sha, &target_ps.tip_sha)?;
+            let groups_out =
+                build_comment_groups(store, &repo_root, &target_ps, rows, &ctx, &changed_paths)?;
             Ok((target_ps, groups_out))
         })
         .await?;
@@ -361,9 +374,10 @@ pub async fn review_comments(
 }
 
 /// Group already-fetched annotation rows (parents + replies, per
-/// [`Store::list_review_annotations`]) into `{path, comments: [...]}`
-/// blocks, each parent carrying its lazily-resolved position against
-/// `target_ps` plus a read-only suggestion block and nested replies.
+/// [`Store::list_review_annotations`]) into `{path, in_diff, comments:
+/// [...]}` blocks, each parent carrying its lazily-resolved position
+/// against `target_ps` plus a read-only suggestion block and nested
+/// replies.
 ///
 /// Shared by [`review_comments`] and (CT-E7) `crate::review_distill` —
 /// the two callers stay identical by construction rather than by two
@@ -372,12 +386,20 @@ pub async fn review_comments(
 /// `ctx` (V76-B3, kbc-prose/1) scopes the additive `body_refs` each comment
 /// and reply carries: the repo for path/symbol resolution, the review for
 /// `f-<slug>` mentions.
+///
+/// `changed_paths` (V80-M0) is `target_ps`'s own diff file set
+/// (`crate::reviews::changed_path_set`/`changed_path_set_from` — each
+/// caller computes it exactly once, never a second `git diff` per
+/// request) — each group's `in_diff` is a per-READ caption computed from
+/// it, never a filter and never stored (the group still lists every
+/// comment regardless).
 pub(crate) fn build_comment_groups(
     store: &Store,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     target_ps: &ReviewPatchsetRow,
     rows: Vec<AnnotationRow>,
     ctx: &crate::prose_refs::RefCtx,
+    changed_paths: &std::collections::HashSet<String>,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
     let mut replies: HashMap<String, Vec<AnnotationRow>> = HashMap::new();
     let mut parents: Vec<AnnotationRow> = Vec::new();
@@ -450,7 +472,14 @@ pub(crate) fn build_comment_groups(
 
     Ok(groups
         .into_iter()
-        .map(|(path, comments)| serde_json::json!({ "path": path, "comments": comments }))
+        .map(|(path, comments)| {
+            // V80-M0 — the review-level group (`path == ""`, PRR-R3's
+            // "general question" kind) has no file to be "in" the diff
+            // AT ALL; every other group is in_diff iff its path is one
+            // `changed_paths` names (either endpoint of a rename).
+            let in_diff = !path.is_empty() && changed_paths.contains(&path);
+            serde_json::json!({ "path": path, "in_diff": in_diff, "comments": comments })
+        })
         .collect())
 }
 

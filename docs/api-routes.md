@@ -50,6 +50,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | PUT | `/api/kb/{kb}/boards/{list_id}/canvas` | `routes::boards::put_canvas` |
 | POST | `/api/kb/{kb}/capture` | `routes::capture::create` |
 | GET | `/api/kb/{kb}/code-refs` | `routes::coderefs::feed` |
+| POST | `/api/kb/{kb}/comments/{id}/keep` | `routes::comments::keep_memory` |
 | POST | `/api/kb/{kb}/compact` | `routes::compact::post` |
 | GET | `/api/kb/{kb}/daycard` | `routes::daycard::get` |
 | POST | `/api/kb/{kb}/desk` | `routes::desk::create` |
@@ -132,6 +133,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | PATCH | `/api/kb/{kb}/review/{id}/comments/{cid}/anchor` | `routes::comments::set_anchor` |
 | POST | `/api/kb/{kb}/review/{id}/comments/{cid}/attachments` | `routes::attachments::upload_to_comment` |
 | DELETE | `/api/kb/{kb}/review/{id}/comments/{cid}/attachments/{aid}` | `routes::attachments::detach_comment` |
+| POST | `/api/kb/{kb}/review/{id}/comments/{cid}/keep` | `routes::comments::keep` |
 | POST | `/api/kb/{kb}/review/{id}/comments/{cid}/replies` | `routes::comments::add_reply` |
 | DELETE | `/api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}` | `routes::comments::delete_reply` |
 | PATCH | `/api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}` | `routes::comments::edit_reply` |
@@ -230,7 +232,8 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | POST | `/api/slates/{slug}/reopen` | `routes::slates::reopen` |
 | POST | `/api/slates/{slug}/rotate` | `routes::slates::rotate` |
 | GET | `/api/stats` | `routes::stats::cross` |
+| GET | `/api/turn` | `routes::turn::get` |
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_223 routes._
+_226 routes._

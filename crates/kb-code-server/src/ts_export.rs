@@ -26,6 +26,7 @@ mod tests {
         "src/lanes/mod.rs",
         "src/lanes/routes.rs",
         "src/reviews.rs",
+        "src/review_base.rs",
         "src/review_doc/mod.rs",
         "src/review_doc/lint.rs",
         "src/review_doc/cards.rs",

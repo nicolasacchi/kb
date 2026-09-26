@@ -11,7 +11,8 @@
 // sides of that (a mapped icon that does not exist fails the golden, and
 // the mapping tables themselves are golden-pinned).
 
-import type { FindingSeverity, ReviewFileRow, ReviewFinding, ReviewReport } from "../api/types";
+import type { FindingSeverity, ReviewCommentsOut, ReviewFileRow, ReviewFinding, ReviewReport } from "../api/types";
+import { isAgentAuthorName } from "./questionState";
 
 // ── the live counts ───────────────────────────────────────────────────────
 // `liveFindingCounts` moved HERE from `ReportPanel.tsx` in V76-R2a so the
@@ -171,11 +172,60 @@ export function heroCounts(findings: ReviewFinding[]): LiveCounts {
   return liveFindingCounts(findings);
 }
 
+/// V80-M5 (D6) — "authored by you: N": live findings whose `origin` is
+/// `"manual"` (a human — typed straight into the finding form, or
+/// PROMOTED from a bound comment; both mint the identical `origin`, D6's
+/// whole point). Superseded findings are excluded, matching every other
+/// live count this module derives (`liveFindingCounts`'s own rule).
+export function manualFindingCount(findings: ReviewFinding[]): number {
+  return findings.filter((f) => !f.superseded && f.origin === "manual").length;
+}
+
 /// "N of M files viewed" — K2a's viewed state, the same predicate
 /// `ReviewHeader`'s progress bar already uses (`viewed && !viewed_stale`:
 /// a stale viewed mark is not a viewed file).
 export function filesViewedOf(files: ReviewFileRow[]): { viewed: number; total: number } {
   return { viewed: files.filter((f) => f.viewed && !f.viewed_stale).length, total: files.length };
+}
+
+// ── human threads (V80-M4) ─────────────────────────────────────────────────
+// "The Room reads human threads first-class": a thread's own OPENER (its
+// top-level `author` — never a reply's, and never the "latest voice" pick
+// `questionState.ts`'s ❓ chip uses for a DIFFERENT question — that module
+// answers "whose turn is it," this one answers "did a human raise this,
+// and is it still open") decides whether it counts here. Reuses
+// `isAgentAuthorName` — the ONE author-classification signal every other
+// Room surface already keys off (`DiffThread`, `ReviewThreadsCard`'s ❓
+// chip) — rather than inventing a second classifier. ONE derivation, two
+// renderers (the Report hero's "open questions from you" line and the
+// guided tour's per-file stops, `lib/reviewTour.ts`), so the two can never
+// disagree about which threads count.
+
+export interface HumanOpenThread {
+  /// `""` for a review-level ("general") thread — never a file to visit,
+  /// so the guided tour's per-path walk simply never reaches it (a
+  /// structural omission, not a filter).
+  path: string;
+  id: string;
+  createdAt: number;
+}
+
+/// Every OPEN (unresolved) top-level review thread whose opener is a
+/// human, across every group `GET /reviews/{id}/comments` returned —
+/// `in_diff`/`path` groupings are irrelevant here, this is a flat count
+/// over the whole thread set. `undefined` (query still loading/absent)
+/// degrades to an empty list, never a throw.
+export function humanOpenThreads(comments: ReviewCommentsOut | undefined): HumanOpenThread[] {
+  if (!comments) return [];
+  const out: HumanOpenThread[] = [];
+  for (const g of comments.groups) {
+    for (const c of g.comments) {
+      if (!c.resolved && !isAgentAuthorName(c.author)) {
+        out.push({ path: g.path, id: c.id, createdAt: c.created_at });
+      }
+    }
+  }
+  return out;
 }
 
 export interface HeroAgent {
@@ -235,13 +285,24 @@ export function truncateMiddle(value: string, max = 48): string {
 }
 
 // ── density ───────────────────────────────────────────────────────────────
-// The Room's compact/comfortable toggle. The PREFERENCE's home is
-// localStorage (D16's browser-local ruling — same as the global
-// `data-density` contract); `?density=` only MIRRORS it so a shared link
-// carries it (`lib/branchViews.ts`'s `?density=` precedent, K2a).
+// The Room's compact/comfortable toggle. V80-R0 retired the Room's OWN
+// preference store: `?density=`/the toggle now read and write the GLOBAL
+// `density` pref (`lib/prefs.ts`'s `loadDensity`/`setThemePrefs`, which also
+// drives the app-wide `[data-density="compact"]` attribute) — one
+// preference, not two. `RoomDensity`/`parseRoomDensity` (still TOTAL, still
+// the type every caller passes around)/`nextRoomDensity` are unchanged.
+// `ROOM_DENSITY_STORAGE_KEY` now names a LEGACY key only: `ReviewDetail.tsx`
+// migrates it into the global pref once (read-then-remove) on mount, then
+// never writes it again. `?density=` is still the share-link mirror, but on
+// load it now WRITES THROUGH to the global pref rather than only
+// overriding one page's render (`lib/branchViews.ts`'s `?density=`
+// precedent, K2a, is unaffected — that is a SEPARATE, still-URL-only store
+// for the Branches page).
 
 export type RoomDensity = "comfortable" | "compact";
 
+/// LEGACY key, read once by `ReviewDetail.tsx`'s migration effect and then
+/// removed — never written again.
 export const ROOM_DENSITY_STORAGE_KEY = "kbc:review-room-density";
 
 /// TOTAL parse: anything that is not literally `compact` reads as the

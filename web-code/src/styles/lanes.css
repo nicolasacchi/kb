@@ -191,24 +191,16 @@
   margin: 0 auto;
   padding: 16px 20px 48px;
 }
-.kbc-lanes__title {
-  margin: 0 0 4px;
-  font-size: 18px;
-}
-.kbc-lanes__lede {
-  margin: 0 0 16px;
-  color: var(--ink-mute);
-  font-size: 13px;
-}
 .kbc-lanes__unknown {
   margin: 0 0 12px;
+}
+.kbc-lanes__unknown .kbc-metaline {
   color: var(--warn);
-  font-size: 12px;
 }
 .kbc-lanes__table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 .kbc-lanes__table th,
 .kbc-lanes__table td {
@@ -218,15 +210,19 @@
   vertical-align: top;
 }
 .kbc-lanes__table th {
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
   font-weight: 600;
 }
+.kbc-lanes__table td {
+  font-variant-numeric: tabular-nums;
+}
 .kbc-lanes__id {
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--fs-sm);
+  font-variant-numeric: normal;
 }
 .kbc-lanes__note {
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }

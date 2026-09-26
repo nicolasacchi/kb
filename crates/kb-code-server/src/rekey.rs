@@ -329,6 +329,17 @@ pub const REPO_KEYED_TABLES: &[KeyedTable] = &[
               declaring its owner",
     },
     KeyedTable {
+        table: "repo_stores",
+        class: RepoKeyClass::Meta,
+        repo_column: "repo_id",
+        // V0045 / RS-U1, README §5.1/D2 — the kb-owned internal git store.
+        why: "repo_stores.repo_id says which review store a `[[repos]]` entry is a MEMBER of, \
+              the same opposite-direction shape as `worktrees.repo_id` above (a row declaring \
+              membership, not a row declaring content it owns); D2's shared store means many \
+              repos legitimately point at ONE store, which is exactly why this is meta \
+              registration bookkeeping and not a per-workspace/per-worktree fact to collapse",
+    },
+    KeyedTable {
         table: "recipes_server",
         class: RepoKeyClass::Meta,
         repo_column: "repo",

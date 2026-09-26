@@ -764,3 +764,117 @@ async fn warm_boot_fixture_settles_to_exact_counts_via_api_repos() {
         "expected at least the two functions (lib.rs, app.py): {repo:?}"
     );
 }
+
+/// V77-P2 (task 4, E6) — `GET /api/repos` shows `catching_up: true` while
+/// the boot walk is in flight and flips to `false` with `settled_at` set
+/// once it drains.
+///
+/// A first version of this test bought "enough time to observe the
+/// mid-walk state" purely with a large fixture (3,000 tracked files) and
+/// paid for it with real flakiness: measured on this repo's heavily
+/// contended shared dev box (several concurrent sibling builds saturating
+/// one IO-bound disk under `nice`/`ionice`), real per-file walk throughput
+/// fell as low as ~3.6 files/s — a >1-2 order-of-magnitude slowdown from
+/// the low-contention case a CI runner should see — which blew even a
+/// generous 240s deadline. Host throughput is exactly the thing this test
+/// must NOT depend on to pass reliably, so it now uses `sink::
+/// test_chunk_delay`'s hook (`KB_CODE_TEST_CHUNK_DELAY_MS`) to force a
+/// fixed, host-speed-INDEPENDENT floor on how long the walk takes, and
+/// shrinks the fixture to just over one `RECONCILE_CHUNK_SIZE` chunk (two
+/// chunks total) so real per-file processing cost — the part still at the
+/// mercy of this machine's actual speed — stays small regardless. The
+/// daemon returns from `serve_on_random_port_with_paths` the instant its
+/// listener is bound, before the boot-walk enqueue task has necessarily
+/// even run its first iteration (see `lib.rs::bind_and_spawn`'s doc), so
+/// the first `GET /api/repos` this test issues is already racing a walk
+/// that has, at best, barely started — the delay hook is what turns that
+/// race into a sure thing instead of a coin flip on host speed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catching_up_is_true_during_the_boot_walk_and_settles_once_drained() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    init_repo(&dir);
+
+    // A bit over one RECONCILE_CHUNK_SIZE (256) chunk — two chunks total,
+    // so there is always at least one more chunk left after the first
+    // completes (the mid-walk window this test asserts on) without a large
+    // fixture's real-processing-time cost. Cleared even on an early
+    // return/panic is NOT guaranteed here (no RAII guard, matching this
+    // file's existing `KB_CODE_TOKEN`/`KB_ALLOW_NO_AUTH` set_var/remove_var
+    // convention in `boot.rs`) — a leaked 300ms-per-chunk floor into a
+    // LATER test in this same process would only ever cost that later
+    // test a bit of extra wall time, never a false pass/fail, so the
+    // small risk is accepted rather than adding new machinery for it.
+    const N: usize = 300;
+    std::env::set_var("KB_CODE_TEST_CHUNK_DELAY_MS", "300");
+    for i in 0..N {
+        std::fs::write(dir.join(format!("gen_{i}.rs")), format!("fn f{i}() {{}}\n")).unwrap();
+    }
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "c1"]);
+
+    let (_tmp, base, _task) = boot_with_repo(&dir, "fixture").await;
+    let client = reqwest::Client::new();
+
+    async fn fetch_repo(client: &reqwest::Client, base: &str) -> serde_json::Value {
+        client
+            .get(format!("{base}/api/repos"))
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["repos"][0]
+            .clone()
+    }
+
+    let mut saw_catching_up = false;
+    let mut saw_null_settled_at_while_catching_up = false;
+    // Generous relative to the ~600ms the delay hook guarantees (2 chunks
+    // x 300ms) plus this file's usual 10-20s margin for real daemon/OS
+    // overhead — not the 240s the pre-delay-hook version needed to survive
+    // real per-file throughput on a bad night.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let repo = fetch_repo(&client, &base).await;
+        let catching_up = repo["catching_up"].as_bool().unwrap_or(false);
+        if catching_up {
+            saw_catching_up = true;
+            if repo["settled_at"].is_null() {
+                saw_null_settled_at_while_catching_up = true;
+            }
+        } else if saw_catching_up {
+            // Settled AFTER we observed it catching up — the transition
+            // this test exists to prove.
+            assert!(
+                repo["settled_at"].as_i64().is_some(),
+                "settled_at must be set once catching_up flips false: {repo:?}"
+            );
+            assert!(
+                repo["file_count"].as_u64().unwrap_or(0) >= N as u64,
+                "expected the settled walk to have indexed every generated file: {repo:?}"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "boot walk never settled within the test deadline \
+             (saw_catching_up={saw_catching_up}); last repo entry: {repo:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    std::env::remove_var("KB_CODE_TEST_CHUNK_DELAY_MS");
+
+    assert!(
+        saw_catching_up,
+        "expected to observe catching_up:true at least once during the boot walk \
+         of {N} files — the KB_CODE_TEST_CHUNK_DELAY_MS hook above should make \
+         this host-speed-independent; if it still flakes, the delay needs to grow"
+    );
+    assert!(
+        saw_null_settled_at_while_catching_up,
+        "settled_at must be null while still catching up"
+    );
+}

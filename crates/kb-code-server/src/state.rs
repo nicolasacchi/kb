@@ -79,6 +79,14 @@ pub struct AppState {
     /// without requiring `MirrorWatcher: Clone`.
     #[allow(dead_code)]
     pub watcher: Arc<MirrorWatcher>,
+    /// V77-P2 — the sink worker's in-memory per-repo `catching_up`/
+    /// `settled_at` registry (`sink::RepoActivity`), the answer to E6's
+    /// "queued behind a 20-minute walk, or broken?" question. Mirrors the
+    /// unpersisted `rekey` field above's own "an honesty flag, never a
+    /// capability" posture — nothing here is written by a route, only read
+    /// (`routes::repos`); see `sink`'s module doc for who writes it and
+    /// when.
+    pub repo_activity: Arc<crate::sink::RepoActivity>,
     /// W2.1 — the files/symbols search lanes' per-boot in-memory caches
     /// (`search`'s module doc). `Arc`-wrapped for the same reason `store`
     /// is: cheap to clone into `AppState`'s own `Clone` impl, shared
@@ -280,6 +288,14 @@ pub struct AppState {
     /// process, swept 1 h after creation. Same guard discipline as
     /// `branch_base_cache` above.
     pub review_jobs: Arc<crate::review_jobs::ReviewJobs>,
+    // ── RS-U3 (review store) — begin ──
+    /// RS-U3 — the kb-owned internal review stores (`crate::review_store::
+    /// ReviewStores`): registration, seeding, the per-(store, remote)
+    /// fetch mutex and per-store ops mutex, and the handle API
+    /// (`handle_for_repo`/`admit_mutation`). Per-boot; the durable state
+    /// is `review_stores`/`repo_stores` (V0045).
+    pub review_stores: Arc<crate::review_store::ReviewStores>,
+    // ── RS-U3 (review store) — end ──
 }
 
 pub type SharedState = Arc<AppState>;

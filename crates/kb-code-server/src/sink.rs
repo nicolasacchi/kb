@@ -6,8 +6,8 @@
 //! # Shape
 //!
 //! [`IndexSink`] is a thin, synchronous producer — every `MirrorSink` method
-//! is a `blocking_send` onto a bounded `tokio::mpsc` channel (`SinkMsg`).
-//! `blocking_send` is legal here for the exact reason
+//! is a `blocking_send` onto a bounded `tokio::mpsc` channel. `blocking_send`
+//! is legal here for the exact reason
 //! `kb_core::indexer::IngestSink::blocking_send` documents its own use: the
 //! caller (`mirror`'s drain thread) is a plain OS thread, never a tokio
 //! runtime worker, so blocking it to apply back-pressure is safe and
@@ -17,6 +17,60 @@
 //! tree-sitter parsing happens, keeping the watcher's drain thread free to
 //! keep draining `notify` events (including OTHER repos' git-diff/dirty-check
 //! subprocess work) while a big file is being parsed.
+//!
+//! # Fairness (V77-P2, the E6 finding)
+//!
+//! Before this unit, `lib.rs::bind_and_spawn` ran a SECOND, unqueued walker:
+//! a direct `spawn_blocking` task called straight into `ingest`, racing this
+//! module's own worker for `Store`'s single connection with no scheduling
+//! relationship between the two at all — a live edit made during that boot
+//! walk could sit behind the ENTIRE walk (measured: ~9 minutes on a large
+//! mirror) with `GET /api/repos` reporting nothing to explain why. There is
+//! now exactly ONE walker (this worker) and exactly ONE queue, split into a
+//! FAST lane ([`FastMsg`]: `Upsert`/`Remove`/`HeadMoved` — the live-edit
+//! path, still bounded by [`QUEUE_CAPACITY`]) and a SLOW lane ([`SlowMsg`]:
+//! `FullReconcile` and the boot walk's own `BootWalk`, bounded by
+//! [`SLOW_QUEUE_CAPACITY`]). `bind_and_spawn`'s former direct call is now
+//! just another SLOW-lane producer ([`IndexSink::enqueue_boot_walk`]) —
+//! see that method's doc.
+//!
+//! A slow-lane message is never processed in one unbroken pass: it is
+//! chunked into bounded sub-batches ([`RECONCILE_CHUNK_SIZE`] paths/files
+//! per chunk, both for a `FullReconcile`'s changed/removed set and for the
+//! boot walk's flattened file list — see [`ReconcileJob`]/[`BootJob`]).
+//! [`worker`]'s scheduling loop always drains up to [`FAST_BURST_LIMIT`]
+//! fast-lane messages BEFORE giving the active slow job its next chunk, on
+//! every iteration — a FAIR interleave, not a strict priority: a live-edit
+//! storm gets serviced promptly (bounded fast-message latency, regardless
+//! of how large the queued slow job is) but can never livelock the slow
+//! job forever, because the loop always attempts exactly one slow chunk
+//! per burst regardless of how much fast-lane traffic remains. This is
+//! queue-level fairness only — `Store`'s own single connection/mutex is
+//! still the final serialization point every message (fast or slow) goes
+//! through, unchanged.
+//!
+//! Ordering is preserved across the two lanes: `mirror::MirrorSink`'s
+//! contract that a `head_moved` (fast) is always immediately followed by
+//! its own `full_reconcile` (slow) call, from the SAME single producer
+//! thread, means a `head_moved` is always already sitting in (or already
+//! drained from) the fast lane by the time the worker picks up the paired
+//! `full_reconcile` — and the scheduling loop always attempts a fast drain
+//! immediately before processing ANY slow chunk (first or continuation),
+//! so `repo.head_moved`'s bus event can never be observed after the first
+//! `mirror.updated` chunk event for the same operation.
+//!
+//! [`RepoActivity`] is the resulting honesty signal: an in-memory,
+//! per-repo `pending` counter incremented when a slow-lane message is
+//! ENQUEUED and decremented when the worker finishes EVERY chunk of it —
+//! `catching_up` is simply `pending > 0`. Scoped to the slow lane only (an
+//! ordinary live edit completing in ~2.7s is not "catching up" on
+//! anything); read by `routes::repos` for `GET /api/repos`'s
+//! `catching_up`/`settled_at` fields, mirroring the unpersisted `rekey`
+//! lifecycle flag's own "an honesty flag, never a capability" posture
+//! (`routes.rs`). [`test_chunk_delay`] is an off-by-default test hook
+//! (`KB_CODE_TEST_CHUNK_DELAY_MS`) letting the `boot_e2e` integration test
+//! for this signal force a host-speed-independent walk duration — see that
+//! function's own doc.
 //!
 //! # Backpressure choice
 //!
@@ -33,49 +87,62 @@
 //! reason. Sized well above what a single debounced flush realistically
 //! produces (`notify-debouncer-full` already coalesces a burst within its
 //! own debounce window; a `full_reconcile` batches an entire changed/removed
-//! set into ONE `SinkMsg`, not one per path) — a persistently-full queue
+//! set into ONE message, not one per path) — a persistently-full queue
 //! means the worker itself is the bottleneck (e.g. parsing a genuinely huge
 //! churn), not a burst size this margin should have absorbed.
+//! [`SLOW_QUEUE_CAPACITY`] is far smaller: a slow-lane message represents a
+//! WHOLE repo's worth of work, not one path, so even a large configured
+//! fleet plus a burst of concurrent gate-exit reconciles is nowhere near
+//! this many outstanding at once — the same never-drop `blocking_send`/
+//! `.send().await` choice applies regardless.
 //!
 //! # Events
 //!
 //! Every store mutation the worker performs also emits onto the shared
 //! `kb_core::events::EventBus` (`GET /api/events`, `router.rs`): `"mirror.
-//! updated" {repo, paths}` after an upsert/remove/reconcile actually touches
-//! the store, and `"repo.head_moved" {repo, old, new}` for every
+//! updated" {repo, paths}` after an upsert/remove/reconcile CHUNK/boot-walk
+//! CHUNK actually touches the store (V77-P2: a slow job now emits one such
+//! event per completed chunk that touched at least one path, rather than a
+//! single event at the very end — a live progress signal for any SSE
+//! listener, and never claimed for a path the V77-P1 fingerprint fast path
+//! merely skipped), and `"repo.head_moved" {repo, old, new}` for every
 //! [`mirror::MirrorSink::head_moved`] call (mirrors `mirror::MirrorSink`'s
 //! own contract: always followed by exactly one `full_reconcile`, so a
-//! `repo.head_moved` frame is always followed by a `mirror.updated` frame
-//! for the same operation, in that order, since both are emitted from the
-//! SAME single-consumer worker loop).
+//! `repo.head_moved` frame is always followed by at least one `mirror.
+//! updated` frame for the same operation, in that order, since both are
+//! emitted from the SAME single-consumer worker loop — see "Fairness"
+//! above).
 //!
 //! # Observability
 //!
-//! [`worker`] processes messages one at a time (see "Shape" above), so the
-//! only way to tell "keeping up" from "falling behind" from the outside is
-//! to watch it: every [`SUMMARY_EVERY_MESSAGES`]-th message (or every
-//! [`SUMMARY_EVERY`] of wall time, whichever comes first — so a quiet queue
-//! still gets a heartbeat) a `tracing::info!` "progress summary" line
-//! reports the window's queue-length high-water mark (sampled via
-//! `Receiver::len()` right after each `recv`, i.e. the backlog still
-//! waiting behind the message just taken) against [`QUEUE_CAPACITY`], plus
-//! the max and average `spawn_blocking` duration for messages processed in
-//! that window. This is DETECTION only — no throttling, no alerting wired
-//! from it yet — enough for an operator or `kb-code fleet`-equivalent log
-//! scrape to notice a bottleneck onset before the queue is actually full.
-//! [`ProgressWindow`] is a plain struct so its arithmetic is unit-testable
-//! without a running channel.
+//! [`worker`] processes one fast message or one slow chunk at a time (see
+//! "Fairness" above), so the only way to tell "keeping up" from "falling
+//! behind" from the outside is to watch it: every [`SUMMARY_EVERY_MESSAGES`]-th
+//! unit processed (or every [`SUMMARY_EVERY`] of wall time, whichever comes
+//! first — so a quiet queue still gets a heartbeat) a `tracing::info!`
+//! "progress summary" line reports the window's fast-queue-length
+//! high-water mark (sampled via `Receiver::len()` right after each
+//! dequeue, i.e. the backlog still waiting behind the message just taken)
+//! against [`QUEUE_CAPACITY`], plus the max and average `spawn_blocking`
+//! duration for units processed in that window. This is DETECTION
+//! only — no throttling, no alerting wired from it yet — enough for an
+//! operator or `kb-code fleet`-equivalent log scrape to notice a
+//! bottleneck onset before the queue is actually full. [`ProgressWindow`]
+//! is a plain struct so its arithmetic is unit-testable without a running
+//! channel. `GET /api/repos`'s `catching_up`/`settled_at` (see "Fairness"
+//! above) is the PER-REPO, always-on complement to this daemon-wide,
+//! log-only signal.
 //!
 //! # Shutdown contract — the dropped `JoinHandle` is a decision, not an oversight
 //!
 //! [`spawn`]'s `JoinHandle` is discarded by every real caller (`lib.rs::
-//! bind_and_spawn`) — the worker task runs detached, and whatever `SinkMsg`s
+//! bind_and_spawn`) — the worker task runs detached, and whatever messages
 //! are still queued (or mid-`spawn_blocking`) at process shutdown are simply
 //! lost with it. This is intentionally NOT a graceful-drain-on-shutdown
 //! design. It doesn't need to be: ADR-3's boot sequence (`lib.rs::
 //! bind_and_spawn`, see that module's doc) already re-walks every
-//! configured repo's `HEAD` tree on EVERY boot — once directly
-//! (`sink::initial_index_one`) and again, redundantly but cheaply (ADR-2's
+//! configured repo's `HEAD` tree on EVERY boot — once via this module's own
+//! boot-walk slow-lane job, and again, redundantly but cheaply (ADR-2's
 //! blob-hash cache skips re-parsing unchanged content), via the live
 //! watcher's own startup reconcile. Any store mutation a dropped queued
 //! message would have made is therefore re-derived from scratch on the very
@@ -85,17 +152,39 @@
 
 use crate::git::GitRepo;
 use crate::ingest;
+use crate::lang;
 use crate::mirror::{MirrorSink, RepoRef};
 use crate::store::{FileRow, Store};
 use kb_core::events::EventBus;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 
-/// See the module doc's "Backpressure choice" section.
+/// See the module doc's "Backpressure choice" section — the FAST lane.
 pub const QUEUE_CAPACITY: usize = 512;
+
+/// See the module doc's "Backpressure choice" section — the SLOW lane.
+const SLOW_QUEUE_CAPACITY: usize = 256;
+
+/// V77-P2 (task 1) — fairness bound: the worker drains at most this many
+/// fast-lane messages before giving the active slow job its next chunk (see
+/// the module doc's "Fairness" section). Large enough that a live-edit
+/// burst still feels effectively immediate between chunks; bounded so a
+/// SUSTAINED fast-lane storm cannot livelock a slow job forever — every
+/// iteration of the scheduling loop attempts exactly one slow chunk after
+/// at most this many fast messages, regardless of how much fast-lane
+/// traffic remains queued.
+const FAST_BURST_LIMIT: usize = 32;
+
+/// V77-P2 (task 1) — slow-lane chunk size: a `FullReconcile`/`BootWalk`
+/// job's path list is processed at most this many entries at a time
+/// between fast-lane drains. Small enough that a live edit queued behind
+/// an in-progress slow job is never stuck for more than "one chunk's worth"
+/// of wall time, matching the design note's own number.
+const RECONCILE_CHUNK_SIZE: usize = 256;
 
 /// Emit a progress summary at least this often, by message count — see the
 /// module doc's "Observability" section. Small enough to surface a
@@ -116,8 +205,8 @@ const SUMMARY_EVERY: Duration = Duration::from_secs(60);
 struct ProgressWindow {
     started: Instant,
     messages: u64,
-    /// Max `Receiver::len()` observed at dequeue time this window — the
-    /// backlog still waiting behind whatever message was just taken.
+    /// Max fast-lane `Receiver::len()` observed at dequeue time this window
+    /// — the backlog still waiting behind whatever message was just taken.
     queue_high_water: usize,
     max: Duration,
     total: Duration,
@@ -134,9 +223,9 @@ impl ProgressWindow {
         }
     }
 
-    /// Record one processed message: `queue_len` is the backlog sampled
-    /// right after dequeuing it, `elapsed` is that message's own
-    /// `spawn_blocking` duration.
+    /// Record one processed unit (a fast message or one slow chunk):
+    /// `queue_len` is the fast-lane backlog sampled at that moment,
+    /// `elapsed` is that unit's own `spawn_blocking` duration.
     fn record(&mut self, queue_len: usize, elapsed: Duration) {
         self.messages += 1;
         self.queue_high_water = self.queue_high_water.max(queue_len);
@@ -160,8 +249,11 @@ impl ProgressWindow {
     }
 }
 
+/// The FAST lane (V77-P2) — the live-edit path: `Upsert`/`Remove` from the
+/// watcher, `HeadMoved` from a HEAD change. Drained preferentially (see the
+/// module doc's "Fairness" section) but never exclusively.
 #[derive(Debug)]
-enum SinkMsg {
+enum FastMsg {
     Upsert {
         repo: RepoRef,
         path: PathBuf,
@@ -175,40 +267,122 @@ enum SinkMsg {
         old: Option<gix::ObjectId>,
         new: gix::ObjectId,
     },
+}
+
+/// The SLOW lane (V77-P2) — chunked, bounded-throughput work: the
+/// watcher's own `full_reconcile` calls, and (new in V77-P2)
+/// [`IndexSink::enqueue_boot_walk`]'s boot HEAD-tree walk, which used to
+/// bypass this queue entirely (see the module doc's "Fairness" section).
+#[derive(Debug)]
+enum SlowMsg {
     FullReconcile {
         repo: RepoRef,
         changed: Vec<PathBuf>,
         removed: Vec<PathBuf>,
     },
+    BootWalk {
+        repo_id: i64,
+        repo_name: String,
+        repo_root: PathBuf,
+        occurrences_enabled: bool,
+        is_rails: bool,
+    },
 }
 
-/// The real sink — see the module doc. `Clone` is cheap (an `mpsc::Sender`
-/// clone); `mirror::MirrorWatcher::start` takes `Arc<dyn MirrorSink>`, so in
-/// practice only one clone is ever made, but nothing stops a future caller
-/// (e.g. a manual reindex route) from holding its own clone to push
-/// synthetic observations through the same pipeline.
+/// V77-P2 (task 2) — per-repo `catching_up`/`settled_at`, the answer to
+/// E6's "queued behind a 20-minute walk, or broken?" question. In-memory
+/// and per-boot ONLY — never persisted, never a capability, mirroring
+/// `routes.rs`'s unpersisted `rekey` lifecycle flag ("an honesty flag,
+/// never a capability") and root invariant #10's live-registry posture. A
+/// restart re-derives the same state from a fresh boot walk regardless, so
+/// there is nothing here worth surviving one.
+///
+/// `pending` counts OUTSTANDING slow-lane messages for a repo — incremented
+/// by the PRODUCER at enqueue time (`IndexSink::full_reconcile`/
+/// `enqueue_boot_walk`), decremented by the WORKER once every chunk of that
+/// message has been processed. `catching_up` is simply `pending > 0`; the
+/// FAST lane (individual live edits) never touches this counter at all — an
+/// ordinary edit completing in a couple of seconds is not "catching up" on
+/// anything, and counting it would make the signal noisy rather than
+/// honest. `settled_at` is the unix timestamp of the last transition from
+/// `pending > 0` to `pending == 0`; `None` while `pending > 0` (still
+/// walking) and also `None` for a repo this sink has never seen slow-lane
+/// work for at all — a valid, honest "nothing to catch up on" rather than a
+/// missing-key default standing in for "settled".
+#[derive(Debug, Default)]
+pub struct RepoActivity {
+    inner: parking_lot::Mutex<HashMap<String, ActivityState>>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ActivityState {
+    pending: u32,
+    settled_at: Option<i64>,
+}
+
+impl RepoActivity {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn mark_busy(&self, repo_name: &str) {
+        let mut map = self.inner.lock();
+        let entry = map.entry(repo_name.to_string()).or_default();
+        entry.pending += 1;
+        entry.settled_at = None;
+    }
+
+    fn mark_drained(&self, repo_name: &str) {
+        let mut map = self.inner.lock();
+        if let Some(entry) = map.get_mut(repo_name) {
+            entry.pending = entry.pending.saturating_sub(1);
+            if entry.pending == 0 {
+                entry.settled_at = Some(chrono::Utc::now().timestamp());
+            }
+        }
+    }
+
+    /// `(catching_up, settled_at)` for `GET /api/repos` — see this struct's
+    /// own doc for the absent-key case.
+    pub fn snapshot(&self, repo_name: &str) -> (bool, Option<i64>) {
+        let map = self.inner.lock();
+        match map.get(repo_name) {
+            Some(entry) => (entry.pending > 0, entry.settled_at),
+            None => (false, None),
+        }
+    }
+}
+
+/// The real sink — see the module doc. `Clone` is cheap (two `mpsc::Sender`
+/// clones plus an `Arc`); `mirror::MirrorWatcher::start` takes `Arc<dyn
+/// MirrorSink>`, so in practice only one clone is ever made that way, but
+/// `bind_and_spawn` holds its own clone too (see [`IndexSink::
+/// enqueue_boot_walk`]), and nothing stops a future caller from holding
+/// another to push synthetic observations through the same pipeline.
 #[derive(Clone)]
 pub struct IndexSink {
-    tx: mpsc::Sender<SinkMsg>,
+    fast_tx: mpsc::Sender<FastMsg>,
+    slow_tx: mpsc::Sender<SlowMsg>,
+    activity: Arc<RepoActivity>,
 }
 
 impl MirrorSink for IndexSink {
     fn upsert_path(&self, repo: &RepoRef, path: &Path) {
-        let _ = self.tx.blocking_send(SinkMsg::Upsert {
+        let _ = self.fast_tx.blocking_send(FastMsg::Upsert {
             repo: repo.clone(),
             path: path.to_path_buf(),
         });
     }
 
     fn remove_path(&self, repo: &RepoRef, path: &Path) {
-        let _ = self.tx.blocking_send(SinkMsg::Remove {
+        let _ = self.fast_tx.blocking_send(FastMsg::Remove {
             repo: repo.clone(),
             path: path.to_path_buf(),
         });
     }
 
     fn head_moved(&self, repo: &RepoRef, old: Option<gix::ObjectId>, new: gix::ObjectId) {
-        let _ = self.tx.blocking_send(SinkMsg::HeadMoved {
+        let _ = self.fast_tx.blocking_send(FastMsg::HeadMoved {
             repo: repo.clone(),
             old,
             new,
@@ -216,7 +390,8 @@ impl MirrorSink for IndexSink {
     }
 
     fn full_reconcile(&self, repo: &RepoRef, changed: Vec<PathBuf>, removed: Vec<PathBuf>) {
-        let _ = self.tx.blocking_send(SinkMsg::FullReconcile {
+        self.activity.mark_busy(&repo.name);
+        let _ = self.slow_tx.blocking_send(SlowMsg::FullReconcile {
             repo: repo.clone(),
             changed,
             removed,
@@ -224,13 +399,48 @@ impl MirrorSink for IndexSink {
     }
 }
 
-/// Start the worker task and return the [`IndexSink`] handle to feed it —
-/// `bind_and_spawn` passes the sink to `mirror::MirrorWatcher::start` and
-/// lets the returned `JoinHandle` run detached (a tokio task keeps running
-/// once spawned regardless of whether its handle is held; the task's own
-/// exit condition — every `IndexSink` clone dropped, closing the channel —
-/// only happens at daemon shutdown, when the `MirrorWatcher` itself is
-/// dropped too).
+impl IndexSink {
+    /// V77-P2 (task 1) — enqueue the boot HEAD-tree walk for one repo onto
+    /// the SAME slow lane `full_reconcile` uses, so `bind_and_spawn`'s boot
+    /// task is no longer a second walker racing this worker for `Store`'s
+    /// mutex outside any fairness scheme (see the module doc's "Fairness"
+    /// section) — it is now just another producer of this one queue.
+    /// `async`, not `blocking_send`: the only real caller is
+    /// `bind_and_spawn` itself (already an async fn, never the watcher's
+    /// `std::thread` drain loop that the `MirrorSink` methods above are
+    /// written for), and this call is a cheap channel send, not real work —
+    /// the actual walk happens inside [`worker`] once this message is
+    /// dequeued.
+    pub async fn enqueue_boot_walk(
+        &self,
+        repo_id: i64,
+        repo_name: String,
+        repo_root: PathBuf,
+        occurrences_enabled: bool,
+        is_rails: bool,
+    ) {
+        self.activity.mark_busy(&repo_name);
+        let _ = self
+            .slow_tx
+            .send(SlowMsg::BootWalk {
+                repo_id,
+                repo_name,
+                repo_root,
+                occurrences_enabled,
+                is_rails,
+            })
+            .await;
+    }
+}
+
+/// Start the worker task and return the [`IndexSink`] handle plus the
+/// shared [`RepoActivity`] registry `routes::repos` reads — `bind_and_spawn`
+/// passes the sink to `mirror::MirrorWatcher::start` (and keeps its own
+/// clone to drive [`IndexSink::enqueue_boot_walk`]) and lets the returned
+/// `JoinHandle` run detached (a tokio task keeps running once spawned
+/// regardless of whether its handle is held; the task's own exit condition
+/// — every `IndexSink` clone dropped, closing both channels — only happens
+/// at daemon shutdown, when the `MirrorWatcher` itself is dropped too).
 /// `is_rails` (PRR-N3) is a per-repo-NAME map, resolved ONCE by the caller
 /// (`lib.rs::bind_and_spawn`, via `frameworks::rails::detect_is_rails` +
 /// `config::RailsLensSection::repo_enabled`) — a plain `HashMap` lookup per
@@ -240,6 +450,11 @@ impl MirrorSink for IndexSink {
 /// per-message: this worker drains ONE file-change event at a time, so a
 /// `Gemfile`+`routes.rb` re-check on every keystroke-triggered save in an
 /// active Rails repo would defeat the whole point of caching it.
+/// `symbol_index` (V77-P2) is the SAME per-boot `SymbolIndex` instance
+/// `AppState` shares — the worker warms it for a repo right after that
+/// repo's boot-walk job finishes, mirroring what `lib.rs`'s old direct
+/// boot task used to do inline (see [`finish_boot_job`]).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     store: Arc<Store>,
     repo_ids: HashMap<String, i64>,
@@ -247,42 +462,112 @@ pub fn spawn(
     occurrences: crate::config::OccurrencesSection,
     is_rails: HashMap<String, bool>,
     comment_keywords: crate::comments::KeywordSet,
-) -> (IndexSink, tokio::task::JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
+    symbol_index: Arc<crate::search::SymbolIndex>,
+    // V77-P3 (Task 1) — `[indexer] walk_workers` (already `.max(1)`-coerced
+    // by `config::IndexerSection::resolved_walk_workers`), bounding the
+    // boot walk's per-chunk parallel extraction fan-out.
+    walk_workers: usize,
+) -> (IndexSink, Arc<RepoActivity>, tokio::task::JoinHandle<()>) {
+    let (fast_tx, fast_rx) = mpsc::channel(QUEUE_CAPACITY);
+    let (slow_tx, slow_rx) = mpsc::channel(SLOW_QUEUE_CAPACITY);
+    let activity = RepoActivity::new();
+    let sink = IndexSink {
+        fast_tx,
+        slow_tx,
+        activity: activity.clone(),
+    };
     let handle = tokio::spawn(worker(
-        rx,
+        fast_rx,
+        slow_rx,
         store,
         Arc::new(repo_ids),
         bus,
         Arc::new(occurrences),
         Arc::new(is_rails),
         Arc::new(comment_keywords),
+        symbol_index,
+        activity.clone(),
+        walk_workers,
     ));
-    (IndexSink { tx }, handle)
+    (sink, activity, handle)
 }
 
-/// The worker loop. Each message's real work (fs-read + tree-sitter-parse +
-/// sqlite-write) is genuinely blocking, so it runs via `spawn_blocking` on
-/// tokio's blocking thread pool rather than inline on this task's own async
-/// worker thread — that distinction matters once a SINGLE message carries a
-/// large batch: a `FullReconcile`'s `changed` set can be an entire repo's
-/// worth of paths (the watcher's own startup reconcile walks the whole
-/// `HEAD` tree, same as `bind_and_spawn`'s initial-index — see that fn's
-/// doc), and processing thousands of files inline with no `.await` point in
-/// between would starve every OTHER task sharing this runtime's worker
-/// threads for however long the batch takes, HTTP request handling
-/// included. `spawn_blocking` keeps this task itself cheap to poll (just
-/// awaiting a `JoinHandle`) while the real work happens off the async
-/// executor. Messages are still processed ONE AT A TIME, in arrival order —
-/// this loop awaits each `spawn_blocking` before draining the next message,
-/// preserving the ordering `mirror::MirrorSink`'s contract relies on (a
-/// `head_moved` is always immediately followed by its paired
-/// `full_reconcile`; processing anything out of order here would let a
-/// later message's store write race ahead of an earlier one for the same
-/// repo). `blocking_send`'s backpressure (see the module doc) is unaffected
-/// either way — the mpsc doesn't care which thread drains it.
+/// One repo-relative path/oid pair operated on by a [`ReconcileJob`] chunk
+/// — `Changed` re-reads and re-indexes (subject to the fs-mtime fast path,
+/// V77-P1), `Removed` deletes.
+enum ReconcileOp {
+    Changed(PathBuf),
+    Removed(PathBuf),
+}
+
+/// A `FullReconcile` message being processed a bounded chunk at a time
+/// (V77-P2, task 1). `fingerprints` is fetched ONCE when the job starts
+/// (`start_reconcile_job`) — the same "one query for the whole repo" shape
+/// V77-P1 already established for this path — and shared (via `Arc`, cheap
+/// to clone per chunk) across every chunk rather than re-queried.
+struct ReconcileJob {
+    repo: RepoRef,
+    repo_id: i64,
+    fingerprints: Arc<HashMap<String, FileRow>>,
+    ops: VecDeque<ReconcileOp>,
+    occurrences_enabled: bool,
+    is_rails: bool,
+}
+
+/// A boot HEAD-tree walk (V77-P2, task 1 — formerly `lib.rs`'s direct,
+/// unqueued `initial_index_one` call) being processed a bounded chunk at a
+/// time. `entries` is the flattened `(path, oid)` list from
+/// `ingest::list_tree_files`, fetched ONCE when the job starts
+/// (`start_boot_job`) — tree-object reads only, no blob content, the same
+/// cheap read the old unchunked `walk_dir` always did before ever deciding
+/// whether to read a blob. `stats` accumulates across chunks
+/// (`WalkStats::merge`) so the final "kb-code initial index complete" log
+/// line stays byte-identical in shape to the old single-pass total.
+/// `derived_preload` (V77-P3, Task 0) is the same "one query, not one per
+/// file" preload `fingerprints` already is, for the derived-status half of
+/// the fast-path check — see `ingest::DerivedPreload`'s doc. `walk_workers`
+/// (V77-P3, Task 1) bounds `step_boot_job`'s per-chunk parallel extraction
+/// fan-out.
+struct BootJob {
+    repo_id: i64,
+    repo_name: String,
+    repo_root: PathBuf,
+    occurrences_enabled: bool,
+    is_rails: bool,
+    fingerprints: Arc<HashMap<String, (String, String)>>,
+    derived_preload: Arc<ingest::DerivedPreload>,
+    entries: VecDeque<(String, String)>,
+    stats: ingest::WalkStats,
+    walk_workers: usize,
+}
+
+/// One slow-lane job in progress — see [`ReconcileJob`]/[`BootJob`].
+enum SlowJob {
+    Reconcile(ReconcileJob),
+    Boot(BootJob),
+}
+
+impl SlowJob {
+    fn repo_name(&self) -> &str {
+        match self {
+            SlowJob::Reconcile(j) => &j.repo.name,
+            SlowJob::Boot(j) => &j.repo_name,
+        }
+    }
+}
+
+/// The worker loop (V77-P2 rewrite — see the module doc's "Fairness"
+/// section for the scheduling contract this implements). Real work
+/// (fs/ODB reads, tree-sitter parsing, sqlite writes) always runs via
+/// `spawn_blocking`, never inline on this task's own async worker thread —
+/// see the pre-V77-P2 module doc note this carries forward: a single slow
+/// chunk can still be a couple hundred files, and processing that with no
+/// `.await` point in between would starve every OTHER task sharing this
+/// runtime's worker threads, HTTP request handling included.
+#[allow(clippy::too_many_arguments)]
 async fn worker(
-    mut rx: mpsc::Receiver<SinkMsg>,
+    mut fast_rx: mpsc::Receiver<FastMsg>,
+    mut slow_rx: mpsc::Receiver<SlowMsg>,
     store: Arc<Store>,
     repo_ids: Arc<HashMap<String, i64>>,
     bus: Arc<EventBus>,
@@ -294,67 +579,160 @@ async fn worker(
     // vocabulary can never differ between the boot walk and a later
     // watcher event.
     comment_keywords: Arc<crate::comments::KeywordSet>,
+    symbol_index: Arc<crate::search::SymbolIndex>,
+    activity: Arc<RepoActivity>,
+    // V77-P3 (Task 1) — `[indexer] walk_workers`, resolved ONCE at boot
+    // (same no-live-reload posture as `comment_keywords`/`occurrences`) and
+    // threaded to every `BootJob` this worker starts.
+    walk_workers: usize,
 ) {
     let mut processed_total: u64 = 0;
     let mut window = ProgressWindow::new();
-    while let Some(msg) = rx.recv().await {
-        // Backlog still queued behind the message just taken — see the
-        // module doc's "Observability" section.
-        let queue_len = rx.len();
-        let store = store.clone();
-        let repo_ids = repo_ids.clone();
-        let bus = bus.clone();
-        let occurrences = occurrences.clone();
-        let is_rails = is_rails.clone();
-        let comment_keywords = comment_keywords.clone();
-        let started = Instant::now();
-        let outcome = tokio::task::spawn_blocking(move || match msg {
-            SinkMsg::Upsert { repo, path } => {
-                let occurrences_enabled = occurrences.repo_enabled(&repo.name);
-                let is_rails_flag = is_rails.get(&repo.name).copied().unwrap_or(false);
-                handle_upsert(
-                    &store,
-                    &repo_ids,
-                    &bus,
-                    &repo,
-                    &path,
-                    occurrences_enabled,
-                    is_rails_flag,
-                    &comment_keywords,
-                )
+    let mut current_job: Option<SlowJob> = None;
+    let mut fast_closed = false;
+    let mut slow_closed = false;
+
+    loop {
+        // 1. Drain up to FAST_BURST_LIMIT fast-lane messages, or until the
+        //    lane is momentarily empty — see the module doc's "Fairness"
+        //    section.
+        for _ in 0..FAST_BURST_LIMIT {
+            match fast_rx.try_recv() {
+                Ok(msg) => {
+                    let queue_len = fast_rx.len();
+                    let started = Instant::now();
+                    process_fast(
+                        msg,
+                        &store,
+                        &repo_ids,
+                        &bus,
+                        &occurrences,
+                        &is_rails,
+                        &comment_keywords,
+                    )
+                    .await;
+                    processed_total += 1;
+                    window.record(queue_len, started.elapsed());
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    fast_closed = true;
+                    break;
+                }
             }
-            SinkMsg::Remove { repo, path } => handle_remove(&store, &repo_ids, &bus, &repo, &path),
-            SinkMsg::HeadMoved { repo, old, new } => handle_head_moved(&bus, &repo, old, new),
-            SinkMsg::FullReconcile {
-                repo,
-                changed,
-                removed,
-            } => {
-                let occurrences_enabled = occurrences.repo_enabled(&repo.name);
-                let is_rails_flag = is_rails.get(&repo.name).copied().unwrap_or(false);
-                handle_full_reconcile(
-                    &store,
-                    &repo_ids,
-                    &bus,
-                    &repo,
+        }
+
+        // 2. If there's no active slow job, try to pick one up
+        //    (non-blocking — an empty slow lane must never stall the fast
+        //    lane's own next burst).
+        if current_job.is_none() {
+            match slow_rx.try_recv() {
+                Ok(SlowMsg::FullReconcile {
+                    repo,
                     changed,
                     removed,
+                }) => {
+                    current_job = Some(SlowJob::Reconcile(
+                        start_reconcile_job(
+                            &store,
+                            &repo_ids,
+                            &occurrences,
+                            &is_rails,
+                            repo,
+                            changed,
+                            removed,
+                        )
+                        .await,
+                    ));
+                }
+                Ok(SlowMsg::BootWalk {
+                    repo_id,
+                    repo_name,
+                    repo_root,
                     occurrences_enabled,
-                    is_rails_flag,
-                    &comment_keywords,
-                )
+                    is_rails: is_rails_flag,
+                }) => {
+                    match start_boot_job(
+                        &store,
+                        repo_id,
+                        repo_name.clone(),
+                        repo_root,
+                        occurrences_enabled,
+                        is_rails_flag,
+                        walk_workers,
+                    )
+                    .await
+                    {
+                        Some(job) => current_job = Some(SlowJob::Boot(job)),
+                        None => activity.mark_drained(&repo_name),
+                    }
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => slow_closed = true,
             }
-        })
-        .await;
-        let elapsed = started.elapsed();
-        processed_total += 1;
-        window.record(queue_len, elapsed);
-        if let Err(e) = outcome {
-            // Only a panic inside the closure (or a runtime shutdown race)
-            // reaches here — every `handle_*` fn already logs its own
-            // errors internally and never propagates a `Result`.
-            tracing::warn!(error = %e, "kb-code sink worker: blocking task panicked");
+            if current_job.is_some() {
+                // A job picked up here gets its FIRST chunk only after the
+                // next iteration's fast drain: a paired `head_moved` that
+                // landed in the fast lane between step 1 and this pick-up
+                // must still be observed before the reconcile's first
+                // `mirror.updated` chunk — the ordering the module doc's
+                // "Fairness" section promises for first AND continuation
+                // chunks alike.
+                continue;
+            }
         }
+
+        // 3. If a slow job is active, give it exactly one chunk this
+        //    iteration — always attempted, regardless of how much fast-lane
+        //    traffic step 1 just drained (the livelock guard).
+        if let Some(job) = current_job.as_mut() {
+            let started = Instant::now();
+            let done = step_slow_job(job, &store, &bus, &comment_keywords).await;
+            processed_total += 1;
+            window.record(fast_rx.len(), started.elapsed());
+            if done {
+                let job = current_job.take().expect("just matched Some");
+                let repo_name = job.repo_name().to_string();
+                match job {
+                    SlowJob::Reconcile(_) => {}
+                    SlowJob::Boot(job) => finish_boot_job(job, &store, &symbol_index).await,
+                }
+                activity.mark_drained(&repo_name);
+            }
+        } else if !(fast_closed && slow_closed) {
+            // Nothing to do right now — block on whichever lane produces
+            // something next, rather than spinning.
+            tokio::select! {
+                biased;
+                msg = fast_rx.recv(), if !fast_closed => match msg {
+                    Some(msg) => {
+                        let queue_len = fast_rx.len();
+                        let started = Instant::now();
+                        process_fast(msg, &store, &repo_ids, &bus, &occurrences, &is_rails, &comment_keywords).await;
+                        processed_total += 1;
+                        window.record(queue_len, started.elapsed());
+                    }
+                    None => fast_closed = true,
+                },
+                msg = slow_rx.recv(), if !slow_closed => match msg {
+                    Some(SlowMsg::FullReconcile { repo, changed, removed }) => {
+                        current_job = Some(SlowJob::Reconcile(
+                            start_reconcile_job(&store, &repo_ids, &occurrences, &is_rails, repo, changed, removed).await,
+                        ));
+                    }
+                    Some(SlowMsg::BootWalk { repo_id, repo_name, repo_root, occurrences_enabled, is_rails: is_rails_flag }) => {
+                        match start_boot_job(&store, repo_id, repo_name.clone(), repo_root, occurrences_enabled, is_rails_flag, walk_workers).await {
+                            Some(job) => current_job = Some(SlowJob::Boot(job)),
+                            None => activity.mark_drained(&repo_name),
+                        }
+                    }
+                    None => slow_closed = true,
+                },
+            }
+        } else {
+            break;
+        }
+
         if window.due() {
             tracing::info!(
                 processed_total,
@@ -374,6 +752,572 @@ async fn worker(
     );
 }
 
+/// Process exactly one [`FastMsg`] via `spawn_blocking` — unchanged
+/// per-message dispatch shape from the pre-V77-P2 worker, just scoped to
+/// the fast lane's three variants.
+async fn process_fast(
+    msg: FastMsg,
+    store: &Arc<Store>,
+    repo_ids: &Arc<HashMap<String, i64>>,
+    bus: &Arc<EventBus>,
+    occurrences: &Arc<crate::config::OccurrencesSection>,
+    is_rails: &Arc<HashMap<String, bool>>,
+    comment_keywords: &Arc<crate::comments::KeywordSet>,
+) {
+    let store = store.clone();
+    let repo_ids = repo_ids.clone();
+    let bus = bus.clone();
+    let occurrences = occurrences.clone();
+    let is_rails = is_rails.clone();
+    let comment_keywords = comment_keywords.clone();
+    let outcome = tokio::task::spawn_blocking(move || match msg {
+        FastMsg::Upsert { repo, path } => {
+            let occurrences_enabled = occurrences.repo_enabled(&repo.name);
+            let is_rails_flag = is_rails.get(&repo.name).copied().unwrap_or(false);
+            handle_upsert(
+                &store,
+                &repo_ids,
+                &bus,
+                &repo,
+                &path,
+                occurrences_enabled,
+                is_rails_flag,
+                &comment_keywords,
+            )
+        }
+        FastMsg::Remove { repo, path } => handle_remove(&store, &repo_ids, &bus, &repo, &path),
+        FastMsg::HeadMoved { repo, old, new } => handle_head_moved(&bus, &repo, old, new),
+    })
+    .await;
+    if let Err(e) = outcome {
+        // Only a panic inside the closure (or a runtime shutdown race)
+        // reaches here — every `handle_*` fn already logs its own errors
+        // internally and never propagates a `Result`.
+        tracing::warn!(error = %e, "kb-code sink worker: blocking task panicked");
+    }
+}
+
+/// Give the active slow job exactly one chunk of work. Returns `true` once
+/// the job has no more chunks left (the caller then runs any per-job
+/// finish step and marks the repo drained in [`RepoActivity`]).
+async fn step_slow_job(
+    job: &mut SlowJob,
+    store: &Arc<Store>,
+    bus: &Arc<EventBus>,
+    comment_keywords: &Arc<crate::comments::KeywordSet>,
+) -> bool {
+    let done = match job {
+        SlowJob::Reconcile(job) => step_reconcile_job(job, store, bus, comment_keywords).await,
+        SlowJob::Boot(job) => step_boot_job(job, store, bus, comment_keywords).await,
+    };
+    let delay = test_chunk_delay();
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+    done
+}
+
+/// V77-P2 (task 4) test hook — an artificial per-chunk delay, off by
+/// default (`Duration::ZERO` unless `KB_CODE_TEST_CHUNK_DELAY_MS` is set to
+/// a non-zero, valid `u64`). Exists SOLELY so `tests/boot_e2e`'s
+/// `catching_up_is_true_during_the_boot_walk_and_settles_once_drained` (an
+/// EXTERNAL integration-test binary — it links this crate as an ordinary
+/// dependency, so it cannot reach a `#[cfg(test)]`-gated knob defined
+/// inside this crate's own unit-test module) can force the boot walk to
+/// take a controlled, host-speed-INDEPENDENT amount of wall time, rather
+/// than relying solely on a large fixture file count to "buy enough time"
+/// to observe the mid-walk `catching_up: true` state — which flaked hard
+/// on a heavily contended shared dev box (measured: real per-file
+/// throughput fell from an expected high rate to low single digits/s under
+/// concurrent sibling builds fighting for the same disk, blowing even a
+/// multi-minute deadline for a several-thousand-file fixture). An env var
+/// (rather than a new `spawn` parameter or Cargo feature) is the cheapest
+/// way to cross that crate boundary — it needs no threading through
+/// `spawn`'s already-long parameter list and every real deployment simply
+/// never sets it, so this is a pure no-op (`Duration::ZERO`, one cheap
+/// `std::env::var` lookup per chunk) outside that one test. Read fresh
+/// per chunk rather than cached once at `spawn` time — the value never
+/// changes mid-process in practice (only ever set once, before a test's
+/// `boot_with_repo` call), so the repeated lookup costs nothing that
+/// matters and avoids adding a field purely for a test's benefit.
+fn test_chunk_delay() -> Duration {
+    std::env::var("KB_CODE_TEST_CHUNK_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or_default()
+}
+
+/// Resolve `repo_id`/`occurrences_enabled`/`is_rails` for `repo` exactly as
+/// the pre-V77-P2 `worker`'s own `match msg` arm did, then fetch the
+/// whole-repo fingerprint map ONCE (V77-P1's own "one query, not one per
+/// file" shape) and build the chunked job state for one `FullReconcile`
+/// message. An unregistered repo (a race against a config change between
+/// boot and this message's send — the pre-V77-P2 code's own edge case)
+/// yields a job with an EMPTY op queue rather than one that would try to
+/// write under a bogus id: `step_reconcile_job` sees zero ops and reports
+/// the job done on its very first (only) step.
+async fn start_reconcile_job(
+    store: &Arc<Store>,
+    repo_ids: &Arc<HashMap<String, i64>>,
+    occurrences: &Arc<crate::config::OccurrencesSection>,
+    is_rails: &Arc<HashMap<String, bool>>,
+    repo: RepoRef,
+    changed: Vec<PathBuf>,
+    removed: Vec<PathBuf>,
+) -> ReconcileJob {
+    let occurrences_enabled = occurrences.repo_enabled(&repo.name);
+    let is_rails_flag = is_rails.get(&repo.name).copied().unwrap_or(false);
+    let Some(&repo_id) = repo_ids.get(&repo.name) else {
+        tracing::warn!(
+            repo = %repo.name,
+            "kb-code sink: reconcile for an unregistered repo — skipping",
+        );
+        return ReconcileJob {
+            repo,
+            repo_id: -1,
+            fingerprints: Arc::new(HashMap::new()),
+            ops: VecDeque::new(),
+            occurrences_enabled,
+            is_rails: is_rails_flag,
+        };
+    };
+
+    let store2 = store.clone();
+    let fingerprints: HashMap<String, FileRow> = tokio::task::spawn_blocking(move || {
+        store2
+            .list_files(repo_id)
+            .map(|rows| rows.into_iter().map(|f| (f.path.clone(), f)).collect())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+
+    let mut ops = VecDeque::with_capacity(changed.len() + removed.len());
+    ops.extend(changed.into_iter().map(ReconcileOp::Changed));
+    ops.extend(removed.into_iter().map(ReconcileOp::Removed));
+
+    ReconcileJob {
+        repo,
+        repo_id,
+        fingerprints: Arc::new(fingerprints),
+        ops,
+        occurrences_enabled,
+        is_rails: is_rails_flag,
+    }
+}
+
+/// One chunk of a [`ReconcileJob`]. Returns `true` once `ops` is empty.
+async fn step_reconcile_job(
+    job: &mut ReconcileJob,
+    store: &Arc<Store>,
+    bus: &Arc<EventBus>,
+    comment_keywords: &Arc<crate::comments::KeywordSet>,
+) -> bool {
+    let take = job.ops.len().min(RECONCILE_CHUNK_SIZE);
+    let chunk: Vec<ReconcileOp> = job.ops.drain(..take).collect();
+    if chunk.is_empty() {
+        return true;
+    }
+    let repo = job.repo.clone();
+    let repo_id = job.repo_id;
+    let fingerprints = job.fingerprints.clone();
+    let occurrences_enabled = job.occurrences_enabled;
+    let is_rails = job.is_rails;
+    let store2 = store.clone();
+    let comment_keywords2 = comment_keywords.clone();
+    let touched = tokio::task::spawn_blocking(move || {
+        let mut touched = Vec::new();
+        for op in chunk {
+            match op {
+                ReconcileOp::Changed(rel) => reconcile_one_changed(
+                    &store2,
+                    &repo,
+                    repo_id,
+                    &rel,
+                    &fingerprints,
+                    occurrences_enabled,
+                    is_rails,
+                    &comment_keywords2,
+                    &mut touched,
+                ),
+                ReconcileOp::Removed(rel) => {
+                    reconcile_one_removed(&store2, &repo, repo_id, &rel, &mut touched)
+                }
+            }
+        }
+        touched
+    })
+    .await
+    .unwrap_or_default();
+    if !touched.is_empty() {
+        emit_mirror_updated(bus, &job.repo.name, &touched);
+    }
+    job.ops.is_empty()
+}
+
+/// List the repo's tracked files ONCE (tree-object reads only — no blob
+/// content, V77-P2) and build the chunked boot-walk job state. `None` on
+/// any failure to open the repo or list its tree (an unborn HEAD, a
+/// vanished repo root, …) — logged, matching the old direct boot task's
+/// blanket "log and skip this repo" posture.
+async fn start_boot_job(
+    store: &Arc<Store>,
+    repo_id: i64,
+    repo_name: String,
+    repo_root: PathBuf,
+    occurrences_enabled: bool,
+    is_rails: bool,
+    walk_workers: usize,
+) -> Option<BootJob> {
+    let store2 = store.clone();
+    let repo_root2 = repo_root.clone();
+    let outcome = tokio::task::spawn_blocking(move || -> ingest::Result<_> {
+        let git_repo = GitRepo::open(&repo_root2)?;
+        let fingerprints: HashMap<String, (String, String)> = store2
+            .list_files(repo_id)?
+            .into_iter()
+            .map(|f| (f.path, (f.blob_hash, f.lang)))
+            .collect();
+        // V77-P3 (Task 0) — the derived-status preload alongside the
+        // fingerprint map: one MORE query, not one per file. See
+        // `ingest::DerivedPreload`'s doc.
+        let derived_preload =
+            ingest::DerivedPreload::from_rows(store2.derived_status_for_current_salts()?);
+        let entries = ingest::list_tree_files(&git_repo, "HEAD", "")?;
+        Ok((fingerprints, derived_preload, entries))
+    })
+    .await;
+
+    match outcome {
+        Ok(Ok((fingerprints, derived_preload, entries))) => Some(BootJob {
+            repo_id,
+            repo_name,
+            repo_root,
+            occurrences_enabled,
+            is_rails,
+            fingerprints: Arc::new(fingerprints),
+            derived_preload: Arc::new(derived_preload),
+            entries: entries.into(),
+            stats: ingest::WalkStats::default(),
+            walk_workers,
+        }),
+        Ok(Err(e)) => {
+            tracing::warn!(
+                repo = %repo_name, error = %e,
+                "kb-code sink: boot walk failed to start — skipping",
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                repo = %repo_name, error = %e,
+                "kb-code sink: boot walk start task panicked",
+            );
+            None
+        }
+    }
+}
+
+/// V77-P3 (Task 1) — sequential, store-free triage of one [`step_boot_job`]
+/// chunk's `(path, oid)` list into two buckets. No I/O: only the
+/// whole-repo fingerprint map (already resident on `BootJob`) and a fresh,
+/// CHUNK-scoped claim set — the claim only needs to live for one chunk
+/// because a chunk's single writer always finishes applying it (primaries
+/// THEN the fast bucket, see below) before the next chunk's plan is built;
+/// a duplicate blob spanning two DIFFERENT chunks is instead caught by the
+/// ordinary LIVE `Store::is_derived` read inside `index_one_tree_file`/
+/// `extract_pure`, since by then the earlier chunk's write has already
+/// landed.
+///
+/// - `fast` — every file whose oid still matches its stored fingerprint (a
+///   CANDIDATE for the Task-0 skip; [`index_one_tree_file`] makes the final
+///   call once it actually runs, since only it — with the store in hand —
+///   knows whether both derived families are still marked) PLUS every file
+///   whose blob_hash duplicates an EARLIER `primary` entry within this same
+///   chunk. Both cases are handled by the ordinary sequential
+///   `index_one_tree_file`, applied AFTER every primary in `step_boot_job`,
+///   so a duplicate's own `is_derived` check always observes its primary's
+///   write already landed — this is what closes the is_derived TOCTOU a
+///   naive "just run every file in `walk_workers` parallel tasks" scheme
+///   would reopen.
+/// - `primary` — the first, not-yet-claimed occurrence of a blob that
+///   actually changed (or is new) in this chunk — dispatched to
+///   `ingest::extract_pure` in parallel by the caller.
+fn plan_boot_chunk(
+    chunk: &[(String, String)],
+    fingerprints: &HashMap<String, (String, String)>,
+) -> BootChunkPlan {
+    let mut claimed: HashSet<String> = HashSet::new();
+    let mut fast = Vec::new();
+    let mut primary = Vec::new();
+    for (path, oid) in chunk {
+        let unchanged = fingerprints
+            .get(path)
+            .is_some_and(|(prev_hash, _)| prev_hash == oid);
+        // A fingerprint-unchanged file AND a within-chunk duplicate blob
+        // both land in `fast` (for different reasons, spelled out in this
+        // fn's own doc) — `claimed.insert` must not run at all for an
+        // `unchanged` file (it never touches the claim set), which is
+        // exactly what short-circuiting `||` gives for free.
+        if unchanged || !claimed.insert(oid.clone()) {
+            fast.push((path.clone(), oid.clone()));
+        } else {
+            primary.push((path.clone(), oid.clone()));
+        }
+    }
+    (fast, primary)
+}
+
+/// `(fast, primary)` — see [`plan_boot_chunk`]'s own doc.
+type BootChunkPlan = (Vec<(String, String)>, Vec<(String, String)>);
+
+/// One parallel-extraction group's result: `(path, oid, extraction)`, with
+/// `extraction` `None` on a per-file failure (logged at the call site,
+/// dropped rather than failing the whole chunk).
+type ExtractGroupResult = Vec<(String, String, Option<ingest::PureExtraction>)>;
+
+/// One chunk of a [`BootJob`]. Returns `true` once `entries` is empty.
+///
+/// V77-P3 (Task 1) — the chunk's PURE per-blob work (read + parse/extract +
+/// highlight, `ingest::extract_pure`) is fanned out across `walk_workers`
+/// bounded blocking tasks (`crate::fanout::buffered_join`, invariant #28's
+/// submission-order-preserving ethos — though order doesn't matter for
+/// correctness here, only boundedness does); the Store WRITES for the
+/// whole chunk still happen from ONE final blocking call, applying every
+/// `primary` result FIRST and the `fast` bucket (see
+/// [`plan_boot_chunk`]'s doc) second, so `Store`'s single connection never
+/// sees two writers and a within-chunk duplicate blob is never parsed
+/// twice.
+async fn step_boot_job(
+    job: &mut BootJob,
+    store: &Arc<Store>,
+    bus: &Arc<EventBus>,
+    comment_keywords: &Arc<crate::comments::KeywordSet>,
+) -> bool {
+    let take = job.entries.len().min(RECONCILE_CHUNK_SIZE);
+    let chunk: Vec<(String, String)> = job.entries.drain(..take).collect();
+    if chunk.is_empty() {
+        return true;
+    }
+    let (fast, primary) = plan_boot_chunk(&chunk, &job.fingerprints);
+
+    let repo_root = job.repo_root.clone();
+    let repo_id = job.repo_id;
+    let occurrences_enabled = job.occurrences_enabled;
+    let is_rails = job.is_rails;
+    let repo_name = job.repo_name.clone();
+
+    // V77-P3 (Task 1) — the parallel extraction fan-out: split `primary`
+    // into `walk_workers` roughly-equal groups (one `GitRepo::open` per
+    // GROUP, not per file — "cheap to reopen", `GitRepo::open`'s own doc)
+    // and run each group's `extract_pure` calls sequentially WITHIN the
+    // group, concurrently ACROSS groups. A per-file failure is logged and
+    // dropped (matching the pre-P3 per-file `Err` handling below) rather
+    // than failing the whole chunk.
+    let n_workers = job.walk_workers.max(1).min(primary.len().max(1));
+    let group_size = primary.len().div_ceil(n_workers).max(1);
+    let futs: Vec<futures::future::BoxFuture<'_, ExtractGroupResult>> = primary
+        .chunks(group_size)
+        .map(|group| {
+            let store = store.clone();
+            let repo_root = repo_root.clone();
+            let repo_name = repo_name.clone();
+            let group: Vec<(String, String)> = group.to_vec();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut out = Vec::with_capacity(group.len());
+                    match GitRepo::open(&repo_root) {
+                        Ok(repo) => {
+                            for (path, oid) in group {
+                                match ingest::extract_pure(&store, &repo, "HEAD", &path, &oid) {
+                                    Ok(extraction) => out.push((path, oid, Some(extraction))),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            repo = %repo_name, path = %path, error = %e,
+                                            "kb-code sink: boot walk parallel extract failed",
+                                        );
+                                        out.push((path, oid, None));
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                repo = %repo_name, error = %e,
+                                "kb-code sink: boot walk parallel extract failed to open repo",
+                            );
+                            for (path, oid) in group {
+                                out.push((path, oid, None));
+                            }
+                        }
+                    }
+                    out
+                })
+                .await
+                .unwrap_or_default()
+            }) as futures::future::BoxFuture<'_, _>
+        })
+        .collect();
+    let extracted: Vec<(String, String, ingest::PureExtraction)> =
+        crate::fanout::buffered_join(futs, n_workers)
+            .await
+            .into_iter()
+            .flatten()
+            .filter_map(|(path, oid, extraction)| extraction.map(|e| (path, oid, e)))
+            .collect();
+
+    // Single writer: apply every primary's ALREADY-COMPUTED extraction
+    // first, then the fast/reuse bucket via the ordinary sequential path —
+    // see `plan_boot_chunk`'s doc for why this ordering is what closes the
+    // is_derived TOCTOU.
+    let fingerprints = job.fingerprints.clone();
+    let derived_preload = job.derived_preload.clone();
+    let store2 = store.clone();
+    let comment_keywords2 = comment_keywords.clone();
+    let repo_name2 = job.repo_name.clone();
+    let (touched, delta) = tokio::task::spawn_blocking(move || {
+        let mut stats = ingest::WalkStats::default();
+        let mut touched = Vec::new();
+
+        for (path, oid, extraction) in extracted {
+            match ingest::apply_precomputed_file(
+                &store2,
+                repo_id,
+                &path,
+                &oid,
+                extraction,
+                occurrences_enabled,
+                is_rails,
+                &comment_keywords2,
+            ) {
+                Ok(outcome) => {
+                    stats.files += 1;
+                    stats.symbols += outcome.symbol_count;
+                    stats.record_highlight(outcome.highlight_cache);
+                    if outcome.cache_hit {
+                        stats.cache_hits += 1;
+                    } else if lang::for_id(outcome.tier).is_some() {
+                        stats.parsed += 1;
+                    } else {
+                        stats.skipped_tier += 1;
+                    }
+                    touched.push(path);
+                }
+                Err(e) => tracing::warn!(
+                    repo = %repo_name2, path = %path, error = %e,
+                    "kb-code sink: boot walk primary apply failed",
+                ),
+            }
+        }
+
+        match GitRepo::open(&repo_root) {
+            Ok(repo) => {
+                for (path, oid) in &fast {
+                    match ingest::index_one_tree_file(
+                        &store2,
+                        &repo,
+                        repo_id,
+                        "HEAD",
+                        path,
+                        oid,
+                        occurrences_enabled,
+                        is_rails,
+                        &mut stats,
+                        &comment_keywords2,
+                        &fingerprints,
+                        &derived_preload,
+                    ) {
+                        Ok(true) => touched.push(path.clone()),
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(
+                            repo = %repo_name2, path = %path, error = %e,
+                            "kb-code sink: boot walk file failed",
+                        ),
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(
+                repo = %repo_name2, error = %e,
+                "kb-code sink: boot walk chunk failed to reopen the repo",
+            ),
+        }
+        (touched, stats)
+    })
+    .await
+    .unwrap_or_default();
+
+    job.stats.merge(delta);
+    if !touched.is_empty() {
+        emit_mirror_updated(bus, &job.repo_name, &touched);
+    }
+    job.entries.is_empty()
+}
+
+/// Run once a [`BootJob`] has processed every chunk — mirrors what the old
+/// direct boot task (`lib.rs`) used to do inline, right after its own
+/// unchunked `ingest::index_repo_working_tree` call returned: rebuild
+/// import edges (the walk's own W1.6 "second pass"), log the same
+/// completion summary, and warm the shared `SymbolIndex` for this repo.
+/// `RepoActivity::mark_drained` is the caller's job, not this fn's — it
+/// runs regardless of which `SlowJob` variant just finished (see
+/// `worker`'s step 3).
+async fn finish_boot_job(
+    job: BootJob,
+    store: &Arc<Store>,
+    symbol_index: &Arc<crate::search::SymbolIndex>,
+) {
+    let store2 = store.clone();
+    let repo_id = job.repo_id;
+    match tokio::task::spawn_blocking(move || {
+        ingest::rebuild_import_edges_for_repo(&store2, repo_id)
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(
+            repo = %job.repo_name, error = %e,
+            "kb-code: boot walk import-edge rebuild failed",
+        ),
+        Err(e) => tracing::warn!(
+            repo = %job.repo_name, error = %e,
+            "kb-code: boot walk import-edge rebuild task panicked",
+        ),
+    }
+    tracing::info!(
+        repo = %job.repo_name,
+        files = job.stats.files,
+        parsed = job.stats.parsed,
+        cache_hits = job.stats.cache_hits,
+        // V77-P3 (Task 0) — the boot fast path's own tally, previously
+        // computed but never emitted here despite this module's doc
+        // documenting it as part of this log line.
+        skipped_unchanged = job.stats.skipped_unchanged,
+        symbols = job.stats.symbols,
+        // V72-H2b — the INDEPENDENT highlight gate's own tally, so the cost
+        // of a `highlight_salt` bump is a number in the boot log rather
+        // than an inference from wall clock.
+        highlight_hits = job.stats.highlight_hits,
+        highlight_misses = job.stats.highlight_misses,
+        highlight_skipped = job.stats.highlight_skipped,
+        "kb-code initial index complete",
+    );
+    let store3 = store.clone();
+    let symbol_index2 = symbol_index.clone();
+    let repo_id2 = job.repo_id;
+    match tokio::task::spawn_blocking(move || symbol_index2.warm(&store3, repo_id2)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(
+            repo = %job.repo_name, error = %e,
+            "kb-code: boot-time symbol cache warm failed",
+        ),
+        Err(e) => tracing::warn!(
+            repo = %job.repo_name, error = %e,
+            "kb-code: boot-time symbol cache warm task panicked",
+        ),
+    }
+}
+
 /// Repo-relative path as a forward-slash string — the `files.path` /
 /// `mirror.updated` payload convention (matches W1.5's own tree-walk, which
 /// always produces `/`-joined relative paths regardless of host OS).
@@ -388,7 +1332,7 @@ fn relativize<'a>(repo: &RepoRef, abs: &'a Path) -> Option<std::borrow::Cow<'a, 
 }
 
 /// V77-P1 (E6) — the fs-read fast path shared by `handle_upsert` and
-/// `handle_full_reconcile`. `row` is the stored fingerprint for this
+/// `reconcile_one_changed`. `row` is the stored fingerprint for this
 /// exact path (from `Store::get_file`/`list_files`, both of which now
 /// carry `mtime`); `meta` is a `fs::metadata` call the caller already made
 /// (never a second stat — see each call site). `true` means "the content
@@ -538,107 +1482,89 @@ fn handle_head_moved(
     );
 }
 
+/// One `Changed` op from a [`ReconcileJob`] chunk — extracted from the
+/// pre-V77-P2 `handle_full_reconcile`'s per-path loop body, unchanged in
+/// substance, so it can run per-chunk instead of over the whole
+/// `changed` set in one pass.
 #[allow(clippy::too_many_arguments)]
-fn handle_full_reconcile(
+fn reconcile_one_changed(
     store: &Store,
-    repo_ids: &HashMap<String, i64>,
-    bus: &EventBus,
     repo: &RepoRef,
-    changed: Vec<PathBuf>,
-    removed: Vec<PathBuf>,
+    repo_id: i64,
+    rel: &Path,
+    fingerprints: &HashMap<String, FileRow>,
     occurrences_enabled: bool,
     is_rails: bool,
     comment_keywords: &crate::comments::KeywordSet,
+    touched: &mut Vec<String>,
 ) {
-    let Some(&repo_id) = repo_ids.get(&repo.name) else {
-        tracing::warn!(repo = %repo.name, "kb-code sink: reconcile for an unregistered repo — skipping");
-        return;
-    };
-    let mut touched: Vec<String> = Vec::with_capacity(changed.len() + removed.len());
+    let rel_str = rel.to_string_lossy().to_string();
+    let abs = repo.root.join(rel);
 
-    // V77-P1 (E6) — ONE query for the whole repo's fingerprints rather
-    // than a per-file `get_file` lookup: `startup_reconcile` calls this fn
-    // with `changed` = the WHOLE tracked tree (`committed_delta`'s
-    // `old = None` shape), which before this unit meant every file in the
-    // mirror was read and re-hashed a SECOND time at boot — the boot walk
-    // (`ingest::index_repo_working_tree`, an ODB read) had just done so
-    // once already. A failed lookup degrades to an empty map (every path
-    // takes the existing read path, unchanged behaviour).
-    let fingerprints: HashMap<String, FileRow> = store
-        .list_files(repo_id)
-        .map(|rows| rows.into_iter().map(|f| (f.path.clone(), f)).collect())
-        .unwrap_or_default();
-
-    // `changed`/`removed` are already repo-relative (see `reconcile::
-    // committed_delta`/`dirty_check`'s doc) — read straight off the
-    // working tree at `repo.root.join(rel)`, matching the mirror module's
-    // own doc: reconcile reports the AUTHORITATIVE delta, and this daemon
-    // indexes live working-tree content, not the committed blob (which
-    // would miss uncommitted-but-reconciled dirty paths).
-    for rel in &changed {
-        let rel_str = rel.to_string_lossy().to_string();
-        let abs = repo.root.join(rel);
-
-        // Stat BEFORE read, once — reused below for the write's mtime on
-        // a miss, exactly as `handle_upsert` does.
-        let meta = std::fs::metadata(&abs).ok();
-        if let (Some(row), Some(meta)) = (fingerprints.get(&rel_str), meta.as_ref()) {
-            if fs_fingerprint_unchanged(store, row, meta) {
-                continue;
-            }
+    // Stat BEFORE read, once — reused below for the write's mtime on a
+    // miss, exactly as `handle_upsert` does.
+    let meta = std::fs::metadata(&abs).ok();
+    if let (Some(row), Some(meta)) = (fingerprints.get(&rel_str), meta.as_ref()) {
+        if fs_fingerprint_unchanged(store, row, meta) {
+            return;
         }
+    }
 
-        match std::fs::read(&abs) {
-            Ok(bytes) => {
-                let blob_hash = ingest::git_blob_hash(&bytes);
-                let mtime = meta.as_ref().and_then(ingest::mtime_unix_secs).unwrap_or(0);
-                if let Err(e) = ingest::index_file_with_mtime(
-                    store,
-                    repo_id,
-                    &rel_str,
-                    &bytes,
-                    &blob_hash,
-                    mtime,
-                    occurrences_enabled,
-                    is_rails,
-                    comment_keywords,
-                ) {
-                    tracing::warn!(
-                        repo = %repo.name, path = %rel_str, error = %e,
-                        "kb-code sink: reconcile index_file failed",
-                    );
-                    continue;
-                }
-                touched.push(rel_str);
-            }
-            Err(e) => {
-                // git reported this path as changed but it isn't readable
-                // right now — a rapid follow-up delete, or a path kind
-                // ingest doesn't read as file content (a submodule gitlink,
-                // reported as its own leaf path per the mirror module's
-                // doc, has nothing to read). Not worth surfacing loudly.
-                tracing::debug!(
+    match std::fs::read(&abs) {
+        Ok(bytes) => {
+            let blob_hash = ingest::git_blob_hash(&bytes);
+            let mtime = meta.as_ref().and_then(ingest::mtime_unix_secs).unwrap_or(0);
+            if let Err(e) = ingest::index_file_with_mtime(
+                store,
+                repo_id,
+                &rel_str,
+                &bytes,
+                &blob_hash,
+                mtime,
+                occurrences_enabled,
+                is_rails,
+                comment_keywords,
+            ) {
+                tracing::warn!(
                     repo = %repo.name, path = %rel_str, error = %e,
-                    "kb-code sink: reconcile changed-path read failed — skipping",
+                    "kb-code sink: reconcile index_file failed",
                 );
+                return;
             }
+            touched.push(rel_str);
         }
-    }
-    for rel in &removed {
-        let rel_str = rel.to_string_lossy().to_string();
-        if let Err(e) = store.delete_file(repo_id, &rel_str) {
-            tracing::warn!(
+        Err(e) => {
+            // git reported this path as changed but it isn't readable
+            // right now — a rapid follow-up delete, or a path kind ingest
+            // doesn't read as file content (a submodule gitlink, reported
+            // as its own leaf path per the mirror module's doc, has
+            // nothing to read). Not worth surfacing loudly.
+            tracing::debug!(
                 repo = %repo.name, path = %rel_str, error = %e,
-                "kb-code sink: reconcile delete_file failed",
+                "kb-code sink: reconcile changed-path read failed — skipping",
             );
-            continue;
         }
-        touched.push(rel_str);
     }
+}
 
-    if !touched.is_empty() {
-        emit_mirror_updated(bus, &repo.name, &touched);
+/// One `Removed` op from a [`ReconcileJob`] chunk — extracted from the
+/// pre-V77-P2 `handle_full_reconcile`'s per-path loop body.
+fn reconcile_one_removed(
+    store: &Store,
+    repo: &RepoRef,
+    repo_id: i64,
+    rel: &Path,
+    touched: &mut Vec<String>,
+) {
+    let rel_str = rel.to_string_lossy().to_string();
+    if let Err(e) = store.delete_file(repo_id, &rel_str) {
+        tracing::warn!(
+            repo = %repo.name, path = %rel_str, error = %e,
+            "kb-code sink: reconcile delete_file failed",
+        );
+        return;
     }
+    touched.push(rel_str);
 }
 
 fn emit_mirror_updated(bus: &EventBus, repo: &str, paths: &[String]) {
@@ -649,57 +1575,6 @@ fn emit_mirror_updated(bus: &EventBus, repo: &str, paths: &[String]) {
             "paths": paths,
         }),
     );
-}
-
-/// Open a repo fresh and walk its `HEAD` tree via W1.5's
-/// `ingest::index_repo_working_tree` — the "initial background index" boot
-/// action (`lib.rs::bind_and_spawn`, item (a) of the W1.6 plan). Kept here
-/// (rather than inline in `lib.rs`) since it shares this module's "how do we
-/// turn a configured repo into indexed rows" concern, even though it never
-/// touches the sink/queue — this is a direct, synchronous store write, run
-/// once at boot before the live watcher (and its own startup reconcile) take
-/// over. Best-effort per repo: an open/walk failure is logged and does not
-/// fail the daemon boot.
-pub fn initial_index_one(
-    store: &Store,
-    repo_id: i64,
-    repo_name: &str,
-    repo_root: &Path,
-    occurrences_enabled: bool,
-    is_rails: bool,
-    comment_keywords: &crate::comments::KeywordSet,
-) {
-    match GitRepo::open(repo_root) {
-        Ok(git_repo) => match ingest::index_repo_working_tree(
-            store,
-            &git_repo,
-            repo_id,
-            "HEAD",
-            occurrences_enabled,
-            is_rails,
-            comment_keywords,
-        ) {
-            Ok(stats) => tracing::info!(
-                repo = %repo_name,
-                files = stats.files,
-                parsed = stats.parsed,
-                cache_hits = stats.cache_hits,
-                symbols = stats.symbols,
-                // V72-H2b — the INDEPENDENT highlight gate's own tally, so
-                // the cost of a `highlight_salt` bump is a number in the
-                // boot log rather than an inference from wall clock.
-                highlight_hits = stats.highlight_hits,
-                highlight_misses = stats.highlight_misses,
-                highlight_skipped = stats.highlight_skipped,
-                "kb-code initial index complete",
-            ),
-            Err(e) => tracing::warn!(repo = %repo_name, error = %e, "kb-code initial index failed"),
-        },
-        Err(e) => tracing::warn!(
-            repo = %repo_name, error = %e,
-            "kb-code initial index: repo does not open — skipping",
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -739,6 +1614,43 @@ mod tests {
         }
         w.record(0, Duration::ZERO);
         assert!(w.due());
+    }
+
+    // --- RepoActivity (V77-P2, task 2) --------------------------------------
+
+    #[test]
+    fn repo_activity_reports_settled_for_a_repo_never_marked_busy() {
+        let activity = RepoActivity::new();
+        assert_eq!(activity.snapshot("never-seen"), (false, None));
+    }
+
+    #[test]
+    fn repo_activity_tracks_busy_and_settles_once_drained() {
+        let activity = RepoActivity::new();
+        activity.mark_busy("r");
+        let (catching_up, settled_at) = activity.snapshot("r");
+        assert!(catching_up);
+        assert_eq!(settled_at, None, "still walking — settled_at must be null");
+
+        activity.mark_drained("r");
+        let (catching_up, settled_at) = activity.snapshot("r");
+        assert!(!catching_up);
+        assert!(settled_at.is_some(), "drained — settled_at must be set");
+    }
+
+    #[test]
+    fn repo_activity_stays_busy_while_a_second_job_is_outstanding() {
+        // Two overlapping slow-lane messages for the same repo (e.g. a
+        // boot walk still running when a live gate-exit reconcile lands) —
+        // draining ONE must not report settled while the other is still
+        // outstanding.
+        let activity = RepoActivity::new();
+        activity.mark_busy("r");
+        activity.mark_busy("r");
+        activity.mark_drained("r");
+        assert!(activity.snapshot("r").0, "one job still outstanding");
+        activity.mark_drained("r");
+        assert!(!activity.snapshot("r").0);
     }
 
     fn git(dir: &Path, args: &[&str]) {
@@ -783,6 +1695,32 @@ mod tests {
         (repo_tmp, store, repo_ids, repo_dir)
     }
 
+    /// Every test in this module spawns the SAME shape of sink — a fresh
+    /// `SymbolIndex` (never asserted on directly here; `search::symbols`'s
+    /// own tests cover `warm`) threaded through so `spawn`'s signature
+    /// match is exercised the same way `lib.rs::bind_and_spawn` calls it.
+    fn spawn_test_sink(
+        store: Arc<Store>,
+        repo_ids: HashMap<String, i64>,
+        bus: Arc<EventBus>,
+    ) -> (IndexSink, Arc<RepoActivity>, tokio::task::JoinHandle<()>) {
+        spawn(
+            store,
+            repo_ids,
+            bus,
+            crate::config::OccurrencesSection::default(),
+            HashMap::new(),
+            crate::comments::KeywordSet::defaults(),
+            Arc::new(crate::search::SymbolIndex::new()),
+            // V77-P3 — a small, deterministic fixed worker count for tests
+            // (never `IndexerSection::default_walk_workers`'s host-core-
+            // dependent value): every boot-walk test here uses a handful of
+            // files, so 2 is enough to exercise the parallel fan-out
+            // without making the tests themselves core-count-sensitive.
+            2,
+        )
+    }
+
     /// `IndexSink`'s `MirrorSink` methods use `blocking_send` (see the
     /// module doc) and MUST NOT be called directly from a tokio runtime
     /// worker — exactly what a `#[tokio::test]` body's own thread is.
@@ -798,14 +1736,8 @@ mod tests {
         let (_repo_tmp, store, repo_ids, repo_dir) = setup();
         let bus = Arc::new(EventBus::default());
         let mut rx = bus.subscribe();
-        let (sink, _handle) = spawn(
-            store.clone(),
-            repo_ids.clone(),
-            bus.clone(),
-            crate::config::OccurrencesSection::default(),
-            std::collections::HashMap::new(),
-            crate::comments::KeywordSet::defaults(),
-        );
+        let (sink, _activity, _handle) =
+            spawn_test_sink(store.clone(), repo_ids.clone(), bus.clone());
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
             root: repo_dir.clone(),
@@ -837,14 +1769,7 @@ mod tests {
     async fn remove_path_deletes_the_files_row() {
         let (_repo_tmp, store, repo_ids, repo_dir) = setup();
         let bus = Arc::new(EventBus::default());
-        let (sink, _handle) = spawn(
-            store.clone(),
-            repo_ids.clone(),
-            bus,
-            crate::config::OccurrencesSection::default(),
-            std::collections::HashMap::new(),
-            crate::comments::KeywordSet::defaults(),
-        );
+        let (sink, _activity, _handle) = spawn_test_sink(store.clone(), repo_ids.clone(), bus);
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
             root: repo_dir.clone(),
@@ -866,14 +1791,7 @@ mod tests {
     async fn full_reconcile_indexes_changed_and_deletes_removed() {
         let (_repo_tmp, store, repo_ids, repo_dir) = setup();
         let bus = Arc::new(EventBus::default());
-        let (sink, _handle) = spawn(
-            store.clone(),
-            repo_ids.clone(),
-            bus,
-            crate::config::OccurrencesSection::default(),
-            std::collections::HashMap::new(),
-            crate::comments::KeywordSet::defaults(),
-        );
+        let (sink, _activity, _handle) = spawn_test_sink(store.clone(), repo_ids.clone(), bus);
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
             root: repo_dir.clone(),
@@ -908,14 +1826,7 @@ mod tests {
         let (_repo_tmp, store, repo_ids, repo_dir) = setup();
         let bus = Arc::new(EventBus::default());
         let mut rx = bus.subscribe();
-        let (sink, _handle) = spawn(
-            store.clone(),
-            repo_ids.clone(),
-            bus,
-            crate::config::OccurrencesSection::default(),
-            std::collections::HashMap::new(),
-            crate::comments::KeywordSet::defaults(),
-        );
+        let (sink, _activity, _handle) = spawn_test_sink(store.clone(), repo_ids.clone(), bus);
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
             root: repo_dir.clone(),
@@ -932,37 +1843,6 @@ mod tests {
         assert_eq!(env.payload["repo"], "fixture");
         assert!(env.payload["old"].is_null());
         assert_eq!(env.payload["new"], new.to_string());
-    }
-
-    #[test]
-    fn initial_index_one_populates_the_store() {
-        let repo_tmp = tempfile::tempdir().unwrap();
-        let repo_dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
-        init_repo(&repo_dir);
-        std::fs::write(repo_dir.join("a.rs"), b"fn a() {}\n").unwrap();
-        git(&repo_dir, &["add", "-A"]);
-        git(&repo_dir, &["commit", "-q", "-m", "c1"]);
-
-        let store_tmp = tempfile::tempdir().unwrap();
-        let store = Store::open(&store_tmp.path().join("index.db")).unwrap();
-        let repo_id = store
-            .upsert_repo("fixture", repo_dir.to_str().unwrap())
-            .unwrap();
-
-        initial_index_one(
-            &store,
-            repo_id,
-            "fixture",
-            &repo_dir,
-            true,
-            false,
-            &crate::comments::KeywordSet::defaults(),
-        );
-        assert_eq!(store.file_count(repo_id).unwrap(), 1);
-        assert_eq!(
-            store.get_file(repo_id, "a.rs").unwrap().unwrap().lang,
-            "rust"
-        );
     }
 
     async fn wait_for(mut f: impl FnMut() -> bool) -> bool {
@@ -1113,14 +1993,8 @@ mod tests {
         let (_repo_tmp, store, repo_ids, repo_dir) = setup();
         let bus = Arc::new(EventBus::default());
         let mut rx = bus.subscribe();
-        let (sink, _handle) = spawn(
-            store.clone(),
-            repo_ids.clone(),
-            bus.clone(),
-            crate::config::OccurrencesSection::default(),
-            std::collections::HashMap::new(),
-            crate::comments::KeywordSet::defaults(),
-        );
+        let (sink, _activity, _handle) =
+            spawn_test_sink(store.clone(), repo_ids.clone(), bus.clone());
         let repo_ref = RepoRef {
             name: "fixture".to_string(),
             root: repo_dir.clone(),
@@ -1170,5 +2044,371 @@ mod tests {
 
         let row2 = store.get_file(repo_id, "b.rs").unwrap().unwrap();
         assert_eq!(row1, row2, "the unchanged file's row must be untouched");
+    }
+
+    // --- V77-P2 (task 1): fairness ------------------------------------------
+
+    /// A fast-lane `Upsert` for an UNRELATED path, sent right after a large
+    /// `FullReconcile`, must be reflected (its own `mirror.updated` event
+    /// observed) before the reconcile's LAST chunk's own event — proof that
+    /// the fast lane isn't stuck behind the whole slow job, only behind at
+    /// most `FAST_BURST_LIMIT` fast messages' worth of scheduling per slow
+    /// chunk. Deterministic given the scheduling algorithm (see the module
+    /// doc's "Fairness" section): it does not depend on any specific wall
+    /// time, only on the fast message being enqueued before the reconcile
+    /// job's chunks finish draining, which a many-chunk reconcile makes an
+    /// extremely generous window.
+    #[tokio::test]
+    async fn a_fast_upsert_lands_before_an_earlier_queued_reconcile_finishes() {
+        let (_repo_tmp, store, repo_ids, repo_dir) = setup();
+        let bus = Arc::new(EventBus::default());
+        let mut rx = bus.subscribe();
+        let (sink, _activity, _handle) =
+            spawn_test_sink(store.clone(), repo_ids.clone(), bus.clone());
+        let repo_ref = RepoRef {
+            name: "fixture".to_string(),
+            root: repo_dir.clone(),
+        };
+
+        // A reconcile spanning several chunks (a.rs plus enough new files to
+        // exceed one RECONCILE_CHUNK_SIZE-sized chunk several times over).
+        let total = RECONCILE_CHUNK_SIZE * 3 + 5;
+        let mut changed: Vec<PathBuf> = Vec::with_capacity(total);
+        for i in 0..total {
+            let name = format!("gen_{i}.rs");
+            std::fs::write(repo_dir.join(&name), format!("fn f{i}() {{}}\n")).unwrap();
+            changed.push(PathBuf::from(name));
+        }
+        let (sink2, repo_ref2, changed2) = (sink.clone(), repo_ref.clone(), changed.clone());
+        call_blocking(move || MirrorSink::full_reconcile(&sink2, &repo_ref2, changed2, Vec::new()))
+            .await;
+
+        // Enqueued immediately after — nothing about the reconcile has been
+        // dequeued by the worker yet, so this is as early as a live edit
+        // realistically arrives relative to a just-started boot/reconcile.
+        std::fs::write(repo_dir.join("live_edit.rs"), b"fn live() {}\n").unwrap();
+        let (sink3, repo_ref3) = (sink.clone(), repo_ref.clone());
+        call_blocking(move || sink3.upsert_path(&repo_ref3, &repo_dir.join("live_edit.rs"))).await;
+
+        let mut seen_reconcile_paths = 0usize;
+        let mut live_edit_index: Option<usize> = None;
+        let mut events_seen = 0usize;
+        loop {
+            let env = tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv())
+                .await
+                .expect("event stream ended before the live edit was observed")
+                .unwrap();
+            if env.type_ != "mirror.updated" {
+                continue;
+            }
+            events_seen += 1;
+            let paths: Vec<String> = env.payload["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect();
+            if paths.iter().any(|p| p == "live_edit.rs") {
+                live_edit_index = Some(events_seen);
+            }
+            seen_reconcile_paths += paths.iter().filter(|p| p.starts_with("gen_")).count();
+            if live_edit_index.is_some() || seen_reconcile_paths >= total {
+                break;
+            }
+        }
+
+        assert!(
+            live_edit_index.is_some(),
+            "the live edit's own event never arrived"
+        );
+        assert!(
+            seen_reconcile_paths < total,
+            "the live edit landed only after the ENTIRE reconcile had already drained \
+             ({seen_reconcile_paths}/{total} paths already touched) — fairness regressed"
+        );
+    }
+
+    /// The K bound (`FAST_BURST_LIMIT`) holds under a sustained fast-lane
+    /// flood: a slow job still gets its chunks processed, rather than
+    /// waiting for the whole flood to drain first. The flood re-upserts the
+    /// SAME already-indexed, unchanged path 10,000 times — each hit is the
+    /// V77-P1 fingerprint skip path (a true no-op that never touches the
+    /// store or the bus), so any `mirror.updated` this test observes can
+    /// only be the reconcile job's own chunk progress.
+    #[tokio::test]
+    async fn a_10k_fast_burst_still_lets_a_slow_chunk_through() {
+        let (_repo_tmp, store, repo_ids, repo_dir) = setup();
+        let bus = Arc::new(EventBus::default());
+        let mut rx = bus.subscribe();
+        let (sink, _activity, _handle) =
+            spawn_test_sink(store.clone(), repo_ids.clone(), bus.clone());
+        let repo_ref = RepoRef {
+            name: "fixture".to_string(),
+            root: repo_dir.clone(),
+        };
+        let repo_id = *repo_ids.get("fixture").unwrap();
+        let a_path = repo_dir.join("a.rs");
+
+        // Index a.rs for real once, so every later re-upsert of it is a
+        // true no-op (the V77-P1 fingerprint fast path).
+        let (sink2, repo_ref2, path2) = (sink.clone(), repo_ref.clone(), a_path.clone());
+        call_blocking(move || sink2.upsert_path(&repo_ref2, &path2)).await;
+        assert!(wait_for(|| store.get_file(repo_id, "a.rs").unwrap().is_some()).await);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+
+        // A reconcile with a few chunks' worth of NEW files.
+        let total = RECONCILE_CHUNK_SIZE * 2 + 5;
+        let mut changed: Vec<PathBuf> = Vec::with_capacity(total);
+        for i in 0..total {
+            let name = format!("gen_{i}.rs");
+            std::fs::write(repo_dir.join(&name), format!("fn f{i}() {{}}\n")).unwrap();
+            changed.push(PathBuf::from(name));
+        }
+        let (sink3, repo_ref3, changed3) = (sink.clone(), repo_ref.clone(), changed.clone());
+        call_blocking(move || MirrorSink::full_reconcile(&sink3, &repo_ref3, changed3, Vec::new()))
+            .await;
+
+        // Flood the fast lane, concurrently, with 10,000 no-op upserts —
+        // mirrors the real producer shape (the watcher's own drain
+        // thread hammering `blocking_send` in a tight loop), run on a
+        // blocking-pool thread so it genuinely races the worker rather
+        // than the test's own async task starving it via cooperative
+        // scheduling.
+        let flood_sink = sink.clone();
+        let flood_repo_ref = repo_ref.clone();
+        let flood_path = a_path.clone();
+        let flood = tokio::task::spawn_blocking(move || {
+            for _ in 0..10_000 {
+                flood_sink.upsert_path(&flood_repo_ref, &flood_path);
+            }
+        });
+
+        let mut saw_reconcile_progress = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await {
+                Ok(Ok(env)) if env.type_ == "mirror.updated" => {
+                    let is_reconcile_progress = env.payload["paths"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .any(|p| p.as_str().is_some_and(|s| s.starts_with("gen_")))
+                        })
+                        .unwrap_or(false);
+                    if is_reconcile_progress {
+                        saw_reconcile_progress = true;
+                        break;
+                    }
+                }
+                // Any other event, a lagged broadcast receiver, or a
+                // one-second timeout tick — keep polling up to the outer
+                // deadline.
+                Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {}
+            }
+        }
+        assert!(
+            saw_reconcile_progress,
+            "a slow-lane chunk should still complete during a 10k-message fast-lane flood",
+        );
+        flood.await.unwrap();
+    }
+
+    // --- V77-P3: `plan_boot_chunk` (Task 1's claim/dedup pre-pass) ----------
+
+    #[test]
+    fn plan_boot_chunk_routes_a_within_chunk_duplicate_blob_to_the_fast_bucket() {
+        let mut fingerprints = HashMap::new();
+        fingerprints.insert(
+            "unchanged.rs".to_string(),
+            ("sameoid".to_string(), "rust".to_string()),
+        );
+        let chunk = vec![
+            ("unchanged.rs".to_string(), "sameoid".to_string()),
+            ("first.rs".to_string(), "dupoid".to_string()),
+            ("second.rs".to_string(), "dupoid".to_string()),
+            ("other.rs".to_string(), "distinctoid".to_string()),
+        ];
+        let (fast, primary) = plan_boot_chunk(&chunk, &fingerprints);
+
+        assert_eq!(
+            primary,
+            vec![
+                ("first.rs".to_string(), "dupoid".to_string()),
+                ("other.rs".to_string(), "distinctoid".to_string()),
+            ],
+            "only the FIRST occurrence of a not-yet-claimed changed blob is a primary",
+        );
+        assert_eq!(
+            fast,
+            vec![
+                ("unchanged.rs".to_string(), "sameoid".to_string()),
+                ("second.rs".to_string(), "dupoid".to_string()),
+            ],
+            "the fingerprint-unchanged file AND the later duplicate both land in `fast`",
+        );
+    }
+
+    #[test]
+    fn plan_boot_chunk_treats_a_never_seen_path_as_primary() {
+        let fingerprints = HashMap::new();
+        let chunk = vec![("new.rs".to_string(), "oid1".to_string())];
+        let (fast, primary) = plan_boot_chunk(&chunk, &fingerprints);
+        assert!(fast.is_empty());
+        assert_eq!(primary, vec![("new.rs".to_string(), "oid1".to_string())]);
+    }
+
+    #[test]
+    fn plan_boot_chunk_treats_a_changed_oid_at_a_known_path_as_primary() {
+        let mut fingerprints = HashMap::new();
+        fingerprints.insert(
+            "edited.rs".to_string(),
+            ("old_oid".to_string(), "rust".to_string()),
+        );
+        let chunk = vec![("edited.rs".to_string(), "new_oid".to_string())];
+        let (fast, primary) = plan_boot_chunk(&chunk, &fingerprints);
+        assert!(fast.is_empty());
+        assert_eq!(
+            primary,
+            vec![("edited.rs".to_string(), "new_oid".to_string())]
+        );
+    }
+
+    // --- V77-P3: the parallel boot walk vs the sequential walk --------------
+
+    /// The parallel boot-walk job (`start_boot_job` + `step_boot_job`, real
+    /// `walk_workers > 1`) must produce the SAME `files`/`symbols`/
+    /// `highlights` rows as the plain sequential `ingest::
+    /// index_repo_working_tree` walk over the identical repo — order
+    /// independence: this asserts SET equality, never an exact processing
+    /// order, since the two walks are free to visit files in different
+    /// sequences internally. The fixture deliberately includes two files
+    /// with IDENTICAL content (`a_dup1.rs`/`b_dup2.rs`) to exercise
+    /// `plan_boot_chunk`'s within-chunk claim/dedup path.
+    #[tokio::test]
+    async fn parallel_boot_walk_matches_the_sequential_walk() {
+        let repo_tmp = tempfile::tempdir().unwrap();
+        let repo_dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+        init_repo(&repo_dir);
+        let dup_body: &[u8] = b"pub fn shared() -> i32 { 42 }\n";
+        std::fs::write(repo_dir.join("a_dup1.rs"), dup_body).unwrap();
+        std::fs::write(repo_dir.join("b_dup2.rs"), dup_body).unwrap();
+        std::fs::write(
+            repo_dir.join("c.py"),
+            b"def greet(name):\n    return f\"hi {name}\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo_dir.join("d.rs"),
+            b"pub struct Widget;\nimpl Widget {\n    pub fn new() -> Self {\n        Self\n    }\n}\n",
+        )
+        .unwrap();
+        git(&repo_dir, &["add", "-A"]);
+        git(&repo_dir, &["commit", "-q", "-m", "c1"]);
+
+        // --- sequential reference ---
+        let seq_tmp = tempfile::tempdir().unwrap();
+        let seq_store = Store::open(&seq_tmp.path().join("index.db")).unwrap();
+        let seq_repo_id = seq_store
+            .upsert_repo("fixture", repo_dir.to_str().unwrap())
+            .unwrap();
+        let git_repo = GitRepo::open(&repo_dir).unwrap();
+        ingest::index_repo_working_tree(
+            &seq_store,
+            &git_repo,
+            seq_repo_id,
+            "HEAD",
+            true,
+            false,
+            &crate::comments::KeywordSet::defaults(),
+        )
+        .unwrap();
+
+        // --- parallel boot-walk path, real fan-out (walk_workers = 3) ---
+        let par_tmp = tempfile::tempdir().unwrap();
+        let par_store = Arc::new(Store::open(&par_tmp.path().join("index.db")).unwrap());
+        let par_repo_id = par_store
+            .upsert_repo("fixture", repo_dir.to_str().unwrap())
+            .unwrap();
+        let mut job = start_boot_job(
+            &par_store,
+            par_repo_id,
+            "fixture".to_string(),
+            repo_dir.clone(),
+            true,
+            false,
+            3,
+        )
+        .await
+        .expect("start_boot_job");
+        let bus = Arc::new(EventBus::default());
+        let comment_keywords = Arc::new(crate::comments::KeywordSet::defaults());
+        loop {
+            let done = step_boot_job(&mut job, &par_store, &bus, &comment_keywords).await;
+            if done {
+                break;
+            }
+        }
+
+        // --- compare: `files` rows (mtime is always 0 on an ODB walk —
+        // excluded from the comparison as a non-signal) ---
+        let mut seq_files: Vec<(String, String, String, u64)> = seq_store
+            .list_files(seq_repo_id)
+            .unwrap()
+            .into_iter()
+            .map(|f| (f.path, f.blob_hash, f.lang, f.size))
+            .collect();
+        let mut par_files: Vec<(String, String, String, u64)> = par_store
+            .list_files(par_repo_id)
+            .unwrap()
+            .into_iter()
+            .map(|f| (f.path, f.blob_hash, f.lang, f.size))
+            .collect();
+        seq_files.sort();
+        par_files.sort();
+        assert_eq!(
+            seq_files, par_files,
+            "files rows must match as a SET regardless of walk shape"
+        );
+        assert!(
+            seq_files.len() >= 4,
+            "fixture sanity: expected at least 4 files rows, got {seq_files:?}"
+        );
+
+        // --- compare: symbols + highlights per distinct blob_hash (the
+        // dup pair shares ONE blob_hash, so this also proves the claim/
+        // dedup path never produced two divergent derivations for it) ---
+        let mut blob_hashes: Vec<String> = seq_files.iter().map(|f| f.1.clone()).collect();
+        blob_hashes.sort();
+        blob_hashes.dedup();
+        for blob_hash in blob_hashes {
+            let lang = seq_files
+                .iter()
+                .find(|f| f.1 == blob_hash)
+                .map(|f| f.2.clone())
+                .unwrap();
+            let Some(info) = lang::for_id(&lang) else {
+                continue;
+            };
+            let seq_symbols = seq_store
+                .symbols_for_blob(&blob_hash, info.symbol_salt)
+                .unwrap();
+            let par_symbols = par_store
+                .symbols_for_blob(&blob_hash, info.symbol_salt)
+                .unwrap();
+            assert_eq!(
+                seq_symbols, par_symbols,
+                "symbols must match for blob_hash {blob_hash} ({lang})"
+            );
+            let seq_highlights = seq_store
+                .highlights_for_blob(&blob_hash, info.highlight_salt)
+                .unwrap();
+            let par_highlights = par_store
+                .highlights_for_blob(&blob_hash, info.highlight_salt)
+                .unwrap();
+            assert_eq!(
+                seq_highlights, par_highlights,
+                "highlights must match for blob_hash {blob_hash} ({lang})"
+            );
+        }
     }
 }

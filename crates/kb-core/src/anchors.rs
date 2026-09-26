@@ -161,6 +161,34 @@ pub fn save(path: &Path, stale: &HashMap<(String, String), StaleAnchorEntry>) ->
     crate::fsx::write_atomic(path, &json)
 }
 
+/// Drop `(artifact, comment)` from the stale-anchor sidecar when a comment
+/// is resolved. A non-resolve (`resolved == false`) does not read or write
+/// the file — reopening must not clear a flag the indexer still owns.
+///
+/// When `resolved` and the row is present, the remaining map is persisted
+/// via [`save`] (atomic tmpfile + rename + parent fsync). A missing file or
+/// missing key is `Ok(false)` and does not create a sidecar. Other rows,
+/// including the same comment id on a different artifact, are left alone.
+pub fn prune_if_resolved(
+    path: &Path,
+    artifact: &str,
+    comment: &str,
+    resolved: bool,
+) -> Result<bool> {
+    if !resolved {
+        return Ok(false);
+    }
+    let mut stale = load(path);
+    if stale
+        .remove(&(artifact.to_string(), comment.to_string()))
+        .is_none()
+    {
+        return Ok(false);
+    }
+    save(path, &stale)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +352,39 @@ mod tests {
         let path = tmp.path().join(".anchors-stale.json");
         std::fs::write(&path, br#"{"version": 1, "stale": ["c_x", "c_y"]}"#).unwrap();
         assert!(load(&path).is_empty());
+    }
+
+    #[test]
+    fn resolve_drops_sidecar_entry_non_resolve_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".anchors-stale.json");
+        // A resolve of a comment that was never stale must not create a sidecar.
+        assert!(!prune_if_resolved(&path, "art", "c_resolve", true).unwrap());
+        assert!(!path.exists());
+
+        let mut set: HashMap<(String, String), StaleAnchorEntry> = HashMap::new();
+        set.insert(("art".into(), "c_resolve".into()), entry("stale", 0.0));
+        set.insert(("art".into(), "c_open".into()), entry("fuzzy", 0.4));
+        // Same comment id on another artifact must survive (v0.7.1 P2).
+        set.insert(("other".into(), "c_resolve".into()), entry("stale", 0.0));
+        save(&path, &set).unwrap();
+
+        assert!(prune_if_resolved(&path, "art", "c_resolve", true).unwrap());
+        let loaded = load(&path);
+        assert!(
+            !loaded.contains_key(&("art".to_string(), "c_resolve".to_string())),
+            "resolving a comment must drop its stale-anchor row"
+        );
+        assert!(loaded.contains_key(&("art".to_string(), "c_open".to_string())));
+        assert!(loaded.contains_key(&("other".to_string(), "c_resolve".to_string())));
+
+        let before = std::fs::read(&path).unwrap();
+        assert!(!prune_if_resolved(&path, "art", "c_open", false).unwrap());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a non-resolve status must not rewrite the sidecar"
+        );
+        assert!(load(&path).contains_key(&("art".to_string(), "c_open".to_string())));
     }
 }
