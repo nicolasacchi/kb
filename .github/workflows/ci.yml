@@ -1140,3 +1140,27 @@ jobs:
         run: cargo-deny check advisories
       - name: cargo-deny (licenses + bans + sources)
         run: cargo-deny check licenses bans sources
+
+  # CI-ONLY (branch rs/gates-binary, never merged): build the kb-code daemon +
+  # CLI for the review-store acceptance gates, which run against private data
+  # off-CI. The operator's rule is "compile only on CI", so the gates consume
+  # this artifact instead of a local build.
+  gates-binary:
+    name: gates-binary (kb-code-server + kb-code artifact)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+      - name: Install protoc (lancedb transitive dep via kb-core)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+      - name: Build kb-code-server + kb-code (fast profile)
+        run: cargo build --profile fast -p kb-code-server -p kb-code-cli
+      - name: Upload binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kb-code-gates-${{ github.sha }}
+          path: |
+            target/fast/kb-code-server
+            target/fast/kb-code
+          retention-days: 7
