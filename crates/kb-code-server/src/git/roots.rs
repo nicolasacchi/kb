@@ -47,10 +47,14 @@
 //! `GitCtx` store resolution lives in exactly ONE place, the
 //! [`GitCtx::for_repo`] constructor (and its async twin
 //! [`GitCtx::resolve`]). With no `ready` store for the repo — not
-//! registered, still seeding, broken, the member's own import
-//! pending, or the whole store subsystem switched off for this boot —
-//! every `GitCtx` resolves to the fallback and behaviour is exactly what it
-//! was before this split. The store half is LIVE: the boot job seeds
+//! registered, still seeding, broken, the member's own import pending, or
+//! the whole store subsystem switched off for this boot — every `GitCtx`
+//! resolves to the fallback and behaviour is exactly what it was before
+//! this split. That last arm is enforced by the FIRST check in
+//! `resolve_ready_store`, through `Store::review_store_readable` (a
+//! boot-published flag on the `Store`): boot pushes
+//! `StoreSettings::disabled` there, because this module sees only
+//! `&Store`. The store half is LIVE: the boot job seeds
 //! (`ReviewStores::seed` writes `state = "ready"`) and
 //! `mark_imported` sets `legacy_import_json`, so a normally seeded daemon
 //! resolves real store roots on the very next boot.
@@ -276,6 +280,18 @@ impl GitCtx {
     /// members. This mirrors that check without needing a `ReviewStores`
     /// handle here — both read the same `repo_stores` row.
     fn resolve_ready_store(store: &Store, repo_name: &str) -> Option<StoreRoot> {
+        // The whole store subsystem is switched OFF for this boot, so
+        // EVERY write is already refused by `unavailable_reason` — but a
+        // stale `ready` row (seeded before the operator moved/relative-ised
+        // the root) survives the boot that disabled the store, because a
+        // disabled boot returns before any row write. Without this check
+        // the reads would keep serving a store root the daemon was
+        // configured to refuse, and would hand `<store>/objects` to a
+        // user-repo git invocation as alternates. The flag lives on the
+        // `Store` precisely because this function sees only `&Store`.
+        if !store.review_store_readable() {
+            return None;
+        }
         let row = match store.store_for_repo_name(repo_name) {
             Ok(Some(row)) if row.state == "ready" => row,
             Ok(_) => return None,
@@ -652,6 +668,81 @@ mod tests {
             ctx.is_fallback(),
             "a ready store with a still-pending member must fall back, not resolve"
         );
+    }
+
+    /// RS-U13 fix — a boot that DISABLES the store subsystem must make
+    /// READS fall back, not only writes. The fixture is MAXIMALLY ready
+    /// (a `ready` row over a real bare store, membership, and the import
+    /// marker the MemberPending test above deliberately leaves NULL) so
+    /// the only thing that CAN move resolution to the fallback is the
+    /// boot-published flag — which is what the control assertion proves.
+    #[test]
+    fn for_repo_falls_back_when_the_store_subsystem_is_disabled() {
+        let (tmp, work, store_root, sha) = fixture();
+        let store = Store::open(&tmp.path().join("kbc.sqlite")).unwrap();
+        let repo_id = store.upsert_repo("widgets", "/nonexistent").unwrap();
+        let store_id = store
+            .create_review_store(
+                "11111111-1111-4111-8111-111111111111",
+                "github.com/acme/widgets",
+                store_root.git_dir().to_str().unwrap(),
+                None,
+                None,
+                1,
+            )
+            .unwrap();
+        store
+            .set_review_store_state(store_id, "ready", None)
+            .unwrap();
+        store.add_repo_to_store(repo_id, store_id).unwrap();
+        store
+            .set_repo_store_legacy_import(repo_id, Some("{}"))
+            .unwrap();
+
+        // CONTROL: every input the read path wants is present, so this
+        // MUST resolve the store — without it the rest proves nothing.
+        let live = GitCtx::for_repo(&store, "widgets", work.clone());
+        assert!(!live.is_fallback(), "control: a ready store must resolve");
+        assert_eq!(
+            live.store_root().map(|s| s.git_dir().to_path_buf()),
+            Some(store_root.git_dir().to_path_buf())
+        );
+        assert_eq!(store.git_fallback_stats().unresolved, 0);
+
+        store.set_review_store_readable(false);
+        let ctx = GitCtx::for_repo(&store, "widgets", work.clone());
+        assert!(
+            ctx.is_fallback(),
+            "a store disabled for this boot must not resolve a stale `ready` row"
+        );
+        assert!(ctx.store_root().is_none());
+        // The CONSUMERS moved, not merely the flag: the work tree is
+        // primary, `<store>/objects` is never handed to a user-repo git
+        // invocation as alternates (SEC-13/15), and a store-only read
+        // runs against the work tree.
+        assert_eq!(ctx.primary().git_path(), work.path());
+        assert!(ctx.alternates_for_work_tree().is_none());
+        assert!(alternates_env(&ctx.bridged_work_tree()).is_none());
+        let mut calls = Vec::new();
+        let got = ctx.read_store_only(|r| {
+            calls.push(r.git_path().to_path_buf());
+            crate::history::run_git_raw(r, &["cat-file", "-t", &sha])
+        });
+        assert_eq!(got.unwrap(), b"commit\n");
+        assert_eq!(calls, vec![work.path().to_path_buf()]);
+
+        // A disabled resolution is a legitimate fallback: it is COUNTED,
+        // not silently absorbed (the Phase-1 gate reads `unresolved`).
+        assert_eq!(store.git_fallback_stats().unresolved, 1);
+
+        // Read/write agreement — the write side was already right, so pin
+        // it: a disabled registry must refuse the same store.
+        let rs = crate::review_store::ReviewStores::disabled("root must be an absolute path");
+        assert!(
+            !rs.reads_can_use_store(),
+            "a disabled registry must publish `readable = false`"
+        );
+        assert!(rs.admit_mutation(&store, "widgets").unwrap().is_none());
     }
 
     #[test]
