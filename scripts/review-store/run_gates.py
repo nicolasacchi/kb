@@ -49,15 +49,47 @@ MIGRATE FIRST
   `--before-ready-timeout` are the budgets (both default to 7200 s — the
   first real run found even the non-migrating pre-upgrade daemon not ready
   within 300 s on this 5.5 GB volume).
-  Readiness distinguishes "still migrating" from "not coming up": a live
-  boot whose output (or whose growing `*.pre-V*.bak` / `*.bak-journal`
-  beside the volume) says the snapshot is in progress is reported and
-  waited out, and ANY readiness failure carries the elapsed time and the
-  last line the daemon printed.
+  Readiness distinguishes "still migrating" from "not coming up", and the
+  migrating signal means it: a boot is reported as migrating while the
+  snapshot file beside the volume is GROWING (its size moved since the last
+  probe) or a `-journal` sidecar is being written — NOT merely because a
+  `*.pre-V*.bak` file exists. A completed snapshot is the SUCCESS state for
+  gate 1's migration proof, and this box produced a 5,282,185,216-byte `.bak`
+  that sat unchanged for six minutes while the daemon booted perfectly
+  normally; a presence-based signal read that as "still migrating" and the
+  gate waited on a lie. Any readiness failure carries the elapsed time and
+  the last line the daemon printed.
+
+PER-REVIEW SNAPSHOT ISOLATION (gate 1)
+
+  The pre-upgrade binary PANICS on part of this data — `prose_refs.rs` slices
+  a string at a byte index inside `'à'`, the blocking-task wrapper re-panics
+  and the connection drops — so `review_snapshot.py snapshot` (one document
+  for every review, all-or-nothing) exits 2 and takes the whole comparison
+  with it. The post-upgrade branch carries the fix
+  (`539e2fc fix(kb-code): stop prose_refs splitting non-ASCII characters
+  (RS-U10)`), so the failure IS the finding: the pre-upgrade binary cannot
+  read data the post-upgrade one can.
+
+  The driver therefore reads ONE REVIEW AT A TIME, in process, through the
+  U0 harness's own per-review entry point, and records each failure with the
+  review id, the HTTP path and the failure verbatim instead of aborting. It
+  then compares every review readable on BOTH sides and states the outcome
+  precisely ("N of M reviews compared; K were unreadable by the pre-upgrade
+  binary"), with the panic text from the daemon log as the evidence. A run
+  in which nothing could be compared is a FAIL, and a review the AFTER
+  binary can no longer read is a FAIL. Nothing is dropped silently.
 
 WHAT IT CALLS (it never reimplements them)
 
-  * `review_snapshot.py snapshot` / `diff` — the U0 golden harness (a).
+  * `review_snapshot.py` — the U0 golden harness (a), used two ways: its
+    `diff` mode is called as a subprocess, and for the snapshot itself the
+    driver imports it as a module and calls its own per-review read. Its
+    `snapshot` CLI is ALL-OR-NOTHING (one review it cannot read aborts the
+    whole document), which is exactly what gate 1 must not be, so the tool
+    is NOT edited and NOT weakened — the driver isolates each review around
+    it. If the harness ever stops exposing a per-review entry point, gate 1
+    says so by name instead of quietly falling back to a weaker comparison.
   * `repo_invariance.py record` / `check`  — the U0 invariance harness (b).
   * `kb-code` (the agent CLI) and `gh` (read-only) for the live gates.
   * `kb-code-server` is STARTED by this driver, on a free port, with its
@@ -65,16 +97,24 @@ WHAT IT CALLS (it never reimplements them)
     gate 6 needs one).
 
 THE GATES (BUILD-BRIEF §3)
-
   1. golden relocation      — the only permitted diffs are NEW envelope
-                              fields; the driver enumerates the keys it
-                              allowed, so "we allowed the new keys" is a
-                              printed list, not a claim.
+                             fields; the driver enumerates the keys it
+                             allowed, so "we allowed the new keys" is a
+                             printed list, not a claim. Each review is read
+                             in isolation, so one review the pre-upgrade
+                             binary cannot read is a named, evidenced
+                             finding rather than an aborted gate.
   2. user-repo invariance   — `record` BEFORE the whole operation sequence
-                              (create, start-pr, sync, snapshot,
-                              auto-capture, retrack, GC) and `check` after.
-                              A configured-but-missing clone FAILS the gate
-                              by name; it is never silently skipped.
+                             (create, start-pr, sync, snapshot,
+                             auto-capture, retrack, GC) and `check` after.
+                             A configured-but-missing clone FAILS the gate
+                             by name; it is never silently skipped. The
+                             sequence never runs against a SEEDING store:
+                             the driver waits for `ready` first, and a 503
+                             `urn:kb:errors:store-seeding` mid-sequence is
+                             the daemon's own documented retry — honoured
+                             within the budget and logged with its elapsed
+                             time.
   3. no fallback            — `runtime.git_fallbacks` on
                               `GET /api/repos/{name}/store` must be zero on
                               a READY store. Not-ready is a backoff+SKIP
@@ -132,6 +172,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
+import inspect
 import json
 import os
 import re
@@ -143,6 +185,7 @@ import time
 import tempfile
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -279,6 +322,25 @@ GIT_WRITE_SUBCOMMANDS = frozenset(
 # saying which, so the driver computes the added-key set itself and requires
 # each one to match this list: the allowlist is enforced, not trusted.
 ALLOWED_NEW_KEYS = ("base", "warnings", "minted", "kind", "base_tip_sha")
+
+# Gate 2 — the daemon's OWN retry contract. While a review store is seeding,
+# `review sync`/`store sync` answer HTTP 503 with this error code and the
+# message "the review store for this repo is seeding; retry in 30s" plus a
+# `next` suggestion. The CLI maps that documented, self-describing answer to
+# exit 3 (conflict) — correctly, per its own docs. So a 503 carrying THIS
+# code is a WAIT, not a failed operation; any other 503 — or this code with
+# no delay the caller can honour — is still a failure.
+STORE_SEEDING_CODE = "urn:kb:errors:store-seeding"
+# The delay the product's own message names. Used ONLY when the envelope
+# carries the code but neither a `retry_after` field nor a "retry in Ns"
+# message — the code IS the contract, so the product's own constant is the
+# faithful fallback, and every wait that uses it says so in the log.
+STORE_SEEDING_FALLBACK_RETRY = 30.0
+
+# Gate 1 — a daemon panic, quoted as evidence when the pre-upgrade binary
+# cannot read a review. The bytes the driver quotes are the daemon's own
+# words; the driver adds nothing to them.
+PANIC_MARKERS = ("panicked at", "not a char boundary", "stack backtrace")
 
 GATE_NAMES = {
     1: "golden relocation",
@@ -579,12 +641,19 @@ class Ctx:
                 f"{self.redact(step.stdout[:400])}"
             ) from e
 
-    def http_json(self, gate: int, label: str, url: str, *, timeout: float = 120.0) -> Any:
+    def http_get(
+        self, gate: int, label: str, url: str, *, timeout: float = 120.0
+    ) -> tuple[int, Any, str]:
+        """One GET that REPORTS the status instead of raising: `(status, body,
+        raw)`. A 503 is an answer from this daemon — the store-seeding one is
+        a state, not a transport failure — so a caller that has to tell
+        `ready` from `seeding` needs the status, not an exception. A
+        connection that never produced a response still raises."""
         step = Step(gate=gate, label=label, argv=["GET", url])
         self.steps.append(step)
         if self.dry_run:
             step.planned = True
-            return {}
+            return 200, {}, ""
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         tok = os.environ.get("KB_CODE_TOKEN")
         if tok:
@@ -592,19 +661,28 @@ class Ctx:
         t0 = time.time()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
+                status = resp.status
+                raw = resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
-            step.returncode = e.code
-            raise GateAbort(
-                f"GET {url} -> HTTP {e.code}: "
-                f"{self.redact(e.read()[:300].decode('utf-8', 'replace'))}"
-            ) from e
+            status = e.code
+            raw = e.read()[:600].decode("utf-8", "replace")
         except Exception as e:  # noqa: BLE001 — reported, never swallowed
             step.returncode = -1
             raise GateAbort(f"GET {url} failed: {e}") from e
-        step.returncode = 200
+        step.returncode = status
         step.seconds = time.time() - t0
-        step.stdout = self.redact(json.dumps(body)[:4000])
+        if status == 200:
+            step.stdout = self.redact(raw[:4000])
+        try:
+            body = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError:
+            body = {}
+        return status, body, raw
+
+    def http_json(self, gate: int, label: str, url: str, *, timeout: float = 120.0) -> Any:
+        status, body, raw = self.http_get(gate, label, url, timeout=timeout)
+        if status != 200:
+            raise GateAbort(f"GET {url} -> HTTP {status}: {self.redact(raw[:300])}")
         return body
 
     # -- gate 6 helpers ------------------------------------------------
@@ -820,6 +898,9 @@ class Daemon:
         self.proc: subprocess.Popen | None = None
         self.log: Path | None = None
         self._snapshot_sizes: dict[str, int] = {}
+        # Consecutive probes on which a snapshot file's size did NOT move: the
+        # snapshot is finished. Growth resets it.
+        self._snapshot_stable: dict[str, int] = {}
 
     @property
     def base(self) -> str:
@@ -910,12 +991,32 @@ class Daemon:
 
           * a line in the daemon's own output (the `backup.rs` messages), or
           * the `VACUUM INTO` destination itself — `index.db.pre-V<e>.bak`
-            growing, or its `-journal` sidecar present — beside the volume.
+            GROWING, or its `-journal` sidecar present — beside the volume.
             The sidecar is SQLite's rollback journal for the destination, so
             its presence means the copy is in flight right now.
 
+        PRESENCE IS NOT THE SIGNAL, and that is the whole point. A finished
+        snapshot sits beside the volume forever — it is the SUCCESS state for
+        gate 1's migration proof, and the operator is meant to read it there.
+        This box grew a 5,282,185,216-byte `index.db.pre-V0044.bak` that then
+        sat unchanged for six minutes while the daemon booted perfectly
+        normally, and a presence-based signal called that "still migrating",
+        so the readiness loop reported a lie and waited on it. So a snapshot
+        file counts as in-flight only while its size MOVES between two
+        consecutive probes; a file whose size has not moved is reported as
+        complete, and the first sighting of one is neither (growth is not yet
+        established either way).
+
+        The daemon's own output is the second signal and is deliberately the
+        weaker one: `backup.rs` says "pre-migration snapshot" both when it
+        takes a snapshot and when it reuses one, and that line then stays in
+        the log for the rest of the boot. So it marks a boot as
+        migration-RELATED and is reported as such — but only the file MOVING
+        is what "in progress" means.
+
         Returns `(in_progress, human-readable detail)`.
         """
+        active: list[str] = []
         detail: list[str] = []
         if self.log and self.log.exists():
             try:
@@ -925,23 +1026,40 @@ class Daemon:
             for signal_text in MIGRATION_LOG_SIGNALS:
                 if signal_text in tail:
                     detail.append(f"daemon output mentions {signal_text!r}")
+                    active.append(f"the daemon's own output mentions {signal_text!r}")
         try:
             for p in sorted(self.db_path.parent.glob("index.db.pre-V*.bak*")):
-                size = p.stat().st_size
+                try:
+                    size = p.stat().st_size
+                except OSError:
+                    continue
                 if p.name.endswith("-journal"):
                     detail.append(f"{p.name} present ({size} bytes) — the snapshot copy is in flight")
-                else:
-                    # "growing" needs a previous sample to compare against: the
-                    # first sighting of a snapshot is not evidence of growth.
-                    previous = self._snapshot_sizes.get(p.name)
-                    self._snapshot_sizes[p.name] = size
+                    active.append(f"{p.name} is being written")
+                    continue
+                # "growing" needs a previous sample to compare against: the
+                # first sighting of a snapshot is not evidence of growth, and
+                # an unchanged size across probes is evidence it is FINISHED.
+                previous = self._snapshot_sizes.get(p.name)
+                self._snapshot_sizes[p.name] = size
+                if previous is None:
                     detail.append(
-                        f"{p.name} at {size} bytes"
-                        + (" (growing)" if previous is not None and size != previous else "")
+                        f"{p.name} at {size} bytes (first sighting — growth not yet established)"
+                    )
+                elif size != previous:
+                    detail.append(f"{p.name} at {size} bytes, up from {previous} — GROWING")
+                    active.append(f"{p.name} grew {previous} -> {size} bytes")
+                    self._snapshot_stable.pop(p.name, None)
+                else:
+                    stable = self._snapshot_stable.get(p.name, 0) + 1
+                    self._snapshot_stable[p.name] = stable
+                    detail.append(
+                        f"{p.name} at {size} bytes, unchanged across {stable} consecutive "
+                        "probe(s) — the snapshot is COMPLETE, not in flight"
                     )
         except OSError:
             pass
-        return bool(detail), "; ".join(detail)
+        return bool(active), "; ".join(detail)
 
     def wait_ready(self, timeout: float | None = None) -> None:
         """Poll `GET /api/identity` until the daemon answers.
@@ -1375,6 +1493,263 @@ def probe_old_binary_refusal(ctx: Ctx, port: int) -> str:
     return f"refused as designed (exit {rc}): {tail}"
 
 
+# --------------------------------------------------------------------------
+# gate 1 — per-review snapshot isolation
+# --------------------------------------------------------------------------
+
+
+def load_snapshot_tool() -> Any:
+    """The U0 golden harness as a MODULE.
+
+    `review_snapshot.py snapshot` builds ONE document for every review and
+    aborts all of it on the first review it cannot read — which is exactly the
+    case this gate has to survive, because the pre-upgrade binary panics on
+    part of the data the gate compares. The harness already contains the
+    per-review read that document is assembled from, so the driver calls THAT,
+    one review at a time. The tool is not edited, not forked and not
+    weakened: it is the same code path, entered per review instead of per
+    store, and its `diff` mode still does the comparing.
+
+    A harness that stops exposing that entry point is reported by name. The
+    driver does NOT fall back to the all-or-nothing document, because that
+    would be a quieter gate than the one the brief asks for.
+    """
+    if not SNAPSHOT_TOOL.is_file():
+        raise GateAbort(f"the U0 golden harness is missing: {SNAPSHOT_TOOL}")
+    spec = importlib.util.spec_from_file_location("rs_u0_review_snapshot", SNAPSHOT_TOOL)
+    if spec is None or spec.loader is None:
+        raise GateAbort(f"could not load the U0 golden harness at {SNAPSHOT_TOOL}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def tool_entry(mod: Any, name: str) -> Any:
+    """One entry point of the U0 harness, or a named GateAbort. Used for the
+    harness's per-review read and its diff; a missing one is a maintenance
+    signal, never a silent downgrade."""
+    fn = getattr(mod, name, None)
+    if fn is None:
+        raise GateAbort(
+            f"{SNAPSHOT_TOOL.name} no longer exposes `{name}`, which is how the driver isolates "
+            "each review. A `--review` filter on `snapshot` would serve the same purpose; until "
+            "the harness offers one, gate 1 cannot read this data review by review, and it will "
+            "not pretend otherwise by falling back to the all-or-nothing document."
+        )
+    return fn
+
+
+def snapshot_token() -> str | None:
+    """The bearer token the harness's own CLI would have used: `KB_CODE_TOKEN`
+    from the environment, never argv (R4). The driver passes no `--token-file`
+    today, so this is exactly what the subprocess call it replaces saw."""
+    return (os.environ.get("KB_CODE_TOKEN") or "").strip() or None
+
+
+# The canonical document's `schema` value, the harness's own constant. The
+# harness is the source of truth (a sweep reads `SCHEMA` off it); this is only
+# what the driver writes when it cannot see the harness.
+SNAPSHOT_SCHEMA = "kbrs-golden-review-snapshot/1"
+
+
+@dataclass
+class ReviewRead:
+    """One review's snapshot attempt: the document, or why there is none."""
+
+    repo: str
+    review_id: int
+    doc: dict | None = None
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.doc is not None
+
+    def http_path(self) -> str:
+        """The path the harness named in the failure, when it named one."""
+        m = re.search(r"GET (\S+?) ->", self.error or "")
+        return m.group(1) if m else "(the harness did not name a path)"
+
+    def describe(self) -> str:
+        if self.ok:
+            return f"review {self.review_id} (repo {self.repo}): read"
+        return f"review {self.review_id} (repo {self.repo}): {self.http_path()} -> {self.error}"
+
+
+@dataclass
+class SideSnapshot:
+    """One side's per-review sweep: what was read, what was not, and why."""
+
+    side: str
+    path: Path
+    schema: str = SNAPSHOT_SCHEMA
+    repos: list[str] = field(default_factory=list)
+    total: int = 0
+    reads: list[ReviewRead] = field(default_factory=list)
+
+    @property
+    def ok_ids(self) -> set[int]:
+        return {r.review_id for r in self.reads if r.ok}
+
+    @property
+    def failures(self) -> list[ReviewRead]:
+        return [r for r in self.reads if not r.ok]
+
+    def document(self, only: Sequence[int] | None = None) -> dict:
+        """The canonical document, exactly the shape the harness writes, for
+        the reviews named in `only` (all of them when it is None)."""
+        keep = None if only is None else set(only)
+        docs = [
+            r.doc
+            for r in self.reads
+            if r.ok and (keep is None or r.review_id in keep)
+        ]
+        docs.sort(key=lambda d: (d.get("repo") or "", d.get("id") or 0))
+        return {
+            "schema": self.schema,
+            "repos": self.repos,
+            "review_count": len(docs),
+            "reviews": docs,
+        }
+
+
+def sweep_reviews(
+    ctx: Ctx, g: int, side: str, daemon: "Daemon", out_path: Path, tool: Any
+) -> SideSnapshot:
+    """Read EVERY review on `daemon`, ONE AT A TIME, and write the canonical
+    document for the ones that came back.
+
+    A review that cannot be read is RECORDED — its id, the HTTP path, the
+    failure verbatim — and the sweep continues. That is the whole difference
+    from the harness's `snapshot` subcommand, which exits 2 on the first bad
+    review and takes every other review down with it. The failure is the
+    finding; the gate has to be able to say which review produced it and what
+    the binary said while producing it.
+    """
+    if ctx.dry_run:
+        ctx.steps.append(
+            Step(
+                g,
+                f"golden snapshot of the {side} volume, one isolated read per review (in process, "
+                f"through the U0 harness — the all-or-nothing CLI argv below is the entry point it "
+                f"replaces per review), written to {out_path.name}",
+                [
+                    sys.executable, str(SNAPSHOT_TOOL), "snapshot",
+                    "--base", daemon.base, "-o", str(out_path),
+                    "--timeout", str(ctx.args.http_timeout),
+                ],
+                planned=True,
+            )
+        )
+        return SideSnapshot(side=side, path=out_path)
+    get_json = tool_entry(tool, "_get_json")
+    snap_review = tool_entry(tool, "_snapshot_review")
+    discover = tool_entry(tool, "_discover_repos")
+    token = snapshot_token()
+    timeout = float(ctx.args.http_timeout)
+    try:
+        repos = list(discover(daemon.base, token, timeout))
+    except Exception as e:  # noqa: BLE001 — no repo list, so no review can be named
+        raise GateAbort(
+            f"the {side} daemon would not list its repos, so not one review could be named: {e}"
+        ) from e
+    snap = SideSnapshot(
+        side=side, path=out_path, schema=str(getattr(tool, "SCHEMA", SNAPSHOT_SCHEMA)), repos=repos
+    )
+    for repo in repos:
+        q = urllib.parse.urlencode({"repo": repo})
+        try:
+            body = get_json(daemon.base, f"/api/reviews?{q}", token, timeout)
+        except Exception as e:  # noqa: BLE001
+            raise GateAbort(
+                f"the {side} daemon would not list the reviews of repo {repo}, so not one of them "
+                f"could be read: {e}"
+            ) from e
+        for row in (body or {}).get("reviews", []):
+            rid = int(row["id"])
+            try:
+                snap.reads.append(
+                    ReviewRead(repo, rid, doc=snap_review(daemon.base, token, timeout, repo, rid))
+                )
+            except Exception as e:  # noqa: BLE001 — recorded verbatim, never swallowed
+                snap.reads.append(ReviewRead(repo, rid, error=str(e)))
+    snap.total = len(snap.reads)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(snap.document(), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return snap
+
+
+def compare_sides(before: SideSnapshot, after: SideSnapshot) -> tuple[list[int], list[str]]:
+    """`(compared review ids, everything that makes this comparison unusable)`.
+
+    The rules live here, together and pure, because each of them is a way this
+    gate could otherwise pass for the wrong reason:
+
+      * only a review readable on BOTH sides is comparable — for it,
+        "identical" is a statement about the data, not about which binary
+        survived;
+      * a review the AFTER binary cannot read but the pre-upgrade one could is
+        a REGRESSION: the relocation is only a pass if every review survives
+        it, so that is a problem, not a footnote;
+      * a review readable after and never enumerated before means the two
+        sides are not snapshots of the same review set at all;
+      * NO comparable review is a problem. A run in which nothing could be
+        compared is a FAIL, never a pass with a caveat — which is what an
+        all-or-nothing snapshot degenerates into when the data is hostile.
+
+    A review the PRE-upgrade binary cannot read is NOT a problem: that is the
+    finding, named and evidenced by the caller.
+    """
+    compared = sorted(before.ok_ids & after.ok_ids)
+    problems: list[str] = []
+    regressed = [r for r in after.failures if r.review_id in before.ok_ids]
+    if regressed:
+        problems.append(
+            f"the post-upgrade binary could not read {len(regressed)} review(s) the pre-upgrade "
+            "one could: "
+            + "; ".join(r.describe() for r in regressed[:10])
+            + ". The relocation is only a pass if every review survives it."
+        )
+    appeared = sorted(after.ok_ids - before.ok_ids - {r.review_id for r in before.failures})
+    if appeared:
+        problems.append(
+            f"review(s) {appeared} are readable after the relocation but were never in the before "
+            "snapshot, so the two sides are not snapshots of the same review set"
+        )
+    if not compared:
+        problems.append(
+            f"NOT ONE review could be read on both sides (before: {len(before.ok_ids)}/"
+            f"{before.total} readable; after: {len(after.ok_ids)}/{after.total}). A relocation "
+            "claim needs a review to compare, so this is a FAIL, not a quiet pass — the named "
+            "failures above say why."
+        )
+    return compared, problems
+
+
+def panic_evidence(ctx: Ctx, daemon: "Daemon", limit: int = 6) -> list[str]:
+    """Panic lines from a daemon's own log, verbatim and redacted. When the
+    pre-upgrade binary cannot read a review, the reason is in ITS log, and a
+    gate that names the failure without quoting that sends the reader off to
+    hunt for it."""
+    log = daemon.log
+    if not log or not log.exists():
+        return []
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    out: list[str] = []
+    for line in lines:
+        if any(marker in line for marker in PANIC_MARKERS):
+            out.append(ctx.redact(line.strip())[:300])
+            if len(out) >= limit:
+                break
+    return out
+
+
 def gate_1(ctx: Ctx) -> GateResult:
     g = 1
     ev: list[tuple[str, str]] = []
@@ -1415,17 +1790,26 @@ def gate_1(ctx: Ctx) -> GateResult:
                 )
 
         before_daemon = ctx.start_daemon(g, "before", Path(ctx.args.before_server), ctx.before_root, ctx.before_port)
-        ctx.exec(
-            g,
-            "golden snapshot of the before volume",
-            [
-                sys.executable, str(SNAPSHOT_TOOL), "snapshot",
-                "--base", before_daemon.base,
-                "-o", str(ctx.art("json", "gate1-before.json")),
-                "--timeout", str(ctx.args.http_timeout),
-            ],
+        # One isolated read per review on BOTH sides. The pre-upgrade binary
+        # panics on part of this data, and the harness's own all-or-nothing
+        # `snapshot` would have turned that single review into "exit 2" and
+        # taken the whole comparison with it.
+        tool = None if ctx.dry_run else load_snapshot_tool()
+        before_side = sweep_reviews(
+            ctx, g, "before", before_daemon, ctx.art("json", "gate1-before.json"), tool
         )
-        ev.append(("before snapshot", str(ctx.art("json", "gate1-before.json"))))
+        ev.append(
+            (
+                "before snapshot (one isolated read per review)",
+                f"{len(before_side.ok_ids)} of {before_side.total} review(s) read into "
+                f"{before_side.path}"
+                + (
+                    f"; {len(before_side.failures)} could NOT be read — named with the reason below"
+                    if before_side.failures
+                    else ""
+                ),
+            )
+        )
 
         after_daemon = ctx.start_daemon(g, "after", Path(ctx.args.after_server), ctx.after_root, ctx.after_port)
         if not ctx.dry_run:
@@ -1463,27 +1847,46 @@ def gate_1(ctx: Ctx) -> GateResult:
                     "epoch a restore of it lands on",
                 )
             )
-        ctx.exec(
-            g,
-            "golden snapshot of the after volume",
-            [
-                sys.executable, str(SNAPSHOT_TOOL), "snapshot",
-                "--base", after_daemon.base,
-                "-o", str(ctx.art("json", "gate1-after.json")),
-                "--timeout", str(ctx.args.http_timeout),
-            ],
+        after_side = sweep_reviews(
+            ctx, g, "after", after_daemon, ctx.art("json", "gate1-after.json"), tool
         )
-        ev.append(("after snapshot", str(ctx.art("json", "gate1-after.json"))))
+        ev.append(
+            (
+                "after snapshot (one isolated read per review)",
+                f"{len(after_side.ok_ids)} of {after_side.total} review(s) read into {after_side.path}"
+                + (
+                    f"; {len(after_side.failures)} could NOT be read — named with the reason below"
+                    if after_side.failures
+                    else ""
+                ),
+            )
+        )
 
         ev.append(("V0044 binary on a V0045 volume", probe_old_binary_refusal(ctx, ctx.before_port)))
 
+        # The comparison is over the reviews BOTH sides could read: the only
+        # set for which "identical" says something about the data instead of
+        # about which binary survived. Everything outside it is named below,
+        # with the reason, and never quietly dropped.
+        compared_before = ctx.art("json", "gate1-compared-before.json")
+        compared_after = ctx.art("json", "gate1-compared-after.json")
+        compared, comparison_problems = (
+            compare_sides(before_side, after_side) if not ctx.dry_run else ([], [])
+        )
+        if not ctx.dry_run:
+            for side_snap, path in ((before_side, compared_before), (after_side, compared_after)):
+                path.write_text(
+                    json.dumps(side_snap.document(compared), indent=2, sort_keys=True, ensure_ascii=False)
+                    + "\n",
+                    encoding="utf-8",
+                )
         step = ctx.exec(
             g,
-            "golden diff (new envelope fields allowed)",
+            f"golden diff over the {len(compared) or 'compared'} review(s) (new envelope fields allowed)",
             [
                 sys.executable, str(SNAPSHOT_TOOL), "diff",
-                str(ctx.art("json", "gate1-before.json")),
-                str(ctx.art("json", "gate1-after.json")),
+                str(compared_before),
+                str(compared_after),
                 "--allow-new-keys",
             ],
             check=False,
@@ -1491,14 +1894,40 @@ def gate_1(ctx: Ctx) -> GateResult:
         ev.append(("diff --allow-new-keys", f"exit {step.returncode}: {step.stdout.strip() or '(no output)'}"))
 
         if not ctx.dry_run:
-            doc_before = json.loads(ctx.art("json", "gate1-before.json").read_text(encoding="utf-8"))
-            doc_after = json.loads(ctx.art("json", "gate1-after.json").read_text(encoding="utf-8"))
+            doc_before = json.loads(compared_before.read_text(encoding="utf-8"))
+            doc_after = json.loads(compared_after.read_text(encoding="utf-8"))
+            unreadable_before = before_side.failures
+            unreadable_after = after_side.failures
             ev.append(
                 (
-                    "reviews compared",
-                    f"{doc_before.get('review_count')} before / {doc_after.get('review_count')} after",
+                    "reviews enumerated",
+                    f"{before_side.total} before (across {len(before_side.repos)} repo(s)) / "
+                    f"{after_side.total} after",
                 )
             )
+            ev.append(
+                (
+                    "reviews compared (readable on BOTH sides)",
+                    f"{len(compared)} of {before_side.total}: {compared}"
+                    if len(compared) <= 40
+                    else f"{len(compared)} of {before_side.total}: {compared[:40]} … (+{len(compared) - 40} more)",
+                )
+            )
+            for r in unreadable_before:
+                ev.append((f"UNREADABLE by the pre-upgrade binary — review {r.review_id}", r.describe()))
+            for r in unreadable_after:
+                ev.append((f"UNREADABLE by the post-upgrade binary — review {r.review_id}", r.describe()))
+            if unreadable_before:
+                panics = panic_evidence(ctx, before_daemon)
+                ev.append(
+                    (
+                        "why, from the pre-upgrade daemon's own log (verbatim)",
+                        "\n".join(panics)
+                        or "(no panic line in the log — the failures above are the whole evidence)",
+                    )
+                )
+            if comparison_problems:
+                raise GateAbort("; ".join(comparison_problems))
             added = added_key_paths(doc_before, doc_after)
             allowed = [p for p in added if key_is_allowed(p)]
             refused = [p for p in added if not key_is_allowed(p)]
@@ -1518,14 +1947,48 @@ def gate_1(ctx: Ctx) -> GateResult:
                     "review_snapshot.py diff reported differences beyond the allowed new keys "
                     f"(exit {step.returncode}):\n{ctx.redact(step.stdout[:2000])}"
                 )
+            # The harness's own diff, per review, so a difference is attributed
+            # to the review that carries it rather than to a document index.
+            diff_snapshots = tool_entry(tool, "diff_snapshots")
+            by_id_before = {r.review_id: r.doc for r in before_side.reads if r.ok}
+            by_id_after = {r.review_id: r.doc for r in after_side.reads if r.ok}
+            differing = {
+                rid: diff_snapshots(by_id_before[rid], by_id_after[rid], True)
+                for rid in compared
+            }
+            differing = {k: v for k, v in differing.items() if v}
+            if differing:
+                raise GateAbort(
+                    "review(s) differ beyond the allowed new envelope keys: "
+                    + "; ".join(
+                        f"review {rid}: " + " | ".join(lines[:3]) for rid, lines in sorted(differing.items())[:10]
+                    )
+                )
+            ev.append(
+                (
+                    "review-by-review diff (harness `diff_snapshots`, new keys allowed)",
+                    f"{len(compared)} review(s) compared individually, 0 with a difference beyond "
+                    f"{list(ALLOWED_NEW_KEYS)}",
+                )
+            )
             res.status = "PASS"
             res.reason = (
-                f"{doc_before.get('review_count')} reviews relocated with no change to files, "
-                f"blob ids, anchors, findings or verdict; {len(allowed)} new envelope key(s) "
-                f"allowed and enumerated above; the gated pre-migration snapshot "
-                f"({snap.path.name if snap else 'MISSING'}) of this volume was taken at epoch "
-                f"{PRE_MIGRATION_EPOCH} before the crossing, and the V0044 binary refused the "
-                "migrated volume."
+                f"{len(compared)} of {before_side.total} reviews compared and relocated with no "
+                "change to files, blob ids, anchors, findings or verdict; "
+                + (
+                    f"{len(unreadable_before)} of {before_side.total} were UNREADABLE by the "
+                    "pre-upgrade binary ("
+                    + ", ".join(str(r.review_id) for r in unreadable_before[:10])
+                    + (", …" if len(unreadable_before) > 10 else "")
+                    + ") — each named above with its HTTP path, the failure verbatim and the "
+                    "daemon's own panic, which is the finding this gate is built to survive; "
+                    if unreadable_before
+                    else "every review was readable on both sides; "
+                )
+                + f"{len(allowed)} new envelope key(s) allowed and enumerated above; the gated "
+                f"pre-migration snapshot ({snap.path.name if snap else 'MISSING'}) of this volume "
+                f"was taken at epoch {PRE_MIGRATION_EPOCH} before the crossing, and the V0044 "
+                "binary refused the migrated volume."
             )
         else:
             res.status = "UNRUN"
@@ -1546,6 +2009,131 @@ def gate_1(ctx: Ctx) -> GateResult:
     res.evidence = ev
     res.steps = [s for s in ctx.steps if s.gate == g]
     return res
+
+
+# --------------------------------------------------------------------------
+# store readiness + the daemon's own retry contract (gate 2, and gate 3)
+# --------------------------------------------------------------------------
+
+
+
+def seeding_retry_seconds(text: str) -> float | None:
+    """How long the daemon asked the caller to wait, or None if `text` carries
+    no store-seeding meaning at all.
+
+    The contract is the daemon's own error envelope: code
+    `urn:kb:errors:store-seeding`, an optional `retry_after`, and the message
+    "the review store for this repo is seeding; retry in 30s". `retry_after`
+    wins; otherwise the delay the message names is read back out of it; and
+    only if the envelope carries the code and neither is present does the
+    product's own constant stand in — every wait that takes that branch says
+    so in the log.
+
+    None means "this is not a seeding answer": any other 503, or any other
+    failure, and the caller must treat it as a failure. Parsed out of the raw
+    text on purpose, so a CLI that pretty-prints or truncates the envelope
+    still yields the code and the delay.
+    """
+    if STORE_SEEDING_CODE not in text:
+        return None
+    m = re.search(r'"retry_after"\s*:\s*"?(\d+(?:\.\d+)?)', text)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"retry in\s+(\d+(?:\.\d+)?)\s*s", text)
+    if m:
+        return float(m.group(1))
+    return STORE_SEEDING_FALLBACK_RETRY
+
+
+def seeding_sleep(
+    returncode: int, text: str, spent: float, budget: float
+) -> tuple[float | None, str]:
+    """What to do about a failed operation, given the daemon's answer:
+    `(seconds to wait, the line to log)`, or `(None, …)` when the operation is
+    a failure and the retry loop must stop.
+
+    A store-seeding 503 is a WAIT as long as the per-operation budget lasts;
+    the wait is the daemon's own (`retry_after`, else the delay its message
+    names) and is never allowed to run past the budget. A budget that is spent
+    is the ONLY way a seeding answer becomes a failure, and it says so. Any
+    other failure carries no note: it was never a wait.
+    """
+    said = seeding_retry_seconds(text)
+    if said is None:
+        return None, ""
+    left = float(budget) - float(spent)
+    if left <= 0:
+        return None, (
+            f"the store was still seeding after {_hms(spent)} — the {_hms(budget)} per-operation "
+            "seeding budget is spent, so the operation is a failure now"
+        )
+    nap = min(said, left)
+    return nap, (
+        f"the daemon answered {STORE_SEEDING_CODE} (exit {returncode}) — the store is still "
+        f"seeding, so this is a WAIT, not a failed operation; sleeping {_hms(nap)} as the daemon "
+        f"asked ({_hms(spent)} of the {_hms(budget)} budget used)"
+    )
+
+
+def read_store_states(
+    ctx: Ctx, g: int, daemon: "Daemon", repos: Sequence[str]
+) -> dict[str, str]:
+    """`GET /api/repos/{name}/store` per repo, as a STATE per repo.
+
+    A 503 carrying the store-seeding code IS the state (`seeding`) — it is the
+    daemon saying "not yet", not a failed read. Any other non-200, or a card
+    with no state, raises: an unreadable store card must never read as
+    `ready`.
+    """
+    states: dict[str, str] = {}
+    for name in repos:
+        status, body, raw = ctx.http_get(g, f"store card: {name}", f"{daemon.base}/api/repos/{name}/store")
+        if status == 200:
+            states[name] = str((body.get("store") or {}).get("state", "<no state>"))
+        elif seeding_retry_seconds(raw) is not None:
+            states[name] = "seeding"
+        else:
+            raise GateAbort(
+                f"GET /api/repos/{name}/store -> HTTP {status}: {ctx.redact(raw[:300])}. The store's "
+                "state could not be read, so this run cannot claim the store is ready."
+            )
+    return states
+
+
+def wait_for_store_ready(
+    ctx: Ctx, g: int, daemon: "Daemon", repos: Sequence[str], *, timeout: float
+) -> tuple[dict[str, str], float, list[str]]:
+    """Wait until EVERY repo's store is `ready`. Returns `(states, elapsed
+    seconds, waits)`, where `waits` is one printable line per wait, each with
+    the elapsed time at that moment — a wait an operator cannot see is a wait
+    nobody can trust.
+
+    ONE definition of readiness, used by gate 3 (whose fallback counters only
+    mean something on a ready store) and by gate 2 (which must not run its
+    operation sequence against a seeding store). The caller decides what a
+    store that never got ready means: gate 3 SKIPs with the state it stayed
+    in, gate 2 FAILs, because its operations would not have run.
+    """
+    started = time.time()
+    backoff = 2.0
+    states: dict[str, str] = {}
+    waits: list[str] = []
+    while True:
+        states = read_store_states(ctx, g, daemon, repos)
+        elapsed = time.time() - started
+        if ctx.dry_run or all(s == "ready" for s in states.values()):
+            return states, elapsed, waits
+        if elapsed >= float(timeout):
+            return states, elapsed, waits
+        line = (
+            f"{_hms(elapsed)} in: store(s) not ready yet — "
+            + ", ".join(f"{k}={v}" for k, v in sorted(states.items()))
+            + f"; waiting {_hms(backoff)} (budget {_hms(float(timeout))})"
+        )
+        waits.append(line)
+        print(f"  ⏳ gate {g}: {line}", flush=True)
+        time.sleep(backoff)
+        backoff = min(backoff * 1.5, 30.0)
 
 
 # --------------------------------------------------------------------------
@@ -1649,6 +2237,48 @@ def gate_2(ctx: Ctx) -> GateResult:
         _, _, _, cli = resolve_binaries(ctx.args)
         repo = ctx.args.repo
         pr = ctx.args.ops_pr
+
+        # The operation sequence must not run against a seeding store. The
+        # daemon says so itself — 503 `urn:kb:errors:store-seeding`, "the
+        # review store for this repo is seeding; retry in 30s" — and the second
+        # real run proved the point by having `sync` refuse exactly that way.
+        # So the store is waited out FIRST, with the same readiness helper
+        # gate 3 uses (one definition, not two), and what it waited for and
+        # for how long is reported whether or not it had to wait.
+        store_names = store_repos(config)
+        if not ctx.dry_run and not store_names:
+            ev.append(
+                (
+                    "store readiness before the operation sequence",
+                    "the after config registers no `[[review.repos]]` store, so there is no store "
+                    "that could be seeding",
+                )
+            )
+        elif store_names:
+            states, waited, waits = wait_for_store_ready(
+                ctx, g, daemon, store_names, timeout=float(ctx.args.store_ready_timeout)
+            )
+            ev.append(
+                (
+                    "store readiness before the operation sequence",
+                    f"waited {_hms(waited)} for "
+                    + ", ".join(f"{k}={v}" for k, v in sorted(states.items()))
+                    + f" (budget {_hms(float(ctx.args.store_ready_timeout))}, "
+                    f"{len(waits)} poll(s) found it not ready)",
+                )
+            )
+            for line in waits:
+                ev.append(("store wait", line))
+                ctx.notes.append(f"gate 2 store readiness: {line}")
+            if not ctx.dry_run and not all(s == "ready" for s in states.values()):
+                raise GateAbort(
+                    f"the review store was still not `ready` after {_hms(waited)} ("
+                    + ", ".join(f"{k}={v}" for k, v in sorted(states.items()))
+                    + f", budget {_hms(float(ctx.args.store_ready_timeout))}). The operation "
+                    "sequence was NOT run: against a seeding store every operation the gate is "
+                    "about to make is refused by the daemon, so a run that started here would "
+                    "prove nothing."
+                )
         review_id: str | None = None
         plan = [
             ("create", ["review", "start", f"refs/kbc/pr/{pr}", "--repo", repo, "--json"]),
@@ -1662,19 +2292,67 @@ def gate_2(ctx: Ctx) -> GateResult:
         ]
         op_rows: list[str] = []
         failed_ops: list[str] = []
+        seeding_waits: list[str] = []
         for label, tail in plan:
             rid = review_id or ctx.placeholder("{REVIEW_ID}", "<review-id-from-create>")
             argv = [str(cli), *[rid if a == "{REVIEW_ID}" else a for a in tail], "--daemon", daemon.base]
-            step = ctx.exec(g, f"operation: {label}", argv, check=False, timeout=1800)
+            # A store-seeding 503 is the daemon's own documented retry, so it
+            # is a WAIT inside the gate's budget, not a failed operation. The
+            # budget is per operation (--store-ready-timeout, the same budget
+            # as the readiness wait above); when it runs out the operation
+            # fails exactly as it does for any other reason, and the log says
+            # which budget it was. Any other 503 has no retry meaning and
+            # fails immediately.
+            seed_budget = float(ctx.args.store_ready_timeout)
+            seed_started = time.time()
+            step = None
+            while True:
+                step = ctx.exec(g, f"operation: {label}", argv, check=False, timeout=1800)
+                if ctx.dry_run:
+                    break
+                if step.returncode == 0:
+                    break
+                nap, note = seeding_sleep(
+                    step.returncode,
+                    (step.stderr or "") + "\n" + (step.stdout or ""),
+                    time.time() - seed_started,
+                    seed_budget,
+                )
+                if note:
+                    seeding_waits.append(f"{label}: {note}")
+                    print(f"  ⏳ gate {g}: {label}: {note}", flush=True)
+                if nap is None:
+                    break
+                time.sleep(nap)
+            if step is None:
+                continue
             if not ctx.dry_run:
                 if step.returncode != 0:
+                    budget_note = (
+                        f" [the store was still seeding when this operation's "
+                        f"{_hms(seed_budget)} seeding budget ran out]"
+                        if any(
+                            w.startswith(f"{label}:") and "budget is spent" in w
+                            for w in seeding_waits
+                        )
+                        else ""
+                    )
                     failed_ops.append(
-                        f"{label} (exit {step.returncode}: {ctx.redact(step.stderr.strip()[:200])})"
+                        f"{label} (exit {step.returncode}: "
+                        f"{ctx.redact(step.stderr.strip()[:200])}{budget_note})"
                     )
                 if review_id is None and label in ("create", "start-pr", "sync"):
                     review_id = extract_review_id(step.stdout)
                 op_rows.append(f"{label}: exit {step.returncode}")
         ev.append(("operation sequence", "; ".join(op_rows) or "(dry run)"))
+        if seeding_waits:
+            ev.append(
+                (
+                    f"store-seeding waits during the operation sequence ({len(seeding_waits)})",
+                    "\n".join(f"  {w}" for w in seeding_waits),
+                )
+            )
+            ctx.notes.extend(f"gate 2 seeding wait: {w}" for w in seeding_waits)
         ev.append(
             (
                 "auto-capture",
@@ -1748,28 +2426,30 @@ def gate_3(ctx: Ctx) -> GateResult:
             res.steps = [s for s in ctx.steps if s.gate == g]
             return res
 
-        states: dict[str, str] = {}
-        deadline = time.time() + float(ctx.args.store_ready_timeout)
-        backoff = 2.0
-        while True:
-            states = {}
-            for name in repos:
-                card = ctx.http_json(g, f"store card: {name}", f"{daemon.base}/api/repos/{name}/store")
-                states[name] = (card.get("store") or {}).get("state", "<no store>")
-            if ctx.dry_run or all(s == "ready" for s in states.values()):
-                break
-            if time.time() > deadline:
-                res.status = "SKIP"
-                res.reason = (
-                    f"store(s) never reached `ready` within {ctx.args.store_ready_timeout}s: "
-                    + ", ".join(f"{k}={v}" for k, v in states.items())
-                )
-                res.evidence = ev
-                res.steps = [s for s in ctx.steps if s.gate == g]
-                return res
-            time.sleep(backoff)
-            backoff = min(backoff * 1.5, 30.0)
-        ev.append(("store state", ", ".join(f"{k}={v}" for k, v in states.items())))
+        states, waited, waits = wait_for_store_ready(
+            ctx, g, daemon, repos, timeout=float(ctx.args.store_ready_timeout)
+        )
+        ev.append(
+            (
+                "store readiness wait",
+                f"waited {_hms(waited)} for "
+                + ", ".join(f"{k}={v}" for k, v in sorted(states.items()))
+                + f" (budget {_hms(float(ctx.args.store_ready_timeout))}, "
+                f"{len(waits)} poll(s) found it not ready)",
+            )
+        )
+        for line in waits:
+            ev.append(("store wait", line))
+        if not ctx.dry_run and not all(s == "ready" for s in states.values()):
+            res.status = "SKIP"
+            res.reason = (
+                f"store(s) never reached `ready` within {ctx.args.store_ready_timeout}s: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(states.items()))
+            )
+            res.evidence = ev
+            res.steps = [s for s in ctx.steps if s.gate == g]
+            return res
+        ev.append(("store state", ", ".join(f"{k}={v}" for k, v in sorted(states.items()))))
 
         before_counters = read_fallback_counters(ctx, g, daemon, repos)
         _, _, _, cli = resolve_binaries(ctx.args)
@@ -2451,18 +3131,39 @@ list is printed. Also surfaces the two facts that prove the migration really ran
 the gated pre-migration snapshot of this volume, and the V0044 binary's refusal to
 open the migrated volume.
 
+Each review is read **in isolation** on both sides, and the verdict counts them:
+`N of M reviews compared; K were unreadable by the pre-upgrade binary`. A review
+the pre-upgrade binary cannot read is a finding, not an aborted gate — the
+driver names it, quotes the HTTP path and the failure verbatim, and reproduces
+the panic from that daemon's own log. Nothing is dropped silently: a review the
+POST-upgrade binary can no longer read, a review that exists only after, and a
+run in which no review could be compared at all are all FAILs.
+
 The snapshot is checked through the product's OWN receipt (`backup.marker` beside
 the volume), not through a hardcoded file name: the gate asserts the claim — a
 non-empty snapshot of THIS volume, taken while it was still at epoch 44, whose
 recorded byte count still matches the file on disk — and prints whatever the
 product named it. It is named for the volume's epoch at the time of the snapshot,
 because that is the epoch a restore of it lands on, so a V0044 → V0045 crossing
-writes `index.db.pre-V0044.bak`.""",
+writes `index.db.pre-V0044.bak`. A COMPLETE snapshot beside the volume is that
+success state, so the readiness loop reports a boot as "still migrating" only
+while that file is GROWING or a `-journal` sidecar is being written — never
+merely because the file exists.""",
     2: """**Asserts.** Across create, start-pr, sync, snapshot, auto-capture, retrack
 and GC, no registered clone's `for-each-ref`, `packed-refs` or `refs/` tree
 changes. `repo_invariance.py record` runs BEFORE the first operation and `check`
 after the last. A configured-but-missing clone FAILS this gate by name: a clone
-that cannot be hashed is a clone whose refs are unverified.""",
+that cannot be hashed is a clone whose refs are unverified.
+
+The sequence never runs against a SEEDING store. The driver waits for every
+`[[review.repos]]` store to be `ready` first — the same helper gate 3 uses, with
+the wait and its elapsed time reported — and FAILs rather than starting against
+a store that is still seeding. Mid-sequence, a 503 carrying
+`urn:kb:errors:store-seeding` is the daemon's own documented retry, so it is
+WAITED on: the `retry_after` it reports (or the delay its message names) is
+honoured, within `--store-ready-timeout` per operation, and every wait is
+printed with its elapsed time. Only when that budget is spent does the operation
+fail. Any other 503 is still a failure.""",
     3: """**Asserts.** With every review store `ready`, ZERO reads fall back to the
 user repo's objects. The counters are `runtime.git_fallbacks` (`unresolved`,
 `odb_miss`) on `GET /api/repos/{{name}}/store`, read per repo. A store that is
@@ -2892,6 +3593,61 @@ def self_test(args: argparse.Namespace) -> int:
             )
         )
 
+        # A COMPLETE, non-growing `.bak` beside a healthy volume is the SUCCESS
+        # state for gate 1's migration proof — and it must not also read as
+        # "still working". The second real run grew a 5,282,185,216-byte
+        # snapshot that then sat unchanged for six minutes while the daemon
+        # booted perfectly normally; a presence-based signal called that a
+        # migration in flight and the readiness loop waited on the lie. Two
+        # probes of an unmoving file, then a verdict.
+        quiet_root = root / "quiet-vol"
+        vol2 = quiet_root / "state" / "kb-code"
+        vol2.mkdir(parents=True)
+        quiet_log = root / "quiet-daemon.log"
+        quiet_log.write_text("kb-code: ready\n", encoding="utf-8")
+        done_bak = vol2 / "index.db.pre-V0044.bak"
+        done_bak.write_bytes(b"z" * (1 << 20))
+        quiet = Daemon(ctx, 0, "after", Path("/bin/true"), quiet_root, 4791)
+        quiet.log = quiet_log
+        seen_first, detail_first = quiet.migration_state()
+        seen_second, detail_second = quiet.migration_state()
+        checks.append(
+            (
+                "readiness a COMPLETE, non-growing *.bak is not 'still migrating'",
+                not seen_first
+                and "growth not yet established" in detail_first
+                and not seen_second
+                and "COMPLETE" in detail_second,
+                detail_second or "no snapshot evidence found",
+            )
+        )
+        try:
+            quiet.wait_ready(timeout=1.0)
+        except GateAbort as e:
+            quiet_msg = str(e)
+        else:
+            quiet_msg = ""
+        checks.append(
+            (
+                "readiness a complete snapshot beside a live daemon gives a BOOT verdict, not a wait",
+                "boot failure, not a slow one" in quiet_msg
+                and "still inside the gated pre-migration snapshot" not in quiet_msg,
+                quiet_msg.splitlines()[0][:150] if quiet_msg else "wait_ready returned instead of failing",
+            )
+        )
+        # …and the same file, GROWING between probes, is in flight. Growth, not
+        # presence: that is the only thing that makes a snapshot in progress.
+        with done_bak.open("ab") as fh:
+            fh.write(b"z" * 8192)
+        growing_active, growing_detail = quiet.migration_state()
+        checks.append(
+            (
+                "readiness a *.bak whose size MOVED between probes is GROWING",
+                growing_active and "GROWING" in growing_detail,
+                growing_detail or "no snapshot evidence found",
+            )
+        )
+
     # The 300 s default is not coming back: the first real run failed gate 1 on
     # the BEFORE daemon with exactly that budget, so both defaults must now
     # exceed it, and the after default must additionally fit a 95 min first
@@ -3005,6 +3761,220 @@ def self_test(args: argparse.Namespace) -> int:
                 f"no {BACKUP_MARKER} and no index.db.pre-V*.bak beside the volume",
             )
         )
+
+    # ------------------------------------------------------------------
+    # Gate 1's per-review isolation. The pre-upgrade binary panics on
+    # `prose_refs.rs` slicing a string at byte 54 — inside `'à'` — the
+    # blocking-task wrapper re-panics, and the connection drops. The harness's
+    # own `snapshot` would have exited 2 on that one review and taken every
+    # other review with it, so the driver reads one review at a time and
+    # records the failure instead of aborting on it.
+    # ------------------------------------------------------------------
+
+    print("Gate 1 per-review isolation (one bad review is a finding, not an abort)")
+    PANIC = (
+        "GET /api/reviews/48/comments?ps=1 -> Remote end closed connection without response"
+    )
+
+    class _StubHarness:
+        """The U0 harness's shape, with review 48 unreadable — the real
+        pre-upgrade failure, reproduced without a daemon."""
+
+        SCHEMA = "kbrs-golden-review-snapshot/1"
+
+        @staticmethod
+        def _discover_repos(base, token, timeout):
+            return ["acme-widgets"]
+
+        @staticmethod
+        def _get_json(base, path, token, timeout, **kw):
+            if path.startswith("/api/reviews?"):
+                return {"reviews": [{"id": 48}, {"id": 65}]}
+            return {}
+
+        @staticmethod
+        def _snapshot_review(base, token, timeout, repo, review_id):
+            if review_id == 48:
+                raise RuntimeError(PANIC)
+            return {"id": review_id, "repo": repo, "patchsets": [{"ps_number": 1, "files": []}]}
+
+    class _StubDaemon:
+        base = "http://127.0.0.1:4790"
+
+    with tempfile.TemporaryDirectory(prefix="run-gates-isolation-") as tmp:
+        live = argparse.Namespace(**{**vars(args), "dry_run": False, "out": str(Path(tmp) / "out")})
+        live_ctx = Ctx(live)
+        out_json = Path(tmp) / "out" / "json" / "gate1-before.json"
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        stub_side = sweep_reviews(live_ctx, 1, "before", _StubDaemon(), out_json, _StubHarness())
+        written = json.loads(out_json.read_text(encoding="utf-8"))
+        checks.append(
+            (
+                "gate 1 one unreadable review does NOT abort the other reviews",
+                stub_side.ok_ids == {65} and stub_side.total == 2 and len(stub_side.failures) == 1,
+                f"read {sorted(stub_side.ok_ids)} of {stub_side.total}; "
+                f"{[f.review_id for f in stub_side.failures]} unreadable",
+            )
+        )
+        checks.append(
+            (
+                "gate 1 an unreadable review is named with its HTTP path and the failure verbatim",
+                stub_side.failures[0].http_path() == "/api/reviews/48/comments?ps=1"
+                and stub_side.failures[0].error == PANIC,
+                stub_side.failures[0].describe()[:150] if stub_side.failures else "no failure recorded",
+            )
+        )
+        checks.append(
+            (
+                "gate 1 the written document holds the READABLE reviews, count and all",
+                written["review_count"] == 1
+                and [r["id"] for r in written["reviews"]] == [65]
+                and written["schema"] == _StubHarness.SCHEMA,
+                f"review_count={written['review_count']}, ids={[r['id'] for r in written['reviews']]}",
+            )
+        )
+        # The rules that keep a hostile volume from turning into a pass.
+        def _side(side_name, ok_ids, fail_ids, total=None):
+            return SideSnapshot(
+                side=side_name,
+                path=Path(f"{side_name}.json"),
+                repos=["acme-widgets"],
+                total=total if total is not None else len(ok_ids) + len(fail_ids),
+                reads=[
+                    ReviewRead("acme-widgets", i, doc={"id": i, "repo": "acme-widgets"})
+                    for i in ok_ids
+                ]
+                + [ReviewRead("acme-widgets", i, error=PANIC) for i in fail_ids],
+            )
+
+        found_before = _side("before", [65], [48])
+        found_after = _side("after", [65, 48], [])
+        picked, problems = compare_sides(found_before, found_after)
+        checks.append(
+            (
+                "gate 1 K unreadable on the before side is a NAMED finding, not a pass-with-caveat",
+                picked == [65] and problems == [],
+                f"compared {picked}, problems {problems or 'none'}",
+            )
+        )
+        none_comparable = compare_sides(_side("before", [], [48, 65]), _side("after", [48, 65], []))
+        checks.append(
+            (
+                "gate 1 a run where NOTHING could be compared is a FAIL, never a pass",
+                none_comparable[0] == []
+                and any("NOT ONE review could be read on both sides" in p for p in none_comparable[1]),
+                "; ".join(none_comparable[1])[:150] or "no problem reported",
+            )
+        )
+        regressed = compare_sides(_side("before", [65, 48], []), _side("after", [65], [48]))
+        checks.append(
+            (
+                "gate 1 a review the AFTER binary can no longer read is a FAIL",
+                any("could not read" in p for p in regressed[1]),
+                "; ".join(regressed[1])[:150] or "no problem reported",
+            )
+        )
+        appeared = compare_sides(_side("before", [65], []), _side("after", [65, 99], []))
+        checks.append(
+            (
+                "gate 1 a review that exists only after is reported, not ignored",
+                any("99" in p for p in appeared[1]),
+                "; ".join(appeared[1])[:150] or "no problem reported",
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Gate 2 — the daemon's own retry contract. A 503
+    # `urn:kb:errors:store-seeding` is a WAIT; anything else is a failure.
+    # ------------------------------------------------------------------
+
+    print("Gate 2 store readiness and the daemon's retry contract")
+    SEEDING_503 = (
+        '{"error":{"code":"urn:kb:errors:store-seeding","hint":null,"message":"the review '
+        'store for this repo is seeding; retry in 30s","next":[["wait","the store is '
+        'seeding"]]}}'
+    )
+    checks.append(
+        (
+            "gate 2 the real seeding 503 is a WAIT, and the delay is the one the daemon names",
+            seeding_retry_seconds(SEEDING_503) == 30.0,
+            f"retry in {seeding_retry_seconds(SEEDING_503)}s from the message the daemon sent",
+        )
+    )
+    checks.append(
+        (
+            "gate 2 an explicit `retry_after` in the envelope wins over the message",
+            seeding_retry_seconds('{"code":"urn:kb:errors:store-seeding","retry_after":12}')
+            == 12.0,
+            "retry_after=12s honoured",
+        )
+    )
+    checks.append(
+        (
+            "gate 2 a seeding code with no delay anywhere falls back to the product's own 30s",
+            seeding_retry_seconds('{"code":"urn:kb:errors:store-seeding"}')
+            == STORE_SEEDING_FALLBACK_RETRY,
+            f"fallback {STORE_SEEDING_FALLBACK_RETRY}s, and the wait says so",
+        )
+    )
+    for label, other in (
+        ("another 503", '{"error":{"code":"urn:kb:errors:store-unavailable","message":"try later"}}'),
+        ("a conflict", '{"error":{"code":"urn:kb:errors:conflict","message":"review exists"}}'),
+        ("a plain failure", "error: the daemon is not listening"),
+    ):
+        checks.append(
+            (
+                f"gate 2 {label} with no seeding meaning is still a FAILURE",
+                seeding_retry_seconds(other) is None,
+                f"no retry honoured for {other[:60]}",
+            )
+        )
+    nap, note = seeding_sleep(3, SEEDING_503, 0.0, 3600.0)
+    checks.append(
+        (
+            "gate 2 a seeding 503 inside the budget sleeps the daemon's own delay and logs it",
+            nap == 30.0 and "WAIT, not a failed operation" in note and "sleeping 30s" in note,
+            note[:150] or "no wait note produced",
+        )
+    )
+    nap, note = seeding_sleep(3, SEEDING_503, 3590.0, 3600.0)
+    checks.append(
+        (
+            "gate 2 the wait never sleeps PAST the per-operation budget",
+            nap == 10.0 and "sleeping 10s" in note,
+            f"asked for 30s with 10s of budget left -> slept {nap}s",
+        )
+    )
+    nap, note = seeding_sleep(3, SEEDING_503, 3600.0, 3600.0)
+    checks.append(
+        (
+            "gate 2 only an exhausted budget turns a seeding 503 into a failure",
+            nap is None and "budget is spent" in note,
+            note[:150] or "a spent budget produced no note",
+        )
+    )
+    nap, note = seeding_sleep(3, '{"error":{"code":"urn:kb:errors:conflict"}}', 0.0, 3600.0)
+    checks.append(
+        (
+            "gate 2 a non-seeding failure is never dressed up as a wait",
+            nap is None and note == "",
+            f"no wait, no note (nap={nap!r})",
+        )
+    )
+    src2, src3 = inspect.getsource(gate_2), inspect.getsource(gate_3)
+    card_read = "/api/repos/{name}/store"
+    checks.append(
+        (
+            "gate 2 and gate 3 share ONE store-readiness helper, not two",
+            "wait_for_store_ready(" in src2
+            and "wait_for_store_ready(" in src3
+            # the per-repo store card is read in the helper only: neither gate
+            # carries a readiness loop of its own
+            and card_read not in src2
+            and card_read not in src3,
+            "both gates call wait_for_store_ready, and the store-card read exists only there",
+        )
+    )
 
     print()
     width = max(len(c[0]) for c in checks)
