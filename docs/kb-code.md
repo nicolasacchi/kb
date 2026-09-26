@@ -206,9 +206,13 @@ remote default is reported as a `stale-mirror` WARNING in the envelope's
 `warnings[]`, never a refusal — the base already comes from the freshly
 fetched remote tip, so a stale local branch no longer affects the diff
 (`reviews.rs`'s `start_pr_base`, whose own doc records the change; the
-`?async=1` job path agrees). The URN constant
-`urn:kb:errors:stale-mirror` and `ERR_STALE_MIRROR` survive only so an
-older client that branches on `error_type` still recognises the string.
+`?async=1` job path agrees). The refusal AND its URN are gone: neither
+`urn:kb:errors:stale-mirror` nor `ERR_STALE_MIRROR` exists anywhere in the
+tree, so a client branching on that `error_type` sees nothing. Only the
+`stale-mirror` WARNING code survives, and only on the pre-store
+`start-pr` fallback (a repo with a ready store resolves its base through
+the store and never reaches it).
+
 For a repo whose review store is ready the whole ladder is `review_base`'s
 resolution chain instead of the pre-store fallback — see **How kb-code
 picks and refreshes a base** below for the shipped grammar, the four live
@@ -293,10 +297,11 @@ the finding's cited lines, capped at 20 later patchsets
 stored, never a disposition — evidence the author acted near the location,
 never a claim that anything was "fixed"; `kb-code review findings list`
 prints it as `touched ps3 (exact)` after the location. `GET
-/api/reviews/{id}/findings/recurrence`
-(bearer, route-only — no dedicated CLI verb yet) surfaces which of a
-review's own findings recur across the repo's other reviews, off the same
-`recurrence_pairs` query `review analytics` uses.
+`/api/reviews/{id}/findings/recurrence`
+(bearer) surfaces which of a review's own findings recur across the repo's
+other reviews, off the same `recurrence_pairs` query `review analytics`
+uses. It ships as a real CLI verb —
+`kb-code review findings recurrence <id> [--json]`.
 
 **Report + artifact.** `kb-code review report ID` (`GET
 /api/reviews/{id}/report`, bearer) reads the agent-authored review report;
@@ -326,11 +331,12 @@ key unchanged; see [The stream](#the-stream--timeline-v2-pseudo-files-claims-hun
 /api/reviews/analytics`, bearer) is the disposition calibration instrument —
 a severity×disposition matrix, acceptance rates, weekly buckets, latency,
 and recurrence, all over non-superseded findings only (`superseded_count` is
-reported separately, never silently dropped). `GET
-/api/reviews/{id}/impact?path=` (bearer, route-only — the SPA's "Reviewer
-X-ray" chips, no CLI verb) reports, per changed callable symbol in a file,
-how many of its callers are also in this review's own change set vs.
-elsewhere, capped at 20 symbols.
+reported separately, never silently dropped). `kb-code review impact ID
+--path P` (`GET /api/reviews/{id}/impact`, bearer — the SPA's "Reviewer
+X-ray" chips read the same route) reports, per changed callable symbol in a
+file, how many of its callers are also in this review's own change set vs.
+elsewhere, capped at 20 symbols. `--path` is required: the route's param is
+a bare `String`, so an omitted one 400s before the handler runs.
 
 **Export + publish (`kbc-github-export/1`).** `kb-code review export-github
 ID [--finding SLUG]... [--include-waived] [--include-orphaned-as-general]`
@@ -792,10 +798,11 @@ Error URNs (`BaseError`, rendered RFC 7807 through `ApiError`):
 | `urn:kb:errors:capture-failed` | 500 | the capture itself failed (git or DB) |
 | `urn:kb:errors:store-disabled` | 503 | the store's git spawner is unavailable |
 
-The legacy `urn:kb:errors:stale-mirror` URN and `ERR_STALE_MIRROR` still
-exist as constants, so an older client branching on `error_type` still
-recognises the string, but no route emits them: RS-U6 removed that
-refusal.
+`urn:kb:errors:stale-mirror` and `ERR_STALE_MIRROR` are GONE: RS-U6
+removed the refusal and the constants together, and neither string exists
+anywhere in the tree, so a client branching on that `error_type` sees
+nothing at all. Only the `stale-mirror` WARNING code in the table above
+survives, and only on the pre-store `start-pr` fallback.
 
 ### The one stderr line
 
@@ -1173,7 +1180,7 @@ prints the D20 envelope; exit codes are the shipped table below.
 | `sync [--offline]` | seed an absent store or sync a ready one (loopback-only) |
 | `set-base-url <URL>` | the ladder's explicit rung; registers, or updates a member store's base URL when it names the SAME project — never a re-key (409 `base-url-key-mismatch`) |
 | `credentials [--test]` | the fetch credential as last resolved; `--test` walks the ladder LIVE (loopback-only; runs `gh`) |
-| `legacy-refs [--yes]` | delete a member clone's `refs/kbc/{pr,review}/*` ONLY where the store holds the same ref name at the same commit; `--dry-run` is the default |
+| `legacy-refs [--yes]` | delete a member clone's `refs/kbc/{pr,review}/*` ONLY where the store holds the same ref name at the same commit; a dry run unless `--yes` (there is no `--dry-run` flag) |
 | `gc [--dry-run\|--yes]` | the store-wide ref GC; dry run by default, `--yes` applies and acknowledges the restore guard |
 | `export-legacy` | write the store's `refs/kbc/{pr,review}/*` back into the clone, CREATE-ONLY |
 | `maintain [--task daily\|weekly\|monthly]` | run the housekeeping cadences now, or whatever is due |
@@ -1187,8 +1194,8 @@ registration's own code.
 
 ### The route gates
 
-Every route in the store family except the two plain reads is
-LOOPBACK-ONLY:
+Loopback-only is the store family's default posture. This is the COMPLETE
+map of that gate: one bearer route, every other row loopback.
 
 | route | gate | why |
 |---|---|---|
@@ -1197,6 +1204,10 @@ LOOPBACK-ONLY:
 | `POST …/store/sync` | loopback | seeds or syncs — a write, and one that runs git |
 | `POST …/store/base-url` | loopback | the ladder's explicit rung |
 | `POST …/credentials/test` | loopback | walks the ladder live and runs `gh` |
+| `POST …/store/legacy-refs` | loopback | deletes refs in the user clone — the one other sanctioned clone write besides `checkout::switch_repo`; manual only |
+| `POST …/store/export-legacy` | loopback | the same clone-write family, writing the store's refs back |
+| `POST …/store/gc` | loopback | the store-wide ref GC deletes; it also applies and acknowledges the restore guard |
+| `POST …/store/maintain` | loopback | the manual housekeeping-cadence trigger |
 
 No bearer route in this crate hands out a kb-internal path. Everything
 secret-adjacent — `cred_reason`, `cred_account`, `key_fingerprint`,
@@ -1271,8 +1282,11 @@ credential.
 7. **`none`**.
 
 Under `auto`, a rung that does not apply is skipped WITH a recorded
-reason, and the whole reason list rides the store's `cred_reason` and
-the credentials card. **Two things stop the ladder with a typed error
+reason. Only the WINNING rung's single reason is persisted — that is all
+`cred_reason` ever holds, and the credentials card echoes it alone. The
+full per-rung reason list is NOT stored anywhere: it rides the resolution
+back to the caller and is rendered only by `store credentials --test`.
+**Two things stop the ladder with a typed error
 instead of falling through (D12):** `credential-account-mismatch`, and
 ANY gh-cli failure once the store is BOUND to an account — `gh_user`
 pinned, or a `cred_account` recorded from an earlier resolve. Falling
@@ -1393,8 +1407,10 @@ false"), not a downgrade. When the rung does apply it is shown amber —
 
 `kb-code store credentials --repo R [--test]` (`GET
 /api/repos/R/credentials`, `kbc-credentials/1`) reports the fetch
-credential as last RESOLVED: kind, account, the reason, the
-`skipped[]` rungs with their classes, and `amber: true` for `inherit`.
+credential as last RESOLVED: kind, account, the reason, the D9
+`broader_than_needed` flag, and `amber: true` for `inherit`. Its `fetch{}`
+block carries NO `skipped[]` — the skipped rungs with their classes appear
+only in the `--test` answer.
 It never carries secret bytes and never runs `gh` — except with
 `--test`, which walks the ladder live (loopback-only), persists the
 answer, and asks the credential chain whether it answers for the forge
@@ -1452,6 +1468,14 @@ leading `+` — so an address can never smuggle anything into a URL path.
 `<ref>/ps<n>` and `--ps N` must agree; passing both with different
 values is a usage error naming both.
 
+Not every verb accepts every form, and the parser is not the constraint:
+`diff`/`log`/`cat`/`verify` take the full address; `status` takes `<id>` or
+`pr:<N>` only and refuses a `/ps<n>` with a client-side USAGE error
+(exit 2 — it always answers against the latest patchset); `retrack` takes
+`<id>` or `pr:<N>`, and a `/ps<n>` suffix is parsed and then SILENTLY
+DROPPED; and `find` (`--pr N`) and `sync` (`--repo R --pr N` /
+`--repo R --open`) take NO positional address at all.
+
 `pr:<N>` resolves through `GET /api/reviews/find`: inferred when exactly
 one repo has a review bound to PR N, else narrowed by `--repo`. Two or
 more repos match is a typed `ambiguous-ref` error (exit 2) listing the
@@ -1478,23 +1502,29 @@ table was NOT adopted; these are envelope.rs's".
 | 5 | unreachable | the daemon could not be reached at all — connection refused, DNS failure, timeout; never got as far as an HTTP status |
 | 6 | upstream | an upstream the daemon depends on failed: a forge fetch/API call that is offline, unauthenticated or vanished (`store sync`, a `sync` job whose forge leg failed) |
 | 7 | partial | the verb partly succeeded — `sync --open` synced some PRs and failed others, `store sync` fetched some members and not all. The envelope carries `degraded: true` |
-| 8 | not found | no such review / patchset / PR binding / file on that side |
+| 8 | not found | EVERY HTTP 404 — the status alone decides it, never the body |
 
-Why 404 is not folded in: a loopback-only route deliberately 404s a
-non-loopback caller — hiding the route's existence is the point, the same
-posture as an ordinary "no such id" — so a 404 is STRUCTURALLY ambiguous
-between "this route doesn't exist for you" and "this resource doesn't
-exist", and the daemon does not tell the two apart. Code 8 is therefore
-used only where the body is an unambiguous not-found. The same reasoning
-is why 503 shares the conflict slot: it is a state refusal, not a
-category error.
+Why 404 is not folded in, and why 8 does not mean "definitely absent": a
+loopback-only route deliberately 404s a non-loopback caller — hiding the
+route's existence is the point, the same posture as an ordinary "no such
+id" — so a 404 is STRUCTURALLY ambiguous between "this route doesn't exist
+for you" and "this resource doesn't exist", and the daemon does not tell
+the two apart. `AgentError::from_http` reflects that by mapping EVERY 404
+to exit 8 on the status alone, with no body inspection: a non-loopback
+caller hitting a loopback-only route gets exactly the code a genuinely
+missing review gets. The ONLY signal separating the two is the hint an
+EMPTY-body 404 carries ("an empty 404 is also what a loopback-only route
+answers off-loopback", **The typed error** above) — so read the body's
+`code`/`message` and that hint; never conclude "no such review" from 8
+alone. The same reasoning is why 503 shares the conflict slot: it is a
+state refusal, not a category error.
 
 ### The verbs
 
 | verb | what it does |
 |---|---|
 | `review find --pr N [--repo R]` | every review bound to PR N, across every configured repo unless `--repo` narrows it |
-| `review diff <REF> [--ps N] [--stat\|--name-only\|--patch] [--path P] [--budget TOKENS]` | the patchset's change set against its OWN base |
+| `review diff <REF> [--ps N] [--stat\|--name-only\|--patch] [--path P] [--budget TOKENS]` | the patchset's change set against its OWN base. `--stat`/`--name-only`/`--patch` are three separate views, not one combined invocation; `--budget` cuts the PATCH text and implies `--patch` only when neither `--stat` nor `--name-only` is given (alongside either, it is silently inert) |
 | `review log <REF> [--ps N]` | the patchset's commits |
 | `review cat <REF> <PATH> [--ps N] [--side old\|new]` | one file at the patchset's base (`old`) or tip (`new`); secret-denylisted paths are refused |
 | `review verify <REF> [--ps N] [--min-findings N]` | the post-compose gate: the document is present and lints clean, the findings count, every anchor resolves, the verdict sits on the latest patchset. **Exits 3 when any check fails** |
@@ -1530,8 +1560,11 @@ build:
   rotate|revoke`, `store hostkey` — see **The internal review store** →
   **Not built here**.
 
-`GET /api/reviews/{id}/findings/recurrence` and `GET
-/api/reviews/analytics` are route-only reads with no dedicated verb.
+Both of the other recurrence reads ship as verbs, not route-only reads:
+`kb-code review findings recurrence <id> [--json]` (`GET
+/api/reviews/{id}/findings/recurrence`) and `kb-code review analytics
+[--repo R] [--from UNIX] [--to UNIX] [--json]` (`GET
+/api/reviews/analytics`).
 
 The SPA's Retrack affordance reflects the same boundary: `BaseChip`'s
 button COPIES the `kb-code review retrack <id> --dry-run` line rather
