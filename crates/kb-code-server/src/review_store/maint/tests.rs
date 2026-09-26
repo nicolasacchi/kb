@@ -688,6 +688,251 @@ fn a_store_with_no_kbc_refs_yet_is_skipped_not_errored() {
     assert!(!dest.exists());
 }
 
+/// Plant `refs/remotes/work-99999/<branch>` — the shape a
+/// DE-REGISTERED member's mirror refs leave behind. `99999` is never a
+/// `repos.id` this fixture mints, so `gc::attribute` classifies the ref
+/// `kind: "work"`, `status: "orphan"` (it is not in the store's
+/// DB-truth member list) while living entirely OUTSIDE `refs/kbc/*` —
+/// and `delete_candidates` filters on `status` alone, so it is a real
+/// delete candidate. Returns `(refname, oid)`.
+fn plant_orphan_work_ref(dir: &Path, branch: &str) -> (String, String) {
+    let donor = store_refs(dir)
+        .into_iter()
+        .find(|r| r.starts_with("refs/remotes/work-"))
+        .expect("fixture sanity: a seeded store carries a member's work mirror ref");
+    let oid = git(dir, &["rev-parse", &donor]);
+    let name = format!("refs/remotes/work-99999/{branch}");
+    git(dir, &["update-ref", &name, &oid]);
+    (name, oid)
+}
+
+/// The fix, at the level it is written: `write_bundle_covering` unions
+/// the caller's `(oid, refname)` delete-candidate list into the
+/// `refs/kbc/*` scan, so a ref outside the `refs/kbc/*` namespace is
+/// still carried — while the routine-backup shape (`write_bundle`, empty
+/// cover) keeps its documented `no-refs` contract untouched. Pins the
+/// union loop in `write_bundle_covering`.
+#[test]
+fn a_cover_outside_the_kbc_namespace_is_bundled_where_the_kbc_only_shape_finds_nothing() {
+    let e = env();
+    let row = ready_row(&e); // no review at all → no refs/kbc/*
+    let dir = Path::new(&row.git_dir);
+    let (work_ref, oid) = plant_orphan_work_ref(dir, "main");
+    assert!(
+        !store_refs(dir)
+            .iter()
+            .any(|r| r.starts_with("refs/remotes/base/")),
+        "fixture sanity: an offline seed fetches no base ref, so nothing is \
+         EXCLUDED from the bundle and a covered ref always makes it non-empty"
+    );
+    let spawner = e.rs.git().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+
+    // The routine-backup shape on this very store: nothing in
+    // `refs/kbc/*`, so git would be asked to write an empty bundle and
+    // the arm is a recorded no-op. This is the shape the pre-apply
+    // bundle MUST NOT be.
+    let unscoped = tmp.path().join("unscoped.bundle");
+    assert_eq!(
+        write_bundle(spawner, dir, &unscoped).unwrap(),
+        BundleOutcome::Skipped { reason: "no-refs" },
+        "the kbc-only shape really does find nothing here"
+    );
+    assert!(!unscoped.exists());
+
+    // The pre-apply shape, given the ref the apply is about to delete.
+    let scoped = tmp.path().join("scoped.bundle");
+    let outcome =
+        write_bundle_covering(spawner, dir, &scoped, &[(oid, work_ref.clone())]).unwrap();
+    assert_ne!(
+        outcome,
+        BundleOutcome::Skipped {
+            reason: "no-refs"
+        },
+        "a non-empty cover can never take the no-refs arm the \
+         apply_gc_candidates fail-closed guard watches for"
+    );
+    assert_eq!(outcome, BundleOutcome::Written);
+    let manifest = std::fs::read_to_string(format!("{}.refs", scoped.display())).unwrap();
+    assert!(
+        manifest.lines().any(|l| l.ends_with(&work_ref)),
+        "the covered work ref must be on the manifest: {manifest}"
+    );
+    let heads = git(dir, &["bundle", "list-heads", scoped.to_str().unwrap()]);
+    assert!(heads.contains(&work_ref), "bundle heads: {heads}");
+    // The routine shape's contract is UNCHANGED by the fix: an empty
+    // cover is still the plain `no-refs` skip.
+    let empty = tmp.path().join("empty.bundle");
+    assert_eq!(
+        write_bundle_covering(spawner, dir, &empty, &[]).unwrap(),
+        BundleOutcome::Skipped { reason: "no-refs" }
+    );
+}
+
+/// Two members (`widgets-01`, `widgets-02`) sharing ONE `ready` store,
+/// `widgets-02` registered FIRST (it carries the single forge remote, so
+/// the store key resolves unambiguously) — the multi-member shape
+/// `a_multi_member_seed_leaves_the_store_at_one_pack` builds inline,
+/// factored out so the de-registration GC test below can reuse it.
+struct TwoMember {
+    _tmp: tempfile::TempDir,
+    rs: ReviewStores,
+    store: Store,
+    row: ReviewStoreRow,
+    /// `repos.id` of `widgets-02` — the member the GC test later
+    /// de-registers.
+    id_two: i64,
+}
+
+fn two_member_env() -> TwoMember {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("state");
+    let one = tmp.path().join("work/widgets-01");
+    let two = tmp.path().join("work/widgets-02");
+    std::fs::create_dir_all(&one).unwrap();
+    git(&one, &["init", "-q", "-b", "main"]);
+    commit(&one, "a.txt", "a");
+    git(
+        &one,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    git(
+        tmp.path(),
+        &[
+            "clone",
+            "-q",
+            "--no-local",
+            one.to_str().unwrap(),
+            two.to_str().unwrap(),
+        ],
+    );
+    git(
+        &two,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    // widgets-02 diverges: a distinct head for the import to mirror.
+    commit(&two, "b.txt", "b");
+
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(&home.join("index.db")).unwrap();
+    let repos = vec![
+        RepoEntry {
+            name: "widgets-01".into(),
+            path: one.clone(),
+        },
+        RepoEntry {
+            name: "widgets-02".into(),
+            path: two.clone(),
+        },
+    ];
+    let mut ids = HashMap::new();
+    for r in &repos {
+        ids.insert(
+            r.name.clone(),
+            store
+                .upsert_repo(&r.name, &r.path.to_string_lossy())
+                .unwrap(),
+        );
+    }
+    let rs = ReviewStores::new(&ReviewSection::default(), &home, &repos, &ids);
+    let sid = member_id(&rs.register_repo(&store, "widgets-02", None));
+    member_id(&rs.register_repo(&store, "widgets-01", None));
+    rs.seed(&store, sid, false).unwrap();
+    let row = store.store_for_repo_name("widgets-01").unwrap().unwrap();
+    TwoMember {
+        _tmp: tmp,
+        rs,
+        store,
+        row,
+        id_two: ids["widgets-02"],
+    }
+}
+
+/// RS-U9 data-loss fix, end to end: **no ref is ever deleted by an apply
+/// whose pre-apply bundle did not cover it.**
+///
+/// The shape: a store with NO `refs/kbc/*` ref at all (no review has
+/// ever been created in it) and one de-registered member's
+/// `refs/remotes/work-<id>/*` mirror refs. `write_bundle`'s no-refs fast
+/// path used to hand back `Skipped { "no-refs" }` on exactly that store,
+/// while `gc::attribute` had independently classified those work refs as
+/// orphan delete candidates — so the guarded `update-ref --stdin` ran
+/// with nothing backed up at all. Pins the `cover` list `apply_gc_candidates`
+/// builds from `candidates` and hands to `write_bundle_covering`, and the
+/// union loop inside it.
+#[test]
+fn the_pre_apply_bundle_covers_a_de_registered_members_work_refs_when_no_kbc_ref_exist() {
+    let e = two_member_env();
+    let dir = Path::new(&e.row.git_dir);
+    let work_ref = format!("refs/remotes/work-{}/main", e.id_two);
+    let before: std::collections::BTreeSet<String> = store_refs(dir).into_iter().collect();
+    assert!(
+        before.contains(&work_ref),
+        "fixture sanity: widgets-02's mirror ref must exist: {before:?}"
+    );
+    assert!(
+        !before.iter().any(|r| r.starts_with("refs/kbc/")),
+        "fixture sanity: this store must hold NO refs/kbc/* ref — the \
+         exact store the no-refs fast path used to strand: {before:?}"
+    );
+
+    // widgets-02 leaves the store: DB truth (`repo_stores`) no longer
+    // names it, so its mirror refs are orphans — but they are still on
+    // disk, which is the only reason GC is worth running.
+    e.store.remove_repo_from_store(e.id_two).unwrap();
+
+    let report = run_gc_now(&e.rs, &e.store, &e.row, true, true, 500).unwrap();
+    assert!(report.applied, "{report:?}");
+    assert_eq!(report.candidates, 1, "widgets-02's one head: {report:?}");
+    assert_eq!(report.reason, "applied");
+
+    let after: std::collections::BTreeSet<String> = store_refs(dir).into_iter().collect();
+    let deleted: std::collections::BTreeSet<String> =
+        before.difference(&after).cloned().collect();
+    assert_eq!(
+        deleted,
+        std::collections::BTreeSet::from([work_ref.clone()]),
+        "the apply deleted exactly the de-registered member's mirror ref"
+    );
+
+    let bundle = bundle_path(&e.rs.settings().backups_dir, &e.row.uuid, 500);
+    assert!(
+        bundle.is_file(),
+        "the pre-apply bundle was skipped as no-refs: {bundle:?}"
+    );
+    let manifest =
+        std::fs::read_to_string(format!("{}.refs", bundle.display()))
+            .expect("the refs manifest beside the bundle");
+    let covered: std::collections::BTreeSet<String> = manifest
+        .lines()
+        .filter_map(|l| l.split('\t').nth(1).map(str::to_string))
+        .collect();
+    // The invariant itself, asserted over the refs the apply ACTUALLY
+    // removed rather than over a hard-coded expectation.
+    for gone in &deleted {
+        assert!(
+            covered.contains(gone),
+            "a ref was deleted that no pre-apply bundle covered: {gone}\n{manifest}"
+        );
+    }
+    assert!(
+        covered.contains(&work_ref),
+        "the work ref must be on the manifest: {manifest}"
+    );
+    let heads = git(dir, &["bundle", "list-heads", bundle.to_str().unwrap()]);
+    assert!(heads.contains(&work_ref), "bundle heads: {heads}");
+}
+
 #[test]
 fn bundle_pruning_keeps_only_the_newest_three() {
     let tmp = tempfile::tempdir().unwrap();
