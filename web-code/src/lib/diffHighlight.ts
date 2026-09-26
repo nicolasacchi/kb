@@ -6,7 +6,12 @@
 // file's line at that number) passes.
 
 import type { HighlightClass, Span } from "../api/types";
-import { cssClassFor, makeByteToUtf16Mapper } from "./decorations";
+import {
+  cssClassFor,
+  lineIndexAt,
+  lineStartByteOffsets,
+  makeByteToUtf16Mapper,
+} from "./decorations";
 import type { ParsedDiff } from "./diff";
 
 /** Server span — same shape as `api/types.Span`. */
@@ -31,13 +36,6 @@ export interface DiffHighlights {
 export interface PaintedSegment {
   text: string;
   cls?: string;
-}
-
-function utf8ByteLength(codePoint: number): number {
-  if (codePoint < 0x80) return 1;
-  if (codePoint < 0x800) return 2;
-  if (codePoint < 0x10000) return 3;
-  return 4;
 }
 
 /// Split file content into lines the same way `parseUnifiedDiff` does
@@ -74,34 +72,6 @@ export function splitContentLines(content: string): string[] {
   const lines = content.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines;
-}
-
-/// 0-indexed: `starts[i]` is the UTF-8 byte offset of 1-based line `i+1`.
-function lineStartByteOffsets(content: string): { starts: number[]; totalBytes: number } {
-  const starts = [0];
-  let byteOffset = 0;
-  let i = 0;
-  const n = content.length;
-  while (i < n) {
-    const code = content.codePointAt(i) as number;
-    const utf16Len = code > 0xffff ? 2 : 1;
-    byteOffset += utf8ByteLength(code);
-    i += utf16Len;
-    if (code === 10) starts.push(byteOffset);
-  }
-  return { starts, totalBytes: byteOffset };
-}
-
-/// Largest index whose start is `<= byte`.
-function lineIndexAt(starts: number[], byte: number): number {
-  let lo = 0;
-  let hi = starts.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (starts[mid] <= byte) lo = mid;
-    else hi = mid - 1;
-  }
-  return lo;
 }
 
 /// One pass over line-start byte offsets; each server span is bucketed
