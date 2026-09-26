@@ -742,6 +742,7 @@ mod tests {
                 source,
                 remote,
                 refused,
+                ..
             } => {
                 assert_eq!(store_key, "github.com/acme/widgets");
                 assert_eq!(source, BaseUrlSource::Single);
