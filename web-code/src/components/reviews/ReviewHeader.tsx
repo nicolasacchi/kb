@@ -7,11 +7,14 @@ import {
   usePatchReview,
   useSnapshotReview,
 } from "../../hooks/useReviews";
+import { useReviewStoreCard } from "../../hooks/useReviewStore";
 import { reviewDiffHref, reviewsUrl } from "../../lib/codeUrl";
 import { setCurrentReview, useCurrentReview } from "../../lib/currentReview";
 import { shortSha } from "../../lib/format";
+import { forgeUnverified } from "../../lib/reviewBase";
 import { toast } from "../../lib/toast";
 import AgentVerdictCard from "./AgentVerdictCard";
+import BaseChip, { BaseWarningChips, ForgeUnverifiedChip } from "./BaseChip";
 import DialecticLedger from "./DialecticLedger";
 import PrChip from "./PrChip";
 import StalenessBanner from "./StalenessBanner";
@@ -59,6 +62,12 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
   const snapshot = useSnapshotReview(repo);
   const patch = usePatchReview(repo);
   const del = useDeleteReview(repo);
+  // RS-U11 — `store.forge_verified`/`forge_kind` is a STORE-level fact
+  // (D8), not a per-review one; renders nothing while still loading or
+  // when the repo has no store row yet (`forgeUnverified` degrades to
+  // `false` on either).
+  const storeQ = useReviewStoreCard(repo);
+  const showForgeUnverified = forgeUnverified(storeQ.data?.store ?? null);
 
   const viewedCount = files.filter((f) => f.viewed && !f.viewed_stale).length;
   const filesCount = files.length;
@@ -136,7 +145,7 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
       <div className="kbc-review__refs">
         <code>{review.head_ref}</code>
         <span aria-hidden="true">→</span>
-        <code>{review.base_ref}</code>
+        <BaseChip reviewId={id} base={review.base} />
         {activePs && (
           <span className="kbc-reviews__row-time">
             · ps{activePs.ps_number} @ {shortSha(activePs.tip_sha_full || activePs.tip_sha)} ·{" "}
@@ -144,6 +153,12 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
           </span>
         )}
       </div>
+      {(showForgeUnverified || review.warnings.length > 0) && (
+        <div className="kbc-review__base-warnings" data-kbc-review-base-warnings>
+          {showForgeUnverified && <ForgeUnverifiedChip />}
+          <BaseWarningChips warnings={review.warnings} />
+        </div>
+      )}
       <PrChip repo={repo} reviewId={id} review={reviewPr} />
       <StalenessBanner review={review} latestPs={latestPs} />
       <div className="kbc-review__actions">
