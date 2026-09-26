@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { UNCOMMITTED_SHA } from "../../api/types";
 import DiffFile from "../diff/DiffFile";
 import { useDiff } from "../../hooks/useDiff";
+import { useDiffHighlights } from "../../hooks/useDiffHighlights";
 import { commitUrl } from "../../lib/codeUrl";
 import { parseUnifiedDiff } from "../../lib/diff";
 import { shortSha } from "../../lib/format";
@@ -40,6 +41,25 @@ export default function OriginatingChange({
     const parsed = parseUnifiedDiff(diff.data.diff);
     return sliceHunksForLine(parsed, { newLine: line });
   }, [diff.data, line]);
+  // The rendered diff is the SLICE, not the full parse — hand the hook
+  // that same projection so the base side is fetched only when a remove
+  // line actually survives the cap.
+  const sliced = useMemo(() => (slice ? slicedAsParsed(slice) : null), [slice]);
+  const hasRemoves = useMemo(
+    () => (sliced ? sliced.hunks.some((h) => h.lines.some((l) => l.kind === "remove")) : false),
+    [sliced],
+  );
+  // BOTH refs are real: `sha` is the blame region's commit and `from` is
+  // either `BlameRegion.previous_sha` or `<sha>^` — a `Revspec` the
+  // `/api/file` reader resolves the same way `/api/diff` does. The
+  // uncommitted arm passes neither (an `UNCOMMITTED_SHA` "commit" has no
+  // blob), so that side simply stays unpainted rather than inventing a ref.
+  const highlights = useDiffHighlights(
+    sliced ? repo : undefined,
+    sliced ? path : undefined,
+    { oldSha: enabled ? from : undefined, newSha: enabled ? sha : undefined },
+    { hasRemoves, parsed: sliced },
+  );
 
   if (isUncommitted) {
     return (
@@ -69,7 +89,8 @@ export default function OriginatingChange({
       ) : slice && slice.hunks.length > 0 ? (
         <>
           <div className="kbc-why__origin-diff" data-kbc-why-origin-diff>
-            <DiffFile path={path} parsed={slicedAsParsed(slice)} mode="unified" />
+            {/* `slice` non-null above ⇔ `sliced` non-null (one derivation). */}
+            <DiffFile path={path} parsed={sliced!} mode="unified" highlights={highlights} />
           </div>
           {slice.truncated && (
             <p className="kbc-why__origin-more">

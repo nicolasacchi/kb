@@ -103,7 +103,13 @@ describe("added-file hunk render path (@@ -0,0 +1,N @@)", () => {
       "utf-8",
     );
     expect(src).toContain("data-kbc-suggestion-preview");
-    expect(src).toMatch(/<UnifiedHunks path=\{thread\.path\} parsed=\{parsed\} \/>/);
+    // hunkViews is per-review-FILE state (the compose/turns lane's own
+    // projection). Handing it to this surface would replace the
+    // synthesized suggestion hunks' own lines with the review file's
+    // comment-driven line lists — the added-file regression this file
+    // exists for. Everything else about the preview's wiring is
+    // behaviour, asserted where the surface renders (e2e
+    // diff-highlight-surfaces.spec.ts), not here.
     expect(src).not.toContain("hunkViews");
   });
 });
