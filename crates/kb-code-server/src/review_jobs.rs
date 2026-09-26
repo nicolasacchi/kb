@@ -17,8 +17,8 @@
 //!   error?}`. A `done` job carries the full creation envelope under
 //!   `result` — byte-for-byte what the synchronous `POST` would have
 //!   returned. A `failed` job carries the refusal message verbatim in
-//!   `error` and, when the refusal is typed (the stale-mirror
-//!   `urn:kb:errors:stale-mirror`), its URN in `error_type`.
+//!   `error` and, when the refusal is typed (e.g. a closed review's
+//!   `urn:kb:errors:review-closed`), its URN in `error_type`.
 //!
 //! Jobs are IN-MEMORY ONLY — a `parking_lot::Mutex<HashMap>` on
 //! [`crate::state::AppState`], per-boot like `file_index`/`symbol_index`.
@@ -91,8 +91,8 @@ pub struct ReviewJob {
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
     /// The refusal's RFC 7807 `type` URN when one was attached
-    /// (`urn:kb:errors:stale-mirror`) — a poller branches on this, never
-    /// on the prose.
+    /// (e.g. `urn:kb:errors:review-closed`) — a poller branches on this,
+    /// never on the prose.
     pub error_type: Option<&'static str>,
     /// RS-U10b — the HTTP status the synchronous route would have
     /// answered for a failed job (`400`, `409`, `502`, …), so a poller
