@@ -31,6 +31,30 @@ third-party deps — BUILDER-RULES / README §9), Python 3.11+ (`tomllib`).
     Rewrite BUILD-LOG.md as the all-UNRUN template:
         python3 run_gates.py --render-template
 
+MIGRATE FIRST
+
+  A first boot of the post-upgrade daemon against a volume that has not
+  crossed V0045 takes the gated pre-migration snapshot — a `VACUUM INTO` of
+  the whole volume — which is ~95 minutes on a 5.5 GB volume, not seconds.
+  So the driver pays that ONCE, up front, visibly, and every gate afterwards
+  starts against a warm migrated volume:
+
+    1. if the after volume is already at epoch >= 45, say so and skip;
+    2. otherwise start the after daemon ONCE, wait for it to be genuinely
+       ready (default 7200 s), report the epoch before/after, the snapshot
+       file and the elapsed time, and stop it;
+    3. only then start the gates.
+
+  `--skip-migrate-first` turns step 2 off; `--ready-timeout` /
+  `--before-ready-timeout` are the budgets (both default to 7200 s — the
+  first real run found even the non-migrating pre-upgrade daemon not ready
+  within 300 s on this 5.5 GB volume).
+  Readiness distinguishes "still migrating" from "not coming up": a live
+  boot whose output (or whose growing `*.pre-V*.bak` / `*.bak-journal`
+  beside the volume) says the snapshot is in progress is reported and
+  waited out, and ANY readiness failure carries the elapsed time and the
+  last line the daemon printed.
+
 WHAT IT CALLS (it never reimplements them)
 
   * `review_snapshot.py snapshot` / `diff` — the U0 golden harness (a).
@@ -62,11 +86,16 @@ THE GATES (BUILD-BRIEF §3)
   5. live GitHub `gh-cli`   — `review sync --open --dry-run` lists every
                               open PR and `forge.base_ref` equals
                               `gh pr list --json number,baseRefName`.
-  6. secrets                — grep the captured daemon log, every gate's
-                              JSON output and a `.backup` COPY of the after
-                              volume for `gho_`/`ghp_`/`ghu_`/`ghs_` and for
-                              the literal `gh auth token` output. Matches
-                              are reported as location + count, redacted.
+  6. secrets                — the same scan the product's own redactor
+                             would do (`redact.rs`): a CREDENTIAL, i.e. a
+                             plausible full token for its prefix family or
+                             the literal `gh auth token` output. A bare
+                             `gho_`/`ghp_`/`ghu_`/`ghs_` is NOT a needle —
+                             it is counted and reported as discounted
+                             fixture/doc text, so the log shows what the
+                             scan ran and what it excluded rather than a
+                             bare zero. Locations and counts are reported;
+                             a matched VALUE never is.
   7. existing suite + TS    — THIS ONE IS CI. The driver never runs
                               `cargo`/`npm`; it records the check-run table
                               for a named PR and requires every check green,
@@ -108,8 +137,10 @@ import os
 import re
 import signal
 import subprocess
+import sqlite3
 import sys
 import time
+import tempfile
 import tomllib
 import urllib.error
 import urllib.request
@@ -165,9 +196,71 @@ USER_CLONE_PREFIX = Path("/home/nik/progetti")
 # flag must not turn a read-only gate into a write on the real volume.
 LIVE_STATE_PREFIX = Path.home() / ".local" / "state" / "kb"
 
-# R4 — a GitHub token, in any of its four classic prefixes, or a
-# fine-grained PAT. Matched against every argv this driver builds.
-TOKEN_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})")
+# THE TOKEN SHAPES — transcribed from the product's own high-precision
+# redactor, `crates/kb-code-server/src/review_store/redact.rs` (its `RULES`
+# table). This repository has exactly ONE notion of "this looks like a GitHub
+# token", and the driver borrows it rather than inventing a second one: the
+# right alphabet AND a plausible length for the prefix family. `_` is
+# deliberately NOT in the classic-token alphabet, which is what separates a
+# credential from (a) the repo's own `ghp_TESTTOKEN_FAKE…sekrit` fixtures and
+# (b) a sentence that merely NAMES a shape (`secrets — high-precision known
+# token shapes (sk-…, ghp_…)`). The design's rule, which the redactor's own
+# header states: a secret is a real credential, not a string that starts with
+# a token prefix.
+SECRET_SHAPES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("classic GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}")),
+    ("fine-grained PAT (github_pat_)", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}")),
+    ("GitLab PAT (glpat-)", re.compile(r"\bglpat-[A-Za-z0-9_\-]{16,}")),
+)
+
+# R4 — every shape above, matched against every argv this driver builds.
+TOKEN_RE = re.compile("(?:" + "|".join(p.pattern for _, p in SECRET_SHAPES) + ")")
+
+# Gate 6 — the BARE prefixes. These are NOT needles: a bare prefix is not a
+# credential. They are counted only so the log can say what the scan
+# discounted (a fixture string, a doc sentence) instead of printing a bare
+# zero, and so an operator can see the run scanned at all.
+SECRET_PREFIXES = ("gho_", "ghp_", "ghu_", "ghs_")
+
+# --------------------------------------------------------------------------
+# readiness (the V0044 -> V0045 first boot)
+# --------------------------------------------------------------------------
+
+# Crossing the V0045 epoch triggers the gated pre-migration snapshot
+# (`backup::GATED_EPOCHS` = [40, 45]): a page-by-page `VACUUM INTO` of the whole
+# volume, measured at ~57 MB/min on a loaded box — so ~95 minutes for a 5.5 GB
+# first boot, after which boots are fast because the volume is already
+# migrated. The post-upgrade daemon's default readiness budget must fit THAT,
+# not an ordinary service start. 7200 s = 2 h, ~25% headroom over the measured
+# first boot.
+DEFAULT_AFTER_READY_TIMEOUT = 7200.0
+
+# The PRE-upgrade daemon migrates nothing, so it was given a short budget of
+# its own on the theory that it boots in ~85 s. The first real run disproved
+# that: gate 1 failed with "the before daemon was not ready within 300.0s",
+# i.e. on a 5.5 GB volume on this box the V0044 boot did NOT answer in five
+# minutes either — it moves the same bytes, so it is the same order of work.
+# The two budgets are therefore equal by default, kept as separate flags so an
+# operator who knows their before-volume boots fast can tighten one of them.
+DEFAULT_BEFORE_READY_TIMEOUT = 7200.0
+
+# Lines in the daemon's own output that mean "this boot is doing the gated
+# snapshot", transcribed from `backup.rs`:
+#   "kb-code: took a pre-migration snapshot before crossing a gated schema epoch"
+#   "kb-code: reusing the existing pre-migration snapshot"
+#   "kb-code: refusing to snapshot before VACUUM: needs … has …"
+MIGRATION_LOG_SIGNALS = (
+    "pre-migration snapshot",
+    "gated schema epoch",
+    "snapshot before vacuum",
+)
+
+# How often the readiness loop looks for migration evidence, and how often it
+# prints a heartbeat while a long migration is in flight. An operator should
+# not have to stare at a silent terminal for 95 minutes.
+READY_POLL_SECS = 0.5
+MIGRATION_PROBE_SECS = 5.0
+MIGRATION_HEARTBEAT_SECS = 60.0
 
 # git subcommands that WRITE to a repository. Anything not in this set is
 # treated as read-only by the R3 guard.
@@ -249,6 +342,16 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _hms(seconds: float) -> str:
+    """`95m03s` / `1h35m03s` / `12.3s` — a readiness budget and an elapsed time
+    are unreadable as bare seconds once one of them is ninety minutes."""
+    s = int(round(seconds))
+    if s < 60:
+        return f"{seconds:.1f}s" if seconds < 10 else f"{s}s"
+    m, rem = divmod(s, 60)
+    return f"{m}m{rem:02d}s" if m < 60 else f"{m // 60}h{m % 60:02d}m{rem:02d}s"
 
 
 def listening_ports() -> set[int]:
@@ -531,8 +634,17 @@ class Ctx:
 
     def start_daemon(self, gate: int, name: str, binary: Path, root: Path, port: int) -> "Daemon":
         d = Daemon(self, gate, name, binary, root, port)
-        d.start()
+        # Registered BEFORE the boot, not after: a daemon that fails readiness
+        # is still a live process, and `stop_daemon`/`stop_all` must be able to
+        # reach it. Registering afterwards leaked the process on every failed
+        # boot — which is exactly what a 95-minute migration budget makes
+        # likely to hit.
         self.daemons[name] = d
+        try:
+            d.start()
+        except BaseException:
+            self.stop_daemon(name)
+            raise
         return d
 
     def stop_daemon(self, name: str) -> None:
@@ -554,6 +666,109 @@ class Ctx:
             gate, "after", Path(self.args.after_server), self.after_root, self.after_port
         )
 
+    def migrate_first(self) -> None:
+        """Pay the V0044 -> V0045 first-boot cost ONCE, before any gate runs.
+
+        The post-upgrade daemon's first boot on an unmigrated volume takes the
+        gated pre-migration snapshot (`backup::GATED_EPOCHS`): a `VACUUM INTO`
+        of the whole volume, ~95 minutes at the ~57 MB/min this box sustains
+        on a 5.5 GB volume. Left to the first gate that boots the daemon, that
+        cost lands inside a 300 s readiness budget and is indistinguishable
+        from a crash — which is exactly what the first real run showed: four
+        gates FAIL for one benign cause.
+
+        So it is done HERE, once, with the full budget and a report, and every
+        gate afterwards starts against a warm migrated volume. Reuses the
+        ordinary start/stop plumbing (`start_daemon`/`stop_daemon`) — there is
+        no second daemon lifecycle here.
+
+        A volume already at epoch >= 45 is not re-migrated: the one-off cost
+        was paid by an earlier run, and saying so is the whole report.
+        """
+        needs_after = any(n in (1, 2, 3, 4, 5, 6) for n in self.selected)
+        if not needs_after:
+            self.notes.append(
+                f"migrate first: SKIPPED — the selected gate(s) {self.selected} never boot the "
+                "after daemon, so there is no volume to migrate"
+            )
+            return
+        if self.dry_run:
+            self.notes.append(
+                "migrate first: would boot the post-upgrade daemon once (budget "
+                f"{_hms(self.args.ready_timeout)}) to take the gated V0045 pre-migration snapshot, "
+                "then stop it and start the gates against a warm volume"
+            )
+            self.steps.append(
+                Step(
+                    0,
+                    f"migrate first: boot the after daemon once (budget "
+                    f"{_hms(self.args.ready_timeout)}), then stop it",
+                    [str(self.args.after_server), "--config",
+                     str(self.after_root / "config" / "kb-code.toml")],
+                    planned=True,
+                )
+            )
+            return
+        if self.args.skip_migrate_first:
+            self.notes.append(
+                "migrate first: SKIPPED by --skip-migrate-first — the first gate that boots the "
+                "after daemon will pay the gated V0045 snapshot instead"
+            )
+            return
+
+        after_db = self.after_root / "state" / "kb-code" / "index.db"
+        epoch_before = read_volume_epoch(after_db)
+        if isinstance(epoch_before, int) and epoch_before >= 45:
+            self.notes.append(
+                f"migrate first: SKIPPED — {after_db} is already at refinery_schema_history "
+                f"max = {epoch_before}, so the gated V0045 snapshot was taken by an earlier run "
+                "and every gate below sees a warm volume"
+            )
+            return
+
+        print(
+            f"→ migrate first: {after_db} is at epoch {epoch_before}; booting the post-upgrade "
+            f"daemon ONCE to take the gated V0045 pre-migration snapshot (budget "
+            f"{self.args.ready_timeout}s — a first boot is ~95 min, not seconds).",
+            flush=True,
+        )
+        t0 = time.time()
+        try:
+            self.start_daemon(
+                0, "after", Path(self.args.after_server), self.after_root, self.after_port
+            )
+        finally:
+            elapsed = time.time() - t0
+            self.stop_daemon("after")
+            epoch_after = read_volume_epoch(after_db)
+            snap = read_gated_snapshot(after_db)
+            snapshots = stray_snapshots(after_db)
+            # The note is written in a `finally`, so it runs on the failure path
+            # too — and a note that says "migrated" after a boot that never
+            # completed would be worse than no note at all.
+            self.notes.append(
+                "migrate first: the after volume is at epoch "
+                f"{epoch_before} before the boot and {epoch_after} after it, "
+                + (
+                    f"migrated in {_hms(elapsed)}"
+                    if epoch_after != epoch_before
+                    else (
+                        f"NOT migrated — the boot did not complete within {_hms(elapsed)}, so the "
+                        "phase did not succeed (see the abort message and the daemon log)"
+                    )
+                )
+                + "; pre-migration snapshot(s) beside it: "
+                + (
+                    ", ".join(
+                        f"{p.name} ({p.stat().st_size} bytes"
+                        + (f", the name the product's {BACKUP_MARKER} recorded" if snap and p == snap.path else "")
+                        + ")"
+                        for p in snapshots
+                    )
+                    or "(none — the gate-1 migration proof will say so)"
+                )
+            )
+
     # -- files ---------------------------------------------------------
 
     def art(self, *parts: str) -> Path:
@@ -568,6 +783,16 @@ class Ctx:
 
     def plan_text(self) -> str:
         lines: list[str] = []
+        pre = [s for s in self.steps if s.gate == 0]
+        if pre:
+            # Gate 0 is the migrate-first phase, not a gate: it boots the
+            # post-upgrade daemon once so the V0045 pre-migration snapshot is
+            # paid BEFORE the gates, not inside a gate's readiness budget.
+            lines.append("── migrate first (before any gate) " + "─" * 20)
+            for s in pre:
+                lines.append("   $ " + sh_quote(s.argv))
+                lines.append(f"     · {s.label}")
+            lines.append("")
         for n in range(1, 8):
             mine = [s for s in self.steps if s.gate == n]
             lines.append(f"── gate {n}: {GATE_NAMES[n]} " + "─" * max(0, 60 - len(GATE_NAMES[n])))
@@ -594,6 +819,7 @@ class Daemon:
         self.port = port
         self.proc: subprocess.Popen | None = None
         self.log: Path | None = None
+        self._snapshot_sizes: dict[str, int] = {}
 
     @property
     def base(self) -> str:
@@ -643,20 +869,105 @@ class Daemon:
         )
         self.wait_ready()
 
-    def wait_ready(self, timeout: float | None = None) -> None:
-        timeout = timeout or float(self.ctx.args.ready_timeout)
-        deadline = time.time() + timeout
-        last = ""
-        while time.time() < deadline:
-            if self.proc is not None and self.proc.poll() is not None:
+    @property
+    def ready_timeout(self) -> float:
+        """The post-upgrade daemon gets the migration budget (a first boot is
+        a whole-volume `VACUUM INTO`); the pre-upgrade one keeps a short
+        budget, because it migrates nothing and a stuck boot must fail fast."""
+        return float(
+            self.ctx.args.before_ready_timeout
+            if self.name == "before"
+            else self.ctx.args.ready_timeout
+        )
+
+    @property
+    def db_path(self) -> Path:
+        return self.root / "state" / "kb-code" / "index.db"
+
+    def last_output_line(self) -> str:
+        """The last non-empty line the daemon printed, redacted. On any
+        readiness failure this is what tells the operator whether the boot is
+        deep in a `VACUUM INTO` or died on one line of error — the first real
+        run's FAIL said neither."""
+        if not self.log or not self.log.exists():
+            return "(the daemon produced no output)"
+        try:
+            lines = [
+                ln.strip()
+                for ln in self.log.read_text(encoding="utf-8", errors="replace").splitlines()
+                if ln.strip()
+            ]
+        except OSError as e:
+            return f"(the daemon log could not be read: {e})"
+        if not lines:
+            return "(the daemon produced no output)"
+        return self.ctx.redact(lines[-1])[:300]
+
+    def migration_state(self) -> tuple[bool, str]:
+        """Is this boot doing the gated pre-migration snapshot?
+
+        Two independent signals, either of which is enough:
+
+          * a line in the daemon's own output (the `backup.rs` messages), or
+          * the `VACUUM INTO` destination itself — `index.db.pre-V<e>.bak`
+            growing, or its `-journal` sidecar present — beside the volume.
+            The sidecar is SQLite's rollback journal for the destination, so
+            its presence means the copy is in flight right now.
+
+        Returns `(in_progress, human-readable detail)`.
+        """
+        detail: list[str] = []
+        if self.log and self.log.exists():
+            try:
+                tail = self.log.read_text(encoding="utf-8", errors="replace")[-200_000:].lower()
+            except OSError:
                 tail = ""
-                if self.log and self.log.exists():
-                    tail = self.ctx.redact(
-                        self.log.read_text(encoding="utf-8", errors="replace")[-1500:]
+            for signal_text in MIGRATION_LOG_SIGNALS:
+                if signal_text in tail:
+                    detail.append(f"daemon output mentions {signal_text!r}")
+        try:
+            for p in sorted(self.db_path.parent.glob("index.db.pre-V*.bak*")):
+                size = p.stat().st_size
+                if p.name.endswith("-journal"):
+                    detail.append(f"{p.name} present ({size} bytes) — the snapshot copy is in flight")
+                else:
+                    # "growing" needs a previous sample to compare against: the
+                    # first sighting of a snapshot is not evidence of growth.
+                    previous = self._snapshot_sizes.get(p.name)
+                    self._snapshot_sizes[p.name] = size
+                    detail.append(
+                        f"{p.name} at {size} bytes"
+                        + (" (growing)" if previous is not None and size != previous else "")
                     )
+        except OSError:
+            pass
+        return bool(detail), "; ".join(detail)
+
+    def wait_ready(self, timeout: float | None = None) -> None:
+        """Poll `GET /api/identity` until the daemon answers.
+
+        "Slow" and "dead" are different verdicts and get different words:
+        a boot that is alive and visibly inside the gated pre-migration
+        snapshot is reported as such and waited out, while a process that
+        exited is reported with its exit code. Either way a failure carries
+        the ELAPSED time and the LAST line the daemon printed, so the log
+        distinguishes "hung in a 95-minute migration" from "exited
+        immediately with an error".
+        """
+        timeout = float(timeout) if timeout is not None else self.ready_timeout
+        started = time.time()
+        deadline = started + timeout
+        last = ""
+        migrating: str | None = None
+        migrating_since: float | None = None
+        next_probe = 0.0
+        next_beat = started + MIGRATION_HEARTBEAT_SECS
+        while True:
+            if self.proc is not None and self.proc.poll() is not None:
                 raise GateAbort(
-                    f"the {self.name} daemon exited (code {self.proc.returncode}) before "
-                    f"answering GET /api/identity. Log tail:\n{tail}"
+                    f"the {self.name} daemon exited (code {self.proc.returncode}) after "
+                    f"{_hms(time.time() - started)} — it never answered GET /api/identity. "
+                    f"Last line: {self.last_output_line()}"
                 )
             try:
                 with urllib.request.urlopen(self.base + "/api/identity", timeout=5) as r:
@@ -665,11 +976,50 @@ class Daemon:
                             Step(self.gate, f"{self.name} daemon ready",
                                  ["GET", self.base + "/api/identity"], returncode=200)
                         )
+                        if migrating is not None:
+                            self.ctx.notes.append(
+                                f"readiness: the {self.name} daemon became ready after "
+                                f"{_hms(time.time() - started)}, of which "
+                                f"{_hms((migrating_since or time.time()) - started)} was spent "
+                                f"inside the gated pre-migration snapshot ({migrating})"
+                            )
                         return
             except Exception as e:  # noqa: BLE001 — not ready yet
                 last = str(e)
-            time.sleep(0.5)
-        raise GateAbort(f"the {self.name} daemon was not ready within {timeout}s (last: {last})")
+            now = time.time()
+            if now >= next_probe:
+                next_probe = now + MIGRATION_PROBE_SECS
+                active, detail = self.migration_state()
+                if active:
+                    migrating = detail
+                    if migrating_since is None:
+                        migrating_since = now
+                    if now >= next_beat:
+                        next_beat = now + MIGRATION_HEARTBEAT_SECS
+                        print(
+                            f"  ⏳ {self.name} daemon: {_hms(now - started)} elapsed, still "
+                            f"migrating — {detail} · last: {self.last_output_line()}",
+                            flush=True,
+                        )
+            if now >= deadline:
+                break
+            time.sleep(READY_POLL_SECS)
+        elapsed = time.time() - started
+        budget_flag = "--before-ready-timeout" if self.name == "before" else "--ready-timeout"
+        if migrating is not None:
+            raise GateAbort(
+                f"the {self.name} daemon was still inside the gated pre-migration snapshot after "
+                f"{_hms(elapsed)} and never answered GET /api/identity (budget {_hms(timeout)}): "
+                f"{migrating}. The snapshot is a whole-volume `VACUUM INTO`; on a 5.5 GB volume "
+                f"it is measured at tens of minutes, so this is a budget, not a crash. "
+                f"Raise {budget_flag} (currently {timeout:.0f}s) or wait. Last line: "
+                f"{self.last_output_line()}"
+            )
+        raise GateAbort(
+            f"the {self.name} daemon was not ready within {_hms(timeout)} (waited "
+            f"{_hms(elapsed)}) and no gated migration was in progress, so this is a boot "
+            f"failure, not a slow one. Last probe: {last}. Last line: {self.last_output_line()}"
+        )
 
     def stop(self) -> None:
         if self.proc is None:
@@ -800,13 +1150,18 @@ def verify_inputs(ctx: Ctx, hash_volumes: bool = True) -> list[tuple[str, str]]:
         note = ""
         if str(db) in previous:
             note = " = the digest recorded by a previous run" if previous[str(db)] == digest else "  DRIFT vs a previous run"
-        bak = db.parent / "index.db.pre-V0045.bak"
+        snap = read_gated_snapshot(db)
         rows.append((f"{label} volume", f"{db} · sha256 {digest[:16]}… · {db.stat().st_size} bytes{note}"))
         rows.append(
             (
                 f"{label} volume epoch",
                 f"refinery_schema_history max = {read_volume_epoch(db)}"
-                + ("; index.db.pre-V0045.bak present" if bak.is_file() else "; no pre-V0045.bak"),
+                + (
+                    f"; gated pre-migration snapshot recorded by the product: {snap.path.name} "
+                    f"({snap.bytes_on_disk} bytes, of volume epoch {snap.volume_epoch})"
+                    if snap
+                    else "; no gated pre-migration snapshot recorded beside this volume"
+                ),
             )
         )
     baseline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -818,6 +1173,114 @@ def verify_inputs(ctx: Ctx, hash_volumes: bool = True) -> list[tuple[str, str]]:
         if orig.is_file() and cfg.is_file():
             rows.append((f"{label} config drift vs kb-code.toml.orig", config_drift_summary(orig, cfg)))
     return rows
+
+
+# `backup.rs` names a gated pre-migration snapshot for the volume's epoch AT THE
+# TIME OF THE SNAPSHOT — the epoch a restore of that file lands on — so a
+# V0044 -> V0045 crossing writes `index.db.pre-V0044.bak`, NOT
+# `pre-V0045.bak`. That is a considered decision with a test pinning it
+# (`crossing_v0045_from_v0044_writes_the_v0045_snapshot` asserts
+# `ends_with("index.db.pre-V0044.bak")`): the file IS the rollback target for
+# the volume as it stands, so naming it after the epoch it does not contain
+# would be wrong.
+#
+# So the driver does not hardcode the name. `backup::take` records the name it
+# actually used, beside the snapshot, in `<db dir>/backup.marker` — and that
+# record is exactly the CLAIM gate 1 must check: "the gated-epoch snapshot of
+# THIS volume was taken before the crossing". The name is read from the
+# product, asserted against the product's own db_path/epoch/bytes fields, and
+# then printed, because the operator is the one who has to recognise it.
+BACKUP_MARKER = "backup.marker"
+
+
+@dataclass
+class GatedSnapshot:
+    """The product's own record of the pre-migration snapshot beside a volume."""
+
+    path: Path
+    db_path: str
+    volume_epoch: int | None
+    recorded_bytes: int
+    bytes_on_disk: int
+    taken_at: int
+    schema: str
+
+    def problems_for(self, db: Path, expected_epoch: int) -> list[str]:
+        """Every way this fails to be a snapshot OF `db` taken before the
+        crossing of `expected_epoch`. An empty list means the claim holds."""
+        bad: list[str] = []
+        if not self.path.is_file():
+            bad.append(f"{self.path} is recorded but is not on disk")
+        elif self.bytes_on_disk == 0:
+            bad.append(f"{self.path} is empty — a snapshot holding nothing restores nothing")
+        if self.recorded_bytes != self.bytes_on_disk:
+            bad.append(
+                f"{self.path} is {self.bytes_on_disk} bytes on disk but the receipt recorded "
+                f"{self.recorded_bytes}: the copy is truncated, or the file was replaced after "
+                "the fact"
+            )
+        try:
+            same_volume = Path(self.db_path).resolve() == db.resolve()
+        except OSError:
+            same_volume = False
+        if not same_volume:
+            bad.append(
+                f"the receipt names {self.db_path} as its source, not {db}: this snapshot is of "
+                "a different volume"
+            )
+        if self.volume_epoch != expected_epoch:
+            bad.append(
+                f"the receipt records the volume at epoch {self.volume_epoch} when the snapshot "
+                f"was taken, expected {expected_epoch} (the pre-migration epoch)"
+            )
+        return bad
+
+    def describe(self) -> str:
+        where = (
+            f"{self.path.name} ({self.bytes_on_disk} bytes, sha256 {sha256_file(self.path)[:16]}…)"
+            if self.bytes_on_disk > 0
+            else f"{self.path.name} ({self.bytes_on_disk} bytes on disk)"
+        )
+        return (
+            f"{where}; the product's own receipt ({self.schema}) records it as taken from "
+            f"{self.db_path} at epoch {self.volume_epoch}, {self.recorded_bytes} bytes — a "
+            "V0044 volume's pre-migration snapshot is named for V0044 because that is the epoch "
+            "a restore of it lands on"
+        )
+
+
+def read_gated_snapshot(db: Path) -> GatedSnapshot | None:
+    """The snapshot the product itself recorded beside `db`, or None if it
+    recorded none. Read-only: never writes, never deletes."""
+    marker = db.parent / BACKUP_MARKER
+    if not marker.is_file():
+        return None
+    try:
+        doc = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    backup_path = str(doc.get("backup_path") or "")
+    if not backup_path:
+        return None
+    try:
+        on_disk = Path(backup_path).stat().st_size
+    except OSError:
+        on_disk = -1
+    return GatedSnapshot(
+        path=Path(backup_path),
+        db_path=str(doc.get("db_path") or ""),
+        volume_epoch=doc.get("volume_epoch"),
+        recorded_bytes=int(doc.get("bytes") or 0),
+        bytes_on_disk=on_disk,
+        taken_at=int(doc.get("taken_at") or 0),
+        schema=str(doc.get("schema") or "(no schema)"),
+    )
+
+
+def stray_snapshots(db: Path) -> list[Path]:
+    """Every `index.db.pre-V*.bak*` beside `db` — snapshot files and any stray
+    `-journal` sidecar. A PRISTINE volume must have none."""
+    return sorted(p for p in db.parent.glob("index.db.pre-V*.bak*") if p.is_file())
 
 
 # --------------------------------------------------------------------------
@@ -921,21 +1384,34 @@ def gate_1(ctx: Ctx) -> GateResult:
         ev += verify_inputs(ctx)
         before_db = ctx.before_root / "state" / "kb-code" / "index.db"
         after_db = ctx.after_root / "state" / "kb-code" / "index.db"
-        bak = after_db.parent / "index.db.pre-V0045.bak"
+        # The snapshot's NAME is the product's to choose; the CLAIM that a
+        # gated-epoch pre-migration snapshot of this volume was taken before
+        # the crossing is gate 1's to check. Both are read from the receipt the
+        # product writes beside the volume — see GatedSnapshot.
+        PRE_MIGRATION_EPOCH = 44
 
         if not ctx.dry_run:
             epoch = read_volume_epoch(before_db)
             ev.append(("before volume epoch (pre-boot)", f"refinery_schema_history max = {epoch}"))
-            if epoch != 44:
+            if epoch != PRE_MIGRATION_EPOCH:
                 raise GateAbort(
-                    f"the before volume is at epoch {epoch}, expected 44 (V0044). It has "
-                    "probably been migrated already; re-decompress the bundle volume."
+                    f"the before volume is at epoch {epoch}, expected {PRE_MIGRATION_EPOCH} "
+                    "(V0044). It has probably been migrated already; re-decompress the bundle "
+                    "volume."
                 )
-            if (before_db.parent / "index.db.pre-V0045.bak").exists():
+            # A pristine V0044 volume has taken no gated-epoch snapshot, so it
+            # has no `index.db.pre-V*.bak` beside it at ANY epoch — the name is
+            # the product's to choose, so the check is for the presence of
+            # the class, not of one spelling.
+            strays = stray_snapshots(before_db)
+            if strays or (before_db.parent / BACKUP_MARKER).is_file():
+                found = ", ".join(p.name for p in strays) or "(none)"
                 raise GateAbort(
-                    f"{before_db.parent}/index.db.pre-V0045.bak exists: the 'before' volume has "
-                    "been migrated at least once and can no longer prove the V0044 -> V0045 "
-                    "relocation. Re-decompress the bundle volume."
+                    f"the 'before' volume already carries gated-epoch snapshot evidence beside it "
+                    f"({found}"
+                    + (f", plus {BACKUP_MARKER}" if (before_db.parent / BACKUP_MARKER).is_file() else "")
+                    + f"). It has been snapshotted/migrated at least once and can no longer prove "
+                    "the V0044 -> V0045 relocation. Re-decompress the bundle volume."
                 )
 
         before_daemon = ctx.start_daemon(g, "before", Path(ctx.args.before_server), ctx.before_root, ctx.before_port)
@@ -953,23 +1429,40 @@ def gate_1(ctx: Ctx) -> GateResult:
 
         after_daemon = ctx.start_daemon(g, "after", Path(ctx.args.after_server), ctx.after_root, ctx.after_port)
         if not ctx.dry_run:
-            if not bak.is_file():
+            snap = read_gated_snapshot(after_db)
+            if snap is None:
                 raise GateAbort(
-                    f"{bak} does not exist after the post-upgrade boot: the gated V0045 "
-                    "snapshot was not taken, so the migration did not run as designed"
+                    f"the post-upgrade boot left no gated-epoch pre-migration snapshot recorded "
+                    f"beside {after_db} (no {BACKUP_MARKER}, and "
+                    f"{[p.name for p in stray_snapshots(after_db)] or 'no index.db.pre-V*.bak'}): "
+                    "the backup gate did not fire, so the migration did not run as designed"
                 )
             epoch = read_volume_epoch(after_db)
             ev.append(
                 (
-                    "migration proof",
-                    f"index.db.pre-V0045.bak written ({bak.stat().st_size} bytes, sha256 "
-                    f"{sha256_file(bak)[:16]}…); refinery_schema_history max = {epoch}",
+                    "migration proof — gated pre-migration snapshot",
+                    f"{snap.describe()}; refinery_schema_history max = {epoch} after the boot",
                 )
             )
+            problems = snap.problems_for(after_db, PRE_MIGRATION_EPOCH)
+            if problems:
+                raise GateAbort(
+                    "the gated-epoch pre-migration snapshot does not hold up as a snapshot of THIS "
+                    "volume taken before the V0044 -> V0045 crossing: " + "; ".join(problems)
+                )
             if epoch != 45:
                 raise GateAbort(f"the after volume is at epoch {epoch} after boot, expected 45 (V0045)")
         else:
-            ev.append(("migration proof", f"would require {bak} to exist and the volume to be at epoch 45"))
+            ev.append(
+                (
+                    "migration proof",
+                    f"would require a {BACKUP_MARKER} beside {after_db} naming a non-empty "
+                    f"index.db.pre-V*.bak of this volume taken at epoch {PRE_MIGRATION_EPOCH}, and "
+                    "the volume to be at epoch 45. The snapshot's NAME is whatever the product "
+                    "recorded — a V0044 volume's pre-migration snapshot is named for V0044, the "
+                    "epoch a restore of it lands on",
+                )
+            )
         ctx.exec(
             g,
             "golden snapshot of the after volume",
@@ -1029,8 +1522,10 @@ def gate_1(ctx: Ctx) -> GateResult:
             res.reason = (
                 f"{doc_before.get('review_count')} reviews relocated with no change to files, "
                 f"blob ids, anchors, findings or verdict; {len(allowed)} new envelope key(s) "
-                "allowed and enumerated above; the V0045 snapshot was taken and the V0044 "
-                "binary refused the migrated volume."
+                f"allowed and enumerated above; the gated pre-migration snapshot "
+                f"({snap.path.name if snap else 'MISSING'}) of this volume was taken at epoch "
+                f"{PRE_MIGRATION_EPOCH} before the crossing, and the V0044 binary refused the "
+                "migrated volume."
             )
         else:
             res.status = "UNRUN"
@@ -1082,13 +1577,47 @@ def gate_2(ctx: Ctx) -> GateResult:
         paths = dict(all_repos)
         missing_scope = sorted(n for n in in_scope if not Path(paths.get(n, "")).is_dir())
         missing_other = sorted(n for n, p in all_repos if n not in in_scope and not Path(p).is_dir())
-        ev.append(("scope", f"{ctx.args.invariance_scope} — {len(in_scope)} configured clone(s) in scope"))
+        # The scope is part of the verdict, so it is printed WITH its reason
+        # and with the exact clone set it covers. A PASS that does not say
+        # which clones it hashed is not readable as a PASS.
+        scope_reason = (
+            "every `[[repos]]` entry in the after config — the default, and the only scope in "
+            "which a configured-but-absent clone FAILS this gate"
+            if ctx.args.invariance_scope == "configured"
+            else "only the `[[review.repos]]` members, because the operator passed "
+            "--invariance-scope store-registered — NARROWER than the configured set, so the "
+            "refs of every clone listed as out of scope below are NOT verified by this run"
+        )
+        ev.append(
+            (
+                "scope",
+                f"{ctx.args.invariance_scope} — {len(in_scope)} of {len(all_repos)} configured "
+                f"clone(s) in scope. Reason: {scope_reason}.",
+            )
+        )
+        ev.append(
+            (
+                "clone set this run covers",
+                ", ".join(sorted(in_scope)) or "(none)",
+            )
+        )
         ev.append(
             (
                 "configured clones",
                 "; ".join(f"{n}={'present' if Path(p).is_dir() else 'MISSING'}" for n, p in all_repos),
             )
         )
+        out_of_scope = sorted(n for n, _ in all_repos if n not in in_scope)
+        if out_of_scope:
+            ev.append(
+                (
+                    "configured but OUT OF SCOPE for this run (listed, never silently dropped)",
+                    ", ".join(
+                        f"{n} ({'present' if Path(dict(all_repos)[n]).is_dir() else 'MISSING'})"
+                        for n in out_of_scope
+                    ),
+                )
+            )
         if missing_other:
             ev.append(
                 (
@@ -1170,8 +1699,12 @@ def gate_2(ctx: Ctx) -> GateResult:
                 raise GateAbort(f"a registered clone's refs changed: {ctx.redact(step.stdout.strip()[:2000])}")
             res.status = "PASS"
             res.reason = (
-                f"{len(targets)} registered clone(s) byte-identical across create, start-pr, "
-                "sync, snapshot, auto-capture, retrack and GC."
+                f"{len(targets)} clone(s) byte-identical across create, start-pr, "
+                f"sync, snapshot, auto-capture, retrack and GC, under "
+                f"--invariance-scope {ctx.args.invariance_scope} "
+                f"({', '.join(sorted(in_scope))}"
+                + (f"; {len(out_of_scope)} configured clone(s) were OUT of scope" if out_of_scope else "")
+                + ")."
             )
         else:
             res.status = "UNRUN"
@@ -1508,66 +2041,163 @@ def gate_5(ctx: Ctx) -> GateResult:
 # gate 6 — secrets
 # --------------------------------------------------------------------------
 
-SECRET_PREFIXES = ("gho_", "ghp_", "ghu_", "ghs_")
-SECRET_SHAPE_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})")
+def _q(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
 
-def scan_text_file(ctx: Ctx, path: Path, token: str | None) -> list[tuple[str, str, int]]:
-    if not path.is_file():
-        return []
-    text = ctx.redact(path.read_text(encoding="utf-8", errors="replace"))
-    out: list[tuple[str, str, int]] = []
+@dataclass
+class SecretScan:
+    """One artefact's worth of secret-scan result.
+
+    `hits` are CREDENTIALS — a plausible full token for its prefix family
+    (`redact.rs`'s shapes, see `SECRET_SHAPES`) or an exact match against the
+    live `gh auth token` value. `excluded` is what the scan saw and
+    deliberately did NOT count: a bare token PREFIX, which in a database that
+    indexes source and prose is overwhelmingly a test fixture
+    (`ghp_TESTTOKEN_FAKE…sekrit`) or a sentence that NAMES a token shape
+    ("high-precision known token shapes (sk-…, ghp_…)"). A bare prefix is not
+    a credential.
+
+    Reporting the exclusions is not politeness: a bare "no matches" is
+    indistinguishable from a scan that never ran. The driver prints both.
+
+    The scan runs on RAW text, deliberately. Redacting first would replace a
+    real token with the redaction marker before the shape rule ever saw it,
+    and the gate could then never report the very thing it exists to report.
+    What keeps the value unprintable is that this structure holds only needle
+    NAMES and COUNTS — there is nowhere for a value to survive to.
+    """
+
+    hits: list[tuple[str, int]] = field(default_factory=list)      # (needle, count)
+    excluded: list[tuple[str, int]] = field(default_factory=list)  # (bare prefix, count)
+
+    def merge(self, other: "SecretScan") -> None:
+        for label, n in other.hits:
+            self.hits = _add_count(self.hits, label, n)
+        for label, n in other.excluded:
+            self.excluded = _add_count(self.excluded, label, n)
+
+
+def _add_count(rows: list[tuple[str, int]], label: str, n: int) -> list[tuple[str, int]]:
+    for i, (existing, count) in enumerate(rows):
+        if existing == label:
+            return rows[:i] + [(label, count + n)] + rows[i + 1:]
+    return rows + [(label, n)]
+
+
+def unshaped_prefix_count(text: str) -> dict[str, int]:
+    """Bare-prefix occurrences that do NOT begin a plausible full token, per
+    prefix. This is the exclusion accounting, and it is what tells a fixture
+    string apart from a credential: `ghp_TESTTOKEN_FAKE…sekrit` has a `_`
+    inside its first sixteen characters, which the real alphabet forbids."""
+    out: dict[str, int] = {}
     for prefix in SECRET_PREFIXES:
-        n = text.count(prefix)
+        start = 0
+        while True:
+            i = text.find(prefix, start)
+            if i < 0:
+                break
+            start = i + len(prefix)
+            if not any(p.match(text, i) for _, p in SECRET_SHAPES):
+                out[prefix] = out.get(prefix, 0) + 1
+    return out
+
+
+def scan_blob(text: str, token: str | None) -> SecretScan:
+    """The scan itself, over one blob of RAW text. Nothing here keeps a
+    matched value — only a needle's name and how many times it matched."""
+    scan = SecretScan()
+    for label, pattern in SECRET_SHAPES:
+        n = len(pattern.findall(text))
         if n:
-            out.append((prefix, f"prefix {prefix}*", n))
-    n = len(SECRET_SHAPE_RE.findall(text))
-    if n:
-        out.append(("shape", "token-shaped string", n))
+            scan.hits.append((f"a plausible {label}", n))
     if token:
         n = text.count(token)
         if n:
-            out.append(("literal", "the literal `gh auth token` output", n))
-    return out
+            scan.hits.append(("the literal `gh auth token` output", n))
+    for prefix, n in unshaped_prefix_count(text).items():
+        scan.excluded.append((prefix, n))
+    return scan
 
 
-def scan_sqlite(ctx: Ctx, db: Path, token: str | None) -> list[tuple[str, str, int]]:
-    """Read-only SQL over every TEXT column of the COPY. Never the live DB,
-    never a `cp`."""
-    out: list[tuple[str, str, int]] = []
-    uri = f"file:{db}?mode=ro"
-    tables = subprocess.run(
-        ["sqlite3", uri, "select name from sqlite_master where type='table';"],
-        capture_output=True, text=True, check=False,
-    )
-    if tables.returncode != 0:
-        return [("error", f"could not list tables: {tables.stderr.strip()[:200]}", 1)]
-    for name in [t for t in tables.stdout.split() if t]:
-        cols = subprocess.run(["sqlite3", uri, f"pragma table_info('{name}');"],
-                              capture_output=True, text=True, check=False)
-        if cols.returncode != 0:
-            continue
-        text_cols = [
-            parts[1] for parts in (line.split("|") for line in cols.stdout.splitlines())
-            if len(parts) >= 3 and (parts[2].upper().startswith("TEXT") or parts[2] == "")
-        ]
-        if not text_cols:
-            continue
-        where = " or ".join(
-            f"instr(coalesce(\"{c}\",''),'{p}')>0" for c in text_cols for p in SECRET_PREFIXES
-        )
-        if token:
-            where += " or " + " or ".join(f"instr(coalesce(\"{c}\",''),'{token}')>0" for c in text_cols)
-        cnt = subprocess.run(
-            ["sqlite3", uri, f'select count(*) from "{name}" where {where};'],
-            capture_output=True, text=True, check=False,
-        )
-        if cnt.returncode == 0 and cnt.stdout.strip().isdigit() and int(cnt.stdout.strip()) > 0:
-            out.append(
-                ("prefix/literal", f"{name}: {cnt.stdout.strip()} row(s) contain a token prefix or the literal token",
-                 int(cnt.stdout.strip()))
-            )
-    return out
+def scan_text_file(ctx: Ctx, path: Path, token: str | None) -> SecretScan:
+    if not path.is_file():
+        return SecretScan()
+    # RAW, not `ctx.redact(...)`: redacting first would erase the very match
+    # this gate exists to report. `scan_blob` keeps only labels and counts.
+    return scan_blob(path.read_text(encoding="utf-8", errors="replace"), token)
+
+
+def _text_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    try:
+        info = conn.execute(f"PRAGMA table_info({_q(table)})").fetchall()
+    except sqlite3.Error:
+        return []
+    return [r[1] for r in info if len(r) >= 3 and (r[2].upper().startswith("TEXT") or r[2] == "")]
+
+
+def scan_sqlite(ctx: Ctx, db: Path, token: str | None) -> SecretScan:
+    """Read-only SQL over every TEXT column of the COPY, with the SHAPE
+    decision made in Python on the candidate rows.
+
+    The SQL only NARROWS (`GLOB` for each prefix family, `instr` for the exact
+    literal): deciding "is this a credential" is a regex against the
+    product's own alphabet, and SQLite has no regex. Narrowing in SQL and
+    deciding in Python is also what keeps a value unprintable — a candidate
+    cell is counted and dropped, never echoed.
+    """
+    scan = SecretScan()
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        conn.execute("PRAGMA query_only=1")
+    except sqlite3.Error as e:
+        scan.hits.append((f"the volume copy could not be opened read-only: {e}", 1))
+        return scan
+    try:
+        try:
+            tables = [
+                r[0]
+                for r in conn.execute(
+                    "select name from sqlite_master "
+                    "where type='table' and name not like 'sqlite_%' order by name;"
+                )
+            ]
+        except sqlite3.Error as e:
+            scan.hits.append((f"could not list tables: {e}", 1))
+            return scan
+        for table in tables:
+            cols = _text_columns(conn, table)
+            if not cols:
+                continue
+            where: list[str] = []
+            params: list[str] = []
+            for col in cols:
+                q = _q(col)
+                # One GLOB per column per prefix family: a bare prefix, or
+                # anything that could still become a plausible full token.
+                for needle in ("*gh[pousr]_*", "*github_pat_*", "*glpat-*"):
+                    where.append(f"{q} GLOB ?")
+                    params.append(needle)
+                if token:
+                    where.append(f"instr(coalesce({q},''),?)>0")
+                    params.append(token)
+            selected = ", ".join(_q(c) for c in cols)
+            try:
+                cursor = conn.execute(
+                    f"select {selected} from {_q(table)} where {' or '.join(where)};", params
+                )
+                for row in cursor:
+                    for cell in row:
+                        if cell is None or isinstance(cell, bytes):
+                            continue
+                        # RAW cell, decided and counted, then dropped. The
+                        # cell is never echoed, so no value can escape.
+                        scan.merge(scan_blob(str(cell), token))
+            except sqlite3.Error as e:
+                scan.hits.append((f"{table} could not be scanned: {e}", 1))
+    finally:
+        conn.close()
+    return scan
 
 
 def gate_6(ctx: Ctx) -> GateResult:
@@ -1580,10 +2210,10 @@ def gate_6(ctx: Ctx) -> GateResult:
             (
                 "credential source",
                 (f"`gh auth token --user {ctx.args.gh_user}` answered ({len(token)} chars; the value "
-                 "is never printed, logged or passed in argv) — its literal is one of the needles below")
+                 "is never printed, logged or passed in argv) — its exact literal is a needle")
                 if token else
-                (f"`gh auth token --user {ctx.args.gh_user}` did NOT answer; only the prefix and "
-                 "shape needles apply"),
+                (f"`gh auth token --user {ctx.args.gh_user}` did NOT answer; only the token SHAPES "
+                 "apply"),
             )
         )
         # The after daemon is stopped first so the copy is consistent and quiescent.
@@ -1617,34 +2247,70 @@ def gate_6(ctx: Ctx) -> GateResult:
             if (ctx.out / "json").is_dir():
                 targets += [("gate output", p) for p in sorted((ctx.out / "json").rglob("*.json"))]
             targets += [("gate output", p) for p in sorted(ctx.out.glob("gate*/*.json"))]
-            hits: list[tuple[str, str, int]] = []
+            hits: list[tuple[str, int]] = []
+            excluded: list[tuple[str, int]] = []
+            scanned = 0
             for kind, path in targets:
-                for _, label, n in scan_text_file(ctx, path, token):
-                    hits.append((kind, f"{path}: {label}", n))
-            for _, label, n in scan_sqlite(ctx, copy_db, token):
-                hits.append(("volume (read-only SQL)", label, n))
+                scan = scan_text_file(ctx, path, token)
+                scanned += 1
+                for label, n in scan.hits:
+                    hits = _add_count(hits, f"{kind}: {path}: {label}", n)
+                for label, n in scan.excluded:
+                    excluded = _add_count(excluded, f"{kind}: {path}: bare {label}", n)
+            volume = scan_sqlite(ctx, copy_db, token)
+            for label, n in volume.hits:
+                hits = _add_count(hits, f"volume (read-only SQL): {label}", n)
+            for label, n in volume.excluded:
+                excluded = _add_count(excluded, f"volume (read-only SQL): bare {label}", n)
             ev.append(
                 (
-                    "needles",
-                    ", ".join(
-                        [f"{p}*" for p in SECRET_PREFIXES]
-                        + ["<token-shaped string>"]
-                        + (["<literal gh auth token output>"] if token else [])
-                    ),
+                    "needles (a secret is a CREDENTIAL, not a string that starts with a prefix)",
+                    "; ".join(
+                        [f"<{label}>" for label, _ in SECRET_SHAPES]
+                        + (["<the exact `gh auth token` output>"] if token else [])
+                    )
+                    + f" — the shapes are the product's own, from "
+                    f"`crates/kb-code-server/src/review_store/redact.rs`",
                 )
             )
-            ev.append(("scanned", f"{len(targets)} file(s) + the volume copy"))
+            ev.append(
+                (
+                    "NOT needles",
+                    ", ".join(f"{p}* (a bare prefix is not a credential)" for p in SECRET_PREFIXES)
+                    + " — counted and reported below as excluded fixture/doc text instead",
+                )
+            )
+            ev.append(("scanned", f"{scanned} file(s) + every TEXT column of the volume copy"))
+            if excluded:
+                for where, n in excluded:
+                    ev.append(
+                        (
+                            "EXCLUDED as fixture/doc text (not a credential, value never printed)",
+                            f"{where} — {n} occurrence(s)",
+                        )
+                    )
+            else:
+                ev.append(
+                    (
+                        "EXCLUDED as fixture/doc text",
+                        "none: no bare token prefix appeared in anything scanned",
+                    )
+                )
             if hits:
-                for kind, where, n in hits:
-                    ev.append(("MATCH (redacted)", f"{kind}: {where} — {n} occurrence(s)"))
+                for where, n in hits:
+                    ev.append(("MATCH (redacted)", f"{where} — {n} occurrence(s)"))
                 raise GateAbort(
-                    f"{len(hits)} location(s) matched a secret pattern; locations and counts above, "
-                    "values never printed"
+                    f"{len(hits)} location(s) held a plausible full token or the literal "
+                    f"`gh auth token` output; locations and counts above, values never printed. "
+                    f"{len(excluded)} bare-prefix occurrence(s) were excluded as fixture/doc text "
+                    "and are listed above — a prefix alone is not a credential."
                 )
             res.status = "PASS"
             res.reason = (
-                f"no {', '.join(SECRET_PREFIXES)} prefix, no token-shaped string and no literal "
-                f"`gh auth token` output in {len(targets)} artefact(s) or in the volume copy."
+                f"no plausible full token and no literal `gh auth token` output in {scanned} "
+                f"artefact(s) or anywhere in the volume copy; {len(excluded)} bare-prefix "
+                f"occurrence(s) seen and excluded as fixture/doc text (listed above), so this is "
+                "a scan that ran rather than a bare zero."
             )
     except RailError:
         raise  # a safety rail refusal is not a gate verdict: it aborts the run
@@ -1762,6 +2428,7 @@ LOG_HEADER = """# BUILD-LOG — kb-code review store, Phase 1 acceptance (BUILD-
 | before volume | `{before_root}` (V0044 input) |
 | after volume | `{after_root}` (migrated in place by the post-upgrade boot) |
 | ports | before `{before_port}`, after `{after_port}` — the in-use set {forbidden} is never touched |
+| readiness budget | after `{ready_timeout}`, before `{before_ready_timeout}` — the after budget covers a first boot that takes the gated V0045 pre-migration snapshot (a whole-volume `VACUUM INTO`) |
 | pristine inputs | `{bundle}` (verified against `SHA256SUMS`) |
 | worktree | {git_head} |
 
@@ -1781,8 +2448,16 @@ V0044 -> V0045 upgrade, and the only differences are new envelope fields
 (`base{{…}}`, `warnings[]`, `minted`, per-patchset `kind`/`base_tip_sha`) — each
 one enumerated below, because "we allowed the new keys" is only a result if the
 list is printed. Also surfaces the two facts that prove the migration really ran:
-the gated `index.db.pre-V0045.bak` snapshot, and the V0044 binary's refusal to
-open the migrated volume.""",
+the gated pre-migration snapshot of this volume, and the V0044 binary's refusal to
+open the migrated volume.
+
+The snapshot is checked through the product's OWN receipt (`backup.marker` beside
+the volume), not through a hardcoded file name: the gate asserts the claim — a
+non-empty snapshot of THIS volume, taken while it was still at epoch 44, whose
+recorded byte count still matches the file on disk — and prints whatever the
+product named it. It is named for the volume's epoch at the time of the snapshot,
+because that is the epoch a restore of it lands on, so a V0044 → V0045 crossing
+writes `index.db.pre-V0044.bak`.""",
     2: """**Asserts.** Across create, start-pr, sync, snapshot, auto-capture, retrack
 and GC, no registered clone's `for-each-ref`, `packed-refs` or `refs/` tree
 changes. `repo_invariance.py record` runs BEFORE the first operation and `check`
@@ -1808,10 +2483,18 @@ hardcoded, and reported either way.""",
     6: """**Asserts.** No GitHub credential leaks. The daemon's stdout+stderr are
 captured to a file (this box has no daemon log file — the driver creates one),
 and that log, every gate's JSON output and a `sqlite3 .backup` COPY of the after
-volume (read-only SQL, never `cp`, never the live DB) are scanned for `gho_`,
-`ghp_`, `ghu_`, `ghs_`, a token-shaped string and the literal output of
-`gh auth token --user {gh_user}`. Matches are reported as location + count; the
-value is never printed or logged.""",
+volume (read-only SQL, never `cp`, never the live DB) are scanned for a
+**credential**: a plausible full token for its prefix family — the shapes are the
+product's own, transcribed from `crates/kb-code-server/src/review_store/redact.rs`
+— or the exact literal output of `gh auth token --user {gh_user}`.
+
+A bare `gho_`/`ghp_`/`ghu_`/`ghs_` is **not** a needle. In a database that
+indexes source and prose, a bare prefix is overwhelmingly a test fixture or a
+sentence that NAMES a token shape, and the design's rule is that a secret is a
+real credential, not a string that starts with a prefix. Those occurrences are
+counted and reported below as excluded, so the log shows what the scan ran and
+what it discounted instead of a bare zero. Matches are reported as location +
+count; a matched value is never printed or logged.""",
     7: """**Asserts.** The existing suite passes and the TypeScript types are
 regenerated with no unrelated diff. This gate IS CI — the driver never runs
 `cargo test` or the web-code tests locally. It records the check-run table for
@@ -1878,6 +2561,8 @@ def render_log(ctx: Ctx, results: Sequence[GateResult], exit_code: int) -> str:
             before_port=ctx.before_port,
             after_port=ctx.after_port,
             forbidden=list(FORBIDDEN_PORTS),
+            ready_timeout=_hms(args.ready_timeout),
+            before_ready_timeout=_hms(args.before_ready_timeout),
             bundle=ctx.bundle,
             git_head=head.stdout.strip() if head.returncode == 0 else "unknown",
             summary="\n".join(summary_rows),
@@ -1927,7 +2612,11 @@ def render_log(ctx: Ctx, results: Sequence[GateResult], exit_code: int) -> str:
             out.append("(none recorded)\n")
         out.append("```\n")
     if ctx.notes:
-        out.append("\n## Driver notes\n\n```\n" + "\n".join(ctx.notes) + "\n```\n")
+        out.append(
+            "\n## Driver notes (migrate-first phase, readiness, migration evidence)\n\n```\n"
+            + "\n".join(ctx.notes)
+            + "\n```\n"
+        )
     return "".join(out)
 
 
@@ -2037,6 +2726,286 @@ def self_test(args: argparse.Namespace) -> int:
     else:
         checks.append(("R5 bundle verified against SHA256SUMS", True, f"skipped: {ctx.bundle} has no SHA256SUMS"))
 
+    # ------------------------------------------------------------------
+    # G6 — the secret needle is a CREDENTIAL, not a token prefix. The
+    # shapes come from the product's own redactor; this proves both the
+    # fixture/doc exclusions and that a plausible full token still counts.
+    # ------------------------------------------------------------------
+
+    print("G6 (a secret is a credential, not a prefix)")
+    FIXTURE = "ghp_TESTTOKEN_FAKE_does_not_match_a_real_alphabet_sekrit"
+    DOC = "secrets — high-precision known token shapes (sk-…, ghp_…, AWS, gho_…)"
+    REAL = "ghp_1a2B3c4D5e6F7g8H9i0JkLmNoPqRsTuVwXyZ0123"
+
+    fixture_scan = scan_blob(f"let token = {FIXTURE}; // fixture", None)
+    checks.append(
+        (
+            "G6 a `ghp_TESTTOKEN_FAKE…sekrit` fixture does NOT count as a secret",
+            not fixture_scan.hits and bool(fixture_scan.excluded),
+            f"hits={fixture_scan.hits or 'none'}, excluded={fixture_scan.excluded}",
+        )
+    )
+    doc_scan = scan_blob(f"//! {DOC}", None)
+    checks.append(
+        (
+            "G6 a doc sentence that NAMES a token shape does NOT count",
+            not doc_scan.hits and bool(doc_scan.excluded),
+            f"hits={doc_scan.hits or 'none'}, excluded={doc_scan.excluded}",
+        )
+    )
+    real_scan = scan_blob(f"remote: https://x-access-token:{REAL}@github.com/acme/widgets.git", None)
+    checks.append(
+        (
+            "G6 a plausible full token DOES count",
+            sum(n for _, n in real_scan.hits) == 1,
+            f"hits={real_scan.hits or 'none'}, excluded={real_scan.excluded or 'none'}",
+        )
+    )
+    checks.append(
+        (
+            "G6 a matched value is never carried into the report",
+            REAL not in repr(real_scan) and FIXTURE not in repr(fixture_scan),
+            "the scan structure holds needle names and counts only",
+        )
+    )
+    # A GHE/Gitea token the shape rules do not know is still caught, because
+    # the caller already holds it: the exact literal is a needle of its own.
+    OPAQUE = "0a1b2c3d4e5fTOKENOFNOSHAPE00"
+    literal_scan = scan_blob(f"pushed with {OPAQUE} as the credential", OPAQUE)
+    checks.append(
+        (
+            "G6 an exact `gh auth token` literal counts whatever its shape",
+            literal_scan.hits == [("the literal `gh auth token` output", 1)]
+            and not any("classic" in label for label, _ in literal_scan.hits),
+            f"hits={literal_scan.hits or 'none'}",
+        )
+    )
+    # The shapes must be the PRODUCT's shapes, not a second invention: read
+    # them back out of redact.rs and compare. If the redactor's alphabet ever
+    # changes, this check is what makes the driver follow it.
+    redact_src = REPO_ROOT / "crates" / "kb-code-server" / "src" / "review_store" / "redact.rs"
+    if redact_src.is_file():
+        wanted = {
+            r"\bgh[pousr]_[A-Za-z0-9]{16,}",
+            r"\bgithub_pat_[A-Za-z0-9_]{20,}",
+            r"\bglpat-[A-Za-z0-9_\-]{16,}",
+        }
+        checks.append(
+            (
+                "G6 the token shapes are the ones in redact.rs (one convention)",
+                {p.pattern for _, p in SECRET_SHAPES} == wanted,
+                f"{sorted(p.pattern for _, p in SECRET_SHAPES)}",
+            )
+        )
+    else:
+        checks.append(
+            ("G6 the token shapes are the ones in redact.rs (one convention)", False,
+ f"redact.rs not found at {redact_src}")
+        )
+
+    # ------------------------------------------------------------------
+    # Readiness — "slow" and "dead" must get different words, and every
+    # failure must carry the elapsed time and the daemon's last line.
+    # ------------------------------------------------------------------
+
+    print("Readiness (a slow migration is not a crash)")
+    with tempfile.TemporaryDirectory(prefix="run-gates-selftest-") as tmp:
+        root = Path(tmp)
+        vol = root / "state" / "kb-code"
+        vol.mkdir(parents=True)
+        log = root / "after-daemon.log"
+
+        log.write_text(
+            "kb-code: booting\n"
+            "kb-code: took a pre-migration snapshot before crossing a gated schema epoch "
+            "[45] — an older binary will refuse this volume afterwards\n",
+            encoding="utf-8",
+        )
+        migrating = Daemon(ctx, 0, "after", Path("/bin/true"), root, 4791)
+        migrating.log = log
+        active, detail = migrating.migration_state()
+        checks.append(
+            (
+                "readiness a migration line in the daemon output is recognised",
+                active and "pre-migration snapshot" in detail,
+                detail or "no migration signal found",
+            )
+        )
+        try:
+            migrating.wait_ready(timeout=1.0)
+        except GateAbort as e:
+            slow_msg = str(e)
+        else:
+            slow_msg = ""
+        checks.append(
+            (
+                "readiness a migrating boot says MIGRATING, not crashed",
+                "still inside the gated pre-migration snapshot" in slow_msg
+                and "not a crash" in slow_msg,
+                slow_msg.splitlines()[0][:150] if slow_msg else "wait_ready returned instead of failing",
+            )
+        )
+        checks.append(
+            (
+                "readiness a failure carries the elapsed time AND the last output line",
+                "Last line:" in slow_msg
+                and "pre-migration snapshot" in slow_msg
+                and (bool(re.search(r"after \d", slow_msg)) or "waited " in slow_msg),
+                slow_msg.splitlines()[-1][:150] if slow_msg else "no failure raised",
+            )
+        )
+
+        # A growing `*.bak` beside the volume is the same signal, from the
+        # filesystem, with no log line at all.
+        log.write_text("kb-code: booting\n", encoding="utf-8")
+        bak = vol / "index.db.pre-V0044.bak"
+        bak.write_bytes(b"x" * 4096)
+        journal = vol / "index.db.pre-V0044.bak-journal"
+        journal.write_bytes(b"y" * 64)
+        active2, detail2 = migrating.migration_state()
+        checks.append(
+            (
+                "readiness a growing *.bak / *.bak-journal beside the volume is recognised",
+                active2 and "bak-journal" in detail2,
+                detail2 or "no snapshot evidence found",
+            )
+        )
+
+        # No migration evidence at all: that is a boot failure, and it says so.
+        log.write_text("error: config parse failed at line 12\n", encoding="utf-8")
+        bak.unlink()
+        journal.unlink()
+        dead = Daemon(ctx, 0, "after", Path("/bin/true"), root, 4791)
+        dead.log = log
+        try:
+            dead.wait_ready(timeout=1.0)
+        except GateAbort as e:
+            dead_msg = str(e)
+        else:
+            dead_msg = ""
+        checks.append(
+            (
+                "readiness a boot with no migration evidence is a BOOT FAILURE, not slow",
+                "boot failure, not a slow one" in dead_msg
+                and "config parse failed at line 12" in dead_msg,
+                dead_msg.splitlines()[0][:150] if dead_msg else "wait_ready returned instead of failing",
+            )
+        )
+
+    # The 300 s default is not coming back: the first real run failed gate 1 on
+    # the BEFORE daemon with exactly that budget, so both defaults must now
+    # exceed it, and the after default must additionally fit a 95 min first
+    # boot.
+    checks.append(
+        (
+            "readiness no daemon is back on the 300 s budget the real run disproved",
+            args.ready_timeout > 300.0 and args.before_ready_timeout > 300.0,
+            f"after {_hms(args.ready_timeout)} ({args.ready_timeout:.0f}s), "
+            f"before {_hms(args.before_ready_timeout)} ({args.before_ready_timeout:.0f}s)",
+        )
+    )
+    checks.append(
+        (
+            "readiness the after-daemon default fits a ~95 min first boot",
+            args.ready_timeout >= 95 * 60,
+            f"--ready-timeout default {_hms(args.ready_timeout)}",
+        )
+    )
+    checks.append(
+        (
+            "readiness budgets are printed in the log header",
+            "{ready_timeout}" in LOG_HEADER and "{before_ready_timeout}" in LOG_HEADER,
+            "readiness budget row present",
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # Gate 1's migration proof. The snapshot's NAME is the product's to
+    # choose (a V0044 volume's pre-migration snapshot is named for V0044);
+    # the CLAIM is gate 1's to check, and it is checked from the receipt the
+    # product writes beside the volume.
+    # ------------------------------------------------------------------
+
+    print("Gate 1 migration proof (the claim, not the spelling)")
+    with tempfile.TemporaryDirectory(prefix="run-gates-snapshot-") as tmp:
+        vol = Path(tmp) / "state" / "kb-code"
+        vol.mkdir(parents=True)
+        db = vol / "index.db"
+        db.write_bytes(b"live volume bytes" * 64)
+        # Exactly what `backup::take` records for a V0044 -> V0045 crossing.
+        good_bak = vol / "index.db.pre-V0044.bak"
+        good_bak.write_bytes(b"snapshot bytes" * 64)
+        receipt = {
+            "schema": "kbc-backup/1",
+            "db_path": str(db),
+            "backup_path": str(good_bak),
+            "volume_epoch": 44,
+            "bytes": good_bak.stat().st_size,
+            "taken_at": 1758900000,
+        }
+        (vol / BACKUP_MARKER).write_text(json.dumps(receipt), encoding="utf-8")
+        good = read_gated_snapshot(db)
+        checks.append(
+            (
+                "gate 1 a snapshot named for the PRE-migration epoch is accepted",
+                good is not None and good.problems_for(db, 44) == [],
+                f"{good.path.name if good else 'no receipt'} -> "
+                + (str(good.problems_for(db, 44)) if good else "no receipt beside the volume"),
+            )
+        )
+        checks.append(
+            (
+                "gate 1 the name comes from the receipt, never a hardcoded spelling",
+                not any(
+                    isinstance(c, str) and "index.db.pre-V0045.bak" in c
+                    for c in gate_1.__code__.co_consts
+                ),
+                f"gate 1 read {good.path.name} from {BACKUP_MARKER} if it exists",
+            )
+        )
+        checks.append(
+            (
+                "gate 1 a snapshot of a DIFFERENT volume is refused",
+                bool(good and any("different volume" in p
+                                  for p in good.problems_for(Path(tmp) / "elsewhere" / "index.db", 44))),
+                "the receipt's db_path must match the volume under test",
+            )
+        )
+        checks.append(
+            (
+                "gate 1 a snapshot taken at the WRONG epoch is refused",
+                bool(good and good.problems_for(db, 40)),
+                "the receipt's volume_epoch must be the pre-migration epoch (44)",
+            )
+        )
+        good_bak.write_bytes(b"short")  # a torn copy
+        truncated = read_gated_snapshot(db)
+        checks.append(
+            (
+                "gate 1 a TRUNCATED snapshot is refused (recorded bytes != bytes on disk)",
+                bool(truncated and any("truncated" in p for p in truncated.problems_for(db, 44))),
+                f"recorded {truncated.recorded_bytes if truncated else '?'} bytes, "
+                f"{truncated.bytes_on_disk if truncated else '?'} on disk",
+            )
+        )
+        good_bak.unlink()
+        gone = read_gated_snapshot(db)
+        checks.append(
+            (
+                "gate 1 a receipt whose snapshot file is gone is refused",
+                bool(gone and any("not on disk" in p for p in gone.problems_for(db, 44))),
+                "a receipt whose file was deleted is not a backup",
+            )
+        )
+        (vol / BACKUP_MARKER).unlink()
+        checks.append(
+            (
+                "gate 1 no receipt and no snapshot file = NO migration proof, not a silent pass",
+                read_gated_snapshot(db) is None and stray_snapshots(db) == [],
+                f"no {BACKUP_MARKER} and no index.db.pre-V*.bak beside the volume",
+            )
+        )
+
     print()
     width = max(len(c[0]) for c in checks)
     failed = 0
@@ -2110,7 +3079,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ci-branch", default="rs/final", help="gate 7: the branch that PR must be on")
     p.add_argument("--before-commit", default="", help="commit the before binary was built from (recorded in the log)")
     p.add_argument("--after-commit", default="", help="commit the after binary was built from (recorded in the log)")
-    p.add_argument("--ready-timeout", type=float, default=300.0, help="seconds to wait for a daemon's /api/identity")
+    p.add_argument("--ready-timeout", type=float, default=DEFAULT_AFTER_READY_TIMEOUT,
+                   help="seconds to wait for the POST-UPGRADE daemon's /api/identity. The default "
+                        f"is {_hms(DEFAULT_AFTER_READY_TIMEOUT)} because its first boot on an "
+                        "unmigrated volume takes the gated V0045 pre-migration snapshot — a "
+                        "whole-volume VACUUM INTO, ~95 min for 5.5 GB")
+    p.add_argument("--before-ready-timeout", type=float, default=DEFAULT_BEFORE_READY_TIMEOUT,
+                   help="seconds to wait for the PRE-upgrade daemon. It migrates nothing, but the "
+                        "first real run found it still not ready after 300 s on the 5.5 GB volume, "
+                        f"so the default matches the after budget (default "
+                        f"{_hms(DEFAULT_BEFORE_READY_TIMEOUT)}); lower it if you know it boots fast")
+    p.add_argument("--skip-migrate-first", action="store_true",
+                   help="do not boot the post-upgrade daemon up front to pay the gated V0045 "
+                        "snapshot; the first gate that needs the daemon will pay it instead")
     p.add_argument("--store-ready-timeout", type=float, default=3600.0, help="gate 3: seconds to wait for every store to be ready")
     p.add_argument("--http-timeout", type=float, default=60.0, help="per-HTTP-request timeout for the golden snapshot")
     p.add_argument("--rust-log", default=os.environ.get("RUST_LOG", "info"))
@@ -2139,14 +3120,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  ports         : {ctx.before_port} / {ctx.after_port} (forbidden: {list(FORBIDDEN_PORTS)})")
         print(f"  output        : {ctx.out}")
         print(f"  build log     : {ctx.log_path}")
-        print(f"  gates         : {ctx.selected}\n")
+        print(f"  gates         : {ctx.selected}")
+        print(
+            f"  readiness     : after {_hms(args.ready_timeout)} / before "
+            f"{_hms(args.before_ready_timeout)} — the after default covers a first boot that "
+            f"takes the gated V0045 pre-migration snapshot"
+        )
+        print(f"  migrate first : {'skipped (--skip-migrate-first)' if args.skip_migrate_first else 'yes'}\n")
         problems: list[str] = []
+        ctx.migrate_first()
         for n in ctx.selected:
             try:
                 GATES[n](ctx)
             except (GateAbort, RailError) as e:
                 problems.append(f"gate {n}: {e}")
         print(ctx.plan_text())
+        for note in ctx.notes:
+            print(f"note: {note}\n")
         if problems:
             print("PREFLIGHT PROBLEM (a real run would abort here):")
             for p in problems:
@@ -2161,6 +3151,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RailError(f"environment root {root} does not exist")
     results: list[GateResult] = []
     try:
+        # The V0044 -> V0045 first boot is a whole-volume VACUUM INTO (~95 min on
+        # a 5.5 GB volume). Pay it ONCE, here, with the full budget and a
+        # report — so no gate can FAIL for being slow, and each gate starts
+        # against a warm volume. Same start/stop plumbing as the gates.
+        try:
+            ctx.migrate_first()
+        except GateAbort as e:
+            # A readiness failure in the migrate-first phase is a DRIVER abort,
+            # not a gate verdict: no gate has run, so no gate may report FAIL.
+            print(f"\nABORTED before any gate: {e}", file=sys.stderr)
+            if not args.no_log:
+                write_log(ctx, results, EXIT_ABORT)
+            return EXIT_ABORT
         for n in ctx.selected:
             print(f"→ gate {n}: {GATE_NAMES[n]}", flush=True)
             r = GATES[n](ctx)
