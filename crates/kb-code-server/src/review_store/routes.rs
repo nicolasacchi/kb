@@ -459,8 +459,24 @@ fn spawn_pending_import(state: &SharedState, name: &str) {
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || {
             if let Ok(Some(row)) = st.store.store_for_repo_name(&n) {
-                if let Err(u) = st.review_stores.import_pending_members(&st.store, row.id) {
-                    tracing::warn!(repo = %n, code = u.code(), "review store: background member import failed");
+                // Both arms are visible: a store-level refusal is a code,
+                // and a PER-MEMBER failure now comes back in the Ok value's
+                // `errors` rather than only a warn-and-continue — without
+                // this the caller of this background task could not tell a
+                // clean import from a member that was skipped.
+                match st.review_stores.import_pending_members(&st.store, row.id) {
+                    Ok(imported) => {
+                        for e in imported.errors {
+                            tracing::warn!(
+                                repo = %n,
+                                error = %e,
+                                "review store: background member import skipped a member"
+                            );
+                        }
+                    }
+                    Err(u) => {
+                        tracing::warn!(repo = %n, code = u.code(), "review store: background member import failed");
+                    }
                 }
             }
         })
