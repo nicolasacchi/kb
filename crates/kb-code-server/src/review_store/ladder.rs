@@ -19,11 +19,18 @@
 //!
 //! A remote that was REFUSED as unsafe (percent escape, control
 //! character, transport-helper form, malformed) is never silently
-//! dropped: if no other remote is a forge URL, the ladder refuses with
-//! `remote-url-refused` and the reason, because "this remote is not a
-//! forge URL" and "this remote is not a URL kb-code will fetch from"
-//! are different answers for the operator. Only a remote that is
-//! genuinely not a forge remote (a local path) is classified away.
+//! dropped, in EITHER shape the refusal can take. If no other remote is
+//! a forge URL, the ladder refuses with `remote-url-refused` and the
+//! reason, because "this remote is not a forge URL" and "this remote is
+//! not a URL kb-code will fetch from" are different answers for the
+//! operator. If another remote DID answer, the store is keyed from that
+//! one — the good remote is the answer, and refusing over a second
+//! remote's typo would strand a working clone — but the refusal rides
+//! out on [`LadderOutcome::Resolved::refused`] under the same
+//! `remote-url-refused` code, so the operator is told either way
+//! instead of the bad remote disappearing. Only a remote that is
+//! genuinely not a forge remote (a local path) is classified away, and
+//! it is not reported at all.
 //!
 //! **Membership** (README §5.1 "Joining"): before rungs 3–7 run, a repo
 //! whose remote normalizes to an EXISTING store's key joins that store.
@@ -34,6 +41,8 @@
 //!
 //! Pure: every input is passed in, so every rung is unit-testable
 //! without git, a DB, or the network.
+
+use serde::Serialize;
 
 use super::key::{classify_url, key_matches_slug, store_key_for_url, NoStoreKey};
 
@@ -166,6 +175,12 @@ pub enum LadderOutcome {
         source: BaseUrlSource,
         /// The remote the answer came from (rungs 3–6, membership).
         remote: Option<String>,
+        /// Remotes REFUSED as unsafe while another remote still decided
+        /// the answer — empty when there were none, and empty on rungs
+        /// 1–2, which answer from the operator's own statement before
+        /// any remote is read. The caller reports these; it never lets
+        /// one stand in for the store's project.
+        refused: Vec<RefusedRemote>,
     },
     /// No forge remote at all → a `local:` store. Only ever returned
     /// when every remote is genuinely not a network remote — a refused
@@ -178,6 +193,17 @@ pub enum LadderOutcome {
         reason: String,
         candidates: Vec<String>,
     },
+}
+
+/// A remote the ladder REFUSED as unsafe, carried out of
+/// [`LadderOutcome::Resolved`] so a refusal alongside a good remote is
+/// reported instead of dropped. Carries no part of the URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RefusedRemote {
+    /// The `remote.<name>` it came from.
+    pub name: String,
+    /// [`NoStoreKey::reason`] — operator words, never the URL.
+    pub reason: &'static str,
 }
 
 /// Stable refusal slug for rung 7.
@@ -207,6 +233,10 @@ pub fn resolve(input: &LadderInput<'_>) -> LadderOutcome {
                     url: url.to_string(),
                     source,
                     remote: None,
+                    // Rungs 1–2 answered from the operator's own
+                    // statement, before any remote was read: nothing was
+                    // consulted, so there is nothing to report.
+                    refused: vec![],
                 },
                 None => LadderOutcome::Refused {
                     code: BASE_URL_INVALID,
@@ -253,11 +283,24 @@ pub fn resolve(input: &LadderInput<'_>) -> LadderOutcome {
         }
         return LadderOutcome::NoForgeRemote;
     }
+    // A refused remote that did NOT stop the answer still rides out on it:
+    // the good remote keys the store, and the operator is told about the
+    // other one under the same `remote-url-refused` code the all-refused
+    // case refuses with — never reclassified into a candidate, never
+    // dropped.
+    let refused_out: Vec<RefusedRemote> = refused
+        .iter()
+        .map(|(r, why)| RefusedRemote {
+            name: r.name.clone(),
+            reason: why.reason(),
+        })
+        .collect();
     let resolved = |r: &RemoteInfo, k: &str, source| LadderOutcome::Resolved {
         store_key: k.to_string(),
         url: r.url.clone(),
         source,
         remote: Some(r.name.clone()),
+        refused: refused_out.clone(),
     };
 
     // Rung 3 FIRST: the slug every PR binding of this repo agrees on is
@@ -648,5 +691,74 @@ mod tests {
             run(None, None, &[], &r, &[], None),
             LadderOutcome::NoForgeRemote
         );
+    }
+
+    /// A remote REFUSED as unsafe — here a percent escape, which is the
+    /// one hostile form no URL-shape test enumerates — with nothing else
+    /// to answer from. The answer must be `remote-url-refused`, never
+    /// `NoForgeRemote`: folding the refused list back into the
+    /// "genuinely not a forge remote" arm is precisely how a
+    /// percent-encoded forge URL was once reported as a repo with no
+    /// forge remote at all, and a `local:<uuid>` store with it.
+    #[test]
+    fn a_refused_remote_refuses_rather_than_reading_as_no_forge_remote() {
+        let r = vec![remote(
+            "origin",
+            "https://github.com/acme/..%2F..%2Fwidgets",
+        )];
+        match run(None, None, &[], &r, &[], None) {
+            LadderOutcome::Refused {
+                code,
+                reason,
+                candidates,
+            } => {
+                assert_eq!(code, REMOTE_URL_REFUSED);
+                assert!(candidates.is_empty(), "a refusal names no candidate");
+                // Names the remote and the rule it broke, never the URL.
+                assert!(reason.contains("origin"), "{reason}");
+                assert!(reason.contains("percent escape"), "{reason}");
+                assert!(!reason.contains("%2F"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The mixed clone: ONE good forge remote and one refused. The good
+    /// remote is the answer — refusing here would strand a working
+    /// clone over a second remote's typo — but the refusal rides out on
+    /// the outcome under the same code the all-refused case refuses
+    /// with. Before the fix it was consulted only when NO forge remote
+    /// resolved, so this clone was keyed from `origin` and the refused
+    /// remote vanished with no finding anywhere.
+    #[test]
+    fn a_refused_remote_beside_a_good_one_is_reported_too() {
+        let r = vec![
+            remote("origin", "git@github.com:acme/widgets.git"),
+            remote("mirror", "https://github.com/acme/..%2F..%2Fwidgets"),
+        ];
+        match run(None, None, &[], &r, &[], None) {
+            LadderOutcome::Resolved {
+                store_key,
+                source,
+                remote,
+                refused,
+            } => {
+                assert_eq!(store_key, "github.com/acme/widgets");
+                assert_eq!(source, BaseUrlSource::Single);
+                assert_eq!(remote.as_deref(), Some("origin"));
+                assert_eq!(refused.len(), 1, "{refused:?}");
+                assert_eq!(refused[0].name, "mirror");
+                assert!(refused[0].reason.contains("percent escape"), "{refused:?}");
+            }
+            other => panic!("a good remote must still decide: {other:?}"),
+        }
+        // The control for the arm above: with no refused remote the field
+        // is empty, so a caller cannot mistake "nothing was refused" for
+        // "nothing was checked".
+        let clean = vec![remote("origin", "git@github.com:acme/widgets.git")];
+        assert!(matches!(
+            run(None, None, &[], &clean, &[], None),
+            LadderOutcome::Resolved { refused, .. } if refused.is_empty()
+        ));
     }
 }
