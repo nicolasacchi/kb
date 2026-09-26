@@ -1603,17 +1603,14 @@ mod tests {
             ticks
         });
         let flag = in_flight.clone();
-        let (ticks, out) = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            async move {
-                let request = async move {
-                    let out = request.await;
-                    flag.store(false, Ordering::SeqCst);
-                    out
-                };
-                tokio::join!(request, probe)
-            },
-        )
+        let (ticks, out) = tokio::time::timeout(std::time::Duration::from_secs(60), async move {
+            let request = async move {
+                let out = request.await;
+                flag.store(false, Ordering::SeqCst);
+                out
+            };
+            tokio::join!(request, probe)
+        })
         .await
         .expect("the request and the probe must both finish");
         (ticks.expect("the probe task must not panic"), out)
@@ -1632,8 +1629,7 @@ mod tests {
     /// 1 ms ticks is a wide margin rather than a knife edge.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn batch_route_parses_off_the_async_worker() {
-        let (ticks, out) =
-            ticks_while_in_flight(highlight_batch_route(Json(at_cap_batch()))).await;
+        let (ticks, out) = ticks_while_in_flight(highlight_batch_route(Json(at_cap_batch()))).await;
         assert!(
             ticks >= 3,
             "the batch parse ran on the async worker: only {ticks} tick(s) were polled \
@@ -1648,7 +1644,9 @@ mod tests {
             .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         assert_eq!(
-            resp.headers().get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
             Some("no-store")
         );
         let body = axum::body::to_bytes(resp.into_body(), 64 << 20)
@@ -1662,7 +1660,10 @@ mod tests {
             assert_eq!(item["id"], format!("i{i}"));
             assert_eq!(item["tier"], "full", "item {i} lost its paint");
             assert!(
-                !item["spans"].as_array().expect("spans is an array").is_empty(),
+                !item["spans"]
+                    .as_array()
+                    .expect("spans is an array")
+                    .is_empty(),
                 "item {i} painted no spans"
             );
         }
@@ -1694,7 +1695,9 @@ mod tests {
             .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         assert_eq!(
-            resp.headers().get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
             Some("no-store")
         );
         let body = axum::body::to_bytes(resp.into_body(), 8 << 20)
@@ -1704,7 +1707,10 @@ mod tests {
         assert_eq!(json["schema"], HIGHLIGHT_SCHEMA);
         assert_eq!(json["tier"], "full");
         assert!(
-            !json["spans"].as_array().expect("spans is an array").is_empty(),
+            !json["spans"]
+                .as_array()
+                .expect("spans is an array")
+                .is_empty(),
             "a tier-full snippet with no spans is a lie"
         );
     }
