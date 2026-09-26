@@ -12,17 +12,17 @@
 //!    `Basic`/`token` credentials, and a credential-protocol
 //!    `password=` line.
 //! 2. **Known literals** — the exact secret(s) the calling operation had in
-//!    hand ([`redact_with`]), so a token with a shape rule 1 does not know
-//!    (a GHE or Gitea token) is still stripped.
+//!    hand ([`redact_with`]), at any length, so a token with a shape rule 1
+//!    does not know (a GHE or Gitea token) is still stripped.
 //!
 //! Over-redaction is the accepted failure mode: a 40-hex object id is NOT
 //! matched (it would destroy every useful git error), but a long opaque
-//! word after `Bearer ` is.
+//! word after `Bearer ` is, and an explicit literal is replaced whatever
+//! its length.
 
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
-use super::cred::MIN_SECRET_LEN;
 use regex::Regex;
 
 /// What every redacted span becomes.
@@ -67,12 +67,21 @@ pub fn redact(s: &str) -> String {
     redact_with(s, &[])
 }
 
-/// Redact the shape rules AND every literal in `secrets` (empty and
-/// very short literals are ignored — redacting every `a` would make the
-/// output useless without protecting anything).
+/// Redact the shape rules AND every literal in `secrets`.
+///
+/// `secrets` is an EXPLICIT, caller-built list of literals the calling
+/// operation already held in hand (today: the bytes of a validated
+/// [`super::cred::SecretToken`]), so the only floor is non-empty: a
+/// caller that put a literal in this list knows it is a secret, and a
+/// one-byte secret is still a secret. The worry a length floor answers —
+/// "redacting every `a` would make captured git stderr useless" — is a
+/// property of the SHAPE rules, which keep their own independent
+/// quantifiers above; a list the caller assembled from its own
+/// credential is not that case. Over-redacting an explicit literal is
+/// the accepted failure mode, as everywhere else here.
 pub fn redact_with(s: &str, secrets: &[&str]) -> String {
     let mut out: Cow<'_, str> = Cow::Borrowed(s);
-    for lit in secrets.iter().filter(|l| l.len() >= MIN_SECRET_LEN) {
+    for lit in secrets.iter().filter(|l| !l.is_empty()) {
         if out.contains(lit) {
             out = Cow::Owned(out.replace(lit, REDACTED));
         }
@@ -170,8 +179,11 @@ mod tests {
             &["0123456789abcdefXYZ"],
         );
         assert_eq!(out, "gitea said: [redacted] is bad");
-        // short literals are ignored rather than shredding the output
-        assert_eq!(redact_with("a b c", &["a"]), "a b c");
+        // an EXPLICIT literal is redacted at any length — the caller put it
+        // in this list because it is a secret. The floor that keeps a
+        // 40-hex object id readable lives on the shape rules, not here.
+        assert_eq!(redact_with("secret is a", &["a"]), "secret is [redacted]");
+        assert_eq!(redact_with("a b c", &["", ""]), "a b c");
     }
 
     #[test]

@@ -32,12 +32,16 @@
 //! 7. `none`.
 //!
 //! Under `auto`, a rung that does not apply is skipped WITH a recorded
-//! reason ([`SkippedRung`]), with two exceptions that STOP the ladder with a
-//! typed error (D12 — falling through would silently swap the identity
-//! the store fetches as): `credential-account-mismatch`, and ANY gh-cli
-//! failure (logged out, gh missing, keyring locked, gh too old) once the
-//! store is bound to an account — `gh_user` pinned or a `cred_account`
-//! recorded.
+//! reason ([`SkippedRung`]), with three exceptions that STOP the ladder
+//! with a typed error (D12 — falling through would silently swap the
+//! identity the store fetches as): `credential-account-mismatch`; ANY
+//! gh-cli failure (logged out, gh missing, keyring locked, gh too old)
+//! once the store is bound to an account — `gh_user` pinned or a
+//! `cred_account` recorded; and a `token_file` that was PRESENT, READABLE
+//! and OWNER-ONLY but then REFUSED by validation (`invalid credential`).
+//! A `token_file` that could not be opened at all — absent, unreadable,
+//! wrong owner, wrong mode — still skips, because that is an operator who
+//! has not set the rung up, not one whose credential is broken.
 //!
 //! # `gh-cli` (D12)
 //!
@@ -147,18 +151,20 @@ impl CredError {
 // Secret material
 // ---------------------------------------------------------------------
 
-/// The shortest secret the redactor's known-literal pass will strip.
-/// `SecretToken::new` enforces it, so a token that could never be redacted
-/// is never created in the first place.
-pub const MIN_SECRET_LEN: usize = 8;
-
 /// A token held in memory only: zeroized on drop, `Debug`/`Display`
 /// print `[redacted]`, no `Serialize`. Rejects whitespace/control
 /// characters — a newline would inject lines into the credential
 /// protocol.
 ///
-/// Also rejects anything under [`MIN_SECRET_LEN`] bytes, which is the
-/// floor below which the redactor's known-literal pass declines to match.
+/// Length is deliberately NOT validated here. A short token is still a
+/// working credential, and refusing one is a hazard rather than a
+/// protection: the fetch ladder treats a `token_file` refusal as "that
+/// rung does not apply" and continues, so a 6-byte token would fetch
+/// the store as a DIFFERENT IDENTITY (anonymous, then `inherit` by
+/// default) with no error raised anywhere. Redaction needs no help
+/// from a length check: every secret held here reaches the redactor as
+/// an EXPLICIT known literal ([`super::redact::redact_with`]), which
+/// strips a literal of any non-zero length.
 #[derive(Clone)]
 pub struct SecretToken(Zeroizing<String>);
 
@@ -167,15 +173,6 @@ impl SecretToken {
         let t = raw.trim();
         if t.is_empty() {
             return Err(CredError::Invalid("empty token"));
-        }
-        // `redact_with` strips EXPLICIT known literals only when they are
-        // 8+ bytes (redact.rs:74) — redacting every `a` would make captured
-        // git stderr useless. A shorter "token" could therefore never be
-        // stripped by the one pass that knows the literal, so refuse it
-        // here: the validation and redaction contracts cannot then drift
-        // apart again. `8` is `redact_with`'s floor, not a policy choice.
-        if t.len() < MIN_SECRET_LEN {
-            return Err(CredError::Invalid("token too short"));
         }
         if t.len() > 1024 {
             return Err(CredError::Invalid("token too long"));
@@ -1044,7 +1041,23 @@ pub fn resolve_fetch_credential(
         &CredError::Refused("deploy keys are Phase 2".into()),
     );
 
-    // 4. token_file
+    // 4. token_file.
+    //
+    // Two failure kinds, and only one of them may fall through.
+    //
+    // A file that could not be OPENED — absent, unreadable, not a
+    // regular file, not owned by the daemon user, not owner-only —
+    // really is a rung that does not apply: skipped WITH a recorded
+    // reason, like an unusable gh login. But `CredError::Invalid` is
+    // raised only AFTER all of those checks passed and the file was
+    // read to the end: the operator configured a credential and it is
+    // broken (not UTF-8, empty, control characters, a bad token
+    // username). Swallowing that and continuing falls through to
+    // anonymous and then to `inherit` — default-on — and the store
+    // would be fetched as a DIFFERENT IDENTITY with nothing but a
+    // skipped-rung note. That is what D12 forbids, so it stops the
+    // ladder exactly like `AccountMismatch` does for gh-cli: a fatal
+    // error carrying the real reason.
     if let (Some(path), Some(h)) = (cfg.token_file.as_deref(), &https) {
         match probes.token_file(path, username, h) {
             Ok(c) => {
@@ -1054,6 +1067,8 @@ pub fn resolve_fetch_credential(
                     skipped,
                 ))
             }
+            // D12: never a warning, never a fall-through.
+            Err(e @ CredError::Invalid(_)) => return Err(e),
             Err(e) => skip(&mut skipped, ProfileKind::TokenFile, &e),
         }
     }
