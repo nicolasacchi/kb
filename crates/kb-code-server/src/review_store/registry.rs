@@ -9,7 +9,11 @@
 //! * **registration** — the base-URL ladder + membership, run once per
 //!   repo ([`ReviewStores::register_repo`]);
 //! * **seeding** — [`ReviewStores::seed`] drives `seed::seed_store` and the
-//!   DB state machine (`absent → seeding → ready`, or `broken`);
+//!   DB state machine (`absent → seeding → ready`, or `broken`). A store
+//!   reaches `ready` only over a credential that WORKED: a credential the
+//!   operator supplied and that came back refused (D12) is
+//!   [`StoreUnavailable::CredentialRefused`], and the row stays `absent`
+//!   carrying the class — never a `ready` row over a base nobody fetched.
 //! * **locks** — a per-(store, remote) FETCH mutex and a short per-store
 //!   OPS mutex (design §4.2), plus the lifetime `flock` per store
 //!   (`manifest::StoreLock`). `tokio::sync::Mutex`es: a fetch guard is held
@@ -50,7 +54,7 @@ use super::cred::{
 };
 use super::git::StoreGit;
 use super::key::{https_url_for_key, local_store_key, split_key};
-use super::ladder::{self, LadderInput, LadderOutcome, NoForkCheck, RemoteInfo};
+use super::ladder::{self, LadderInput, LadderOutcome, NoForkCheck, RefusedRemote, RemoteInfo};
 use super::manifest::{self, ManifestProblem, StoreLock};
 use super::seed::{self, BaseFetch, ExpectedPatchset, SeedMember, SeedPlan, SeedReport};
 use super::settings::StoreSettings;
@@ -84,6 +88,14 @@ pub enum Registration {
         store_key: String,
         source: String,
         joined_existing: bool,
+        /// Remotes REFUSED as unsafe while another remote still decided
+        /// the store's project — the ladder's `remote-url-refused`, on
+        /// the same code the all-refused case refuses with. A good remote
+        /// keys the store regardless (refusing here would strand a
+        /// working clone over a second remote's typo), so these are the
+        /// only trace that remote is there at all: reported, never
+        /// dropped, and never reclassified into the store's key.
+        refused_remotes: Vec<RefusedRemote>,
     },
     Refused {
         code: String,
@@ -110,6 +122,19 @@ pub enum StoreUnavailable {
         code: String,
     },
     LockedElsewhere,
+    /// The credential the operator configured for this store came back
+    /// REFUSED (D12): a gh account that is not the pinned/recorded one,
+    /// a PINNED rung that failed, or a `token_file` that was present,
+    /// readable and owner-only but did not validate. `class` is the
+    /// `FailureClass` slug, `detail` the (redacted) reason.
+    ///
+    /// A store-level ERROR, never a recorded base-fetch skip: the store
+    /// is not brought up — or re-reported — on a credential that never
+    /// worked, and no other rung is tried in its place.
+    CredentialRefused {
+        class: String,
+        detail: String,
+    },
     /// The store is ready, but THIS member joined after the seed and its
     /// refs are not imported yet (background import pending). Reads fall
     /// back to the user repo, exactly like an absent store.
@@ -134,6 +159,7 @@ impl StoreUnavailable {
             Self::LockedElsewhere => "store-locked",
             Self::MemberPending => "store-member-pending",
             Self::GitTooOld { .. } => "git-too-old",
+            Self::CredentialRefused { .. } => "store-credential-refused",
             Self::Error { .. } => "store-error",
         }
     }
@@ -154,11 +180,23 @@ impl axum::response::IntoResponse for StoreRefusal {
             StoreUnavailable::LockedElsewhere => (StatusCode::CONFLICT, None),
             StoreUnavailable::NotRegistered => (StatusCode::CONFLICT, None),
             StoreUnavailable::Error { .. } => (StatusCode::INTERNAL_SERVER_ERROR, None),
+            StoreUnavailable::CredentialRefused { .. } => (StatusCode::FORBIDDEN, None),
             _ => (StatusCode::CONFLICT, None),
         };
         let code = self.0.code();
+        // A refused credential is the ONE arm whose class and reason the
+        // operator must read in the message itself, not only in `detail`:
+        // the class is what says WHICH half of the ladder refused, and a
+        // store that is not up is not something to go debug in a JSON blob.
+        let error = match &self.0 {
+            StoreUnavailable::CredentialRefused { class, detail } => format!(
+                "review store unavailable: {code} — the configured credential was refused \
+                 ({class}): {detail}"
+            ),
+            _ => format!("review store unavailable: {code}"),
+        };
         let mut body = serde_json::json!({
-            "error": format!("review store unavailable: {code}"),
+            "error": error,
             "type": format!("urn:kb:errors:{code}"),
             "title": status.canonical_reason().unwrap_or("Error"),
             "status": status.as_u16(),
@@ -930,6 +968,7 @@ impl ReviewStores {
                     store_key: row.store_key,
                     source: "explicit".into(),
                     joined_existing: true,
+                    refused_remotes: vec![],
                 };
             }
             return Registration::Member {
@@ -937,6 +976,7 @@ impl ReviewStores {
                 store_key: row.store_key,
                 source: row.base_url_source.unwrap_or_else(|| "member".into()),
                 joined_existing: true,
+                refused_remotes: vec![],
             };
         }
 
@@ -970,15 +1010,31 @@ impl ReviewStores {
             // sync, `&Store`-only, pre-store-row path).
             fork_check: &NoForkCheck,
         });
-        let (key, base_url, source) = match outcome {
+        let (key, base_url, source, refused) = match outcome {
             LadderOutcome::Resolved {
                 store_key,
                 url,
                 source,
+                refused,
                 ..
             } => {
                 let base = canonical_base_url(&url, &store_key);
-                (store_key, base, source.slug())
+                // A remote refused as unsafe while a GOOD remote still
+                // decided the project: the store is keyed from the good
+                // one, and the refusal is reported rather than lost with
+                // it (it is the same `remote-url-refused` the all-refused
+                // clone refuses with).
+                for r in &refused {
+                    tracing::warn!(
+                        repo = %name,
+                        remote = %r.name,
+                        code = ladder::REMOTE_URL_REFUSED,
+                        reason = %r.reason,
+                        "kb-code: a remote was refused as unsafe; the store is keyed from \
+                         another remote"
+                    );
+                }
+                (store_key, base, source.slug(), refused)
             }
             LadderOutcome::NoForgeRemote => {
                 let uuid = match new_store_uuid() {
@@ -992,6 +1048,9 @@ impl ReviewStores {
                     &local_store_key(&uuid),
                     None,
                     "local",
+                    // Unreachable in fact: a single refused remote stops
+                    // the ladder above, so nothing was refused here.
+                    vec![],
                 );
             }
             LadderOutcome::Refused {
@@ -1016,6 +1075,7 @@ impl ReviewStores {
                     store_key: row.store_key,
                     source: source.into(),
                     joined_existing: true,
+                    refused_remotes: refused,
                 }
             }
             Ok(None) => {
@@ -1023,7 +1083,15 @@ impl ReviewStores {
                     Ok(u) => u,
                     Err(e) => return err("failed", e.to_string()),
                 };
-                self.create_and_join(store, &repo, &uuid, &key, base_url.as_deref(), source)
+                self.create_and_join(
+                    store,
+                    &repo,
+                    &uuid,
+                    &key,
+                    base_url.as_deref(),
+                    source,
+                    refused,
+                )
             }
             Err(e) => err("db", e.to_string()),
         }
@@ -1037,6 +1105,10 @@ impl ReviewStores {
         key: &str,
         base_url: Option<&str>,
         source: &str,
+        // Remotes the ladder refused as unsafe while `key` was still
+        // decided by another remote — reported on the registration,
+        // never folded into the key.
+        refused: Vec<RefusedRemote>,
     ) -> Registration {
         let git_dir = seed::store_dir(&self.settings.root, uuid);
         let id = match store.create_review_store(
@@ -1090,6 +1162,7 @@ impl ReviewStores {
             store_key: key.to_string(),
             source: source.into(),
             joined_existing: false,
+            refused_remotes: refused,
         }
     }
 
@@ -1419,17 +1492,46 @@ impl ReviewStores {
                 return Err(StoreUnavailable::Error { detail: d });
             }
         };
+        // D12 — a credential the operator SUPPLIED came back refused. The
+        // ladder already stops on these (`cred.rs`: an account that is not
+        // the pinned/recorded one, any gh failure on a bound store, a
+        // `token_file` that was present and readable but did not validate,
+        // a pinned rung that failed), so this call site must not put the
+        // fatality back: seeding the store with NO credential and filing
+        // the class as a `BaseFetch::Skipped` note is what left a store
+        // `ready` over a base that was never fetched, as a DIFFERENT
+        // identity than the operator asked for. `FailureClass::is_auth`
+        // is the one grouping both sides already read, so the split is
+        // never spelled twice.
         let mut cred_note = None;
         let cred = if network && plan.base_url.is_some() {
             match self.resolve_settings_member(store, &row) {
                 Ok(who) => match self.resolve_credential(store, &row, &who) {
                     Ok(r) => Some(r.credential),
+                    Err(e) if e.class().is_auth() => {
+                        // Never `ready`: the row goes back to `absent`
+                        // carrying the class, so the next boot re-seeds it
+                        // once the operator fixes the credential.
+                        let u = credential_refused(&row, &e);
+                        let _ = store.set_review_store_state(
+                            row.id,
+                            "absent",
+                            Some(&refused_state(&e)),
+                        );
+                        return Err(u);
+                    }
+                    // A network-shaped failure (offline, timeout) is not a
+                    // credential fault: recorded as a skip, exactly as
+                    // before, and the store still comes up on cached refs.
                     Err(e) => {
                         cred_note = Some(e.class().slug());
                         None
                     }
                 },
                 // Members disagree: no credential is resolved on a guess.
+                // No credential was supplied and none was refused, so this
+                // is not the arm above — the pass continues and the store
+                // is reported with the reason.
                 Err(_) => {
                     cred_note = Some(FailureClass::NoCredentials.slug());
                     None
@@ -1579,6 +1681,18 @@ impl ReviewStores {
                         &plan.base_branches,
                         &r.credential,
                     ),
+                    // D12, the same rule the seed path applies: a
+                    // credential the operator supplied and that was
+                    // REFUSED stops the pass. Returning here — before
+                    // the `ready` write further down — is the point: the
+                    // store keeps the base status it last really had
+                    // instead of having a refused credential recorded
+                    // over it as its current one, and the caller gets
+                    // the refusal rather than a 200 carrying a warning.
+                    // A network-shaped failure still degrades to a skip.
+                    Err(e) if e.class().is_auth() => {
+                        return Err(credential_refused(&row, &e));
+                    }
                     Err(e) => BaseFetch::Skipped {
                         code: e.class().slug().into(),
                     },
@@ -1688,6 +1802,41 @@ impl Drop for SeedClaim<'_> {
     }
 }
 
+/// The store-level refusal for a credential the operator supplied and
+/// that was REFUSED (D12), logged on the way out. The class is
+/// [`FailureClass::is_auth`]'s — the grouping `cred.rs` stops the ladder
+/// on and the CLI already reads off the wire — so "a credential fault"
+/// is defined in exactly one place and this call site only asks the
+/// question.
+fn credential_refused(row: &ReviewStoreRow, e: &CredError) -> StoreUnavailable {
+    let class = e.class();
+    tracing::warn!(
+        store = %row.store_key,
+        code = class.slug(),
+        detail = %e,
+        "kb-code: the store's configured credential was refused; the store is not brought \
+         up on another rung (D12)"
+    );
+    StoreUnavailable::CredentialRefused {
+        class: class.slug().into(),
+        detail: e.to_string(),
+    }
+}
+
+/// The `state_json` a row is left with when its credential was refused:
+/// the class as `code`, so `store show`/doctor name the same slug the
+/// refusal did instead of a bare "not seeded yet".
+fn refused_state(e: &CredError) -> String {
+    let class = e.class();
+    serde_json::json!({
+        "code": class.slug(),
+        "class": class.slug(),
+        "detail": e.to_string(),
+        "at": now(),
+    })
+    .to_string()
+}
+
 /// `state_json.code`, if any.
 pub fn state_code(state_json: Option<&str>) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(state_json?).ok()?;
@@ -1696,8 +1845,8 @@ pub fn state_code(state_json: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::cred::CredentialPin;
     use super::*;
+    use crate::review_store::cred::CredentialPin;
 
     fn member(
         repo: &str,
