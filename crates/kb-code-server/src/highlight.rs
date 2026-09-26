@@ -1603,7 +1603,10 @@ mod tests {
             ticks
         });
         let flag = in_flight.clone();
-        let (ticks, out) = tokio::time::timeout(std::time::Duration::from_secs(60), async move {
+        // `join!` yields in ARGUMENT order — the request's own output first,
+        // then the probe task's `Result`. Binding them the other way round
+        // type-checks into the wrong pair, so the order is named here.
+        let (out, ticks) = tokio::time::timeout(std::time::Duration::from_secs(60), async move {
             let request = async move {
                 let out = request.await;
                 flag.store(false, Ordering::SeqCst);
