@@ -110,18 +110,23 @@ function TokenSpan({ seg }: { seg: ComposedSeg }) {
 
 /// One painted line — the same classed-span DOM every other `.kbc-hl-*`
 /// surface emits (`data-kbc-hl` is the painted-span contract the e2e
-/// suite reads). An unclassed segment stays bare text.
+/// suite reads). An unclassed segment stays bare text, exactly as
+/// `UnifiedHunks`' `PaintedText` renders it: this output is a `<pre>` of
+/// file text, so the segment must carry no element of its own beyond the
+/// paint. `data-kbc-hl` is spelled like `TokenSpan`'s above — only the
+/// attribute's PRESENCE is ever read (CSS `:not([data-kbc-hl])`, the e2e
+/// selector), never its value.
 function PaintLine({ segs }: { segs: PaintedSegment[] }) {
   if (segs.length === 1 && !segs[0].cls) return <>{segs[0].text}</>;
   return (
     <>
       {segs.map((s, i) =>
         s.cls ? (
-          <span key={i} className={s.cls} data-kbc-hl>
+          <span key={i} className={s.cls} data-kbc-hl="">
             {s.text}
           </span>
         ) : (
-          <span key={i}>{s.text}</span>
+          s.text
         ),
       )}
     </>
