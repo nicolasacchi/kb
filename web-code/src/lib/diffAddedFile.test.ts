@@ -97,7 +97,7 @@ describe("added-file hunk render path (@@ -0,0 +1,N @@)", () => {
     expect(src).toContain("buildSplitPairs(lines)");
   });
 
-  it("SuggestionEditor preview is UnifiedHunks without hunkViews", () => {
+  it("SuggestionEditor preview keeps its own hook and is never handed hunkViews", () => {
     const src = readFileSync(
       fileURLToPath(new URL("../components/diff/SuggestionEditor.tsx", import.meta.url)),
       "utf-8",
@@ -107,9 +107,19 @@ describe("added-file hunk render path (@@ -0,0 +1,N @@)", () => {
     // projection). Handing it to this surface would replace the
     // synthesized suggestion hunks' own lines with the review file's
     // comment-driven line lists — the added-file regression this file
-    // exists for. Everything else about the preview's wiring is
-    // behaviour, asserted where the surface renders (e2e
-    // diff-highlight-surfaces.spec.ts), not here.
+    // exists for. So the two static facts are: the preview still has its
+    // own hook, and no `hunkViews` reaches the component. WHICH renderer
+    // it is and how it is invoked is deliberately NOT pinned here — a
+    // literal JSX string is exactly what V80-H1 rewrote legitimately,
+    // and re-pinning it would forbid the change.
+    //
+    // The e2e (e2e/diff-highlight-surfaces.spec.ts) covers the rendered
+    // outcome, not the wiring: it drives a real editor and asserts the
+    // preview's remove row carries the anchored original text plus a
+    // `[data-kbc-hl]` token. That is the paint working; it would still
+    // pass if `hunkViews` arrived and the review file's own view lines
+    // happened to spell the same row — which is why the no-`hunkViews`
+    // constraint has to stay static, here.
     expect(src).not.toContain("hunkViews");
   });
 });

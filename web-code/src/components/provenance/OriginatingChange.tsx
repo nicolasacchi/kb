@@ -49,16 +49,26 @@ export default function OriginatingChange({
     () => (sliced ? sliced.hunks.some((h) => h.lines.some((l) => l.kind === "remove")) : false),
     [sliced],
   );
-  // BOTH refs are real: `sha` is the blame region's commit and `from` is
-  // either `BlameRegion.previous_sha` or `<sha>^` — a `Revspec` the
-  // `/api/file` reader resolves the same way `/api/diff` does. The
-  // uncommitted arm passes neither (an `UNCOMMITTED_SHA` "commit" has no
-  // blob), so that side simply stays unpainted rather than inventing a ref.
+  // V80-H1 — BOTH refs are real: `sha` is the blame region's commit and
+  // `from` is either `BlameRegion.previous_sha` or `<sha>^` — a `Revspec`
+  // the `/api/file` reader resolves the same way `/api/diff` does, so the
+  // committed arm reads two pinned blobs. `hasAdds` does not touch that
+  // arm (a pinned tip is never gated on it).
+  //
+  // `hasAdds: false` is what closes the UNCOMMITTED arm: its `newSha` is
+  // `undefined`, and the tip of a diff with no `to` is the WORKING TREE
+  // (`tipSideEnabled`) — an `UNCOMMITTED_SHA` "commit" has no blob, so a
+  // read there would paint today's on-disk text, not this change. The
+  // hook's `hasAdds` is opt-OUT, so omitting it would open that path
+  // silently. Today `sliced` is ALSO `null` on that arm, which makes
+  // `repo`/`path` undefined and stops the query before it runs — incidental
+  // to the diff fetch being disabled, so the opt carries the guarantee
+  // on its own.
   const highlights = useDiffHighlights(
     sliced ? repo : undefined,
     sliced ? path : undefined,
     { oldSha: enabled ? from : undefined, newSha: enabled ? sha : undefined },
-    { hasRemoves, parsed: sliced },
+    { hasRemoves, hasAdds: false, parsed: sliced },
   );
 
   if (isUncommitted) {
