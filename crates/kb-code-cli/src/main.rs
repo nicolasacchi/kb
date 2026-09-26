@@ -200,10 +200,6 @@ mod review_agent;
 mod retrack_cmd;
 // RS-U10b — `review sync` / `review status`.
 mod review_sync;
-// RS-U7 — `kb-code review retrack` (single + `--all`). Its own file (not
-// `review_agent.rs`) so it never touches the same lines RS-U10b's `review
-// sync`/`status` land on.
-mod retrack_cmd;
 
 #[derive(Parser, Debug)]
 #[command(
