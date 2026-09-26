@@ -757,11 +757,14 @@ override with `--config`; schema source of truth:
 `crates/kb-code-server/src/config.rs`). It is a **completely separate file**
 from `kb.toml` above — the two daemons share nothing but the config-dir
 layout convention. This section covers only the sections v0.39 ("The PR
-Room" / lip track), S2-B ("Mobile mutations," kb-code v6.0) and V77-P3
-(the bounded parallel boot walk) added; the full section list (`[server]`,
-`[indexer]`, `[[repos]]`, `[watcher]`, `[semantic]`, `[transcripts]`,
-`[doclens]`, `[github]`, `[review]`, `[behavioral]`, …) is enumerated in
-that file's own module doc.
+Room" / lip track), S2-B ("Mobile mutations," kb-code v6.0), V77-P3
+(the bounded parallel boot walk) and the kb-code review store
+(`[review.store]`, `[[review.repos]]`) added; the full section list
+(`[server]`, `[indexer]`, `[[repos]]`, `[watcher]`, `[semantic]`,
+`[transcripts]`, `[doclens]`, `[github]`, `[kb_daemon]`, `[scip]`,
+`[comments]`, `[rails_lens]`, `[review]` — with its `[review.store]` and
+`[[review.repos]]` subsections — `[[intel.providers]]`, `[security]`,
+`[search]`, `[behavioral]`, …) is enumerated in that file's own module doc.
 
 ### `[kb_daemon]`
 
@@ -913,6 +916,12 @@ module doc for the full admission table. `GET /api/identity`'s
 (never required — the SPA renders a small "Remote review mutations: on/off"
 chip on Home when present, but every route enforces the gate itself).
 
+`[review]` also carries the two review-store subsections documented below —
+`[review.store]` and `[[review.repos]]` (the store `[[repos]]` entries are
+matched against, the fetch-credential ladder, the store root). They are
+separate TOML tables nested under the same `[review]` block; the gotcha that
+governs where each key lands is stated under `### [[review.repos]]` below.
+
 | key | type | default | meaning |
 |---|---|---|---|
 | `remote_mutations` | bool | `false` | Admit a non-loopback bearer caller on the five graduated route families. |
@@ -921,6 +930,107 @@ chip on Home when present, but every route enforces the gate itself).
 [review]
 remote_mutations = true
 ```
+
+
+### `[review.store]`
+
+RS-U3's kb-owned review store — one bare git store per repo, holding that
+repo's refs so a review read is served from the store instead of the user's
+working tree. The whole table is optional and is resolved **once at boot**
+(`crates/kb-code-server/src/review_store/settings.rs`'s
+`StoreSettings::resolve`, from `ReviewStoreSection` at
+`crates/kb-code-server/src/config.rs:1388`); there is no live reload.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `root` | string (path) | `<state_dir>/git` | Where the stores live. `~` is expanded (`settings.rs:141`); absent ⇒ the daemon's own `kb-code` state dir joined with `git` (`config.rs:1391`, `settings.rs:15`). Every store is one bare repo at `<root>/<uuid>.git` (`seed::store_dir`, `review_store/seed.rs:233`) — nothing else lives under `root`, and the `keys/`/`ssh/` directories the section's own doc comment names (`config.rs:1382`) deliberately do **not** follow it. (This build creates neither directory: its fetch ladder has no deploy-key rung — see `credential` below.) **Must be absolute, and must neither sit inside nor contain any configured `[[repos]] path`** — see "the store-disabled guard" below. |
+| `seed_on_boot` | bool | `true` | Seed `absent` stores in the background after boot, for repos that already have reviews (`config.rs:1394`). **Local only — no credential, no network**: a boot seed never fetches, and base branches arrive with the first explicit `store sync` or capture (`review_store/boot.rs:15-18`). |
+| `allow_inherited_credentials` | bool | `true` | Whether the ambient-environment (`inherit`) rung of the fetch ladder may be used at all (`config.rs:1397`). `false` does not merely mark that rung amber: under `auto` it is **skipped** with the recorded reason `allow_inherited_credentials = false` (`review_store/cred.rs:1080-1092`), and an explicit `credential = "inherit"` is a **refused error**, not a fall-through to another rung (`cred.rs:983-988`). |
+
+### `[[review.repos]]`
+
+Per-repo store settings — array-of-tables, default `[]`, resolved into a
+`name → RepoStoreSettings` map at boot (`config.rs:1373`, `config.rs:1414`;
+`settings.rs:189`). One entry per `[[repos]]` name; several repos can share
+one store, and the first member carrying an entry is the one whose settings
+drive the store-wide fetch credential (`review_store/registry.rs:1097-1100`).
+The enum-valued keys are held as raw strings by serde and parsed tolerantly
+at resolve time, not by the deserializer.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `name` | string | — required | A configured `[[repos]]` name — the join key; an entry naming no configured repo is meaningless. Trimmed before matching; a blank name, a name matching no `[[repos]]`, or a duplicate is **ignored with a warning, never an error** (`config.rs:1416`; `settings.rs:157-173`, where a duplicate keeps the FIRST entry). |
+| `base_url` | string | none | Rung 2 of the registration base-URL ladder (`review_store/ladder.rs:6-7`) — below the explicit `store set-base-url` rung, so an operator statement always wins. Must name a forge project URL; anything else is refused as `base-url-invalid` (`ladder.rs:142-168`). If the repo already has a store and the URL normalizes to a different store key, that is a **doctor error** — "a store is never re-keyed" (`review_store/routes.rs:228-235`) — not a silent re-key. |
+| `credential` | enum | `auto` | `auto \| gh-cli \| deploy-key \| token \| anonymous \| inherit \| none` (`config.rs:1420`; `cred.rs:694-701`). A pinned rung that fails is an error, never a fall-through. `deploy-key` **parses but is refused at resolve time in this build** — "deploy keys are Phase 2" (`cred.rs:958-960`); under `auto` that rung is recorded as skipped, not tried (`cred.rs:1040-1045`). Unknown value: warning + `auto`. |
+| `gh_user` | string | none | Which `gh` account must answer, for the `gh-cli` rung (`config.rs:1422`; `cred.rs:519-526`). Setting it **binds the store to that account**: with a pinned `gh_user` or a recorded `cred_account`, any gh-cli failure — logged out, `gh` missing, keyring locked, `gh` too old — **stops the ladder** rather than falling through to `token_file`/`anonymous`/`inherit`, which would silently swap the identity the store fetches as (`cred.rs:1009-1014`). A different account answering later is a typed `credential-account-mismatch` (`cred.rs:114-117`, `cred.rs:548-552`). |
+| `token_file` | string (path) | none | An owner-only token file for the `token` rung; `~` is expanded (`config.rs:1424`; `settings.rs:195-199`). **Only read when `credential = "token"`**, and only if the file is owner-only — mode `0600`/`0400`, the same rule as `[github] token_file`; anything group- or world-readable is refused unread (`cred.rs:866-897`). |
+| `default_branch` | string | none | Pins the project's default branch (`config.rs:1425`). Read as the first rung of the default-branch ladder, ahead of the store's cached forge symref and its `refs/remotes/base/*` candidates; when it is set the forge `ls-remote --symref` probe is skipped entirely (`review_base/capture.rs:1013-1032`, `review_base.rs:687-723`). Also the documented fix for the `default-branch-guessed` / ambiguous-default refusals (`review_base.rs:709-721`). |
+| `forge` | enum | `auto` | `auto \| github \| gitlab \| gitea \| forgejo \| bitbucket-server \| none` (`config.rs:1427`; `settings.rs:46-63`). Unknown value: warning + `auto`. `auto` is resolved against the store key's host and detects **only** `github.com`, `gitlab.com` and `codeberg.org` (→ `forgejo`); every other host is *unknown* and must be named with `forge = …` (`settings.rs:77-91`). **GitHub is the only forge verified in this build** (`settings.rs:93-96`). |
+
+```toml
+[review]
+remote_mutations = false
+
+[review.store]
+root = "/var/lib/kb-code/kb-code/git"
+seed_on_boot = true
+
+[[review.repos]]
+name = "kb-rs"
+base_url = "https://github.com/acme/kb-rs.git"
+credential = "gh-cli"
+gh_user = "octo-builder"
+default_branch = "main"
+
+[[review.repos]]
+name = "internal-tools"
+credential = "token"
+token_file = "~/.config/kb/kb-code/store-token"
+```
+
+**TOML ordering.** A `[review]` key such as `remote_mutations` must appear
+**before** any `[review.store]` or `[[review.repos]]` header: TOML binds every
+bare key to the most recently opened table, so a `remote_mutations` line
+written after one of those headers is read as a key of that subtable and the
+`[review]` default silently applies instead.
+
+**Behaviour that is not per-key.**
+
+- **Tolerant enums.** `credential` and `forge` are parsed
+  case-insensitively after trimming, and an unrecognised value produces a
+  warning (collected in `StoreSettings::warnings`, logged at boot and shown
+  by `store doctor`) plus a fall-back to the default — a typo never stops the
+  daemon (`settings.rs:1-5`, `settings.rs:46-63`, `cred.rs:694-701`).
+- **Three ignored-entry classes.** A `[[review.repos]]` entry is dropped with
+  a warning, and the rest of the config keeps working, when it has no `name`,
+  when its `name` matches no configured `[[repos]]`, or when the same `name`
+  appears twice (first entry wins) — `settings.rs:157-173`. None of the three
+  is a boot error.
+- **The `[[repos]]` dependency.** `name` is a `[[repos]]` name, so
+  `[[review.repos]]` only has meaning next to a `[[repos]]` table of
+  `{ name, path }` entries (`config.rs:432-435`) — this file cross-references
+  `[[repos]]` but does not document it. A `[[review.repos]]` entry that names
+  nothing configured is ignored, so a typo in a repo name degrades to "no
+  store settings for that repo", not to a boot failure.
+- **The store-disabled guard.** A `root` that is not absolute, or that
+  overlaps any configured `[[repos]]` path **in either direction** (both sides
+  canonicalised first, so a symlinked path cannot sneak past), sets
+  `StoreSettings::disabled` with the reason
+  (`settings.rs:144-154`, `settings.rs:241-257`). The store is then disabled
+  for that boot and `store doctor` reports it as a `store-disabled` error
+  beside the warnings (`review_store/routes.rs:156-162`); reads fall back to
+  the user repo exactly as they did before the store existed.
+- **Derived, not configurable.** Three paths are computed by the daemon from
+  its own state dir and are deliberately **not** moved by `root`
+  (`settings.rs:206-208`): `<state>/git-home` (`GIT_HOME_DIR`, the `HOME` for
+  scrubbed store git calls), `<state>/backups` (`BACKUPS_DIR_NAME`, where
+  `store-<uuid>-<ts>.bundle` lands — a bundle has to survive a store removal
+  or a bad `root`), and `<state>/review-store-restore-guard.json`
+  (`RESTORE_GUARD_FILE`, the restore-guard sentinel, which must sit outside
+  the sqlite volume so that restoring `index.db` alone can never also roll
+  the sentinel back — the asymmetry its epoch-rollback detector depends on;
+  see `review_store/maint.rs`'s `restore_guard`) (`settings.rs:16-30`). There
+  is no key that moves any of them.
 
 ### `[[intel.providers]]`
 
