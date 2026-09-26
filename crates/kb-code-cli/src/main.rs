@@ -16748,8 +16748,8 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 /// fetch completed server-side while the CLI had already given up, and a
 /// confusing second call "succeeded". The final envelope printed is the
 /// SAME one the synchronous route returns (the job carries it verbatim
-/// under `result`); the stale-mirror refusal
-/// (`urn:kb:errors:stale-mirror`) is printed verbatim, hint included.
+/// under `result`); a typed refusal (e.g. a closed review's
+/// `urn:kb:errors:review-closed`) is printed verbatim, hint included.
 ///
 /// V76-R1b — `--reopen`/`--new` become `?on_closed=reopen|new` (an OPEN
 /// existing (repo, PR) review is reused; a CLOSED one 409s without a flag).
@@ -16947,8 +16947,8 @@ fn start_pr_failed(
         }
         std::process::exit(envelope::EXIT_CONFLICT);
     }
-    // The refusal verbatim — the stale-mirror message's retry command is
-    // IN the text, so nothing is re-worded here.
+    // The refusal verbatim — a typed refusal's retry command is IN the
+    // text, so nothing is re-worded here.
     let urn = error_type.map(|t| format!(" [{t}]")).unwrap_or_default();
     Err(anyhow::anyhow!("review start-pr failed{urn}: {error}"))
 }
@@ -28771,15 +28771,13 @@ mod tests {
 
     #[test]
     fn start_pr_job_classify_failed_keeps_the_refusal_verbatim() {
-        let hint = "stale mirror: the local default branch \"main\" is 214 commits behind \
-                    the fetched origin/main (0 ahead, 214 behind; refusal limit 50). \
-                    ps1 would be based on its merge-base with the PR head; to proceed \
-                    against that base explicitly, run:\n  \
-                    kb-code review start-pr --repo widget --pr 42 --base deadbeef";
+        let hint = "review 65 is closed; pass --reopen to sync it again, \
+                    or --new to open a fresh review against PR 42.\n  \
+                    kb-code review start-pr --repo widget --pr 42 --reopen";
         let body = serde_json::json!({
             "job_id": "job_abc", "status": "failed",
             "error": hint,
-            "error_type": "urn:kb:errors:stale-mirror",
+            "error_type": "urn:kb:errors:review-closed",
         });
         match classify_start_pr_job(&body) {
             StartPrJob::Failed { error, error_type } => {
@@ -28787,9 +28785,9 @@ mod tests {
                 // re-words nothing.
                 assert_eq!(error, hint);
                 assert!(
-                    error.contains("kb-code review start-pr --repo widget --pr 42 --base deadbeef")
+                    error.contains("kb-code review start-pr --repo widget --pr 42 --reopen")
                 );
-                assert_eq!(error_type.as_deref(), Some("urn:kb:errors:stale-mirror"));
+                assert_eq!(error_type.as_deref(), Some("urn:kb:errors:review-closed"));
             }
             _ => panic!("a failed job must classify as Failed"),
         }

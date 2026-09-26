@@ -22,7 +22,7 @@
 //! branch before merge-basing against it — the only write outside
 //! `refs/kbc/`, and it is a remote-TRACKING ref, never a local branch) and
 //! `git rev-list --left-right --count <local>...<remote>` (the
-//! stale-mirror refusal's ahead/behind probe).
+//! stale-mirror warning's ahead/behind probe).
 //!
 //! `id` and `n` are daemon-generated integers; shas are validated as
 //! full 40-hex after `rev-parse` before any `update-ref`. User-supplied
@@ -1029,18 +1029,19 @@ pub fn default_base_ref(repo_root: &Path) -> String {
 
 // --- V76-R1a — the start-pr base ladder (explicit > merge-base > local-default) --
 
-/// V76-R1a — the stale-mirror refusal threshold. When `start-pr` is called
+/// V76-R1a — the stale-mirror WARNING threshold. When `start-pr` is called
 /// WITHOUT `--base` and the mirror's LOCAL default branch is behind the
 /// just-fetched remote default by MORE than this many commits, the route
-/// refuses with [`ERR_STALE_MIRROR`] instead of silently basing ps1 on a
-/// merge-base the operator never saw. 50 is a judgment call, not a
-/// measurement: a mirror a handful of commits behind is the ordinary case
-/// (the merge-base default handles it correctly), a mirror MONTHS behind is
-/// the incident this unit fixes — the operator must say so explicitly.
+/// attaches a `stale-mirror` warning to the envelope, so the operator sees
+/// that ps1 was based on a merge-base they never looked at. 50 is a
+/// judgment call, not a measurement: a mirror a handful of commits behind is
+/// the ordinary case (the merge-base default handles it correctly), a mirror
+/// MONTHS behind is the incident this unit fixes.
+///
+/// RS-U6 removed the 409 this used to raise — ps1 is now based on the
+/// freshly fetched remote tip either way, so a stale local default no longer
+/// changes the diff. Only the warning survives.
 pub const STALE_MIRROR_BEHIND_LIMIT: u64 = 50;
-
-/// The RFC 7807 `type` URN of the stale-mirror refusal.
-pub const ERR_STALE_MIRROR: &str = "urn:kb:errors:stale-mirror";
 
 /// What fed ps1's `base_sha` on a `start-pr` review — reported on the
 /// `POST /api/reviews/pr` envelope as `base_source` and merged into the
@@ -1142,11 +1143,11 @@ fn ahead_behind(
 ///   `refs/remotes/origin/<d>` — so ps1's `base_sha` is the merge-base of
 ///   the PR head against the FRESH remote tip, never the mirror's local
 ///   branch.
-/// - RS-U6: the old stale-mirror REFUSAL (409 [`ERR_STALE_MIRROR`]) is gone
-///   — the base above already comes from the freshly fetched remote tip, so
-///   a stale local default branch no longer affects the diff. It is
-///   reported as a `stale-mirror` WARNING instead (design-general
-///   "Envelopes"); the URN constant stays for older clients.
+/// - RS-U6: the old stale-mirror REFUSAL is gone — the base above already
+///   comes from the freshly fetched remote tip, so a stale local default
+///   branch no longer affects the diff. It is reported as a
+///   `stale-mirror` WARNING instead (design-general "Envelopes"), and the
+///   409 URN is no longer produced on the wire at all.
 /// - A repo without an `origin` remote, a failed default-branch fetch, or
 ///   a remote that lacks the branch degrades to the pre-V76 answer (the
 ///   mirror's local default branch) with `base_source: local-default`.
