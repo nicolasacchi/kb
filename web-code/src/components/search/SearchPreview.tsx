@@ -18,6 +18,8 @@
 //     `:preview-key` lesson for an expensive previewer.
 
 import CodeView, { type GotoSel } from "../CodeView";
+import EmptyState from "../EmptyState";
+import { Icon } from "../icons";
 import { useFile } from "../../hooks/useFile";
 
 export interface SearchPreviewProps {
@@ -46,7 +48,15 @@ export default function SearchPreview({ repo, path, line }: SearchPreviewProps) 
       </header>
       <div className="kbc-searchpreview__body">
         {!path || !repo ? (
-          <p className="kbc-reader__hint">Move the cursor onto a file hit to preview it.</p>
+          // V80-R1 — the shared `EmptyState` (was a bare `.kbc-reader__hint`
+          // line, which that class is reserved for transient loading/error
+          // states, never "nothing here, and it's worth explaining").
+          <EmptyState
+            icon={<Icon.Eye />}
+            title="Nothing focused"
+            hint="Move the cursor onto a file hit to preview it."
+            variant="rail"
+          />
         ) : file.isLoading ? (
           <p className="kbc-reader__hint">Loading…</p>
         ) : file.error ? (

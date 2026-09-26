@@ -1825,7 +1825,7 @@ struct StoreSource<'a> {
 
 impl DossierSource for StoreSource<'_> {
     fn read(&self, path: &str) -> Option<(Vec<u8>, String)> {
-        crate::routes::read_repo_file(self.repo, path, None)
+        crate::routes::read_repo_file(self.repo, path, crate::routes::RevResolver::work_tree())
             .ok()
             .map(|r| (r.bytes, r.blob_hash))
     }

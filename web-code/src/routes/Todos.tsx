@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router";
 import type { TodoItem } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import { useScopes } from "../hooks/useScopes";
 import { useTodos } from "../hooks/useTodos";
 import { readerUrl } from "../lib/breadcrumbs";
@@ -87,22 +88,22 @@ export default function Todos() {
 
   return (
     <div className="kbc-todos" id="main" data-kbc-todos>
-      <header className="kbc-todos__head">
-        <h1 className="kbc-todos__title">TODOs — {repo}</h1>
-        <p className="kbc-todos__hint">Comment markers from the live index (TODO / FIXME / …).</p>
-        {/* V72-J2 (D8) — this page is UNCHANGED (its own URL, wire and specs
-            keep working byte-for-byte), but comments/1's `~comments`
-            dashboard is now the richer, kind-aware surface: it covers the
-            same TODO-family rows PLUS docs/directives/sections/… with a
-            per-row drift/aged/unreasoned state and the claim → annotation
-            bridge. A link, not a redirect — an existing bookmark to this
-            page never breaks. */}
-        <p className="kbc-todos__hint" data-kbc-todos-comments-link>
-          See also <Link to={commentsUrl(repo)}>Comments</Link> — the full comments/1 index
-          (docs, directives, sections, …) with drift/aged/unreasoned state and the claim → annotation
-          bridge.
-        </p>
-      </header>
+      <PageHeader
+        title={`TODOs — ${repo}`}
+        lede="Comment markers from the live index (TODO / FIXME / …)."
+      />
+      {/* V72-J2 (D8) — this page is UNCHANGED (its own URL, wire and specs
+          keep working byte-for-byte), but comments/1's `~comments`
+          dashboard is now the richer, kind-aware surface: it covers the
+          same TODO-family rows PLUS docs/directives/sections/… with a
+          per-row drift/aged/unreasoned state and the claim → annotation
+          bridge. A link, not a redirect — an existing bookmark to this
+          page never breaks. */}
+      <p className="kbc-todos__hint" data-kbc-todos-comments-link>
+        See also <Link to={commentsUrl(repo)}>Comments</Link> — the full comments/1 index
+        (docs, directives, sections, …) with drift/aged/unreasoned state and the claim → annotation
+        bridge.
+      </p>
 
       {todos.data?.truncated && (
         <div className="kbc-todos__trunc" data-kbc-todos-truncated role="status">
@@ -111,30 +112,33 @@ export default function Todos() {
       )}
 
       <div className="kbc-todos__filters">
-        <div className="kbc-todos__chips" role="group" aria-label="marker filter">
-          <button
-            type="button"
-            className={"kbc-todos__chip" + (marker === null ? " is-on" : "")}
-            onClick={() => setMarker(null)}
-            data-kbc-todos-chip="all"
-          >
-            All
-            {allTodos.data && (
-              <span className="kbc-todos__chip-n">{allTodos.data.total}</span>
-            )}
-          </button>
-          {markerChips.map(({ marker: m, count }) => (
+        <div className="kbc-todos__chipgroup">
+          <span className="kbc-todos__chipgroup-label">Marker</span>
+          <div className="kbc-todos__chips" role="group" aria-label="marker filter">
             <button
-              key={m}
               type="button"
-              className={"kbc-todos__chip" + (marker === m ? " is-on" : "")}
-              onClick={() => setMarker((cur) => (cur === m ? null : m))}
-              data-kbc-todos-chip={m}
+              className={"kbc-todos__chip" + (marker === null ? " is-on" : "")}
+              onClick={() => setMarker(null)}
+              data-kbc-todos-chip="all"
             >
-              {m}
-              <span className="kbc-todos__chip-n">{count}</span>
+              All
+              {allTodos.data && (
+                <span className="kbc-todos__chip-n">{allTodos.data.total}</span>
+              )}
             </button>
-          ))}
+            {markerChips.map(({ marker: m, count }) => (
+              <button
+                key={m}
+                type="button"
+                className={"kbc-todos__chip" + (marker === m ? " is-on" : "")}
+                onClick={() => setMarker((cur) => (cur === m ? null : m))}
+                data-kbc-todos-chip={m}
+              >
+                {m}
+                <span className="kbc-todos__chip-n">{count}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="kbc-todos__row2">
           <input

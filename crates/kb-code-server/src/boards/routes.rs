@@ -545,7 +545,11 @@ pub(crate) fn build_nodes(repo: &crate::config::RepoEntry, doc: &BoardDoc) -> Ve
             let mut anchor_snippet = None;
             if n.kind == KIND_CODE {
                 if let (Some(path), Some(range)) = (reference.path.clone(), reference.range) {
-                    if let Ok(read) = crate::routes::read_repo_file(repo, &path, None) {
+                    if let Ok(read) = crate::routes::read_repo_file(
+                        repo,
+                        &path,
+                        crate::routes::RevResolver::work_tree(),
+                    ) {
                         let claimed_matches = reference
                             .blob_sha
                             .as_deref()

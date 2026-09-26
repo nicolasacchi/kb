@@ -11,7 +11,7 @@ import { useSyntax } from "../../hooks/useSyntax";
 import { toast } from "../../lib/toast";
 import { isLoopbackRefusal, LOOPBACK_HINT, msg } from "./ReviewHeader";
 import { speedFilterItems } from "../../lib/speedSearch";
-import { codeUrl } from "../../lib/codeUrl";
+import { codeUrl, reviewDiffHref } from "../../lib/codeUrl";
 import { useNavigate } from "react-router";
 import type { MapRowState } from "../../lib/reviewMapColumn";
 
@@ -23,8 +23,13 @@ export interface FilesPanelProps {
   files: ReviewFileRow[];
   loading: boolean;
   error: Error | null;
+  /// V80-F1 — still externally driven ONLY (the rail's per-thread-group
+  /// "open file" quick action, `ReviewDetail.tsx`'s `openFile`/`expanded`):
+  /// a click on the tree ROW ITSELF no longer sets this — see `openInDiff`
+  /// below — so `expanded` can only ever be set from outside this
+  /// component now. Kept (not retired) because that rail surface still
+  /// uses the inline preview.
   expanded: string | null;
-  onOpenFile: (path: string) => void;
   pathFilter: string;
   onPathFilter: (q: string) => void;
   fileSort: FileSort;
@@ -41,7 +46,6 @@ export default function FilesPanel({
   loading,
   error,
   expanded,
-  onOpenFile,
   pathFilter,
   onPathFilter,
   fileSort,
@@ -62,6 +66,16 @@ export default function FilesPanel({
   const syntaxQ = useSyntax();
   const putViewed = usePutReviewViewed(repo, reviewId);
   const delViewed = useDeleteReviewViewed(repo, reviewId);
+  // V80-F1 — the Files tab's own row click NAVIGATES to the full-page diff
+  // (design of record, `web-code/CLAUDE.md`'s Review diff v2 section) —
+  // the inline cockpit expansion below (`expandedPath`/`expandedContent`)
+  // is retired from THIS interaction; it survives only for the rail's
+  // externally-driven `expanded` (see the prop doc above). `ps` is a
+  // single-patchset selector here (never a range, `ReviewDetail.tsx`'s
+  // `psQuery`), so `"latest"` is the only non-numeric value it ever holds.
+  function openInDiff(path: string) {
+    navigate(reviewDiffHref(repo, reviewId, path, ps === "latest" ? undefined : { ps: Number(ps) }));
+  }
   const stateByPath = useMemo(() => {
     const m = new Map<string, MapRowState>();
     for (const f of files) {
@@ -150,7 +164,7 @@ export default function FilesPanel({
           stateByPath={stateByPath}
           currentPath={expanded ?? ""}
           syntaxRows={syntaxQ.data?.rows}
-          onPick={onOpenFile}
+          onPick={openInDiff}
           rowAttr="files"
           riskAvailable={riskAvailable}
           riskByPath={riskByPath}

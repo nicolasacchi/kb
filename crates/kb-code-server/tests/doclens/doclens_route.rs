@@ -19,6 +19,10 @@
 //!    the ACAO-carrying route set is EXACTLY the doc-lens routes meant to be
 //!    on it (four in W1.C/W2.A, five since SL7e's path lens) so a later
 //!    `/doc-lens/*` route cannot join it by accident.
+//!    `store_card_route_gate_is_pinned` pins the OTHER property that a
+//!    position between two `Router::new()` blocks used to leave unpinned: the
+//!    review-store family 404s a non-loopback caller, so it cannot silently
+//!    slide back onto the bearer `api` router (which answers such a caller 401).
 //!
 //! `[kb_daemon]` is pointed at the mock (or explicitly disabled) on every
 //! boot here — this suite must never risk reaching a real kb daemon that
@@ -2273,6 +2277,65 @@ async fn cors_layer_route_set_is_pinned() {
             true,
             "W3.C — loopback-only, never CORS'd",
         ),
+        // RS-U3/RS-U7/RS-U9 — the review-store family, every route of it
+        // mounted on the `loopback_only` `transcripts_api` router on purpose.
+        // The card read is asserted-absent here for the same reason
+        // `/api/sets/from-doc` is: it reports `store.git_dir` (the ABSOLUTE
+        // path of the daemon's own state dir) and `store.uuid`, so an ACAO
+        // would hand any allowlisted origin a map of the operator's disk. The
+        // mutations are POST-only, so the GET probe reaches them as a 405 —
+        // non-404, which is what proves they are MOUNTED rather than absent
+        // (`route_exists`'s hardening below). The GATE half of this pin is
+        // `store_card_route_gate_is_pinned` below: a non-loopback caller must
+        // 404 every one of them.
+        (
+            "/api/repos/alpha/store",
+            false,
+            true,
+            "RS-U3 — loopback-only, never CORS'd",
+        ),
+        (
+            "/api/repos/alpha/store/sync",
+            false,
+            true,
+            "RS-U3 — loopback-only, never CORS'd",
+        ),
+        (
+            "/api/repos/alpha/store/base-url",
+            false,
+            true,
+            "RS-U3 — loopback-only, never CORS'd",
+        ),
+        (
+            "/api/repos/alpha/credentials/test",
+            false,
+            true,
+            "RS-U3 — loopback-only, never CORS'd",
+        ),
+        (
+            "/api/repos/alpha/store/legacy-refs",
+            false,
+            true,
+            "RS-U7 — loopback-only, never CORS'd",
+        ),
+        (
+            "/api/repos/alpha/store/export-legacy",
+            false,
+            true,
+            "RS-U7 — loopback-only, never CORS'd",
+        ),
+        (
+            "/api/repos/alpha/store/gc",
+            false,
+            true,
+            "RS-U9 — loopback-only, never CORS'd",
+        ),
+        (
+            "/api/repos/alpha/store/maintain",
+            false,
+            true,
+            "RS-U9 — loopback-only, never CORS'd",
+        ),
         ("/api/file?repo=alpha&path=a.rb", false, true, "never"),
         ("/api/search/transcripts?q=x", false, true, "never"),
         ("/api/repos", false, true, "never"),
@@ -2318,6 +2381,69 @@ async fn cors_layer_route_set_is_pinned() {
         ],
         "the ACAO-carrying set is EXACTLY the shipped doc-lens routes"
     );
+}
+
+/// The GATE half of the review-store pin — and the half that actually fails if
+/// a route slides. `cors_layer_route_set_is_pinned` above proves the ACAO set,
+/// which the bearer and the loopback sub-routers satisfy EQUALLY, so it cannot
+/// tell the two apart. This can: a non-loopback caller gets
+/// `loopback_only`'s 404, whereas on the bearer `api` router the very same
+/// request would come back 401 (token-less non-loopback fails closed) — the
+/// same discriminator `review_findings.rs::findings_list_route_accepts_bearer_
+/// and_loopback_401s_nonloopback` relies on. Peer is loopback (this crate's
+/// `reqwest::Client` default) and `X-Forwarded-For` is consulted because a
+/// loopback peer counts as a trusted hop.
+///
+/// Both halves of each row are load-bearing: a bare 404 is also what an
+/// UNMOUNTED route returns, so every path is first probed over REAL loopback
+/// and must answer non-404 (200 for the card read, 405 for the POST-only
+/// mutations) before the spoofed probe below claims it is the GATE refusing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn store_card_route_gate_is_pinned() {
+    let (boot, _alpha, _kb) = cors_boot(&[]).await;
+    let client = reqwest::Client::new();
+    // (path, note) — the WHOLE review-store family, not just the card read:
+    // every one of these is mounted on the `loopback_only` sub-router, and
+    // `router.rs` says so only by position between two `Router::new()` blocks.
+    let probes: &[(&str, &str)] = &[
+        (
+            "/api/repos/alpha/store",
+            "RS-U3 card read — leaks store.git_dir, loopback-only",
+        ),
+        ("/api/repos/alpha/store/sync", "RS-U3 store sync"),
+        ("/api/repos/alpha/store/base-url", "RS-U3 base url"),
+        ("/api/repos/alpha/credentials/test", "RS-U3 credential test"),
+        ("/api/repos/alpha/store/legacy-refs", "RS-U7 legacy refs"),
+        (
+            "/api/repos/alpha/store/export-legacy",
+            "RS-U7 legacy export",
+        ),
+        ("/api/repos/alpha/store/gc", "RS-U9 store gc"),
+        ("/api/repos/alpha/store/maintain", "RS-U9 maintain"),
+    ];
+    for (path, note) in probes {
+        let url = format!("{}{path}", boot.base);
+        let local = client.get(&url).send().await.unwrap();
+        let local_status = local.status();
+        assert_ne!(
+            local_status,
+            StatusCode::NOT_FOUND,
+            "{path} ({note}): a loopback caller must not get 404 — the route is \
+             unmounted, and the gate assertion below would be vacuous"
+        );
+        let resp = client
+            .get(&url)
+            .header("X-Forwarded-For", "8.8.8.8")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "{path} ({note}): a non-loopback caller must 404 (loopback_only) — a \
+             401 here means this route slid onto the bearer `api` router"
+        );
+    }
 }
 
 // --- DCB W3.A — the reverse index's own route posture ----------------------
@@ -2371,6 +2497,9 @@ async fn doc_refs_and_sync_route_posture() {
 
     // The reverse lookup: a known repo with nothing cited answers an empty,
     // LIVE-flagged response rather than a 404.
+    // `live` is "the files row exists" — wait for the boot walk to land it
+    // (the chunked walk applies a whole chunk at once; siblings wait the same way).
+    wait_for_indexed(&boot.base, "alpha", 1).await;
     let (status, body) = http_get(&boot.base, "/api/doc-refs?repo=alpha&path=a.rb").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["schema"], "doc-refs/1");
@@ -2405,6 +2534,10 @@ async fn unpinning_a_doc_drops_its_doc_refs_claims() {
         doclens_cfg(&["platform"], &[]),
     )
     .await;
+    // The sync below expects "alpha" resolved, and doclens refuses a repo that
+    // is still indexing — every sibling sync test waits the same way (the
+    // chunked boot walk lands a whole chunk at once, so this race is real).
+    wait_for_indexed(&boot.base, "alpha", ALPHA_FILES).await;
     let client = reqwest::Client::new();
 
     let put = client

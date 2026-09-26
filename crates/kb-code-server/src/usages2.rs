@@ -661,7 +661,7 @@ fn enrich(
     core: CoreOut,
     limit: usize,
 ) -> Result<Usages2Out, ApiError> {
-    let read = read_repo_file(repo, path, rev)?;
+    let read = read_repo_file(repo, path, crate::routes::RevResolver::lookup(store, rev))?;
     let query_lang = crate::lang::detect(path, Some(&read.bytes)).map(|l| l.id);
 
     let mut groups: [(&'static str, Vec<CoreRow>); 3] = [
@@ -819,7 +819,7 @@ fn file_facts(
 ) -> FileFacts {
     let (bytes, blob_sha) = match preread {
         Some((b, h)) => (Some(b), Some(h)),
-        None => match read_repo_file(repo, path, None) {
+        None => match read_repo_file(repo, path, crate::routes::RevResolver::work_tree()) {
             Ok(r) => (Some(r.bytes), Some(r.blob_hash)),
             // A row can legitimately name a file this daemon may not read
             // (the secret denylist) or that vanished between the index and

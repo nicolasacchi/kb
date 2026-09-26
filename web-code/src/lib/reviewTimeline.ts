@@ -34,6 +34,12 @@ export type TimelineIconKind =
   /// `github_comment` server kind reuses this SAME icon (one visual
   /// "GitHub" glyph regardless of which side produced the row).
   | "github"
+  /// V80-F3 — a client-synthesized row derived from a finding's own
+  /// `touched_in` field (`lib/findingTouches.ts`'s
+  /// `findingTouchTimelineRows`), the SAME "merge client-side, no second
+  /// server kind" pattern `github` above uses. Never says "fixed" — see
+  /// that module's own doc.
+  | "finding_touch"
   | "unknown";
 
 export interface TimelineRow {

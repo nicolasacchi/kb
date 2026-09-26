@@ -31,7 +31,7 @@ import {
   type DiffSide,
 } from "../lib/reviewComments";
 import { toast } from "../lib/toast";
-import { useReviewFindings } from "./useReviews";
+import { useReviewFiles, useReviewFindings } from "./useReviews";
 
 /// Key convention: `repo` stays at index 1 so the `review.changed` prefix
 /// `["reviews", repo]` and the `annotation.changed` review_id prefix
@@ -56,6 +56,49 @@ export function useReviewComments(
     queryFn: () => fetchReviewComments(id as number, ps, all),
     enabled: repo !== undefined && id !== undefined,
   });
+}
+
+/// V80-M2 — "is `path` one this review's diff touches, and what patchset
+/// would a bind against `reviewId` resolve to." Prefers the comments
+/// wire's own per-group `in_diff` caption (exact, server-computed at the
+/// SAME resolved `ps` this hook reports) when a thread already exists on
+/// `path`; falls back to the review's files-at-latest-ps list (M2 brief:
+/// "use `in_diff` from the review's comments wire if the file is known,
+/// else the review's file list from the cockpit Files hook") when it
+/// doesn't — a file with no existing thread has no comments-wire group to
+/// read `in_diff` off at all. `inDiff: null` means "still loading / no
+/// review selected," never a guess.
+export interface ReviewFileBindHint {
+  /// The patchset a bind against `reviewId` would resolve to (the
+  /// comments wire's own `ps`, always present once that query has
+  /// loaded — even for a `path` with zero existing threads).
+  ps: number | null;
+  inDiff: boolean | null;
+  loading: boolean;
+}
+
+export function useReviewFileBindHint(
+  repo: string | undefined,
+  reviewId: number | undefined,
+  path: string | undefined,
+): ReviewFileBindHint {
+  const commentsQ = useReviewComments(repo, reviewId, undefined, true);
+  const group = path ? commentsQ.data?.groups.find((g) => g.path === path) : undefined;
+  const knownFromComments = group?.in_diff;
+  const filesEnabled = reviewId !== undefined && knownFromComments === undefined;
+  const filesQ = useReviewFiles(repo, reviewId, "latest", filesEnabled);
+
+  let inDiff: boolean | null = null;
+  if (knownFromComments !== undefined) inDiff = knownFromComments;
+  else if (path && filesQ.data) {
+    inDiff = filesQ.data.files.some((f) => f.path === path || f.old_path === path);
+  }
+
+  return {
+    ps: commentsQ.data?.ps ?? null,
+    inDiff,
+    loading: commentsQ.isLoading || (filesEnabled && filesQ.isLoading),
+  };
 }
 
 function invalidateComments(

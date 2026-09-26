@@ -202,3 +202,98 @@ export function expandParsed(
     expandHunk(h, lines, combineExpand(dial, manualByHunk?.get(i))),
   );
 }
+
+// --- V80-M1 — "the review diff shows ANY file" ----------------------------
+//
+// A file with zero textual hunks (unchanged outside the diff, or changed
+// only in mode/name) used to bail with "No textual difference" and render
+// nothing else — no gutter, no composer, no thread. `wholeFileHunk` turns
+// the file's own content (fetched the SAME way `?ctx=full` already does,
+// `useFile` at the patchset's tip — never synthesised) into ONE synthetic
+// `DiffHunk` of pure `context` rows, `oldLine === newLine` throughout, so it
+// rides through `UnifiedHunks`/`SplitHunks` exactly like a real hunk: same
+// gutter, same comment buttons, same fold/viewed affordances. `hunkId` (see
+// `diffHunks.ts`) hashes the path plus each `+`/`-` line — with none of
+// either, it collapses to `fnv1a64(path)`, which is stable across reloads
+// and distinct per file (the path is still in the hash), so "mark this
+// whole file viewed" persists exactly like a real hunk's mark would.
+
+export function wholeFileHunk(lines: readonly string[]): DiffHunk {
+  const n = lines.length;
+  return {
+    header: `@@ -1,${n} +1,${n} @@`,
+    oldStart: 1,
+    oldLines: n,
+    newStart: 1,
+    newLines: n,
+    lines: lines.map((text, i) => ({ kind: "context", text, oldLine: i + 1, newLine: i + 1 })),
+  };
+}
+
+/// What `emptyDiffView` needs to decide the ONE caption a zero-hunk file
+/// shows, and whether a whole-file body may render below it. Each field is
+/// a fact `FileDiffBody` already has in hand — nothing here is inferred.
+export interface EmptyDiffInfo {
+  /// A real `files_changed` row names this path (its `status` is
+  /// non-empty) — as opposed to a path reachable only from OUTSIDE the
+  /// diff (the "All files" tree, or a stale/typed deep link).
+  inDiff: boolean;
+  /// That row's status is a deletion. Checked BEFORE any fetch: a deleted
+  /// file cannot exist at the tip sha, so there is nothing to fetch.
+  deleted: boolean;
+  /// The whole-file fetch's own outcome (`GET /api/file?ref=<tip>`):
+  /// `"pending"` in flight, `"missing"` on a 404 (absent at the tip),
+  /// `"binary"` for a base64-encoded blob, `"ready"` once real utf8 lines
+  /// have landed.
+  fetch: "pending" | "missing" | "binary" | "ready";
+  /// The resolved patchset number (never `"latest"` — the caller already
+  /// resolved it), `null` when unknown.
+  psNumber: number | null;
+  /// `shortSha(tipSha)`, or `""` when unknown — folded into the caption
+  /// only when non-empty.
+  tipShaShort: string;
+}
+
+export interface EmptyDiffView {
+  /// Always a real sentence, never blank — every branch below names why.
+  caption: string;
+  /// Whether the whole-file body (built from `wholeFileHunk`) may render
+  /// below the caption. `false` means: caption only, no gutter, no
+  /// composer — the honest "nothing more to show" branch.
+  renderBody: boolean;
+}
+
+/// The ONE decision table behind "a file outside the diff renders whole at
+/// the tip" (see this module's header + `web-code/CLAUDE.md`'s Review diff
+/// v2 section). Pure, so the five captions are unit-pinned rather than
+/// reconstructed by reading JSX.
+export function emptyDiffView(info: EmptyDiffInfo): EmptyDiffView {
+  if (info.deleted) {
+    return { caption: "deleted in this patchset", renderBody: false };
+  }
+  if (info.fetch === "pending") {
+    return { caption: "loading the file at this patchset…", renderBody: false };
+  }
+  if (info.fetch === "missing") {
+    return {
+      caption:
+        info.psNumber != null
+          ? `not present at ps ${info.psNumber} tip`
+          : "not present at this patchset's tip",
+      renderBody: false,
+    };
+  }
+  if (info.fetch === "binary") {
+    return { caption: "binary", renderBody: false };
+  }
+  // info.fetch === "ready" — real content is in hand.
+  if (info.inDiff) {
+    return { caption: "No textual difference", renderBody: true };
+  }
+  const shaPart = info.tipShaShort ? ` (${info.tipShaShort})` : "";
+  const psPart = info.psNumber != null ? ` at ps ${info.psNumber}${shaPart}` : shaPart;
+  return {
+    caption: `Not changed in this patchset — showing the whole file${psPart}`,
+    renderBody: true,
+  };
+}

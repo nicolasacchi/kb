@@ -72,6 +72,8 @@ async fn main() -> Result<()> {
 
 // lance 4.0.0 emits a paired `_score`/`_distance` auto-projection
 // deprecation WARN on every FTS + vector search. lancedb 0.27.2 doesn't
-// expose a builder to opt into the future behavior. Pin the noisy logger
-// to ERROR so the daemon log stays useful.
-const STDERR_DEFAULT_FILTER: &str = "info,kb=debug,lance::dataset::scanner=error";
+// expose a builder to opt into the future behavior. Pin that scanner to
+// ERROR, and pin `lance::execution` / `lance::file_audit` to WARN — their
+// INFO lines flood the daemon log. `kb=debug` stays on.
+const STDERR_DEFAULT_FILTER: &str =
+    "info,kb=debug,lance::dataset::scanner=error,lance::execution=warn,lance::file_audit=warn";

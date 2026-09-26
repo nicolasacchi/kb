@@ -15,6 +15,24 @@
   outline: none;
 }
 
+/* V80-R5 — the view row is the page's primary control: a visible "View"
+   label beside the tab strip (was an unlabelled `role="tablist"` alone). */
+.kbc-bviews__selector-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.kbc-bviews__label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  flex: 0 0 auto;
+}
+
 .kbc-bviews__selector {
   display: flex;
   flex-wrap: wrap;
@@ -26,24 +44,35 @@
   align-items: baseline;
   gap: 6px;
   padding: 4px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
-  color: var(--fg);
+  color: var(--ink);
   font: inherit;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 
 .kbc-bviews__view--on {
   border-color: var(--accent);
-  background: var(--bg-raised, var(--bg-card));
+  background: var(--bg-card-hi);
   font-weight: 600;
 }
 
 .kbc-bviews__count {
-  color: var(--fg-dim);
+  color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
   font-size: 0.85em;
+}
+
+/* V80-R5 — filter input + prefix chips now share ONE row (was two stacked
+   rows, `.kbc-bviews__controls` then `.kbc-bviews__prefixes` on its own
+   line every time there were any prefixes at all). */
+.kbc-bviews__filterrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
 }
 
 .kbc-bviews__controls {
@@ -57,20 +86,22 @@
   flex: 1 1 22ch;
   min-width: 18ch;
   padding: 4px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  background: var(--bg-input, var(--bg-card));
-  color: var(--fg);
+  background: var(--bg-card);
+  color: var(--ink);
   font: inherit;
+  font-size: var(--fs-sm);
 }
 
 .kbc-bviews__toggle {
   padding: 4px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
-  color: var(--fg);
+  color: var(--ink);
   font: inherit;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 
@@ -82,12 +113,13 @@
 .kbc-bviews__prefixes {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
 }
 
 .kbc-bviews__diag {
   margin: 0;
-  color: var(--warn, var(--fg-dim));
+  color: var(--warn, var(--ink-mute));
   font-size: 0.9em;
 }
 
@@ -108,9 +140,9 @@
 }
 
 .kbc-bviews__rules {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--rule);
   padding-top: 8px;
-  color: var(--fg-dim);
+  color: var(--ink-mute);
   font-size: 0.85em;
 }
 
@@ -121,7 +153,7 @@
 /* --- one row ---------------------------------------------------------- */
 
 .kbc-bfact {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   padding: 8px 10px;
@@ -142,7 +174,7 @@
  * `lib/provHue.ts` (`var(--prov-hue-N)`); the fallback keeps a row with no
  * agent evidence visually neutral rather than assigning it a colour. */
 .kbc-bfact--agent {
-  border-left-color: var(--kbc-prov-hue, var(--line));
+  border-left-color: var(--kbc-prov-hue, var(--rule));
 }
 
 /* A stack layer is indented by its depth — the structure a flat list hides.
@@ -162,7 +194,7 @@
 .kbc-bfact__star {
   border: 0;
   background: none;
-  color: var(--fg-dim);
+  color: var(--ink-mute);
   font-size: 1em;
   line-height: 1;
   cursor: pointer;
@@ -175,20 +207,20 @@
 
 .kbc-bfact__name {
   font-weight: 600;
-  color: var(--fg);
+  color: var(--ink);
 }
 
 .kbc-bfact__remote,
 .kbc-bfact__base,
 .kbc-bfact__baseclass {
-  color: var(--fg-dim);
+  color: var(--ink-mute);
   font-size: 0.9em;
 }
 
 .kbc-bfact__ab {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
-  color: var(--fg-dim);
+  color: var(--ink-mute);
 }
 
 .kbc-bfact__badges {
@@ -206,17 +238,17 @@
   list-style: none;
   margin: 4px 0 0;
   padding: 0;
-  color: var(--fg-dim);
+  color: var(--ink-mute);
   font-size: 0.88em;
 }
 
 .kbc-bfact__cta {
   margin-top: 6px;
   padding: 3px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
-  color: var(--fg);
+  color: var(--ink);
   font: inherit;
   cursor: pointer;
 }
@@ -224,7 +256,7 @@
 /* --- the radar -------------------------------------------------------- */
 
 .kbc-radar {
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   padding: 10px 12px;
@@ -246,28 +278,28 @@
 .kbc-radar__hint,
 .kbc-radar__hunks,
 .kbc-radar__kind {
-  color: var(--fg-dim);
+  color: var(--ink-mute);
   font-size: 0.9em;
   font-weight: 400;
 }
 
 .kbc-radar__close {
   margin-left: auto;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--fg);
+  color: var(--ink);
   font: inherit;
   cursor: pointer;
   padding: 2px 8px;
 }
 
 .kbc-radar__refusal {
-  color: var(--red, var(--fg));
+  color: var(--red, var(--ink));
 }
 
 .kbc-radar__refusal-why {
-  color: var(--fg-dim);
+  color: var(--ink-mute);
 }
 
 .kbc-radar__rows,
@@ -282,11 +314,11 @@
 }
 
 .kbc-radar__row--clean .kbc-radar__verdict {
-  color: var(--green, var(--fg-dim));
+  color: var(--green, var(--ink-mute));
 }
 
 .kbc-radar__row--conflict .kbc-radar__verdict {
-  color: var(--warn, var(--fg));
+  color: var(--warn, var(--ink));
 }
 
 .kbc-radar__branch {
@@ -298,11 +330,11 @@
 
 .kbc-branches__legacy {
   margin-top: 24px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--rule);
   padding-top: 8px;
 }
 
 .kbc-branches__legacy-summary {
   cursor: pointer;
-  color: var(--fg-dim);
+  color: var(--ink-mute);
 }

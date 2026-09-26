@@ -1,8 +1,14 @@
-//! `kb fleet` — cross-daemon verbs over `~/.config/kb/daemons.toml`.
+//! `kb fleet` — cross-daemon verbs over `~/.config/kb/daemons.toml`
+//! (or `$KB_DAEMONS_FILE`).
 //!
-//! `kb fleet status` (v0.24 T1) sweeps every configured daemon's
-//! `/api/identity` + `/api/stats` into one health report (the TUI
-//! fleet grid's CLI replacement). `kb fleet replicate --kb NAME` (Q4)
+//! `kb fleet init --daemon name=url` writes that address book and refuses
+//! to overwrite an existing file unless `--force`. `kb fleet status`
+//! (v0.24 T1) reads the file when it exists instead of synthesizing a
+//! loopback entry, and sweeps every entry's `/api/identity` + `/api/stats`.
+//! A missing file still works; the text names the path
+//! (`fleet: 1 daemon(s); daemons.toml absent`). `kb fleet doctor` GETs
+//! `/healthz` on each named daemon (a missing file is a WARN, not a crash).
+//! `kb fleet replicate --kb NAME` (Q4)
 //! queries each daemon's `/api/kb/{kb}/docs` for the artifact id set
 //! and prints a diff matrix: which daemons are missing which docs.
 //!
@@ -25,11 +31,11 @@
 
 use crate::http::{client_with_timeout_and_bearer, encode_path_segment};
 use anyhow::{anyhow, Context, Result};
-use kb_core::config::DaemonsConfig;
+use kb_core::config::{DaemonEntry, DaemonsConfig};
 use kb_core::paths::KbPaths;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Minimal DocSummary shape — we only need id + path for the diff
 /// and copy-out. Other fields are discarded by `#[serde(deny_unknown_fields)]`
@@ -245,6 +251,182 @@ enum DaemonState {
     },
 }
 
+// ---- address book -------------------------------------------------------
+
+/// Address book path. `$KB_DAEMONS_FILE` wins when set and non-empty;
+/// otherwise `~/.config/kb/daemons.toml` (honours `KB_CONFIG_DIR` /
+/// `KB_HOME` via [`KbPaths`]).
+fn address_book_path() -> Result<PathBuf> {
+    if let Some(raw) = std::env::var_os("KB_DAEMONS_FILE") {
+        if !raw.is_empty() {
+            return Ok(PathBuf::from(raw));
+        }
+    }
+    Ok(KbPaths::new("default")?.daemons_file())
+}
+
+/// Human status header. A missing file still reports the synthesized
+/// loopback count and names the path
+/// (`fleet: 1 daemon(s); daemons.toml absent`).
+fn status_header(count: usize, path: &Path, absent: bool) -> String {
+    if absent {
+        format!(
+            "fleet: {count} daemon(s); daemons.toml absent ({})",
+            path.display()
+        )
+    } else {
+        format!("fleet: {count} daemon(s) ({})", path.display())
+    }
+}
+
+fn missing_book_warn(path: &Path) -> String {
+    format!("WARN: daemons.toml absent ({})", path.display())
+}
+
+// ---- `kb fleet init` ----------------------------------------------------
+
+/// One `--daemon name=url` flag that did not parse.
+#[derive(Debug, PartialEq, Eq)]
+struct DaemonFlagError {
+    raw: String,
+    reason: &'static str,
+}
+
+/// `kb fleet init --daemon name=url [--daemon ...] [--force]`.
+///
+/// Writes the named daemons to `~/.config/kb/daemons.toml` (or
+/// `$KB_DAEMONS_FILE`). Refuses to overwrite an existing file unless
+/// `force`. Does not synthesize a loopback entry the operator did not
+/// name. Prints the path.
+///
+/// Registered from `FleetAction` in `main.rs` — this module does not
+/// own the clap enum.
+pub async fn init(daemon_flags: &[String], force: bool) -> Result<()> {
+    init_at(&address_book_path()?, daemon_flags, force)
+}
+
+/// Write `daemon_flags` to `path`. Flags are parsed before the file is
+/// touched, so a bad invocation cannot clobber an existing book.
+fn init_at(path: &Path, daemon_flags: &[String], force: bool) -> Result<()> {
+    let cfg = match daemons_from_flags(daemon_flags) {
+        Ok(cfg) => cfg,
+        Err(e) if e.raw.is_empty() => {
+            return Err(anyhow!(
+                "no daemons named — pass --daemon name=url (repeatable)"
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow!(
+                "invalid --daemon '{}' — {}; expected name=url",
+                e.raw,
+                e.reason
+            ));
+        }
+    };
+    if path.exists() && !force {
+        return Err(anyhow!(
+            "refusing to overwrite {} — pass --force",
+            path.display()
+        ));
+    }
+    let body = render_daemons_toml(&cfg);
+    kb_core::fsx::write_atomic(path, body.as_bytes())
+        .map_err(|e| anyhow!("write {}: {e}", path.display()))?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+/// Parse repeated `name=url` flags into an address book. Empty input
+/// and malformed flags are errors. Duplicate names are errors. No
+/// loopback entry is added.
+fn daemons_from_flags(flags: &[String]) -> std::result::Result<DaemonsConfig, DaemonFlagError> {
+    if flags.is_empty() {
+        return Err(DaemonFlagError {
+            raw: String::new(),
+            reason: "at least one --daemon name=url is required",
+        });
+    }
+    let mut cfg = DaemonsConfig::default();
+    for raw in flags {
+        let (name, url) = split_daemon_flag(raw)?;
+        if cfg.daemon.contains_key(&name) {
+            return Err(DaemonFlagError {
+                raw: raw.clone(),
+                reason: "duplicate daemon name",
+            });
+        }
+        cfg.daemon.insert(name, DaemonEntry { endpoint: url });
+    }
+    Ok(cfg)
+}
+
+fn split_daemon_flag(raw: &str) -> std::result::Result<(String, String), DaemonFlagError> {
+    let fail = |reason: &'static str| DaemonFlagError {
+        raw: raw.to_string(),
+        reason,
+    };
+    let Some((name, url)) = raw.split_once('=') else {
+        return Err(fail("missing '='"));
+    };
+    let name = name.trim();
+    let url = url.trim();
+    if name.is_empty() {
+        return Err(fail("empty name"));
+    }
+    if url.is_empty() {
+        return Err(fail("empty url"));
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(fail("url must start with http:// or https://"));
+    }
+    Ok((name.to_string(), url.to_string()))
+}
+
+fn render_daemons_toml(cfg: &DaemonsConfig) -> String {
+    let mut out = String::from(
+        "# kb fleet address book — one [daemon.<name>] per host.\n\
+         # Written by `kb fleet init --daemon name=url`.\n",
+    );
+    for (name, entry) in &cfg.daemon {
+        out.push_str(&format!(
+            "\n[daemon.{}]\nendpoint = {}\n",
+            toml_key(name),
+            toml_basic_string(&entry.endpoint),
+        ));
+    }
+    out
+}
+
+fn toml_key(s: &str) -> String {
+    let bare = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if bare {
+        s.to_string()
+    } else {
+        toml_basic_string(s)
+    }
+}
+
+fn toml_basic_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 // ---- `kb fleet status` (v0.24 T1) --------------------------------------
 
 /// Cross-daemon health sweep — the TUI fleet grid's replacement. For
@@ -252,13 +434,22 @@ enum DaemonState {
 /// kbs) + `GET /api/stats` (docs + open errors per kb). Per-daemon
 /// failures are non-fatal (an unreachable daemon is a report row, not
 /// an abort) — the same connection model as `replicate` above.
+///
+/// A file that exists is the fleet: it is not padded with a synthesized
+/// loopback entry. A missing file still sweeps the local default so
+/// status works, and the text names the path
+/// (`fleet: 1 daemon(s); daemons.toml absent`).
 pub async fn status(json: bool, bearer: Option<&str>) -> Result<()> {
-    let paths = KbPaths::new("default")?;
-    let daemons_file = paths.daemons_file();
-    // Missing daemons.toml → single local default, like the retired TUI
-    // did — first-run users get a useful `kb fleet status` with zero
-    // config.
-    let daemons = DaemonsConfig::load_or_default(&daemons_file);
+    let daemons_file = address_book_path()?;
+    let (daemons, absent) = if daemons_file.exists() {
+        (
+            DaemonsConfig::load(&daemons_file)
+                .map_err(|e| anyhow!("read {}: {e}", daemons_file.display()))?,
+            false,
+        )
+    } else {
+        (DaemonsConfig::default_local(), true)
+    };
     if daemons.daemon.is_empty() {
         return Err(anyhow!(
             "no daemons configured — populate {}",
@@ -288,15 +479,15 @@ pub async fn status(json: bool, bearer: Option<&str>) -> Result<()> {
         rows.push(row);
     }
 
+    let header = status_header(rows.len(), &daemons_file, absent);
     if json {
+        if absent {
+            eprintln!("{header}");
+        }
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
-    println!(
-        "fleet: {} daemon(s) ({})",
-        rows.len(),
-        daemons_file.display()
-    );
+    println!("{header}");
     for row in &rows {
         print_status_row(row);
     }
@@ -363,6 +554,41 @@ fn print_status_row(row: &serde_json::Value) {
             );
         }
     }
+}
+
+// ---- `kb fleet doctor` --------------------------------------------------
+
+/// `kb fleet doctor` — `GET /healthz` on each named daemon.
+///
+/// Prints `ok <name>` or `fail <name> <reason>` per entry. A missing
+/// address book is a WARN on stderr and a success return — not a crash.
+/// Unreachable daemons are fail rows, not an abort of the sweep.
+pub async fn doctor(bearer: Option<&str>) -> Result<()> {
+    let path = address_book_path()?;
+    if !path.exists() {
+        eprintln!("{}", missing_book_warn(&path));
+        return Ok(());
+    }
+    let daemons =
+        DaemonsConfig::load(&path).map_err(|e| anyhow!("read {}: {e}", path.display()))?;
+    if daemons.daemon.is_empty() {
+        eprintln!("WARN: {} names no daemons", path.display());
+        return Ok(());
+    }
+    let client = client_with_timeout_and_bearer(5, bearer)?;
+    for (name, entry) in &daemons.daemon {
+        let url = format!("{}/healthz", entry.base_url());
+        match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => println!("ok {name}"),
+            Ok(resp) => println!("fail {name} HTTP {}", resp.status()),
+            Err(e) => {
+                let reason = e.to_string();
+                let first = reason.lines().next().unwrap_or(&reason);
+                println!("fail {name} {first}");
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn fetch_docs(client: &reqwest::Client, url: &str) -> Result<Vec<DocRow>> {
@@ -433,4 +659,118 @@ fn pick_source(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        daemons_from_flags, init_at, missing_book_warn, render_daemons_toml, status_header,
+    };
+    use kb_core::config::DaemonsConfig;
+    use std::path::Path;
+
+    #[test]
+    fn absent_status_header_names_the_missing_path() {
+        let path = Path::new("/home/nik/.config/kb/daemons.toml");
+        let msg = status_header(1, path, true);
+        assert!(
+            msg.contains("fleet: 1 daemon(s); daemons.toml absent"),
+            "{msg}"
+        );
+        assert!(msg.contains(&path.display().to_string()), "{msg}");
+    }
+
+    #[test]
+    fn present_status_header_does_not_claim_absent() {
+        let path = Path::new("/tmp/daemons.toml");
+        let msg = status_header(2, path, false);
+        assert_eq!(msg, "fleet: 2 daemon(s) (/tmp/daemons.toml)");
+        assert!(!msg.contains("absent"), "{msg}");
+    }
+
+    #[test]
+    fn missing_book_warn_names_the_path() {
+        let path = Path::new("/home/nik/.config/kb/daemons.toml");
+        let msg = missing_book_warn(path);
+        assert!(msg.starts_with("WARN:"), "{msg}");
+        assert!(msg.contains("daemons.toml absent"), "{msg}");
+        assert!(msg.contains(&path.display().to_string()), "{msg}");
+    }
+
+    #[test]
+    fn daemons_from_flags_records_named_endpoints_only() {
+        let cfg = daemons_from_flags(&[
+            "h=https://kb.example/x?a=1".into(),
+            " local = http://127.0.0.1:4000 ".into(),
+        ])
+        .unwrap();
+        assert_eq!(cfg.daemon.len(), 2);
+        assert_eq!(cfg.daemon["h"].endpoint, "https://kb.example/x?a=1");
+        assert_eq!(cfg.daemon["local"].endpoint, "http://127.0.0.1:4000");
+        let body = render_daemons_toml(&cfg);
+        assert!(body.contains("[daemon.h]"), "{body}");
+        assert!(body.contains("https://kb.example/x?a=1"), "{body}");
+    }
+
+    #[test]
+    fn daemons_from_flags_rejects_empty_malformed_and_duplicates() {
+        assert!(daemons_from_flags(&[]).is_err());
+        assert!(daemons_from_flags(&["local".into()]).is_err());
+        assert!(daemons_from_flags(&["=http://127.0.0.1:4000".into()]).is_err());
+        assert!(daemons_from_flags(&["local=".into()]).is_err());
+        assert!(daemons_from_flags(&["local=127.0.0.1:4000".into()]).is_err());
+        assert!(daemons_from_flags(&[
+            "h=https://kb.example".into(),
+            "h=https://other.example".into(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn init_at_writes_and_refuses_to_clobber_without_force() {
+        let dir = std::env::temp_dir().join(format!(
+            "kb-fleet-init-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemons.toml");
+
+        init_at(&path, &["local=http://127.0.0.1:4000".into()], false).unwrap();
+        let written = DaemonsConfig::load(&path).unwrap();
+        assert_eq!(written.daemon["local"].endpoint, "http://127.0.0.1:4000");
+        assert!(!path_body(&path).contains("[daemon.h]"));
+
+        let refused = init_at(&path, &["h=https://kb.example".into()], false).unwrap_err();
+        assert!(
+            refused.to_string().contains("refusing to overwrite"),
+            "{refused}"
+        );
+        let still = DaemonsConfig::load(&path).unwrap();
+        assert_eq!(still.daemon.len(), 1);
+        assert_eq!(still.daemon["local"].endpoint, "http://127.0.0.1:4000");
+
+        let bad = init_at(&path, &["not-a-flag".into()], true).unwrap_err();
+        assert!(bad.to_string().contains("invalid --daemon"), "{bad}");
+        assert_eq!(
+            DaemonsConfig::load(&path).unwrap().daemon["local"].endpoint,
+            "http://127.0.0.1:4000",
+            "a bad --force invocation must not clobber"
+        );
+
+        init_at(&path, &["h=https://kb.example".into()], true).unwrap();
+        let forced = DaemonsConfig::load(&path).unwrap();
+        assert_eq!(forced.daemon.len(), 1, "force replaces the book");
+        assert_eq!(forced.daemon["h"].endpoint, "https://kb.example");
+        assert!(!forced.daemon.contains_key("local"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn path_body(path: &Path) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
 }

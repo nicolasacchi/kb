@@ -15,7 +15,16 @@
 //!   PATCH  …/review/{id}/comments/{cid}/anchor    re-point the anchor (R9)
 //!   DELETE …/review/{id}/comments/{cid}           delete a comment
 //!   DELETE …/review/{id}/comments/{cid}/replies/{rid}  delete a reply
+//!   POST   …/review/{id}/comments/{cid}/keep      queue a proposal → 201
+//!   POST   …/comments/{id}/keep                   keep comment as memory
 //!   GET    …/reviews                              list/query comments
+//!
+//! `keep` copies one open or resolved comment into the proposal queue
+//! (`source: "comment"`). It does not approve, does not ingest a memory,
+//! and does not rewrite or delete the comment. `keep_memory` is the other
+//! half: one memory in this kb's memory corpus, or the global memory
+//! corpus when this kb is not memory-scoped. A second click with the same
+//! comment id does not insert another memory.
 //!
 //! Concurrency: every mutation runs the load → typed-mutation → save
 //! sequence under the per-kb `review_lock` (`review_lock_for(&kb)`), so
@@ -44,6 +53,7 @@ use kb_core::review::{self, Anchor, Author, Choice, CommentStatus, NewComment, R
 use kb_core::types::KbName;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 // --- request bodies --------------------------------------------------------
@@ -550,14 +560,503 @@ async fn set_status(
     if let Err(resp) = check_subid(&cid, "comment id") {
         return resp;
     }
-    with_review_mut(&state, &kb_name, &id, StatusCode::OK, |file| {
-        let changed = file.set_comment_status(&cid, status)?;
-        Ok((
-            json!({ "ok": true, "open_count": file.open_count() }),
-            changed,
-        ))
+    // Unresolve (and any future non-resolve status) must not touch the
+    // stale-anchor sidecar. The shared path already holds the review lock
+    // for the file rewrite; there is no sidecar write to sequence with it.
+    if status != CommentStatus::Resolved {
+        return with_review_mut(&state, &kb_name, &id, StatusCode::OK, |file| {
+            let changed = file.set_comment_status(&cid, status)?;
+            Ok((
+                json!({ "ok": true, "open_count": file.open_count() }),
+                changed,
+            ))
+        })
+        .await;
+    }
+
+    // Resolve — same lock scope as `set_anchor` / `delete_comment`: the
+    // review-file rewrite and the stale-anchor sidecar prune share the
+    // per-kb guard so two same-kb mutations can't race a load→remove→save
+    // on the sidecar. A resolved comment's stale flag is meaningless
+    // (ux-13 — the queue was mostly already-resolved rows).
+    let path = state.paths.kb_review_file(&kb_name, &id);
+    let lock = state.review_lock_for(&kb_name);
+    let guard = lock.lock().await;
+    let mut file = match review::load(&path) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            return error_to_problem_json(&kb_core::Error::NotFound(format!(
+                "no comments for {kb_name}/{id}"
+            )))
+        }
+        Err(e) => return error_to_problem_json(&e),
+    };
+    let changed = match file.set_comment_status(&cid, status) {
+        Ok(c) => c,
+        Err(e) => return error_to_problem_json(&e),
+    };
+    if changed {
+        if let Err(e) = review::save_atomic(&path, &file, None) {
+            return error_to_problem_json(&e);
+        }
+    }
+    // Prune even on a no-op re-resolve: the comment may already be
+    // Resolved and still own a sidecar row. Non-resolve never reaches here.
+    let review_dir = state.paths.kb_review_dir(&kb_name);
+    let sidecar = kb_core::anchors::sidecar_path(&review_dir);
+    if let Err(e) = kb_core::anchors::prune_if_resolved(&sidecar, &id, &cid, true) {
+        tracing::warn!(kb = %kb_name, error = %e, "failed to prune anchor-stale sidecar on resolve");
+    }
+    drop(guard);
+    if changed {
+        emit_updated(&state, &kb_name, &id, &file);
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "open_count": file.open_count() })),
+    )
+        .into_response()
+}
+
+// --- keep (queue a proposal; do not approve or delete) ---------------------
+
+/// `POST …/review/{id}/comments/{cid}/keep` — copy one comment into the
+/// proposal queue as `kb-proposal/1` with `source: "comment"`. Open and
+/// resolved comments are both eligible. Does not approve, does not ingest
+/// a memory, and does not delete or rewrite the comment.
+///
+/// Wire in `router.rs` (not edited here), beside `resolve`:
+/// `.route("/kb/{kb}/review/{id}/comments/{cid}/keep", post(routes::comments::keep))`.
+pub async fn keep(
+    State(state): State<Arc<KbHandles>>,
+    Path((kb, id, cid)): Path<(String, String, String)>,
+) -> Response<Body> {
+    let kb_name = match validate(&state, &kb, &id) {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+    if let Err(resp) = check_subid(&cid, "comment id") {
+        return resp;
+    }
+    let review_path = state.paths.kb_review_file(&kb_name, &id);
+    let proposals_dir = state.paths.kb_proposals_dir(&kb_name);
+
+    // Review lock, then the proposal lock. Keep reads the comment and
+    // writes only the queue — never the reverse order, and never the
+    // review file. `set_status`'s stale-anchor prune is not this path.
+    let review_lock = state.review_lock_for(&kb_name);
+    let proposal_lock = state.proposal_lock_for(&kb_name);
+    let review_guard = review_lock.lock().await;
+    let proposal_guard = proposal_lock.lock().await;
+    let proposal = match keep_comment_as_proposal(&review_path, &proposals_dir, &id, &cid) {
+        Ok(p) => p,
+        Err(e) => return error_to_problem_json(&e),
+    };
+    drop(proposal_guard);
+    drop(review_guard);
+
+    if let Some(ctx) = state.kbs.get(&kb_name) {
+        ctx.bus.emit(
+            "proposal.created",
+            json!({
+                "kb": kb_name.as_str(),
+                "id": proposal.id.clone(),
+                "title": proposal.title.clone(),
+            }),
+        );
+    }
+    (StatusCode::CREATED, Json(proposal)).into_response()
+}
+
+/// Read one comment and enqueue a proposal through
+/// [`super::proposals::enqueue_proposal`]. Does not approve, does not
+/// write a memory artifact, and does not mutate the review file.
+fn keep_comment_as_proposal(
+    review_path: &std::path::Path,
+    proposals_dir: &std::path::Path,
+    artifact_id: &str,
+    comment_id: &str,
+) -> kb_core::Result<super::proposals::Proposal> {
+    let file = match review::load(review_path)? {
+        Some(f) => f,
+        None => {
+            return Err(kb_core::Error::NotFound(format!(
+                "no comments for artifact {artifact_id}"
+            )))
+        }
+    };
+    let comment = file
+        .comments
+        .iter()
+        .find(|c| c.id == comment_id)
+        .ok_or_else(|| {
+            kb_core::Error::NotFound(format!("no comment {comment_id} on artifact {artifact_id}"))
+        })?;
+    let title = super::proposals::truncate_proposal_title(&comment.body);
+    if title.is_empty() {
+        return Err(kb_core::Error::BadRequest(
+            "proposal title must not be empty".into(),
+        ));
+    }
+    let body = format!(
+        "{}\n\nProvenance: artifact {artifact_id}, comment {comment_id}",
+        comment.body
+    );
+    super::proposals::enqueue_proposal(
+        proposals_dir,
+        super::proposals::EnqueueProposal {
+            title,
+            body,
+            category: super::proposals::default_category(),
+            tags: Vec::new(),
+            global: true,
+            linked_kbs: Vec::new(),
+            salience: None,
+            supersedes: None,
+            session_id: None,
+            source: super::proposals::ProposalSource::Comment,
+            note: None,
+        },
+    )
+}
+
+// --- keep as memory (idempotent on comment id) -----------------------------
+
+/// One comment lifted into a memory corpus. `already` is true when a prior
+/// click with this comment id already inserted the memory.
+#[derive(Debug, Serialize)]
+struct KeepMemoryResponse {
+    id: String,
+    path: String,
+    already: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct KeepRecord {
+    id: String,
+    path: String,
+    comment_id: String,
+}
+
+#[derive(Debug)]
+struct FoundComment {
+    comment_id: String,
+    artifact_id: String,
+    title: String,
+    body: String,
+    anchor: Anchor,
+    author: Author,
+}
+
+struct KeepInsert {
+    title: String,
+    text: String,
+    summary: String,
+    artifact_id: String,
+    anchor: Anchor,
+    author: Author,
+}
+
+#[derive(Debug)]
+enum KeepError {
+    Core(kb_core::Error),
+    Http(Box<Response<Body>>),
+}
+
+/// `POST /api/kb/{kb}/comments/{id}/keep` — write one memory for this
+/// comment. `{id}` is the comment id. The memory text is the comment body,
+/// the title is `Keep: <artifact title or source path>`, and the citation
+/// includes the comment id. A second click with the same comment id does
+/// not insert another memory. 404 when the comment is missing.
+///
+/// The write is [`crate::routes::artifacts::ingest`] — the same memory
+/// insert `kb remember` and proposal approval use. This kb is the corpus
+/// when it is memory-scoped; otherwise the memory lands in the global
+/// memory corpus (the one named `memory` when several global corpora
+/// exist). Does not rewrite or delete the comment, and does not queue a
+/// proposal (`keep` owns that).
+///
+/// Mounted in `router.rs` as
+/// `.route("/kb/{kb}/comments/{id}/keep", post(routes::comments::keep_memory))`.
+pub async fn keep_memory(
+    State(state): State<Arc<KbHandles>>,
+    Path((kb, id)): Path<(String, String)>,
+) -> Response<Body> {
+    let kb_name = match KbName::new(&kb) {
+        Ok(k) => k,
+        Err(e) => return error_to_problem_json(&e),
+    };
+    if !state.kbs.contains_key(&kb_name) {
+        return error_to_problem_json(&kb_core::Error::NotFound(format!("kb {kb_name}")));
+    }
+    if let Err(resp) = check_subid(&id, "comment id") {
+        return resp;
+    }
+
+    let source_is_memory = state
+        .kbs
+        .get(&kb_name)
+        .is_some_and(|c| c.memory_scope.is_some());
+    let target_name = if source_is_memory {
+        kb_name.clone()
+    } else {
+        match global_memory_name(&state) {
+            Ok(n) => n,
+            Err(e) => return error_to_problem_json(&e),
+        }
+    };
+    let Some(memory_root) = state.kbs.get(&target_name).map(|c| c.source_path.clone()) else {
+        return error_to_problem_json(&kb_core::Error::NotFound(format!(
+            "memory corpus {target_name}"
+        )));
+    };
+
+    let review_dir = state.paths.kb_review_dir(&kb_name);
+    let source_root = state
+        .kbs
+        .get(&kb_name)
+        .map(|c| c.source_path.clone())
+        .unwrap_or_default();
+    let source_storage = state.kbs.get(&kb_name).map(|c| c.storage.clone());
+
+    let lock = state.review_lock_for(&kb_name);
+    let _guard = lock.lock().await;
+
+    let found = match find_comment(&review_dir, &id) {
+        Ok(f) => f,
+        Err(e) => return error_to_problem_json(&e),
+    };
+    let source_rel = if found.title.trim().is_empty() {
+        match source_storage {
+            Some(storage) => storage
+                .get_by_id(found.artifact_id.clone())
+                .await
+                .ok()
+                .flatten()
+                .map(|d| kb_core::paths::doc_rel_path(&d.path, &source_root))
+                .unwrap_or_default(),
+            None => String::new(),
+        }
+    } else {
+        String::new()
+    };
+
+    let state_for_insert = Arc::clone(&state);
+    let target_for_insert = target_name.clone();
+    let source_kb = kb_name.as_str().to_string();
+    let outcome = insert_keep_once(&review_dir, &memory_root, &found, &source_rel, |spec| {
+        let Some(target_ctx) = state_for_insert.kbs.get(&target_for_insert) else {
+            return Err(KeepError::Core(kb_core::Error::NotFound(format!(
+                "memory corpus {target_for_insert}"
+            ))));
+        };
+        match crate::routes::artifacts::ingest(
+            &state_for_insert,
+            &target_for_insert,
+            target_ctx,
+            keep_ingest_body(&spec, &source_kb),
+        ) {
+            Ok(written) => Ok((written.id, written.path)),
+            Err(resp) => Err(KeepError::Http(Box::new(resp))),
+        }
+    });
+
+    match outcome {
+        Ok(body) => {
+            let status = if body.already {
+                StatusCode::OK
+            } else {
+                StatusCode::CREATED
+            };
+            (status, Json(body)).into_response()
+        }
+        Err(KeepError::Core(e)) => error_to_problem_json(&e),
+        Err(KeepError::Http(resp)) => *resp,
+    }
+}
+
+/// Global curated-memory write target. Prefers the corpus named `memory`
+/// so a `sessions` corpus (also `memory_scope = "global"`) is not the
+/// landing place for a kept comment. Mirrors the CLI write-target rule.
+fn global_memory_name(state: &KbHandles) -> kb_core::Result<KbName> {
+    let mut named_memory: Option<KbName> = None;
+    let mut curated: Vec<KbName> = Vec::new();
+    for (name, ctx) in &state.kbs {
+        if ctx.memory_scope.as_deref() != Some("global") {
+            continue;
+        }
+        if name.as_str() == "memory" {
+            named_memory = Some(name.clone());
+        }
+        if name.as_str() != "sessions" {
+            curated.push(name.clone());
+        }
+    }
+    if let Some(name) = named_memory {
+        return Ok(name);
+    }
+    match curated.len() {
+        1 => Ok(curated.remove(0)),
+        0 => Err(kb_core::Error::NotFound("no global memory corpus".into())),
+        _ => Err(kb_core::Error::BadRequest(
+            "multiple global memory corpora; cannot choose a keep target".into(),
+        )),
+    }
+}
+
+fn find_comment(review_dir: &FsPath, comment_id: &str) -> kb_core::Result<FoundComment> {
+    let entries = match std::fs::read_dir(review_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Err(kb_core::Error::NotFound(format!("no comment {comment_id}"))),
+    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        files.push(path);
+    }
+    files.sort();
+    for path in files {
+        let Some(file) = review::load(&path).ok().flatten() else {
+            continue;
+        };
+        if let Some(comment) = file.comments.iter().find(|c| c.id == comment_id) {
+            return Ok(FoundComment {
+                comment_id: comment.id.clone(),
+                artifact_id: file.artifact.id.clone(),
+                title: file.artifact.title.clone(),
+                body: comment.body.clone(),
+                anchor: comment.anchor.clone(),
+                author: comment.author,
+            });
+        }
+    }
+    Err(kb_core::Error::NotFound(format!("no comment {comment_id}")))
+}
+
+/// Artifact title when it has one, otherwise the source path. Never empty
+/// — ingest rejects an empty title.
+fn keep_label(artifact_title: &str, source_path: &str) -> String {
+    let title = artifact_title.trim();
+    if !title.is_empty() {
+        return title.lines().next().unwrap_or(title).trim().to_string();
+    }
+    let path = source_path.trim();
+    if !path.is_empty() {
+        return path.to_string();
+    }
+    "artifact".to_string()
+}
+
+fn keep_text(body: &str, comment_id: &str) -> String {
+    let citation = format!("Citation: comment {comment_id}");
+    let body = body.trim_end();
+    if body.is_empty() {
+        citation
+    } else {
+        format!("{body}\n\n{citation}")
+    }
+}
+
+fn keep_record_path(review_dir: &FsPath, comment_id: &str) -> PathBuf {
+    review_dir.join("keeps").join(format!("{comment_id}.json"))
+}
+
+fn read_keep_record(path: &FsPath) -> Option<KeepRecord> {
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_keep_record(path: &FsPath, rec: &KeepRecord) -> kb_core::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| kb_core::Error::Storage(format!("create keep record dir: {e}")))?;
+    }
+    let bytes = serde_json::to_vec(rec).map_err(|e| kb_core::Error::Serde(e.to_string()))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &bytes)
+        .map_err(|e| kb_core::Error::Storage(format!("write keep record: {e}")))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| kb_core::Error::Storage(format!("rename keep record: {e}")))?;
+    Ok(())
+}
+
+fn keep_ingest_body(spec: &KeepInsert, source_kb: &str) -> crate::routes::artifacts::IngestBody {
+    crate::routes::artifacts::IngestBody {
+        title: spec.title.clone(),
+        body: Some(spec.text.clone()),
+        body_html: None,
+        category: "memory-user".to_string(),
+        tags: Vec::new(),
+        salience: None,
+        decay: None,
+        supersedes: None,
+        summary: Some(spec.summary.clone()),
+        session_id: None,
+        global: None,
+        linked_kbs: Vec::new(),
+        author: Some(spec.author),
+        source_kb: Some(source_kb.to_string()),
+        source_artifact: Some(spec.artifact_id.clone()),
+        source_anchor: Some(spec.anchor.clone()),
+        source: None,
+        memory_type: None,
+        outcome: None,
+    }
+}
+
+/// Insert at most one memory for `found.comment_id`. The closure is the
+/// existing ingest path; it is not called when a keep record for this
+/// comment id already exists.
+#[allow(clippy::result_large_err)]
+fn insert_keep_once<F>(
+    review_dir: &FsPath,
+    memory_root: &FsPath,
+    found: &FoundComment,
+    source_path: &str,
+    insert: F,
+) -> Result<KeepMemoryResponse, KeepError>
+where
+    F: FnOnce(KeepInsert) -> Result<(String, String), KeepError>,
+{
+    let record_path = keep_record_path(review_dir, &found.comment_id);
+    if let Some(existing) = read_keep_record(&record_path) {
+        return Ok(KeepMemoryResponse {
+            id: existing.id,
+            path: existing.path,
+            already: true,
+        });
+    }
+    let spec = KeepInsert {
+        title: format!("Keep: {}", keep_label(&found.title, source_path)),
+        text: keep_text(&found.body, &found.comment_id),
+        summary: format!("Citation: comment {}", found.comment_id),
+        artifact_id: found.artifact_id.clone(),
+        anchor: found.anchor.clone(),
+        author: found.author,
+    };
+    let (id, path) = insert(spec)?;
+    if let Err(e) = write_keep_record(
+        &record_path,
+        &KeepRecord {
+            id: id.clone(),
+            path: path.clone(),
+            comment_id: found.comment_id.clone(),
+        },
+    ) {
+        let _ = std::fs::remove_file(memory_root.join(&path));
+        return Err(KeepError::Core(e));
+    }
+    Ok(KeepMemoryResponse {
+        id,
+        path,
+        already: false,
     })
-    .await
 }
 
 // --- resolve-all / unresolve-all -------------------------------------------
@@ -1492,4 +1991,241 @@ pub async fn list_reviews(
     }
 
     Json(ReviewsResponse { comments: rows }).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        find_comment, insert_keep_once, keep_comment_as_proposal, keep_label, keep_text, KeepError,
+    };
+    use kb_core::paths::KbPaths;
+    use kb_core::review::{self, Anchor, Author, CommentStatus, NewComment};
+    use kb_core::types::KbName;
+
+    fn files_under(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn keep_writes_a_proposal_file_and_not_a_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kb = KbName::new("smoke").unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "keep-test");
+        let artifact_id = "abc123def456";
+        let review_path = paths.kb_review_file(&kb, artifact_id);
+        let proposals_dir = paths.kb_proposals_dir(&kb);
+        std::fs::create_dir_all(review_path.parent().unwrap()).unwrap();
+
+        let mut file = review::ReviewFile::empty_skeleton(&kb, artifact_id, "Artifact");
+        let comment_text = "k".repeat(crate::routes::proposals::TITLE_LIMIT + 40);
+        file.add_comment(NewComment {
+            file: artifact_id.to_string(),
+            file_label: "Artifact".to_string(),
+            anchor: Anchor::File,
+            author: Author::You,
+            body: comment_text.clone(),
+            choices: Vec::new(),
+            attachments: Vec::new(),
+            user: None,
+        });
+        let cid = file.comments[0].id.clone();
+        file.set_comment_status(&cid, CommentStatus::Resolved)
+            .unwrap();
+        review::save_atomic(&review_path, &file, None).unwrap();
+        let review_before = std::fs::read(&review_path).unwrap();
+        let files_before = files_under(tmp.path());
+
+        let proposal =
+            keep_comment_as_proposal(&review_path, &proposals_dir, artifact_id, &cid).unwrap();
+
+        assert_eq!(proposal.schema, crate::routes::proposals::SCHEMA);
+        assert_eq!(
+            proposal.source,
+            crate::routes::proposals::ProposalSource::Comment
+        );
+        assert_eq!(
+            proposal.title,
+            "k".repeat(crate::routes::proposals::TITLE_LIMIT)
+        );
+        assert!(proposal.body.starts_with(&comment_text));
+        assert!(proposal.body.contains(artifact_id));
+        assert!(proposal.body.contains(&cid));
+
+        let on_disk = paths.kb_proposal_file(&kb, &proposal.id);
+        assert!(on_disk.is_file(), "keep must write a proposal file");
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&on_disk).unwrap()).unwrap();
+        assert_eq!(raw["schema"], "kb-proposal/1");
+        assert_eq!(raw["source"], "comment");
+        assert_eq!(raw["id"], proposal.id);
+
+        // Comment remains. Keep must not rewrite or delete the review file.
+        assert_eq!(std::fs::read(&review_path).unwrap(), review_before);
+        let reloaded = review::load(&review_path).unwrap().unwrap();
+        assert_eq!(reloaded.comments.len(), 1);
+        assert_eq!(reloaded.comments[0].id, cid);
+        assert_eq!(reloaded.comments[0].body, comment_text);
+        assert_eq!(reloaded.comments[0].status, CommentStatus::Resolved);
+
+        // The only new file is the queued proposal. Approve would have
+        // deleted it and written an HTML memory; neither happens here.
+        let files_after = files_under(tmp.path());
+        let new_files: Vec<_> = files_after
+            .iter()
+            .filter(|p| !files_before.iter().any(|b| b == *p))
+            .cloned()
+            .collect();
+        assert_eq!(
+            new_files.len(),
+            1,
+            "keep wrote unexpected files: {new_files:?}"
+        );
+        assert_eq!(new_files[0], on_disk);
+        assert!(
+            files_after
+                .iter()
+                .all(|p| p.extension().and_then(|s| s.to_str()) != Some("html")),
+            "keep must not write a memory artifact"
+        );
+    }
+
+    fn review_with_comment(root: &std::path::Path, title: &str, body: &str) -> (KbPaths, String) {
+        let kb = KbName::new("smoke").unwrap();
+        let paths = KbPaths::rooted_at(root, "keep-memory");
+        let artifact_id = "abc123def456";
+        let review_path = paths.kb_review_file(&kb, artifact_id);
+        std::fs::create_dir_all(review_path.parent().unwrap()).unwrap();
+        let mut file = review::ReviewFile::empty_skeleton(&kb, artifact_id, title);
+        file.add_comment(NewComment {
+            file: artifact_id.to_string(),
+            file_label: "Artifact".to_string(),
+            anchor: Anchor::File,
+            author: Author::You,
+            body: body.to_string(),
+            choices: Vec::new(),
+            attachments: Vec::new(),
+            user: None,
+        });
+        let cid = file.comments[0].id.clone();
+        review::save_atomic(&review_path, &file, None).unwrap();
+        (paths, cid)
+    }
+
+    #[test]
+    fn keep_memory_missing_comment_is_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, _cid) = review_with_comment(tmp.path(), "Tour", "kept text");
+        let kb = KbName::new("smoke").unwrap();
+        let review_dir = paths.kb_review_dir(&kb);
+        let err = find_comment(&review_dir, "c_missing").unwrap_err();
+        assert!(
+            matches!(err, kb_core::Error::NotFound(_)),
+            "missing comment must be NotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn keep_label_prefers_title_then_source_path() {
+        assert_eq!(keep_label("Tour", "notes/a.html"), "Tour");
+        assert_eq!(keep_label("  ", "notes/a.html"), "notes/a.html");
+        assert_eq!(keep_label("", ""), "artifact");
+    }
+
+    #[test]
+    fn keep_text_cites_the_comment_id() {
+        let text = keep_text("hello", "c_abc");
+        assert!(text.contains("hello"));
+        assert!(text.contains("Citation: comment c_abc"));
+    }
+
+    #[test]
+    fn keep_memory_inserts_once_and_a_second_click_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, cid) = review_with_comment(tmp.path(), "Tour", "the comment body");
+        let kb = KbName::new("smoke").unwrap();
+        let review_dir = paths.kb_review_dir(&kb);
+        let review_path = paths.kb_review_file(&kb, "abc123def456");
+        let review_before = std::fs::read(&review_path).unwrap();
+        let found = find_comment(&review_dir, &cid).unwrap();
+        let memory_root = tmp.path().join("memory");
+        std::fs::create_dir_all(&memory_root).unwrap();
+        let calls = std::cell::Cell::new(0);
+
+        let first = insert_keep_once(&review_dir, &memory_root, &found, "", |spec| {
+            calls.set(calls.get() + 1);
+            assert_eq!(spec.title, "Keep: Tour");
+            assert!(spec.text.contains("the comment body"));
+            assert!(spec.text.contains(&format!("Citation: comment {cid}")));
+            assert!(spec.summary.contains(&cid));
+            let rel = format!("kept-{cid}.html");
+            std::fs::write(memory_root.join(&rel), &spec.text).unwrap();
+            Ok::<_, KeepError>((format!("mem-{cid}"), rel))
+        })
+        .unwrap();
+        assert!(!first.already);
+        assert_eq!(calls.get(), 1);
+
+        let second = insert_keep_once(&review_dir, &memory_root, &found, "", |_spec| {
+            calls.set(calls.get() + 1);
+            Err(KeepError::Core(kb_core::Error::Storage(
+                "second keep must not insert".into(),
+            )))
+        })
+        .unwrap();
+        assert!(second.already);
+        assert_eq!(second.id, first.id);
+        assert_eq!(calls.get(), 1, "second click inserted another memory");
+
+        let html: Vec<_> = files_under(&memory_root)
+            .into_iter()
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("html"))
+            .collect();
+        assert_eq!(html.len(), 1, "expected one memory file, got {html:?}");
+        let written = std::fs::read_to_string(&html[0]).unwrap();
+        assert!(written.contains("the comment body"));
+        assert!(written.contains(&format!("Citation: comment {cid}")));
+
+        // The comment itself is untouched. The keep record is a sidecar.
+        assert_eq!(std::fs::read(&review_path).unwrap(), review_before);
+    }
+
+    #[test]
+    fn keep_memory_title_falls_back_to_source_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, cid) = review_with_comment(tmp.path(), "", "body");
+        let kb = KbName::new("smoke").unwrap();
+        let review_dir = paths.kb_review_dir(&kb);
+        let found = find_comment(&review_dir, &cid).unwrap();
+        let memory_root = tmp.path().join("memory");
+        std::fs::create_dir_all(&memory_root).unwrap();
+        let written = insert_keep_once(
+            &review_dir,
+            &memory_root,
+            &found,
+            "notes/tour.html",
+            |spec| {
+                assert_eq!(spec.title, "Keep: notes/tour.html");
+                Ok::<_, KeepError>(("mem".into(), "kept.html".into()))
+            },
+        )
+        .unwrap();
+        assert!(!written.already);
+        assert_eq!(written.id, "mem");
+    }
 }

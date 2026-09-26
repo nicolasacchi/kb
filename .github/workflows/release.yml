@@ -432,10 +432,11 @@ jobs:
         # `--target kb-code-runtime`: the Dockerfile's LAST stage is kb's
         # `runtime` on purpose (a bare `docker build` must keep shipping kb),
         # so kb-code is only ever reachable by explicit target.
-        # Same KB_GIT_SHA build arg as kb below — the `.dockerignore` drops
-        # `.git`, so neither builder stage can probe the sha itself, and both
-        # kb-code-builder and kb-code-runtime declare the ARG (build stamp +
-        # the OCI version label).
+        # Same KB_GIT_SHA + KB_BUILD_VERSION build args as kb below — the
+        # `.dockerignore` drops `.git`, so neither builder stage can probe
+        # the sha or the version itself. KB_BUILD_VERSION is the tag this
+        # job already resolved (`steps.img.outputs.version`, v-stripped);
+        # the sha step above is unchanged.
         # TODO(verify-after-public): the first push creates a SECOND package,
         # `kb-code`, which may also land PRIVATE — set it public alongside `kb`
         # in the repo's Packages settings if `docker pull` should be open.
@@ -448,6 +449,7 @@ jobs:
           docker build \
             --target kb-code-runtime \
             --build-arg KB_GIT_SHA="$SHA" \
+            --build-arg KB_BUILD_VERSION="$VERSION" \
             -t "${CODE_IMAGE}:${VERSION}" \
             -t "${CODE_IMAGE}:latest" \
             .
@@ -497,6 +499,7 @@ jobs:
           set -euo pipefail
           docker build \
             --build-arg KB_GIT_SHA="$SHA" \
+            --build-arg KB_BUILD_VERSION="$VERSION" \
             -t "${IMAGE}:${VERSION}" \
             -t "${IMAGE}:latest" \
             .

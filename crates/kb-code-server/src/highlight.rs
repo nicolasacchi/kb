@@ -120,10 +120,56 @@
 use crate::lang::{self, LangError};
 use crate::syntax::{self, SyntaxRow};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 use tree_sitter::StreamingIterator;
 
 pub type Result<T> = std::result::Result<T, LangError>;
+
+/// Compiled `highlights.scm` queries, cached per language id (V77-P4).
+/// `extract_highlights_host_only` used to call `lang::compile_query` fresh
+/// on every invocation — this module's own doc says that "happens once per
+/// file ingest, not in a hot loop" (see `lang::highlights_query`'s doc),
+/// true for every OTHER language but broken by HAML's own scanner: its
+/// injection painting (`crate::injection::paint_regions`) calls this
+/// function once per Ruby FRAGMENT — a script line, every `#{…}`, every
+/// attribute hash — which can be hundreds to thousands of calls for one
+/// template. Recompiling a many-pattern tree-sitter query from source text
+/// on every one of those was the second half of the scanner's ~46x-per-byte
+/// regression against a plain Ruby file (the first half, the quadratic
+/// `line_at`/`line_index_at` rescans, is `haml::extract::LineIndex`'s doc).
+/// `tree_sitter::Query` is immutable once built and `Send + Sync`, so a
+/// process-wide cache behind a `RwLock` is sound: every OTHER caller (one
+/// call per file) pays a single uncontended read-lock lookup instead of a
+/// write, and the query text itself is a fixed, closed set
+/// (`lang::highlights_query`'s own match arms) so the map can never grow
+/// unboundedly.
+static QUERY_CACHE: std::sync::LazyLock<RwLock<HashMap<String, Arc<tree_sitter::Query>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// The compiled query for `id`, from the cache when present. `query_src` is
+/// only used to compile a NEW entry — every caller passes
+/// `lang::highlights_query(id)`'s own return value, which is a pure
+/// function of `id`, so a cache hit and a fresh compile are guaranteed to
+/// have compiled the SAME source text.
+fn cached_highlights_query(
+    id: &str,
+    language: &tree_sitter::Language,
+    query_src: &str,
+) -> Result<Arc<tree_sitter::Query>> {
+    if let Some(q) = QUERY_CACHE.read().unwrap().get(id) {
+        return Ok(Arc::clone(q));
+    }
+    let compiled = Arc::new(lang::compile_query(id, language, query_src)?);
+    // Two threads racing to compile the same language both succeed; the
+    // second insert just replaces an equal entry, and the cache is a pure
+    // memoization layer with no correctness dependence on which one wins.
+    QUERY_CACHE
+        .write()
+        .unwrap()
+        .insert(id.to_string(), Arc::clone(&compiled));
+    Ok(compiled)
+}
 
 /// The ROLE TABLE version, embedded in every
 /// `lang::LangInfo::highlight_salt` (pinned by
@@ -265,7 +311,7 @@ pub fn extract_highlights_host_only(lang_id: &str, source: &[u8]) -> Result<Vec<
     let (tree, language) = lang::parse(lang_id, source)?;
     let hl_src = lang::highlights_query(lang_id)
         .ok_or_else(|| LangError::Unsupported(lang_id.to_string()))?;
-    let query = lang::compile_query(lang_id, &language, &hl_src)?;
+    let query = cached_highlights_query(lang_id, &language, &hl_src)?;
     let capture_names = query.capture_names();
 
     let mut cursor = tree_sitter::QueryCursor::new();
@@ -740,18 +786,51 @@ use axum::response::IntoResponse;
 use axum::Json;
 
 /// `POST /api/highlight` — paint one snippet. Bearer read; nothing persisted.
+///
+/// `highlight_snippet` reaches `lang::parse`, which builds a FRESH
+/// `tree_sitter::Parser` and runs a full parse per call — CPU-bound work
+/// that has no business on an async runtime worker, where one paint
+/// starves every unrelated handler sharing the thread. Bounded above by
+/// `MAX_SNIPPET_BYTES` (256 KiB), which is what makes the hop worth its
+/// scheduling cost. Same discipline as `routes::diff_route` and the
+/// `blame` routes it cites — there it is a subprocess's blocking I/O,
+/// here it is tree-sitter's CPU.
 pub async fn highlight_route(
     Json(body): Json<HighlightIn>,
 ) -> std::result::Result<impl IntoResponse, crate::routes::ApiError> {
-    let out = highlight_snippet(&body)?;
+    let out = tokio::task::spawn_blocking(move || highlight_snippet(&body))
+        .await
+        .map_err(|e| {
+            crate::routes::ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("highlight task panicked: {e}"),
+            )
+        })??;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
 }
 
 /// `POST /api/highlight/batch` — paint up to [`MAX_BATCH_ITEMS`] snippets.
+///
+/// The batch form is where the hop really earns its place: ONE request
+/// runs up to `MAX_BATCH_ITEMS` (64) `highlight_snippet`s, each with its
+/// own fresh parser and full parse, bounded by `MAX_BATCH_BYTES` (1 MiB)
+/// of input. On the async worker, one such request is a stall sized by
+/// the SUM of every item's parse, paid by every handler sharing the
+/// thread — so it runs on the blocking pool, as the single route does.
+/// The response is unchanged: the same `Json`, the same `no-store`, and
+/// every cap refusal still a 400 out of `highlight_batch` itself — the
+/// caps are checked INSIDE the hop, not in front of it.
 pub async fn highlight_batch_route(
     Json(body): Json<HighlightBatchIn>,
 ) -> std::result::Result<impl IntoResponse, crate::routes::ApiError> {
-    let out = highlight_batch(&body)?;
+    let out = tokio::task::spawn_blocking(move || highlight_batch(&body))
+        .await
+        .map_err(|e| {
+            crate::routes::ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("highlight batch task panicked: {e}"),
+            )
+        })??;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)))
 }
 
@@ -783,6 +862,8 @@ pub const V76_C1_ROUTES: &[crate::entities::RouteContract] =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     const RUST_SNIPPET: &str = "fn add(a: i32, b: i32) -> i32 {\n    // sum\n    a + b\n}\n";
     const PYTHON_SNIPPET: &str = "def greet(name):\n    # say hi\n    return f\"hi {name}\"\n";
@@ -1453,5 +1534,187 @@ mod tests {
             );
             assert!((c.params_accept_without)(""));
         }
+    }
+
+    // ── the async routes: the parse must leave the runtime worker ───────
+
+    /// How often the probe asks the worker for a turn. One millisecond is
+    /// short enough to catch a real stall and long enough that a busy
+    /// machine does not make the sleep itself the thing under test.
+    const TICK: std::time::Duration = std::time::Duration::from_millis(1);
+
+    /// Whole Ruby source lines, repeated — a real parse with real tokens,
+    /// not a degenerate blob tree-sitter can chew through for free.
+    const RUBY_FILL: &str = "def greet(name)\n  # say hi\n  \"hi #{name}\"\nend\n\n";
+
+    /// ~`bytes` of valid Ruby: whole lines only, and never over the cap
+    /// it is being sized for.
+    fn ruby_source(bytes: usize) -> String {
+        let mut s = String::with_capacity(bytes + RUBY_FILL.len());
+        while s.len() + RUBY_FILL.len() <= bytes {
+            s.push_str(RUBY_FILL);
+        }
+        s
+    }
+
+    /// A batch sitting on the caps: `MAX_BATCH_ITEMS` items of a
+    /// `MAX_BATCH_BYTES / MAX_BATCH_ITEMS` share each, so every item
+    /// clears the per-item gate and the total clears the batch gate — the
+    /// most work one request can legally ask for.
+    fn at_cap_batch() -> HighlightBatchIn {
+        let share = MAX_BATCH_BYTES / MAX_BATCH_ITEMS;
+        let items = (0..MAX_BATCH_ITEMS)
+            .map(|i| HighlightBatchItemIn {
+                id: format!("i{i}"),
+                lang: Some("ruby".into()),
+                path: None,
+                text: ruby_source(share),
+            })
+            .collect();
+        HighlightBatchIn { items }
+    }
+
+    /// Drive `request` to completion on the current (single-worker)
+    /// runtime while a SECOND task ticks every [`TICK`], and report how
+    /// many of those ticks were polled while the request was still in
+    /// flight. Zero means the one worker was pinned by the request for
+    /// its whole life — i.e. the handler parsed on the runtime thread.
+    ///
+    /// The probe is spawned BEFORE the request is first polled, and
+    /// `join!` polls the request first, so a request that blocks its own
+    /// worker runs start-to-finish before the probe has had a single turn:
+    /// the count is then necessarily 0, with no ordering luck involved.
+    /// The `timeout` turns a genuine hang into a failure instead of a
+    /// stuck suite.
+    async fn ticks_while_in_flight<T>(request: impl Future<Output = T>) -> (usize, T) {
+        let in_flight = Arc::new(AtomicBool::new(true));
+        let flag = in_flight.clone();
+        let probe = tokio::spawn(async move {
+            let mut ticks = 0usize;
+            loop {
+                tokio::time::sleep(TICK).await;
+                // A tick polled AFTER the request finished proves nothing;
+                // only the ones that landed mid-flight are evidence.
+                if !flag.load(Ordering::SeqCst) {
+                    break;
+                }
+                ticks += 1;
+            }
+            ticks
+        });
+        let flag = in_flight.clone();
+        // `join!` yields in ARGUMENT order — the request's own output first,
+        // then the probe task's `Result`. Binding them the other way round
+        // type-checks into the wrong pair, so the order is named here.
+        let (out, ticks) = tokio::time::timeout(std::time::Duration::from_secs(60), async move {
+            let request = async move {
+                let out = request.await;
+                flag.store(false, Ordering::SeqCst);
+                out
+            };
+            tokio::join!(request, probe)
+        })
+        .await
+        .expect("the request and the probe must both finish");
+        (ticks.expect("the probe task must not panic"), out)
+    }
+
+    /// `highlight_batch_route` must keep its parse off the async worker:
+    /// one worker, one full-cap batch, and a probe that has to be polled
+    /// while that batch is in flight. Called inline again, the parse of
+    /// 64 snippets (a fresh `tree_sitter::Parser` each) pins the single
+    /// worker for the whole request and `ticks` lands on 0.
+    ///
+    /// TIMING-BASED — the one assertion in this file that is about
+    /// scheduling rather than a value, and so the least deterministic of
+    /// the change. The bar is deliberately coarse: the batch parses ~1 MiB
+    /// of Ruby, which is tens of milliseconds even on a fast box, so three
+    /// 1 ms ticks is a wide margin rather than a knife edge.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn batch_route_parses_off_the_async_worker() {
+        let (ticks, out) = ticks_while_in_flight(highlight_batch_route(Json(at_cap_batch()))).await;
+        assert!(
+            ticks >= 3,
+            "the batch parse ran on the async worker: only {ticks} tick(s) were polled \
+             while the request was in flight"
+        );
+
+        // The hop must not have changed a byte of the response: same
+        // 200, same `no-store`, same `highlight-batch/1` body with every
+        // item still painted in caller order.
+        let resp = out
+            .expect("a legal at-the-cap batch is a 200, never a refusal")
+            .into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 64 << 20)
+            .await
+            .expect("a JSON body is readable");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
+        assert_eq!(json["schema"], HIGHLIGHT_BATCH_SCHEMA);
+        let items = json["items"].as_array().expect("items is an array");
+        assert_eq!(items.len(), MAX_BATCH_ITEMS);
+        for (i, item) in items.iter().enumerate() {
+            assert_eq!(item["id"], format!("i{i}"));
+            assert_eq!(item["tier"], "full", "item {i} lost its paint");
+            assert!(
+                !item["spans"]
+                    .as_array()
+                    .expect("spans is an array")
+                    .is_empty(),
+                "item {i} painted no spans"
+            );
+        }
+    }
+
+    /// The same bar for the single-snippet route, at the per-snippet cap:
+    /// one `tree_sitter::Parser` and one parse of `MAX_SNIPPET_BYTES` of
+    /// Ruby. The bar is ONE tick, not three — a single quarter-megabyte
+    /// parse is the smallest work this route can legally be handed, so
+    /// the honest claim is "the worker kept serving other tasks while it
+    /// ran", not "it ran for milliseconds".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn snippet_route_parses_off_the_async_worker() {
+        let body = HighlightIn {
+            lang: Some("ruby".into()),
+            path: None,
+            text: ruby_source(MAX_SNIPPET_BYTES),
+            salt: false,
+        };
+        let (ticks, out) = ticks_while_in_flight(highlight_route(Json(body))).await;
+        assert!(
+            ticks >= 1,
+            "the snippet parse ran on the async worker: no tick was polled \
+             while the request was in flight"
+        );
+
+        let resp = out
+            .expect("a snippet at the cap is a 200, never a refusal")
+            .into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 8 << 20)
+            .await
+            .expect("a JSON body is readable");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
+        assert_eq!(json["schema"], HIGHLIGHT_SCHEMA);
+        assert_eq!(json["tier"], "full");
+        assert!(
+            !json["spans"]
+                .as_array()
+                .expect("spans is an array")
+                .is_empty(),
+            "a tier-full snippet with no spans is a lie"
+        );
     }
 }

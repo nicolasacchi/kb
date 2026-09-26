@@ -192,96 +192,114 @@ export default function BranchViews({ repo }: BranchViewsProps) {
       tabIndex={-1}
       aria-label="branch views"
     >
-      <div className="kbc-bviews__selector" role="tablist" aria-label="branch view">
-        {BRANCH_VIEWS.map((v: BranchView) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={urlState.view === v}
-            className={`kbc-bviews__view ${urlState.view === v ? "kbc-bviews__view--on" : ""}`}
-            data-kbc-bview={v}
-            title={BRANCH_VIEW_HINTS[v]}
-            onClick={() => go({ view: v })}
-          >
-            {BRANCH_VIEW_LABELS[v]}
-            {counts[v] !== undefined && (
-              <span className="kbc-bviews__count" data-kbc-bview-count={v}>
-                {counts[v]}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div className="kbc-bviews__controls">
-        <input
-          type="search"
-          className="kbc-bviews__filter"
-          value={draftQuery}
-          placeholder="Filter — or an atom: branch: touches: by: agent:"
-          aria-label="filter branches"
-          data-kbc-bviews-filter
-          onChange={(e) => setDraftQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") go({ q: draftQuery });
-          }}
-          onBlur={() => go({ q: draftQuery })}
-        />
-        <button
-          type="button"
-          className={`kbc-bviews__toggle ${urlState.fav ? "kbc-bviews__toggle--on" : ""}`}
-          aria-pressed={urlState.fav}
-          data-kbc-bviews-fav
-          onClick={() => go({ fav: !urlState.fav })}
+      {/* V80-R5 — the view selector is the page's PRIMARY control: a
+          visible "View" label names what the eight-button row actually
+          is, rather than leaving it to read as an unlabelled tab strip. */}
+      <div className="kbc-bviews__selector-row">
+        <span className="kbc-bviews__label" id="bviews-label">
+          View
+        </span>
+        <div
+          className="kbc-bviews__selector"
+          role="tablist"
+          aria-label="branch view"
+          aria-labelledby="bviews-label"
         >
-          ★ starred
-        </button>
-        <button
-          type="button"
-          className="kbc-bviews__toggle"
-          data-kbc-bviews-density
-          onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
-        >
-          {density === "compact" ? "Comfortable" : "Compact"}
-        </button>
-        <button
-          type="button"
-          className={`kbc-bviews__toggle ${urlState.radar ? "kbc-bviews__toggle--on" : ""}`}
-          aria-pressed={!!urlState.radar}
-          // The radar merges every candidate against the DEFAULT branch,
-          // which is a fact off the wire. Before it arrives there is no
-          // target, so the button is disabled rather than clickable-and-
-          // inert — a control that silently does nothing is the worse of
-          // the two honest answers.
-          disabled={!urlState.radar && !facts.data?.default}
-          data-kbc-bviews-radar
-          onClick={() => go({ radar: urlState.radar ? undefined : (facts.data?.default ?? undefined) })}
-        >
-          Conflict radar
-        </button>
-      </div>
-
-      {facts.data && facts.data.prefixes.length > 0 && (
-        <div className="kbc-bviews__prefixes" data-kbc-bviews-prefixes>
-          {urlState.prefix && (
-            <button type="button" className="kbc-chip" data-kbc-bviews-prefix-clear onClick={() => go({ prefix: "" })}>
-              ✕ {urlState.prefix}
-            </button>
-          )}
-          {facts.data.prefixes.map((p) => (
+          {BRANCH_VIEWS.map((v: BranchView) => (
             <button
-              key={p.prefix}
+              key={v}
               type="button"
-              className={`kbc-chip ${urlState.prefix === p.prefix ? "kbc-chip--on" : ""}`}
-              data-kbc-bviews-prefix={p.prefix}
-              onClick={() => go({ prefix: urlState.prefix === p.prefix ? "" : p.prefix })}
+              role="tab"
+              aria-selected={urlState.view === v}
+              className={`kbc-bviews__view ${urlState.view === v ? "kbc-bviews__view--on" : ""}`}
+              data-kbc-bview={v}
+              title={BRANCH_VIEW_HINTS[v]}
+              onClick={() => go({ view: v })}
             >
-              {p.prefix} <span className="kbc-bviews__count">{p.count}</span>
+              {BRANCH_VIEW_LABELS[v]}
+              {counts[v] !== undefined && (
+                <span className="kbc-bviews__count" data-kbc-bview-count={v}>
+                  {counts[v]}
+                </span>
+              )}
             </button>
           ))}
         </div>
-      )}
+      </div>
+
+      {/* V80-R5 — filter input + prefix chips now share ONE row (was a
+          third stacked row of its own); wrapping happens INSIDE this row
+          rather than between two separate rows. */}
+      <div className="kbc-bviews__filterrow">
+        <div className="kbc-bviews__controls">
+          <input
+            type="search"
+            className="kbc-bviews__filter"
+            value={draftQuery}
+            placeholder="Filter — or an atom: branch: touches: by: agent:"
+            aria-label="filter branches"
+            data-kbc-bviews-filter
+            onChange={(e) => setDraftQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") go({ q: draftQuery });
+            }}
+            onBlur={() => go({ q: draftQuery })}
+          />
+          <button
+            type="button"
+            className={`kbc-bviews__toggle ${urlState.fav ? "kbc-bviews__toggle--on" : ""}`}
+            aria-pressed={urlState.fav}
+            data-kbc-bviews-fav
+            onClick={() => go({ fav: !urlState.fav })}
+          >
+            ★ starred
+          </button>
+          <button
+            type="button"
+            className="kbc-bviews__toggle"
+            data-kbc-bviews-density
+            onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
+          >
+            {density === "compact" ? "Comfortable" : "Compact"}
+          </button>
+          <button
+            type="button"
+            className={`kbc-bviews__toggle ${urlState.radar ? "kbc-bviews__toggle--on" : ""}`}
+            aria-pressed={!!urlState.radar}
+            // The radar merges every candidate against the DEFAULT branch,
+            // which is a fact off the wire. Before it arrives there is no
+            // target, so the button is disabled rather than clickable-and-
+            // inert — a control that silently does nothing is the worse of
+            // the two honest answers.
+            disabled={!urlState.radar && !facts.data?.default}
+            data-kbc-bviews-radar
+            onClick={() => go({ radar: urlState.radar ? undefined : (facts.data?.default ?? undefined) })}
+          >
+            Conflict radar
+          </button>
+        </div>
+
+        {facts.data && facts.data.prefixes.length > 0 && (
+          <div className="kbc-bviews__prefixes" data-kbc-bviews-prefixes>
+            {urlState.prefix && (
+              <button type="button" className="kbc-chip" data-kbc-bviews-prefix-clear onClick={() => go({ prefix: "" })}>
+                ✕ {urlState.prefix}
+              </button>
+            )}
+            {facts.data.prefixes.map((p) => (
+              <button
+                key={p.prefix}
+                type="button"
+                className={`kbc-chip ${urlState.prefix === p.prefix ? "kbc-chip--on" : ""}`}
+                data-kbc-bviews-prefix={p.prefix}
+                onClick={() => go({ prefix: urlState.prefix === p.prefix ? "" : p.prefix })}
+              >
+                {p.prefix} <span className="kbc-bviews__count">{p.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {facts.data?.diagnostics.map((d) => (
         <p key={`${d.token}:${d.message}`} className="kbc-bviews__diag" data-kbc-bviews-diag role="status">

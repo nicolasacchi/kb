@@ -44,6 +44,7 @@
 //! scratch dir is THIS process, which has not created any yet at boot.
 
 use super::{HistoryError, Result};
+use crate::git::roots::GitRoot;
 use std::path::{Path, PathBuf};
 
 /// The state-dir subdirectory every scratch ODB lives under.
@@ -66,7 +67,7 @@ pub struct ScratchOdb {
 impl ScratchOdb {
     /// Create `<scratch_root>/<random>` and resolve `repo_root`'s real
     /// objects dir as the alternate.
-    pub fn create(repo_root: &Path, scratch_root: &Path) -> Result<Self> {
+    pub fn create(repo_root: &dyn GitRoot, scratch_root: &Path) -> Result<Self> {
         let alternates = real_objects_dir(repo_root)?;
         let dir = scratch_root.join(random_id());
         // `objects/` needs its two standard subdirs to be a usable ODB;
@@ -118,10 +119,10 @@ impl Drop for ScratchOdb {
 
 /// `git rev-parse --git-path objects`, absolutised against `repo_root` —
 /// see the module doc for why this is not `<root>/.git/objects`.
-fn real_objects_dir(repo_root: &Path) -> Result<PathBuf> {
+fn real_objects_dir(repo_root: &dyn GitRoot) -> Result<PathBuf> {
     let out = std::process::Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
         .args(["rev-parse", "--git-path", "objects"])
         .output()
         .map_err(HistoryError::Spawn)?;
@@ -142,7 +143,7 @@ fn real_objects_dir(repo_root: &Path) -> Result<PathBuf> {
     Ok(if p.is_absolute() {
         p
     } else {
-        repo_root.join(p)
+        repo_root.git_path().join(p)
     })
 }
 
@@ -201,7 +202,8 @@ mod tests {
     fn the_alternate_points_at_the_repos_real_objects_dir() {
         let repo = tempfile::tempdir().unwrap();
         init_repo(repo.path());
-        let objects = real_objects_dir(repo.path()).unwrap();
+        let objects =
+            real_objects_dir(&crate::git::roots::WorkTreeRoot::user_clone(repo.path())).unwrap();
         assert!(objects.ends_with("objects"), "{objects:?}");
         assert!(objects.exists(), "{objects:?}");
     }
@@ -212,7 +214,11 @@ mod tests {
         init_repo(repo.path());
         let root = tempfile::tempdir().unwrap();
         let path = {
-            let s = ScratchOdb::create(repo.path(), root.path()).unwrap();
+            let s = ScratchOdb::create(
+                &crate::git::roots::WorkTreeRoot::user_clone(repo.path()),
+                root.path(),
+            )
+            .unwrap();
             assert!(s.dir().is_dir());
             assert!(s.dir().starts_with(root.path()));
             s.dir().to_path_buf()
@@ -227,7 +233,11 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         init_repo(repo.path());
         let root = tempfile::tempdir().unwrap();
-        let s = ScratchOdb::create(repo.path(), root.path()).unwrap();
+        let s = ScratchOdb::create(
+            &crate::git::roots::WorkTreeRoot::user_clone(repo.path()),
+            root.path(),
+        )
+        .unwrap();
         assert!(!s.dir().starts_with(repo.path()));
     }
 
@@ -244,7 +254,10 @@ mod tests {
         std::fs::create_dir_all(&locked).unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
 
-        let got = ScratchOdb::create(repo.path(), &locked);
+        let got = ScratchOdb::create(
+            &crate::git::roots::WorkTreeRoot::user_clone(repo.path()),
+            &locked,
+        );
         // Restore before asserting so a failure still leaves a removable
         // temp dir behind.
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();

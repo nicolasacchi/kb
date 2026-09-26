@@ -1,20 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clampReaderFontSize,
+  clampCodeFontSize,
+  CODE_FONT_SIZE_DEFAULT,
+  CODE_FONT_SIZE_MAX,
+  CODE_FONT_SIZE_MIN,
   coldSeedRepo,
   loadAttentionOverlay,
+  loadCodeFontSize,
   loadDiffSyntaxHighlight,
   loadLastRepo,
   loadPrefs,
-  loadReaderFontSize,
   loadWrap,
-  READER_FONT_SIZE_DEFAULT,
-  READER_FONT_SIZE_MAX,
-  READER_FONT_SIZE_MIN,
   saveAttentionOverlay,
+  saveCodeFontSize,
   saveDiffSyntaxHighlight,
   saveLastRepo,
-  saveReaderFontSize,
   saveWrap,
 } from "./prefs";
 
@@ -160,39 +160,39 @@ describe("wrap pref (SH.C3)", () => {
   });
 });
 
-describe("readerFontSize pref (SH.C3)", () => {
+describe("codeFontSize pref (SH.C3/V80-R2)", () => {
   beforeEach(() => stubLocalStorage());
 
-  it("defaults to READER_FONT_SIZE_DEFAULT", () => {
-    expect(loadReaderFontSize()).toBe(READER_FONT_SIZE_DEFAULT);
+  it("defaults to CODE_FONT_SIZE_DEFAULT", () => {
+    expect(loadCodeFontSize()).toBe(CODE_FONT_SIZE_DEFAULT);
   });
 
   it("round-trips an in-range value", () => {
-    saveReaderFontSize(16);
-    expect(loadReaderFontSize()).toBe(16);
+    saveCodeFontSize(14);
+    expect(loadCodeFontSize()).toBe(14);
   });
 
   it("clamps below the minimum on save", () => {
-    expect(saveReaderFontSize(0)).toBe(READER_FONT_SIZE_MIN);
-    expect(loadReaderFontSize()).toBe(READER_FONT_SIZE_MIN);
+    expect(saveCodeFontSize(0)).toBe(CODE_FONT_SIZE_MIN);
+    expect(loadCodeFontSize()).toBe(CODE_FONT_SIZE_MIN);
   });
 
   it("clamps above the maximum on save", () => {
-    expect(saveReaderFontSize(99)).toBe(READER_FONT_SIZE_MAX);
-    expect(loadReaderFontSize()).toBe(READER_FONT_SIZE_MAX);
+    expect(saveCodeFontSize(99)).toBe(CODE_FONT_SIZE_MAX);
+    expect(loadCodeFontSize()).toBe(CODE_FONT_SIZE_MAX);
   });
 
-  it("clampReaderFontSize rounds fractional pixels", () => {
-    expect(clampReaderFontSize(13.6)).toBe(14);
+  it("clampCodeFontSize rounds fractional pixels", () => {
+    expect(clampCodeFontSize(13.6)).toBe(14);
   });
 
-  it("clampReaderFontSize degrades non-finite input to the default", () => {
-    expect(clampReaderFontSize(Number.NaN)).toBe(READER_FONT_SIZE_DEFAULT);
-    expect(clampReaderFontSize(Number.POSITIVE_INFINITY)).toBe(READER_FONT_SIZE_DEFAULT);
+  it("clampCodeFontSize degrades non-finite input to the default", () => {
+    expect(clampCodeFontSize(Number.NaN)).toBe(CODE_FONT_SIZE_DEFAULT);
+    expect(clampCodeFontSize(Number.POSITIVE_INFINITY)).toBe(CODE_FONT_SIZE_DEFAULT);
   });
 
   it("degrades a corrupt stored value to the default", () => {
-    localStorage.setItem("kbc:prefs", JSON.stringify({ readerFontSize: "not-a-number" }));
-    expect(loadReaderFontSize()).toBe(READER_FONT_SIZE_DEFAULT);
+    localStorage.setItem("kbc:prefs", JSON.stringify({ codeFontSize: "not-a-number" }));
+    expect(loadCodeFontSize()).toBe(CODE_FONT_SIZE_DEFAULT);
   });
 });

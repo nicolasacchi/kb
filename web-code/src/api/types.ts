@@ -911,6 +911,15 @@ export interface AnnotationView {
   line_end: number | null;
   /// `diff` only — the full commit sha this annotation is pinned to.
   sha: string | null;
+  /// V80-M2 — mirrors the Rust `AnnotationView`'s pre-existing V4.C1
+  /// fields (never mirrored here until this unit needed to render a
+  /// binding chip): present only on a review-scoped row, `undefined`
+  /// (`skip_serializing_if`) for a plain annotation. `symbol`/`trail_id`
+  /// (also on the Rust struct, V70-A4/V74-L3b) are STILL not mirrored —
+  /// no caller here needs them yet.
+  review_id?: number;
+  ps_number?: number;
+  side?: string;
   /// V70-A10 — present only on a workspace-scoped row (`reading_sets.id`).
   /// `undefined` (the server omits the key, `skip_serializing_if`) for
   /// every pre-V0029 / non-workspace annotation.
@@ -2130,6 +2139,11 @@ export interface ReviewComment {
 
 export interface ReviewCommentGroup {
   path: string;
+  /** V80-M0 — per-read caption: `path` is one `files_changed(base_sha,
+   * tip_sha)` touched at the target patchset. `false` for the path-less
+   * "general" group (`path === ""`). Never a filter — every group's
+   * `comments` is still listed either way. */
+  in_diff: boolean;
   comments: ReviewComment[];
 }
 
@@ -3544,6 +3558,32 @@ export interface ReviewFinding {
   resolution: FindingResolution;
   thread_count: number;
   unresolved_count: number;
+  /**
+   * V80-F3 — the patchset this finding was RAISED against (its linked
+   * annotation's own `ps_number`). `null` only for a should-never-happen
+   * missing annotation, or an older daemon that predates this field.
+   */
+  own_ps?: number | null;
+  /**
+   * V80-F3 — evidence, not a verdict: one entry per LATER patchset whose
+   * diff (this finding's own ps tip -> that ps tip) touched its cited
+   * lines. `[]` for a `whole_file`/no-lines finding, or when nothing
+   * later came near. Absent on an older daemon.
+   */
+  touched_in?: FindingTouchedIn[];
+  /**
+   * V80-F3 — `true` when more than 20 later patchsets existed and this
+   * finding's `touched_in` walk stopped early. Absent on an older daemon
+   * (the same "absent ≠ false" reading `verdict_stale`'s siblings use).
+   */
+  touched_in_capped?: boolean;
+}
+
+/** V80-F3 — one `ReviewFinding.touched_in` row. */
+export interface FindingTouchedIn {
+  ps: number;
+  hunks: number;
+  overlap: "exact" | "adjacent";
 }
 
 /// `GET /api/reviews/{id}/findings?ps=&disposition=&include_superseded=`
@@ -3761,15 +3801,32 @@ export type ReviewFindingResolution = FindingResolution;
 /// `POST /api/reviews/{id}/findings` body (addendum §E, LOOPBACK-ONLY) — one
 /// human-authored finding, code-anchored (no path-less/general finding —
 /// enforced client-side by the composer's copy, not a server 400).
+///
+/// V80-M5 (D6) — `category`/`location`/`title`/`rationale` are now optional
+/// on the WIRE (the server still requires them unless `from_annotation_id`
+/// is set — see `review_findings.rs`'s "Adoption" doc); `act`/`blocking`
+/// (findings v2's axes, previously hardcoded server-side) and
+/// `from_annotation_id` (ADOPT an existing top-level, review-bound comment
+/// as this finding's thread) are new. The pre-M5 composer
+/// (`DiffLineComposerV2`'s finding mode) is unaffected — it still sends
+/// every field it always did.
 export interface CreateManualFindingInput {
   slug?: string;
   severity: FindingSeverity;
-  category: string;
-  location: FindingLocation;
-  title: string;
-  rationale: string;
+  category?: string;
+  location?: FindingLocation;
+  title?: string;
+  rationale?: string;
   recommendation?: string;
   author?: string;
+  /** findings v2's speech-act axis. Defaults to `"issue"` server-side. */
+  act?: string;
+  /** The reviewer's own call — never derived from `severity`. */
+  blocking?: boolean;
+  /** V80-M5 (D6) — adopt this existing top-level, review-bound comment's
+   * annotation id as the finding's thread instead of anchoring a fresh
+   * one; `location` above is ignored when this is set. */
+  from_annotation_id?: string;
 }
 
 // ── PRR-U1 ── kb v0.39 "The PR Room," unit U1 (Review Room landing) ────────
@@ -3797,6 +3854,10 @@ export interface ReviewInboxRow {
   title: string | null;
   unresolved_findings: number;
   unanswered_questions: number;
+  /** V80-M4 — open (unresolved) top-level threads opened by a human, any
+   * intent; see `review_inbox.rs`'s module doc for the `human_open` vs.
+   * `unanswered_questions` split. */
+  human_open: number;
   verdict: ReviewVerdict | null;
   verdict_stale: boolean;
   pr_head_drift: boolean | null;
@@ -4639,6 +4700,38 @@ export interface IdentityOut {
 /// `effectiveIntelProviders`).
 export interface RepoListEntry {
   intel_providers?: RepoIntelStatus[];
+}
+
+/// V77-P2 (E6) — declaration-merged onto `RepoListEntry` (declared above),
+/// same additive-field precedent as `intel_providers` just above. Whether
+/// the sink worker still has slow-lane work (a `FullReconcile` or the boot
+/// HEAD-tree walk, chunked) outstanding for this repo, and when it last
+/// settled — see `crates/kb-code-server/src/sink.rs`'s `RepoActivity` doc.
+/// Both fields are ALWAYS present on the wire (no `skip_serializing_if`
+/// server-side): `catching_up` scoped to the slow lane only (an ordinary
+/// live edit finishing in a couple of seconds never flips it on), and
+/// `settled_at` `null` while still catching up OR for a repo the daemon
+/// has never run slow-lane work for at all (an honest "nothing to catch up
+/// on", never a missing-value stand-in for "settled").
+export interface RepoListEntry {
+  catching_up: boolean;
+  settled_at: number | null;
+}
+
+/// V80-F2 (the loopback pre-probe) — declaration-merged onto `IdentityOut`
+/// (declared above, the same S2-B precedent), own block for the same
+/// "never touch a line a sibling builder might also edit" reason.
+/// Computed PER REQUEST server-side from the exact peer classification
+/// `review_mutations_gate` itself applies — `true` for a loopback caller
+/// unconditionally, else mirrors `remote_mutations` above — so it can
+/// never disagree with the 404/200 a graduated route (verdict PUT/DELETE,
+/// finding disposition PUT/DELETE, manual finding create, publish
+/// recording) would actually return to THIS caller. Absent on a daemon
+/// built before this landed; `hooks/useReviewMutationsAdmitted.ts` treats
+/// "absent" and "false" the same way `IdentityOut.remote_mutations`'s own
+/// doc does.
+export interface IdentityOut {
+  review_mutations_admitted?: boolean;
 }
 
 // --- V71-E2 — `usages/2` (D4) + `kbc-actions/1` (D5) ----------------------

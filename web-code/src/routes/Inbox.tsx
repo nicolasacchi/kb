@@ -8,6 +8,7 @@ import { Link } from "react-router";
 import type { UnifiedInboxAnnotationRow } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import PageHeader from "../components/PageHeader";
 import InboxList from "../components/reviews/InboxList";
 import { useIdentity } from "../hooks/useIdentity";
 import { useUnifiedInbox } from "../hooks/useUnifiedInbox";
@@ -48,22 +49,30 @@ export default function Inbox() {
 
   return (
     <div className="kbc-inboxpage" id="main">
-      <header className="kbc-inboxpage__head">
-        <h1 className="kbc-inboxpage__title">
-          Inbox
-          {badge !== null && badge > 0 && <span className="kbc-inboxpage__badge" data-kbc-inbox-badge>{badge}</span>}
-        </h1>
-        <button
-          type="button"
-          className="kbc-inboxpage__refresh"
-          onClick={() => void inbox.refetch()}
-          disabled={inbox.isFetching}
-          data-kbc-inbox-refresh
-        >
-          <Icon.Refresh width={12} height={12} />
-          {inbox.isFetching ? "Refreshing…" : "Refresh"}
-        </button>
-      </header>
+      <PageHeader
+        title={
+          <>
+            Inbox
+            {badge !== null && badge > 0 && (
+              <span className="kbc-inboxpage__badge" data-kbc-inbox-badge>
+                {badge}
+              </span>
+            )}
+          </>
+        }
+        actions={
+          <button
+            type="button"
+            className="kbc-inboxpage__refresh"
+            onClick={() => void inbox.refetch()}
+            disabled={inbox.isFetching}
+            data-kbc-inbox-refresh
+          >
+            <Icon.Refresh width={12} height={12} />
+            {inbox.isFetching ? "Refreshing…" : "Refresh"}
+          </button>
+        }
+      />
 
       {inbox.isLoading ? (
         <div className="kbc-reader__hint">Loading inbox…</div>

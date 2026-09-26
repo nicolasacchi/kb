@@ -79,17 +79,30 @@ test.describe("review diff collapse-on-tick + suggestion tokens (V76-R2c)", () =
     await page.locator(`[data-kbc-hunk-viewed-toggle="${hunkId}"]`).click();
     await expect(firstStrip).toHaveAttribute("data-kbc-hunk-viewed", "1", { timeout: 10_000 });
     await expect(firstStrip).toHaveAttribute("data-kbc-hunk-collapsed", "1");
+    // Un-tick again — "un-ticking expands" (web-code/CLAUDE.md's
+    // Collapse-on-tick section) — so the compose flow below (V80-F1: a
+    // real navigate to THIS SAME diff page, not the old collapse-blind
+    // inline preview) finds an EXPANDED hunk to compose on rather than a
+    // one-line collapsed strip.
+    await page.locator(`[data-kbc-hunk-viewed-toggle="${hunkId}"]`).click();
+    await expect(firstStrip).toHaveAttribute("data-kbc-hunk-collapsed", "0");
 
     await page.goto(`${BASE}/r/${REPO_NAME}/~reviews/${reviewId}`);
     await expect(page.locator("[data-kbc-review-files]")).toBeVisible({ timeout: 10_000 });
+    // V80-F1 — the Files-tab row click NAVIGATES to the full-page diff now
+    // (the inline cockpit expansion is retired from this interaction).
     await page.locator(`[data-kbc-review-file-row="${FILE}"]`).click();
-    const diff = page.locator(`[data-kbc-review-file-diff="${FILE}"]`);
+    await expect(page).toHaveURL(new RegExp(`/diff/${FILE}(\\?|$)`));
+    const diff = page.locator(`[data-kbc-rdiff-file="${FILE}"]`);
     await expect(diff).toBeVisible({ timeout: 10_000 });
     await diff.locator("[data-kbc-review-compose-new]").last().click();
     const composer = page.locator("[data-kbc-review-composer]");
     await expect(composer).toBeVisible();
     await composer.locator("[data-kbc-review-composer-body]").fill("r2c token suggestion");
     await composer.locator("[data-kbc-review-composer-submit]").click();
+    // V80-F1 — the real full-page diff drafts a compose (V73-K2a) and
+    // auto-opens the tray; publish before expecting a live thread.
+    await page.locator("[data-kbc-rdiff-drafts-publish]").click();
     const thread = page.locator("[data-kbc-review-thread]").filter({ hasText: "r2c token suggestion" });
     await expect(thread).toBeVisible({ timeout: 10_000 });
     const threadId = await thread.getAttribute("data-kbc-review-thread");

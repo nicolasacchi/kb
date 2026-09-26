@@ -15,6 +15,47 @@
   margin: 0 0 0.6em;
   padding-left: 1.2em;
 }
+/* V80-R3 — a markdown-lite heading (`## Summary`, …) inside prose had NO
+   ladder at all before this: it fell through to raw UA defaults (h1 at 2em,
+   h2 at 1.5em, …) computed against whatever ambient font-size the prose
+   surface happened to sit in — a report summary's "## Summary" could render
+   larger than the Room's own page title. `em`-relative (not a fixed `--fs-*`
+   token) so the ladder holds proportionally in EVERY prose context (Report
+   tab, finding rationale, comments, claims, the Document tab), never
+   exceeding 1.5× the surrounding body text. */
+.kbc-prose h1,
+.kbc-prose h2,
+.kbc-prose h3,
+.kbc-prose h4,
+.kbc-prose h5,
+.kbc-prose h6 {
+  margin: 0.9em 0 0.4em;
+  font-weight: 650;
+  line-height: 1.3;
+  color: var(--ink);
+}
+.kbc-prose h1:first-child,
+.kbc-prose h2:first-child,
+.kbc-prose h3:first-child,
+.kbc-prose h4:first-child,
+.kbc-prose h5:first-child,
+.kbc-prose h6:first-child {
+  margin-top: 0;
+}
+.kbc-prose h1 {
+  font-size: 1.5em;
+}
+.kbc-prose h2 {
+  font-size: 1.3em;
+}
+.kbc-prose h3 {
+  font-size: 1.15em;
+}
+.kbc-prose h4,
+.kbc-prose h5,
+.kbc-prose h6 {
+  font-size: 1em;
+}
 .kbc-prose__fence {
   margin: 0.4em 0;
   padding: 0.6em 0.8em;
