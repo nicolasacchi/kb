@@ -1337,3 +1337,15 @@ fn store_refs_count(dir: &Path, prefix: &str) -> usize {
         .filter(|r| r.starts_with(prefix))
         .count()
 }
+
+/// Acceptance gate 3 reads the fallback counters off the store card.
+#[test]
+fn the_store_card_exposes_the_git_fallback_counters() {
+    let e = env();
+    let _reg = e.rs.register_repo(&e.store, "widgets-01", None);
+    let card = crate::review_store::routes::store_card(&e.rs, &e.store, "widgets-01").unwrap();
+    let v = serde_json::to_value(&card).unwrap();
+    let f = &v["runtime"]["git_fallbacks"];
+    assert_eq!(f["odb_miss"], serde_json::json!(0), "{v}");
+    assert!(f["unresolved"].is_u64(), "{v}");
+}
