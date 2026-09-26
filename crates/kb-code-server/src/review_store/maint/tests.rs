@@ -742,13 +742,10 @@ fn a_cover_outside_the_kbc_namespace_is_bundled_where_the_kbc_only_shape_finds_n
 
     // The pre-apply shape, given the ref the apply is about to delete.
     let scoped = tmp.path().join("scoped.bundle");
-    let outcome =
-        write_bundle_covering(spawner, dir, &scoped, &[(oid, work_ref.clone())]).unwrap();
+    let outcome = write_bundle_covering(spawner, dir, &scoped, &[(oid, work_ref.clone())]).unwrap();
     assert_ne!(
         outcome,
-        BundleOutcome::Skipped {
-            reason: "no-refs"
-        },
+        BundleOutcome::Skipped { reason: "no-refs" },
         "a non-empty cover can never take the no-refs arm the \
          apply_gc_candidates fail-closed guard watches for"
     );
@@ -897,8 +894,7 @@ fn the_pre_apply_bundle_covers_a_de_registered_members_work_refs_when_no_kbc_ref
     assert_eq!(report.reason, "applied");
 
     let after: std::collections::BTreeSet<String> = store_refs(dir).into_iter().collect();
-    let deleted: std::collections::BTreeSet<String> =
-        before.difference(&after).cloned().collect();
+    let deleted: std::collections::BTreeSet<String> = before.difference(&after).cloned().collect();
     assert_eq!(
         deleted,
         std::collections::BTreeSet::from([work_ref.clone()]),
@@ -910,9 +906,8 @@ fn the_pre_apply_bundle_covers_a_de_registered_members_work_refs_when_no_kbc_ref
         bundle.is_file(),
         "the pre-apply bundle was skipped as no-refs: {bundle:?}"
     );
-    let manifest =
-        std::fs::read_to_string(format!("{}.refs", bundle.display()))
-            .expect("the refs manifest beside the bundle");
+    let manifest = std::fs::read_to_string(format!("{}.refs", bundle.display()))
+        .expect("the refs manifest beside the bundle");
     let covered: std::collections::BTreeSet<String> = manifest
         .lines()
         .filter_map(|l| l.split('\t').nth(1).map(str::to_string))

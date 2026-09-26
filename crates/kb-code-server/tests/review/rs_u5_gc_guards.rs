@@ -113,7 +113,10 @@ fn fixture_repo() -> (Repo, String) {
     let author = root.join("author");
     std::fs::create_dir_all(&author).unwrap();
     init_repo(&author);
-    git(&author, &["remote", "add", "origin", forge.to_str().unwrap()]);
+    git(
+        &author,
+        &["remote", "add", "origin", forge.to_str().unwrap()],
+    );
     commit(&author, "m0.txt", "m0");
     let m1 = commit(&author, "m1.txt", "m1");
     git(&author, &["push", "-q", "origin", "main"]);
@@ -419,7 +422,10 @@ async fn the_refs_gc_route_refuses_a_candidate_above_the_high_water_mark() {
             .is_some_and(|d| d.contains(&impossible.to_string())),
         "the detail must name the impossible review id: {applied}"
     );
-    assert_eq!(applied["deleted_count"], 2, "both refs were candidates: {applied}");
+    assert_eq!(
+        applied["deleted_count"], 2,
+        "both refs were candidates: {applied}"
+    );
     // Nothing at all was deleted — not even the legitimate orphan.
     assert!(ref_exists(&e.store_dir, &impossible_ref), "{applied}");
     assert!(ref_exists(&e.store_dir, orphan_ref), "{applied}");
