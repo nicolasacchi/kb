@@ -289,7 +289,11 @@ pub async fn ingest_route(
                 }
 
                 let entry = files.entry(f.path.clone()).or_insert_with(|| {
-                    match crate::routes::read_repo_file(&repo, &f.path, None) {
+                    match crate::routes::read_repo_file(
+                        &repo,
+                        &f.path,
+                        crate::routes::RevResolver::work_tree(),
+                    ) {
                         Ok(read) => {
                             let text = String::from_utf8(read.bytes).ok();
                             Some((read.blob_hash, text))

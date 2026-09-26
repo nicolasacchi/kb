@@ -497,7 +497,7 @@ pub async fn review_map_route(
         .store
         .run_blocking(move |store| resolve_ps(store, id, None))
         .await?;
-    let root = repo.path.clone();
+    let root = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let store = state.store.clone();
@@ -525,7 +525,7 @@ pub async fn review_reading_order_route(
         .store
         .run_blocking(move |store| resolve_ps(store, id, None))
         .await?;
-    let root = repo.path.clone();
+    let root = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
     let store = state.store.clone();

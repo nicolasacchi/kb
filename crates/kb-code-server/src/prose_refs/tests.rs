@@ -530,3 +530,31 @@ fn every_declared_v76_b3_route_is_registered_and_requires_its_params() {
         }
     }
 }
+
+/// Non-ASCII prose must never split a token mid-character. `à` is C3 A0 and
+/// `(0xA0 as char)` is a no-break space, so the byte-level delimiter check
+/// used to cut inside it and panic the slice (a review comment in Italian
+/// took down every read of that review's comments).
+#[test]
+fn non_ascii_prose_never_splits_a_character() {
+    let texts = [
+        "Perché la città è più lenta: vedi app/models/order.rb:12 già modificato.",
+        "Übergröße in lib/tasks/import.rake — naïve café, straße",
+        "Controllare à la volée `Foo::Bar` e l'attività 😀 in config/routes.rb",
+        "\u{0085}NEL and\u{00A0}NBSP next to app/x.rb",
+    ];
+    for t in texts {
+        let got = extract(t);
+        for r in &got.refs {
+            assert!(!r.text.is_empty(), "{t:?}");
+        }
+    }
+    let got = extract("La funzione è in app/models/order.rb:12 già.");
+    assert!(
+        kinds(&got)
+            .iter()
+            .any(|(k, t)| *k == "path" && t.starts_with("app/models/order.rb")),
+        "{:?}",
+        kinds(&got)
+    );
+}

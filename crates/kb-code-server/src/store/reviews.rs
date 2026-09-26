@@ -752,6 +752,42 @@ impl Store {
         Ok(rows)
     }
 
+    /// RS-U10a — every review bound to PR `pr_number`, in any repo (or only
+    /// `repo` when given), each with its `(pr_repo_slug, pr_head_sha)`.
+    /// Ordered the way [`Self::get_review_by_pr_binding`] prefers: repo,
+    /// then open before closed, then newest first — so the FIRST row per
+    /// repo is the review `pr:<N>` addressing resolves to. `GET
+    /// /api/reviews/find`'s one query (the CLI's `review find` and the
+    /// `pr:<N>` address both ride it, never a per-repo list + git diff).
+    #[allow(clippy::type_complexity)]
+    pub fn find_reviews_by_pr(
+        &self,
+        pr_number: i64,
+        repo: Option<&str>,
+    ) -> Result<Vec<(ReviewRow, Option<String>, Option<String>)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, repo, title, base_ref, head_ref, session_id, state,
+                    created_at, updated_at, verdict, verdict_note, verdict_at, verdict_ps,
+                    pr_repo_slug, pr_head_sha
+             FROM reviews
+             WHERE pr_number = ?1 AND (?2 IS NULL OR repo = ?2)
+             ORDER BY repo,
+                      CASE WHEN state = 'open' THEN 0 ELSE 1 END,
+                      updated_at DESC, id DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![pr_number, repo], |r| {
+                Ok((
+                    review_row_from(r)?,
+                    r.get::<_, Option<String>>(13)?,
+                    r.get::<_, Option<String>>(14)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// How many reviews in `repo` still bind `pr_number` (any state).
     /// `delete_review_with_refs` uses this to decide whether `refs/kbc/pr/<n>`
     /// is still claimed.

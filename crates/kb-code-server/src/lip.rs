@@ -555,7 +555,7 @@ pub(crate) fn verify_blob_freshness_sha(
     path: &str,
     verified_blob_sha: &str,
 ) -> bool {
-    match read_repo_file(repo, path, None) {
+    match read_repo_file(repo, path, crate::routes::RevResolver::work_tree()) {
         Ok(read) => read.blob_hash == verified_blob_sha,
         Err(_) => false,
     }
@@ -748,7 +748,7 @@ pub(crate) async fn lsp_live_definitions(
     let Some(client) = state.lip.client_for(&repo.name, lang.id) else {
         return Vec::new();
     };
-    let Ok(read) = read_repo_file(repo, path, None) else {
+    let Ok(read) = read_repo_file(repo, path, crate::routes::RevResolver::work_tree()) else {
         return Vec::new();
     };
     let Some(answer) = client.definition(path, &read.blob_hash, line, col).await else {
@@ -843,7 +843,7 @@ pub(crate) async fn overlay_hover(
     let Some(client) = state.lip.client_for(&repo.name, lang.id) else {
         return;
     };
-    let Ok(read) = read_repo_file(repo, path, None) else {
+    let Ok(read) = read_repo_file(repo, path, crate::routes::RevResolver::work_tree()) else {
         return;
     };
     let Some(answer) = client.hover(path, &read.blob_hash, line, col).await else {
@@ -940,7 +940,7 @@ pub(crate) async fn lsp_live_reference_locations(
     let Some(client) = state.lip.client_for(&repo.name, lang.id) else {
         return Vec::new();
     };
-    let Ok(read) = read_repo_file(repo, path, None) else {
+    let Ok(read) = read_repo_file(repo, path, crate::routes::RevResolver::work_tree()) else {
         return Vec::new();
     };
     let Some(answer) = client.references(path, &read.blob_hash, line, col).await else {
@@ -966,7 +966,7 @@ pub(crate) async fn lsp_live_reference_locations(
 /// vendored/external file outside this repo) degrades to an empty string,
 /// never an error.
 pub(crate) fn line_context(repo: &crate::config::RepoEntry, path: &str, line: u32) -> String {
-    let Ok(read) = read_repo_file(repo, path, None) else {
+    let Ok(read) = read_repo_file(repo, path, crate::routes::RevResolver::work_tree()) else {
         return String::new();
     };
     let Ok(text) = std::str::from_utf8(&read.bytes) else {
@@ -1057,7 +1057,7 @@ async fn diagnostics_for(
         return empty("no_provider_configured", None);
     };
     let provider_name = client.name().to_string();
-    let Ok(read) = read_repo_file(repo, path, None) else {
+    let Ok(read) = read_repo_file(repo, path, crate::routes::RevResolver::work_tree()) else {
         return empty("file_unreadable", Some(provider_name));
     };
     let Some(answer) = client.diagnostics(path, &read.blob_hash).await else {

@@ -1461,7 +1461,12 @@ pub async fn actions_route(
         .store
         .run_blocking(move |store| {
             let mut notes: Vec<String> = Vec::new();
-            let read = read_repo_file(&repo_bg, &path, rev.as_deref()).ok();
+            let read = read_repo_file(
+                &repo_bg,
+                &path,
+                crate::routes::RevResolver::lookup(store, rev.as_deref()),
+            )
+            .ok();
             let blob_sha = read.as_ref().map(|r| r.blob_hash.clone());
             let lang = crate::lang::detect(&path, read.as_ref().map(|r| r.bytes.as_slice()));
             let word = read.as_ref().and_then(|r| {

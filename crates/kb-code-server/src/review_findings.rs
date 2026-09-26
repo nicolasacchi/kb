@@ -91,6 +91,7 @@
 //! resolution algorithm).
 
 use crate::annotations;
+use crate::git::roots::GitCtx;
 use crate::review_comments::{self, ResolvedAgainst, ResolvedForPs};
 use crate::review_finding_touches::{self, TouchedInQuery, TouchedInResult};
 use crate::reviews::{emit_review_changed, require_review, resolve_ps};
@@ -103,7 +104,6 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 
 /// `kbc-findings/1` (design doc §3.1) — the batch-import payload's schema
 /// tag, validated verbatim against `body.schema`.
@@ -287,7 +287,7 @@ pub const FINDING_SLUG_PATTERN: &str = "f-[a-z0-9-]+";
 /// `pub(crate)` (V73-K1) — `review_doc::refs`'s `finding:` scheme and
 /// `review_doc::lint` validate against this exact predicate rather than a
 /// second copy of the pattern.
-pub(crate) fn is_valid_finding_slug(s: &str) -> bool {
+pub fn is_valid_finding_slug(s: &str) -> bool {
     match s.strip_prefix("f-") {
         Some(rest) if !rest.is_empty() => rest
             .chars()
@@ -321,13 +321,25 @@ fn kebab_case(title: &str) -> String {
     out
 }
 
+/// RS-U10a — the `f-<kebab>` slug kb derives from a finding title, exposed
+/// for `kb-code review compose --slugify` so an agent never re-implements
+/// it. ASCII-only by construction: every non-ASCII character (`à`, `ü`,
+/// emoji, CJK) is a separator, never sliced, so no title can panic it and
+/// every result satisfies [`is_valid_finding_slug`]. Deterministic — the
+/// same title always yields the same slug (uniquifying is the caller's
+/// job: [`derive_unique_slug`] against the store, or `--slugify` within a
+/// batch).
+pub fn slug_from_title(title: &str) -> String {
+    format!("f-{}", kebab_case(title))
+}
+
 /// `POST /api/reviews/{id}/findings`'s slug derivation: `f-<kebab>`,
 /// uniquified `-2`/`-3`… against every EXISTING finding on this review
 /// (superseded included — `idx_review_findings_review_slug` is unique
 /// across all rows regardless of supersession, so this must check the
 /// same universe that index enforces).
 fn derive_unique_slug(store: &Store, review_id: i64, title: &str) -> Result<String, ApiError> {
-    let base = format!("f-{}", kebab_case(title));
+    let base = slug_from_title(title);
     if store.get_review_finding(review_id, &base)?.is_none() {
         return Ok(base);
     }
@@ -512,7 +524,7 @@ fn validate_import_batch(
 /// degrade every other stale comment goes through — not a batch-import
 /// failure over an imprecise citation.
 fn build_finding_anchor(
-    repo_root: &Path,
+    repo_root: &GitCtx,
     blob_cache: &mut HashMap<(String, String), Option<String>>,
     target_ps: &ReviewPatchsetRow,
     location: &FindingLocationBody,
@@ -816,7 +828,7 @@ fn finding_json(
 /// `run_blocking` closure — this fn makes no other use of `state`.
 pub(crate) fn compose_finding_view(
     store: &Store,
-    repo_root: &Path,
+    repo_root: &GitCtx,
     target_ps: &ReviewPatchsetRow,
     row: &ReviewFindingRow,
 ) -> Result<serde_json::Value, ApiError> {
@@ -959,10 +971,11 @@ pub async fn import_findings_route(
 
     let (v1_act, v1_blocking, v1_cites, v1_fp, v1_supersedes) =
         store::ImportedFinding::v1_defaults();
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut imported = Vec::with_capacity(body.findings.len());
     for f in &body.findings {
-        let anchor = build_finding_anchor(&repo.path, &mut blob_cache, &target_ps, &f.location)?;
+        let anchor = build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &f.location)?;
         imported.push(store::ImportedFinding {
             slug: f.slug.clone(),
             severity: f.severity.clone(),
@@ -1363,11 +1376,12 @@ async fn compose_document(
         })
         .await?;
 
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let prepared = doc_routes::prepare_doc(
         &state,
         id,
         repo_id,
-        &repo.path,
+        &git_ctx,
         &target_ps,
         &doc_md,
         tier,
@@ -1463,7 +1477,7 @@ async fn compose_document(
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     let mut imported = Vec::with_capacity(prepared.findings.len());
     for f in &prepared.findings {
-        let anchor = build_finding_anchor(&repo.path, &mut blob_cache, &target_ps, &f.location)?;
+        let anchor = build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &f.location)?;
         imported.push(store::ImportedFinding {
             slug: f.slug.clone().unwrap_or_default(),
             severity: f.severity.clone(),
@@ -1796,8 +1810,9 @@ pub async fn create_manual_finding_route(
         // The pre-M5 path, unchanged in spirit: mint a fresh annotation
         // anchored from the request's own `location`.
         let location = body.location.clone().expect("validated required above");
+        let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
         let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
-        let anchor = build_finding_anchor(&repo.path, &mut blob_cache, &target_ps, &location)?;
+        let anchor = build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &location)?;
         let new = store::NewReviewFinding {
             review_id: id,
             repo_id,
@@ -1849,7 +1864,7 @@ pub async fn create_manual_finding_route(
 
     emit_findings_review_changed(&state.bus, id, &review.repo, "findings_import", Some(&slug));
 
-    let repo_root = repo.path.clone();
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let target_ps_c = target_ps.clone();
     let row_c = row.clone();
     let view = state
@@ -1915,6 +1930,7 @@ pub async fn list_findings_route(
         }
     }
 
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     // Pass 1: resolution + own_ps + the touched_in QUERY per finding — no
     // git work for touched_in yet, so the batch below shares its caches
@@ -1938,7 +1954,7 @@ pub async fn list_findings_route(
                     if !blob_cache.contains_key(&key) {
                         blob_cache.insert(
                             key.clone(),
-                            review_comments::read_blob_text(&repo.path, &a.path, &sha),
+                            review_comments::read_blob_text(&git_ctx, &a.path, &sha),
                         );
                     }
                     blob_cache.get(&key).and_then(|c| c.as_deref())
@@ -1963,7 +1979,7 @@ pub async fn list_findings_route(
     // the SAME split `review_interdiff` (this file's own sibling route)
     // uses for its own git reads, never through `state.store.run_blocking`.
     let touched_by_finding = {
-        let root = repo.path.clone();
+        let root = git_ctx.clone();
         tokio::task::spawn_blocking(move || {
             review_finding_touches::compute_touched_in(&root, &patchsets, &touch_queries)
         })
@@ -2085,7 +2101,7 @@ pub async fn set_finding_disposition_route(
             Ok((target_ps, row))
         })
         .await?;
-    let repo_root = repo.path.clone();
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let target_ps_c = target_ps.clone();
     let row_c = row.clone();
     let view = state
@@ -2131,7 +2147,7 @@ pub async fn clear_finding_disposition_route(
             Ok((target_ps, row))
         })
         .await?;
-    let repo_root = repo.path.clone();
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let target_ps_c = target_ps.clone();
     let row_c = row.clone();
     let view = state
@@ -2329,6 +2345,27 @@ mod tests {
         assert!(!is_valid_finding_slug(""));
         assert!(!is_valid_finding_slug("F-dedup"));
         assert_eq!(FINDING_SLUG_PATTERN, "f-[a-z0-9-]+");
+    }
+
+    #[test]
+    fn slug_from_title_is_ascii_and_panic_free_for_non_ascii_titles() {
+        // RS-U10a — non-ASCII titles (the à-panic class; the panic itself
+        // was `prose_refs`' byte tokenizer, fixed on the base) derive an
+        // ASCII slug here without ever slicing inside a character.
+        for (title, want) in [
+            ("Perché à rotto", "f-perch-rotto"),
+            ("Café déjà vu", "f-caf-d-j-vu"),
+            ("Größe über alles", "f-gr-e-ber-alles"),
+            ("🔥 hot path 🔥", "f-hot-path"),
+            ("数据库 N+1 查询", "f-n-1"),
+            ("à", "f-finding"),
+            ("", "f-finding"),
+        ] {
+            let got = slug_from_title(title);
+            assert_eq!(got, want, "{title:?}");
+            assert!(got.is_ascii(), "{got:?}");
+            assert!(is_valid_finding_slug(&got), "{got:?}");
+        }
     }
 
     #[test]
