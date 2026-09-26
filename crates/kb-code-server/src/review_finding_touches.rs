@@ -60,6 +60,7 @@
 //! `review_findings::finding_json`'s own doc states.
 
 use crate::diff;
+use crate::git::roots::GitCtx;
 use crate::git::Revspec;
 use crate::history;
 use crate::numstat::FileChange;
@@ -67,7 +68,6 @@ use crate::review_hunks::{self, DiffHunk};
 use crate::store::ReviewPatchsetRow;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::Path;
 
 /// How many patchsets LATER than a finding's own ps this module will walk
 /// before giving up and naming the response `touched_in_capped: true`.
@@ -177,7 +177,7 @@ fn better(a: Option<&'static str>, b: Option<&'static str>) -> Option<&'static s
 /// ps didn't touch it" case, distinct from "touched but returned no
 /// hunks"). Memoized in `cache`.
 fn resolve_path(
-    repo_root: &Path,
+    ctx: &GitCtx,
     cache: &mut RenameCache,
     from_sha: &str,
     to_sha: &str,
@@ -186,7 +186,9 @@ fn resolve_path(
     let key = (from_sha.to_string(), to_sha.to_string());
     if !cache.contains_key(&key) {
         let range = format!("{from_sha}..{to_sha}");
-        let files = history::diff_files(repo_root, "diff", &["-M", &range]).unwrap_or_default();
+        let files = ctx
+            .read_with_fallback(|root| history::diff_files(root, "diff", &["-M", &range]))
+            .unwrap_or_default();
         cache.insert(key.clone(), files);
     }
     let files = cache.get(&key)?;
@@ -207,7 +209,7 @@ fn resolve_path(
 /// via `diff.rs`), a blob-to-blob diff otherwise (`diff::diff_blob_pair`,
 /// this unit's own addition to `diff.rs`). Memoized in `cache`.
 fn parsed_hunks(
-    repo_root: &Path,
+    ctx: &GitCtx,
     cache: &mut HunkCache,
     from_sha: &str,
     from_path: &str,
@@ -226,9 +228,13 @@ fn parsed_hunks(
     let text = if from_path == to_path {
         let from = Revspec::trusted(from_sha.to_string());
         let to = Revspec::trusted(to_sha.to_string());
-        diff::diff_file(repo_root, &from, Some(&to), from_path).unwrap_or_default()
+        ctx.read_with_fallback(|root| diff::diff_file(root.git_path(), &from, Some(&to), from_path))
+            .unwrap_or_default()
     } else {
-        diff::diff_blob_pair(repo_root, from_sha, from_path, to_sha, to_path).unwrap_or_default()
+        ctx.read_with_fallback(|root| {
+            diff::diff_blob_pair(root.git_path(), from_sha, from_path, to_sha, to_path)
+        })
+        .unwrap_or_default()
     };
     let hunks = review_hunks::parse_unified_diff(&text).hunks;
     cache.insert(key, hunks.clone());
@@ -240,7 +246,7 @@ fn parsed_hunks(
 /// this inside `spawn_blocking`, same rule `diff::diff_file`'s own doc
 /// states.
 pub fn compute_touched_in(
-    repo_root: &Path,
+    ctx: &GitCtx,
     patchsets: &[ReviewPatchsetRow],
     queries: &[TouchedInQuery],
 ) -> HashMap<i64, TouchedInResult> {
@@ -268,12 +274,12 @@ pub fn compute_touched_in(
         let mut entries = Vec::new();
         for ps in later {
             let Some(resolved_path) =
-                resolve_path(repo_root, &mut rename_cache, from_sha, &ps.tip_sha, &q.path)
+                resolve_path(ctx, &mut rename_cache, from_sha, &ps.tip_sha, &q.path)
             else {
                 continue;
             };
             let hunks = parsed_hunks(
-                repo_root,
+                ctx,
                 &mut hunk_cache,
                 from_sha,
                 &q.path,
@@ -305,6 +311,7 @@ pub fn compute_touched_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::process::Command as StdCommand;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -424,7 +431,11 @@ mod tests {
             path: "a.txt".to_string(),
             lines: vec![3],
         }];
-        let out = compute_touched_in(dir, &patchsets, &queries);
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
         let result = out.get(&42).expect("finding present");
         assert!(!result.capped);
         assert_eq!(result.entries.len(), 1);
@@ -466,7 +477,11 @@ mod tests {
             path: "a.txt".to_string(),
             lines: vec![15],
         }];
-        let out = compute_touched_in(dir, &patchsets, &queries);
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
         let result = out.get(&7).expect("finding present");
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].overlap, OVERLAP_ADJACENT);
@@ -498,7 +513,11 @@ mod tests {
             path: "a.txt".to_string(),
             lines: vec![3],
         }];
-        let out = compute_touched_in(dir, &patchsets, &queries);
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
         let result = out.get(&9).expect("finding present");
         assert!(result.entries.is_empty());
         assert!(!result.capped);
@@ -532,7 +551,11 @@ mod tests {
             path: "old.txt".to_string(),
             lines: vec![3],
         }];
-        let out = compute_touched_in(dir, &patchsets, &queries);
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
         let result = out.get(&3).expect("finding present");
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].ps, 2);
@@ -567,7 +590,11 @@ mod tests {
             path: "old.txt".to_string(),
             lines: vec![3],
         }];
-        let out = compute_touched_in(dir, &patchsets, &queries);
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
         let result = out.get(&5).expect("finding present");
         assert!(
             result.entries.is_empty(),
@@ -605,7 +632,11 @@ mod tests {
             path: "a.txt".to_string(),
             lines: vec![3],
         }];
-        let out = compute_touched_in(dir, &patchsets, &queries);
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
         let result = out.get(&1).expect("finding present");
         assert!(result.capped, "22 later patchsets must trip the cap");
         assert!(result.entries.len() <= MAX_TOUCHED_IN_PATCHSETS);

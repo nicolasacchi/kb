@@ -288,6 +288,14 @@ pub struct AppState {
     /// process, swept 1 h after creation. Same guard discipline as
     /// `branch_base_cache` above.
     pub review_jobs: Arc<crate::review_jobs::ReviewJobs>,
+    // ── RS-U3 (review store) — begin ──
+    /// RS-U3 — the kb-owned internal review stores (`crate::review_store::
+    /// ReviewStores`): registration, seeding, the per-(store, remote)
+    /// fetch mutex and per-store ops mutex, and the handle API
+    /// (`handle_for_repo`/`admit_mutation`). Per-boot; the durable state
+    /// is `review_stores`/`repo_stores` (V0045).
+    pub review_stores: Arc<crate::review_store::ReviewStores>,
+    // ── RS-U3 (review store) — end ──
 }
 
 pub type SharedState = Arc<AppState>;

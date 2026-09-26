@@ -113,7 +113,12 @@ pub async fn lenses_at(
     path: &str,
     rev: Option<&str>,
 ) -> Result<LensesOut, ApiError> {
-    let read = read_repo_file(repo, path, rev)?;
+    let git_ctx = crate::routes::bridge_ctx(state, repo, rev).await;
+    let read = read_repo_file(
+        repo,
+        path,
+        crate::routes::RevResolver::maybe_bridged(git_ctx.as_ref(), rev),
+    )?;
     let lang_info = crate::lang::detect(path, Some(&read.bytes));
     let salt = lang_info.map(|l| l.symbol_salt).ok_or_else(|| {
         ApiError::bad_request(format!(
