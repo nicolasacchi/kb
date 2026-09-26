@@ -232,6 +232,11 @@ enum Cmd {
         daemon: Option<String>,
         #[arg(long)]
         json: bool,
+        /// HTTP deadline in seconds for the recall request. Omit to keep
+        /// the 30s client timeout. A timeout is a non-zero exit with one
+        /// short stderr line, not a hang.
+        #[arg(long)]
+        timeout: Option<u64>,
     },
     /// CT-D1 — the ONE context pack for a task: recalled memories (with
     /// their score decomposition), prior-session POINTERS, open comments on
@@ -266,6 +271,11 @@ enum Cmd {
         daemon: Option<String>,
         #[arg(long)]
         json: bool,
+        /// HTTP deadline in seconds for the context request. Omit to keep
+        /// the 30s client timeout. A timeout is a non-zero exit with one
+        /// short stderr line, not a hang.
+        #[arg(long)]
+        timeout: Option<u64>,
     },
     /// R2 — why is a file the way it is? Pulls the past sessions that touched
     /// it (episodic memory) and inlines the prompt / decisions / commits that
@@ -526,11 +536,21 @@ enum Cmd {
         action: Option<ConfigAction>,
     },
     /// Atomic snapshot of a kb's state directory.
+    /// `--all` backs up every corpus from `GET /api/kbs` (no `--out`).
     Backup {
-        kb: String,
+        /// Knowledge base to snapshot. Required unless `--all`.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        kb: Option<String>,
         /// Output tarball path (defaults to <state>/exports/<kb>-<timestamp>.tar.gz).
-        #[arg(long)]
+        /// Not valid with `--all` (one path cannot hold every tarball).
+        #[arg(long, conflicts_with = "all")]
         out: Option<PathBuf>,
+        /// Back up every corpus listed by the daemon. Fails if any kb fails.
+        #[arg(long)]
+        all: bool,
+        /// Daemon URL for `--all` (`GET /api/kbs`).
+        #[arg(long, requires = "all")]
+        daemon: Option<String>,
     },
     /// Restore a `kb backup` tarball into a kb's state directory. Stop the
     /// daemon for that kb first; refuses a non-empty state unless --force.
@@ -1155,9 +1175,10 @@ enum Cmd {
     Tools,
     /// Reindex — force the daemon to re-walk a kb's source folder and
     /// re-emit `watch.modify` for every HTML file (bypasses the
-    /// content-hash dedup gate via `force=true`). Reach for this when
-    /// the SPA / popover is missing files — usually inotify dropped
-    /// events under a burst and the next reconcile tick hasn't run.
+    /// content-hash dedup gate via `force=true`). Stored embeddings are
+    /// reused unless `--re-embed` is set. Reach for this when the SPA /
+    /// popover is missing files — usually inotify dropped events under a
+    /// burst and the next reconcile tick hasn't run.
     Reindex {
         /// kb name. Defaults to the only configured kb when there's
         /// just one; required when there's >1.
@@ -1169,6 +1190,10 @@ enum Cmd {
         /// Emit JSON instead of the human-readable line.
         #[arg(long)]
         json: bool,
+        /// Force a real embed even when the content hash matches.
+        /// Sends `re_embed=true`. Omit to reuse stored vectors.
+        #[arg(long)]
+        re_embed: bool,
     },
     /// Exclude — per-file index exclusion (v0.24). An excluded file is
     /// removed from the index via the keep-user-data cascade (comments +
@@ -2574,6 +2599,15 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
+    /// Fill NULL session `project_key` values from `repo_root` or `cwd`
+    /// already stored on the row. Dry-run by default (writes nothing,
+    /// prints `would_change=<n> changed=<n>`); `--apply` writes. SQLite
+    /// only — no reindex.
+    BackfillProjectKey {
+        /// Write the keys. Absent = dry-run; nothing is written.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -3152,6 +3186,27 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
+    /// Queue a `kb-proposal/1` from one comment
+    /// (`POST .../comments/{cid}/keep`). Does not approve and does not
+    /// delete the comment.
+    ///
+    /// `comment_id` is the sole positional; the artifact is named via
+    /// `--path` or `--artifact-id` + optional `--kb`.
+    Keep {
+        /// The comment id to queue a proposal from.
+        comment_id: String,
+        /// kb name. Optional when only one kb is configured.
+        #[arg(long)]
+        kb: Option<String>,
+        /// 12-hex artifact id. Conflicts with `--path`.
+        #[arg(long)]
+        artifact_id: Option<String>,
+        /// Source-relative path / unique filename, resolved via /lookup.
+        #[arg(long, conflicts_with = "artifact_id")]
+        path: Option<String>,
+        #[arg(long)]
+        daemon: Option<String>,
+    },
     /// Y-track — stage attachment(s) WITHOUT adopting them, printing the
     /// inline `attachment:<aid>` token for each (splice into a `--body`).
     /// Target the artifact via `--path` or `--artifact-id` (+ optional `--kb`).
@@ -3341,6 +3396,21 @@ enum FleetAction {
         #[arg(long)]
         copy_to: Option<PathBuf>,
     },
+    /// Write `~/.config/kb/daemons.toml` (or `$KB_DAEMONS_FILE`) with the
+    /// daemons named by repeated `--daemon name=url` flags. Refuses to
+    /// overwrite an existing file unless `--force`.
+    Init {
+        /// Daemon to record, as `name=url`. Repeatable.
+        #[arg(long = "daemon", value_name = "NAME=URL")]
+        daemon: Vec<String>,
+        /// Overwrite an existing address book. Without this, an existing
+        /// file is left untouched.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Probe each named daemon's `/healthz`. Prints `ok` or `fail` per
+    /// name. A missing address book is a warning, not an error.
+    Doctor,
 }
 
 /// CT-F5 — the three SLO verbs. `--kb` is optional everywhere: it resolves
@@ -3944,6 +4014,9 @@ enum SlateAction {
         /// Idle timeout in seconds.
         #[arg(long)]
         timeout: Option<u64>,
+        /// Exit when this pid is no longer alive. Not required.
+        #[arg(long = "parent-pid")]
+        parent_pid: Option<u32>,
     },
     /// Counts, never a verdict: hands, takes, asks, tried, provenance.
     Stats,
@@ -4086,9 +4159,10 @@ async fn main() -> Result<()> {
             explain,
             daemon,
             json,
+            timeout,
         } => {
             let bearer = read_bearer();
-            commands::memory::recall(
+            commands::memory::recall_with_timeout(
                 &query,
                 &scope,
                 project.as_deref(),
@@ -4100,6 +4174,7 @@ async fn main() -> Result<()> {
                 daemon.as_deref(),
                 bearer.as_deref(),
                 json,
+                timeout,
             )
             .await
         }
@@ -4111,6 +4186,7 @@ async fn main() -> Result<()> {
             no_floor,
             daemon,
             json,
+            timeout,
         } => {
             let bearer = read_bearer();
             commands::context::context(
@@ -4122,6 +4198,7 @@ async fn main() -> Result<()> {
                 daemon.as_deref(),
                 bearer.as_deref(),
                 json,
+                timeout,
             )
             .await
         }
@@ -4563,8 +4640,20 @@ async fn main() -> Result<()> {
                 .await
             }
         },
-        Cmd::Backup { kb, out } => {
-            commands::backup::run(cli.config.as_ref(), &kb, out.as_deref()).await
+        Cmd::Backup {
+            kb,
+            out,
+            all,
+            daemon,
+        } => {
+            if all {
+                let bearer = read_bearer();
+                commands::backup::run_all(cli.config.as_ref(), daemon.as_deref(), bearer.as_deref())
+                    .await
+            } else {
+                let kb = kb.ok_or_else(|| anyhow::anyhow!("kb backup requires <kb> or --all"))?;
+                commands::backup::run(cli.config.as_ref(), &kb, out.as_deref()).await
+            }
         }
         Cmd::Restore { tarball, kb, force } => {
             commands::restore::run(cli.config.as_ref(), &kb, &tarball, force)
@@ -5685,6 +5774,9 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            SessionsAction::BackfillProjectKey { apply } => {
+                commands::sessions::backfill_project_key(cli.config.as_ref(), apply)
+            }
         },
         Cmd::Reading {
             target,
@@ -6099,6 +6191,24 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            CommentsAction::Keep {
+                comment_id,
+                kb,
+                artifact_id,
+                path,
+                daemon,
+            } => {
+                let bearer = read_bearer();
+                commands::comments::keep(
+                    kb.as_deref(),
+                    artifact_id.as_deref(),
+                    &comment_id,
+                    path.as_deref(),
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await
+            }
             CommentsAction::Delete {
                 comment_id,
                 kb,
@@ -6337,6 +6447,11 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            FleetAction::Init { daemon, force } => commands::fleet::init(&daemon, force).await,
+            FleetAction::Doctor => {
+                let bearer = read_bearer();
+                commands::fleet::doctor(bearer.as_deref()).await
+            }
         },
         Cmd::Pull {
             from,
@@ -6561,9 +6676,21 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Cmd::Reindex { kb, daemon, json } => {
+        Cmd::Reindex {
+            kb,
+            daemon,
+            json,
+            re_embed,
+        } => {
             let bearer = read_bearer();
-            commands::reindex::run(kb.as_deref(), daemon.as_deref(), bearer.as_deref(), json).await
+            commands::reindex::run(
+                kb.as_deref(),
+                daemon.as_deref(),
+                bearer.as_deref(),
+                json,
+                re_embed,
+            )
+            .await
         }
         Cmd::Compact { kb, daemon, json } => {
             let bearer = read_bearer();
@@ -6838,7 +6965,11 @@ async fn main() -> Result<()> {
                 }
                 SlateAction::Reopen => sl::lifecycle(&ctx, "reopen", None).await,
                 SlateAction::Rotate => sl::lifecycle(&ctx, "rotate", None).await,
-                SlateAction::Watch { once, timeout } => sl::watch(&ctx, once, timeout).await,
+                SlateAction::Watch {
+                    once,
+                    timeout,
+                    parent_pid,
+                } => sl::watch(&ctx, once, timeout, parent_pid).await,
                 SlateAction::Stats => sl::stats(&ctx).await,
                 SlateAction::Ls => sl::ls(&ctx).await,
                 SlateAction::Doctor => sl::doctor(&ctx).await,

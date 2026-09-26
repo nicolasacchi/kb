@@ -19,6 +19,10 @@
 //! one-line digest excerpt) — invariant #11's R0/R1/R3. To read one, run
 //! `kb sessions read <id>`; this verb will never print a transcript.
 
+use crate::commands::memory::{
+    aliased_corpus_name, confirm_derived_project, corpus_names, current_repo_slug,
+    current_repo_slug_in, derived_project_miss_line, fetch_kbs, local_project_slug_aliases,
+};
 use crate::http;
 use anyhow::{anyhow, Result};
 
@@ -28,7 +32,7 @@ const PACK_NOTE: &str =
     "the pack POINTS: sessions are ids + digest excerpts (kb sessions read <id>), \
 code paths are kb-local citation hints, never a claim the code still matches";
 
-/// `kb context <query> [--cwd] [--budget] [--session] [--json]` entry point.
+/// `kb context <query> [--cwd] [--budget] [--session] [--json] [--timeout]` entry point.
 #[allow(clippy::too_many_arguments)]
 pub async fn context(
     query: &str,
@@ -39,8 +43,20 @@ pub async fn context(
     daemon: Option<&str>,
     bearer: Option<&str>,
     json: bool,
+    timeout_secs: Option<u64>,
 ) -> Result<()> {
-    match fetch(query, cwd, budget, session, no_floor, daemon, bearer).await {
+    match fetch(
+        query,
+        cwd,
+        budget,
+        session,
+        no_floor,
+        daemon,
+        bearer,
+        timeout_secs,
+    )
+    .await
+    {
         Ok(pack) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&pack)?);
@@ -67,6 +83,7 @@ async fn fetch(
     no_floor: bool,
     daemon: Option<&str>,
     bearer: Option<&str>,
+    timeout_secs: Option<u64>,
 ) -> Result<serde_json::Value> {
     let url = http::detect_daemon(daemon, bearer).await.ok_or_else(|| {
         anyhow!(
@@ -74,7 +91,20 @@ async fn fetch(
             daemon.map(|d| format!(" at {d}")).unwrap_or_default()
         )
     })?;
-    let client = http::client_with_timeout_and_bearer(30, bearer)?;
+    // B1 — mirror `kb recall --scope auto`, including the existence check.
+    // A derived `memory-<slug>` (or a `project_slugs` alias that names a
+    // real corpus) is sent as `memory_project` / `memory_visible_to`. A miss
+    // sends neither and prints the same stderr line recall prints, so a
+    // missing corpus cannot filter the memories lane to nothing. When the
+    // corpus exists the pair is the same one this verb sent before the
+    // check — not narrower. An older daemon's serde `Query` ignores
+    // unrecognised params. Context has no `--project`; recall leaves an
+    // explicit `--project` unchecked, and this path never invents one.
+    let (memory_project, memory_visible_to) = confirmed_memory_scope(&url, cwd, bearer).await;
+    // None keeps today's 30s cap. `--timeout` replaces it; a hit is a short
+    // error, not a hang. Same shape as `recall_with_timeout`.
+    let secs = timeout_secs.unwrap_or(30);
+    let client = http::client_with_timeout_and_bearer(secs, bearer)?;
     let mut req = client
         .get(format!("{url}/api/context"))
         .query(&[("q", query)]);
@@ -90,32 +120,81 @@ async fn fetch(
     if no_floor {
         req = req.query(&[("no_floor", "true")]);
     }
-    // B1 — mirror `kb recall --scope auto`'s project narrowing on the
-    // client side: derive the same repo slug (from `--cwd` if given, else
-    // the process cwd) and pass it as `memory_project`/`memory_visible_to`
-    // so a daemon that understands them can narrow the pack's memories lane
-    // the same way. Additive/best-effort: an older daemon's serde `Query`
-    // ignores unrecognised params, so this degrades gracefully rather than
-    // erroring — see `commands::memory::resolve_recall_wire`'s doc comment
-    // for the mirror-image wiring on the recall side.
-    let slug = match cwd {
-        Some(c) => crate::commands::memory::current_repo_slug_in(&std::path::PathBuf::from(c)),
-        None => crate::commands::memory::current_repo_slug(),
-    };
-    if !slug.is_empty() {
-        let project = format!("memory-{slug}");
-        let visible_to = format!("{slug},{project}");
-        req = req
-            .query(&[("memory_project", project.as_str())])
-            .query(&[("memory_visible_to", visible_to.as_str())]);
+    if let Some(project) = memory_project.as_deref() {
+        req = req.query(&[("memory_project", project)]);
     }
-    let mut pack = http::send_json(req, "context").await?;
+    if let Some(visible_to) = memory_visible_to.as_deref() {
+        req = req.query(&[("memory_visible_to", visible_to)]);
+    }
+    let mut pack = send_context(req, secs).await?;
     // The route is deliberately free of prose; the CLI owns the caveat, and
     // owns it in BOTH shapes (see `PACK_NOTE`).
     if let Some(obj) = pack.as_object_mut() {
         obj.insert("note".into(), serde_json::Value::String(PACK_NOTE.into()));
     }
     Ok(pack)
+}
+
+/// ux-01 — keep a derived project filter only when `GET /api/kbs` confirms
+/// it (or a `project_slugs` alias). On a miss, or if the check itself
+/// fails, send no project filter. The stderr lines are recall's.
+async fn confirmed_memory_scope(
+    url: &str,
+    cwd: Option<&str>,
+    bearer: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let slug = match cwd {
+        Some(c) => current_repo_slug_in(&std::path::PathBuf::from(c)),
+        None => current_repo_slug(),
+    };
+    if slug.is_empty() {
+        return (None, None);
+    }
+    match fetch_kbs(url, bearer).await {
+        Ok(kbs) => {
+            let local = local_project_slug_aliases();
+            let alias = aliased_corpus_name(&slug, &kbs, &local);
+            let known = corpus_names(&kbs);
+            let (project, visible, miss) = confirm_derived_project(&slug, &known, alias);
+            if let Some(derived) = miss {
+                eprintln!("{}", derived_project_miss_line(&derived));
+            }
+            (project, visible)
+        }
+        Err(_) => {
+            // Could not verify. Sending the derived name would be a filter
+            // that might match nothing. This is not a confirmed miss, so it
+            // does not use that line. Same wording as `recall_inner`.
+            eprintln!(
+                "note: derived project corpus memory-{slug} could not be checked against GET /api/kbs; sending no project filter"
+            );
+            (None, None)
+        }
+    }
+}
+
+/// `send_json`, plus recall's timeout wording. A deadline is one short
+/// error line; other failures keep the `"context failed: HTTP …"` shape.
+async fn send_context(req: reqwest::RequestBuilder, secs: u64) -> Result<serde_json::Value> {
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) if e.is_timeout() => return Err(anyhow!("context timed out after {secs}s")),
+        Err(e) => return Err(anyhow!("context failed: {e}")),
+    };
+    let status = resp.status().as_u16();
+    let text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) if e.is_timeout() => return Err(anyhow!("context timed out after {secs}s")),
+        Err(_) => String::new(),
+    };
+    if !(200..300).contains(&status) {
+        let detail = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(str::to_string))
+            .unwrap_or(text);
+        anyhow::bail!("context failed: HTTP {status} — {detail}");
+    }
+    Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
 }
 
 /// Pure text renderer over the SAME shape `--json` prints — split out so the

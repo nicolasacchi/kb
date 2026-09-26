@@ -255,12 +255,85 @@ async fn inbox_route_scores_orders_and_is_deterministic_across_repeated_calls() 
     assert_eq!(rows[0]["review_id"], a, "higher score sorts first");
     assert_eq!(rows[0]["unresolved_findings"], 2);
     assert_eq!(rows[0]["unanswered_questions"], 1);
+    // V80-M4 — review A's question was opened by "you" and is still
+    // unresolved, so it is also the row's one open human thread.
+    assert_eq!(rows[0]["human_open"], 1);
     assert_eq!(rows[1]["review_id"], b);
     assert_eq!(rows[1]["unresolved_findings"], 0);
     assert_eq!(rows[1]["unanswered_questions"], 0);
+    // V80-M4 — review B's question was ALSO opened by "you" and (unlike
+    // `unanswered_questions`) `human_open` does not care that claude
+    // replied most recently: the thread itself carries no `resolved` flag
+    // flip from a reply alone, so it is still an open human thread. This
+    // is the deliberate `human_open` vs. `unanswered_questions` split the
+    // module doc names — "whose turn is it" vs. "did a human raise
+    // something here that is still open."
+    assert_eq!(rows[1]["human_open"], 1);
 
     let second = fetch_once().await;
     assert_eq!(first, second, "same state -> byte-identical order/content");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inbox_route_human_open_excludes_agent_authored_threads_and_includes_every_intent() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = fixture_repo("R1H");
+    let dir = std::fs::canonicalize(repo_tmp.path()).unwrap();
+    let (_tmp, base) = boot(vec![RepoEntry {
+        name: "r".to_string(),
+        path: dir,
+    }])
+    .await;
+    let client = reqwest::Client::new();
+
+    let id = create_review(&client, &base, "r").await;
+    // A human-opened, non-"question"-intent note — `human_open` is
+    // intent-agnostic (unlike `unanswered_questions`, which only ever
+    // walks `intent == "question"` rows).
+    ask(&client, &base, id, "a plain note, not a question", "you").await;
+    // A human-opened question that IS resolved — must not count.
+    let resolved_q = ask(&client, &base, id, "resolved already", "you").await;
+    let resp = client
+        .patch(format!("{base}/api/annotations/{resolved_q}"))
+        .json(&serde_json::json!({ "resolved": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    // An agent-opened, unresolved thread — must not count as `human_open`
+    // even though it is exactly the shape `unanswered_questions` DOES
+    // count (an unanswered question with zero replies).
+    ask(&client, &base, id, "an agent's own open question", "claude").await;
+
+    let body: serde_json::Value = client
+        .get(format!("{base}/api/reviews/inbox"))
+        .query(&[("repo", "r")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = body["reviews"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    // Exactly one open human thread (the plain note) — the resolved
+    // question and the agent-opened question are both excluded.
+    assert_eq!(rows[0]["human_open"], 1);
+    // `unanswered_questions` is author-agnostic by design (see
+    // `review_inbox.rs`'s own module doc): BOTH the plain note (thread A,
+    // "you") and the agent's own open question (thread C, "claude") are
+    // unanswered question-intent threads with zero replies, so both count
+    // here — 2, not 1. This is the whole point of the test: the SAME two
+    // threads score differently on the two terms (`human_open` excludes
+    // thread C for its author, `unanswered_questions` does not), proving
+    // they are deliberately independent rather than one a subset of the
+    // other.
+    assert_eq!(rows[0]["unanswered_questions"], 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

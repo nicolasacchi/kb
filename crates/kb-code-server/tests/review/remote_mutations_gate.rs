@@ -18,6 +18,16 @@
 //!   non-loopback caller even with the gate ON and a valid token (one test
 //!   per route, `never_moves_*`).
 //!
+//! V80-F2 adds the loopback PRE-PROBE: `GET /api/identity`'s additive
+//! `review_mutations_admitted` field (`routes::IdentityResponse`), computed
+//! from the exact same peer classification as `review_mutations_gate` so a
+//! client can render the capability BEFORE submitting rather than learning
+//! it from a 404 —
+//! `identity_review_mutations_admitted_is_true_for_a_loopback_caller_
+//! regardless_of_the_gate` and
+//! `identity_review_mutations_admitted_matches_the_gate_for_a_non_loopback_
+//! caller`.
+//!
 //! Boot pattern mirrors `local_review_routes.rs` / `review_findings.rs`
 //! (each e2e file in this crate duplicates its own small helper set — see
 //! `review_routes.rs`'s own doc for why). `KB_CODE_TOKEN` is a process env
@@ -628,6 +638,118 @@ async fn loopback_admits_regardless_of_gate_state() {
         resp.status(),
         reqwest::StatusCode::OK,
         "loopback + gate ON must still work, no token needed"
+    );
+}
+
+// --- V80-F2: the loopback pre-probe on GET /api/identity -------------------
+
+/// A loopback caller (real TCP peer, no `X-Forwarded-For` spoof, no bearer
+/// token) sees `review_mutations_admitted: true` on `GET /api/identity`
+/// regardless of `[review] remote_mutations` — the probe agrees with
+/// `loopback_admits_regardless_of_gate_state` above, just read off the
+/// identity route instead of a graduated one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn identity_review_mutations_admitted_is_true_for_a_loopback_caller_regardless_of_the_gate() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let client = reqwest::Client::new();
+
+    let repo_tmp_off = fixture_feature_branch();
+    let (_daemon_off, base_off) =
+        boot_with_repo("r", repo_tmp_off.path(), ReviewSection::default()).await;
+    let resp = client
+        .get(format!("{base_off}/api/identity"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["review_mutations_admitted"], true,
+        "loopback + gate OFF must still admit, no token needed: {body}"
+    );
+
+    let repo_tmp_on = fixture_feature_branch();
+    let review_on = ReviewSection {
+        remote_mutations: true,
+        ..ReviewSection::default()
+    };
+    let (_daemon_on, base_on) = boot_with_repo("r", repo_tmp_on.path(), review_on).await;
+    let resp = client
+        .get(format!("{base_on}/api/identity"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["review_mutations_admitted"], true,
+        "loopback + gate ON must still admit: {body}"
+    );
+}
+
+/// A non-loopback caller (genuine loopback TCP peer + `X-Forwarded-For`
+/// spoof, same technique the gate tests above use) sees
+/// `review_mutations_admitted` mirror `[review] remote_mutations` exactly:
+/// `false` at the default, `true` once the flag is on — never disagreeing
+/// with what `review_mutations_gate` would actually do for the same
+/// caller. `GET /api/identity` sits outside `review_gate` (it is an
+/// ordinary `auth_bearer` read), so a non-loopback caller needs a valid
+/// bearer token to reach it at all in either case — that is `auth_bearer`,
+/// not the field under test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn identity_review_mutations_admitted_matches_the_gate_for_a_non_loopback_caller() {
+    const FIXTURE_TOKEN: &str = "kb-code-identity-pre-probe-token";
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let auth = format!("Bearer {FIXTURE_TOKEN}");
+    let client = reqwest::Client::new();
+
+    // Gate OFF (default) — the field must read false for a non-loopback
+    // caller, matching `remote_mutations`'s own default.
+    std::env::set_var("KB_CODE_TOKEN", FIXTURE_TOKEN);
+    let repo_tmp_off = fixture_feature_branch();
+    let (_daemon_off, base_off) =
+        boot_with_repo("r", repo_tmp_off.path(), ReviewSection::default()).await;
+    std::env::remove_var("KB_CODE_TOKEN");
+    let resp = client
+        .get(format!("{base_off}/api/identity"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", &auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["review_mutations_admitted"], false,
+        "non-loopback + gate OFF (default) must read false: {body}"
+    );
+    assert_eq!(
+        body["remote_mutations"], false,
+        "the raw config flag must also read false: {body}"
+    );
+
+    // Gate ON — the field must flip to true for the same non-loopback
+    // caller, matching `remote_mutations` = true.
+    std::env::set_var("KB_CODE_TOKEN", FIXTURE_TOKEN);
+    let repo_tmp_on = fixture_feature_branch();
+    let review_on = ReviewSection {
+        remote_mutations: true,
+        ..ReviewSection::default()
+    };
+    let (_daemon_on, base_on) = boot_with_repo("r", repo_tmp_on.path(), review_on).await;
+    std::env::remove_var("KB_CODE_TOKEN");
+    let resp = client
+        .get(format!("{base_on}/api/identity"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", &auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["review_mutations_admitted"], true,
+        "non-loopback + gate ON must read true: {body}"
     );
 }
 

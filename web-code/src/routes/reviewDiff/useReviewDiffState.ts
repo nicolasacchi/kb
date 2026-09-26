@@ -25,6 +25,7 @@ import {
   formatDiffPs,
   mergeCurrentSearch,
   parseDiffCtx,
+  parseDiffFiles,
   parseDiffMap,
   parseDiffPs,
   type DiffCtxDial,
@@ -49,6 +50,10 @@ export interface ReviewDiffUrlState {
   psQuery: string;
   ctxDial: DiffCtxDial;
   noiseMode: NoiseMode;
+  /// V80-M1 — `?files=` (`"changed"` default, `"all"` lists the tip sha's
+  /// whole tree). Named `filesMode` here (not `files`) so it never reads as
+  /// the unrelated `expandedFiles` array a few lines down.
+  filesMode: "changed" | "all";
   mapParamOpen: boolean;
   hunkParam: string | null;
   urlView: DiffMode | null;
@@ -70,6 +75,7 @@ export interface ReviewDiffUrlState {
   setPs: (next: DiffPsSelection | null) => void;
   setCtx: (next: DiffCtxDial) => void;
   setNoiseMode: (next: NoiseMode) => void;
+  setFilesMode: (next: "changed" | "all") => void;
   setMapOpen: (next: boolean) => void;
   setView: (next: DiffMode) => void;
   setOverlay: (next: OverlayMode) => void;
@@ -91,6 +97,7 @@ export function useReviewDiffState(): ReviewDiffUrlState {
   const psQuery = psSel === null ? "latest" : String(typeof psSel === "number" ? psSel : psSel.to);
   const ctxDial = parseDiffCtx(searchParams.get("ctx"));
   const noiseMode: NoiseMode = parseNoiseMode(searchParams.get("noise"));
+  const filesMode = parseDiffFiles(searchParams.get("files"));
   const mapParamOpen = parseDiffMap(searchParams.get("map"));
   const hunkParam = searchParams.get("hunk");
   const urlView = parseView(searchParams.get("view"));
@@ -191,6 +198,10 @@ export function useReviewDiffState(): ReviewDiffUrlState {
     (next: boolean) => setParam("map", next ? null : "0"),
     [setParam],
   );
+  const setFilesMode = useCallback(
+    (next: "changed" | "all") => setParam("files", next === "changed" ? null : "all"),
+    [setParam],
+  );
 
   const setExpanded = useCallback(
     (files: readonly string[], hunks: readonly string[]) => {
@@ -217,6 +228,7 @@ export function useReviewDiffState(): ReviewDiffUrlState {
     psQuery,
     ctxDial,
     noiseMode,
+    filesMode,
     mapParamOpen,
     hunkParam,
     urlView,
@@ -234,6 +246,7 @@ export function useReviewDiffState(): ReviewDiffUrlState {
     setPs,
     setCtx,
     setNoiseMode,
+    setFilesMode,
     setMapOpen,
     setView,
     setOverlay,

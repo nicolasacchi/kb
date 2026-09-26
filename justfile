@@ -5,13 +5,35 @@ default:
 # Low-priority prefix for long builds (nice + ionice; Linux/WSL2).
 prio := "nice -n 20 ionice -c 3"
 
-# Run the full CI suite (fmt + clippy + test) across the workspace and the
-# ORT-linking embedder surface, then assert the generated artifacts (TS wire
-# bindings + the API route table) are in sync with the Rust source — a derive
-# or router change without `just types` / `just api-docs` fails here, not in
-# review. (The bootstrap-spike recipes lived here until all 6 spikes retired;
-# git history on this file preserves them.)
+# Fast local gate: workspace fmt/clippy/test (no ORT, no kb-code), the
+# ORT embedder surface, then the two kb generated-artifact drift guards
+# (TS wire bindings + the API route table). Not the GitHub ci.yml matrix —
+# the body names the lanes this skips. `just ci-all` runs every lane.
 ci: ci-workspace ci-embedder types-check api-docs-check
+    @echo "did not run: code-lint, code-test, code-spa, code-e2e, e2e, web-unit, supply-chain, code-drift, scripts/check-invariants.sh — just ci-all"
+
+# Every lane .github/workflows/ci.yml runs, as the local recipe that
+# already mirrors it (job → recipe):
+#   workspace-lint + workspace-test → ci-workspace
+#   workspace-lint's invariant step → ci-invariants
+#   workspace-test's route-table step → api-docs-check
+#   drift → types-check
+#   code-drift → gen-ts-code-check
+#   e2e → ci-e2e
+#   embedder-lint + embedder-test → ci-embedder
+#   code-lint + code-test → ci-code
+#   code-spa → ci-code-spa
+#   code-e2e → ci-code-e2e
+#   web-unit → test-spa
+#   supply-chain → deny
+# Not mirrored (no recipe, so not run here): web-unit's `npm audit
+# --omit=dev`, and e2e's Firefox install + annotator size guard.
+ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check ci-e2e ci-embedder ci-code ci-code-spa ci-code-e2e test-spa deny
+
+# Invariant-to-test coverage table (GC-C2). A step of ci.yml's
+# workspace-lint job, not of `just ci`. Always exits 0 — a signal, not a gate.
+ci-invariants:
+    scripts/check-invariants.sh
 
 # Supply-chain gate — local mirror of the CI `supply-chain` job. Needs
 # cargo-deny on PATH: `cargo install --locked cargo-deny`. Split so a license
@@ -126,7 +148,12 @@ ci-code-spa:
     # APCA + Oklab state separation incl. CVD simulation). It runs BEFORE the
     # unit suite so a palette regression fails on its own named step with a
     # table of offending pairs, rather than inside a vitest assertion.
-    cd web-code && npm ci && npm run build && npm run lint:themes && npm test
+    # V80-C1 — `lint:css-vars` is the undefined-CSS-custom-property gate (R0/
+    # R4/R5 each independently found a `var(--name)` referencing a `--name`
+    # nothing declares — an invalid var() silently falls back to inherited/
+    # initial rather than erroring). A pure static scan of src/**/*.css (+
+    # .ts/.tsx), no build needed, so it runs first.
+    cd web-code && npm ci && npm run lint:css-vars && npm run build && npm run lint:themes && npm test
 
 # W4.3 — the Search-Everywhere box's Playwright smoke: a real
 # kb-code-server fast-profile binary against a fresh git fixture repo

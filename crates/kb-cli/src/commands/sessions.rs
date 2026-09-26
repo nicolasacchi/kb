@@ -1,17 +1,21 @@
 //! `kb sessions` — read captured Claude Code transcripts via the
 //! daemon's /api/sessions/* surface. v0.14 Track S.
 //!
-//! Mirrors the `kb comments` verb pattern: every call requires a
+//! Mirrors the `kb comments` verb pattern: the read verbs require a
 //! reachable daemon (the data lives in the per-kb V0008 sessions
-//! sqlite table + the cross-kb fan-out HTTP routes; there's no
-//! offline path). W0.6 adds three offline-git + daemon probes
+//! sqlite table + the cross-kb fan-out HTTP routes).
+//! `backfill-project-key` is the offline exception — it opens each
+//! configured kb's `index.db` and calls `Db::sessions_backfill_project_key`.
+//! W0.6 adds three offline-git + daemon probes
 //! (`by_commit`, `provenance_report`, `why_line`) for kb-code's
 //! wave-0 sha→session wedge instrument.
 
 use crate::http;
 use anyhow::{anyhow, bail, Context, Result};
+use kb_core::paths::KbPaths;
+use kb_core::storage::sqlite::Db;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn list(
@@ -2298,6 +2302,43 @@ pub async fn replay(
     let v: serde_json::Value =
         serde_json::from_str(&body).context("replay response was not JSON")?;
     print!("{}", render_replay(&v));
+    Ok(())
+}
+
+/// `kb sessions backfill-project-key` — fill NULL `sessions.project_key`
+/// from a path already on the row (`repo_root`, else `cwd`).
+///
+/// Dry-run unless `apply` is true (`--apply`). Other sessions verbs read
+/// the per-kb V0008 `sessions` table through the daemon's cross-kb fan-out,
+/// so this opens every configured kb `index.db` with [`Db::open`] (the same
+/// connection `kb status` uses for its sqlite fallback) and sums
+/// [`Db::sessions_backfill_project_key`]. Prints `would_change=<n> changed=<n>`.
+/// `apply == false` writes nothing.
+pub fn backfill_project_key(config: Option<&PathBuf>, apply: bool) -> Result<()> {
+    let cfg_path = super::resolve_config_path(config)?;
+    let cfg = super::load_config_or_default(&cfg_path)?;
+    let paths = KbPaths::new(cfg.daemon.name.as_deref().unwrap_or("default"))?;
+    let mut would_change = 0u64;
+    let mut changed = 0u64;
+    let mut opened = 0usize;
+    for name in cfg.kb.keys() {
+        let sqlite = paths.kb_sqlite(name);
+        if !sqlite.is_file() {
+            continue;
+        }
+        let mut db = Db::open(&sqlite).with_context(|| format!("open {}", sqlite.display()))?;
+        let (would, did) = db.sessions_backfill_project_key(apply)?;
+        would_change += would;
+        changed += did;
+        opened += 1;
+    }
+    if opened == 0 {
+        bail!(
+            "no kb index.db found — configure a corpus and index it first \
+             (sessions rows live in each kb's index.db)"
+        );
+    }
+    println!("would_change={would_change} changed={changed}");
     Ok(())
 }
 

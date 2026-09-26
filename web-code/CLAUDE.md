@@ -417,6 +417,25 @@ that way — a palette regression should fail on its own named step with the
 offending pairs listed, not surface as an unexplained vitest assertion three
 files away.
 
+**Every `var(--name)` must resolve (V80-C1).** Three independent v8.0 review
+passes (R0 on `tours.css`, R4 on `--fg`/`--fg-dim` — ~65 references across
+five files, R5 on `branches.css` + a named list of six more) each found the
+same bug: a `var(--name)` referencing a `--name` nothing declares. CSS hides
+this — an invalid `var()` doesn't error, it makes the declaration invalid at
+computed-value time, which silently falls back to the inherited value
+(`color`, `font-family`, …) or the property's initial value (`background`,
+`border`, `box-shadow`, …: transparent / none / 0) — a plausible-looking
+render that is simply wrong, and worse under a theme nobody's screen was on.
+`npm run lint:css-vars` (`scripts/css-undefined-vars.mjs`, wired into
+`ci-code-spa`) statically scans every `var(--…)` under `src/**/*.css` (and
+`.ts`/`.tsx` string literals) and fails on any reference that has no
+fallback, or whose fallback chain (however many `var(--x, var(--y, …))`
+levels deep) never bottoms out on a name some `--name:` declaration actually
+defines. A literal fallback (`var(--x, 8px)`) is accepted as resolved — CSS
+guarantees a real value there in every theme — so it is not itself a
+mandate to add the token; a `var(--x, var(--y))` where `--y` is ALSO
+undefined is not.
+
 ## The Desk (`V70-A4`, design §P1)
 
 `desk/deskState.ts` is the reducer that owns the shell's geometry — five
@@ -465,6 +484,88 @@ positions at save time regardless of the dirty flag). Do not widen this
 comparison to cover content drift without re-reading D26's own stated
 grammar first — "dirty" here answers one question only: has the FILE SET
 changed.
+
+## The current review (`V80-M3`)
+
+"Which review am I working" is a per-repo BROWSER marker
+(`lib/currentReview.ts`), not a server fact — the daemon has no route, no
+table and no wire type for it, the same CLI-parity exemption
+`lib/reviewDrafts.ts` already carries. It lives in `sessionStorage` under
+`kbc:current-review:<repo>` (never `localStorage` — a marker that outlived
+the tab would resurface weeks later pointing at a closed or deleted
+review), and a plain `useSyncExternalStore` pub-sub (the `lib/
+publishMarks.ts` idiom) is what lets the TopBar chip, the reader and the
+search results chip — three separate React subtrees with no shared owner —
+agree within one tab, since `sessionStorage` fires no `storage` event for a
+same-tab write.
+
+**The URL mirror is reader-only.** `?review=<id>` rides `lib/codeUrl.ts`'s
+`appendReviewParam`/`parseReviewIdParam` (the `pane2`/`sym`/`ent`/`trail`
+precedent: a scalar appended LAST to an already-built URL, never a second
+grammar) and `nav/location.ts`'s Location Contract (`Location.review` on
+`mode: "reader"` only — `ReviewLoc` reused with just `id` populated).
+`transition()` needed no new clause: a review-only change falls through to
+the existing generic `encode(...) !== encode(...)` catch-all in rule 5 and
+comes out a `replace`, same as a rail-tab or trail-only change already
+does — never a `push`, never a `none`.
+
+**Precedence, and why it can't loop.** A `?review=` present on load SETS
+the session marker (a shared link wins over stale session state — see
+`Reader.tsx`'s sync effect). Once the marker is set, landing on ANY reader
+URL for that repo with no `?review=` re-appends it via one `replace`
+("navigation inside the reader keeps appending it while the state is
+set") — the effect's dependency list includes every URL-affecting param
+this route reads, not just `review` itself, because most of `Reader.tsx`'s
+own internal `navigate(codeUrl({...}))` calls build a URL from scratch and
+drop `review` even when the path is unchanged; the check itself is
+idempotent (a landing that already matches session state is a no-op), so
+re-running it on every navigation converges in at most one extra
+`replace`. Clearing the TopBar chip's `×` clears the session marker AND
+strips `?review=` from the current URL in the same action (`lib/
+mergeCurrentSearch` — a no-op strip on any page that never carried the
+param).
+
+**Set/show.** Entering a Room (`ReviewDetail.tsx`) or the review diff
+(`ReviewDiff.tsx`) auto-sets the marker (no click); the Room's own "Work
+this review" button re-affirms it explicitly. `Reader.tsx` flips
+`InspectorRail`'s `hasReviewContext` to `!!currentReview`, making the rail's
+Review tab selectable. Search results (`components/search/
+SearchSection.tsx`'s `reviewFilePaths`/`reviewFileRepo` props, wired from
+ONE `useReviewFiles` fetch in `routes/Search.tsx`/`components/Omnibox.tsx`,
+never a per-row fetch) mark a hit whose path is in the current review's
+changed files with a LINE-style `in review diff` chip — never hue-only.
+
+**Binding a comment to a review, from the plain reader (`V80-M2`, riding
+M0's `PUT`/`DELETE /api/annotations/{id}/review`).** The composer
+`AnnotationsPanel`/`DiffLineComposer` share (`components/annotations/
+ReviewBindSelector.tsx`) lists the repo's OPEN reviews and preselects the
+current review (a one-time seed on mount, not a standing sync — see that
+component's own doc for why re-clobbering a deliberate mid-session choice
+every time the ambient marker changes elsewhere would be the wrong
+trade-off); submitting with a review chosen passes `review_id` (`ps`
+omitted → the review's latest, `side: "new"` — this composer only ever
+anchors to CURRENT working-tree/blob content, never a historical diff
+side). The selector's own hint line reads `useReviewFileBindHint`
+(`hooks/useReviewComments.ts`): "will appear in the Room of &lt;title&gt;"
+by default, or "not in this review's diff — anchors to ps N's tip" once
+that hook POSITIVELY knows the file isn't one the target patchset's diff
+touches (comments-wire `in_diff` when a thread already exists there, else
+the review's files-at-latest-ps list — never a guess while still
+loading). Every Notes-panel card for a top-level (non-reply — a reply has
+no scope of its own) annotation carries its binding as a chip ("in review
+&lt;title&gt;", linking to the Room) plus bind/rebind (opens the same
+selector inline)/unbind actions (`useBindAnnotationReview`/
+`useUnbindAnnotationReview`, `hooks/useAnnotations.ts`) — belt-and-braces
+invalidating `["reviews", repo, "comments"]` themselves alongside the
+`annotation.changed` SSE bridge's own prefix invalidation on either event
+a bind/rebind emits. The rail's Review tab (`components/reviews/
+ReviewFileThreadsPanel.tsx`) replaces M3's "arrives with M2" stub: the
+current review's threads for the FOCUSED file (`useReviewComments`, the
+SAME query the Room's own cards share), a header caption from the SAME
+`in_diff` hint the composer's selector reads, and a "Comment here" door
+that seeds the composer at the focused pane's own caret line and opens
+the Notes tab (the composer then preselects this same review with no
+further plumbing).
 
 ## Search grammar and match rendering (kbcq/1, `V71-D1`)
 
@@ -978,14 +1079,200 @@ Files tab and the review-diff map column render the SAME
 `ReviewFileTree` (status sections of folder trees — added / modified /
 renamed / deleted — because a 38-file review already clustered into
 three status groups; mixing them into one folder walk would hide
-"deleted 15"). Kind icons come from the cached `GET /api/syntax`
-registry. Paths are middle-truncated, never a leading ellipsis. Click /
-Enter on a file writes `?file=` and opens that file's diff in the center
-on its first hunk; `]f`/`[f` stay in sync with the tree cursor. The map
-pane is resized with the Desk's `react-resizable-panels` mechanism (no
-second drag implementation, no `autoSaveId`); `g =` / a separator
-double-click resets the width. Tree keys: `g f` focus, `z f` toggle
-folder, `z m` collapse all.
+"deleted 15"). Kind icons are real icons (`components/icons` via
+`lib/reviewFileTree.ts`'s `fileIconKind`, V80-F1 — a closed `lang` →
+`"doc"|"shell"|"config"|"generic"` mapping over the cached `GET
+/api/syntax` registry's `lang`, never a 2-letter mark). Paths are
+middle-truncated, never a leading ellipsis. On the MAP column (this
+page's own tree), click/Enter writes `?file=` and opens that file's diff
+in the center on its first hunk, staying on this page; `]f`/`[f` stay in
+sync with the tree cursor. The map pane is resized with the Desk's
+`react-resizable-panels` mechanism (no second drag implementation, no
+`autoSaveId`); `g =` / a separator double-click resets the width. Tree
+keys: `g f` focus, `z f` toggle folder, `z m` collapse all. V80-F1 gave
+`ReviewFileTree` a third `rowAttr="drawer"` shape
+(`data-kbc-rdiff-drawer-file`) so this page's own MOBILE files drawer
+(`routes/reviewDiff/ReviewDiffRail.tsx`, ≤860px, replacing a flat list)
+is a THIRD home for the same tree, sharing `OutsideDiffChapter` (factored
+out of `ReviewMapColumn.tsx`, still rendered by the map column too) for
+the "outside the diff" group — a tap on an already-`ordered` row still
+just scrolls+closes (no navigation, mobile.spec.ts's own contract), a tap
+on an All-files-only or outside-the-diff row falls through to the SAME
+single-file-focus navigate the map column's own click uses, since there
+is no rendered section to scroll to. **`?files=all`'s own toggle is
+`FilesModeToggle` (same file, same export)** — V80-R4 (landed after this
+paragraph was first drafted, this unit rebased onto it) moved the
+DESKTOP copy out of the map column entirely, into `ReviewDiffToolbar`'s
+View cluster (reachable with the map closed — it also widens the jump
+palette and the outside-the-diff group); `FilesModeToggle` now has
+exactly one caller, the mobile drawer, since the toolbar's copy is
+unreachable while the drawer is open (`.kbc-drawer-scrim` covers the
+full viewport and closes the drawer on any outside click, so the
+toolbar sits behind it, not beside it).
+
+**The cockpit Files tab's OWN click NAVIGATES (V80-F1) — it does not
+share the map column's in-page `?file=` behavior above.** Click/Enter on
+a `FilesPanel` row now calls `reviewDiffHref(repo, reviewId, path, {ps})`
+and leaves the Room entirely, landing on this page at that file's first
+hunk — the retired alternative was an inline diff expanded UNDER the
+picked row (`ReviewAwareDiff`, `components/reviews/ReviewFileItem.tsx`),
+kept ONLY for the findings rail's per-file-group "open file" quick action
+(`ReviewThreadsCard`'s path buttons, via `ReviewDetail.tsx`'s pre-existing
+`expanded`/`openFile` state — decoupled from `FilesPanel`'s own `onPick`,
+which now builds its navigate locally) — "keep whatever other surface
+still uses it" is that one surface, not a hedge nobody exercises. Two
+real, load-bearing consequences of landing on the real page rather than
+the old bare preview: a compose here DRAFTS (the section above's own
+rule) rather than posting straight to the server, and diff-LINE syntax
+highlighting — which `FileDiffBody` never wired up (`useDiffHighlights`
+was called by the now-retired `ReviewAwareDiff` only) — had to be added
+here too (same hook, additive `highlights` prop `DiffFile` already
+declared but nothing populated), or a Files-tab click would have quietly
+lost a feature the old surface had.
+
+**A file outside the diff renders whole at the tip (V80-M1).** A zero-
+textual-hunk file used to bail with a bare "No textual difference" and
+nothing else — no gutter, no thread, no composer, which is what made a
+comment on such a file (the server already accepts one — path need only
+exist at the pinned sha) undiscoverable through its own deep link. Rule:
+whenever `parsed.hunks.length === 0` and the file isn't a known deletion,
+`FileDiffBody` (`routes/reviewDiff/DiffSections.tsx`) fetches
+`GET /api/file?ref=<patchset tip>` — the SAME call `?ctx=full` already
+makes (`lib/diffContext.ts`) — and splices it into ONE synthetic
+`wholeFileHunk`: pure `context` rows, `oldLine === newLine` throughout.
+That hunk rides through `UnifiedHunks`/`SplitHunks` exactly like a real
+one (same gutter, same comment buttons, same fold/viewed), because
+`DiffFile` only ever looks at `hunkViews`/`parsed.hunks` — never at
+whether the change is real. `hunkId` (`lib/diffHunks.ts`) hashes the path
+plus each `+`/`-` line; with none of either it collapses to
+`fnv1a64(path)`, stable and per-file-unique, so "mark this whole file
+viewed" persists exactly like a real hunk's mark. `lib/diffContext.ts`'s
+`emptyDiffView` is the ONE decision table for the caption: a known
+`files_changed` row with no textual hunks keeps the old "No textual
+difference" text (a mode/rename change) WITH the body below it; a path
+outside the diff gets "Not changed in this patchset — showing the whole
+file at ps N (<short sha>)"; a known deletion, a binary blob, or a file
+absent at the tip get their own honest caption and NO body — never a
+guessed line. `?files=all` (`ReviewFileTree`'s `mode` prop,
+`lib/reviewFileTree.ts`'s `buildAllFilesTree`/`walkAllFiles`, `z A`
+toggles it) widens the map/tree to the tip sha's whole tree (client-side,
+recursive over `GET /api/tree` — the reader's per-directory read, capped
+honestly at `ALL_FILES_CAP`); changed files keep their status chip,
+everything else renders `kbc-ftree__row--plain`. A thread/finding anchored
+outside the diff surfaces in the map column's own "outside the diff" group
+REGARDLESS of `filesMode` — a thread is never hidden because its file has
+no hunks.
+
+**Diff-line syntax paint, and the ONE working-tree tip rule (V80-H1).**
+`hooks/useDiffHighlights.ts` is the whole diff-painting contract: two
+`useFile`-shaped queries that share `useFile`'s EXACT
+`["file", repo, path, ref ?? null]` key, bucketed by `lib/diffHighlight.ts`
+into per-line UTF-16 column maps that `UnifiedHunks`/`SplitHunks` paint
+behind the per-LINE integrity guard (`lib/diffHighlight.ts:5`) — a line
+whose text does not byte-equal the file's line at that number stays plain
+rather than being mis-coloured. `cssClassFor` (`lib/decorations.ts`) remains
+the ONE 18-role → `.kbc-hl-*` table, so a diff row and a fence cannot
+disagree. What a surface must supply is only the two refs and, optionally,
+`parsed` (the hook reconstructs a side from it when `GET /api/file` spans
+are missing — new files, unindexed blobs, pseudo-files).
+
+The tip side used to be gated on `!!newSha`, and that gate was wrong about
+the common case. A diff rendered with no `to` does not have no new side:
+`GET /api/diff`'s own contract says so (`crates/kb-code-server/src/
+routes.rs:2087-2090` — "Omitted = diff `from` against the CURRENT WORKING
+TREE", mirroring `GET /api/file`'s own "no `ref` = working tree" default),
+and the two readers that render it mostly pass no `to` — the compare
+strip's `to={gitRef ? pane2Loc?.ref : undefined}`
+(`routes/Reader.tsx:4528`) and the `~diff` route's optional `?to=`
+(`routes/Reader.tsx:501`, `searchParams.get("to") ?? undefined`). So the
+tip query runs at `ref: undefined` — the very `["file", …, null]` entry
+`useFile` already keeps for the reader's own read, so a diff opened on a
+file the reader has open costs no new request shape, only the one that was
+being suppressed. **Do not re-gate the tip on `!!newSha`**: that one
+expression is what put every ADDED line of a no-`to` diff back to plain,
+and it read as a correct "no ref, nothing to fetch" because the fetch was
+optional in the first place.
+
+Two gates, and only two, survive on the tip, and both are named exports so
+they are pinned by their own tests: `tipSideEnabled` sits beside its
+untouched twin `baseSideEnabled`, so the two rules read side by side rather
+than one being an inline condition inside the hook. `hasAdds` is the MIRROR
+of the base side's `hasRemoves` and closes the tip only for the UNPINNED
+read, where the blob may not exist at all — a DELETED file has no
+working-tree blob, so the read would be a guaranteed 404 whose only effect
+is a wasted request (`shouldFallbackToSnippet` refuses on a failed read, so
+nothing would have painted anyway). A PINNED tip is never gated on
+`hasAdds`: that blob exists whatever the line mix says, which is the
+pre-existing behaviour, unchanged. `DiffView.tsx:25-37` derives both flags
+from the parsed diff by the same `hunks.some(…)` shape, so a new
+`DiffFile` caller that forgets `hasAdds` is merely over-fetching — omit it
+and you are assumed to have adds, and only a deletion needs to say
+otherwise.
+
+**An oversize side is DROPPED, never sent — one bad item must not strip
+the other side's paint (V80-H1).** `useHighlight` sends every side in ONE
+`POST /api/highlight/batch`, and the server refuses the WHOLE batch when
+any single item exceeds `MAX_SNIPPET_BYTES` (256 KiB,
+`crates/kb-code-server/src/highlight.rs:424`, enforced :752-759). The
+hook's own `DIFF_HIGHLIGHT_MAX_BYTES` (1.5 MiB) only bounds what is worth
+READING and is six times the server's per-item cap, so a big side could
+400 the shared request and take the OTHER side's legitimate paint down with
+it — a failure that presents as "highlighting stopped working" on a diff
+whose base side was fine. Both sides are now clamped to
+`HIGHLIGHT_SNIPPET_MAX_BYTES` before they are enqueued, measured in UTF-8
+BYTES via `lib/decorations.ts`'s `utf8LengthOf`, never `.length` — a
+function rather than `new TextEncoder().encode(text).length` so a 1.5 MiB
+side is not copied into a throwaway byte array just to learn its length,
+which early-outs on `.length > cap` (sound: a UTF-8 byte length is never
+fewer than the UTF-16 code-unit count). The server measures
+`item.text.len()`, so a non-ASCII side under-counts on a UTF-16 length and
+would slip past the clamp. The affected side degrades to PLAIN TEXT, which
+is the honest outcome; this is a drop, never a truncate, because a
+truncated snippet would paint spans against the wrong bytes. Clamping each
+side also makes the batch TOTAL cap of 1 MiB (`highlight.rs:428`, enforced
+:761-765) unreachable — two in-cap sides are at most 512 KiB — so the hook
+never has to reason about the aggregate.
+
+**Four raw diff surfaces paint now, and two that deliberately do not
+(V80-H1).** `components/reviews/InterdiffPanel.tsx` passes the panel's real
+`from_tip`/`to_tip` shas, so both interdiff sides paint from blobs a reader
+of that review may already have open. `components/provenance/
+OriginatingChange.tsx` passes the blame commit as the tip and its
+`BlameRegion.previous_sha` — or `<sha>^` — as the base, and hands the hook
+the SLICE it renders (`slicedAsParsed(slice)`) rather than the full parse,
+so the base read is gated on a remove line that actually survives the
+slice's own row cap (`lib/hunkSlice.ts`'s `maxLines`).
+`components/diff/SuggestionEditor.tsx` reads BOTH sides from
+the one blob the editor already has open (`useFile(repo, path, sha)`, the
+same key), so its preview costs no extra request. The composer's DRAFT
+rows stay plain by design, and this is the rule to not undo: the draft is
+not the blob's text, so the shipped per-line integrity guard refuses it.
+Plain, never wrong — a guessed colour on a line the reader is about to
+replace is a worse failure than no colour. For the same reason the
+UNCOMMITTED originating change passes neither ref and stays unpainted
+(`UNCOMMITTED_SHA` names no commit, so there is no blob to read and
+inventing a revspec would be a claim). `components/diff/SuggestionDiff.tsx`'s
+`ApplySuggestionPreview` is the fourth: it paints through
+`lib/diffHighlight.ts`'s `paintLine` and the same `data-kbc-hl` span
+contract every other surface emits, out of the `GET /api/file` body it
+ALREADY holds — no second request for bytes already in memory.
+
+**Both `POST /api/highlight` handlers parse OFF the async worker (V80-H1).**
+`highlight_snippet` reaches `lang::parse`, which builds a FRESH
+`tree_sitter::Parser` and runs a full parse per call; the batch form does
+that up to `MAX_BATCH_ITEMS` (64) times. Run inline on an async runtime
+worker, one paint is a stall sized by the SUM of every item's parse, paid
+by every unrelated handler sharing that thread. `highlight_route` and
+`highlight_batch_route` now wrap their work in
+`tokio::task::spawn_blocking`
+(`crates/kb-code-server/src/highlight.rs:798-835`) — the same discipline
+`routes::diff_route` already used for its `git diff` subprocess
+(`routes.rs:2116`): there blocking I/O, here CPU. The caps are checked
+INSIDE the hop, not in front of it, so every oversize, duplicate-id and
+over-total refusal is still the same 400 out of `highlight_batch` with the
+same body, and both responses keep their `no-store`. A panicked task is
+the one genuinely new outcome, and it is a 500 naming the panic
+(`"highlight task panicked"`), never a hang.
 
 ## The review document (`kbc-review/1`, `V73-K2b`, design §D9/D9-a)
 
@@ -1198,6 +1485,39 @@ holds. Do not re-derive this from `window.location.hostname` — that is a
 second, quietly different answer to a question the server answers exactly.
 Absent (an older daemon), failed or in-flight all read `false`, the safe
 direction, and a refusal is still surfaced with the daemon's own message.
+
+**The `[review] remote_mutations` family has its OWN probe, because
+`useLoopback()` alone can't answer for it.** `review_mutations_gate`
+admits a non-loopback caller when `[review] remote_mutations = true`, so
+"is this caller loopback" is the wrong question for verdict PUT/DELETE,
+finding disposition PUT/DELETE, manual finding create, and publish
+recording. `GET /api/identity`'s additive `review_mutations_admitted`
+(V80-F2) answers the RIGHT one — computed per request from the exact
+peer classification the gate itself runs — and
+`hooks/useReviewMutationsAdmitted.ts` is the one place that reads it,
+paired with one shared caption (`REVIEW_MUTATIONS_ADMITTED_HINT`, naming
+both remedies: run kb-code on the box, or set the config flag). Every
+consumer (`VerdictBar`, `DiffLineComposerV2`'s finding-mode submit,
+`DispositionMenu` and `DiffThread`'s inline disposition chips) disables
+the control and shows that caption BEFORE a submit rather than only after
+one 404s — the fix for a standing v0.37 deferral. Same "never hidden"
+rule as the loopback-only pattern above: a disabled control still shows
+what it would do, with the reason attached, never a control that
+silently vanishes.
+**An ABSENT probe never pre-empts a write the daemon might admit**
+(V80-F2b — a real compatibility bug caught post-merge, `review-room.spec.ts`
+failing against a server binary that predates this field). The hook
+returns `{ admitted, unknown }`, and `admitted` is `true` unless the
+daemon's identity response said `review_mutations_admitted: false`
+EXPLICITLY — an older daemon (rolling deploy, mixed fleet), a failed
+identity fetch, and an in-flight one all read `admitted: true`
+(`unknown: true`), never `false`. Every consumer disables ONLY on the
+explicit `false`; the pre-existing post-submit 404 latch (`VerdictBar`'s
+`refused`, `DispositionMenu`/`DiffThread`'s `dispositionLoopbackLatched`)
+is what discovers an unknown-but-actually-refused write, exactly as it
+did before this probe existed — the probe narrows the window that latch
+has to cover, it does not replace it, and it must never be stricter than
+"no answer yet" would have been.
 
 ## `~rails` and the Rails reader surfaces (`rails/1`, `V72-I2`)
 
@@ -1760,13 +2080,23 @@ only if a future wire does. A hero count chip filters the rail — the
 severity filter is LIFTED to `ReviewDetail.tsx` (controlled props on
 `ReviewThreadsCard`), so the hero and the rail share one state.
 
-**Prose scale.** The Room's body is ≥15px via local size custom properties
-(`--room-fs-*`, declared once in `review-room.css`); finding titles are
-real `h3`s; section dividers are `RoomChips.tsx`'s `SectionDecor` (icon +
-token per `RoomSectionKind`) with a `data-kbc-room-section` anchor the
-`review.jump.*` rows scroll to. The density toggle (compact/comfortable)
-lives in localStorage with `?density=` as the share-link mirror — K2a's
-`lib/branchViews.ts` posture, `parseRoomDensity` total.
+**Prose scale.** *V80-R0:* the Room's body text rides the GLOBAL type ramp
+(`--fs-body`/`--fs-sm`/`--fs-title`/`--fs-hero`, `tokens.css`) — the
+private `--room-fs-*` set (body 15 / small 13 / title 17 / hero 26,
+declared once in `review-room.css`) is retired, and with it the Room's own
+density store: `?density=`/the toggle now read and write the app-wide
+`density` preference (`lib/prefs.ts`'s `loadDensity`/`setThemePrefs`),
+which also drives `[data-density="compact"]` on `<html>` — one preference,
+not two. `lib/reviewRoom.ts`'s `RoomDensity`/`parseRoomDensity` (still
+total)/`nextRoomDensity` are unchanged; `ROOM_DENSITY_STORAGE_KEY` now
+names a LEGACY key only, migrated into the global pref once
+(read-then-remove) on a Room mount that still finds it. `?density=` is
+still the share-link mirror, but on load it now WRITES THROUGH to the
+global pref (so a shared compact link makes the whole app compact, not
+just the Room's render) rather than only overriding one page's render.
+Finding titles are real `h3`s; section dividers are `RoomChips.tsx`'s
+`SectionDecor` (icon + token per `RoomSectionKind`) with a
+`data-kbc-room-section` anchor the `review.jump.*` rows scroll to.
 
 **Keys.** Seven new `scope: "review"` / `dispatch: "surface"` rows, no
 `vim_kind` (this route mounts no CodeView): `Space i` rail toggle (`Space r`

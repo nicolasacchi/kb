@@ -18,7 +18,7 @@
 # remember's non-JSON stdout line, captured into a tool.result output) is
 # the exact same regex as every other harness's nudge.
 #
-# On a hit this does TWO things:
+# On a hit this does THREE things:
 #   1. prints a one-line PLAIN-TEXT nudge to stdout — Kimi appends Stop
 #      hook stdout to the model's context (no hookSpecificOutput envelope
 #      on this harness), which is exactly where the nudge belongs;
@@ -26,7 +26,11 @@
 #      kb-wake.sh surfaces at the next interactive SessionStart (same
 #      relay as kb-capture-grok.sh's queue_distill_pending, with the same
 #      dedup-by-session-id), so the nudge survives even if the Stop-time
-#      stdout is never read.
+#      stdout is never read;
+#   3. posts one slate ask, `Distill session <sid> (kimi)?`, via
+#      `kb slate ask --cwd <session cwd>` when `kb` is on PATH. A slate
+#      failure must not block the stdout nudge or the ledger append. A
+#      suppressed run posts nothing.
 #
 # A marker file (its own "-kimi-" namespace, distinct from the Claude and
 # codex nudges' markers) caps this at once per session. Every failure
@@ -37,6 +41,31 @@
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
+
+# Call only after the commit-without-remember check. Slate stdout is
+# discarded so it cannot corrupt the plain-text nudge. Never blocks.
+post_distill_ask() {
+  local sid="$1" harness="$2" cwd="${3:-}"
+  command -v kb >/dev/null 2>&1 || return 0
+  local args=(
+    slate ask "Distill session ${sid} (${harness})?"
+    --harness "$harness"
+    --session-id "$sid"
+    --ref "session:${sid}"
+  )
+  [ -n "$cwd" ] && args+=(--cwd "$cwd")
+  # Loopback must not ride HTTP(S)_PROXY (same reason as kb-wake-kimi.sh).
+  (
+    export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
+    export no_proxy="127.0.0.1,localhost${no_proxy:+,$no_proxy}"
+    unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 4 kb "${args[@]}" >/dev/null 2>&1 || true
+    else
+      kb "${args[@]}" >/dev/null 2>&1 || true
+    fi
+  )
+}
 
 input="$(cat)"
 sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
@@ -68,5 +97,6 @@ else
   printf 'kimi %s %s\n' "$sid" "$(date +%s)" >>"$ledger" 2>/dev/null
 fi
 
+post_distill_ask "$sid" kimi "$cwd"
 printf 'kb: this session has commits but no curated memory — run /kb-distill %s or ask the agent to distill.\n' "$sid"
 exit 0

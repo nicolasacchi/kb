@@ -389,6 +389,39 @@ invariant #2 records).
     must never be split across, or a reader could observe a fingerprint
     match against a `blob_hash` from a different write than the one that
     produced it.
+    *V77-P2 amendment (fair live-first ingest, E6):* there is now exactly
+    ONE walker and ONE queue (`sink::worker`) — the boot HEAD-tree walk
+    used to bypass the sink queue entirely via a direct `spawn_blocking`
+    call, racing the sink worker for `Store`'s mutex with no fairness
+    relationship between the two; it is now just another slow-lane
+    producer (`IndexSink::enqueue_boot_walk`). A FAST lane (live-edit
+    upsert/remove/head-moved) and a SLOW lane (full reconcile, boot walk —
+    each chunked into bounded sub-batches) are fairly interleaved: the
+    worker always drains up to `FAST_BURST_LIMIT` fast messages before
+    giving the active slow job its next chunk, every iteration, so a
+    live-edit storm cannot starve the slow job forever. `sink::
+    RepoActivity` surfaces the result on `GET /api/repos` as `catching_up`/
+    `settled_at` — see `sink.rs`'s own module doc for the full contract.
+    *V77-P3 amendment (bounded parallel boot walk, E6):* `step_boot_job`'s
+    chunk splits `ingest::index_file`'s PURE half (read blob + parse
+    symbols/highlights, `ingest::extract_pure`) across `[indexer]
+    walk_workers` bounded blocking tasks (`crate::fanout::buffered_join`);
+    the STORE side stays single-writer regardless — one final
+    `spawn_blocking` applies every parallel result (`ingest::
+    apply_precomputed_file`), in submission order, before the chunk's
+    fingerprint-unchanged/within-chunk-duplicate bucket runs through the
+    ordinary sequential `index_one_tree_file`. A within-chunk duplicate
+    blob is claimed by its FIRST occurrence (`sink::plan_boot_chunk`'s
+    in-memory set, no store access) rather than independently re-checked by
+    every worker, closing the `is_derived` TOCTOU concurrency would
+    otherwise reopen; a duplicate spanning two DIFFERENT chunks needs no
+    claim at all, since chunks are strictly sequential and the earlier
+    chunk's write has already landed by the time the later one's own live
+    `Store::is_derived` read runs. Task 0 of the same unit preloads BOTH
+    salt families' derived-status markers once per boot walk
+    (`Store::derived_status_for_current_salts`, `ingest::DerivedPreload`),
+    so the common "unchanged since a prior successful boot" case costs zero
+    additional store reads instead of two.
 
 12. **The Rails lens's three read/write contracts, fixed together as one
     unit and easy to regress independently** (V70-A1, R1–R3,
@@ -731,7 +764,14 @@ invariant #2 records).
     oracle only**: `tests/fixtures/haml/`'s expectations were generated
     once by hand and checked in, `ci-code` is pure Rust, and invariant 10
     is untouched — `tests/haml_corpus.rs` greps its own source for
-    `Command::new` to keep that true.
+    `Command::new` to keep that true. *V77-P4b amendment:* `haml::extract::
+    outline`'s per-node last-line lookup is now one bottom-up postorder
+    pass (`compute_last_lines`, O(n log n) via the highlighter's own
+    `LineIndex`) rather than a per-ancestor subtree revisit, and
+    `ingest::index_file_inner` parses a `.haml` blob ONCE — not once per
+    consumer — whenever outline AND highlights are BOTH a cache miss on the
+    same call, each consumer's extraction still isolated behind its own
+    `catch_unwind` so neither can take the other's down.
     (e) **A host's guest regions are located in ONE place, and every
     re-anchoring goes through ONE offset map** (V72-H2a, D7,
     `src/injection.rs`). `injection::regions` is the only walk that finds
@@ -994,6 +1034,55 @@ invariant #2 records).
     unchanged — every authoring surface here is loopback-only and root
     invariant #4 is not amended. `review_doc::routes::V73_K1_ROUTES` joins
     invariant 15's `RouteContract` walk from both sides.
+    (e) **A plain annotation's review scope is set ONLY at create or bind,
+    never inferred from its path** (V80-M0, `routes::{resolve_review_
+    create_scope,resolve_review_bind_scope}` share one `resolve_review_
+    ps_side` core). `PUT`/`DELETE /api/annotations/{id}/review`
+    (bind/rebind/unbind, plus the batch `bind_review`/`unbind_review` ops)
+    are the ONLY way to change `review_id`/`ps_number`/`side` on an
+    EXISTING row — same "PATCH never touches anchor" discipline
+    `update_annotation` already has for those columns, just for THESE
+    three instead. Binding additionally REFUSES a `closed` review (`409`,
+    `reviews::ERR_REVIEW_CLOSED`) — a check create does not make, since
+    binding is a deliberate later action on an existing comment, not a
+    fresh finding filed while the review is still live. `GET
+    /api/reviews/{id}/comments`'s per-group `in_diff` (from `crate::
+    reviews::changed_path_set`/`changed_path_set_from`, reusing
+    `files_changed` — never a second `git diff`) is a per-READ CAPTION
+    ONLY: computed fresh every call, never persisted, and never a filter
+    — a comment on a file outside the diff is still listed, merely
+    labelled `in_diff: false`.
+    (f) **Adoption is a peer create, not a second finding path** (V80-M5,
+    D6). `POST /api/reviews/{id}/findings`'s optional `from_annotation_id`
+    lets a finding ADOPT an existing top-level, review-bound comment
+    (M0/M2's bind surface) as its thread instead of minting a fresh
+    annotation — `review_findings.annotation_id` still owns exactly ONE
+    `annotations` row (the table's own UNIQUE index, part (d) above and
+    V0024's original rule), so an adoption is validated (exists, top-level,
+    bound to THIS review, not already claimed — a race on the last check
+    surfaces as `StoreError::AnnotationAlreadyFinding`/409, never a raw
+    constraint panic) and then simply REUSES the id rather than routing
+    around the constraint. `origin` is always `"manual"` on an adoption,
+    same as every other human-authored finding, so V0024's origin rule
+    (a `manual` row is never superseded or overwritten by an import/compose)
+    protects a promoted comment exactly as it protects one typed straight
+    into the finding form. `location` is derived from the adopted
+    annotation's own anchor (never a second git read — the anchor is
+    already the pinned selection) and is the one part of this route that a
+    caller cannot override on the adopt path; `title`/`rationale` default
+    from the comment's own first line / whole body but a caller MAY still
+    override either.
+    (g) **`touched_in` is derived per read, never persisted, never a
+    disposition** (V80-F3, `src/review_finding_touches.rs`). For a finding
+    at `path:lines` in the patchset it was raised against (its linked
+    annotation's `ps_number` — not a `review_findings` column), each LATER
+    patchset's diff (own-ps tip -> that ps tip) is checked for a hunk whose
+    old-side range intersects (`exact`) or sits within 3 lines
+    (`adjacent`) of the finding's own lines, capped at 20 later patchsets
+    per finding (`touched_in_capped`). Evidence the author acted near the
+    location — surfaced on `GET /api/reviews/{id}/findings` and every
+    single-finding response `finding_json` composes, never scored, and
+    the word "fixed" appears nowhere in this lane.
 
 24. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
     board is COORDINATE-FREE, and the two mutation rules are enforced by

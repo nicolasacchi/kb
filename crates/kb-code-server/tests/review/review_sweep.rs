@@ -512,3 +512,137 @@ async fn sweep_requires_exactly_one_of_repo_or_all_repos() {
     .await;
     assert_eq!(status, 400, "both repo and all_repos");
 }
+
+// --- RS-U7 (D18): sweep auto-close ------------------------------------------
+
+/// A dry run (the default — `apply` omitted) reports `suggest_close` for a
+/// merged PR but writes nothing, same invariant the pre-existing
+/// `sweep_flags_suggest_close_for_a_merged_pr_but_never_closes_it` test
+/// covers for the OLD (pre-D18) shape; this one additionally asserts the
+/// NEW `closed`/`close_reason` fields stay honestly `false`/`null`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sweep_dry_run_never_closes_even_a_merged_pr() {
+    let _guard = SERIAL.lock().await;
+    let (_repo_tmp, _bare_tmp, dir, shas) = fixture_multi_pr_repo(&[50]);
+    let sha = shas[&50].clone();
+
+    let gh_router = Router::new()
+        .route(
+            "/repos/acme/widget/pulls/50",
+            get(move || {
+                let sha = sha.clone();
+                async move { Json(pull_json(50, &sha, "closed", true)) }
+            }),
+        )
+        .route(
+            &format!("/repos/acme/widget/commits/{}/check-runs", shas[&50]),
+            get(|| async { Json(checks_json(1)) }),
+        );
+    let (gh_addr, _gh_server) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot(cfg_for(&dir, gh_addr)).await;
+    let client = reqwest::Client::new();
+
+    let id = bind_pr(&client, &base, 50).await;
+    let (status, body) = sweep(
+        &client,
+        &base,
+        serde_json::json!({ "repo": "fixture", "apply": false }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["apply"], false, "{body}");
+    let row = row_for(&body, id);
+    assert_eq!(row["suggest_close"], true, "{row}");
+    assert_eq!(row["closed"], false, "{row}");
+    assert!(row["close_reason"].is_null(), "{row}");
+    assert_eq!(body["summary"]["closed"], 0, "{body}");
+
+    let show: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(show["state"], "open");
+}
+
+/// `--close --yes` (`apply: true`) closes ONLY the reviews the SAME sweep's
+/// own live read already flagged `suggest_close` — a merged PR is closed
+/// with `close_reason: "pr-merged"`; a still-open PR is untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sweep_apply_closes_only_merged_or_closed_prs_and_records_why() {
+    let _guard = SERIAL.lock().await;
+    let (_repo_tmp, _bare_tmp, dir, shas) = fixture_multi_pr_repo(&[51, 52]);
+    let sha51 = shas[&51].clone();
+    let sha52 = shas[&52].clone();
+
+    let sha51_pull = sha51.clone();
+    let sha52_pull = sha52.clone();
+    let gh_router = Router::new()
+        .route(
+            "/repos/acme/widget/pulls/51",
+            get(move || {
+                let sha = sha51_pull.clone();
+                async move { Json(pull_json(51, &sha, "closed", true)) }
+            }),
+        )
+        .route(
+            &format!("/repos/acme/widget/commits/{sha51}/check-runs"),
+            get(|| async { Json(checks_json(1)) }),
+        )
+        .route(
+            "/repos/acme/widget/pulls/52",
+            get(move || {
+                let sha = sha52_pull.clone();
+                async move { Json(pull_json(52, &sha, "open", false)) }
+            }),
+        )
+        .route(
+            &format!("/repos/acme/widget/commits/{sha52}/check-runs"),
+            get(|| async { Json(checks_json(1)) }),
+        );
+    let (gh_addr, _gh_server) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot(cfg_for(&dir, gh_addr)).await;
+    let client = reqwest::Client::new();
+
+    let id_merged = bind_pr(&client, &base, 51).await;
+    let id_open = bind_pr(&client, &base, 52).await;
+
+    let (status, body) = sweep(
+        &client,
+        &base,
+        serde_json::json!({ "repo": "fixture", "apply": true }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["apply"], true, "{body}");
+    assert_eq!(body["summary"]["closed"], 1, "{body}");
+
+    let merged_row = row_for(&body, id_merged);
+    assert_eq!(merged_row["closed"], true, "{merged_row}");
+    assert_eq!(merged_row["close_reason"], "pr-merged", "{merged_row}");
+    let open_row = row_for(&body, id_open);
+    assert_eq!(open_row["closed"], false, "{open_row}");
+    assert!(open_row["close_reason"].is_null(), "{open_row}");
+
+    let show_merged: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id_merged}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(show_merged["state"], "closed", "{show_merged}");
+    let show_open: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id_open}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(show_open["state"], "open", "{show_open}");
+}

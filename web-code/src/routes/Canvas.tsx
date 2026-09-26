@@ -19,6 +19,8 @@ import {
 } from "../api/client";
 import type { SymbolHit } from "../api/types";
 import EmptyState from "../components/EmptyState";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import { useConfirm } from "../components/ConfirmProvider";
 import { Icon } from "../components/icons";
 import { useCommandScope } from "../commands/CommandRoot";
@@ -348,30 +350,38 @@ export default function CanvasPage() {
 
   return (
     <div className="kbc-canvas" id="main" data-kbc-canvas>
-      <header className="kbc-canvas__head">
-        <div>
-          <h1 className="kbc-canvas__title">
-            Canvas{openName ? ` — ${openName}` : ""} · {repo}
-          </h1>
-          <p className="kbc-canvas__hint" data-kbc-canvas-hint>
+      <PageHeader
+        title={`Canvas${openName ? ` — ${openName}` : ""} · ${repo}`}
+        lede={
+          <span data-kbc-canvas-hint>
             Read-only symbol fragments on a pan-zoom surface. Alt-drag or middle-drag to pan;
             ctrl+wheel to zoom. Layout is saved per canvas (loopback edits only).
-          </p>
-        </div>
-        {openId != null && (
-          <div
-            className={
-              "kbc-canvas__save" +
-              (dirty ? " kbc-canvas__save--dirty" : " kbc-canvas__save--ok")
-            }
-            data-kbc-canvas-save
-            data-dirty={dirty ? "1" : "0"}
-          >
-            <span data-kbc-canvas-save-state>{dirty ? "unsaved" : "saved"}</span>
-            <span data-kbc-canvas-payload-bytes>{payloadBytes} B</span>
-          </div>
-        )}
-      </header>
+          </span>
+        }
+        actions={
+          openId != null && (
+            <div
+              className={
+                "kbc-canvas__save" +
+                (dirty ? " kbc-canvas__save--dirty" : " kbc-canvas__save--ok")
+              }
+              data-kbc-canvas-save
+              data-dirty={dirty ? "1" : "0"}
+            >
+              <MetaLine
+                items={[
+                  <span data-kbc-canvas-save-state key="state">
+                    {dirty ? "unsaved" : "saved"}
+                  </span>,
+                  <span data-kbc-canvas-payload-bytes key="bytes">
+                    {payloadBytes} B
+                  </span>,
+                ]}
+              />
+            </div>
+          )
+        }
+      />
 
       <div className="kbc-canvas__body">
         <aside className="kbc-canvas__sidebar" data-kbc-canvas-sidebar>

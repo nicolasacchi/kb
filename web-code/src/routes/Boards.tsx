@@ -19,6 +19,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/icons";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import { useBoardSweep, useBoards } from "../hooks/useBoards";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { boardHref, parseBoardsStatus } from "../lib/boardsUrl";
@@ -57,54 +59,52 @@ export default function Boards() {
 
   return (
     <div className="kbc-boards" data-kbc-boards>
-      <header className="kbc-boards__head">
-        <h1 className="kbc-boards__title">Boards — {repo}</h1>
-        <p className="kbc-boards__hint">
-          A board is an ordered set of REFERENCES into this repo — never a copy of it. Every card
-          is re-resolved on every read, and an orphan is shown with its last-known text rather than
-          dropped.
-        </p>
-        <div className="kbc-boards__controls">
-          <label>
-            <span>Status</span>
-            <select
-              value={statusOptimistic ?? ""}
-              onChange={(e) => {
-                setStatusOptimistic(e.target.value || null);
-                // V76-R4d.3 — merge onto the CURRENT location at call time,
-                // never the render-time snapshot (deferred v7 commits).
-                const value = e.target.value;
-                navigate(
-                  {
-                    search: mergeCurrentSearch((next) => {
-                      if (value) next.set("status", value);
-                      else next.delete("status");
-                    }),
-                  },
-                  { replace: true },
-                );
-              }}
-              aria-label="filter by status"
-              data-kbc-boards-status
+      <PageHeader
+        title={`Boards — ${repo}`}
+        lede="A board is an ordered set of REFERENCES into this repo — never a copy of it. Every card is re-resolved on every read, and an orphan is shown with its last-known text rather than dropped."
+        actions={
+          <div className="kbc-boards__controls">
+            <label>
+              <span>Status</span>
+              <select
+                value={statusOptimistic ?? ""}
+                onChange={(e) => {
+                  setStatusOptimistic(e.target.value || null);
+                  // V76-R4d.3 — merge onto the CURRENT location at call time,
+                  // never the render-time snapshot (deferred v7 commits).
+                  const value = e.target.value;
+                  navigate(
+                    {
+                      search: mergeCurrentSearch((next) => {
+                        if (value) next.set("status", value);
+                        else next.delete("status");
+                      }),
+                    },
+                    { replace: true },
+                  );
+                }}
+                aria-label="filter by status"
+                data-kbc-boards-status
+              >
+                <option value="">every status</option>
+                {statuses.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => setSweeping((v) => !v)}
+              data-kbc-boards-sweep
+              title="Re-resolve every node of every board and report drift. A read: it never repairs what it finds."
             >
-              <option value="">every status</option>
-              {statuses.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => setSweeping((v) => !v)}
-            data-kbc-boards-sweep
-            title="Re-resolve every node of every board and report drift. A read: it never repairs what it finds."
-          >
-            <Icon.Refresh /> {sweeping ? "Hide drift" : "Check drift"}
-          </button>
-        </div>
-      </header>
+              <Icon.Refresh /> {sweeping ? "Hide drift" : "Check drift"}
+            </button>
+          </div>
+        }
+      />
 
       {sweeping && (
         <section className="kbc-boards__sweep" data-kbc-boards-sweep-panel>
@@ -160,11 +160,16 @@ export default function Boards() {
               >
                 {b.status}
               </span>
-              <span className="kbc-boards__row-meta">
-                {b.nodes} node{b.nodes === 1 ? "" : "s"} · {b.edges} edge{b.edges === 1 ? "" : "s"} ·{" "}
-                {b.steps} step{b.steps === 1 ? "" : "s"} · rev {b.revision} · updated{" "}
-                {relativeTime(b.updated_unix)}
-              </span>
+              <MetaLine
+                className="kbc-boards__row-meta"
+                items={[
+                  `${b.nodes} node${b.nodes === 1 ? "" : "s"}`,
+                  `${b.edges} edge${b.edges === 1 ? "" : "s"}`,
+                  `${b.steps} step${b.steps === 1 ? "" : "s"}`,
+                  `rev ${b.revision}`,
+                  `updated ${relativeTime(b.updated_unix)}`,
+                ]}
+              />
             </li>
           ))}
         </ul>

@@ -35,6 +35,8 @@ const DIFF_V2_ROWS: ReadonlyArray<[string, string]> = [
   ["diff.section-toggle", "z v"],
   ["diff.collapse-viewed", "z V"],
   ["diff.expand-all", "z O"],
+  // V80-M1 — the tree mode toggle ("Changed (N) | All files").
+  ["diff.tree-mode-toggle", "z A"],
 ];
 
 const REVIEW_DIFF_SRC = readFileSync(

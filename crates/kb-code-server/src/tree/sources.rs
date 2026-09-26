@@ -247,7 +247,11 @@ pub fn build(req: BuildReq<'_>) -> Result<Built, ApiError> {
     let mut changes: Vec<(String, String)> = Vec::new();
     if want_git {
         match base {
-            Some(base) => match crate::history::diff_files(repo_root, "diff", &["-M", base]) {
+            Some(base) => match crate::history::diff_files(
+                &crate::git::roots::WorkTreeRoot::user_clone(repo_root),
+                "diff",
+                &["-M", base],
+            ) {
                 Ok(fc) => {
                     changes = fc.into_iter().map(|c| (c.path, c.status)).collect();
                 }

@@ -230,6 +230,8 @@
   flex-direction: column;
   gap: 4px;
 }
+/* V80-R3 — the strip's rows read at body scale, not the small-print
+   `--fs-sm` every other chip on this page already uses. */
 .kbc-unreviewed__row {
   display: flex;
   align-items: center;
@@ -238,7 +240,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body);
 }
 .kbc-unreviewed__number {
   font-family: var(--font-mono);

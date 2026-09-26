@@ -68,6 +68,18 @@ export interface DiffFileProps {
   onHunkTurns?: (hunkIdx: number) => void;
   turnsOpenId?: string | null;
   turnsPanel?: ReactNode | null;
+  /// V80-M1 — the caption shown when `parsed.hunks.length === 0` and no
+  /// synthetic whole-file body was built (deleted / binary / absent-at-tip
+  /// / still loading — `lib/diffContext.ts`'s `emptyDiffView`). Defaults to
+  /// the pre-existing literal text, so every caller that does not pass this
+  /// (Commit/Compare/SessionDiff, and the review diff before this unit)
+  /// renders byte-identically.
+  emptyNote?: ReactNode;
+  /// V80-M1 — shown ABOVE the hunk renderer, ONLY while a synthetic
+  /// whole-file body (`hunkViews` non-empty despite zero real hunks) is
+  /// actually rendering. `undefined` shows nothing — no existing caller
+  /// (none passes `hunkViews` for a zero-hunk file) is affected.
+  wholeFileNote?: ReactNode;
 }
 
 /// Orchestrator every call site uses: header (path / stats / optional
@@ -101,6 +113,8 @@ export default function DiffFile({
   onHunkTurns,
   turnsOpenId,
   turnsPanel,
+  emptyNote,
+  wholeFileNote,
 }: DiffFileProps) {
   const isMobile = useIsMobile();
   const effectiveMode: DiffMode = isMobile ? "unified" : mode;
@@ -140,6 +154,14 @@ export default function DiffFile({
     );
   }
 
+  // V80-M1 — a caller (`FileDiffBody`) that built a synthetic whole-file
+  // hunk hands it here ALREADY FOLDED into `parsed` (its own doc: the
+  // caller passes the EFFECTIVE parse, real or synthetic, as this prop) —
+  // so `parsed.hunks.length === 0` alone still tells the two branches
+  // apart, exactly as it did before this unit; no caller (this one
+  // included) ever needs a second flag. `wholeFileNote` is gated on being
+  // non-empty ALONE — every pre-existing caller leaves it `undefined`, so
+  // a real multi-hunk diff never shows it.
   if (parsed.hunks.length === 0) {
     return (
       <div className="kbc-diff kbc-diff--empty" data-kbc-diff-mode="empty">
@@ -157,7 +179,7 @@ export default function DiffFile({
           impactChip={impactChip}
           onImpactClick={onImpactClick}
         />
-        No textual difference
+        <span data-kbc-diff-empty-note>{emptyNote ?? "No textual difference"}</span>
       </div>
     );
   }
@@ -179,6 +201,11 @@ export default function DiffFile({
         onImpactClick={onImpactClick}
       />
       {diagnosticsCardOpen && diagnosticsCard}
+      {wholeFileNote && (
+        <p className="kbc-diff__wholefile-note" role="status" data-kbc-diff-wholefile-note>
+          {wholeFileNote}
+        </p>
+      )}
       {effectiveMode === "split" ? (
         <SplitHunks
           path={path}
