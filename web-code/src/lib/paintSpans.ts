@@ -4,7 +4,13 @@
 // No second class table.
 
 import type { HighlightClass, HighlightSpan, Span } from "../api/types";
-import { cssClassFor, makeByteToUtf16Mapper } from "./decorations";
+import {
+  cssClassFor,
+  lineIndexAt,
+  lineStartByteOffsets,
+  makeByteToUtf16Mapper,
+  type ByteToUtf16Mapper,
+} from "./decorations";
 import {
   paintLine,
   splitContentLines,
@@ -12,38 +18,6 @@ import {
   type PaintedSegment,
 } from "./diffHighlight";
 
-function utf8ByteLength(codePoint: number): number {
-  if (codePoint < 0x80) return 1;
-  if (codePoint < 0x800) return 2;
-  if (codePoint < 0x10000) return 3;
-  return 4;
-}
-
-function lineStartByteOffsets(content: string): { starts: number[]; totalBytes: number } {
-  const starts = [0];
-  let byteOffset = 0;
-  let i = 0;
-  const n = content.length;
-  while (i < n) {
-    const code = content.codePointAt(i) as number;
-    const utf16Len = code > 0xffff ? 2 : 1;
-    byteOffset += utf8ByteLength(code);
-    i += utf16Len;
-    if (code === 10) starts.push(byteOffset);
-  }
-  return { starts, totalBytes: byteOffset };
-}
-
-function lineIndexAt(starts: number[], byte: number): number {
-  let lo = 0;
-  let hi = starts.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (starts[mid] <= byte) lo = mid;
-    else hi = mid - 1;
-  }
-  return lo;
-}
 
 /// Convert `GET /api/file` byte-offset spans onto the `highlight/1` wire
 /// shape so LiveRefCard / file-backed cards share `paintSpans`.
@@ -81,14 +55,29 @@ export function byteSpansToHighlightSpans(content: string, spans: Span[]): Highl
 
 /// Bucket highlight/1 spans onto 1-based lines as UTF-16 columns (the
 /// shape `paintLine` already consumes).
+///
+/// A span's `start`/`end` are byte columns WITHIN its line, so the mapper
+/// must be built over that one line — but once per LINE, not once per
+/// span: `makeByteToUtf16Mapper` walks the whole line, so a file whose
+/// every token is its own span would otherwise re-walk the same line
+/// hundreds of times. One mapper per FILE is the rule for whole-file byte
+/// offsets (`buildLineSpans`); one per LINE is the same rule one scope down.
 export function wireSpansToLineMap(text: string, spans: HighlightSpan[]): Map<number, LineSpan[]> {
   const out = new Map<number, LineSpan[]>();
   if (text.length === 0 || spans.length === 0) return out;
   const lines = splitContentLines(text);
+  // Lazily filled, so a snippet pays only for the lines it actually spans;
+  // spans arrive in no guaranteed line order, hence the cache rather than a
+  // pre-pass building a mapper for every line up front.
+  const mappers = new Map<number, ByteToUtf16Mapper>();
   for (const s of spans) {
     const lineText = lines[s.line - 1];
     if (lineText === undefined || s.end <= s.start) continue;
-    const mapper = makeByteToUtf16Mapper(lineText);
+    let mapper = mappers.get(s.line);
+    if (mapper === undefined) {
+      mapper = makeByteToUtf16Mapper(lineText);
+      mappers.set(s.line, mapper);
+    }
     const start = mapper(s.start);
     const end = mapper(s.end);
     if (end <= start) continue;
@@ -114,20 +103,4 @@ export function classSequence(text: string, spans: HighlightSpan[]): string[] {
   return paintSpans(text, spans).flatMap((segs) =>
     segs.map((s) => (s.cls ? `${s.cls}:${s.text}` : `:${s.text}`)),
   );
-}
-
-/// Shift snippet-relative 1-based lines onto a file line base (suggestion
-/// blocks number from the comment's anchor, not from 1).
-export function offsetHighlightSpans(spans: HighlightSpan[], lineBase: number): HighlightSpan[] {
-  const delta = Math.max(1, lineBase) - 1;
-  if (delta === 0) return spans;
-  return spans.map((s) => ({ ...s, line: s.line + delta }));
-}
-
-/// Pad a snippet so `lines[n - 1]` is file line `n` (integrity guard).
-export function padSnippetLines(text: string, lineBase: number): string[] {
-  const body = splitContentLines(text);
-  const pad = Math.max(0, lineBase - 1);
-  if (pad === 0) return body;
-  return [...Array<string>(pad).fill(""), ...body];
 }

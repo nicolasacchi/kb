@@ -208,6 +208,7 @@ const V0_0_1_TYPES: &[&str] = &[
     // `logs.pruned` is fleet-wide (the daemon's own ndjson log dir has no
     // kb scope).
     "maintenance.retention.pruned",
+    "maintenance.backup.written",
     "maintenance.logs.pruned",
     // enrich.rs MI-W1.1 — the `memory_recalls` ledger hook (CLAUDE.md
     // invariant #10). One event per session CAPTURE with the recall count,
@@ -427,6 +428,7 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         "quarantine.restored" => json!({"type": kind, "payload": ["kb", "path"]}),
         "daemon.restarting" => json!({"type": kind, "payload": ["addr", "config_path"]}),
         "maintenance.retention.pruned" => json!({"type": kind, "payload": ["kb", "deleted"]}),
+        "maintenance.backup.written" => json!({"type": kind, "payload": ["kb", "path"]}),
         "maintenance.logs.pruned" => json!({"type": kind, "payload": ["deleted"]}),
         // Identical payload shape to its recall sibling above — same
         // capture identity, same "count of rows this capture derived".

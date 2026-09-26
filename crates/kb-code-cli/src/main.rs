@@ -142,7 +142,9 @@
 //! is a collision risk the design doc explicitly flags. `ReviewCmd` gains
 //! `start-pr` (`POST /api/reviews/pr` [LOOPBACK]), `report` (`GET`/`PUT
 //! /api/reviews/{id}/report`, `--set --from-file` for the PUT half
-//! [LOOPBACK]), and `artifact` (`GET /api/reviews/{id}/artifact`).
+//! [LOOPBACK], plus `--emit-artifact --kb NAME` which writes that report
+//! into the named kb corpus and sets `artifact_hint_*`), and `artifact`
+//! (`GET /api/reviews/{id}/artifact`).
 //!
 //! **PRR-R4** ("The PR Room," kb v0.39 T2, Phase 4) adds `review pr-status
 //! ID` (`GET /api/reviews/{id}/pr-status`, design doc §2 row 12 — the
@@ -187,6 +189,17 @@ mod envelope;
 mod redact;
 mod token;
 mod tools;
+// RS-U3 (review store) — `kb-code store …`.
+mod store_cmd;
+// RS-U10a — the agent-facing review verbs (find/diff/log/cat/verify) and
+// the JSON contract they share.
+mod review_agent;
+// RS-U7 — `kb-code review retrack` (single + `--all`). Its own file (not
+// `review_agent.rs`) so it never touches the same lines RS-U10b's `review
+// sync`/`status` land on.
+mod retrack_cmd;
+// RS-U10b — `review sync` / `review status`.
+mod review_sync;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -1581,6 +1594,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: WorkspaceCmd,
     },
+    // ── RS-U3 (review store) — begin ──
+    /// `kb-code store show|members|doctor|sync|set-base-url|credentials`
+    /// — the kb-owned internal review store (one per forge project, shared
+    /// by every clone of it). Daemon-only; `sync`, `set-base-url` and
+    /// `credentials --test` are loopback-only on the daemon.
+    Store {
+        #[command(subcommand)]
+        cmd: store_cmd::StoreCmd,
+    },
+    // ── RS-U3 (review store) — end ──
     // ── V70-A8 (D20 CLI hygiene) — the self-description surface ──────────
     /// `kb-code tools [--json]` — clap-tree walk manifest of every verb
     /// this binary knows about (recon `cli-agent-surface.md` open question
@@ -3815,14 +3838,27 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Capture a new patchset (explicit snapshot).
+    /// Capture a new patchset (explicit snapshot). RS-U6 (D13): an
+    /// identical capture — the `(tip, merge-base)` pair unchanged — is
+    /// SKIPPED by default (`minted: false`); `--force` always mints.
     Snapshot {
         id: i64,
+        /// Mint even when nothing changed (the pre-RS-U6 behaviour).
+        #[arg(long)]
+        force: bool,
+        /// Skip the base/PR-head fetch a ready review store runs first.
+        #[arg(long = "no-fetch")]
+        no_fetch: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code review retrack <ID|pr:N> [--base SPEC] [--dry-run]` /
+    /// `kb-code review retrack --all [--repo R] [--pinned|--legacy]
+    /// --dry-run|--yes` — RS-U7 (README §10 step 4/§12, D17/D20). See
+    /// `retrack_cmd`'s own module doc.
+    Retrack(retrack_cmd::RetrackArgs),
     /// Files changed in a patchset (`--ps N` or latest).
     Files {
         id: i64,
@@ -4031,6 +4067,18 @@ enum ReviewCmd {
         /// Print the payload with the token redacted; do not POST.
         #[arg(long = "dry-run")]
         dry_run: bool,
+        /// RS-U10a — how long to wait on the daemon-side job, in seconds
+        /// (`--wait` alone = 600, the default when omitted). `--wait=0`
+        /// returns at once with the job id; re-running the same start-pr
+        /// attaches to the running job instead of fetching twice.
+        #[arg(
+            long,
+            value_name = "SECS",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "600"
+        )]
+        wait: Option<u64>,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4041,13 +4089,26 @@ enum ReviewCmd {
     /// `kb-code review report ID --set --from-file FILE [--json]` — `PUT
     /// /api/reviews/{id}/report` (design doc §2 row 5). LOOPBACK-ONLY.
     /// Wholesale-replaces the report; `generated_at` is server-stamped.
+    /// `kb-code review report ID --emit-artifact --kb NAME [--json]`
+    /// fetches the stored report, writes it as HTML into that kb's watched
+    /// capture directory, and sets `artifact_hint_*` through `set-artifact`.
+    /// Does not publish a verdict and does not delete the review.
     Report {
         id: i64,
         /// PUT instead of GET — requires `--from-file`.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "emit_artifact")]
         set: bool,
-        #[arg(long = "from-file")]
+        #[arg(long = "from-file", conflicts_with = "emit_artifact")]
         from_file: Option<PathBuf>,
+        /// Fetch the report and write it into `--kb` as an HTML artifact,
+        /// then set this review's artifact hint to that id. Requires `--kb`.
+        /// Does not publish a verdict and does not delete the review.
+        #[arg(long, requires = "kb", conflicts_with_all = ["set", "from_file"])]
+        emit_artifact: bool,
+        /// Corpus name (`kb.toml`'s `[kb.<name>]`). Required with
+        /// `--emit-artifact`.
+        #[arg(long, value_name = "NAME", requires = "emit_artifact")]
+        kb: Option<String>,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4306,12 +4367,15 @@ enum ReviewCmd {
         json: bool,
     },
     /// `kb-code review sweep [--repo R | --all-repos] [--include-closed]
-    /// [--json]` — PRR-R8: `POST /api/reviews/sweep` (design-addendum-2
-    /// §B). LOOPBACK-ONLY. Walks every PR-bound review (default
-    /// `state=open`) and reconciles it against live GitHub — the cron/
-    /// agent entry point for "every PR the LLM touched." `--repo`/
+    /// [--close [--yes]] [--json]` — PRR-R8: `POST /api/reviews/sweep`
+    /// (design-addendum-2 §B). LOOPBACK-ONLY. Walks every PR-bound review
+    /// (default `state=open`) and reconciles it against live GitHub — the
+    /// cron/agent entry point for "every PR the LLM touched." `--repo`/
     /// `--all-repos` are mutually exclusive; exactly one is required (same
-    /// guard as `review inbox`).
+    /// guard as `review inbox`). RS-U7 (D18): `--close` applies the
+    /// merged/closed-PR auto-close this sweep already computes as
+    /// `suggest_close` — a dry run (report only, the default) unless
+    /// `--yes` is also given.
     Sweep {
         #[arg(long)]
         repo: Option<String>,
@@ -4319,6 +4383,12 @@ enum ReviewCmd {
         all_repos: bool,
         #[arg(long = "include-closed")]
         include_closed: bool,
+        /// Close every `suggest_close` review whose PR is merged/closed.
+        #[arg(long)]
+        close: bool,
+        /// Required alongside `--close` — there is no prompt.
+        #[arg(long)]
+        yes: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4341,6 +4411,45 @@ enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
+    /// `kb-code review find --pr N [--repo R] [--json]` — RS-U10a: every
+    /// review bound to PR N (`GET /api/reviews/find`), across every
+    /// configured repo unless `--repo` narrows it.
+    Find(review_agent::FindArgs),
+    /// `kb-code review diff <REF> [--ps N] [--stat|--name-only|--patch]
+    /// [--path P] [--budget TOKENS] [--json]` — RS-U10a: the patchset's
+    /// change set against its OWN base, computed by the daemon (`GET
+    /// /api/reviews/{id}/diff`) — works with no `refs/kbc/*` in the clone.
+    /// REF is `<id>`, `<id>/ps<n>` or `pr:<N>`.
+    Diff(review_agent::DiffArgs),
+    /// `kb-code review log <REF> [--ps N] [--json]` — RS-U10a: the
+    /// patchset's commits (`GET /api/reviews/{id}/log`).
+    Log(review_agent::LogArgs),
+    /// `kb-code review cat <REF> <PATH> [--ps N] [--side old|new] [--json]`
+    /// — RS-U10a: one file at the patchset's base (`old`) or tip (`new`)
+    /// (`GET /api/reviews/{id}/cat`). Secret-denylisted paths are refused.
+    Cat(review_agent::CatArgs),
+    /// `kb-code review verify <REF> [--ps N] [--min-findings N] [--json]` —
+    /// RS-U10a: the post-compose gate. Checks the document is present and
+    /// lints clean, counts findings, checks every finding anchor resolves
+    /// and the verdict sits on the latest patchset. Exit 3 when any check
+    /// fails.
+    Verify(review_agent::VerifyArgs),
+    /// `kb-code review sync --repo R {--pr N [--title T] [--base SPEC] |
+    /// --open [--merged-since DATE]} [--dry-run] [--wait[=SECS]]
+    /// [--gh-token-from-cli] [--json]` — RS-U10b: ONE idempotent daemon
+    /// operation per PR (`POST /api/reviews/sync`, a polled job): create
+    /// the review if missing, fetch base + head into the store, snapshot
+    /// only when (tip, merge-base) changed; a merged PR is final. Reports
+    /// `reason: created|head-moved|base-moved|retargeted|unchanged|
+    /// merged-final`. `--open` runs it for every open PR (exit 7 when some
+    /// failed). LOOPBACK-ONLY.
+    Sync(review_sync::SyncArgs),
+    /// `kb-code review status <REF> [--fetch] [--json]` — RS-U10b: has the
+    /// PR head moved past the LATEST patchset tip? base state, file-count
+    /// drift against GitHub, verdict staleness, open findings (`GET
+    /// /api/reviews/{id}/status`). Read-only; `--fetch` (loopback-only)
+    /// fetches into the review store first.
+    Status(review_sync::StatusArgs),
     /// `kb-code review compose ID {--from-file FILE|--stdin} [--json]` —
     /// V70-R: `POST /api/reviews/{id}/compose` (design doc D9 scoped to
     /// v0). LOOPBACK-ONLY. The one-shot authoring call: a `kbc-compose/1`
@@ -4463,6 +4572,12 @@ pub struct ReviewComposeArgs {
     /// Lint + resolve only — nothing is written and no event fires.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+    /// RS-U10a — give every finding without a valid slug the ASCII
+    /// `f-<kebab>` slug kb derives from its title (uniquified within the
+    /// batch, deterministic), instead of the whole batch 400ing on
+    /// `invalid_slug`. Author-written valid slugs are never changed.
+    #[arg(long)]
+    pub slugify: bool,
     /// The V0 `kbc-compose/1` JSON body (summary + a `kbc-findings/1`
     /// block). Mutually exclusive with `--doc`.
     #[arg(long = "from-file")]
@@ -5960,9 +6075,14 @@ async fn run(cli: Cli) -> Result<()> {
                 json,
             } => review_list_cmd(&daemon, &repo, state.as_deref(), json).await,
             ReviewCmd::Show { id, daemon, json } => review_show_cmd(&daemon, id, json).await,
-            ReviewCmd::Snapshot { id, daemon, json } => {
-                review_snapshot_cmd(&daemon, id, json).await
-            }
+            ReviewCmd::Snapshot {
+                id,
+                force,
+                no_fetch,
+                daemon,
+                json,
+            } => review_snapshot_cmd(&daemon, id, force, no_fetch, json).await,
+            ReviewCmd::Retrack(a) => retrack_cmd::run(a).await,
             ReviewCmd::Files {
                 id,
                 ps,
@@ -6047,6 +6167,7 @@ async fn run(cli: Cli) -> Result<()> {
                 new,
                 gh_token_from_cli,
                 dry_run,
+                wait,
                 daemon,
                 json,
             } => {
@@ -6061,6 +6182,7 @@ async fn run(cli: Cli) -> Result<()> {
                     new,
                     gh_token_from_cli,
                     dry_run,
+                    wait,
                     json,
                 )
                 .await
@@ -6069,9 +6191,22 @@ async fn run(cli: Cli) -> Result<()> {
                 id,
                 set,
                 from_file,
+                emit_artifact,
+                kb,
                 daemon,
                 json,
-            } => review_report_cmd(&daemon, id, set, from_file.as_deref(), json).await,
+            } => {
+                review_report_cmd(
+                    &daemon,
+                    id,
+                    set,
+                    from_file.as_deref(),
+                    emit_artifact,
+                    kb.as_deref(),
+                    json,
+                )
+                .await
+            }
             ReviewCmd::Artifact { id, daemon, json } => {
                 review_artifact_cmd(&daemon, id, json).await
             }
@@ -6307,9 +6442,24 @@ async fn run(cli: Cli) -> Result<()> {
                 repo,
                 all_repos,
                 include_closed,
+                close,
+                yes,
                 daemon,
                 json,
-            } => review_sweep_cmd(&daemon, repo.as_deref(), all_repos, include_closed, json).await,
+            } => {
+                if close && !yes {
+                    anyhow::bail!("review sweep --close requires --yes (there is no prompt)");
+                }
+                review_sweep_cmd(
+                    &daemon,
+                    repo.as_deref(),
+                    all_repos,
+                    include_closed,
+                    close && yes,
+                    json,
+                )
+                .await
+            }
             ReviewCmd::Analytics {
                 repo,
                 from,
@@ -6321,6 +6471,13 @@ async fn run(cli: Cli) -> Result<()> {
                 review_github_threads_cmd(&daemon, id, json).await
             }
             ReviewCmd::Compose(args) => review_compose_cmd(*args).await,
+            ReviewCmd::Find(a) => review_agent::find_cmd(a).await,
+            ReviewCmd::Diff(a) => review_agent::diff_cmd(a).await,
+            ReviewCmd::Log(a) => review_agent::log_cmd(a).await,
+            ReviewCmd::Cat(a) => review_agent::cat_cmd(a).await,
+            ReviewCmd::Verify(a) => review_agent::verify_cmd(a).await,
+            ReviewCmd::Sync(a) => review_sync::sync_cmd(a).await,
+            ReviewCmd::Status(a) => review_sync::status_cmd(a).await,
             ReviewCmd::Doc {
                 id,
                 ps,
@@ -6961,6 +7118,8 @@ async fn run(cli: Cli) -> Result<()> {
             }
         }
         // ── V70-A10: `kb-code workspace …` dispatch ──
+        // RS-U3 (review store).
+        Cmd::Store { cmd } => store_cmd::run(cmd).await,
         Cmd::Workspace { cmd } => match cmd {
             WorkspaceCmd::List {
                 repo,
@@ -7583,7 +7742,9 @@ fn cat(repo_path: &Path, path: &str, rev: &str) -> Result<()> {
 
 fn cat_at(repo_path: &Path, path: &str, at: i64) -> Result<()> {
     let emails: Vec<String> = Vec::new();
-    match kb_code_server::history::scrub::file_at(repo_path, path, None, at, &emails)
+    // RS-U4 — a file-history scrub over the user's own clone.
+    let work = kb_code_server::git::roots::WorkTreeRoot::user_clone(repo_path);
+    match kb_code_server::history::scrub::file_at(&work, path, None, at, &emails)
         .map_err(|e| anyhow::anyhow!("{e}"))?
     {
         kb_code_server::history::scrub::AtHit::Hit { stop, .. } => {
@@ -7659,6 +7820,60 @@ fn http_client() -> Result<reqwest::Client> {
         .context("build http client")
 }
 
+/// The shared HTTP helpers' non-2xx answer, rendered for a human.
+///
+/// These used to hand the response to reqwest's CONSUMING
+/// `error_for_status()`, which collapses a typed
+/// `application/problem+json` body into an error whose `Display` is only
+/// `HTTP status client error (404 Not Found) for url (…)` — so the daemon's
+/// own `type`/`title`/`detail` never reached the operator. A revspec that
+/// parsed but does not resolve answers 404 `urn:kb:errors:unknown-ref` with
+/// `error: "<spec>: unknown ref"`, and all of that used to be dropped for a
+/// bare status line.
+///
+/// `err` is that status error, kept as this error's CAUSE deliberately:
+/// [`envelope::exit_code_for`] reads its table (401/403 → `EXIT_REFUSED`,
+/// 409 → `EXIT_CONFLICT`, 5 unreachable) off the `reqwest::Error` in the
+/// chain, so dropping it would move every exit code without anything in
+/// this crate noticing. Keeping the error also leaves reqwest's status line
+/// in the `Caused by:` section — the body only ADDS the reason beside it.
+///
+/// A body with no human key at all (a loopback gate's bare 404, an HTML
+/// error page) keeps the pre-existing `"{method} {url}"` message, byte for
+/// byte.
+fn daemon_status_error(
+    method: &str,
+    url: &str,
+    err: reqwest::Error,
+    body_text: &str,
+) -> anyhow::Error {
+    let body = json_body_or_null(body_text);
+    // The daemon's own words, most specific first: `ApiError`'s `error`
+    // summary, then RFC 7807's `detail`, then `title` — the only human key
+    // a body that omits `error` carries (`reviews::report_shape_error`).
+    let summary = ["error", "detail", "title"]
+        .into_iter()
+        .find_map(|k| body[k].as_str());
+    let Some(summary) = summary else {
+        return anyhow::Error::new(err).context(format!("{method} {url}"));
+    };
+    let mut out = format!("{method} {url} — {summary}");
+    // `detail` beside the `error` summary when a route sends both: a store
+    // refusal carries the class in `error` and the specific cause only in
+    // `detail` (`review_store::registry::StoreRefusal`).
+    if let Some(detail) = body["detail"].as_str().filter(|d| *d != summary) {
+        out.push_str(&format!(" — {detail}"));
+    }
+    // `recipe_api_error`'s exact ordering: message, status, then the URN.
+    if let Some(status) = err.status() {
+        out.push_str(&format!(" (HTTP {})", status.as_u16()));
+    }
+    if let Some(problem_type) = body["type"].as_str() {
+        out.push_str(&format!(" [{problem_type}]"));
+    }
+    anyhow::Error::new(err).context(out)
+}
+
 async fn get_json(
     client: &reqwest::Client,
     daemon: &str,
@@ -7666,15 +7881,23 @@ async fn get_json(
     query: &[(&str, &str)],
 ) -> Result<serde_json::Value> {
     let url = format!("{}{path}", daemon.trim_end_matches('/'));
-    client
+    let resp = client
         .get(&url)
         .query(query)
         .send()
         .await
-        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url}"))?
-        .json()
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?;
+    // `error_for_status_ref` — not the consuming `error_for_status` it
+    // replaces — hands the status error over WITHOUT taking the response,
+    // so the body underneath it is still readable. The `.err()` is its own
+    // statement on purpose: that `Result` borrows `resp`, and the temporary
+    // has to die before `resp` is moved. The JSON path is untouched, so a
+    // decode failure still reports "parse {url} …".
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
+    resp.json()
         .await
         .with_context(|| format!("parse {url} response as JSON"))
 }
@@ -7717,9 +7940,14 @@ async fn get_json_warming_aware(
             ))
         }
     })?;
-    resp.error_for_status()
-        .with_context(|| format!("GET {url}"))?
-        .json()
+    // As in `get_json`: the status error comes off the response without
+    // consuming it, so the daemon's own reason is still readable. The
+    // timeout/connect mapping above is untouched.
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
+    resp.json()
         .await
         .with_context(|| format!("parse {url} response as JSON"))
 }
@@ -7733,15 +7961,17 @@ async fn post_json(
     query: &[(&str, &str)],
 ) -> Result<serde_json::Value> {
     let url = format!("{}{path}", daemon.trim_end_matches('/'));
-    client
+    let resp = client
         .post(&url)
         .query(query)
         .send()
         .await
-        .with_context(|| format!("POST {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("POST {url}"))?
-        .json()
+        .with_context(|| format!("POST {url} — is kb-code-server running at {daemon}?"))?;
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("POST", &url, status_err, &text));
+    }
+    resp.json()
         .await
         .with_context(|| format!("parse {url} response as JSON"))
 }
@@ -11644,10 +11874,12 @@ fn recipe_client() -> Result<reqwest::Client> {
 }
 
 /// V74-L3a repair (D11's "error bodies surfaced"). `get_json`'s blanket
-/// `error_for_status()` threw away the server's own message, so a caller
-/// who forgot a required param got `HTTP status client error (400 Bad
+/// `error_for_status()` used to throw the server's own message away, so a
+/// caller who forgot a required param got `HTTP status client error (400 Bad
 /// Request)` while the SPA rendered `p.since: required (string)`. Two
 /// surfaces, one server, two qualities of answer. This renders the body.
+/// `get_json` renders it now too, via `daemon_status_error`; the recipe
+/// family keeps its own because it reads the status off `get_json_raw`.
 fn recipe_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> anyhow::Error {
     let msg = body["error"]
         .as_str()
@@ -12645,9 +12877,14 @@ async fn board_export_cmd(
         .query(&query_pairs(&q))
         .send()
         .await
-        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url}"))?;
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?;
+    // An unknown slug, a wrong `repo`, a `format` the daemon refuses: each
+    // answers the same typed body, and it is worth reading BEFORE the export
+    // document — otherwise the error body itself gets written to `--out`.
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
     let body = resp.text().await.context("read the export body")?;
     match out {
         Some(p) => {
@@ -13014,9 +13251,13 @@ async fn tour_export_cmd(
         .query(&query_pairs(&q))
         .send()
         .await
-        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url}"))?;
+        .with_context(|| format!("GET {url} — is kb-code-server running at {daemon}?"))?;
+    // `board_export_cmd`'s treatment, for the same reason: the typed refusal
+    // must not be written out as the export document.
+    if let Some(status_err) = resp.error_for_status_ref().err() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(daemon_status_error("GET", &url, status_err, &text));
+    }
     let body = resp.text().await.context("read the export body")?;
     match out {
         Some(p) => {
@@ -13443,8 +13684,12 @@ async fn board_sweep_cmd(
 
 /// Status-preserving `GET` — the doc-lens routes answer `{"error", "reason"}`
 /// on every non-2xx (R12) and the whole point of the `reason` field is that a
-/// client can render the DEGRADE STATE, not just an HTTP number. `get_json`'s
-/// `error_for_status` would throw that body away.
+/// client can render the DEGRADE STATE, not just an HTTP number. The status
+/// comes back to the CALLER, which needs it: `doclens_api_error` and
+/// `recipe_api_error` each build their own `…: … (HTTP nnn)` message from it,
+/// and `store_cmd`'s `fail` picks an `EXIT_*` with it. `get_json` returns no
+/// status to branch on — it collapses every non-2xx into
+/// `daemon_status_error`'s single line.
 async fn get_json_raw(
     client: &reqwest::Client,
     daemon: &str,
@@ -14017,11 +14262,13 @@ fn print_backfill_stats(body: &serde_json::Value) {
 // --- annotations (W4.6; D3 — full CLI parity for annotations v2) -----------
 
 /// `POST` counterpart to [`post_json`] that sends a JSON BODY rather than
-/// query params, RETAINING the response body on a non-2xx status (unlike
-/// [`post_json`]'s blanket `error_for_status()`, which discards it) — every
-/// annotation-creation kind (D3's `--symbol`/`--sha`/`--to` in particular)
-/// needs its daemon-side validation failure's `{"error": …}` text rendered
-/// as a friendly message, not swallowed into an opaque reqwest error.
+/// query params, RETAINING the response body AND the status on a non-2xx
+/// (unlike [`post_json`], which hands back only `daemon_status_error`'s one
+/// rendered line) — every annotation-creation kind (D3's
+/// `--symbol`/`--sha`/`--to` in particular) needs its daemon-side validation
+/// failure's `{"error": …}` text rendered as a friendly message keyed off the
+/// status, since `loopback_or_api_error` tells a bare 404 from a real
+/// not-found by exactly that pair.
 /// Mirrors `checkout_cmd`'s own manual status-check style.
 async fn post_json_raw(
     client: &reqwest::Client,
@@ -14668,9 +14915,9 @@ async fn annotate_unbind_cmd(daemon: &str, id: &str, json: bool) -> Result<()> {
 /// `kb-code checkout <ref> --repo NAME` — `POST /api/checkout` (W4.7): the
 /// daemon's confirmed, only working-tree mutation. A dirty refusal (409)
 /// prints every dirty path and exits non-zero — deliberately NOT routed
-/// through [`post_json`] (its blanket `error_for_status()` would surface
-/// the refusal as an opaque HTTP-error message instead of the structured
-/// path list the route actually returns).
+/// through [`post_json`], which hands back a rendered error and no status:
+/// the structured path list the route actually returns IS the answer here,
+/// and a 409 has to be recognised as a 409 rather than flattened.
 async fn checkout_cmd(daemon: &str, repo: &str, target: &str, json: bool) -> Result<()> {
     let client = http_client()?;
     let url = format!("{}/api/checkout", daemon.trim_end_matches('/'));
@@ -14929,6 +15176,10 @@ async fn review_start_cmd(
     }
     let client = http_client()?;
     let (status, body) = post_json_raw(&client, daemon, "/api/reviews", &payload).await?;
+    if status.is_success() {
+        // RS-U6 — README §12's one stderr line.
+        review_agent::eprint_base_line(&body);
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
     }
@@ -15189,22 +15440,57 @@ async fn review_show_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn review_snapshot_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
+async fn review_snapshot_cmd(
+    daemon: &str,
+    id: i64,
+    force: bool,
+    no_fetch: bool,
+    json: bool,
+) -> Result<()> {
     let client = http_client()?;
+    let mut payload = serde_json::json!({});
+    if force {
+        payload["force"] = serde_json::json!(true);
+    }
+    if no_fetch {
+        payload["fetch"] = serde_json::json!(false);
+    }
     let (status, body) = post_json_raw(
         &client,
         daemon,
         &format!("/api/reviews/{id}/snapshot"),
-        &serde_json::json!({}),
+        &payload,
     )
     .await?;
+    if status.is_success() {
+        // RS-U6 — README §12's one stderr line (stdout stays JSON-only).
+        review_agent::eprint_base_line(&body);
+    }
     if json {
-        println!("{}", serde_json::to_string_pretty(&body)?);
+        // RS-U10a — `--json` is ALWAYS the typed envelope now: success is
+        // `kbc-review-snapshot/1` (`id`, `minted`, `base`, `warnings[]`),
+        // failure the `{ok:false, error:{code, …}}` document on stderr.
+        if !status.is_success() {
+            review_agent::AgentError::from_http(status.as_u16(), &body, "review snapshot")
+                .emit(true);
+        }
+        let review = get_json(&client, daemon, &format!("/api/reviews/{id}"), &[])
+            .await
+            .unwrap_or(serde_json::Value::Null);
+        envelope::print_value(&review_agent::snapshot_envelope(&body, &review));
+        return Ok(());
     }
     if !status.is_success() {
         return Err(annotation_api_error("snapshot review", status, &body));
     }
     if !json {
+        if body["minted"].as_bool() == Some(false) {
+            println!(
+                "= unchanged: ps{} already captures this head and base (pass --force to mint anyway)",
+                body["ps_number"]
+            );
+            return Ok(());
+        }
         println!(
             "✓ captured ps{} tip={}",
             body["ps_number"],
@@ -15570,8 +15856,20 @@ async fn review_refs_gc_cmd(daemon: &str, repo: &str, apply: bool, json: bool) -
         &serde_json::json!({}),
     )
     .await?;
+    // Exit contract for agent callers — the same one `store gc` uses. The
+    // route answers HTTP 200 for a REFUSED apply (restore guard,
+    // `restore-suspected` high-water, `backup-failed`) and says so in the
+    // body as `applied: false` + `reason` + `detail`. Honouring only the
+    // HTTP status would print `✓ deleted N orphan ref(s)` and exit 0 while
+    // every candidate ref is still in the store. Only `dry-run` (nothing
+    // requested) and `nothing-to-do` (nothing to delete) are benign
+    // no-apply outcomes; any other reason fails closed. The route emits no
+    // `partial` field, so there is no partial signal to honour here.
+    let applied = body["applied"] == true;
+    let refused =
+        apply && !applied && !matches!(body["reason"].as_str(), Some("dry-run" | "nothing-to-do"));
     if json {
-        envelope::print_ok("review-refs/1", &body, Vec::new(), false, None);
+        envelope::print_ok("review-refs/1", &body, Vec::new(), refused, None);
     }
     if !status.is_success() {
         return Err(loopback_or_api_error(
@@ -15583,18 +15881,34 @@ async fn review_refs_gc_cmd(daemon: &str, repo: &str, apply: bool, json: bool) -
     }
     if !json {
         let n = body["deleted_count"].as_u64().unwrap_or(0);
-        if body["dry_run"].as_bool().unwrap_or(true) {
+        if refused {
+            // Every stdout line this could print reads like success, so the
+            // refusal goes to stderr only — reason, detail, and the fact
+            // that nothing was deleted.
+            eprintln!(
+                "{repo}: review refs gc REFUSED — {} ({n} candidate(s); nothing deleted)",
+                body["reason"].as_str().unwrap_or("unknown"),
+            );
+            if let Some(detail) = body["detail"].as_str() {
+                eprintln!("  {detail}");
+            }
+        } else if body["dry_run"].as_bool().unwrap_or(true) {
             println!("dry-run: would delete {n} orphan ref(s) in {repo} (pass --apply)");
         } else {
             println!("✓ deleted {n} orphan ref(s) in {repo}");
         }
-        if let Some(arr) = body["deleted"].as_array() {
-            for r in arr {
-                if let Some(s) = r.as_str() {
-                    println!("  {s}");
+        if !refused {
+            if let Some(arr) = body["deleted"].as_array() {
+                for r in arr {
+                    if let Some(s) = r.as_str() {
+                        println!("  {s}");
+                    }
                 }
             }
         }
+    }
+    if refused {
+        std::process::exit(envelope::EXIT_CONFLICT);
     }
     Ok(())
 }
@@ -16565,6 +16879,7 @@ async fn review_start_pr_cmd(
     new: bool,
     gh_token_from_cli: bool,
     dry_run: bool,
+    wait: Option<u64>,
     json: bool,
 ) -> Result<()> {
     let mut payload = serde_json::json!({ "repo": repo, "pr_number": pr_number });
@@ -16644,13 +16959,65 @@ async fn review_start_pr_cmd(
         if body["attached"].as_bool().unwrap_or(false) && !json {
             eprintln!("start-pr: attached to already-running job {job_id}");
         }
-        let terminal = poll_start_pr_job(&client, daemon, job_id, json).await?;
+        let budget = wait
+            .map(Duration::from_secs)
+            .unwrap_or(START_PR_POLL_BUDGET);
+        // Re-running the same start-pr attaches to the running job (the
+        // daemon dedupes on (repo, pr)), so that IS the "poll again" verb.
+        let rerun = vec![
+            "kb-code".to_string(),
+            "review".into(),
+            "start-pr".into(),
+            "--repo".into(),
+            repo.to_string(),
+            "--pr".into(),
+            pr_number.to_string(),
+            "--wait=600".into(),
+        ];
+        if budget.is_zero() {
+            // RS-U10a — `--wait=0`: hand back the job, do not poll.
+            if json {
+                envelope::print_value(&envelope::ok_value(
+                    "kbc-review-job/1",
+                    serde_json::json!({
+                        "job_id": job_id,
+                        "status": "running",
+                        "attached": body["attached"],
+                        "poll": kb_code_server::review_jobs::REVIEW_JOB_ROUTE
+                            .path
+                            .replace("{id}", job_id),
+                    }),
+                    vec![],
+                    false,
+                    None,
+                    vec![rerun],
+                ));
+            } else {
+                println!("start-pr: job {job_id} running (re-run with --wait to attach)");
+            }
+            return Ok(());
+        }
+        let terminal =
+            match poll_review_job(&client, daemon, job_id, budget, json, "start-pr").await? {
+                Some(t) => t,
+                None => review_agent::AgentError::new(
+                    "job-running",
+                    format!(
+                    "start-pr job {job_id} still running after {} s — the daemon is still working",
+                    budget.as_secs()
+                ),
+                    envelope::EXIT_CONFLICT,
+                )
+                .with_hint("re-run the same start-pr: it attaches to the running job")
+                .with_next(vec![rerun])
+                .emit(json),
+            };
         return match classify_start_pr_job(&terminal) {
             StartPrJob::Done(result) => print_start_pr_envelope(&result, json),
             StartPrJob::Failed { error, error_type } => {
                 start_pr_failed(&error, error_type.as_deref(), &terminal, json)
             }
-            StartPrJob::Running(_) => unreachable!("poll_start_pr_job returns on a terminal state"),
+            StartPrJob::Running(_) => unreachable!("poll_review_job returns on a terminal state"),
         };
     }
     // A pre-V76 daemon has no job mode and answers the POST synchronously
@@ -16785,8 +17152,13 @@ fn classify_start_pr_job(body: &serde_json::Value) -> StartPrJob {
 /// envelope pretty-printed, nothing else; the human line is the pre-V76
 /// one verbatim.
 fn print_start_pr_envelope(body: &serde_json::Value, json: bool) -> Result<()> {
+    // RS-U6 — README §12's one stderr line (stdout stays JSON-only).
+    review_agent::eprint_base_line(body);
     if json {
-        println!("{}", serde_json::to_string_pretty(body)?);
+        // RS-U10a — the `kbc-review-start/1` envelope: `id`, `minted`,
+        // `base{…}`, `warnings[]`, with the daemon's full body kept under
+        // `data.review`.
+        envelope::print_value(&review_agent::start_envelope(body));
     } else {
         print_start_pr_human(body);
     }
@@ -16828,7 +17200,7 @@ fn print_start_pr_human(body: &serde_json::Value) {
 }
 
 /// `GET /api/reviews/jobs/{id}` — the declared path carries the `{id}`
-/// placeholder; [`poll_start_pr_job`] substitutes the real one. The route
+/// placeholder; [`poll_review_job`] substitutes the real one. The route
 /// takes no query params, so the pair is empty — the builder exists so the
 /// CLI half of invariant 15's dead-surface walk covers the route, and the
 /// poll loop below builds its path from the SAME declaration rather than
@@ -16838,38 +17210,38 @@ fn review_job_request() -> (&'static str, Vec<(&'static str, String)>) {
 }
 
 /// Poll `GET /api/reviews/jobs/{id}` every [`START_PR_POLL_INTERVAL`]
-/// until the job settles or [`START_PR_POLL_BUDGET`] is spent. Progress
-/// goes to STDERR (never stdout — `--json` output must stay parseable,
-/// and even the human path keeps stdout to the one final line), and only
-/// when the stage CHANGES, so a long fetch prints one line, not 300.
-async fn poll_start_pr_job(
+/// until the job settles (`Ok(Some(body))`) or `budget` is spent
+/// (`Ok(None)` — the caller decides how to report a still-running job).
+/// Progress goes to STDERR (never stdout — `--json` output must stay
+/// parseable, and even the human path keeps stdout to the one final line),
+/// and only when the stage CHANGES, so a long fetch prints one line, not
+/// 300.
+///
+/// RS-U10a — generalized from the V76-R1a start-pr poller for
+/// `--wait[=SECS]`: any daemon-side review job (`crate::review_jobs`) is
+/// polled through here, so RS-U10b's `review sync` reuses it rather than
+/// inventing a second pattern.
+async fn poll_review_job(
     client: &reqwest::Client,
     daemon: &str,
     job_id: &str,
+    budget: Duration,
     json: bool,
-) -> Result<serde_json::Value> {
-    let deadline = std::time::Instant::now() + START_PR_POLL_BUDGET;
+    label: &str,
+) -> Result<Option<serde_json::Value>> {
+    let deadline = std::time::Instant::now() + budget;
     let mut last_stage = String::new();
     loop {
-        tokio::time::sleep(START_PR_POLL_INTERVAL).await;
-        if std::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "review start-pr: job {job_id} still running after {} s — the daemon is \
-                 still working; poll it by hand with GET /api/reviews/jobs/{job_id}",
-                START_PR_POLL_BUDGET.as_secs()
-            );
-        }
+        tokio::time::sleep(START_PR_POLL_INTERVAL.min(budget)).await;
         let (declared_path, _) = review_job_request();
         let path = declared_path.replace("{id}", job_id);
         let (status, body) = get_json_raw(client, daemon, &path, &[]).await?;
         if status == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!(
-                "review start-pr: job {job_id} vanished (unknown or swept past its 1 h TTL)"
-            );
+            anyhow::bail!("review job {job_id} vanished (unknown or swept past its 1 h TTL)");
         }
         if !status.is_success() {
             return Err(loopback_or_api_error(
-                "review start-pr (job poll)",
+                "review job poll",
                 daemon,
                 status,
                 &body,
@@ -16878,11 +17250,14 @@ async fn poll_start_pr_job(
         match classify_start_pr_job(&body) {
             StartPrJob::Running(stage) => {
                 if !json && stage != last_stage {
-                    eprintln!("start-pr: {stage}…");
+                    eprintln!("{label}: {stage}…");
                     last_stage = stage;
                 }
             }
-            _ => return Ok(body),
+            _ => return Ok(Some(body)),
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(None);
         }
     }
 }
@@ -16890,12 +17265,16 @@ async fn poll_start_pr_job(
 /// `kb-code review report ID [--json]` — `GET /api/reviews/{id}/report`
 /// (design doc §2 row 4). `kb-code review report ID --set --from-file FILE
 /// [--json]` — `PUT /api/reviews/{id}/report` (design doc §2 row 5),
-/// LOOPBACK-ONLY.
+/// LOOPBACK-ONLY. `kb-code review report ID --emit-artifact --kb NAME`
+/// fetches the stored report, writes it into that corpus, and sets the
+/// artifact hint. The no-flag path is the GET, unchanged.
 async fn review_report_cmd(
     daemon: &str,
     id: i64,
     set: bool,
     from_file: Option<&Path>,
+    emit_artifact: bool,
+    kb: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let client = http_client()?;
@@ -16929,13 +17308,17 @@ async fn review_report_cmd(
         return Ok(());
     }
     let body = get_json(&client, daemon, &path, &[]).await?;
+    if emit_artifact {
+        let Some(kb) = kb.filter(|s| !s.is_empty()) else {
+            anyhow::bail!("review report --emit-artifact: pass --kb NAME");
+        };
+        return review_report_emit_cmd(daemon, id, kb, &body, json).await;
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
         return Ok(());
     }
-    if body.get("report").map(|v| v.is_null()).unwrap_or(false)
-        && body.as_object().map(|o| o.len()) == Some(1)
-    {
+    if review_report_absent(&body) {
         println!("review {id}: no report authored yet");
         return Ok(());
     }
@@ -16947,6 +17330,401 @@ async fn review_report_cmd(
         println!("  summary: {s}");
     }
     Ok(())
+}
+
+/// `{report: null}` — the GET shape when nothing has been authored yet.
+fn review_report_absent(body: &serde_json::Value) -> bool {
+    body.get("report").map(|v| v.is_null()).unwrap_or(false)
+        && body.as_object().map(|o| o.len()) == Some(1)
+}
+
+/// HTML written into a kb corpus, plus the two hint ids (`artifact_hint_kb`
+/// / `artifact_hint_id`) a successful ingest can hand to `set-artifact`.
+#[derive(Debug)]
+struct ReviewReportArtifact {
+    html: String,
+    kb: String,
+    artifact_id: String,
+    source_relative: String,
+}
+
+/// `kb-code review report ID --emit-artifact --kb NAME`.
+///
+/// This binary has no kb ingest verb. `kb add` registers or re-points a
+/// corpus folder in kb.toml and returns no artifact id, so it is not the
+/// write. The watched source path is readable from kb.toml
+/// (`KbPaths` + `KbConfig`, already dependencies of this crate); the file
+/// is written through `kb_core::capture` — the same engine `kb capture`
+/// uses — which derives the id the watcher will assign. A missing config,
+/// unknown kb, or unreadable source returns that reason and does not set
+/// a hint. Never publishes a verdict and never deletes the review.
+async fn review_report_emit_cmd(
+    daemon: &str,
+    id: i64,
+    kb: &str,
+    report: &serde_json::Value,
+    json: bool,
+) -> Result<()> {
+    if review_report_absent(report) {
+        anyhow::bail!("review {id}: no report authored yet; cannot emit an artifact or set a hint");
+    }
+    if !report.is_object() {
+        anyhow::bail!("review {id}: report response is not a JSON object; cannot emit");
+    }
+    let config = default_kb_toml_path()?;
+    let emitted = write_review_report_artifact(&config, id, kb, report)?;
+    if emitted.html.is_empty() {
+        anyhow::bail!("review {id}: rendered report HTML was empty; artifact hint was not set");
+    }
+    if !json {
+        println!(
+            "✓ review {id} report written to {}/{}  artifact {}",
+            emitted.kb, emitted.source_relative, emitted.artifact_id
+        );
+    }
+    review_set_artifact_cmd(daemon, id, &emitted.kb, &emitted.artifact_id, json).await
+}
+
+fn default_kb_toml_path() -> Result<PathBuf> {
+    let paths = kb_core::paths::KbPaths::new("default").map_err(|e| {
+        anyhow::anyhow!("review report --emit-artifact: resolve kb config dir: {e}")
+    })?;
+    Ok(paths.config_file())
+}
+
+/// Render `report` as one self-contained HTML artifact and write it into
+/// `kb`'s watched capture directory (from `config_path`). A relative
+/// capture directory is resolved against that corpus root, never the
+/// process cwd. The canonical output must stay inside the canonical root;
+/// otherwise this returns before creating the file. Returns the HTML plus
+/// the two hint ids. On any config/path failure, returns why the report
+/// was not ingested — the caller must not set a hint.
+fn write_review_report_artifact(
+    config_path: &Path,
+    review_id: i64,
+    kb: &str,
+    report: &serde_json::Value,
+) -> Result<ReviewReportArtifact> {
+    if !config_path.is_file() {
+        anyhow::bail!(
+            "review report --emit-artifact: no kb.toml at {}; cannot see a watched corpus path for kb {kb}, so the report was not ingested and the artifact hint was not set",
+            config_path.display()
+        );
+    }
+    let name = kb_core::types::KbName::new(kb).map_err(|e| {
+        anyhow::anyhow!("review report --emit-artifact: kb name {kb:?} is not usable ({e})")
+    })?;
+    let cfg = kb_core::config::KbConfig::load(config_path).map_err(|e| {
+        anyhow::anyhow!(
+            "review report --emit-artifact: cannot read {} ({e}); no watched corpus path for kb {kb}",
+            config_path.display()
+        )
+    })?;
+    let section = cfg.kb.get(&name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "review report --emit-artifact: kb {kb} is not configured in {}; no watched source path, so the report was not ingested and the artifact hint was not set",
+            config_path.display()
+        )
+    })?;
+    if !section.path.is_absolute() {
+        anyhow::bail!(
+            "review report --emit-artifact: kb {kb} source {} is relative; refusing to guess a watched directory from this process's cwd",
+            section.path.display()
+        );
+    }
+    let source_root = section.path.canonicalize().map_err(|e| {
+        anyhow::anyhow!(
+            "review report --emit-artifact: kb {kb} source {} is not a directory ({e}); the report was not written and the artifact hint was not set",
+            section.path.display()
+        )
+    })?;
+    let capture_dir = section.resolved_capture_dir().to_string();
+    let html = review_report_html(review_id, report);
+    let stable = format!("review-{review_id}-report");
+    let tags = vec!["review-report".to_string(), "kb-code".to_string()];
+    // `kb add` is not an ingest: it re-points `[kb.<name>].path` and returns
+    // no artifact id. This write lands in the directory that path already
+    // watches. `stable_name` keeps re-emits on the same path, so the hint
+    // id does not churn. Sanitize stays off — this HTML is produced here,
+    // and ammonia would strip the document shell.
+    // Confinement is checked on the same path `capture` will create.
+    // Relative `capture_dir` joins the corpus root here — `Path::canonicalize`
+    // on a relative path would follow the process cwd instead.
+    let filename = format!(
+        "{}.html",
+        kb_core::capture::capture_slug_checked(&stable).unwrap_or_else(|| stable.clone())
+    );
+    refuse_emit_outside_corpus(&source_root, Path::new(&capture_dir), &filename, kb)?;
+    let captured = kb_core::capture::capture(kb_core::capture::CaptureInput {
+        source_root: &source_root,
+        capture_dir: &capture_dir,
+        pipeline: kb_core::extmap::Pipeline::Html,
+        ext: "html",
+        bytes: html.as_bytes(),
+        original_filename: Some("review-report.html"),
+        title: None,
+        tags: &tags,
+        from: "kb-code",
+        sanitize: false,
+        url: None,
+        stable_name: Some(&stable),
+        session_id: None,
+        expires_at: None,
+        category: Some("review"),
+    })
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "review report --emit-artifact: write into kb {kb} source {} failed ({e}); the artifact hint was not set",
+            source_root.display()
+        )
+    })?;
+    Ok(ReviewReportArtifact {
+        html,
+        kb: kb.to_string(),
+        artifact_id: captured.id,
+        source_relative: captured.source_relative,
+    })
+}
+
+/// Destination `capture` will write. Relative `requested` joins `root`;
+/// an absolute path is left absolute so confinement can reject it.
+fn emit_artifact_destination(root: &Path, requested: &Path, filename: &str) -> PathBuf {
+    let dir = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    dir.join(filename)
+}
+
+/// Canonicalize `path` without creating it. The longest existing ancestor
+/// — a symlink included — is canonicalized and the missing suffix appended.
+/// `..` in that suffix is collapsed before the result is compared to the root.
+fn canonicalize_emit_path(path: &Path) -> std::io::Result<PathBuf> {
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path.to_path_buf();
+    loop {
+        if cursor.as_os_str().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "output path has no existing ancestor",
+            ));
+        }
+        let is_link = std::fs::symlink_metadata(&cursor)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_link || cursor.exists() {
+            let mut resolved = cursor.canonicalize()?;
+            for part in suffix.iter().rev() {
+                if part.as_os_str() == ".." {
+                    resolved.pop();
+                } else if part.as_os_str() != "." {
+                    resolved.push(part);
+                }
+            }
+            return Ok(resolved);
+        }
+        let Some(name) = cursor.file_name().map(|n| n.to_os_string()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("cannot resolve {}", path.display()),
+            ));
+        };
+        suffix.push(name);
+        if !cursor.pop() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("cannot resolve {}", path.display()),
+            ));
+        }
+    }
+}
+
+/// One stderr line (via `main`'s `Error:` printer) and a non-zero exit.
+/// Does not create `requested` or any parent of the destination.
+fn refuse_emit_outside_corpus(
+    root: &Path,
+    requested: &Path,
+    filename: &str,
+    kb: &str,
+) -> Result<()> {
+    let dest = emit_artifact_destination(root, requested, filename);
+    let resolved = canonicalize_emit_path(&dest).map_err(|e| {
+        anyhow::anyhow!(
+            "review report --emit-artifact: cannot resolve output path {} against kb {kb} source {} ({e}); the report was not written and the artifact hint was not set",
+            requested.display(),
+            root.display()
+        )
+    })?;
+    if !resolved.starts_with(root) {
+        anyhow::bail!(
+            "review report --emit-artifact: refusing to write {}; it resolves outside kb {kb} source {}; the report was not written and the artifact hint was not set",
+            requested.display(),
+            root.display()
+        );
+    }
+    Ok(())
+}
+
+/// One self-contained HTML file for a stored review report. Prose is
+/// escaped. The authored verdict is rendered as text only — nothing here
+/// publishes it.
+fn review_report_html(review_id: i64, report: &serde_json::Value) -> String {
+    let headline = report
+        .get("verdict_headline")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let title = match headline {
+        Some(h) => format!("Review {review_id} report — {h}"),
+        None => format!("Review {review_id} report"),
+    };
+    let mut out = String::new();
+    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>");
+    out.push_str(&html_escape(&title));
+    out.push_str("</title>\n<style>\n");
+    out.push_str(
+        "body{font:16px/1.5 system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fafafa}\n",
+    );
+    out.push_str("pre{white-space:pre-wrap;font:0.95em ui-monospace,monospace}\n");
+    out.push_str("h1,h2{line-height:1.25}\n");
+    out.push_str(
+        ".skip-link{position:absolute;left:-999px}.skip-link:focus{left:1rem;top:1rem;position:absolute}\n",
+    );
+    out.push_str("</style>\n</head>\n<body>\n");
+    out.push_str("<a class=\"skip-link\" href=\"#report\">Skip to report</a>\n");
+    out.push_str("<h1 id=\"report\">");
+    out.push_str(&html_escape(&title));
+    out.push_str("</h1>\n<p>Review ");
+    out.push_str(&review_id.to_string());
+    if let Some(at) = report.get("generated_at").filter(|v| !v.is_null()) {
+        out.push_str(". Generated ");
+        out.push_str(&html_escape(&json_display(at)));
+    }
+    out.push_str(".</p>\n");
+    if let Some(deck) = report
+        .get("deck")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        push_prose_section(&mut out, "deck", "Deck", deck);
+    }
+    if let Some(summary) = report
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        push_prose_section(&mut out, "summary", "Summary", summary);
+    }
+    push_verdict_section(&mut out, report);
+    if let Some(risk) = report.get("risk_score").filter(|v| !v.is_null()) {
+        out.push_str("<section id=\"risk\"><h2>Risk</h2><p>");
+        out.push_str(&html_escape(&json_display(risk)));
+        out.push_str("</p></section>\n");
+    }
+    if let Some(stats) = report.get("stats").filter(|v| !v.is_null()) {
+        push_value_section(&mut out, "stats", "Stats", stats);
+    }
+    let pretty = serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string());
+    out.push_str("<section id=\"report-json\"><h2>Report JSON</h2><pre>");
+    out.push_str(&html_escape(&pretty));
+    out.push_str("</pre></section>\n<script type=\"application/json\" id=\"kbc-review-report\">");
+    let embedded = serde_json::to_string(report)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace('<', "\\u003c");
+    out.push_str(&embedded);
+    out.push_str("</script>\n</body>\n</html>\n");
+    out
+}
+
+fn push_prose_section(out: &mut String, id: &str, heading: &str, text: &str) {
+    out.push_str("<section id=\"");
+    out.push_str(id);
+    out.push_str("\"><h2>");
+    out.push_str(heading);
+    out.push_str("</h2><pre>");
+    out.push_str(&html_escape(text));
+    out.push_str("</pre></section>\n");
+}
+
+fn push_verdict_section(out: &mut String, report: &serde_json::Value) {
+    let state = report
+        .get("verdict")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let headline = report
+        .get("verdict_headline")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let body = report
+        .get("verdict_body")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if state.is_none() && headline.is_none() && body.is_none() {
+        return;
+    }
+    out.push_str("<section id=\"verdict\"><h2>Verdict</h2>");
+    out.push_str("<p>Authored in the report. Not published.</p>");
+    if let Some(s) = state {
+        out.push_str("<p>State: ");
+        out.push_str(&html_escape(s));
+        out.push_str("</p>");
+    }
+    if let Some(h) = headline {
+        out.push_str("<h3 id=\"verdict-headline\">");
+        out.push_str(&html_escape(h));
+        out.push_str("</h3>");
+    }
+    if let Some(b) = body {
+        out.push_str("<pre id=\"verdict-body\">");
+        out.push_str(&html_escape(b));
+        out.push_str("</pre>");
+    }
+    out.push_str("</section>\n");
+}
+
+fn push_value_section(out: &mut String, id: &str, heading: &str, value: &serde_json::Value) {
+    out.push_str("<section id=\"");
+    out.push_str(id);
+    out.push_str("\"><h2>");
+    out.push_str(heading);
+    out.push_str("</h2>");
+    if let Some(obj) = value.as_object() {
+        out.push_str("<dl>");
+        for (k, v) in obj {
+            out.push_str("<dt>");
+            out.push_str(&html_escape(k));
+            out.push_str("</dt><dd><pre>");
+            out.push_str(&html_escape(&json_display(v)));
+            out.push_str("</pre></dd>");
+        }
+        out.push_str("</dl>");
+    } else {
+        out.push_str("<pre>");
+        out.push_str(&html_escape(&json_display(value)));
+        out.push_str("</pre>");
+    }
+    out.push_str("</section>\n");
+}
+
+fn json_display(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+    }
+}
+
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// `kb-code review artifact ID [--json]` — `GET /api/reviews/{id}/artifact`
@@ -17108,6 +17886,7 @@ async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
         verdict,
         verdict_note,
         dry_run,
+        slugify,
         from_file,
         stdin,
         daemon,
@@ -17165,6 +17944,26 @@ async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
         };
         serde_json::from_str(&text).context("parse compose payload as JSON")?
     };
+    let mut payload = payload;
+    if slugify {
+        // RS-U10a — the doc form's sidecar rides under `findings_v2`; the
+        // V0 body carries `findings.findings[]`.
+        let target = if payload.get("findings_v2").is_some() {
+            &mut payload["findings_v2"]
+        } else {
+            &mut payload
+        };
+        let changes = review_agent::slugify_findings(target);
+        for (i, old, new) in &changes {
+            eprintln!(
+                "slugify: finding #{i}: {} -> {new}",
+                old.as_deref().unwrap_or("(none)")
+            );
+        }
+        if changes.is_empty() {
+            eprintln!("slugify: every finding already carries a valid slug");
+        }
+    }
 
     let client = http_client()?;
     let path = format!("/api/reviews/{id}/compose");
@@ -18510,13 +19309,17 @@ async fn review_sweep_cmd(
     repo: Option<&str>,
     all_repos: bool,
     include_closed: bool,
+    apply_close: bool,
     json: bool,
 ) -> Result<()> {
     if repo.is_some() == all_repos {
         anyhow::bail!("review sweep: pass exactly one of --repo NAME or --all-repos");
     }
-    let mut payload =
-        serde_json::json!({ "all_repos": all_repos, "include_closed": include_closed });
+    let mut payload = serde_json::json!({
+        "all_repos": all_repos,
+        "include_closed": include_closed,
+        "apply": apply_close,
+    });
     if let Some(r) = repo {
         payload["repo"] = serde_json::json!(r);
     }
@@ -18533,8 +19336,12 @@ async fn review_sweep_cmd(
     }
     let summary = &body["summary"];
     println!(
-        "swept={}  refreshed={}  unavailable={}  suggest_close={}",
-        summary["swept"], summary["refreshed"], summary["unavailable"], summary["suggest_close"],
+        "swept={}  refreshed={}  unavailable={}  suggest_close={}  closed={}",
+        summary["swept"],
+        summary["refreshed"],
+        summary["unavailable"],
+        summary["suggest_close"],
+        summary["closed"],
     );
     let rows = body["rows"].as_array().cloned().unwrap_or_default();
     for r in &rows {
@@ -18546,7 +19353,9 @@ async fn review_sweep_cmd(
             continue;
         }
         let checks = &r["checks"];
-        let flag = if r["suggest_close"].as_bool().unwrap_or(false) {
+        let flag = if r["closed"].as_bool().unwrap_or(false) {
+            "  CLOSED"
+        } else if r["suggest_close"].as_bool().unwrap_or(false) {
             "  SUGGEST-CLOSE"
         } else {
             ""
@@ -25183,24 +25992,62 @@ fn backup_cmd(db: Option<&std::path::Path>, json: bool) -> Result<()> {
     // no sqlite dependency of its own.
     let receipt =
         kb_code_server::backup::take_at_current_epoch(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
+    // RS-U9 — also bundle-back up every `ready` review store (README
+    // §5.4/§8: "on ... `kb-code backup`"). The sqlite snapshot above is
+    // this command's primary contract and always succeeds or fails on its
+    // own; the bundle pass is additive but its errors are SURFACED (nit:
+    // `--json` must carry them too) and this command exits non-zero when
+    // any store's bundle failed, so a script relying on `kb-code backup`
+    // for a full backup notices a partial one.
+    let bundle_report = kb_code_server::review_store::maint::backup_all_ready_stores_at(&db);
+    let bundle_errors: Vec<String> = match &bundle_report {
+        Ok(r) => r.stores.iter().filter_map(|s| s.error.clone()).collect(),
+        Err(e) => vec![e.clone()],
+    };
     if json {
-        println!("{}", serde_json::to_string_pretty(&receipt)?);
-        return Ok(());
+        let mut doc = serde_json::to_value(&receipt)?;
+        if let serde_json::Value::Object(map) = &mut doc {
+            map.insert(
+                "review_store_backup".to_string(),
+                serde_json::json!({
+                    "ok": bundle_errors.is_empty(),
+                    "stores": bundle_report.as_ref().ok().map(|r| &r.stores),
+                    "errors": bundle_errors,
+                }),
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+    } else {
+        match &bundle_report {
+            Ok(r) if !r.stores.is_empty() => {
+                let written = r.stores.iter().filter(|s| s.written.is_some()).count();
+                let errored = r.stores.iter().filter(|s| s.error.is_some()).count();
+                println!("review stores: {written} bundle(s) written, {errored} error(s)");
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("warning: review-store bundle backup skipped: {e}"),
+        }
+        for e in &bundle_errors {
+            eprintln!("error: review-store bundle backup: {e}");
+        }
+        println!(
+            "backup: {} -> {} ({} bytes, restores to schema epoch {})",
+            receipt.db_path,
+            receipt.backup_path,
+            receipt.bytes,
+            receipt
+                .volume_epoch
+                .map(|e| format!("V{e:04}"))
+                .unwrap_or_else(|| "none (unmigrated volume)".to_string()),
+        );
+        println!(
+            "receipt: {}",
+            kb_code_server::backup::marker_path(&db).display()
+        );
     }
-    println!(
-        "backup: {} -> {} ({} bytes, restores to schema epoch {})",
-        receipt.db_path,
-        receipt.backup_path,
-        receipt.bytes,
-        receipt
-            .volume_epoch
-            .map(|e| format!("V{e:04}"))
-            .unwrap_or_else(|| "none (unmigrated volume)".to_string()),
-    );
-    println!(
-        "receipt: {}",
-        kb_code_server::backup::marker_path(&db).display()
-    );
+    if !bundle_errors.is_empty() {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -27657,6 +28504,233 @@ mod tests {
         }
     }
 
+    /// `--emit-artifact --kb` is additive. `review report ID` without the
+    /// flag stays a plain GET.
+    #[test]
+    fn review_report_emit_artifact_parses_without_changing_plain_get() {
+        match parse_cli(&["review", "report", "4"]).unwrap() {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Report {
+                        id,
+                        set,
+                        emit_artifact,
+                        kb,
+                        from_file,
+                        json,
+                        ..
+                    },
+            } => {
+                assert_eq!(id, 4);
+                assert!(!set);
+                assert!(!emit_artifact);
+                assert!(kb.is_none());
+                assert!(from_file.is_none());
+                assert!(!json);
+            }
+            other => panic!("expected Review{{Report}}, got {other:?}"),
+        }
+        match parse_cli(&[
+            "review",
+            "report",
+            "4",
+            "--emit-artifact",
+            "--kb",
+            "platform",
+        ])
+        .unwrap()
+        {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Report {
+                        id,
+                        set,
+                        emit_artifact,
+                        kb,
+                        ..
+                    },
+            } => {
+                assert_eq!(id, 4);
+                assert!(!set);
+                assert!(emit_artifact);
+                assert_eq!(kb.as_deref(), Some("platform"));
+            }
+            other => panic!("expected Review{{Report}}, got {other:?}"),
+        }
+        assert!(parse_cli(&["review", "report", "4", "--emit-artifact"]).is_err());
+        assert!(parse_cli(&[
+            "review",
+            "report",
+            "4",
+            "--set",
+            "--from-file",
+            "r.json",
+            "--emit-artifact",
+            "--kb",
+            "platform",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn review_report_html_escapes_prose_and_does_not_publish() {
+        let report = serde_json::json!({
+            "summary": "<script>alert(1)</script>",
+            "verdict": "concerns",
+            "verdict_headline": "Hold",
+            "risk_score": 0.4,
+            "deck": "short",
+        });
+        let html = review_report_html(4, &report);
+        assert!(html.contains("<h1 id=\"report\">"));
+        assert!(html.contains("id=\"summary\""));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert"));
+        assert!(html.contains("Not published"));
+        assert!(html.contains("Review 4 report"));
+        assert!(review_report_absent(&serde_json::json!({"report": null})));
+        assert!(!review_report_absent(&report));
+    }
+
+    #[test]
+    fn write_review_report_artifact_sets_stable_ids_or_reports_why_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("corpus");
+        std::fs::create_dir(&source).unwrap();
+        let cfg_path = tmp.path().join("kb.toml");
+        std::fs::write(
+            &cfg_path,
+            format!("[kb.platform]\npath = \"{}\"\n", source.display()),
+        )
+        .unwrap();
+        let report = serde_json::json!({
+            "summary": "ship the hint",
+            "risk_score": 0.2,
+        });
+        let emitted = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap();
+        assert_eq!(emitted.kb, "platform");
+        assert!(!emitted.html.is_empty());
+        assert!(emitted.html.contains("ship the hint"));
+        assert_eq!(
+            emitted.artifact_id,
+            kb_core::ids::ArtifactId::from_path(&emitted.source_relative).to_string()
+        );
+        let written = std::fs::read_to_string(source.join(&emitted.source_relative)).unwrap();
+        assert!(written.contains("name=\"kb-category\" content=\"review\""));
+        assert!(written.contains("ship the hint"));
+        let again = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap();
+        assert_eq!(again.artifact_id, emitted.artifact_id);
+        assert_eq!(again.source_relative, emitted.source_relative);
+
+        let missing = write_review_report_artifact(&cfg_path, 4, "absent", &report).unwrap_err();
+        let msg = missing.to_string();
+        assert!(msg.contains("absent"), "{msg}");
+        assert!(msg.contains("not configured"), "{msg}");
+
+        let no_cfg = write_review_report_artifact(
+            Path::new("/no/such/kb-emit.toml"),
+            4,
+            "platform",
+            &report,
+        )
+        .unwrap_err();
+        let msg = no_cfg.to_string();
+        assert!(msg.contains("no kb.toml"), "{msg}");
+        assert!(msg.contains("artifact hint was not set"), "{msg}");
+    }
+
+    /// `../outside.html` and an absolute path outside the corpus root are
+    /// refused before any write. A relative path is resolved against the
+    /// corpus root, and an in-root path still writes.
+    #[test]
+    fn emit_artifact_refuses_output_outside_the_corpus_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("corpus");
+        std::fs::create_dir(&source).unwrap();
+        let cfg_path = tmp.path().join("kb.toml");
+        let report = serde_json::json!({
+            "summary": "ship the hint",
+        });
+        let outside_rel = tmp.path().join("outside.html");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"../outside.html\"\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+        let err = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("../outside.html"), "{msg}");
+        assert!(msg.contains("outside"), "{msg}");
+        assert!(
+            !outside_rel.exists(),
+            "relative escape must not create a file"
+        );
+        assert!(
+            !outside_rel.join("review-4-report.html").exists(),
+            "relative escape must not create the artifact"
+        );
+
+        let outside_abs = tmp.path().join("abs-outside.html");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"{}\"\n",
+                source.display(),
+                outside_abs.display()
+            ),
+        )
+        .unwrap();
+        let err = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(&outside_abs.display().to_string()), "{msg}");
+        assert!(
+            !outside_abs.exists(),
+            "absolute escape must not create a file"
+        );
+        assert!(!outside_abs.join("review-4-report.html").exists());
+
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"kept\"\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+        let emitted = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap();
+        let written = source.join("kept").join("review-4-report.html");
+        assert!(written.is_file(), "in-root relative path must still write");
+        assert_eq!(emitted.source_relative, "kept/review-4-report.html");
+        let written_canon = written.canonicalize().unwrap();
+        let kept_canon = source.join("kept").canonicalize().unwrap();
+        assert_eq!(written_canon.parent(), Some(kept_canon.as_path()));
+
+        let inside_abs = source.join("abs-kept");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"{}\"\n",
+                source.display(),
+                inside_abs.display()
+            ),
+        )
+        .unwrap();
+        let emitted = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap();
+        let written = inside_abs.join("review-4-report.html");
+        assert!(written.is_file(), "in-root absolute path must still write");
+        assert!(
+            written
+                .canonicalize()
+                .unwrap()
+                .starts_with(source.canonicalize().unwrap()),
+            "{}",
+            emitted.source_relative
+        );
+    }
+
     /// V70-R — `kb-code review compose ID --from-file FILE`.
     #[test]
     fn review_compose_parses_id_and_from_file() {
@@ -28511,6 +29585,13 @@ mod tests {
             // V76-B3 — `POST /api/prose/resolve`. Body fields ride as the
             // walk's pairs so a required key the CLI omits fails HERE.
             prose_resolve_request("repo", "hello"),
+            // RS-U10a — the review git views + PR lookup.
+            review_agent::review_find_request(7, Some("repo")),
+            review_agent::review_diff_request(Some(1), "patch", Some("src"), Some(100)),
+            review_agent::review_log_request(Some(1)),
+            review_agent::review_cat_request("src/lib.rs", Some(1), "old"),
+            // RS-U10b — `review status`.
+            review_sync::review_status_request(true),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -28605,7 +29686,11 @@ mod tests {
             // V76-R3d — scrub/1 stops + at.
             .chain(kb_code_server::history::scrub::V76_R3D_ROUTES.iter())
             // V76-B3 — `POST /api/prose/resolve`, same walk.
-            .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter());
+            .chain(kb_code_server::prose_refs::V76_B3_ROUTES.iter())
+            // RS-U10a — the review git views + PR lookup, same walk.
+            .chain(kb_code_server::review_views::RS_U10A_ROUTES.iter())
+            // RS-U10b — `review status`, same walk.
+            .chain(kb_code_server::review_sync::RS_U10B_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

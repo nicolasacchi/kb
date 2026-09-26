@@ -57,6 +57,7 @@ pub type BlobReadCache = HashMap<(String, String), Option<Vec<u8>>>;
 /// Cached wrapper around [`crate::routes::read_repo_file`] — see
 /// [`BlobReadCache`]'s own doc.
 fn read_repo_file_cached(
+    store: &Store,
     repo: &crate::config::RepoEntry,
     path: &str,
     rev: Option<&str>,
@@ -66,7 +67,9 @@ fn read_repo_file_cached(
     if let Some(hit) = cache.get(&key) {
         return hit.clone();
     }
-    let result = read_repo_file(repo, path, rev).ok().map(|r| r.bytes);
+    let result = read_repo_file(repo, path, crate::routes::RevResolver::lookup(store, rev))
+        .ok()
+        .map(|r| r.bytes);
     cache.insert(key, result.clone());
     result
 }
@@ -1282,7 +1285,7 @@ fn require_callable_def(
     if line < 1 {
         return Err(ApiError::bad_request("line must be >= 1 (1-based)"));
     }
-    let read = read_repo_file(repo, path, rev)?;
+    let read = read_repo_file(repo, path, crate::routes::RevResolver::lookup(store, rev))?;
     let lang_info = lang::detect(path, Some(&read.bytes)).ok_or_else(|| {
         ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1373,7 +1376,7 @@ fn is_dynamic_call(
     // Read source for local type hints on the receiver identifier — PF-K1:
     // memoized by (path, rev) in `cache`, shared across every call site in
     // `callers_at`'s caller-group loop (see `BlobReadCache`'s own doc).
-    let bytes = read_repo_file_cached(repo, path, rev, cache).unwrap_or_default();
+    let bytes = read_repo_file_cached(store, repo, path, rev, cache).unwrap_or_default();
     let receiver = qual
         .split(['.', ':'])
         .next()

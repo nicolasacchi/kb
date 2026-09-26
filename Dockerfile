@@ -150,11 +150,19 @@ COPY crates ./crates
 # to `kb`.
 FROM workspace AS builder
 
-# Inject the git sha for the build-stamp: `.git` is excluded from the build
-# context, so kb-server's build.rs can't probe it here. Passed via
-# `--build-arg KB_GIT_SHA=...`; defaults to "unknown" for a bare build.
-ARG KB_GIT_SHA=unknown
+# Inject the git sha + release version for the build-stamp. `.git` is
+# excluded from the build context, so kb-buildstamp's build.rs can't probe
+# either value here. It reads `KB_BUILD_SHA` / `KB_BUILD_VERSION` (not the
+# ARG names). Both are required `--build-arg`s with no default: an empty
+# arg used to bake "unknown" / "0.0.0-dev", and the SPA treated "unknown"
+# as "no drift". Fail closed before cargo so a bare `docker compose build`
+# errors instead of publishing an unstamped binary.
+ARG KB_GIT_SHA
+ARG KB_BUILD_VERSION
+RUN test -n "$KB_GIT_SHA" || { echo "KB_GIT_SHA build-arg is required"; exit 1; }
+RUN test -n "$KB_BUILD_VERSION" || { echo "KB_BUILD_VERSION build-arg is required"; exit 1; }
 ENV KB_BUILD_SHA=${KB_GIT_SHA}
+ENV KB_BUILD_VERSION=${KB_BUILD_VERSION}
 # Cache mounts: target/ is NOT in the image layer, so each cargo RUN
 # copies the stripped binary to /tmp/<bin> (which is). Downstream
 # COPY --from must read /tmp/<bin>, never target/release/. Two separate
@@ -199,9 +207,14 @@ RUN npm ci
 COPY web/ ./
 # Stamp the same commit the daemon binary carries (KB_BUILD_SHA) so the SPA's
 # build-drift banner compares like-for-like. `.git` is out of the build
-# context, so vite's git probe reads this env var instead (vite.config.ts).
-ARG KB_GIT_SHA=unknown
+# context, so vite's git probe reads KB_GIT_SHA instead (vite.config.ts).
+# No default: an empty arg used to bake "unknown" and the drift check
+# silently no-op'd. Fail closed before `npm run build`.
+ARG KB_GIT_SHA
+ARG KB_BUILD_VERSION
+RUN test -n "$KB_GIT_SHA" || { echo "KB_GIT_SHA build-arg is required"; exit 1; }
 ENV KB_GIT_SHA=${KB_GIT_SHA}
+ENV KB_BUILD_VERSION=${KB_BUILD_VERSION}
 RUN npm run build
 
 # --- kb-code stages (W4.8 — hosted kbc.example.com) ------------------------
@@ -226,10 +239,15 @@ FROM workspace AS kb-code-builder
 
 # Inject the git sha for the build-stamp: `.git` is excluded from the build
 # context, so kb-code-server's own `option_env!("KB_BUILD_SHA")` read can't
-# probe it here either. Same `--build-arg KB_GIT_SHA=...` the `builder` stage
+# probe it here either. Same required `--build-arg`s the `builder` stage
 # takes above; ARGs are per-stage, so this stage needs its own declaration.
-ARG KB_GIT_SHA=unknown
+# Empty used to bake "unknown". Fail closed before cargo.
+ARG KB_GIT_SHA
+ARG KB_BUILD_VERSION
+RUN test -n "$KB_GIT_SHA" || { echo "KB_GIT_SHA build-arg is required"; exit 1; }
+RUN test -n "$KB_BUILD_VERSION" || { echo "KB_BUILD_VERSION build-arg is required"; exit 1; }
 ENV KB_BUILD_SHA=${KB_GIT_SHA}
+ENV KB_BUILD_VERSION=${KB_BUILD_VERSION}
 RUN --mount=type=cache,id=kb-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=kb-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=kb-target,target=/build/target,sharing=locked \
@@ -245,7 +263,14 @@ COPY web-code/ ./
 RUN npm run build
 
 FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS kb-code-runtime
-ARG KB_GIT_SHA=unknown
+ARG KB_GIT_SHA
+ARG KB_BUILD_VERSION
+# Fail closed even though this stage only labels: an unset sha must not
+# publish an image whose OCI version is empty. Compile stages above already
+# require KB_BUILD_VERSION; declare it here so the build-arg reaches this
+# stage too (ARGs are per-stage).
+RUN test -n "$KB_GIT_SHA" || { echo "KB_GIT_SHA build-arg is required"; exit 1; }
+ENV KB_BUILD_VERSION=${KB_BUILD_VERSION}
 LABEL org.opencontainers.image.title="kb-code" \
       org.opencontainers.image.description="Read-first code browsing daemon (session-aware blame, search-everywhere, agent verbs)." \
       org.opencontainers.image.source="https://github.com/nicolasacchi/kb" \
@@ -293,7 +318,11 @@ FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3
 # OCI image annotations (consumed by registries, `docker inspect`, and
 # provenance tooling). KB_GIT_SHA is re-declared here because ARGs are
 # per-stage; it carries the build commit into the image version label.
-ARG KB_GIT_SHA=unknown
+# No default — a bare build must fail rather than label the image "unknown".
+ARG KB_GIT_SHA
+ARG KB_BUILD_VERSION
+RUN test -n "$KB_GIT_SHA" || { echo "KB_GIT_SHA build-arg is required"; exit 1; }
+ENV KB_BUILD_VERSION=${KB_BUILD_VERSION}
 LABEL org.opencontainers.image.title="kb" \
       org.opencontainers.image.description="Personal search engine for LLM-generated HTML/Markdown artifacts (hybrid BM25 + vector)." \
       org.opencontainers.image.source="https://github.com/nicolasacchi/kb" \

@@ -373,6 +373,7 @@ pub async fn serve_with_paths(
             handles.shutdown.subscribe(),
             handles.review_lock_for(kb_name),
             ext_map,
+            &handles.embed_cache,
         )
         .await
         .with_context(|| format!("bring up kb {kb_name}"));
@@ -453,6 +454,15 @@ pub async fn serve_with_paths(
     // the window across every kb. Joined in `teardown_tasks` like every task
     // here, so an in-process config reload can't leak it.
     if let Some(h) = spawn_retention_prune(handles.clone(), &config.retention) {
+        tasks.push(h);
+    }
+    // Daemon-wide opt-in export schedule. Spawns NOTHING unless
+    // `[backup] schedule_hours` is a positive integer. When set, one task
+    // (also running once at boot) writes an export tarball per kb via the
+    // in-process writer — never the `kb` binary. A schedule with no
+    // `remote_cmd` already WARNs at config load; do not warn again here.
+    // Joined in `teardown_tasks` like the retention prune above.
+    if let Some(h) = spawn_backup_schedule(handles.clone(), &config.backup) {
         tasks.push(h);
     }
     // L2 — daemon log-file retention. Always on (validated ≥ 1 day, default
@@ -708,9 +718,9 @@ fn spawn_metrics_ticker(handles: Arc<crate::state::KbHandles>) -> tokio::task::J
                 .storage_channel_depth
                 .store(queue_depth, Ordering::Relaxed);
             // P3+P4: per-route snapshot. Each route's cumulative
-            // count + p50/p95 from its bucket histogram. Stable shape
-            // (8 entries always) so the TUI's table layout doesn't
-            // shift between ticks.
+            // count + p50/p95 from its bucket histogram. The vec is
+            // `RouteKind::ALL` and grows with the enum — 9 entries now
+            // (Sessions was inserted at 7, Other is 8).
             let routes: Vec<serde_json::Value> = crate::state::RouteKind::ALL
                 .iter()
                 .map(|k| {
@@ -923,16 +933,24 @@ const COMPACT_FRAGMENTS_PER_ROW: u64 = 8;
 /// catch).
 const COMPACT_MAX_VERSIONS: u64 = 200;
 
-/// Absolute small-fragment count that warrants compaction, honoured in
-/// BOTH the startup and periodic paths. Each `merge_insert` upsert
-/// appends one small data fragment and compaction merges them away, so
-/// this signal is SELF-RESOLVING — it drops to ~0 after a pass and won't
-/// re-fire — and it's the one that actually tracked the latency rot we
-/// measured (58 small fragments → 4× hybrid latency on a 91-row kb). The
-/// fragments-per-ROW ratio below misses that entirely: a 91-row kb would
-/// need 728 fragments to reach 8×. 32 sits well under the 58 that hurt
-/// and well over a healthy steady state of a handful. Tunable.
-const COMPACT_SMALL_FRAGMENTS: u64 = 32;
+/// Rows per fragment production compaction aims for. Same constant the
+/// compact pass passes to `CompactionOptions` — lance's own default is
+/// `1024 * 1024`, which makes every kb fragment a permanent candidate.
+const COMPACT_TARGET_ROWS_PER_FRAGMENT: u64 =
+    kb_core::storage::lance::COMPACT_TARGET_ROWS_PER_FRAGMENT as u64;
+
+/// Fragments above `ceil(rows / COMPACT_TARGET_ROWS_PER_FRAGMENT)` that
+/// warrant a pass, in both startup and periodic modes.
+///
+/// This replaces lancedb's `small_fragments >= 32`. That count uses a
+/// 100_000-row threshold, so on every kb corpus `small_fragments ==
+/// fragments` and the old bar was "fragment count ≥ 32". A pass dropped
+/// that to ~3, then ~30 captures pushed it back over — the comment that
+/// called the trigger self-resolving was wrong. 32 is the same absolute
+/// slack, now measured against the fragment count a 2048-row target
+/// actually produces: `(rows=5000, fragments=33)` is excess 30 and does
+/// not fire; `(rows=5000, fragments=200)` does.
+const COMPACT_EXCESS_FRAGMENTS: u64 = 32;
 
 /// SC1 — fallback cadence for the periodic auto-compact check when the
 /// reconcile pass is disabled (`reconcile_secs = 0`). Pre-SC1 the check
@@ -954,56 +972,111 @@ fn compact_check_interval_secs(reconcile_secs: u64) -> u64 {
     }
 }
 
+/// FNV-1a 64. `DefaultHasher` is randomly seeded per process, so it
+/// cannot be a stable per-kb offset across restarts.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
+/// First reconcile delay: a stable per-kb offset in `(0, interval]`.
+///
+/// `interval_at(now + interval, interval)` phase-locks every corpus onto
+/// the same instant. The steady period stays `interval`; only the first
+/// deadline moves, and it stays inside one interval. A zero slot maps to
+/// the full interval so the tick never fires at `now` (that would stack
+/// on the watcher's startup walk). Intervals shorter than 2 ms cannot be
+/// split and stay aligned.
+fn reconcile_first_delay(kb: &str, interval: Duration) -> Duration {
+    let millis = interval.as_millis();
+    if millis <= 1 {
+        return interval;
+    }
+    let slot = u128::from(fnv1a64(kb.as_bytes())) % millis;
+    if slot == 0 {
+        return interval;
+    }
+    match u64::try_from(slot) {
+        Ok(ms) => Duration::from_millis(ms),
+        Err(_) => interval,
+    }
+}
+
 /// Decide whether a dataset warrants compaction.
 ///
-/// `small_fragments` is the steady-state, self-resolving trigger honoured
-/// in both modes (see [`COMPACT_SMALL_FRAGMENTS`]).
+/// The steady-state trigger, honoured in both modes, is fragment excess
+/// over `ceil(rows / `[`COMPACT_TARGET_ROWS_PER_FRAGMENT`]`)`. It is not
+/// lancedb's `small_fragments`: that count uses a 100_000-row threshold,
+/// so `small_fragments == fragments` on every kb corpus and a `>= 32`
+/// bar never stays satisfied. See [`COMPACT_EXCESS_FRAGMENTS`].
 ///
 /// The startup path (`periodic == false`) additionally honours the
-/// fragments-per-row ratio (pathologically fragmented huge corpora) and
-/// the absolute version cap (manifest pile-up) — both safe at startup: it
-/// runs once, and versions left from previous days are outside lance's
-/// retention window so a prune actually removes them.
+/// fragments-per-row ratio (pathologically fragmented tiny corpora the
+/// excess bar does not cover) and the absolute version cap (manifest
+/// pile-up). Both are safe at startup: it runs once, and versions left
+/// from previous days are outside the prune retention window so a prune
+/// actually removes them.
 ///
-/// The periodic path (`periodic == true`) deliberately does NOT honour
-/// the version cap: inside lance's retention window those versions can't
-/// be pruned, so a version-cap trigger would re-fire on every reconcile
-/// tick forever (a compaction storm) while never reducing the count.
-/// `rows == 0` short-circuits the ratio term so a barely-indexed kb
-/// doesn't trip on a tiny absolute fragment count.
-fn wants_compaction(
-    rows: u64,
-    fragments: u64,
-    small_fragments: u64,
-    versions: u64,
-    periodic: bool,
-) -> bool {
-    if small_fragments >= COMPACT_SMALL_FRAGMENTS {
+/// The periodic path deliberately does NOT honour the version cap:
+/// inside the retention window those versions can't be pruned, so a
+/// version-cap trigger would re-fire on every tick forever. `rows == 0`
+/// suppresses both the excess and ratio terms so an empty dataset
+/// doesn't trip on a leftover fragment count.
+fn wants_compaction(rows: u64, fragments: u64, versions: u64, periodic: bool) -> bool {
+    if fragment_excess(rows, fragments) >= COMPACT_EXCESS_FRAGMENTS {
         return true;
     }
     if periodic {
         return false;
     }
-    let frag_per_row = if rows == 0 {
-        0
-    } else {
-        fragments / rows.max(1)
-    };
+    let frag_per_row = fragments.checked_div(rows).unwrap_or(0);
     frag_per_row > COMPACT_FRAGMENTS_PER_ROW || versions > COMPACT_MAX_VERSIONS
 }
 
-/// Inspect one kb's dataset and, if [`needs_compaction`], run
+/// Fragments beyond what a compacted corpus of `rows` should hold.
+/// `0` when `rows == 0` (no excess, no ratio).
+fn fragment_excess(rows: u64, fragments: u64) -> u64 {
+    if rows == 0 {
+        return 0;
+    }
+    let expected = rows.div_ceil(COMPACT_TARGET_ROWS_PER_FRAGMENT);
+    fragments.saturating_sub(expected)
+}
+
+/// Refuse a re-compact while `elapsed` since the last successful pass is
+/// still under 10× that pass's duration.
+///
+/// `None` (never compacted) never skips — a first pass must still run.
+/// A zero duration never skips: `elapsed < 0` is impossible, and recording
+/// a 0 must not lock the corpus out forever.
+fn compact_backoff_skip(last_duration: Option<Duration>, elapsed: Duration) -> bool {
+    match last_duration {
+        None => false,
+        Some(d) if d.is_zero() => false,
+        Some(d) => elapsed < d.saturating_mul(10),
+    }
+}
+
+/// Inspect one kb's dataset and, if [`wants_compaction`] trips, run
 /// `compact_all` through the storage actor. Shared by the startup pass
-/// and the periodic reconcile loop; `trigger` (`"startup"` | `"periodic"`)
+/// and the periodic ticker; `trigger` (`"startup"` | `"periodic"`)
 /// tags the log lines + `maintenance.compact.*` SSE envelopes.
 ///
 /// Reads route through the same per-kb actor, so a compaction pass
-/// briefly blocks search for this kb while it runs. That's an acceptable
-/// trade because the heuristic only fires when the dataset is genuinely
-/// fragmented, and a compaction resets fragments + versions — so it
-/// self-throttles to roughly once per `COMPACT_MAX_VERSIONS` writes, and
-/// the alternative (no periodic pass) is permanent latency creep on a
-/// daemon that never restarts.
+/// briefly blocks search for this kb while it runs. Acceptable because
+/// the periodic trigger only fires when fragment count is well above
+/// `ceil(rows / target)`, and a pass merges the sub-target fragments so
+/// the excess drops. It does not self-resolve via lancedb's
+/// `small_fragments` (100_000-row threshold): that count equals
+/// `fragments` on every kb corpus.
+///
+/// A pass that would otherwise run is skipped while
+/// [`compact_backoff_skip`] is inside 10× the last successful duration
+/// recorded on the storage actor.
 async fn maybe_compact_kb(
     kb: &str,
     storage: &kb_core::storage::StorageHandle,
@@ -1018,13 +1091,7 @@ async fn maybe_compact_kb(
             return;
         }
     };
-    if !wants_compaction(
-        stats.rows,
-        stats.fragments,
-        stats.small_fragments,
-        stats.versions,
-        periodic,
-    ) {
+    if !wants_compaction(stats.rows, stats.fragments, stats.versions, periodic) {
         tracing::debug!(
             kb = %kb, trigger,
             rows = stats.rows, fragments = stats.fragments,
@@ -1032,6 +1099,20 @@ async fn maybe_compact_kb(
             "auto-compact: dataset healthy, skipping"
         );
         return;
+    }
+    if let Some(last) = storage.last_compact() {
+        let elapsed = last.ended.elapsed();
+        if compact_backoff_skip(Some(last.duration), elapsed) {
+            tracing::debug!(
+                kb = %kb,
+                trigger,
+                elapsed_ms = elapsed.as_millis() as u64,
+                last_ms = last.duration.as_millis() as u64,
+                backoff_ms = last.duration.saturating_mul(10).as_millis() as u64,
+                "auto-compact: skipping, within 10x last pass duration",
+            );
+            return;
+        }
     }
     tracing::info!(
         kb = %kb, trigger,
@@ -1118,6 +1199,102 @@ fn retention_windows(
     let history = retention.history_max_age_secs();
     let reading = retention.reading_sections_max_age_secs();
     (history.is_some() || reading.is_some()).then_some((history, reading))
+}
+
+/// Period for `[backup] schedule_hours`. `None` and `Some(0)` are unset,
+/// so the caller spawns nothing. A positive count is the tick interval;
+/// the task also runs once at boot (`interval`'s first tick).
+fn backup_schedule_period(backup: &kb_core::config::BackupSection) -> Option<Duration> {
+    let hours = backup.schedule_hours.filter(|h| *h > 0)?;
+    Some(Duration::from_secs(hours.saturating_mul(3_600)))
+}
+
+enum ScheduledBackup {
+    Skipped,
+    Written(std::path::PathBuf),
+}
+
+/// One kb on a schedule tick. Skips when the sqlite index has no writes
+/// newer than that kb's newest export tarball. The writer is in-process
+/// (`tar` + `VACUUM INTO`) — this must not exec the `kb` binary, and it
+/// does not take a maintenance lock.
+async fn backup_one_kb(paths: &kb_core::paths::KbPaths, kb: &KbName) -> Result<ScheduledBackup> {
+    if kb_core::storage::backup::should_skip_scheduled_backup(
+        &paths.kb_sqlite(kb),
+        &paths.exports,
+        kb.as_str(),
+    ) {
+        return Ok(ScheduledBackup::Skipped);
+    }
+    let path = kb_core::storage::backup::write_kb_export(paths, kb)
+        .await
+        .with_context(|| format!("export tarball for {kb}"))?;
+    Ok(ScheduledBackup::Written(path))
+}
+
+/// Boot-then-period export task. `None` when `[backup] schedule_hours` is
+/// unset, so an unconfigured daemon pays nothing. Watches the shutdown
+/// watch and is joined in `teardown_tasks`, so an in-process config reload
+/// can't leak it. Does not warn about a missing `remote_cmd` — config load
+/// already does.
+fn spawn_backup_schedule(
+    handles: Arc<crate::state::KbHandles>,
+    backup: &kb_core::config::BackupSection,
+) -> Option<tokio::task::JoinHandle<()>> {
+    use tokio::time::{interval, MissedTickBehavior};
+    let period = backup_schedule_period(backup)?;
+    let mut shutdown = handles.shutdown.subscribe();
+    tracing::info!(
+        schedule_hours = ?backup.schedule_hours,
+        "backup schedule enabled"
+    );
+    Some(tokio::spawn(async move {
+        // First tick is immediate → one pass at boot, then once per period.
+        // Skip missed ticks so a slow export doesn't burst into another.
+        let mut ticker = interval(period);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.wait_for(|&down| down) => break,
+                _ = ticker.tick() => {}
+            }
+            let names: Vec<KbName> = handles.kbs.keys().cloned().collect();
+            for kb_name in &names {
+                if *shutdown.borrow() {
+                    return;
+                }
+                match backup_one_kb(&handles.paths, kb_name).await {
+                    Ok(ScheduledBackup::Skipped) => {
+                        tracing::debug!(
+                            kb = %kb_name,
+                            "backup schedule: index unchanged since newest tarball, skipped"
+                        );
+                    }
+                    Ok(ScheduledBackup::Written(path)) => {
+                        tracing::info!(
+                            kb = %kb_name,
+                            path = %path.display(),
+                            "backup schedule: wrote export tarball"
+                        );
+                        handles.bus.emit(
+                            "maintenance.backup.written",
+                            serde_json::json!({
+                                "kb": kb_name.as_str(),
+                                "path": path.display().to_string(),
+                            }),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            kb = %kb_name,
+                            error = %e,
+                            "backup schedule: export failed"
+                        );
+                    }
+                }
+            }
+        }
+    }))
 }
 
 /// R3 — daemon-wide opt-in retention prune. One background task that wakes
@@ -1370,6 +1547,7 @@ pub async fn serve_on_random_port_with_paths_and_spa(
             handles.shutdown.subscribe(),
             handles.review_lock_for(kb_name),
             ext_map,
+            &handles.embed_cache,
         )
         .await
         .with_context(|| format!("bring up kb {kb_name}"))?;
@@ -1595,6 +1773,10 @@ async fn bring_up_kb(
     // `KbConfig`), exactly like `resolved_model`. Installed on the ingest sink
     // (walk/watcher/reconcile gates) AND handed to the indexer (parse dispatch).
     ext_map: kb_core::extmap::ExtensionMap,
+    // Process-wide query-embed cache. Memory-scoped kbs warm it once at
+    // boot; a later memory kb on the same model is a cache hit. Non-memory
+    // corpora are not warmed, and a warm failure must not abort bring-up.
+    embed_cache: &Arc<crate::embed_cache::QueryEmbedCache>,
 ) -> Result<(KbContext, Vec<tokio::task::JoinHandle<()>>)> {
     use kb_core::ids::SourceSlug;
 
@@ -1800,6 +1982,22 @@ async fn bring_up_kb(
         None
     };
 
+    // Pay the cold memory-recall embed at boot, not on the first
+    // `/api/memory/recall`. Only memory-scoped kbs with an embedder; the
+    // cache is keyed on model + query, so a later memory kb on the same
+    // model hits. Failure is logged and boot continues.
+    if kb_section.memory_scope.is_some() {
+        if let Some(emb) = embedder.as_ref() {
+            if let Err(e) = crate::embed_cache::warm_memory_query_cache(embed_cache, emb).await {
+                tracing::warn!(
+                    kb = %kb_name,
+                    error = %e,
+                    "memory query-cache warm-start failed; continuing boot"
+                );
+            }
+        }
+    }
+
     // SQ4 — optional cross-encoder reranker. Opt-in per kb; spawns a
     // `kb-embedder --reranker` subprocess (niced like the embedder) so the
     // daemon links no ONNX. The model load is slow, so the spawn+handshake
@@ -2004,8 +2202,10 @@ async fn bring_up_kb(
     // a safety net for any class of missed event. Setting
     // `[indexer] reconcile_secs = 0` (or `KB_RECONCILE_SECS=0`, or —
     // PF-I1 — this kb's own `[kb.<name>] reconcile_secs = 0`)
-    // disables. The first tick fires after `interval`, not zero, so it
-    // doesn't pile on top of the watcher's startup initial walk.
+    // disables. The first tick is a stable per-kb offset inside the
+    // interval (never zero). `now + interval` for every corpus
+    // phase-locks a multi-kb host so every reconcile wakes together.
+    // The period stays `interval`.
     // (`reconcile_secs` was resolved above, before the indexer spawn.)
     // R1 — shared snapshot of the last completed reconcile pass. Lives
     // on the KbContext so /api/stats can read it; written by the
@@ -2023,10 +2223,12 @@ async fn bring_up_kb(
         let skips_for_reconcile = kb_section.skip_patterns.clone();
         let last_reconcile_for_task = last_reconcile.clone();
         let mut rec_shutdown = shutdown_rx.clone();
+        let interval = Duration::from_secs(reconcile_secs);
+        let first_delay = reconcile_first_delay(kb_name.as_str(), interval);
+        let first_delay_ms = first_delay.as_millis() as u64;
         let rec_handle = tokio::spawn(async move {
-            let interval = std::time::Duration::from_secs(reconcile_secs);
             let mut ticker =
-                tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
+                tokio::time::interval_at(tokio::time::Instant::now() + first_delay, interval);
             // Skip ticks we couldn't run on time (e.g. an oversized
             // walk overran the interval) — we just want "walk again
             // soon", not a queued backlog.
@@ -2084,6 +2286,7 @@ async fn bring_up_kb(
         tracing::info!(
             kb = %kb_name,
             reconcile_secs,
+            first_delay_ms,
             "reconciliation pass scheduled",
         );
     } else {
@@ -2325,17 +2528,18 @@ mod tests {
         Db::open(&path).expect("re-opening at an equal epoch must boot");
     }
 
-    /// A freshly compacted dataset (few small fragments, few versions)
-    /// must NOT compact in either mode.
+    /// A freshly compacted dataset (few fragments, few versions) must NOT
+    /// compact in either mode. `(rows=5000, fragments=33)` is the pin: excess
+    /// over `ceil(5000/2048)` is 30, under the slack, so the periodic path
+    /// does not fire.
     #[test]
     fn wants_compaction_healthy_is_false() {
-        assert!(!wants_compaction(91, 1, 0, 5, false));
-        assert!(!wants_compaction(91, 1, 0, 5, true));
-        assert!(!wants_compaction(10_000, 200, 4, 50, true));
+        assert!(!wants_compaction(91, 1, 5, false));
+        assert!(!wants_compaction(91, 1, 5, true));
+        assert!(!wants_compaction(5_000, 33, 5, true));
+        assert!(!wants_compaction(5_000, 33, 5, false));
     }
 
-    /// The small-fragment trigger fires in BOTH modes — it's the signal
-    /// that tracks real latency rot and is self-resolving (compaction
     /// SC1 — the periodic auto-compact ticker is decoupled from the
     /// reconcile loop: `reconcile_secs = 0` no longer disables it (it
     /// falls back to the default cadence), and a configured reconcile
@@ -2347,65 +2551,105 @@ mod tests {
         assert_eq!(compact_check_interval_secs(3600), 3600);
     }
 
-    /// merges them away, so it won't re-fire).
+    /// perf-05 — first reconcile ticks are a stable per-kb offset inside
+    /// the interval, not one shared `now + interval` deadline.
     #[test]
-    fn wants_compaction_small_fragments_fires_both_modes() {
-        assert!(wants_compaction(91, 60, COMPACT_SMALL_FRAGMENTS, 5, true));
-        assert!(wants_compaction(91, 60, COMPACT_SMALL_FRAGMENTS, 5, false));
-        // One under the bar → no compaction.
-        assert!(!wants_compaction(
-            91,
-            60,
-            COMPACT_SMALL_FRAGMENTS - 1,
-            5,
-            true
+    fn reconcile_first_delay_spreads_corpora_inside_the_interval() {
+        let interval = Duration::from_secs(600);
+        let names = ["platform", "memory", "sessions", "docs", "kb"];
+        let delays: Vec<Duration> = names
+            .iter()
+            .map(|n| reconcile_first_delay(n, interval))
+            .collect();
+        assert!(
+            delays.iter().all(|d| !d.is_zero() && *d <= interval),
+            "every first delay must sit in (0, interval]: {delays:?}"
+        );
+        assert!(
+            delays.iter().any(|d| *d != delays[0]),
+            "distinct corpora must not all share the first deadline: {delays:?}"
+        );
+        for n in names {
+            assert_eq!(
+                reconcile_first_delay(n, interval),
+                reconcile_first_delay(n, interval),
+                "offset for {n} must be stable"
+            );
+        }
+        // Sub-2 ms intervals cannot be split at millisecond granularity.
+        assert_eq!(
+            reconcile_first_delay("platform", Duration::from_millis(1)),
+            Duration::from_millis(1)
+        );
+    }
+
+    /// A 90s pass is not repeated within 15 minutes (`10 × 90s`). No prior
+    /// duration still runs. A zero duration does not lock the corpus out.
+    #[test]
+    fn compact_backoff_skips_within_10x_last_duration() {
+        let ninety = Duration::from_secs(90);
+        let fifteen_min = Duration::from_secs(15 * 60);
+        assert!(
+            compact_backoff_skip(Some(ninety), Duration::from_secs(15 * 60 - 1)),
+            "a 90s pass must not repeat inside ~15 minutes"
+        );
+        assert!(
+            !compact_backoff_skip(Some(ninety), fifteen_min),
+            "the window is strict < 10×, so the boundary may run"
+        );
+        assert!(!compact_backoff_skip(None, Duration::ZERO));
+        assert!(
+            !compact_backoff_skip(None, fifteen_min),
+            "a corpus that has never compacted must still compact"
+        );
+        assert!(
+            !compact_backoff_skip(Some(Duration::ZERO), Duration::from_secs(3600)),
+            "a 0 duration must not lock the corpus out"
+        );
+        assert!(compact_backoff_skip(
+            Some(Duration::from_secs(1)),
+            Duration::from_secs(9)
         ));
+        assert!(!compact_backoff_skip(
+            Some(Duration::from_secs(1)),
+            Duration::from_secs(10)
+        ));
+    }
+
+    /// Excess over `ceil(rows / target)` fires in both modes. lancedb's
+    /// `small_fragments` is not the signal. `(rows=5000, fragments=200)`
+    /// is the pin for the periodic path.
+    #[test]
+    fn wants_compaction_excess_fragments_fires_both_modes() {
+        assert!(wants_compaction(5_000, 200, 5, true));
+        assert!(wants_compaction(5_000, 200, 5, false));
+        // 91 rows expects 1 fragment. 32 total is excess 31 — one under.
+        assert!(!wants_compaction(91, COMPACT_EXCESS_FRAGMENTS, 5, true));
+        assert!(wants_compaction(91, COMPACT_EXCESS_FRAGMENTS + 1, 5, true));
+        assert!(wants_compaction(91, COMPACT_EXCESS_FRAGMENTS + 1, 5, false));
     }
 
     /// The version cap fires at STARTUP (old versions are prunable on a
     /// fresh boot) but is deliberately IGNORED in the periodic path —
-    /// recent versions can't be pruned inside lance's retention window, so
-    /// honouring it there compacts every reconcile tick forever (the storm
-    /// the end-to-end test caught).
+    /// recent versions can't be pruned inside the retention window, so
+    /// honouring it there compacts every tick forever.
     #[test]
     fn wants_compaction_version_cap_is_startup_only() {
-        assert!(wants_compaction(
-            91,
-            1,
-            2,
-            COMPACT_MAX_VERSIONS + 100,
-            false
-        ));
-        assert!(!wants_compaction(
-            91,
-            1,
-            2,
-            COMPACT_MAX_VERSIONS + 100,
-            true
-        ));
+        assert!(wants_compaction(91, 1, COMPACT_MAX_VERSIONS + 100, false));
+        assert!(!wants_compaction(91, 1, COMPACT_MAX_VERSIONS + 100, true));
     }
 
-    /// The fragments-per-row ratio is also startup-only (it only trips on
-    /// huge corpora), and `rows == 0` guards the ratio term.
+    /// The fragments-per-row ratio is also startup-only. It only matters
+    /// when absolute excess is still under the bar (a tiny corpus).
+    /// `rows == 0` guards both terms.
     #[test]
     fn wants_compaction_ratio_is_startup_only_and_guards_empty() {
-        assert!(wants_compaction(
-            10,
-            10 * (COMPACT_FRAGMENTS_PER_ROW + 1),
-            2,
-            5,
-            false
-        ));
-        assert!(!wants_compaction(
-            10,
-            10 * (COMPACT_FRAGMENTS_PER_ROW + 1),
-            2,
-            5,
-            true
-        ));
-        // rows == 0 → ratio suppressed.
-        assert!(!wants_compaction(0, 1000, 2, 5, false));
-        assert!(!wants_compaction(0, 0, 0, 0, true));
+        // 3 rows, 27 fragments → 9 per row > 8, excess = 26 < 32.
+        let shredded = 3 * (COMPACT_FRAGMENTS_PER_ROW + 1);
+        assert!(wants_compaction(3, shredded, 5, false));
+        assert!(!wants_compaction(3, shredded, 5, true));
+        assert!(!wants_compaction(0, 1000, 5, false));
+        assert!(!wants_compaction(0, 0, 0, true));
     }
 
     /// Shared-embedder dedup contract: kbs on the same model resolve to ONE
@@ -2672,5 +2916,133 @@ mod tests {
         let path = tmp.path().join("kb.toml");
         std::fs::write(&path, "[server]\naddr = \"127.0.0.1:4321\"\n").unwrap();
         assert_eq!(load_config_for_serve(&path).server.addr, "127.0.0.1:4321");
+    }
+
+    fn backup_section(hours: Option<u64>) -> kb_core::config::BackupSection {
+        kb_core::config::BackupSection {
+            remote_cmd: None,
+            remote_dest: None,
+            schedule_hours: hours,
+        }
+    }
+
+    #[test]
+    fn backup_schedule_period_unset_spawns_nothing() {
+        assert!(
+            backup_schedule_period(&backup_section(None)).is_none(),
+            "absent schedule_hours must not arm a task"
+        );
+        assert!(
+            backup_schedule_period(&backup_section(Some(0))).is_none(),
+            "0 is unset, not a period"
+        );
+        assert_eq!(
+            backup_schedule_period(&backup_section(Some(24))),
+            Some(Duration::from_secs(24 * 3_600))
+        );
+    }
+
+    #[tokio::test]
+    async fn backup_schedule_joins_on_shutdown_and_unset_spawns_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Arc::new(KbPaths::rooted_at(tmp.path(), "sched"));
+        let handles = Arc::new(KbHandles::new("sched".into(), paths, chrono::Utc::now()));
+        assert!(spawn_backup_schedule(handles.clone(), &backup_section(None)).is_none());
+        assert!(spawn_backup_schedule(handles.clone(), &backup_section(Some(0))).is_none());
+
+        // Keep a receiver alive so `send` succeeds even if the task has not
+        // subscribed yet. The watch value is what the task observes.
+        let _rx = handles.shutdown.subscribe();
+        let task = spawn_backup_schedule(handles.clone(), &backup_section(Some(24)))
+            .expect("a positive schedule_hours spawns");
+        handles.shutdown.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("shutdown must stop the backup schedule task")
+            .expect("task did not panic");
+    }
+
+    #[tokio::test]
+    async fn backup_one_kb_skips_unchanged_index_and_writes_after_a_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "sched");
+        paths.ensure_dirs().unwrap();
+        let kb = KbName::new("notes").unwrap();
+        std::fs::create_dir_all(paths.kb_state(&kb)).unwrap();
+        {
+            let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&kb)).unwrap();
+            db.history_record_search("hello", 1_700_000_000, "operator")
+                .unwrap();
+        }
+        let ancient = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let recent = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_003_600);
+        std::fs::File::options()
+            .write(true)
+            .open(paths.kb_sqlite(&kb))
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+        // WAL commits do not bump index.db. A sidecar left at "now" by
+        // Db::open would look like a write newer than the tarball.
+        let wal = {
+            let mut os = paths.kb_sqlite(&kb).into_os_string();
+            os.push("-wal");
+            std::path::PathBuf::from(os)
+        };
+        if wal.is_file() {
+            std::fs::File::options()
+                .write(true)
+                .open(&wal)
+                .unwrap()
+                .set_modified(ancient)
+                .unwrap();
+        }
+        let prior = paths.exports.join("notes-20260101-000000.tar.gz");
+        std::fs::write(&prior, b"already exported").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&prior)
+            .unwrap()
+            .set_modified(recent)
+            .unwrap();
+
+        match backup_one_kb(&paths, &kb).await.unwrap() {
+            ScheduledBackup::Skipped => {}
+            ScheduledBackup::Written(path) => {
+                panic!("unchanged index must be skipped, wrote {}", path.display())
+            }
+        }
+        let stamped = std::fs::read_dir(&paths.exports)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name().to_str().is_some_and(|n| {
+                    n.starts_with("notes-")
+                        && n.ends_with(".tar.gz")
+                        && n != "notes-20260101-000000.tar.gz"
+                })
+            })
+            .count();
+        assert_eq!(stamped, 0, "a skip must not write another tarball");
+
+        std::fs::File::options()
+            .write(true)
+            .open(paths.kb_sqlite(&kb))
+            .unwrap()
+            .set_modified(recent + Duration::from_secs(60))
+            .unwrap();
+        match backup_one_kb(&paths, &kb).await.unwrap() {
+            ScheduledBackup::Written(path) => {
+                assert!(path.is_file(), "written path missing: {}", path.display());
+                assert!(
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("notes-") && n.ends_with(".tar.gz")),
+                    "export must land in the scheduled name, got {}",
+                    path.display()
+                );
+            }
+            ScheduledBackup::Skipped => panic!("an index write since the tarball must export"),
+        }
     }
 }

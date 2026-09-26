@@ -508,7 +508,9 @@ fn resolve_code(
         context_snippet: None,
     };
 
-    let Ok(read) = crate::routes::read_repo_file(ctx.repo, &path, None) else {
+    let Ok(read) =
+        crate::routes::read_repo_file(ctx.repo, &path, crate::routes::RevResolver::work_tree())
+    else {
         out.state = STATE_ORPHAN;
         out.reason = REASON_PATH_GONE;
         out.code = Some(card);

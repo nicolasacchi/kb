@@ -2564,8 +2564,11 @@ async fn start_pr_merge_base_default_is_chosen_and_base_source_is_recorded() {
     assert_eq!(show["pr_meta"]["base_source"], "merge-base");
 }
 
+/// RS-U6 — the stale-mirror 409 is gone: ps1's base already comes from the
+/// freshly fetched `origin/<default>`, so a stale LOCAL default branch is a
+/// `stale-mirror` warning on a 201, never a refusal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn start_pr_stale_mirror_refuses_with_the_retry_hint() {
+async fn start_pr_stale_mirror_is_a_warning_not_a_refusal() {
     let _guard = SERIAL.lock().await;
     let extra = kb_code_server::reviews::STALE_MIRROR_BEHIND_LIMIT + 10;
     let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(43, extra as u32);
@@ -2581,30 +2584,18 @@ async fn start_pr_stale_mirror_refuses_with_the_retry_hint() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 409, "{}", resp.text().await.unwrap());
+    assert_eq!(resp.status(), 201, "{}", resp.text().await.unwrap());
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["type"], "urn:kb:errors:stale-mirror");
-    let msg = body["error"].as_str().unwrap();
-    assert!(msg.contains("0 ahead"), "{msg}");
-    assert!(msg.contains(&format!("{extra} behind")), "{msg}");
-    assert!(
-        msg.contains(&format!(
-            "kb-code review start-pr --repo fixture --pr 43 --base {base_sha}"
-        )),
-        "{msg}"
-    );
-
-    // No review row was written.
-    let list: serde_json::Value = client
-        .get(format!("{base}/api/reviews"))
-        .query(&[("repo", "fixture")])
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert!(list["reviews"].as_array().unwrap().is_empty());
+    assert_eq!(body["base_ref"], "refs/remotes/origin/main", "{body}");
+    assert_eq!(body["base_source"], "merge-base");
+    assert_eq!(body["base_sha"], base_sha.as_str(), "{body}");
+    let warnings = body["warnings"].as_array().expect("warnings[]");
+    let w = warnings
+        .iter()
+        .find(|w| w["code"] == "stale-mirror")
+        .unwrap_or_else(|| panic!("no stale-mirror warning: {body}"));
+    let msg = w["message"].as_str().unwrap();
+    assert!(msg.contains(&format!("{extra} commits behind")), "{msg}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2788,11 +2779,13 @@ async fn start_pr_async_job_fails_with_the_error_and_404s_for_an_unknown_id() {
     assert_eq!(missing.status(), 404);
 }
 
+/// RS-U6 — the async job path agrees with the sync route: no stale-mirror
+/// refusal any more, the job completes and carries the warning.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn start_pr_async_job_surfaces_the_stale_mirror_refusal_typed() {
+async fn start_pr_async_job_reports_the_stale_mirror_as_a_warning() {
     let _guard = SERIAL.lock().await;
     let extra = kb_code_server::reviews::STALE_MIRROR_BEHIND_LIMIT + 10;
-    let (_r, _b, _c, dir, base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(48, extra as u32);
+    let (_r, _b, _c, dir, _base_sha, pr_sha, _tip) = fixture_pr_repo_remote_main(48, extra as u32);
 
     let gh_router = gh_pull_router(48, &pr_sha, std::time::Duration::ZERO);
     let (gh_addr, _gh) = mock_github_server(gh_router).await;
@@ -2812,13 +2805,12 @@ async fn start_pr_async_job_surfaces_the_stale_mirror_refusal_typed() {
         .to_string();
 
     let settled = poll_job(&base, &client, &job_id).await;
-    assert_eq!(settled["status"], "failed", "{settled}");
-    assert_eq!(settled["error_type"], "urn:kb:errors:stale-mirror");
-    let err = settled["error"].as_str().unwrap();
+    assert_eq!(settled["status"], "done", "{settled}");
+    let warnings = settled["result"]["warnings"]
+        .as_array()
+        .expect("warnings[]");
     assert!(
-        err.contains(&format!(
-            "kb-code review start-pr --repo fixture --pr 48 --base {base_sha}"
-        )),
-        "{err}"
+        warnings.iter().any(|w| w["code"] == "stale-mirror"),
+        "{settled}"
     );
 }

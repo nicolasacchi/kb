@@ -1,0 +1,21 @@
+{
+  "base_sha": "string",
+  "files": [
+    {
+      "additions": "number",
+      "blob_sha": "string",
+      "deletions": "number",
+      "old_path": "null",
+      "open_annotations": "number",
+      "path": "string",
+      "status": "string",
+      "viewed": "bool",
+      "viewed_stale": "bool"
+    }
+  ],
+  "hunks_viewed": [],
+  "ps_number": "number",
+  "review_id": "number",
+  "schema": "string",
+  "tip_sha": "string"
+}

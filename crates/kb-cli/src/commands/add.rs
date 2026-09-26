@@ -80,6 +80,7 @@ pub fn run(
                 atlas: None,
                 templates: Default::default(),
                 memory_scope: None,
+                project_slugs: Vec::new(),
                 default_search_category: None,
                 code_url: None,
                 decay_policy: None,
@@ -91,6 +92,7 @@ pub fn run(
                 capture_dir: None,
                 resurface: None,
                 slo: None,
+                id_patterns: Vec::new(),
             });
             "Registered"
         }

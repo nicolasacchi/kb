@@ -95,6 +95,14 @@ pub struct SweepBody {
     pub all_repos: bool,
     #[serde(default)]
     pub include_closed: bool,
+    /// RS-U7 (D18) — default OFF (a dry run): `suggest_close` is computed
+    /// and reported either way, but a review's `state` is written to
+    /// `closed` only when this is `true`. Applying NEVER widens which
+    /// reviews are suggested — it only decides whether the ones already
+    /// `suggest_close:true` (this sweep's OWN live PR read, not a stale
+    /// prior snapshot) get closed.
+    #[serde(default)]
+    pub apply: bool,
 }
 
 /// One review's sweep outcome — the row plus, when its stored snapshot
@@ -175,6 +183,7 @@ async fn sweep_one(
     state: SharedState,
     review: ReviewRow,
     binding: ReviewPrBinding,
+    apply: bool,
 ) -> Result<SweepOutcome, ApiError> {
     let pr_number = binding
         .pr_number
@@ -186,9 +195,11 @@ async fn sweep_one(
         .run_blocking(move |store| local_only_fields(store, &review_for_local))
         .await?;
 
-    let repo_root = {
+    let (repo_root, git_ctx) = {
         let (repo_entry, _repo_id) = find_repo(&state, &review.repo)?;
-        repo_entry.path.clone()
+        let repo_entry = repo_entry.clone();
+        let git_ctx = crate::git::roots::GitCtx::resolve_entry(&state.store, &repo_entry).await;
+        (repo_entry.path, git_ctx)
     };
 
     let root_for_origin = repo_root.clone();
@@ -267,24 +278,28 @@ async fn sweep_one(
     let new_head_commits = if head_drift {
         match &old_head {
             Some(old) => {
-                let root2 = repo_root.clone();
+                let root2 = git_ctx.clone();
                 let old2 = old.clone();
                 let new2 = pull.head_sha.clone();
                 let resolved: Result<(String, String), ReviewGitError> =
                     tokio::task::spawn_blocking(move || {
-                        let o =
-                            reviews::resolve_commit_sha(&root2, &reviews::parse_user_ref(&old2)?)?;
-                        let n =
-                            reviews::resolve_commit_sha(&root2, &reviews::parse_user_ref(&new2)?)?;
+                        let (old_spec, new_spec) = (
+                            reviews::parse_user_ref(&old2)?,
+                            reviews::parse_user_ref(&new2)?,
+                        );
+                        let o = root2
+                            .read_with_fallback(|r| reviews::resolve_commit_sha(r, &old_spec))?;
+                        let n = root2
+                            .read_with_fallback(|r| reviews::resolve_commit_sha(r, &new_spec))?;
                         Ok((o, n))
                     })
                     .await
                     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 match resolved {
                     Ok((o, n)) => {
-                        let root3 = repo_root.clone();
+                        let root3 = git_ctx.clone();
                         let count = tokio::task::spawn_blocking(move || {
-                            reviews::commit_count(&root3, &o, &n)
+                            root3.read_with_fallback(|r| reviews::commit_count(r, &o, &n))
                         })
                         .await
                         .map_err(|e| {
@@ -351,6 +366,31 @@ async fn sweep_one(
         })
         .await?;
 
+    // RS-U7 (D18) — `apply` NEVER widens what `suggest_close` already
+    // decided above from THIS sweep's own live PR read; it only decides
+    // whether a `suggest_close:true` row's `state` is actually written.
+    // `close_reason` records WHY, for the audit trail an ordinary
+    // `PATCH /reviews/{id}` close never has to carry.
+    let mut closed = false;
+    let mut close_reason: Option<&'static str> = None;
+    if apply && suggest_close {
+        let reason = if pull.merged {
+            "pr-merged"
+        } else {
+            "pr-closed"
+        };
+        let review_id2 = review.id;
+        let ok = state
+            .store
+            .run_blocking(move |store| store.update_review(review_id2, None, Some("closed"), now))
+            .await?;
+        if ok {
+            closed = true;
+            close_reason = Some(reason);
+            reviews::emit_review_changed(&state.bus, review.id, &review.repo, "meta", false);
+        }
+    }
+
     let row = serde_json::json!({
         "review_id": review.id,
         "pr_number": pr_number,
@@ -362,6 +402,8 @@ async fn sweep_one(
         "verdict_stale": verdict_stale,
         "unanswered_questions": unanswered_questions,
         "suggest_close": suggest_close,
+        "closed": closed,
+        "close_reason": close_reason,
         "unavailable_reason": serde_json::Value::Null,
     });
 
@@ -389,6 +431,8 @@ fn unavailable_row(
         "verdict_stale": verdict_stale,
         "unanswered_questions": unanswered_questions,
         "suggest_close": false,
+        "closed": false,
+        "close_reason": serde_json::Value::Null,
         "unavailable_reason": reason,
     })
 }
@@ -439,10 +483,11 @@ pub async fn sweep_route(
         })
         .await?;
 
+    let apply = body.apply;
     let outcomes: Vec<Result<SweepOutcome, ApiError>> =
         stream::iter(targets.into_iter().map(|(review, binding)| {
             let state = state.clone();
-            async move { sweep_one(state, review, binding).await }
+            async move { sweep_one(state, review, binding, apply).await }
         }))
         .buffer_unordered(SWEEP_CONCURRENCY)
         .collect()
@@ -482,16 +527,22 @@ pub async fn sweep_route(
         .iter()
         .filter(|r| r["suggest_close"].as_bool().unwrap_or(false))
         .count();
+    let closed = rows
+        .iter()
+        .filter(|r| r["closed"].as_bool().unwrap_or(false))
+        .count();
 
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
             "schema": SCHEMA,
+            "apply": apply,
             "summary": {
                 "swept": rows.len(),
                 "refreshed": refreshed,
                 "unavailable": unavailable,
                 "suggest_close": suggest_close,
+                "closed": closed,
             },
             "rows": rows,
         })),

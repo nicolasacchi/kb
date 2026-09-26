@@ -172,6 +172,128 @@ async fn checkout_reports_a_clean_error_for_an_unknown_ref() {
     assert_eq!(git_out(dir, &["symbolic-ref", "--short", "HEAD"]), "main");
 }
 
+/// `for-each-ref` of `dir` — never lists `HEAD`, so byte-identical
+/// before/after is exactly "only HEAD moved, no ref was written"
+/// (BUILD-BRIEF U8's invariance test).
+fn ref_tree(dir: &Path) -> Vec<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+        .output()
+        .expect("git runs");
+    assert!(out.status.success());
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkout_of_a_store_only_review_tip_fetches_by_sha_and_writes_no_refs_kbc() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = fixture_two_branches();
+    let dir = repo_tmp.path();
+    let (daemon_tmp, base) = boot_with_repo("r", dir).await;
+
+    // A commit that will exist ONLY inside a kb-owned review store — an
+    // unrelated repo, fetched into a bare store under a review-ref name
+    // that never touches `dir`'s own refs (ancestry doesn't matter:
+    // `allowAnySHA1InWant` fetches by sha regardless). Built under a
+    // SEPARATE tempdir, never under `dir` itself — `dir` IS the checked-out
+    // repo's own working tree, and a stray subdirectory there would make
+    // `git status` see it as untracked and trip the dirty-tree refusal.
+    let scratch_tmp = tempfile::tempdir().unwrap();
+    let scratch = scratch_tmp.path();
+    let src = scratch.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    git(&src, &["init", "-q", "-b", "main"]);
+    git(&src, &["config", "user.email", "test@example.com"]);
+    git(&src, &["config", "user.name", "Test"]);
+    std::fs::write(src.join("b.txt"), "review tip\n").unwrap();
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-q", "-m", "review tip"]);
+    let tip = git_out(&src, &["rev-parse", "HEAD"]);
+
+    let store_dir = scratch.join("store.git");
+    git(
+        scratch,
+        &["init", "-q", "--bare", store_dir.to_str().unwrap()],
+    );
+    std::fs::write(
+        store_dir.join("config"),
+        "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
+         [uploadpack]\n\tallowAnySHA1InWant = true\n",
+    )
+    .unwrap();
+    git(
+        &store_dir,
+        &[
+            "fetch",
+            "-q",
+            src.to_str().unwrap(),
+            "HEAD:refs/kbc/review/1/ps1",
+        ],
+    );
+
+    // Register a `ready` review store for repo "r" directly on the
+    // daemon's own sqlite volume — the seeding job that would normally
+    // produce this row is a separate unit; this test only needs the DB
+    // shape a `ready` store leaves behind (same precedent
+    // `tests/review/local_review_routes.rs::verdict_zero_patchset_is_400`
+    // uses for writing against a live daemon's own db).
+    let db = daemon_tmp.path().join("state/kb-code/index.db");
+    let store = kb_code_server::store::Store::open(&db).unwrap();
+    let repo_id = store
+        .upsert_repo("r", std::fs::canonicalize(dir).unwrap().to_str().unwrap())
+        .unwrap();
+    let store_id = store
+        .create_review_store(
+            "22222222-2222-2222-2222-222222222222",
+            "local:r-rs-u8-test",
+            store_dir.to_str().unwrap(),
+            None,
+            None,
+            1,
+        )
+        .unwrap();
+    assert!(store
+        .set_review_store_state(store_id, "ready", None)
+        .unwrap());
+    store.add_repo_to_store(repo_id, store_id).unwrap();
+    // RS-U5 review fix — `GitCtx::for_repo` also requires this member's OWN
+    // import to have landed (`repo_stores.legacy_import_json` set), the
+    // same `MemberPending` check `ReviewStores::handle_for_repo` makes.
+    // Without this, a `ready` store row still resolves to the work-tree
+    // fallback for a member whose import never ran (this test's case).
+    store
+        .set_repo_store_legacy_import(
+            repo_id,
+            Some(r#"{"at":1,"imported":1,"conflicts":[],"missing_reviews":[]}"#),
+        )
+        .unwrap();
+    drop(store);
+
+    let before = ref_tree(dir);
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/checkout"))
+        .json(&serde_json::json!({ "repo": "r", "ref": tip }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["detached"], true);
+    assert_eq!(git_out(dir, &["rev-parse", "HEAD"]), tip);
+    assert_eq!(
+        ref_tree(dir),
+        before,
+        "checkout via the store bridge must write no ref besides HEAD"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkout_reports_404_for_an_unknown_repo() {
     let _guard = SERIAL.lock().await;
