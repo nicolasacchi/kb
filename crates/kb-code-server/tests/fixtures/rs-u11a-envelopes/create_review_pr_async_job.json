@@ -1,0 +1,55 @@
+{
+  "error": "null",
+  "error_type": "null",
+  "job_id": "string",
+  "pr_number": "number",
+  "progress": {
+    "stage": "string"
+  },
+  "repo": "string",
+  "result": {
+    "base_ref": "string",
+    "base_sha": "string",
+    "base_source": "string",
+    "created_at": "number",
+    "head_ref": "string",
+    "id": "number",
+    "latest_ps": "number",
+    "pr_head_sha": "string",
+    "pr_meta": {
+      "author": "string",
+      "base_ref": "string",
+      "base_source": "string",
+      "body": "string",
+      "checks": [
+        {
+          "duration": "number",
+          "name": "string",
+          "note": "string",
+          "status": "string"
+        }
+      ],
+      "draft": "bool",
+      "head_ref": "string",
+      "labels": [
+        "string"
+      ],
+      "merge_state_status": "string",
+      "merged": "bool",
+      "state": "string",
+      "title": "string"
+    },
+    "pr_meta_unavailable_reason": "null",
+    "pr_number": "number",
+    "pr_repo_slug": "string",
+    "repo": "string",
+    "schema": "string",
+    "session_id": "null",
+    "state": "string",
+    "tip_sha": "string",
+    "title": "null",
+    "updated_at": "number"
+  },
+  "review_id": "number",
+  "status": "string"
+}

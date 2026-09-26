@@ -533,7 +533,22 @@ pub async fn resolve_commit(
     store: &Arc<Store>,
     kb_client: &KbClient,
 ) -> Attribution {
-    let local = local::resolve_local(&repo.path, sha).await;
+    let mut local = local::resolve_local(&repo.path, sha).await;
+    // RS-U4 (design §6 S8) — a commit the user clone does not have (a
+    // force-pushed PR head, a patchset tip only the review store fetched)
+    // falls back to the review store once it is ready. With no ready store
+    // (every repo today) this is one extra lookup on a miss and nothing
+    // else changes; when neither resolves, the ladder's own
+    // unresolved-commit handling below is untouched.
+    if !local.resolved {
+        let ctx = crate::git::roots::GitCtx::resolve_entry(store, repo).await;
+        if let Some(store_root) = ctx.store_root() {
+            let from_store = local::resolve_local(store_root.git_dir(), sha).await;
+            if from_store.resolved {
+                local = from_store;
+            }
+        }
+    }
     let canonical_sha = local
         .sha_full
         .clone()

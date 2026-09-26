@@ -99,8 +99,16 @@ const INGEST_BATCH_MAX_BYTES: usize = 8 * 1024 * 1024;
 pub struct WatchWork {
     pub kind: WatchKind,
     pub path: PathBuf,
-    /// Bypass the content-hash dedup gate (operator reindex).
+    /// Bypass the content-hash early return (operator reindex). Parse,
+    /// edges, anchors, and coderefs still re-run. Does not by itself
+    /// re-embed: when the content hash, resolved model, and dim match the
+    /// stored row, the embed and chunk paths copy the stored vectors
+    /// (perf-04). [`Self::re_embed`] is the hatch that forces a real embed.
     pub force: bool,
+    /// Force a real embed even when the content hash matches. Set only by
+    /// `POST .../reindex` with `re_embed=true` (query or JSON). Default
+    /// false — a force reindex reuses stored vectors.
+    pub re_embed: bool,
     /// X1 — for a `Deleted` unit only: route `process_delete` through
     /// [`crate::cascade::CascadeMode::KeepUserData`] instead of `Full`. Set
     /// ONLY by the reconciler when a stored row's file is still on disk but its
@@ -214,13 +222,16 @@ impl IngestSink {
         &self.gate
     }
 
-    fn mirror(&self, kind: WatchKind, path: &Path, force: bool) {
+    fn mirror(&self, kind: WatchKind, path: &Path, force: bool, re_embed: bool) {
         let mut payload = json!({
             "kb": self.kb.as_str(),
             "path": path.to_string_lossy(),
         });
         if force {
             payload["force"] = serde_json::Value::Bool(true);
+        }
+        if re_embed {
+            payload["re_embed"] = serde_json::Value::Bool(true);
         }
         self.bus.emit(kind.bus_type(), payload);
     }
@@ -229,13 +240,14 @@ impl IngestSink {
     /// the bus, then awaits channel space (back-pressure). A closed channel
     /// (indexer gone) is ignored — the daemon is tearing down.
     pub async fn send(&self, kind: WatchKind, path: PathBuf, force: bool) {
-        self.mirror(kind, &path, force);
+        self.mirror(kind, &path, force, false);
         let _ = self
             .tx
             .send(WatchWork {
                 kind,
                 path,
                 force,
+                re_embed: false,
                 keep_user_data: false,
             })
             .await;
@@ -248,13 +260,14 @@ impl IngestSink {
     /// history (the file is still on disk; re-widening the map restores it).
     /// The reconciler's delete pass is the only caller.
     pub async fn send_unmapped_delete(&self, path: PathBuf) {
-        self.mirror(WatchKind::Deleted, &path, false);
+        self.mirror(WatchKind::Deleted, &path, false, false);
         let _ = self
             .tx
             .send(WatchWork {
                 kind: WatchKind::Deleted,
                 path,
                 force: false,
+                re_embed: false,
                 keep_user_data: true,
             })
             .await;
@@ -266,11 +279,19 @@ impl IngestSink {
     /// tokio runtime worker (it would panic); both call sites are blocking
     /// threads.
     pub fn blocking_send(&self, kind: WatchKind, path: PathBuf, force: bool) {
-        self.mirror(kind, &path, force);
+        self.blocking_send_with(kind, path, force, false);
+    }
+
+    /// `blocking_send` plus the perf-04 re-embed hatch. `re_embed` is only
+    /// meaningful with `force` (the operator reindex walk); other producers
+    /// pass false.
+    fn blocking_send_with(&self, kind: WatchKind, path: PathBuf, force: bool, re_embed: bool) {
+        self.mirror(kind, &path, force, re_embed);
         let _ = self.tx.blocking_send(WatchWork {
             kind,
             path,
             force,
+            re_embed,
             keep_user_data: false,
         });
     }
@@ -307,11 +328,17 @@ async fn bridge_watch_to_ingest(
                     .get("force")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let re_embed = env
+                    .payload
+                    .get("re_embed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if tx
                     .send(WatchWork {
                         kind,
                         path: PathBuf::from(path),
                         force,
+                        re_embed,
                         // The broadcast bridge is test-only and never carries
                         // an exclusion-shaped delete (only the reconciler
                         // produces those, via the sink directly).
@@ -364,9 +391,9 @@ pub fn is_indexable(path: &Path) -> bool {
 ///
 /// Used by:
 /// - `routes/reindex.rs` — operator-triggered full rescan. Passes
-///   `force = true` so the indexer bypasses the byte-identical dedup
-///   gate (the reindex is explicit; the operator wants the full
-///   pipeline incl. edge resolution to re-run).
+///   `force = true` so the indexer bypasses the byte-identical early
+///   return (parse, edges, anchors, and coderefs re-run). Embeddings are
+///   reused unless the route sets `re_embed` ([`walk_send_reindex`]).
 /// - [`reconcile`] — periodic safety net that catches files notify
 ///   missed (inotify queue overflow, NFS mounts, dropped broadcast lag,
 ///   dead drain thread). Passes `force = false` so byte-identical
@@ -418,8 +445,9 @@ pub fn walk_emit_modify(
 /// instead of fire-and-forget bus emits. Runs in `spawn_blocking`, so the
 /// sink's `blocking_send` blocks the walk when the indexer falls behind —
 /// the bulk-walk back-pressure that stops a >queue burst from dropping work.
-/// The reconciler and operator `reindex` use this; the same G5 mtime dedup
-/// applies, so a no-op reconcile still pushes ~nothing.
+/// The reconciler uses this with `force = false`; operator `reindex` uses
+/// [`walk_send_reindex`] so the re-embed hatch can ride the same walk.
+/// The same G5 mtime dedup applies, so a no-op reconcile still pushes ~nothing.
 pub fn walk_send_work(
     sink: &IngestSink,
     source_root: &Path,
@@ -429,7 +457,9 @@ pub fn walk_send_work(
 ) -> WalkOutcome {
     // X1/X2 — the sink carries the kb's resolved extension map AND the shared
     // ingest gate; the walk reads both from there (no extra param on the
-    // ~half-dozen call sites).
+    // ~half-dozen call sites). `re_embed` stays false: this signature is
+    // shared with the reconciler and the watcher rescan, which must not
+    // grow a parameter (those callers live outside this file).
     walk_core(
         source_root,
         skip_patterns,
@@ -439,6 +469,28 @@ pub fn walk_send_work(
         sink.gate(),
         |p| {
             sink.blocking_send(WatchKind::Modified, p.to_path_buf(), force);
+        },
+    )
+}
+
+/// Operator reindex walk. Always `force` (parse / edges / anchors / coderefs
+/// re-run). `re_embed` forces a real embed even when the content hash
+/// matches; the default (`false`) reuses stored vectors (perf-04).
+pub fn walk_send_reindex(
+    sink: &IngestSink,
+    source_root: &Path,
+    skip_patterns: &[String],
+    re_embed: bool,
+) -> WalkOutcome {
+    walk_core(
+        source_root,
+        skip_patterns,
+        true,
+        None,
+        sink.extensions(),
+        sink.gate(),
+        |p| {
+            sink.blocking_send_with(WatchKind::Modified, p.to_path_buf(), true, re_embed);
         },
     )
 }
@@ -1014,9 +1066,11 @@ pub async fn run_with_ingest(
             "indexer recv",
         );
         match work.kind {
-            // `force = true` bypasses the byte-identical dedup gate — set by
-            // the operator reindex walk. Live watcher events + reconciler
-            // walks omit it.
+            // `force = true` bypasses the byte-identical early return — set
+            // by the operator reindex walk — so parse, edges, anchors, and
+            // coderefs re-run. It does not re-embed when hash, model, and
+            // dim match (`re_embed` is the hatch). Live watcher events +
+            // reconciler walks omit force.
             WatchKind::Created | WatchKind::Modified => {
                 // GC-B7 — opportunistically grow `work` into a batch of
                 // same-kind pending items so their storage upserts share one
@@ -1185,6 +1239,11 @@ struct PreparedDoc {
     /// failure condition is gone; a gated one is proof of nothing — the
     /// embed was never attempted).
     embed_gated: bool,
+    /// Model that produced `doc.embedding`, when this pass can name it.
+    /// `None` when the upsert writes a null vector (no embedder, or the
+    /// quarantine gate skipped the embed). Recorded beside the vector only
+    /// after the upsert commits — see `finish_indexed_doc`.
+    embedding_model: Option<String>,
 }
 
 /// Per-file run-completion bookkeeping shared by every exit path (the
@@ -1235,6 +1294,143 @@ async fn finish_run_tail(
     );
 }
 
+/// ops-06 — whether the unchanged-hash pre-gate may dismiss this open error.
+///
+/// An IO read failure is recorded with kind `"io"` and `content_hash: None`
+/// (`prepare_doc`'s `record_failure`). `clear_errors_for_path` runs only from
+/// `finish_indexed_doc`'s success tail, which this skip never reaches, so that
+/// row stays open forever: reconcile hashes, sees no change, heals mtime, and
+/// continues. Dismiss only that pair — NULL hash is not enough.
+///
+/// Edge writes (`EdgeRecordHook`) and failed deletes also store
+/// `content_hash: None`, but with kind `"storage"`. An unchanged reconcile
+/// must leave those for `clear_errors_for_path` on a real success; dismissing
+/// them here drops the edge write or the delete without a retry. A row that
+/// carries a content_hash is quarantine / embed-gate state and must survive
+/// this arm. Empty string is a hash, not SQL NULL.
+fn unchanged_pre_gate_dismisses(content_hash: Option<&str>, kind: &str) -> bool {
+    content_hash.is_none() && kind == "io"
+}
+
+/// Open error ids for `path` that [`unchanged_pre_gate_dismisses`] selects.
+fn null_hash_error_ids_for_path<'a>(
+    path: &Path,
+    rows: &'a [crate::storage::sqlite::ErrorRow],
+) -> Vec<&'a str> {
+    rows.iter()
+        .filter(|row| {
+            row.path == path
+                && unchanged_pre_gate_dismisses(row.content_hash.as_deref(), row.kind.as_str())
+        })
+        .map(|row| row.id.as_str())
+        .collect()
+}
+
+/// `ErrorId`'s inner string is private. Stored ids round-trip through the
+/// transparent serde impl — the same reconstruction the dismiss route uses.
+fn error_id_from_stored(id: &str) -> Result<crate::ids::ErrorId, serde_json::Error> {
+    serde_json::from_value(serde_json::Value::String(id.to_string()))
+}
+
+async fn load_null_hash_open_errors(
+    storage: &StorageHandle,
+    kb_name: &KbName,
+) -> Vec<crate::storage::sqlite::ErrorRow> {
+    match storage.list_open_errors().await {
+        Ok(rows) => rows
+            .into_iter()
+            .filter(|row| {
+                unchanged_pre_gate_dismisses(row.content_hash.as_deref(), row.kind.as_str())
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                kb = %kb_name,
+                error = %e,
+                "list_open_errors failed; NULL-hash error heal skipped this batch"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// Dismiss open NULL-hash `"io"` errors for `path`. `cached` is loaded once per
+/// ingest batch: a restart walk hits the unchanged arm for every
+/// already-indexed file, and a per-file `list_open_errors` would serialize
+/// that many actor reads ahead of real ingest (the same storm class as the
+/// unconditional mtime heal this arm used to do).
+async fn dismiss_null_hash_open_errors(
+    storage: &StorageHandle,
+    bus: &EventBus,
+    kb_name: &KbName,
+    path: &Path,
+    cached: &mut Option<Vec<crate::storage::sqlite::ErrorRow>>,
+) {
+    if cached.is_none() {
+        *cached = Some(load_null_hash_open_errors(storage, kb_name).await);
+    }
+    let Some(rows) = cached.as_ref() else {
+        return;
+    };
+    let ids: Vec<String> = null_hash_error_ids_for_path(path, rows)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let mut dismissed = 0usize;
+    let mut dismissed_ids = Vec::new();
+    for id in &ids {
+        let typed = match error_id_from_stored(id) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    kb = %kb_name,
+                    path = %path.display(),
+                    error = %e,
+                    id = %id,
+                    "NULL-hash error id failed to decode (non-fatal)"
+                );
+                continue;
+            }
+        };
+        match storage.dismiss_error(typed).await {
+            Ok(()) => {
+                dismissed += 1;
+                dismissed_ids.push(id.clone());
+            }
+            Err(e) => tracing::warn!(
+                kb = %kb_name,
+                path = %path.display(),
+                error = %e,
+                id = %id,
+                "dismiss NULL-hash error failed (non-fatal)"
+            ),
+        }
+    }
+    if let Some(rows) = cached.as_mut() {
+        rows.retain(|row| !dismissed_ids.contains(&row.id));
+    }
+    if dismissed > 0 {
+        tracing::debug!(
+            kb = %kb_name,
+            path = %path.display(),
+            count = dismissed,
+            "dedup pre-gate dismissed NULL-hash open errors",
+        );
+        bus.emit(
+            "error.dismissed",
+            json!({
+                "kb": kb_name.as_str(),
+                "path": path.to_string_lossy(),
+                "count": dismissed,
+                "reason": "auto-cleared NULL-hash error on unchanged reconcile",
+            }),
+        );
+    }
+}
+
 /// GC-B7 — drive a drained batch of same-kind `WatchWork` through the
 /// prepare/upsert-batch/finish pipeline. Per-file bookkeeping (the dedup
 /// pre-gate, `begin_run`/`index.start`, and the `finish_run_tail` every exit
@@ -1264,6 +1460,8 @@ async fn process_ingest_batch(
 ) {
     let mut prepared: Vec<PreparedDoc> = Vec::with_capacity(items.len());
     let mut pending_bytes: usize = 0;
+    // First unchanged skip in this batch loads it; later skips reuse it.
+    let mut null_hash_errors: Option<Vec<crate::storage::sqlite::ErrorRow>> = None;
 
     for work in items {
         let change_kind = if work.kind == WatchKind::Created {
@@ -1344,6 +1542,18 @@ async fn process_ingest_batch(
                             }
                         }
                     }
+                    // ops-06 — beside the mtime heal, before continue. Only a
+                    // NULL-hash `"io"` row is dismissed. Storage/edge/delete
+                    // NULL-hash rows and hashed quarantine / embed-gate rows
+                    // stay until a real success. `force` never reaches this arm.
+                    dismiss_null_hash_open_errors(
+                        storage,
+                        bus,
+                        kb_name,
+                        &work.path,
+                        &mut null_hash_errors,
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -1378,6 +1588,7 @@ async fn process_ingest_batch(
             &work.path,
             change_kind,
             work.force,
+            work.re_embed,
             embedder,
             &run_id,
             indexed_hashes.clone(),
@@ -1592,6 +1803,364 @@ fn cap_chunks_to(
     (chunks, total)
 }
 
+/// perf-04 — chunk side of the lock-step reuse decision.
+///
+/// `NotChunked`: the chunk path is off, so there is no chunk vector to
+/// diverge from the doc vector. `Aligned`: every parsed chunk has a stored
+/// vector of the resolved dim at the same idx and text. `Unusable`: chunking
+/// is on and the stored chunk vectors cannot be copied onto the parsed
+/// chunks — the doc vector must not be copied either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkReuse {
+    NotChunked,
+    Aligned,
+    Unusable,
+}
+
+/// Sidecar beside the per-kb quarantine directory, not inside it. Restore
+/// only deletes `{stem}.html` / `{stem}.error.txt`, but the model map must
+/// not live in a dir a future sweep might empty. Lance has no embedding-model
+/// column; this file is the persist the reuse decision reads. A missing
+/// file, a blank name, or an unknown schema version is "no stored name" —
+/// today's reuse rule, not a refusal.
+const EMBEDDING_MODEL_SIDECAR_VERSION: u64 = 1;
+
+fn embedding_model_sidecar(quarantine_dir: &Path) -> PathBuf {
+    match (quarantine_dir.parent(), quarantine_dir.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            parent.join(format!("{}.embedding-models.json", name.to_string_lossy()))
+        }
+        _ => quarantine_dir.join("embedding-models.json"),
+    }
+}
+
+fn embedding_model_cache() -> &'static Mutex<HashMap<PathBuf, HashMap<String, String>>> {
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, HashMap<String, String>>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    &CACHE
+}
+
+fn load_embedding_models(path: &Path) -> HashMap<String, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return HashMap::new(),
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "corrupt embedding-models sidecar; treating stored names as missing"
+            );
+            return HashMap::new();
+        }
+    };
+    if value.get("version").and_then(|n| n.as_u64()) != Some(EMBEDDING_MODEL_SIDECAR_VERSION) {
+        tracing::warn!(
+            path = %path.display(),
+            "unknown embedding-models sidecar version; treating stored names as missing"
+        );
+        return HashMap::new();
+    }
+    let Some(obj) = value.get("models").and_then(|m| m.as_object()) else {
+        return HashMap::new();
+    };
+    obj.iter()
+        .filter_map(|(id, name)| {
+            let name = name.as_str()?.trim();
+            if id.is_empty() || name.is_empty() {
+                None
+            } else {
+                Some((id.clone(), name.to_string()))
+            }
+        })
+        .collect()
+}
+
+fn save_embedding_models(path: &Path, models: &HashMap<String, String>) {
+    let mut keys: Vec<&String> = models.keys().collect();
+    keys.sort();
+    let mut ordered = serde_json::Map::new();
+    for key in keys {
+        if let Some(name) = models.get(key) {
+            ordered.insert(key.clone(), serde_json::Value::String(name.clone()));
+        }
+    }
+    let body = serde_json::json!({
+        "version": EMBEDDING_MODEL_SIDECAR_VERSION,
+        "models": ordered,
+    });
+    let Ok(bytes) = serde_json::to_vec_pretty(&body) else {
+        return;
+    };
+    if let Err(e) = crate::fsx::write_atomic(path, &bytes) {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "failed to persist embedding-model sidecar"
+        );
+    }
+}
+
+fn with_embedding_models<T>(
+    quarantine_dir: &Path,
+    f: impl FnOnce(&mut HashMap<String, String>) -> (T, bool),
+) -> T {
+    let path = embedding_model_sidecar(quarantine_dir);
+    let mut guard = embedding_model_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !guard.contains_key(&path) {
+        guard.insert(path.clone(), load_embedding_models(&path));
+    }
+    let models = guard.get_mut(&path).expect("just inserted");
+    let (out, dirty) = f(models);
+    if dirty {
+        save_embedding_models(&path, models);
+    }
+    out
+}
+
+/// Stored producer of this artifact's vector. `None` when the sidecar has
+/// no name — the caller keeps today's reuse rule.
+fn stored_embedding_model(quarantine_dir: &Path, artifact_id: &str) -> Option<String> {
+    with_embedding_models(quarantine_dir, |models| {
+        (models.get(artifact_id).cloned(), false)
+    })
+}
+
+fn record_embedding_model(quarantine_dir: &Path, artifact_id: &str, model: &str) {
+    let model = model.trim();
+    if artifact_id.is_empty() || model.is_empty() {
+        return;
+    }
+    with_embedding_models(quarantine_dir, |models| {
+        let dirty = models.get(artifact_id).map(String::as_str) != Some(model);
+        if dirty {
+            models.insert(artifact_id.to_string(), model.to_string());
+        }
+        ((), dirty)
+    });
+}
+
+fn clear_embedding_model(quarantine_dir: &Path, artifact_id: &str) {
+    with_embedding_models(quarantine_dir, |models| {
+        ((), models.remove(artifact_id).is_some())
+    });
+}
+
+#[cfg(test)]
+fn drop_embedding_model_cache(quarantine_dir: &Path) {
+    let path = embedding_model_sidecar(quarantine_dir);
+    embedding_model_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&path);
+}
+
+/// Inputs to [`reuse_stored_embedding`]. Pure so a unit test can pin the
+/// embedder-call decision without a live embedder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EmbeddingReuseQuery<'a> {
+    /// Operator force reindex. The early return is a separate gate; this
+    /// flag only decides whether the embedder runs.
+    force: bool,
+    /// Explicit re-embed hatch. Wins over a hash match.
+    re_embed: bool,
+    hash_matches: bool,
+    /// Live embedder model (`Embedder::model_name`). `None` = no embedder.
+    resolved_model: Option<&'a str>,
+    /// Live embedder dim (`Embedder::dim`).
+    resolved_dim: Option<usize>,
+    /// Model that produced the stored vector, when the sidecar names it.
+    ///
+    /// `None` (missing file, blank name, row indexed before the sidecar
+    /// existed) keeps today's rule: reuse only when the dim uniquely
+    /// identifies `resolved` in the registry. A present name that differs
+    /// refuses, including a same-dim swap (`bge-base-en-v1.5` ↔
+    /// `jina-embeddings-v2-base-code`, both 768).
+    stored_model: Option<&'a str>,
+    /// `stored_doc.map(|v| v.len())`. `None` = no stored doc vector.
+    stored_doc_dim: Option<usize>,
+    chunks: ChunkReuse,
+}
+
+/// Whether a force reindex may copy stored vectors instead of calling the
+/// embedder. Doc and chunk vectors are lock-step: if either side cannot be
+/// reused, neither is (`ChunkReuse::Unusable`, or a missing doc vector).
+fn reuse_stored_embedding(q: &EmbeddingReuseQuery<'_>) -> bool {
+    if !q.force || q.re_embed || !q.hash_matches {
+        return false;
+    }
+    let (Some(model), Some(dim)) = (q.resolved_model, q.resolved_dim) else {
+        return false;
+    };
+    if q.stored_doc_dim != Some(dim) {
+        return false;
+    }
+    if !resolved_model_matches_stored(model, dim, q.stored_model) {
+        return false;
+    }
+    match q.chunks {
+        ChunkReuse::NotChunked | ChunkReuse::Aligned => true,
+        ChunkReuse::Unusable => false,
+    }
+}
+
+/// Model identity for a vector copy. A dim mismatch or a different stored
+/// model refuses. An unproven model is accepted only when the dim uniquely
+/// identifies `resolved` in the registry — otherwise a same-dim swap would
+/// copy the wrong model's vector. `kb model set --in-place` NULLs vectors
+/// on the supported same-dim swap, so a missing vector (handled by the
+/// caller) also refuses. A different-dim swap cannot open the dataset
+/// (`Storage::open`); this check is the in-process guard.
+fn resolved_model_matches_stored(
+    resolved_model: &str,
+    resolved_dim: usize,
+    stored_model: Option<&str>,
+) -> bool {
+    let Some(info) = crate::embed::model_info(resolved_model) else {
+        return false;
+    };
+    if info.dim != resolved_dim {
+        return false;
+    }
+    if let Some(stored) = stored_model {
+        return stored == resolved_model;
+    }
+    crate::embed::SUPPORTED_MODELS
+        .iter()
+        .filter(|m| m.dim == resolved_dim)
+        .count()
+        == 1
+}
+
+fn classify_chunk_reuse(
+    parsed: &[crate::chunk::Chunk],
+    stored: &[crate::storage::schema::ChunkDoc],
+    dim: usize,
+) -> ChunkReuse {
+    if parsed.len() != stored.len() {
+        return ChunkReuse::Unusable;
+    }
+    let mut by_idx: HashMap<u32, &crate::storage::schema::ChunkDoc> = HashMap::new();
+    for chunk in stored {
+        if by_idx.insert(chunk.chunk_idx, chunk).is_some() {
+            return ChunkReuse::Unusable;
+        }
+    }
+    for parsed_chunk in parsed {
+        let Some(stored_chunk) = by_idx.remove(&parsed_chunk.idx) else {
+            return ChunkReuse::Unusable;
+        };
+        if stored_chunk.text != parsed_chunk.text {
+            return ChunkReuse::Unusable;
+        }
+        match stored_chunk.embedding.as_ref() {
+            Some(vector) if vector.len() == dim => {}
+            _ => return ChunkReuse::Unusable,
+        }
+    }
+    if by_idx.is_empty() {
+        ChunkReuse::Aligned
+    } else {
+        ChunkReuse::Unusable
+    }
+}
+
+fn passage_chunks(fields: &parser::Fields) -> (Vec<crate::chunk::Chunk>, usize) {
+    let title = fields
+        .title
+        .clone()
+        .or_else(|| fields.h1.clone())
+        .unwrap_or_default();
+    let chunks = crate::chunk::chunk_document_default(&title, &fields.headings, &fields.body);
+    cap_chunks_to(chunks, MAX_CHUNKS_PER_DOC)
+}
+
+fn copy_chunk_vectors(
+    artifact_id: &ArtifactId,
+    parsed: &[crate::chunk::Chunk],
+    stored: &[crate::storage::schema::ChunkDoc],
+) -> Vec<crate::storage::schema::ChunkDoc> {
+    parsed
+        .iter()
+        .map(|chunk| {
+            let embedding = stored
+                .iter()
+                .find(|stored_chunk| stored_chunk.chunk_idx == chunk.idx)
+                .and_then(|stored_chunk| stored_chunk.embedding.clone());
+            crate::storage::schema::ChunkDoc {
+                chunk_id: format!("{}#{}", artifact_id.as_str(), chunk.idx),
+                doc_id: artifact_id.as_str().to_string(),
+                chunk_idx: chunk.idx,
+                text: chunk.text.clone(),
+                embedding,
+            }
+        })
+        .collect()
+}
+
+/// Relocate's preserve-embedding path copies the stored vector onto the
+/// upsert instead of re-embedding. This is that copy for a force reindex
+/// of unchanged bytes: both the doc vector and the chunk vectors, or
+/// neither. A storage miss falls through to a real embed.
+#[allow(clippy::too_many_arguments)]
+async fn try_preserve_embeddings(
+    storage: &StorageHandle,
+    artifact_id: &ArtifactId,
+    parsed: &[crate::chunk::Chunk],
+    chunked: bool,
+    resolved_model: &str,
+    resolved_dim: usize,
+    force: bool,
+    re_embed: bool,
+    hash_matches: bool,
+    stored_model: Option<&str>,
+) -> Option<(Vec<f32>, Vec<crate::storage::schema::ChunkDoc>)> {
+    if !force || re_embed || !hash_matches {
+        return None;
+    }
+    let doc_vec = storage
+        .embedding_by_id(artifact_id.as_str().to_string())
+        .await
+        .ok()
+        .flatten()?;
+    let stored_chunks = if chunked {
+        storage
+            .list_chunks_for_doc(artifact_id.as_str().to_string())
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let chunks = if chunked {
+        classify_chunk_reuse(parsed, &stored_chunks, resolved_dim)
+    } else {
+        ChunkReuse::NotChunked
+    };
+    let reuse = reuse_stored_embedding(&EmbeddingReuseQuery {
+        force,
+        re_embed,
+        hash_matches,
+        resolved_model: Some(resolved_model),
+        resolved_dim: Some(resolved_dim),
+        stored_model: stored_model.map(str::trim).filter(|s| !s.is_empty()),
+        stored_doc_dim: Some(doc_vec.len()),
+        chunks,
+    });
+    if !reuse {
+        return None;
+    }
+    let chunk_docs = if chunked {
+        copy_chunk_vectors(artifact_id, parsed, &stored_chunks)
+    } else {
+        Vec::new()
+    };
+    Some((doc_vec, chunk_docs))
+}
+
 /// GC-B7 — phase 1 of the (former `index_file`) pipeline: read → parse →
 /// embed → build the `Doc` + chunk vectors, everything the drain-batching
 /// loop can safely do BEFORE the storage commit. Returns `Ok(Some(_))` when
@@ -1612,6 +2181,7 @@ async fn prepare_doc(
     path: &Path,
     change_kind: ChangeKind,
     force: bool,
+    re_embed: bool,
     embedder: Option<&Arc<Mutex<Embedder>>>,
     run_id: &RunId,
     indexed_hashes: DedupCache,
@@ -1682,12 +2252,17 @@ async fn prepare_doc(
     // Rename-as-create is unaffected: artifact_id is path-based, so a
     // renamed file gets a fresh id and the cache misses naturally.
     //
-    // `force` bypasses the gate — set by explicit operator reindex
+    // `force` bypasses this early return — set by explicit operator reindex
     // routes (kb_post / post). Necessary because cross-artifact link
-    // resolution can fail on initial walk (target not yet in storage)
-    // and the operator's reindex is the recovery path. The reconciler's
-    // walk uses force=false so byte-identical files still short-circuit
-    // cheaply on the safety-net pass.
+    // resolution can fail on initial walk (target not yet in storage) and
+    // the operator's reindex is the recovery path: parse, edges, anchors,
+    // and coderefs must re-run. It does NOT re-embed by itself (perf-04).
+    // The hash is always computed above; when it matches and the resolved
+    // model + dim match the stored vectors, the embed and chunk paths below
+    // copy those vectors instead of calling the embedder. `re_embed` is the
+    // escape hatch that forces a real embed. The reconciler's walk uses
+    // force=false so byte-identical files still short-circuit cheaply on
+    // the safety-net pass.
     //
     // Safety for !force: anchor-stale/resolved transitions are a
     // function of `(html bytes, anchor)`, so identical bytes → no
@@ -1699,15 +2274,13 @@ async fn prepare_doc(
     // wouldn't dismiss anything new. See plan
     // `/home/user/.claude/plans/while-i-m-reading-an-jaunty-shannon.md`
     // for the full rationale.
-    if !force {
-        let unchanged = indexed_hashes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(artifact_id.as_str())
-            .is_some_and(|cached| cached.content_hash == content_hash);
-        if unchanged {
-            return Ok(None);
-        }
+    let hash_matches = indexed_hashes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(artifact_id.as_str())
+        .is_some_and(|cached| cached.content_hash == content_hash);
+    if !force && hash_matches {
+        return Ok(None);
     }
 
     // Stat for size_kb / mtime / btime. M5: async — same NFS rationale
@@ -1889,6 +2462,49 @@ async fn prepare_doc(
         false
     };
 
+    // perf-04 — force already bypassed the early return, so parse still
+    // runs. When the hash matches, copy the stored doc vector and the
+    // stored chunk vectors together (relocate's preserve-embedding path)
+    // and do not call the embedder. `re_embed` skips the copy. A copy does
+    // not emit `index.embedding` — that event is the inference signal the
+    // TUI sums — and does not record embed latency. Doc and chunk vectors
+    // are lock-step: `try_preserve_embeddings` returns both or neither.
+    let resolved = embedder.map(|emb| {
+        let guard = emb.lock().unwrap_or_else(|e| e.into_inner());
+        (guard.model_name(), guard.dim())
+    });
+    let stored_model_name = stored_embedding_model(quarantine_dir, artifact_id.as_str());
+    let preserved = match (force && !re_embed && hash_matches, resolved) {
+        (true, Some((model, dim))) => {
+            let parsed = if chunked {
+                passage_chunks(&fields).0
+            } else {
+                Vec::new()
+            };
+            try_preserve_embeddings(
+                storage,
+                &artifact_id,
+                &parsed,
+                chunked,
+                model,
+                dim,
+                force,
+                re_embed,
+                hash_matches,
+                stored_model_name.as_deref(),
+            )
+            .await
+        }
+        _ => None,
+    };
+    if preserved.is_some() {
+        tracing::debug!(
+            kb = %kb_name,
+            path = %path.to_string_lossy(),
+            "reusing stored doc+chunk embeddings (hash, model, dim match)"
+        );
+    }
+
     // Embed (slow path: ~170 ms per doc on Kaby Lake per spike-fastembed).
     // P4 — the embed is a blocking IPC round-trip to the kb-embedder
     // subprocess; running it on `spawn_blocking` keeps this tokio worker
@@ -1897,7 +2513,9 @@ async fn prepare_doc(
     // (stable, per-kb) model_name, then do the embed on a blocking thread —
     // splitting the two can't mismatch model_name vs the result because the
     // model never changes for a given embedder.
-    let embedding = if embed_gated {
+    let embedding = if let Some((doc_vec, _)) = &preserved {
+        Some(doc_vec.clone())
+    } else if embed_gated {
         None
     } else if let Some(emb) = embedder {
         let model = {
@@ -1980,8 +2598,8 @@ async fn prepare_doc(
     // embedder is hot; the doc-level embedding above is kept regardless
     // (atlas reads it). Gated by the SAME `embed_gated` computed above the
     // doc-level embed — an already-quarantined doc skips this pass too.
-    let chunk_docs: Vec<crate::storage::schema::ChunkDoc> = match (chunked, embedder) {
-        (true, Some(emb)) if !embed_gated => {
+    let mut chunk_docs: Vec<crate::storage::schema::ChunkDoc> = match (chunked, embedder) {
+        (true, Some(emb)) if !embed_gated && preserved.is_none() => {
             let title_for_chunk = fields
                 .title
                 .clone()
@@ -2071,6 +2689,9 @@ async fn prepare_doc(
         }
         _ => Vec::new(),
     };
+    if let Some((_, copied)) = &preserved {
+        chunk_docs = copied.clone();
+    }
 
     let doc = Doc {
         id: artifact_id.as_str().to_string(),
@@ -2161,6 +2782,10 @@ async fn prepare_doc(
     let enrich_mtime_unix = doc.mtime_unix;
     let seed_global = fields.kb_global;
     let seed_linked_kbs = fields.kb_linked_kbs.clone();
+    let embedding_model = doc
+        .embedding
+        .as_ref()
+        .and_then(|_| resolved.map(|(model, _)| model.to_string()));
 
     Ok(Some(PreparedDoc {
         path: path.to_path_buf(),
@@ -2180,6 +2805,7 @@ async fn prepare_doc(
         seed_global,
         seed_linked_kbs,
         embed_gated,
+        embedding_model,
     }))
 }
 
@@ -2224,7 +2850,12 @@ async fn finish_indexed_doc(
         seed_global,
         seed_linked_kbs,
         embed_gated,
+        embedding_model,
     } = p;
+    match &embedding_model {
+        Some(model) => record_embedding_model(quarantine_dir, artifact_id.as_str(), model),
+        None => clear_embedding_model(quarantine_dir, artifact_id.as_str()),
+    }
     let path = path.as_path();
     let html = html.as_str();
     let raw = raw.as_str();
@@ -5024,6 +5655,413 @@ mod tests {
         assert_eq!(storage.count_rows().await.unwrap(), 2);
     }
 
+    /// ops-06 — the unchanged-hash pre-gate dismisses an open `"io"` error
+    /// whose `content_hash` IS NULL. A NULL-hash non-io row (edge write /
+    /// failed delete, kind `"storage"`) and a hashed row stay. The filter
+    /// is path-scoped: another path's NULL-hash IO row is not this skip's.
+    /// Empty string is a stored hash, not SQL NULL.
+    #[test]
+    fn unchanged_pre_gate_selects_only_null_hash_rows_for_path() {
+        let path = std::path::PathBuf::from("/corpus/doc.html");
+        let other = std::path::PathBuf::from("/corpus/other.html");
+        let row = |id: &str, path: &std::path::Path, kind: &str, hash: Option<&str>| {
+            crate::storage::sqlite::ErrorRow {
+                id: id.into(),
+                kind: kind.into(),
+                source_slug: "src".into(),
+                path: path.to_path_buf(),
+                message: id.into(),
+                content_hash: hash.map(str::to_string),
+                retry_count: 0,
+                created_at_unix: 0,
+            }
+        };
+        let rows = vec![
+            row("null", &path, "io", None),
+            row("storage-null", &path, "storage", None),
+            row("hashed", &path, "io", Some("kept-hash")),
+            row("empty", &path, "io", Some("")),
+            row("other-null", &other, "io", None),
+        ];
+        assert_eq!(null_hash_error_ids_for_path(&path, &rows), vec!["null"]);
+        assert!(unchanged_pre_gate_dismisses(None, "io"));
+        assert!(!unchanged_pre_gate_dismisses(None, "storage"));
+        assert!(!unchanged_pre_gate_dismisses(Some("kept-hash"), "io"));
+        assert!(!unchanged_pre_gate_dismisses(Some(""), "io"));
+    }
+
+    /// ops-06 — reconcile re-emits `watch.modify` for a byte-identical file.
+    /// The pre-gate hashes, sees no change, and continues before
+    /// `finish_indexed_doc`'s `clear_errors_for_path`. That skip must still
+    /// dismiss an IO error recorded with kind `"io"` and `content_hash: None`
+    /// after the last successful index, and must not dismiss a hashed error
+    /// (quarantine / embed-gate state) or a NULL-hash non-io error (edge
+    /// write / failed delete, kind `"storage"`). A sentinel indexes after the
+    /// modify so the assert runs only once the skip has been processed.
+    #[tokio::test]
+    async fn unchanged_pre_gate_dismisses_null_hash_error_keeps_hashed() {
+        let (bus, storage, kb, slug, tmp) = setup().await;
+        let quarantine = tmp.path().join("quarantine");
+
+        let indexer_rx = bus.subscribe();
+        let bus_for_indexer = bus.clone();
+        let storage_for_indexer = storage.clone();
+        let kb_for_indexer = kb.clone();
+        let slug_for_indexer = slug.clone();
+        let quarantine_for_indexer = quarantine.clone();
+        let _indexer = tokio::spawn(async move {
+            run(
+                kb_for_indexer,
+                slug_for_indexer,
+                storage_for_indexer,
+                bus_for_indexer,
+                quarantine_for_indexer,
+                indexer_rx,
+                None,
+                None,
+                crate::iframe::DEFAULT_HOST_SUFFIX.to_string(),
+                crate::vcs::VersionsMode::Off,
+                0,
+                Vec::new(),
+            )
+            .await
+        });
+
+        let html_path = tmp.path().join("static.html");
+        let html = "<html><title>Static</title><body>same bytes forever</body></html>";
+        std::fs::write(&html_path, html).unwrap();
+        let mut rx = bus.subscribe();
+
+        bus.emit(
+            "watch.create",
+            json!({"kb": kb.as_str(), "path": html_path.to_string_lossy()}),
+        );
+        timeout(Duration::from_secs(5), async {
+            loop {
+                match rx.recv().await {
+                    Ok(env) if env.type_ == "index.complete" => return,
+                    _ => continue,
+                }
+            }
+        })
+        .await
+        .expect("create lifecycle timeout");
+
+        // After the success-path clear, so these rows are what the skip sees.
+        storage
+            .record_error(
+                "io".into(),
+                slug.clone(),
+                html_path.clone(),
+                "fd pressure".into(),
+                None,
+                unix_now(),
+            )
+            .await
+            .unwrap();
+        storage
+            .record_error(
+                "embed".into(),
+                slug.clone(),
+                html_path.clone(),
+                "hashed failure".into(),
+                Some("kept-hash".into()),
+                unix_now(),
+            )
+            .await
+            .unwrap();
+        let other = tmp.path().join("other.html");
+        storage
+            .record_error(
+                "io".into(),
+                slug.clone(),
+                other.clone(),
+                "other path".into(),
+                None,
+                unix_now(),
+            )
+            .await
+            .unwrap();
+        // `record_error` dedups on (path, COALESCE(content_hash, '')), so the
+        // edge/delete NULL-hash row cannot be seeded through it beside the IO
+        // row. Insert directly. A real ErrorId so a mistaken dismiss would
+        // actually close the row and fail the assert below.
+        let storage_id = crate::ids::ErrorId::new();
+        {
+            let conn = rusqlite::Connection::open(tmp.path().join("index.db")).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            conn.execute(
+                "INSERT INTO errors (id, kind, source_slug, path, message, content_hash, created_at)
+                 VALUES (?1, 'storage', ?2, ?3, ?4, NULL, ?5)",
+                rusqlite::params![
+                    storage_id.as_str(),
+                    slug.as_str(),
+                    html_path.to_string_lossy().into_owned(),
+                    "record_edges: synthetic",
+                    unix_now(),
+                ],
+            )
+            .unwrap();
+        }
+
+        std::fs::write(&html_path, html).unwrap();
+        bus.emit(
+            "watch.modify",
+            json!({"kb": kb.as_str(), "path": html_path.to_string_lossy()}),
+        );
+        let sentinel = tmp.path().join("sentinel.html");
+        std::fs::write(
+            &sentinel,
+            "<html><title>Sentinel</title><body>distinct bytes</body></html>",
+        )
+        .unwrap();
+        bus.emit(
+            "watch.create",
+            json!({"kb": kb.as_str(), "path": sentinel.to_string_lossy()}),
+        );
+
+        let window = timeout(Duration::from_secs(5), async {
+            let mut events: Vec<String> = Vec::new();
+            let mut sentinel_run: Option<String> = None;
+            loop {
+                let env = rx.recv().await.expect("bus closed");
+                let event_type = env.type_.clone();
+                let run = env
+                    .payload
+                    .get("run")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let path = env
+                    .payload
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if env.type_ == "index.file" && path.ends_with("sentinel.html") {
+                    sentinel_run = run.clone();
+                }
+                let barrier =
+                    env.type_ == "index.complete" && sentinel_run.is_some() && run == sentinel_run;
+                if path.ends_with("static.html") {
+                    events.push(event_type);
+                }
+                if barrier {
+                    break;
+                }
+            }
+            events
+        })
+        .await
+        .expect("timed out waiting for sentinel index.complete");
+        assert!(
+            !window
+                .iter()
+                .any(|t| t == "artifact.indexed" || t == "index.start"),
+            "pre-gate skip must not reindex static.html; saw {window:?}"
+        );
+
+        let open = storage.list_open_errors().await.unwrap();
+        assert!(
+            !open.iter().any(|row| {
+                row.path == html_path && row.kind == "io" && row.content_hash.is_none()
+            }),
+            "NULL-hash IO error must be dismissed by the unchanged pre-gate, got {open:?}"
+        );
+        assert!(
+            open.iter().any(|row| {
+                row.path == html_path && row.kind == "storage" && row.content_hash.is_none()
+            }),
+            "NULL-hash non-io error must survive the unchanged pre-gate, got {open:?}"
+        );
+        assert!(
+            open.iter().any(|row| {
+                row.path == html_path && row.content_hash.as_deref() == Some("kept-hash")
+            }),
+            "hashed error must survive the unchanged pre-gate, got {open:?}"
+        );
+        assert!(
+            open.iter()
+                .any(|row| row.path == other && row.content_hash.is_none()),
+            "NULL-hash error for another path must survive, got {open:?}"
+        );
+        assert_eq!(storage.count_rows().await.unwrap(), 2);
+    }
+
+    /// perf-04 — `force` still re-parses, but the embedder runs only when
+    /// the reuse decision is false. The embedder is not mockable here, so
+    /// this pins the flag [`reuse_stored_embedding`] that `prepare_doc`
+    /// consults before either embed call: true means the stored vectors are
+    /// copied and the embedder is not called; false means it is.
+    #[test]
+    fn force_unchanged_hash_model_dim_does_not_call_embedder_changed_hash_does() {
+        fn embedder_calls(q: &EmbeddingReuseQuery<'_>) -> u32 {
+            if reuse_stored_embedding(q) {
+                0
+            } else if q.resolved_model.is_some() {
+                1
+            } else {
+                0
+            }
+        }
+
+        let unchanged = EmbeddingReuseQuery {
+            force: true,
+            re_embed: false,
+            hash_matches: true,
+            resolved_model: Some("bge-large-en-v1.5"),
+            resolved_dim: Some(1024),
+            stored_model: Some("bge-large-en-v1.5"),
+            stored_doc_dim: Some(1024),
+            chunks: ChunkReuse::NotChunked,
+        };
+        assert!(
+            reuse_stored_embedding(&unchanged),
+            "force + matching hash/model/dim must reuse"
+        );
+        assert_eq!(
+            embedder_calls(&unchanged),
+            0,
+            "force=true with an unchanged hash/model/dim must not call the embedder"
+        );
+
+        // A missing sidecar name keeps today's rule: a unique dim still
+        // proves identity. A shared dim (768) stays unproven and refuses.
+        let unproven_unique_dim = EmbeddingReuseQuery {
+            stored_model: None,
+            ..unchanged
+        };
+        assert_eq!(embedder_calls(&unproven_unique_dim), 0);
+
+        let changed_hash = EmbeddingReuseQuery {
+            hash_matches: false,
+            ..unchanged
+        };
+        assert!(
+            !reuse_stored_embedding(&changed_hash),
+            "a changed hash must not reuse"
+        );
+        assert_eq!(
+            embedder_calls(&changed_hash),
+            1,
+            "force=true with a changed hash must call the embedder"
+        );
+
+        let re_embed = EmbeddingReuseQuery {
+            re_embed: true,
+            ..unchanged
+        };
+        assert_eq!(
+            embedder_calls(&re_embed),
+            1,
+            "re_embed=true must call the embedder even when the hash matches"
+        );
+
+        let wrong_model = EmbeddingReuseQuery {
+            resolved_model: Some("bge-base-en-v1.5"),
+            resolved_dim: Some(768),
+            stored_model: Some("jina-embeddings-v2-base-code"),
+            stored_doc_dim: Some(768),
+            ..unchanged
+        };
+        assert_eq!(
+            embedder_calls(&wrong_model),
+            1,
+            "a same-dim model change must not copy the stored vector"
+        );
+
+        let wrong_dim = EmbeddingReuseQuery {
+            stored_doc_dim: Some(384),
+            ..unchanged
+        };
+        assert_eq!(
+            embedder_calls(&wrong_dim),
+            1,
+            "a dim mismatch must not copy the stored vector"
+        );
+
+        // 768 is shared by bge-base and jina. An unproven producer refuses.
+        let ambiguous = EmbeddingReuseQuery {
+            resolved_model: Some("bge-base-en-v1.5"),
+            resolved_dim: Some(768),
+            stored_model: None,
+            stored_doc_dim: Some(768),
+            ..unchanged
+        };
+        assert_eq!(embedder_calls(&ambiguous), 1);
+
+        let lockstep = EmbeddingReuseQuery {
+            chunks: ChunkReuse::Unusable,
+            ..unchanged
+        };
+        assert_eq!(
+            embedder_calls(&lockstep),
+            1,
+            "if chunk vectors cannot be reused, the doc vector must not be either"
+        );
+        let both = EmbeddingReuseQuery {
+            chunks: ChunkReuse::Aligned,
+            ..unchanged
+        };
+        assert_eq!(
+            embedder_calls(&both),
+            0,
+            "aligned chunk vectors reuse in lock-step with the doc vector"
+        );
+    }
+    /// The quarantine-dir sidecar is the stored model name. A present name
+    /// that differs does not reuse; a missing name still reuses when the
+    /// hash and a unique dim match. The name survives a cache drop (restart).
+    #[test]
+    fn embedding_model_sidecar_mismatch_refuses_reuse_missing_name_reuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert!(
+            stored_embedding_model(dir, "art-missing").is_none(),
+            "a missing sidecar name must stay missing"
+        );
+        let missing = EmbeddingReuseQuery {
+            force: true,
+            re_embed: false,
+            hash_matches: true,
+            resolved_model: Some("bge-large-en-v1.5"),
+            resolved_dim: Some(1024),
+            stored_model: None,
+            stored_doc_dim: Some(1024),
+            chunks: ChunkReuse::NotChunked,
+        };
+        assert!(
+            reuse_stored_embedding(&missing),
+            "missing model name + matching hash and unique dim must reuse"
+        );
+
+        record_embedding_model(dir, "art-swap", "jina-embeddings-v2-base-code");
+        drop_embedding_model_cache(dir);
+        let stored = stored_embedding_model(dir, "art-swap");
+        assert_eq!(stored.as_deref(), Some("jina-embeddings-v2-base-code"));
+        let mismatch = EmbeddingReuseQuery {
+            resolved_model: Some("bge-base-en-v1.5"),
+            resolved_dim: Some(768),
+            stored_model: stored.as_deref(),
+            stored_doc_dim: Some(768),
+            ..missing
+        };
+        assert!(
+            !reuse_stored_embedding(&mismatch),
+            "a stored model name that differs must not reuse the vector"
+        );
+
+        record_embedding_model(dir, "art-same", "bge-base-en-v1.5");
+        let same = stored_embedding_model(dir, "art-same");
+        let matched = EmbeddingReuseQuery {
+            stored_model: same.as_deref(),
+            ..mismatch
+        };
+        assert!(
+            reuse_stored_embedding(&matched),
+            "a stored model name that matches must reuse when hash and dim match"
+        );
+    }
+
     /// `force = true` (operator reindex) must bypass BOTH the pre-gate and
     /// the in-band gate: re-running an unchanged artifact is the recovery
     /// path for cross-artifact link resolution, so it must still produce a
@@ -5155,6 +6193,7 @@ mod tests {
                 kind: WatchKind::Created,
                 path: p,
                 force: false,
+                re_embed: false,
                 keep_user_data: false,
             })
             .await
@@ -5205,6 +6244,7 @@ mod tests {
                 kind: WatchKind::Created,
                 path: p,
                 force: false,
+                re_embed: false,
                 keep_user_data: false,
             })
             .await
@@ -5337,6 +6377,7 @@ mod tests {
                 kind: WatchKind::Created,
                 path: p.clone(),
                 force: false,
+                re_embed: false,
                 keep_user_data: false,
             })
             .await
@@ -5368,6 +6409,7 @@ mod tests {
                 kind: WatchKind::Created,
                 path: p.clone(),
                 force: false,
+                re_embed: false,
                 keep_user_data: false,
             })
             .await
@@ -5428,6 +6470,7 @@ mod tests {
             kind: WatchKind::Created,
             path: p.clone(),
             force: false,
+            re_embed: false,
             keep_user_data: false,
         })
         .await
@@ -5461,6 +6504,7 @@ mod tests {
                 kind: WatchKind::Modified,
                 path: p.clone(),
                 force: false,
+                re_embed: false,
                 keep_user_data: false,
             })
             .await
@@ -5498,6 +6542,7 @@ mod tests {
             kind: WatchKind::Modified,
             path: p.clone(),
             force: false,
+            re_embed: false,
             keep_user_data: false,
         })
         .await
@@ -5567,6 +6612,7 @@ mod tests {
                 &quarantine,
                 &p,
                 ChangeKind::Created,
+                false,
                 false,
                 None,
                 &run_id,
@@ -5853,6 +6899,7 @@ done
             &quarantine,
             &path,
             ChangeKind::Created,
+            false,
             false,
             Some(&embedder),
             &run_id,
@@ -7624,6 +8671,7 @@ done
             &path,
             ChangeKind::Created,
             false,
+            false,
             None,
             &run_id,
             indexed_hashes,
@@ -7712,6 +8760,7 @@ done
             &quarantine,
             &path,
             ChangeKind::Created,
+            false,
             false,
             None,
             &run_id,

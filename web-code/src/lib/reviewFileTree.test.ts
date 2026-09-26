@@ -4,15 +4,20 @@ import { describe, expect, it } from "vitest";
 import type { ReviewFileRow, SyntaxRowOut } from "../api/types";
 import { mergeQuery, reviewDiffHref } from "./codeUrl";
 import {
+  ALL_FILES_CAP,
+  buildAllFilesTree,
   buildFolderTree,
   buildStatusSections,
   countsText,
+  flattenTree,
   flattenVisible,
   langIdFromSyntax,
   middleTruncate,
   statusKind,
+  walkAllFiles,
   type FileTreeFolderNode,
 } from "./reviewFileTree";
+import type { EntryKind, TreeEntry } from "../api/types";
 
 function file(path: string, over: Partial<ReviewFileRow> = {}): ReviewFileRow {
   return {
@@ -141,6 +146,85 @@ describe("flattenVisible", () => {
     );
     const noAdded = flattenVisible(sections, new Set(), new Set(["added"]));
     expect(noAdded.every((r) => r.status === "modified")).toBe(true);
+  });
+});
+
+describe("flattenTree", () => {
+  it("is the section-free primitive flattenVisible now composes from", () => {
+    const tree = buildFolderTree([file("app/a.rb", { status: "A" }), file("z.rs", { status: "M" })]);
+    const rows = flattenTree(tree, new Set());
+    expect(rows.some((r) => r.node.kind === "file" && r.node.path === "app/a.rb")).toBe(true);
+    expect(rows.some((r) => r.key === "dir:app")).toBe(true);
+  });
+
+  it("hides descendants of a collapsed folder", () => {
+    const tree = buildFolderTree([file("app/a.rb", { status: "A" })]);
+    const collapsed = flattenTree(tree, new Set(["app"]));
+    expect(collapsed.some((r) => r.key === "dir:app")).toBe(true);
+    expect(collapsed.some((r) => r.node.kind === "file")).toBe(false);
+  });
+});
+
+describe("buildAllFilesTree", () => {
+  it("keeps the real ReviewFileRow for a changed path", () => {
+    const changed = [file("app/a.rb", { status: "A", additions: 5 })];
+    const { tree, changedPaths } = buildAllFilesTree(changed, ["app/a.rb", "app/b.rb"]);
+    expect(changedPaths.has("app/a.rb")).toBe(true);
+    expect(changedPaths.has("app/b.rb")).toBe(false);
+    const rows = flattenTree(tree, new Set());
+    const a = rows.find((r) => r.node.kind === "file" && r.node.path === "app/a.rb");
+    const b = rows.find((r) => r.node.kind === "file" && r.node.path === "app/b.rb");
+    expect(a?.node.kind === "file" && a.node.file.additions).toBe(5);
+    expect(b?.node.kind === "file" && b.node.file.status).toBe("");
+    expect(b?.node.kind === "file" && b.node.file.additions).toBe(0);
+  });
+
+  it("never double-lists a changed path that is also in allPaths", () => {
+    const changed = [file("app/a.rb", { status: "A" })];
+    const { tree } = buildAllFilesTree(changed, ["app/a.rb"]);
+    const rows = flattenTree(tree, new Set()).filter((r) => r.node.kind === "file");
+    expect(rows).toHaveLength(1);
+  });
+});
+
+describe("walkAllFiles", () => {
+  function entry(name: string, kind: EntryKind): TreeEntry {
+    return { name, kind, size: kind === "dir" ? null : 10, oid: "a".repeat(40) };
+  }
+
+  it("walks a nested tree into a flat, sorted leaf list", async () => {
+    const fs: Record<string, TreeEntry[]> = {
+      "": [entry("app", "dir"), entry("z.rs", "file")],
+      app: [entry("models", "dir"), entry("a.rb", "file")],
+      "app/models": [entry("b.rb", "file")],
+    };
+    const out = await walkAllFiles(async (dir) => fs[dir] ?? []);
+    expect(out).toEqual({
+      paths: ["app/a.rb", "app/models/b.rb", "z.rs"],
+      capped: false,
+    });
+  });
+
+  it("lists submodules and symlinks as leaves, never descending into a submodule", async () => {
+    const fs: Record<string, TreeEntry[]> = {
+      "": [entry("vendor", "submodule"), entry("link", "symlink")],
+      // If the walk ever tried to descend into "vendor" as a directory,
+      // this entry would surface a bogus nested path.
+      vendor: [entry("should-not-appear.rs", "file")],
+    };
+    const out = await walkAllFiles(async (dir) => fs[dir] ?? []);
+    expect(out.paths).toEqual(["link", "vendor"]);
+  });
+
+  it("caps honestly rather than truncating silently", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => entry(`f${i}.rs`, "file"));
+    const out = await walkAllFiles(async () => many, 3);
+    expect(out.capped).toBe(true);
+    expect(out.paths).toHaveLength(3);
+  });
+
+  it("the default cap is a real, exported number", () => {
+    expect(ALL_FILES_CAP).toBeGreaterThan(0);
   });
 });
 

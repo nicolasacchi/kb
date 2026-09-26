@@ -13,21 +13,9 @@
 /* --- Sets list + detail shell (mirrors `home.css`'s page-container idiom) */
 
 .kbc-sets {
-  max-width: 900px;
+  max-width: var(--measure, 900px);
   margin: 0 auto;
   padding: 32px 16px 64px;
-}
-.kbc-sets__head {
-  margin-bottom: 16px;
-}
-.kbc-sets__title {
-  font-size: 24px;
-  margin: 0 0 4px;
-}
-.kbc-sets__hint {
-  color: var(--ink-mute);
-  margin: 0;
-  font-size: 13px;
 }
 
 .kbc-sets__create {
@@ -43,7 +31,7 @@
   color: var(--ink);
   padding: 7px 10px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__create button {
   flex: 0 0 auto;
@@ -54,7 +42,7 @@
   padding: 7px 14px;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__create button:hover:not(:disabled) {
   border-color: var(--accent);
@@ -92,11 +80,12 @@
 }
 .kbc-sets__row-desc {
   color: var(--ink-mute);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__row-meta {
   color: var(--ink-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
   margin-left: auto;
   white-space: nowrap;
 }
@@ -112,7 +101,7 @@
   color: var(--ink-mute);
   padding: 4px 8px;
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__row-actions button:hover {
   color: var(--ink);
@@ -132,7 +121,7 @@
   color: var(--ink);
   padding: 5px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__rename-form button {
   flex: 0 0 auto;
@@ -142,7 +131,7 @@
   color: var(--ink-mute);
   padding: 5px 10px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 /* --- Set detail ---------------------------------------------------------- */
@@ -162,6 +151,11 @@
   align-items: baseline;
   gap: 10px;
 }
+.kbc-sets__title-row .kbc-sets__title {
+  font-size: var(--fs-hero);
+  line-height: var(--lh-tight);
+  margin: 0;
+}
 .kbc-sets__rename-trigger {
   background: none;
   border: 1px solid var(--rule);
@@ -169,7 +163,7 @@
   color: var(--ink-mute);
   padding: 3px 8px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__rename-trigger:hover {
   color: var(--ink);
@@ -178,7 +172,7 @@
 .kbc-sets__desc {
   color: var(--ink-mute);
   margin: 4px 0 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__detail-actions {
   display: flex;
@@ -194,7 +188,7 @@
   color: var(--accent-soft);
   padding: 6px 12px;
   text-decoration: none;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-sets__tour-btn:hover {
@@ -207,7 +201,7 @@
   color: var(--red);
   padding: 6px 12px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__delete:hover {
   border-color: var(--red);
@@ -226,7 +220,7 @@
   border: 1px solid var(--warn);
   border-radius: var(--radius-md);
   color: var(--warn);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__stale-banner button {
   flex: 0 0 auto;
@@ -237,7 +231,7 @@
   padding: 5px 10px;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__stale-banner button:hover:not(:disabled) {
   border-color: var(--accent);
@@ -267,7 +261,7 @@
 }
 .kbc-sets__span-link {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   text-decoration: none;
 }
@@ -276,7 +270,7 @@
 }
 .kbc-sets__span-ref {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -284,7 +278,7 @@
 }
 .kbc-sets__span-note {
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -305,7 +299,7 @@
   width: 24px;
   height: 24px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__span-actions button:hover:not(:disabled) {
   color: var(--ink);
@@ -327,7 +321,7 @@
 }
 .kbc-sets__add-span-title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-title);
   color: var(--ink-mute);
 }
 .kbc-sets__add-span-row {
@@ -347,7 +341,7 @@
   color: var(--ink);
   padding: 6px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__add-span button {
   align-self: flex-start;
@@ -358,7 +352,7 @@
   padding: 6px 14px;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sets__add-span button:disabled {
   opacity: 0.5;
@@ -377,7 +371,7 @@
   color: var(--ink);
   padding: 4px 10px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 .kbc-addset__trigger:hover {
   border-color: var(--rule-hi);
@@ -613,7 +607,7 @@
   color: var(--ink);
   padding: 5px 8px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 .kbc-sessiondiff__save-set-btn {
   background: var(--accent-bg);
@@ -623,7 +617,7 @@
   padding: 6px 12px;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kbc-sessiondiff__save-set-btn:hover:not(:disabled) {
   border-color: var(--accent);
@@ -641,6 +635,9 @@
   font-size: 12px;
   text-decoration: none;
   white-space: nowrap;
+  /* V80-R0 — the other clickable bit of a toast; see `.kbc-toast`'s own
+   * `pointer-events: none` in reader.css. */
+  pointer-events: auto;
 }
 .kbc-toast__link:hover {
   text-decoration: underline;
@@ -655,7 +652,7 @@
   margin-bottom: 24px;
 }
 .kbc-sets__group-title {
-  font-size: 13px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--ink-mute);
   font-family: var(--font-mono);
@@ -673,7 +670,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kbc-save-workspace__field input,
@@ -684,11 +681,11 @@
   color: var(--ink);
   padding: 7px 10px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   resize: vertical;
 }
 .kbc-save-workspace__hint {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }

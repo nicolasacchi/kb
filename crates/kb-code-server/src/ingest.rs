@@ -44,7 +44,7 @@
 //! skip markers in `files.lang`) from `syntax::Tier` (the file type's
 //! extraction tier); see `syntax`'s module doc.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::extract;
 use crate::git::{EntryKind, GitError, GitRepo};
@@ -195,6 +195,7 @@ pub fn index_file(
         occurrences_enabled,
         is_rails,
         comment_keywords,
+        Precomputed::default(),
     )
 }
 
@@ -227,7 +228,53 @@ pub fn index_file_with_mtime(
         occurrences_enabled,
         is_rails,
         comment_keywords,
+        Precomputed::default(),
     )
+}
+
+/// HAML's outline extraction over an ALREADY-PARSED tree — the shared-parse
+/// path `index_file_inner` takes below (V77-P4b) when outline AND highlight
+/// extraction are BOTH a cache miss on the same call. `haml::extract::
+/// outline` is total by design (`haml/mod.rs`'s own "Nothing here mints...
+/// never a panic" posture) and should never unwind, but sharing one parsed
+/// tree between two consumers means a hypothetical bug walking it here must
+/// not also cost the highlight pass — computed from the SAME tree, right
+/// below — its own, independently derivable answer. A caught panic
+/// therefore degrades to the same "empty is the honest answer" shape this
+/// module's own doc already claims for a tier with nothing to report (and
+/// the `LangError::Unsupported` degrade a few lines down uses for
+/// comments), rather than losing the highlight pass along with it — this is
+/// the "catch per consumer" isolation the shared parse must preserve: the
+/// two-independent-parses path could never let one consumer's failure take
+/// the other down, and sharing a tree must not change that.
+fn haml_outline_isolated(doc: &crate::haml::Document, src: &str) -> Vec<extract::Symbol> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::haml::extract::outline(doc, src)
+    }))
+    .unwrap_or_default()
+}
+
+/// The highlight half of the same isolation — see [`haml_outline_isolated`].
+fn haml_highlights_isolated(doc: &crate::haml::Document, src: &str) -> Vec<highlight::Span> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::haml::extract::highlight_spans(doc, src)
+    }))
+    .unwrap_or_default()
+}
+
+/// V77-P3 — pre-computed symbol/highlight results for [`index_file_inner`],
+/// supplied by [`extract_pure`] when the caller already ran that work on a
+/// separate (possibly parallel — see `sink::step_boot_job`'s per-chunk
+/// fan-out) task. `None` in either field means "compute it here, exactly as
+/// before" — so `Precomputed::default()` (what [`index_file`]/
+/// [`index_file_with_mtime`] pass) makes this fn behave byte-identically to
+/// pre-P3. The two fields are independent because the two salt families
+/// are (V72-H2b): a caller may have a fresh symbol extraction but no
+/// highlight one, or vice versa.
+#[derive(Default)]
+pub(crate) struct Precomputed {
+    pub symbols: Option<Vec<extract::Symbol>>,
+    pub highlights: Option<Vec<highlight::Span>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -241,7 +288,12 @@ fn index_file_inner(
     occurrences_enabled: bool,
     is_rails: bool,
     comment_keywords: &crate::comments::KeywordSet,
+    precomputed: Precomputed,
 ) -> Result<IngestOutcome> {
+    let Precomputed {
+        symbols: pre_symbols,
+        highlights: pre_highlights,
+    } = precomputed;
     let size = bytes.len() as u64;
 
     if size > MAX_PARSE_BYTES {
@@ -320,7 +372,67 @@ fn index_file_inner(
     let symbol_salt = lang_info.symbol_salt;
     let highlight_salt = lang_info.highlight_salt;
 
-    let outcome = if store.is_derived(blob_hash, lang::SaltFamily::Symbol, symbol_salt)? {
+    // Each family's own marker, read ONCE and reused below — the ORIGINAL
+    // shape asked `is_derived` once per branch too (the `!plan.highlight`
+    // arm and the `else if` arm below are mutually exclusive on
+    // `plan.highlight`, so exactly one of them ran the highlight check),
+    // just inline at each call site. Hoisting them is what lets the
+    // shared-parse gate below ask "are BOTH families a miss on this call"
+    // without a third, redundant pair of store reads.
+    let symbol_is_derived = store.is_derived(blob_hash, lang::SaltFamily::Symbol, symbol_salt)?;
+    let highlight_is_derived =
+        store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)?;
+
+    // V77-P4b — HAML is the ONE language whose outline and highlights each
+    // run their own from-scratch parse (`haml::parser::parse_str`; HAML has
+    // no tree-sitter grammar at all — this crate's CLAUDE.md invariant
+    // 18(d)). Every other language shares nothing here because there is
+    // nothing TO share: a symbols cache hit still calls
+    // `highlight::extract_highlights` on its own and vice versa, and
+    // `lang::parse`'s tree is never threaded between the two calls today —
+    // the `if let Some(..) = &haml_shared_doc { .. } else { <original call>
+    // }` arms below fall to the ORIGINAL, independent call for every
+    // non-HAML language unconditionally, so that path stays byte-identical.
+    // HAML differs only on the ONE shape where a from-scratch parse
+    // actually duplicates work — BOTH families a cache MISS on the SAME
+    // call — so the shared-parse path is gated on exactly that, rather than
+    // a general knob that would touch the non-HAML dispatch for a saving no
+    // other language has.
+    // `bytes` is valid UTF-8 by construction whenever `lang_info.id ==
+    // "haml"` is reached at all — the TIER_BINARY branch above already
+    // returned for anything that isn't. Computed unconditionally (empty
+    // otherwise) so the two consumer branches below can borrow ONE `&str`
+    // with `haml_shared_doc`'s own lifetime, rather than each destructuring
+    // a `(src, doc)` pair out of the `Option` (which would need matching
+    // through a shared reference to the tuple and re-borrowing `src` a
+    // level too deep for no benefit — this is a plain function-scoped
+    // local, not part of what needs to travel with the parsed tree).
+    let haml_src: &str = if lang_info.id == "haml" {
+        std::str::from_utf8(bytes).unwrap_or_default()
+    } else {
+        ""
+    };
+    // V77-P3: when the caller (a parallel boot-walk worker, via
+    // `extract_pure`) already ran BOTH extractions and handed the results
+    // in as `precomputed`, this shared parse would be pure waste — the two
+    // consumer branches below never look at `haml_shared_doc` once their
+    // own `pre_symbols`/`pre_highlights` is `Some`. Gating on their
+    // ABSENCE keeps every pre-P3 caller (both `pre_*` fields always `None`)
+    // byte-identical.
+    let haml_shared_doc = if lang_info.id == "haml"
+        && plan.symbols
+        && !symbol_is_derived
+        && pre_symbols.is_none()
+        && plan.highlight
+        && !highlight_is_derived
+        && pre_highlights.is_none()
+    {
+        Some(crate::haml::parser::parse_str(haml_src))
+    } else {
+        None
+    };
+
+    let outcome = if symbol_is_derived {
         let symbol_count = store.symbols_for_blob(blob_hash, symbol_salt)?.len();
         IngestOutcome {
             cache_hit: true,
@@ -331,10 +443,14 @@ fn index_file_inner(
             highlight_cache: HighlightCache::SkippedTier,
         }
     } else {
-        let symbols = if plan.symbols {
-            extract::extract_symbols(lang_info.id, bytes)?
-        } else {
+        let symbols = if !plan.symbols {
             Vec::new()
+        } else if let Some(symbols) = pre_symbols {
+            symbols
+        } else if let Some(doc) = &haml_shared_doc {
+            haml_outline_isolated(doc, haml_src)
+        } else {
+            extract::extract_symbols(lang_info.id, bytes)?
         };
         let symbol_count = symbols.len();
         store.replace_symbols(blob_hash, symbol_salt, &symbols)?;
@@ -353,14 +469,20 @@ fn index_file_inner(
     // answering `Some([])` (rather than `null`) for a parse-only grammar,
     // exactly as it did before this unit.
     let highlight_cache = if !plan.highlight {
-        if !store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)? {
+        if !highlight_is_derived {
             store.put_highlights(blob_hash, highlight_salt, &[])?;
         }
         HighlightCache::SkippedTier
-    } else if store.is_derived(blob_hash, lang::SaltFamily::Highlight, highlight_salt)? {
+    } else if highlight_is_derived {
         HighlightCache::Hit
     } else {
-        let spans = highlight::extract_highlights(lang_info.id, bytes)?;
+        let spans = if let Some(spans) = pre_highlights {
+            spans
+        } else if let Some(doc) = &haml_shared_doc {
+            haml_highlights_isolated(doc, haml_src)
+        } else {
+            highlight::extract_highlights(lang_info.id, bytes)?
+        };
         store.put_highlights(blob_hash, highlight_salt, &spans)?;
         HighlightCache::Miss
     };
@@ -563,6 +685,183 @@ fn index_file_inner(
     Ok(outcome)
 }
 
+/// V77-P3 — the store-free half of indexing one already-known-changed
+/// `(path, blob_hash)` from an ODB tree walk: read the blob, classify its
+/// content tier, and (unless the store already has a CURRENT derivation for
+/// this exact blob_hash — a plain read, safe from any thread) run the
+/// tree-sitter symbol/highlight passes. This is what `sink::step_boot_job`
+/// fans out across `[indexer] walk_workers` bounded blocking tasks (see
+/// that module's doc for the per-chunk claim/dedup scheme that guarantees
+/// no two concurrent callers this fn ever see the SAME blob_hash within one
+/// chunk), and what [`index_one_tree_file`] itself now calls too
+/// (immediately followed by [`apply_precomputed_file`], on the same
+/// thread) — ONE implementation of "how a blob becomes files/symbols/
+/// highlights rows" regardless of whether the caller is the sequential walk
+/// or the boot job's parallel fan-out.
+///
+/// Store access here is READ-ONLY (`Store::is_derived`) — `Store`'s single
+/// connection mutex serializes concurrent readers safely; every WRITE for
+/// this blob happens later, in [`apply_precomputed_file`], from the
+/// chunk's single writer.
+pub(crate) enum PureExtraction {
+    /// The git layer's own size cap tripped before any content was read —
+    /// mirrors `index_file_inner`'s `size > MAX_PARSE_BYTES` branch, just
+    /// caught one layer up (see `GitRepo::read_blob`'s doc: the check is a
+    /// cheap ODB header lookup, so an oversized blob's content is never
+    /// actually loaded).
+    TooLargeAtGit { size: u64 },
+    /// Blob content was read; `precomputed` carries fresh symbol/highlight
+    /// results ONLY when this call actually found a cache miss worth
+    /// parsing — empty (`Precomputed::default()`) is the correct, honest
+    /// value for a content-capped tier, a plan that derives nothing, or a
+    /// blob that's already fully derived (`apply_precomputed_file`'s own
+    /// `index_file_inner` call re-derives the classification from `bytes`
+    /// and takes the ordinary cache-hit path in that case).
+    Read {
+        bytes: Vec<u8>,
+        precomputed: Precomputed,
+    },
+}
+
+/// See [`PureExtraction`]'s doc. `oid` is the blob's own hash (from the
+/// tree walk, free — never a content hash computed here).
+pub(crate) fn extract_pure(
+    store: &Store,
+    repo: &GitRepo,
+    rev: &str,
+    path: &str,
+    oid: &str,
+) -> Result<PureExtraction> {
+    let bytes = match repo.read_blob(rev, path, MAX_PARSE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(GitError::TooLarge { size, .. }) => {
+            return Ok(PureExtraction::TooLargeAtGit { size });
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // Mirror `index_file_inner`'s own cap/tier ladder just far enough to
+    // know whether there is any tree-sitter work worth doing here —
+    // `apply_precomputed_file`'s call into `index_file_inner` repeats this
+    // classification (cheap: string/byte checks, never the parse) when the
+    // result is applied, so a mismatch here can only ever under-precompute
+    // (a missed parallelism opportunity), never write a wrong answer.
+    if bytes.len() as u64 > MAX_PARSE_BYTES
+        || bytes.starts_with(LFS_POINTER_PREFIX)
+        || std::str::from_utf8(&bytes).is_err()
+    {
+        return Ok(PureExtraction::Read {
+            bytes,
+            precomputed: Precomputed::default(),
+        });
+    }
+    let Some(lang_info) = lang::detect(path, Some(&bytes)) else {
+        return Ok(PureExtraction::Read {
+            bytes,
+            precomputed: Precomputed::default(),
+        });
+    };
+    let plan = crate::syntax::row_for_path(path, Some(&bytes))
+        .map(|row| row.plan())
+        .unwrap_or(crate::syntax::Plan {
+            highlight: false,
+            symbols: false,
+        });
+
+    let symbol_is_derived =
+        store.is_derived(oid, lang::SaltFamily::Symbol, lang_info.symbol_salt)?;
+    let highlight_is_derived =
+        store.is_derived(oid, lang::SaltFamily::Highlight, lang_info.highlight_salt)?;
+
+    // HAML shared-parse (V77-P4b) — same gate `index_file_inner` uses, so a
+    // HAML blob that needs BOTH families still pays exactly one parse here
+    // rather than two.
+    let haml_src: &str = if lang_info.id == "haml" {
+        std::str::from_utf8(&bytes).unwrap_or_default()
+    } else {
+        ""
+    };
+    let haml_shared_doc = if lang_info.id == "haml"
+        && plan.symbols
+        && !symbol_is_derived
+        && plan.highlight
+        && !highlight_is_derived
+    {
+        Some(crate::haml::parser::parse_str(haml_src))
+    } else {
+        None
+    };
+
+    let symbols = if plan.symbols && !symbol_is_derived {
+        Some(if let Some(doc) = &haml_shared_doc {
+            haml_outline_isolated(doc, haml_src)
+        } else {
+            extract::extract_symbols(lang_info.id, &bytes)?
+        })
+    } else {
+        None
+    };
+    let highlights = if plan.highlight && !highlight_is_derived {
+        Some(if let Some(doc) = &haml_shared_doc {
+            haml_highlights_isolated(doc, haml_src)
+        } else {
+            highlight::extract_highlights(lang_info.id, &bytes)?
+        })
+    } else {
+        None
+    };
+
+    Ok(PureExtraction::Read {
+        bytes,
+        precomputed: Precomputed {
+            symbols,
+            highlights,
+        },
+    })
+}
+
+/// The single-writer half of [`extract_pure`] — everything
+/// `index_file_inner` already did after its own extraction step, now fed
+/// whatever [`Precomputed`] results `extract_pure` already ran. Always
+/// returns the SAME `IngestOutcome` shape `index_file_inner`'s
+/// `size > MAX_PARSE_BYTES` branch does for the `TooLargeAtGit` case, so
+/// callers never need to special-case it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_precomputed_file(
+    store: &Store,
+    repo_id: i64,
+    path: &str,
+    blob_hash: &str,
+    extraction: PureExtraction,
+    occurrences_enabled: bool,
+    is_rails: bool,
+    comment_keywords: &crate::comments::KeywordSet,
+) -> Result<IngestOutcome> {
+    match extraction {
+        PureExtraction::TooLargeAtGit { size } => {
+            store.upsert_file(repo_id, path, blob_hash, TIER_TOO_LARGE, size)?;
+            Ok(IngestOutcome {
+                cache_hit: false,
+                tier: TIER_TOO_LARGE,
+                symbol_count: 0,
+                highlight_cache: HighlightCache::SkippedTier,
+            })
+        }
+        PureExtraction::Read { bytes, precomputed } => index_file_inner(
+            store,
+            repo_id,
+            path,
+            &bytes,
+            blob_hash,
+            0,
+            occurrences_enabled,
+            is_rails,
+            comment_keywords,
+            precomputed,
+        ),
+    }
+}
+
 /// Aggregate counts from one [`index_repo_working_tree`] walk.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct WalkStats {
@@ -597,12 +896,34 @@ pub struct WalkStats {
 }
 
 impl WalkStats {
-    fn record_highlight(&mut self, cache: HighlightCache) {
+    // V77-P3 — `pub(crate)`, not private: `sink::step_boot_job`'s parallel
+    // apply loop now also needs to fold a `HighlightCache` outcome into
+    // stats from a DIFFERENT module (`sink.rs`), mirroring how
+    // `index_one_tree_file` already did in-module.
+    pub(crate) fn record_highlight(&mut self, cache: HighlightCache) {
         match cache {
             HighlightCache::Hit => self.highlight_hits += 1,
             HighlightCache::Miss => self.highlight_misses += 1,
             HighlightCache::SkippedTier => self.highlight_skipped += 1,
         }
+    }
+
+    /// V77-P2 — fold another walk's counts into this one. The sink worker's
+    /// chunked boot-walk job (`sink::worker`) accumulates one `WalkStats`
+    /// across many bounded chunks (each its own `spawn_blocking` call, so
+    /// each chunk produces its OWN fresh `WalkStats`) rather than one
+    /// unbroken pass — this is how the final per-repo log line stays
+    /// byte-identical in shape to the pre-V77-P2 single-pass total.
+    pub(crate) fn merge(&mut self, other: WalkStats) {
+        self.files += other.files;
+        self.parsed += other.parsed;
+        self.cache_hits += other.cache_hits;
+        self.skipped_tier += other.skipped_tier;
+        self.skipped_unchanged += other.skipped_unchanged;
+        self.symbols += other.symbols;
+        self.highlight_hits += other.highlight_hits;
+        self.highlight_misses += other.highlight_misses;
+        self.highlight_skipped += other.highlight_skipped;
     }
 }
 
@@ -633,6 +954,11 @@ pub fn index_repo_working_tree(
         .into_iter()
         .map(|f| (f.path, (f.blob_hash, f.lang)))
         .collect();
+    // V77-P3 (Task 0) — the derived-status preload alongside it: see
+    // `DerivedPreload`'s own doc for why this saves the boot fast path a
+    // per-file `is_derived_pair` round trip on the common "unchanged since
+    // a prior successful boot" case.
+    let derived_preload = DerivedPreload::from_rows(store.derived_status_for_current_salts()?);
     walk_dir(
         store,
         repo,
@@ -644,6 +970,7 @@ pub fn index_repo_working_tree(
         &mut stats,
         comment_keywords,
         &fingerprints,
+        &derived_preload,
     )?;
     // V3.G2 — second pass: rebuild import edges now that every files row
     // exists. Per-file edge resolution during the walk can miss targets
@@ -692,6 +1019,57 @@ pub fn rebuild_import_edges_for_repo(store: &Store, repo_id: i64) -> Result<()> 
     Ok(())
 }
 
+/// V77-P3 (Task 0, the P1 datapoint) — a boot-walk-start snapshot of every
+/// `(blob_hash, family, salt)` triple already marked derived, restricted to
+/// TODAY's registered salts (`Store::derived_status_for_current_salts`,
+/// itself ONE query bounded by the number of registered languages, not by
+/// corpus size). Before this, `unchanged_and_fully_derived` issued a fresh
+/// `Store::is_derived_pair` round trip for EVERY unchanged file on every
+/// boot — measured at ~3m42s of pure query cost on a 75k-file mirror's boot
+/// #1, entirely on files whose content hadn't changed at all. A miss in
+/// this snapshot does NOT mean "not derived": it only means "not derived as
+/// of walk start" — [`unchanged_and_fully_derived`] always falls back to
+/// the LIVE `Store::is_derived_pair` read on a miss, which is authoritative
+/// for a blob whose derivation completed DURING this walk (another file
+/// sharing its content, processed earlier in the same walk).
+#[derive(Default)]
+pub(crate) struct DerivedPreload {
+    symbol: HashMap<String, HashSet<String>>,
+    highlight: HashMap<String, HashSet<String>>,
+}
+
+impl DerivedPreload {
+    /// Build from `Store::derived_status_for_current_salts`'s
+    /// `(blob_hash, family, salt)` rows. An unrecognised `family` value
+    /// (should never happen — the query itself filters to the two known
+    /// families) is ignored defensively rather than panicking a boot walk.
+    pub(crate) fn from_rows(rows: Vec<(String, String, String)>) -> Self {
+        let mut symbol: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut highlight: HashMap<String, HashSet<String>> = HashMap::new();
+        for (blob_hash, family, salt) in rows {
+            let map = if family == lang::SaltFamily::Symbol.as_str() {
+                &mut symbol
+            } else if family == lang::SaltFamily::Highlight.as_str() {
+                &mut highlight
+            } else {
+                continue;
+            };
+            map.entry(blob_hash).or_default().insert(salt);
+        }
+        Self { symbol, highlight }
+    }
+
+    fn is_pair_derived(&self, blob_hash: &str, symbol_salt: &str, highlight_salt: &str) -> bool {
+        self.symbol
+            .get(blob_hash)
+            .is_some_and(|s| s.contains(symbol_salt))
+            && self
+                .highlight
+                .get(blob_hash)
+                .is_some_and(|s| s.contains(highlight_salt))
+    }
+}
+
 /// `true` iff `blob_hash` needs no (re-)derivation under `lang_id`'s
 /// CURRENT salts — the boot fast path's eligibility check (V77-P1). A
 /// `lang_id` that is not a registered language (one of the `TIER_*`
@@ -701,13 +1079,150 @@ pub fn rebuild_import_edges_for_repo(store: &Store, repo_id: i64) -> Result<()> 
 /// `walk_dir` may skip `repo.read_blob` + `index_file` for an unchanged
 /// path — see the call site for the oid comparison that gates entry into
 /// it, and `Store::is_derived_pair`'s doc for the residual TOCTOU note.
-fn unchanged_and_fully_derived(store: &Store, lang_id: &str, blob_hash: &str) -> Result<bool> {
+///
+/// V77-P3 (Task 0): consults `derived_preload` first (no store access) and
+/// only falls back to the live `Store::is_derived_pair` read on a miss —
+/// see [`DerivedPreload`]'s own doc for why a miss there is not the same as
+/// "not derived".
+fn unchanged_and_fully_derived(
+    store: &Store,
+    lang_id: &str,
+    blob_hash: &str,
+    derived_preload: &DerivedPreload,
+) -> Result<bool> {
     match lang::for_id(lang_id) {
         Some(info) => {
+            if derived_preload.is_pair_derived(blob_hash, info.symbol_salt, info.highlight_salt) {
+                return Ok(true);
+            }
             Ok(store.is_derived_pair(blob_hash, info.symbol_salt, info.highlight_salt)?)
         }
         None => Ok(true),
     }
+}
+
+/// Index (or, via V77-P1's oid short-circuit, skip) exactly one tracked
+/// file found by an ODB tree walk — the per-file body shared by
+/// [`walk_dir`] (the non-chunked `index_repo_working_tree` walk) and the
+/// sink worker's chunked boot-walk job (V77-P2, `sink::worker`), so there
+/// is exactly ONE implementation of the fast-path decision regardless of
+/// which loop shape is driving it. Returns `Ok(true)` when this file was
+/// actually read/written (a real `files`/derived-rows mutation happened —
+/// what the caller uses to decide whether a path counts as "touched" for a
+/// `mirror.updated` event) and `Ok(false)` when the V77-P1 fingerprint
+/// match let it skip `repo.read_blob`/`index_file` entirely.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn index_one_tree_file(
+    store: &Store,
+    repo: &GitRepo,
+    repo_id: i64,
+    rev: &str,
+    path: &str,
+    oid: &str,
+    occurrences_enabled: bool,
+    is_rails: bool,
+    stats: &mut WalkStats,
+    comment_keywords: &crate::comments::KeywordSet,
+    fingerprints: &HashMap<String, (String, String)>,
+    derived_preload: &DerivedPreload,
+) -> Result<bool> {
+    // V77-P1 (E6) — the boot fast path. `oid` is the blob id `list_tree`
+    // already read off the tree object — free, no content read. If it
+    // matches what is stored for this exact path AND (for a real language)
+    // both derived families are already marked, the file's content, tier
+    // and derived rows are ALL provably unchanged since the last successful
+    // walk: skip `repo.read_blob` and `index_file` entirely, the whole cost
+    // this unit exists to cut. Any mismatch, any never-seen path, or a
+    // missing derived family falls through to the existing read path below,
+    // byte-identical to pre-V77-P1 behaviour.
+    //
+    // Known limitation (not a torn-read risk, a classification one): the
+    // language used for the `is_derived_pair` lookup is the STORED
+    // `files.lang` from the previous successful visit, not a fresh
+    // `lang::detect` — cheaper (no bytes to detect from) and correct as
+    // long as this binary's language registry hasn't changed what this
+    // path's extension/filename maps to since that visit. A registry
+    // upgrade that reclassifies an unchanged, previously `unknown`/
+    // wrongly-typed file will not be picked up by this fast path (it will
+    // keep being skipped under its old classification) until the file's
+    // content or path next changes, or an operator forces a re-visit
+    // (`kb-code reextract --bill` prices a salt bump; there is no "force
+    // re-extract" verb by design, invariant 11(b)). The slow path this fast
+    // path shortcuts always re-detects from fresh bytes, so this gap is new
+    // to the unchanged case only.
+    if let Some((prev_hash, prev_lang)) = fingerprints.get(path) {
+        if prev_hash == oid && unchanged_and_fully_derived(store, prev_lang, oid, derived_preload)?
+        {
+            stats.files += 1;
+            stats.skipped_unchanged += 1;
+            return Ok(false);
+        }
+    }
+    // V77-P3 — the same two-phase split the boot job's parallel fan-out
+    // uses (`extract_pure` then `apply_precomputed_file`), just run
+    // back-to-back on this one thread: ONE implementation of "how a blob
+    // becomes files/symbols/highlights rows" regardless of caller.
+    let extraction = extract_pure(store, repo, rev, path, oid)?;
+    let outcome = apply_precomputed_file(
+        store,
+        repo_id,
+        path,
+        oid,
+        extraction,
+        occurrences_enabled,
+        is_rails,
+        comment_keywords,
+    )?;
+    stats.files += 1;
+    stats.symbols += outcome.symbol_count;
+    stats.record_highlight(outcome.highlight_cache);
+    if outcome.cache_hit {
+        stats.cache_hits += 1;
+    } else if lang::for_id(outcome.tier).is_some() {
+        stats.parsed += 1;
+    } else {
+        stats.skipped_tier += 1;
+    }
+    Ok(true)
+}
+
+/// Recursively enumerate every regular-file entry under `dir_path` (`""` =
+/// repo root) in `rev` as `(path, oid)` pairs — tree-object reads only, no
+/// blob content (the same cheap read [`walk_dir`] always did before ever
+/// deciding whether to read a blob). V77-P2: separates "which files exist"
+/// from "index them", so the sink worker's boot-walk job (`sink::worker`)
+/// can hold the result as resumable state and process it a bounded chunk
+/// at a time between live-edit fast-lane drains, instead of one unbroken
+/// recursive pass with no yield points.
+pub(crate) fn list_tree_files(
+    repo: &GitRepo,
+    rev: &str,
+    dir_path: &str,
+) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    list_tree_files_into(repo, rev, dir_path, &mut out)?;
+    Ok(out)
+}
+
+fn list_tree_files_into(
+    repo: &GitRepo,
+    rev: &str,
+    dir_path: &str,
+    out: &mut Vec<(String, String)>,
+) -> Result<()> {
+    for entry in repo.list_tree(rev, dir_path)? {
+        let full_path = if dir_path.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{dir_path}/{}", entry.name)
+        };
+        match entry.kind {
+            EntryKind::Dir => list_tree_files_into(repo, rev, &full_path, out)?,
+            EntryKind::File => out.push((full_path, entry.oid)),
+            EntryKind::Symlink | EntryKind::Submodule => {}
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -722,6 +1237,7 @@ fn walk_dir(
     stats: &mut WalkStats,
     comment_keywords: &crate::comments::KeywordSet,
     fingerprints: &HashMap<String, (String, String)>,
+    derived_preload: &DerivedPreload,
 ) -> Result<()> {
     for entry in repo.list_tree(rev, dir_path)? {
         let full_path = if dir_path.is_empty() {
@@ -741,82 +1257,23 @@ fn walk_dir(
                 stats,
                 comment_keywords,
                 fingerprints,
+                derived_preload,
             )?,
             EntryKind::File => {
-                // V77-P1 (E6) — the boot fast path. `entry.oid` is the
-                // blob id `list_tree` already read off the tree object —
-                // free, no content read. If it matches what is stored for
-                // this exact path AND (for a real language) both derived
-                // families are already marked, the file's content, tier
-                // and derived rows are ALL provably unchanged since the
-                // last successful walk: skip `repo.read_blob` and
-                // `index_file` entirely, the whole cost this unit exists
-                // to cut. Any mismatch, any never-seen path, or a missing
-                // derived family falls through to the existing read path
-                // below, byte-identical to pre-V77-P1 behaviour.
-                //
-                // Known limitation (not a torn-read risk, a classification
-                // one): the language used for the `is_derived_pair` lookup
-                // is the STORED `files.lang` from the previous successful
-                // visit, not a fresh `lang::detect` — cheaper (no bytes to
-                // detect from) and correct as long as this binary's
-                // language registry hasn't changed what this path's
-                // extension/filename maps to since that visit. A registry
-                // upgrade that reclassifies an unchanged, previously
-                // `unknown`/wrongly-typed file will not be picked up by
-                // this fast path (it will keep being skipped under its old
-                // classification) until the file's content or path next
-                // changes, or an operator forces a re-visit (`kb-code
-                // reextract --bill` prices a salt bump; there is no
-                // "force re-extract" verb by design, invariant 11(b)). The
-                // slow path this fast path shortcuts always re-detects
-                // from fresh bytes, so this gap is new to the unchanged
-                // case only.
-                if let Some((prev_hash, prev_lang)) = fingerprints.get(&full_path) {
-                    if prev_hash == &entry.oid
-                        && unchanged_and_fully_derived(store, prev_lang, &entry.oid)?
-                    {
-                        stats.files += 1;
-                        stats.skipped_unchanged += 1;
-                        continue;
-                    }
-                }
-                match repo.read_blob(rev, &full_path, MAX_PARSE_BYTES) {
-                    Ok(bytes) => {
-                        let outcome = index_file(
-                            store,
-                            repo_id,
-                            &full_path,
-                            &bytes,
-                            &entry.oid,
-                            occurrences_enabled,
-                            is_rails,
-                            comment_keywords,
-                        )?;
-                        stats.files += 1;
-                        stats.symbols += outcome.symbol_count;
-                        stats.record_highlight(outcome.highlight_cache);
-                        if outcome.cache_hit {
-                            stats.cache_hits += 1;
-                        } else if lang::for_id(outcome.tier).is_some() {
-                            stats.parsed += 1;
-                        } else {
-                            stats.skipped_tier += 1;
-                        }
-                    }
-                    // The git layer's own cap tripped first (its default is
-                    // 10 MiB vs our 5 MiB parse cap, but we pass MAX_PARSE_BYTES
-                    // explicitly so this is really the same boundary) — the
-                    // error still carries the real size, so the files row is
-                    // just as accurate as the in-process size check's branch.
-                    Err(GitError::TooLarge { size, .. }) => {
-                        store.upsert_file(repo_id, &full_path, &entry.oid, TIER_TOO_LARGE, size)?;
-                        stats.files += 1;
-                        stats.skipped_tier += 1;
-                        stats.record_highlight(HighlightCache::SkippedTier);
-                    }
-                    Err(e) => return Err(e.into()),
-                }
+                index_one_tree_file(
+                    store,
+                    repo,
+                    repo_id,
+                    rev,
+                    &full_path,
+                    &entry.oid,
+                    occurrences_enabled,
+                    is_rails,
+                    stats,
+                    comment_keywords,
+                    fingerprints,
+                    derived_preload,
+                )?;
             }
             // Wave-1 scope is regular file content — symlinks and
             // submodule pins are not indexed as files at all.
@@ -1353,6 +1810,96 @@ mod tests {
         assert_eq!(outcome.tier, "haml");
     }
 
+    // --- V77-P4b: HAML shares ONE parse between outline and highlights -----
+
+    /// The shared-parse path's whole point: on a FRESH blob (both salt
+    /// families a cache miss, HAML's usual first-ingest shape since it is
+    /// `Tier::Full` — `plan.symbols` and `plan.highlight` both `true`),
+    /// `index_file` must call `haml::parser::parse_str` exactly ONCE, not
+    /// once for the outline and once again for highlights. The counter is
+    /// `haml::parser`'s own test-only, per-thread one (see its doc for why
+    /// a thread-local rather than the process-global `AtomicUsize` this
+    /// crate already learned not to use for exactly this shape of
+    /// assertion, in `frameworks::rails::i18n`) — reset it immediately
+    /// before the call under test so any parse this SAME thread ran
+    /// earlier in the test binary's lifetime can't be mistaken for one
+    /// this call made.
+    #[test]
+    fn index_file_parses_a_fresh_haml_blob_exactly_once() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let haml = b"%section.container\n  %h1= title\n  - if user\n    \
+                     %p Hi, #{user.name}\n  :javascript\n    console.log(1);\n";
+
+        crate::haml::parser::test_reset_parse_count();
+        let outcome = index_file(
+            &store,
+            repo_id,
+            "app/views/x.html.haml",
+            haml,
+            "hashHamlOnce",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert_eq!(outcome.tier, "haml");
+        assert!(
+            outcome.symbol_count > 0,
+            "the outline should find the section/h1/p rows"
+        );
+        assert_eq!(
+            crate::haml::parser::test_parse_count(),
+            1,
+            "outline and highlights are both a cache miss on this first visit — \
+             they must share ONE parser::parse_str call (V77-P4b), not one each"
+        );
+    }
+
+    /// The flip side: a full cache hit (both families already derived by a
+    /// prior call) must not parse AT ALL — the shared-parse path must not
+    /// regress the existing zero-reparse cache-hit guarantee
+    /// (`identical_bytes_indexed_twice_is_a_cache_hit_with_zero_reparse`,
+    /// above, pins the same property for Rust's tree-sitter parse).
+    #[test]
+    fn index_file_does_not_reparse_a_fully_cached_haml_blob() {
+        let (_tmp, store) = open_store();
+        let repo_id = store.upsert_repo("r", "/tmp/r").unwrap();
+        let haml = b"%section\n  %p Hi\n";
+
+        let first = index_file(
+            &store,
+            repo_id,
+            "views/x.haml",
+            haml,
+            "hashHamlCache",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert!(!first.cache_hit);
+
+        crate::haml::parser::test_reset_parse_count();
+        let second = index_file(
+            &store,
+            repo_id,
+            "views/x.haml",
+            haml,
+            "hashHamlCache",
+            true,
+            false,
+            &kw(),
+        )
+        .unwrap();
+        assert!(second.cache_hit);
+        assert_eq!(
+            crate::haml::parser::test_parse_count(),
+            0,
+            "a full cache hit (both salt families already derived) must not reparse at all"
+        );
+    }
+
     #[test]
     fn oversized_content_gets_a_files_row_and_no_symbols() {
         let (_tmp, store) = open_store();
@@ -1878,7 +2425,9 @@ mod tests {
             .unwrap();
         assert!(!symbols_before.is_empty());
 
-        assert!(unchanged_and_fully_derived(&store, "rust", &hash).unwrap());
+        assert!(
+            unchanged_and_fully_derived(&store, "rust", &hash, &DerivedPreload::default()).unwrap()
+        );
 
         let fingerprints: HashMap<String, (String, String)> =
             [("a.rs".to_string(), (hash.clone(), "rust".to_string()))].into();
@@ -1925,6 +2474,7 @@ mod tests {
             &mut stats,
             &kw(),
             &fingerprints,
+            &DerivedPreload::default(),
         )
         .unwrap();
         assert_eq!(stats.skipped_unchanged, 1);
@@ -1966,7 +2516,13 @@ mod tests {
         let new_src = b"fn add(a: i32, b: i32) -> i32 {\n    a + b + 1\n}\n";
         let new_hash = real_git_hash_object(new_src);
         assert_ne!(old_hash, new_hash);
-        assert!(!unchanged_and_fully_derived(&store, "rust", &new_hash).unwrap());
+        assert!(!unchanged_and_fully_derived(
+            &store,
+            "rust",
+            &new_hash,
+            &DerivedPreload::default()
+        )
+        .unwrap());
     }
 
     /// V77-P1 (task 6) — same oid, but ONE derived family is missing (a
@@ -1980,7 +2536,9 @@ mod tests {
         store
             .mark_derived(hash, lang::SaltFamily::Symbol, lang::RUST.symbol_salt, 3)
             .unwrap();
-        assert!(!unchanged_and_fully_derived(&store, "rust", hash).unwrap());
+        assert!(
+            !unchanged_and_fully_derived(&store, "rust", hash, &DerivedPreload::default()).unwrap()
+        );
 
         // ... and the reverse: only highlights marked.
         let hash2 = "cafedeadbeef";
@@ -1992,13 +2550,18 @@ mod tests {
                 0,
             )
             .unwrap();
-        assert!(!unchanged_and_fully_derived(&store, "rust", hash2).unwrap());
+        assert!(
+            !unchanged_and_fully_derived(&store, "rust", hash2, &DerivedPreload::default())
+                .unwrap()
+        );
 
         // Both marked ⇒ eligible.
         store
             .mark_derived(hash2, lang::SaltFamily::Symbol, lang::RUST.symbol_salt, 1)
             .unwrap();
-        assert!(unchanged_and_fully_derived(&store, "rust", hash2).unwrap());
+        assert!(
+            unchanged_and_fully_derived(&store, "rust", hash2, &DerivedPreload::default()).unwrap()
+        );
     }
 
     /// V77-P1 (task 6) — a TIER_* marker (no registered language) has
@@ -2006,9 +2569,72 @@ mod tests {
     #[test]
     fn tier_marker_with_unchanged_oid_is_vacuously_eligible() {
         let (_tmp, store) = open_store();
-        assert!(unchanged_and_fully_derived(&store, TIER_UNKNOWN, "anyhash").unwrap());
-        assert!(unchanged_and_fully_derived(&store, TIER_BINARY, "anyhash").unwrap());
-        assert!(unchanged_and_fully_derived(&store, TIER_TOO_LARGE, "anyhash").unwrap());
-        assert!(unchanged_and_fully_derived(&store, TIER_LFS, "anyhash").unwrap());
+        let preload = DerivedPreload::default();
+        assert!(unchanged_and_fully_derived(&store, TIER_UNKNOWN, "anyhash", &preload).unwrap());
+        assert!(unchanged_and_fully_derived(&store, TIER_BINARY, "anyhash", &preload).unwrap());
+        assert!(unchanged_and_fully_derived(&store, TIER_TOO_LARGE, "anyhash", &preload).unwrap());
+        assert!(unchanged_and_fully_derived(&store, TIER_LFS, "anyhash", &preload).unwrap());
+    }
+
+    // --- V77-P3 (Task 0): `DerivedPreload` itself --------------------------
+
+    /// A blob whose derived-status is present in the PRELOAD (not the live
+    /// store — this store is a bare, empty fixture) is still reported
+    /// eligible: the preload is consulted BEFORE any store read.
+    #[test]
+    fn derived_preload_hit_short_circuits_without_a_live_store_read() {
+        let (_tmp, store) = open_store();
+        let hash = "preloadedhash";
+        let rows = vec![
+            (
+                hash.to_string(),
+                lang::SaltFamily::Symbol.as_str().to_string(),
+                lang::RUST.symbol_salt.to_string(),
+            ),
+            (
+                hash.to_string(),
+                lang::SaltFamily::Highlight.as_str().to_string(),
+                lang::RUST.highlight_salt.to_string(),
+            ),
+        ];
+        let preload = DerivedPreload::from_rows(rows);
+        // The store itself has NO `derived_status` row for this hash at
+        // all — if `unchanged_and_fully_derived` fell through to a live
+        // read it would see `false`. It must return `true` here purely
+        // from the preload.
+        assert!(unchanged_and_fully_derived(&store, "rust", hash, &preload).unwrap());
+    }
+
+    /// A preload MISS falls back to the live store read (never a false
+    /// "not derived" for something derived DURING this walk, after the
+    /// preload snapshot was taken).
+    #[test]
+    fn derived_preload_miss_falls_back_to_the_live_store_read() {
+        let (_tmp, store) = open_store();
+        let hash = "livehash";
+        store
+            .mark_derived(hash, lang::SaltFamily::Symbol, lang::RUST.symbol_salt, 1)
+            .unwrap();
+        store
+            .mark_derived(
+                hash,
+                lang::SaltFamily::Highlight,
+                lang::RUST.highlight_salt,
+                1,
+            )
+            .unwrap();
+        // Empty preload — a miss on `hash` for both families.
+        let preload = DerivedPreload::default();
+        assert!(unchanged_and_fully_derived(&store, "rust", hash, &preload).unwrap());
+    }
+
+    /// An unrecognised `family` value from `derived_status_for_current_salts`
+    /// (should never happen — defensive only) is ignored rather than
+    /// panicking a boot walk.
+    #[test]
+    fn derived_preload_ignores_an_unrecognised_family_value() {
+        let rows = vec![("h".to_string(), "bogus".to_string(), "salt".to_string())];
+        let preload = DerivedPreload::from_rows(rows);
+        assert!(!preload.is_pair_derived("h", "salt", "salt"));
     }
 }

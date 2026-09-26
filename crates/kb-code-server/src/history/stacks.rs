@@ -40,9 +40,9 @@ use super::{
     merge_base, parse_log_summary_line, reject_dash_prefixed, resolve_sha, run_git_raw,
     HistoryError, Result, LOG_SUMMARY_FMT,
 };
+use crate::git::roots::GitRoot;
 use crate::git::{RefRange, Revspec};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
 
 /// First-parent walk ceiling per branch — exceeded ⇒ `unresolved: true`.
 pub const MAX_FIRST_PARENT_WALK: usize = 2000;
@@ -115,7 +115,7 @@ pub struct BranchTip {
 /// Ordering is total and deterministic: stacks sorted by first layer's
 /// branch name ascending; layers ordered base-first along the chain.
 pub fn detect_stacks(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     branches: &[BranchTip],
     default: Option<&str>,
     include_all: bool,
@@ -246,7 +246,7 @@ struct ChainCtx<'a> {
     base_of: &'a BTreeMap<String, (String, bool, bool)>,
     name_to_tip: &'a BTreeMap<String, String>,
     tip_meta: &'a HashMap<String, LayerTip>,
-    repo_root: &'a Path,
+    repo_root: &'a dyn GitRoot,
 }
 
 /// DFS: extend the current path from `branch` (whose base is already
@@ -314,7 +314,7 @@ fn emit_chains(
 }
 
 fn finish_layer(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     branch: &str,
     base: &str,
     tip_shared: bool,
@@ -351,7 +351,7 @@ fn finish_layer(
 
 /// `merge-base(layer, base) ≠ base's tip` ⇒ the base moved since the
 /// layer was cut.
-fn is_stale(repo_root: &Path, layer: &str, base: &str) -> Result<bool> {
+fn is_stale(repo_root: &dyn GitRoot, layer: &str, base: &str) -> Result<bool> {
     // Branch names come from ref enumeration, but git permits refs that
     // START with `-` — the same argv-injection surface `resolve_sha`'s
     // module doc guards `compare` against. Fail closed, never pass a
@@ -371,7 +371,7 @@ fn is_stale(repo_root: &Path, layer: &str, base: &str) -> Result<bool> {
 /// `max_walk` is the first-parent ceiling (production:
 /// [`MAX_FIRST_PARENT_WALK`]; tests may lower it to exercise the bound).
 fn detect_base(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     branch: &str,
     tip_sha: &str,
     default_name: &str,
@@ -479,7 +479,7 @@ fn detect_base(
 
 /// Whether `x` may be the base of `branch` (cycle-breaking direction filter).
 fn may_be_base(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     x_name: &str,
     x_tip: &str,
     branch: &str,
@@ -511,10 +511,10 @@ fn may_be_base(
 }
 
 /// `git merge-base --is-ancestor a b` — true when `a` is an ancestor of `b`.
-fn is_ancestor(repo_root: &Path, a: &str, b: &str) -> Result<bool> {
+fn is_ancestor(repo_root: &dyn GitRoot, a: &str, b: &str) -> Result<bool> {
     let output = std::process::Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
         .args(["merge-base", "--is-ancestor", a, b])
         .output()
         .map_err(HistoryError::Spawn)?;
@@ -531,7 +531,7 @@ fn is_ancestor(repo_root: &Path, a: &str, b: &str) -> Result<bool> {
 
 /// First-parent commit count from `from` to `to` (`from..to` exclusive of
 /// `from`) — used only for the diverged-base direction tie-break.
-fn fp_distance(repo_root: &Path, from: &str, to: &str) -> Result<u32> {
+fn fp_distance(repo_root: &dyn GitRoot, from: &str, to: &str) -> Result<u32> {
     let revspec = format!("{from}..{to}");
     let out = run_git_raw(
         repo_root,
@@ -545,7 +545,7 @@ fn fp_distance(repo_root: &Path, from: &str, to: &str) -> Result<u32> {
 }
 
 /// `git rev-list --first-parent -n <limit> <tip>` — newest-first full shas.
-fn first_parent_chain(repo_root: &Path, tip_sha: &str, limit: usize) -> Result<Vec<String>> {
+fn first_parent_chain(repo_root: &dyn GitRoot, tip_sha: &str, limit: usize) -> Result<Vec<String>> {
     let n = limit.to_string();
     let out = run_git_raw(
         repo_root,
@@ -559,7 +559,7 @@ fn first_parent_chain(repo_root: &Path, tip_sha: &str, limit: usize) -> Result<V
         .collect())
 }
 
-fn load_tip(repo_root: &Path, sha: &str) -> Result<LayerTip> {
+fn load_tip(repo_root: &dyn GitRoot, sha: &str) -> Result<LayerTip> {
     let out = run_git_raw(
         repo_root,
         &["log", "-1", &format!("--format={LOG_SUMMARY_FMT}"), sha],
@@ -584,7 +584,7 @@ fn load_tip(repo_root: &Path, sha: &str) -> Result<LayerTip> {
 /// (honest incremental view of what the layer actually contains vs the
 /// base as detection named it).
 pub fn layer_diff(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     branches: &[BranchTip],
     default: Option<&str>,
     branch: &Revspec,
@@ -652,7 +652,7 @@ pub fn layer_diff(
 /// Test-only: detect stacks with a custom first-parent walk ceiling.
 #[cfg(test)]
 fn detect_stacks_with_walk_limit(
-    repo_root: &Path,
+    repo_root: &dyn GitRoot,
     branches: &[BranchTip],
     default: Option<&str>,
     include_all: bool,
@@ -725,6 +725,7 @@ fn detect_stacks_with_walk_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::process::Command as StdCommand;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -812,7 +813,13 @@ mod tests {
         let tmp = stack_fixture();
         let dir = tmp.path();
         let tips = list_branch_tips(dir);
-        let stacks = detect_stacks(dir, &tips, Some("main"), false).unwrap();
+        let stacks = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            false,
+        )
+        .unwrap();
         assert_eq!(stacks.default_branch.as_deref(), Some("main"));
         assert_eq!(
             stacks.stacks.len(),
@@ -843,14 +850,26 @@ mod tests {
         git(dir, &["checkout", "-q", "main"]);
 
         let tips = list_branch_tips(dir);
-        let def = detect_stacks(dir, &tips, Some("main"), false).unwrap();
+        let def = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            false,
+        )
+        .unwrap();
         assert!(
             def.stacks.is_empty(),
             "single-layer excluded by default: {:?}",
             def.stacks
         );
 
-        let all = detect_stacks(dir, &tips, Some("main"), true).unwrap();
+        let all = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            true,
+        )
+        .unwrap();
         assert_eq!(all.stacks.len(), 1);
         assert_eq!(all.stacks[0].layers.len(), 1);
         assert_eq!(all.stacks[0].layers[0].branch, "feature");
@@ -867,7 +886,13 @@ mod tests {
         git(dir, &["checkout", "-q", "main"]);
 
         let tips = list_branch_tips(dir);
-        let stacks = detect_stacks(dir, &tips, Some("main"), false).unwrap();
+        let stacks = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             stacks.stacks.len(),
             1,
@@ -897,10 +922,22 @@ mod tests {
         let tips = list_branch_tips(dir);
         // With only same-tip pair on main: apple base? zebra base?
         // apple (lex smaller) walks to main; zebra's base = apple (tip_shared).
-        let all = detect_stacks(dir, &tips, Some("main"), true).unwrap();
+        let all = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            true,
+        )
+        .unwrap();
         // Maximal chain: main ← apple ← zebra  OR  main ← apple  and zebra on apple.
         // Default listing wants multi-layer: main ← apple ← zebra.
-        let stacks = detect_stacks(dir, &tips, Some("main"), false).unwrap();
+        let stacks = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            false,
+        )
+        .unwrap();
         assert_eq!(stacks.stacks.len(), 1, "got: {:?}", stacks.stacks);
         let layers = &stacks.stacks[0].layers;
         assert_eq!(layers[0].branch, "apple");
@@ -934,7 +971,14 @@ mod tests {
         }
         git(dir, &["checkout", "-q", "main"]);
         let tips = list_branch_tips(dir);
-        let stacks = detect_stacks_with_walk_limit(dir, &tips, Some("main"), true, 2).unwrap();
+        let stacks = detect_stacks_with_walk_limit(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            true,
+            2,
+        )
+        .unwrap();
         let long = stacks
             .stacks
             .iter()
@@ -950,16 +994,27 @@ mod tests {
         let tmp = stack_fixture();
         let dir = tmp.path();
         let tips = list_branch_tips(dir);
-        for s in detect_stacks(dir, &tips, Some("main"), true)
-            .unwrap()
-            .stacks
+        for s in detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            true,
+        )
+        .unwrap()
+        .stacks
         {
             for l in s.layers {
                 assert!(!l.unresolved, "{l:?}");
             }
         }
 
-        let ld = layer_diff(dir, &tips, Some("main"), &Revspec::parse("B").unwrap()).unwrap();
+        let ld = layer_diff(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            &Revspec::parse("B").unwrap(),
+        )
+        .unwrap();
         assert_eq!(ld.base, "A");
         assert!(!ld.stale);
         let paths: Vec<&str> = ld.compare.files.iter().map(|f| f.path.as_str()).collect();
@@ -995,7 +1050,13 @@ mod tests {
         git(dir, &["checkout", "-q", "main"]);
 
         let tips = list_branch_tips(dir);
-        let stacks = detect_stacks(dir, &tips, Some("main"), false).unwrap();
+        let stacks = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            Some("main"),
+            false,
+        )
+        .unwrap();
         assert_eq!(stacks.stacks.len(), 2);
         assert_eq!(stacks.stacks[0].layers[0].branch, "x");
         assert_eq!(stacks.stacks[1].layers[0].branch, "y");
@@ -1007,7 +1068,13 @@ mod tests {
         let dir = tmp.path();
         commit(dir, "base.txt", "base\n", "base");
         let tips = list_branch_tips(dir);
-        let stacks = detect_stacks(dir, &tips, None, true).unwrap();
+        let stacks = detect_stacks(
+            &crate::git::roots::WorkTreeRoot::user_clone(dir),
+            &tips,
+            None,
+            true,
+        )
+        .unwrap();
         assert!(stacks.stacks.is_empty());
         assert!(stacks.default_branch.is_none());
     }

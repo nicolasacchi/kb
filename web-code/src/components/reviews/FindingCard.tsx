@@ -19,6 +19,7 @@ import { ActChip, CategoryChip, SeverityChip } from "./RoomChips";
 // without threading a new prop through `ReportPanel`/`ReviewThreadsCard`.
 import { eligibleForPublishMark, toggleMark, useIsMarked } from "../../lib/publishMarks";
 import RecurrenceChip from "./RecurrenceChip";
+import { touchedInChips } from "../../lib/findingTouches";
 import ProseBlock from "../prose/ProseBlock";
 import HighlightedSnippet from "../HighlightedSnippet";
 
@@ -291,6 +292,7 @@ export default function FindingCard({ repo, reviewId, finding, ps }: FindingCard
         <DispositionMenu repo={repo} reviewId={reviewId} finding={finding} />
         {eligibleForPublishMark(finding) && <PublishMarkToggle reviewId={reviewId} slug={finding.slug} />}
         <RecurrenceChip repo={repo} reviewId={reviewId} slug={finding.slug} />
+        <TouchedInChips finding={finding} repo={repo} reviewId={reviewId} />
         <span className="grow" />
         {finding.thread_count > 0 && (
           <span className="kbc-finding__thread-count" data-kbc-finding-thread-count>
@@ -359,6 +361,7 @@ export function FindingRow({ repo, reviewId, finding, ps }: FindingRowProps) {
         <PublishMarkToggle reviewId={reviewId} slug={finding.slug} />
       )}
       <RecurrenceChip repo={repo} reviewId={reviewId} slug={finding.slug} />
+      <TouchedInChips finding={finding} repo={repo} reviewId={reviewId} />
     </div>
   );
 }
@@ -383,6 +386,42 @@ function PublishMarkToggle({ reviewId, slug }: { reviewId: number; slug: string 
     >
       <Icon.Check /> {marked ? "marked" : "mark"}
     </button>
+  );
+}
+
+// ── V80-F3 — "lines changed in ps N" chips. Sibling to `RecurrenceChip`
+// rather than a merge into it: recurrence is cross-REVIEW memory (a
+// separate fetch, its own popover); this is a pure derivation off the
+// SAME `finding` prop already in hand, one chip per `touched_in` entry,
+// each a real link into that patchset's interdiff — never a popover, since
+// there is nothing to expand. Renders nothing for a finding with no
+// `own_ps`/`touched_in` (named absence, the same "no empty chip" posture
+// `RecurrenceChip`'s own doc states). ──
+function TouchedInChips({
+  finding,
+  repo,
+  reviewId,
+}: {
+  finding: ReviewFinding;
+  repo: string;
+  reviewId: number;
+}) {
+  const chips = touchedInChips(finding, repo, reviewId);
+  if (chips.length === 0) return null;
+  return (
+    <span className="kbc-finding__touched" data-kbc-finding-touched={finding.slug}>
+      {chips.map((c) => (
+        <a
+          key={c.ps}
+          className="kbc-finding__touched-chip"
+          href={c.href}
+          title={c.title}
+          data-kbc-finding-touch-ps={c.ps}
+        >
+          {c.label}
+        </a>
+      ))}
+    </span>
   );
 }
 

@@ -1,5 +1,7 @@
 import { useParams } from "react-router";
 import EmptyState from "../components/EmptyState";
+import MetaLine from "../components/MetaLine";
+import PageHeader from "../components/PageHeader";
 import { useLanes } from "../hooks/useLanes";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { formatLastIngest, isFamilyTemplate } from "../lib/lanes";
@@ -17,17 +19,30 @@ export default function Lanes() {
   const { repo = "" } = useParams<{ repo: string }>();
   const q = useLanes(repo);
 
+  const header = (
+    <PageHeader
+      title="Lanes"
+      lede={
+        <>
+          aug-lane/1 registry for {repo}. A lane is enabled only by <code>[lanes] enabled</code> — never
+          by this page.
+        </>
+      }
+    />
+  );
+
   if (q.isLoading) {
     return (
-      <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="loading">
-        <h1 className="kbc-lanes__title">Lanes</h1>
-        <p className="kbc-lanes__lede">Loading…</p>
+      <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="loading" id="main">
+        {header}
+        <p className="kbc-reader__hint">Loading…</p>
       </div>
     );
   }
   if (q.error) {
     return (
-      <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="error">
+      <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="error" id="main">
+        {header}
         <EmptyState
           title="Could not load lanes"
           hint={q.error instanceof Error ? q.error.message : "request failed"}
@@ -39,23 +54,23 @@ export default function Lanes() {
   const unknown = q.data?.unknown_enabled ?? [];
   if (lanes.length === 0) {
     return (
-      <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="empty">
+      <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="empty" id="main">
+        {header}
         <EmptyState title="No lanes registered" hint="This daemon shipped no aug-lane/1 registry rows." />
       </div>
     );
   }
 
   return (
-    <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="ready">
-      <h1 className="kbc-lanes__title">Lanes</h1>
-      <p className="kbc-lanes__lede">
-        aug-lane/1 registry for {repo}. A lane is enabled only by{" "}
-        <code>[lanes] enabled</code> — never by this page.
-      </p>
+    <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="ready" id="main">
+      {header}
       {unknown.length > 0 && (
-        <p className="kbc-lanes__unknown" data-kbc-lanes-unknown>
-          unknown in [lanes] enabled: {unknown.join(", ")}
-        </p>
+        <div data-kbc-lanes-unknown>
+          <MetaLine
+            className="kbc-lanes__unknown"
+            items={[`unknown in [lanes] enabled: ${unknown.join(", ")}`]}
+          />
+        </div>
       )}
       <table className="kbc-lanes__table">
         <thead>

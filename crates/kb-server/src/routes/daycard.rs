@@ -48,9 +48,12 @@
 //! (one URL, one response, no follow-on asset fetches, no JS needed to read
 //! it).
 //!
-//! Per-kb only, matching the `resurface`/`echoes`/`timeline` family it reuses
-//! — a federated "every kb's daycard" digest would need `routes::
-//! buffered_join` (invariant #28) and is out of scope for this thin slice.
+//! Day mode stays per-kb. `?since=` without `all` is also per-kb. `?since=`
+//! with `all=1` (`true`/`yes`) fans out over every mounted kb through
+//! [`crate::routes::buffered_join`] (invariant #28), in `state.kbs`
+//! submission order. A corpus that errors is skipped and named in
+//! `degraded` ([`crate::routes::context::DegradedLane`]) rather than 500-ing
+//! the fleet. Absent `since` ignores `all` and stays the single-kb day card.
 //!
 //! **CT-E1 — `?since=`, "what happened while I was away"**: additive,
 //! mutually exclusive with `?day=` (400 on both). Composes FOUR lanes from
@@ -156,6 +159,9 @@ pub struct DaycardParams {
     /// midnight): the window lower bound for "what happened while I was
     /// away". Mutually exclusive with `day` (400 when both are present).
     pub since: Option<String>,
+    /// `1` / `true` / `yes` — with `since`, fan out over every mounted kb.
+    /// Ignored when `since` is absent, so day mode stays the single-kb card.
+    pub all: Option<String>,
     /// Explicit content-negotiation override: `"json"` or `"html"`.
     /// Absent → decided from the `Accept` header (see [`wants_json`]).
     pub format: Option<String>,
@@ -263,6 +269,22 @@ pub async fn get(
             return error_to_problem_json(&kb_core::Error::BadRequest(
                 "since must not be in the future".to_string(),
             ));
+        }
+        // `all` is consulted only inside the since branch. Absent since never
+        // reaches here, so the day-mode response below stays byte-identical.
+        if wants_all(params.all.as_ref()) {
+            let fleet = build_since_fleet(&state, since_unix, to_unix).await;
+            return if wants_json(&headers, &params) {
+                Json(fleet).into_response()
+            } else {
+                let html = render_since_fleet_html(&fleet);
+                let mut resp = Response::new(Body::from(html));
+                resp.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static("text/html; charset=utf-8"),
+                );
+                resp
+            };
         }
         let response = match build_since_response(&state, &kb_name, ctx, since_unix, to_unix).await
         {
@@ -567,6 +589,79 @@ async fn build_since_response(
         comments_truncated,
         comments_still_open,
     })
+}
+
+/// Truthy set for `?all=`, matching `routes::slates::flag` (`1` / `true` /
+/// `yes`). Duplicated rather than exposed cross-module.
+fn wants_all(v: Option<&String>) -> bool {
+    matches!(v.map(|s| s.trim()), Some("1" | "true" | "yes"))
+}
+
+/// One corpus's since read, or the swallowed failure that names it.
+struct SinceArm {
+    ok: Option<DaycardSinceResponse>,
+    degraded: Option<crate::routes::context::DegradedLane>,
+}
+
+/// Fleet `?since=&all=1` body. Not the single-kb [`DaycardSinceResponse`] —
+/// that shape stays the no-`all` path. `degraded` reuses the existing
+/// per-corpus failure type; an empty vec is omitted.
+#[derive(Debug, Serialize)]
+struct DaycardSinceFleet {
+    pub since_unix: i64,
+    pub to_unix: i64,
+    /// Corpora that answered, `state.kbs` (BTreeMap) submission order.
+    pub kbs: Vec<DaycardSinceResponse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<crate::routes::context::DegradedLane>,
+}
+
+/// CT-E1 fleet — one [`build_since_response`] per mounted kb, bounded by
+/// `buffered_join` (#28). A corpus error is named in `degraded` and dropped
+/// from `kbs`; it does not fail the fleet.
+async fn build_since_fleet(state: &KbHandles, since_unix: i64, to_unix: i64) -> DaycardSinceFleet {
+    let mut futs: Vec<super::CorpusFut<'_, SinceArm>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            match build_since_response(state, kb_name, ctx, since_unix, to_unix).await {
+                Ok(v) => SinceArm {
+                    ok: Some(v),
+                    degraded: None,
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        kb = kb_name.as_str(),
+                        error = %e,
+                        "daycard since fan-out: skipping corpus"
+                    );
+                    SinceArm {
+                        ok: None,
+                        degraded: Some(crate::routes::context::degraded_of(
+                            kb_name.as_str(),
+                            "since",
+                            crate::routes::context::classify_query_error(&e.to_string()),
+                        )),
+                    }
+                }
+            }
+        }));
+    }
+    let mut kbs = Vec::new();
+    let mut degraded = Vec::new();
+    for arm in super::buffered_join(futs, state.fanout_cap).await {
+        if let Some(v) = arm.ok {
+            kbs.push(v);
+        }
+        if let Some(d) = arm.degraded {
+            degraded.push(d);
+        }
+    }
+    DaycardSinceFleet {
+        since_unix,
+        to_unix,
+        kbs,
+        degraded,
+    }
 }
 
 /// `sessions` lane — collapse multi-capture (#11) then keep only sessions
@@ -940,6 +1035,78 @@ fn render_since_html(d: &DaycardSinceResponse) -> String {
     out
 }
 
+fn error_class_name(class: crate::routes::context::QueryErrorClass) -> &'static str {
+    use crate::routes::context::QueryErrorClass::{Embed, IndexFragment, Other, Storage, Timeout};
+    match class {
+        IndexFragment => "index_fragment",
+        Timeout => "timeout",
+        Storage => "storage",
+        Embed => "embed",
+        Other => "other",
+    }
+}
+
+/// Fleet HTML twin of [`render_since_html`]. One heading per corpus that
+/// answered, then the same four lanes. A skipped corpus is named, never a
+/// raw storage error.
+fn render_since_fleet_html(fleet: &DaycardSinceFleet) -> String {
+    let mut out = String::with_capacity(4096);
+    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
+    out.push_str("<meta charset=\"utf-8\">\n");
+    out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+    out.push_str(&format!(
+        "<title>kb daycard — all — since {}</title>\n",
+        fleet.since_unix
+    ));
+    out.push_str(STYLE);
+    out.push_str("\n</head>\n<body>\n");
+    let names = fleet
+        .kbs
+        .iter()
+        .map(|d| d.kb.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let heading = if names.is_empty() {
+        "all".to_string()
+    } else {
+        names
+    };
+    out.push_str(&format!(
+        "<header><h1>{}</h1><p class=\"day\">while you were away: {} → {}</p></header>\n",
+        escape(&heading),
+        fleet.since_unix,
+        fleet.to_unix
+    ));
+    if fleet.kbs.is_empty() {
+        out.push_str("<p class=\"empty\">Nothing here.</p>\n");
+    }
+    for d in &fleet.kbs {
+        out.push_str("<h2>");
+        out.push_str(&escape(&d.kb));
+        out.push_str("</h2>\n");
+        out.push_str(&render_session_section(&d.sessions));
+        out.push_str(&render_doc_section("Memories written", &d.memories));
+        out.push_str(&render_doc_section(
+            "Artifacts created / updated",
+            &d.artifacts,
+        ));
+        out.push_str(&render_comment_section(&d.comments, d.comments_still_open));
+    }
+    if !fleet.degraded.is_empty() {
+        out.push_str("<section><h2>Unavailable</h2>\n<ul>\n");
+        for d in &fleet.degraded {
+            out.push_str("<li>");
+            out.push_str(&escape(&d.kb));
+            out.push_str(" (");
+            out.push_str(error_class_name(d.error_class));
+            out.push_str(")</li>\n");
+        }
+        out.push_str("</ul>\n</section>\n");
+    }
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
 fn render_session_section(items: &[DaycardSessionItem]) -> String {
     let mut out = String::new();
     out.push_str("<section><h2>Sessions</h2>\n");
@@ -1021,11 +1188,13 @@ mod tests {
         let json_param = DaycardParams {
             day: None,
             since: None,
+            all: None,
             format: Some("json".into()),
         };
         let html_param = DaycardParams {
             day: None,
             since: None,
+            all: None,
             format: Some("html".into()),
         };
         assert!(wants_json(&headers, &json_param));
@@ -1045,6 +1214,52 @@ mod tests {
             "text/html,application/xhtml+xml".parse().unwrap(),
         );
         assert!(!wants_json(&headers, &params));
+    }
+
+    #[test]
+    fn wants_all_accepts_only_explicit_truthy_flags() {
+        assert!(wants_all(Some(&"1".to_string())));
+        assert!(wants_all(Some(&"true".to_string())));
+        assert!(wants_all(Some(&" yes ".to_string())));
+        assert!(!wants_all(None));
+        assert!(!wants_all(Some(&"0".to_string())));
+        assert!(!wants_all(Some(&String::new())));
+    }
+
+    fn empty_since(kb: &str) -> DaycardSinceResponse {
+        DaycardSinceResponse {
+            kb: kb.into(),
+            since_unix: 10,
+            to_unix: 20,
+            sessions: Vec::new(),
+            sessions_truncated: false,
+            memories: Vec::new(),
+            memories_truncated: false,
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
+            comments: Vec::new(),
+            comments_truncated: false,
+            comments_still_open: 0,
+        }
+    }
+
+    #[test]
+    fn since_fleet_html_names_every_answering_kb_and_a_skipped_one() {
+        let fleet = DaycardSinceFleet {
+            since_unix: 10,
+            to_unix: 20,
+            kbs: vec![empty_since("alpha"), empty_since("beta")],
+            degraded: vec![crate::routes::context::degraded_of(
+                "gamma",
+                "since",
+                crate::routes::context::QueryErrorClass::Storage,
+            )],
+        };
+        let html = render_since_fleet_html(&fleet);
+        assert!(html.contains(">alpha</h2>"), "{html}");
+        assert!(html.contains(">beta</h2>"), "{html}");
+        assert!(html.contains("gamma (storage)"), "{html}");
+        assert!(!html.contains("lance"), "{html}");
     }
 
     #[test]
