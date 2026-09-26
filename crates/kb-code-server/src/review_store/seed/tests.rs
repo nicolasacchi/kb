@@ -442,10 +442,15 @@ fn missing_tips_mark_reviews_while_the_store_goes_ready() {
 #[test]
 fn a_dropped_member_rides_out_on_the_seed_report() {
     let e = env();
-    let id = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
-    // widgets-02 normalizes to the same store key, so it JOINS this store.
+    // widgets-02 first: its single `origin` normalizes to
+    // `github.com/acme/widgets` unambiguously. widgets-01 carries TWO
+    // forge remotes (`origin` = acme/widgets, `mine` = someone/widgets) and
+    // has no PR binding, so registering it first would be refused
+    // `base-url-ambiguous` — correct ladder behaviour, wrong fixture order.
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    // widgets-01 normalizes to the same store key, so it JOINS this store.
     assert_eq!(
-        member_id(&e.rs.register_repo(&e.store, "widgets-02", None)),
+        member_id(&e.rs.register_repo(&e.store, "widgets-01", None)),
         id
     );
     // Its worktree is gone, so `members_of` drops it and names the reason.
