@@ -52,6 +52,7 @@ pub fn kb_section(path: PathBuf) -> KbSection {
         atlas: None,
         templates: BTreeMap::new(),
         memory_scope: None,
+        project_slugs: Vec::new(),
         default_search_category: None,
         code_url: None,
         decay_policy: None,
@@ -63,6 +64,7 @@ pub fn kb_section(path: PathBuf) -> KbSection {
         capture_dir: None,
         resurface: None,
         slo: None,
+        id_patterns: Vec::new(),
     }
 }
 

@@ -40,7 +40,7 @@ memory_scope = "global"
 Example redeploy flow (adapt to your own compose layout):
 
 ```bash
-cd ~/your-deploy-dir && export KB_GIT_SHA=$(git -C ~/path/to/kb rev-parse --short=12 HEAD) && docker compose build kb && docker compose up -d kb
+cd ~/your-deploy-dir && KB_GIT_SHA=$(git -C ~/path/to/kb rev-parse --short=12 HEAD) && KB_BUILD_VERSION=$(git -C ~/path/to/kb describe --tags --match 'v[0-9]*' --always 2>/dev/null || printf '%s' "$KB_GIT_SHA") && KB_BUILD_VERSION=${KB_BUILD_VERSION#v} && export KB_GIT_SHA KB_BUILD_VERSION && docker compose build kb && docker compose up -d kb
 ```
 
 ## 4. Export `KB_SESSIONS_DIR` in the local Claude env

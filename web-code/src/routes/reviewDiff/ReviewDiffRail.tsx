@@ -10,9 +10,17 @@
 import MobileDrawer from "../../components/MobileDrawer";
 import KeyboardHelp from "../../components/KeyboardHelp";
 import DraftsTray from "../../components/reviews/DraftsTray";
-import { Icon } from "../../components/icons";
+import ReviewFileTree from "../../components/reviews/ReviewFileTree";
+import {
+  FilesModeToggle,
+  OutsideDiffChapter,
+  type OutsideDiffFile,
+} from "../../components/reviews/ReviewMapColumn";
+import { useSyntax } from "../../hooks/useSyntax";
 import type { ReviewFileRow } from "../../api/types";
 import type { ReviewFinding } from "../../api/types";
+import type { FileTreeNode } from "../../lib/reviewFileTree";
+import type { MapRowState } from "../../lib/reviewMapColumn";
 import type { DraftsState } from "../../lib/reviewDrafts";
 import { cssAttr } from "./helpers";
 
@@ -21,8 +29,18 @@ export interface ReviewDiffRailProps {
   onSetFilesOpen: (open: boolean) => void;
   ordered: ReviewFileRow[];
   cursorPath: string;
-  fileRollup: Map<string, { open: number }> | null;
+  /// V80-F1 — the SAME per-path chip state (viewed/comments/findings/
+  /// drafts/noise) the desktop map column renders, replacing the old
+  /// flat drawer's own ad hoc `fileRollup`-derived annotation count so
+  /// the two homes read identically (`web-code/CLAUDE.md`'s Review diff
+  /// v2 "one file tree" rule, extended to the mobile drawer).
+  stateByPath: ReadonlyMap<string, MapRowState>;
   onGoFile: (idx: number) => void;
+  /// V80-F1 — a path outside `ordered` (an "All files" plain row, or an
+  /// "outside the diff" row) has no rendered section to scroll to; this
+  /// navigates to the single-file focus route instead (the SAME fallback
+  /// `ReviewDiffCenter.tsx`'s `pickFile` uses for the desktop map column).
+  onOpenFile: (path: string) => void;
   dispositionMenuOpen: boolean;
   focusThreadId: string | null;
   findingsById: Map<string, ReviewFinding>;
@@ -38,6 +56,16 @@ export interface ReviewDiffRailProps {
   onDiscardDrafts: () => void;
   helpOpen: boolean;
   onSetHelpOpen: (open: boolean) => void;
+  /// V80-F1 — "Changed (N) | All files" parity with the desktop map
+  /// column (both homes, `web-code/CLAUDE.md`'s Review diff v2 section).
+  filesMode: "changed" | "all";
+  onSetFilesMode: (mode: "changed" | "all") => void;
+  outsideDiffFiles: readonly OutsideDiffFile[];
+  /// `buildAllFilesTree`'s output, computed ONCE in `ReviewDiff.tsx` and
+  /// shared with the desktop map column — `null`/absent while
+  /// `filesMode !== "all"` or the whole-tree fetch hasn't landed yet.
+  allTree?: readonly FileTreeNode[] | null;
+  changedPaths?: ReadonlySet<string>;
 }
 
 export default function ReviewDiffRail({
@@ -45,8 +73,9 @@ export default function ReviewDiffRail({
   onSetFilesOpen: setFilesOpen,
   ordered,
   cursorPath,
-  fileRollup,
+  stateByPath,
   onGoFile: goFile,
+  onOpenFile,
   dispositionMenuOpen,
   focusThreadId,
   findingsById,
@@ -62,7 +91,34 @@ export default function ReviewDiffRail({
   onDiscardDrafts: discardDrafts,
   helpOpen,
   onSetHelpOpen: setHelpOpen,
+  filesMode,
+  onSetFilesMode,
+  outsideDiffFiles,
+  allTree,
+  changedPaths,
 }: ReviewDiffRailProps) {
+  const syntaxQ = useSyntax();
+
+  // V80-F1 — a path already rendered on THIS page (a real `ordered` /
+  // `paths` entry) just scrolls to its section and closes, exactly the
+  // pre-existing "tapping a row scrolls and closes" contract
+  // (mobile.spec.ts) — no navigation, so the multi-file page stays put.
+  // A path OUTSIDE `paths` (an "All files" plain row, or an "outside the
+  // diff" row) has no section to scroll to, so it falls through to
+  // `onOpenFile` (the single-file focus navigate the desktop map column's
+  // own `pickFile` fallback already uses for the same case).
+  function pickAndClose(path: string) {
+    const idx = paths.indexOf(path);
+    if (idx >= 0) {
+      goFile(idx);
+      const el = document.querySelector(`[data-kbc-rdiff-file="${cssAttr(path)}"]`);
+      el?.scrollIntoView({ block: "start" });
+    } else {
+      onOpenFile(path);
+    }
+    setFilesOpen(false);
+  }
+
   return (
     <>
       <MobileDrawer
@@ -71,42 +127,29 @@ export default function ReviewDiffRail({
         title="Files"
         ariaLabel="Review files"
       >
-        {ordered.map((file, idx) => {
-          const checked = !!(file.viewed && !file.viewed_stale);
-          const openN = fileRollup?.get(file.path)?.open ?? file.open_annotations;
-          return (
-            <button
-              key={file.path}
-              type="button"
-              className={
-                "kbc-rdiff__file-row" + (file.path === cursorPath ? " is-current" : "")
-              }
-              onClick={() => {
-                goFile(idx);
-                const el = document.querySelector(
-                  `[data-kbc-rdiff-file="${cssAttr(file.path)}"]`,
-                );
-                el?.scrollIntoView({ block: "start" });
-                setFilesOpen(false);
-              }}
-              data-kbc-rdiff-drawer-file={file.path}
-            >
-              <span
-                className="kbc-rdiff__file-check"
-                aria-label={checked ? "viewed" : "unviewed"}
-                data-kbc-rdiff-drawer-viewed={checked ? "1" : "0"}
-              >
-                {checked ? <Icon.Check /> : null}
-              </span>
-              <span className="kbc-rdiff__file-row-path">{file.path}</span>
-              {openN > 0 && (
-                <span className="kbc-review__file-ann" data-kbc-rdiff-drawer-ann>
-                  {openN}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {/* V80-F1 — the SAME status-sectioned folder tree as the Files tab
+            and the desktop map column (`web-code/CLAUDE.md`'s Review diff
+            v2 "one file tree" rule), not a flat list — folders, real kind
+            icons, and (V80-F1) the "Changed | All files" toggle + the
+            "outside the diff" chapter for parity with the desktop map
+            column, its other home. */}
+        <FilesModeToggle
+          filesMode={filesMode}
+          fileCount={ordered.length}
+          onSetFilesMode={onSetFilesMode}
+        />
+        <OutsideDiffChapter files={outsideDiffFiles} currentPath={cursorPath} onPick={pickAndClose} />
+        <ReviewFileTree
+          files={ordered}
+          stateByPath={stateByPath}
+          currentPath={cursorPath}
+          syntaxRows={syntaxQ.data?.rows}
+          onPick={pickAndClose}
+          rowAttr="drawer"
+          mode={filesMode}
+          allTree={allTree}
+          changedPaths={changedPaths}
+        />
       </MobileDrawer>
       {dispositionMenuOpen && focusThreadId && findingsById.get(focusThreadId) && (
         <div

@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Link, useLocation } from "react-router";
+import CurrentReviewChip from "./CurrentReviewChip";
 import { Icon } from "./icons";
 import { cycleTheme, loadTheme, loadThemeFamily } from "../lib/prefs";
 import {
@@ -151,6 +152,9 @@ export default function NavSheet({
           {GROUPS.map(({ group, label }) => (
             <section key={group} className="kbc-navsheet__sec">
               <h2 className="kbc-navsheet__h">{label}</h2>
+              {/* V80-M3 — the current-review chip's mobile home (≤860px
+                  moves it out of the TopBar into this sheet, same rule). */}
+              {group === "review" && <CurrentReviewChip variant="sheet" onNavigate={onClose} />}
               {NAV_ITEMS.filter((item) => item.group === group).map((item) => {
                 const on = navItemMatches(pathname, item.url(repo));
                 const ItemIcon = item.icon;

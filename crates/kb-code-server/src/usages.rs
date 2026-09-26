@@ -239,7 +239,7 @@ pub(crate) fn usages_core(
     if line < 1 {
         return Err(ApiError::bad_request("line must be >= 1 (1-based)"));
     }
-    let read = read_repo_file(repo, path, rev)?;
+    let read = read_repo_file(repo, path, crate::routes::RevResolver::lookup(store, rev))?;
     let content = std::str::from_utf8(&read.bytes).map_err(|_| {
         ApiError::bad_request(format!(
             "{path}: not valid UTF-8 — usages needs text content"
@@ -695,7 +695,7 @@ pub fn usages_counts_at(
     col: u32,
     rev: Option<&str>,
 ) -> Result<UsagesCounts, ApiError> {
-    let read = read_repo_file(repo, path, rev)?;
+    let read = read_repo_file(repo, path, crate::routes::RevResolver::lookup(store, rev))?;
     let content = std::str::from_utf8(&read.bytes).unwrap_or("");
     let line_text = content
         .lines()

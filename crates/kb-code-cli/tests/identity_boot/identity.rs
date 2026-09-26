@@ -66,6 +66,10 @@ async fn identity_json_flag_prints_daemon_identity() {
     let repos = body["repos"].as_array().expect("repos array");
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0]["name"].as_str(), Some("kb"));
+    // V80-F2 — the loopback pre-probe: this CLI call is itself a loopback
+    // peer (127.0.0.1), so it must read `true` regardless of `[review]
+    // remote_mutations`'s (default) config value.
+    assert_eq!(body["review_mutations_admitted"].as_bool(), Some(true));
     task.abort();
 }
 
@@ -87,6 +91,10 @@ async fn identity_default_output_is_human_readable() {
     assert!(text.contains("version:"), "got: {text}");
     assert!(text.contains("repos:"), "got: {text}");
     assert!(text.contains("kb ("), "expected the repo line; got: {text}");
+    assert!(
+        text.contains("review writes admitted: true"),
+        "expected the V80-F2 pre-probe line for this loopback CLI call; got: {text}"
+    );
     task.abort();
 }
 

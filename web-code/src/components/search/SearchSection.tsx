@@ -59,6 +59,15 @@ export interface SearchSectionProps {
   /// shared handler is what makes "open elsewhere" carry the `via` edge and
   /// the way back. Absent ⇒ the browser's native link behaviour, unchanged.
   onRamp?: (rung: RampRung, target: RampTarget) => void;
+  /// V80-M3 — the current review's changed-file set (`lib/currentReview.ts`
+  /// + `useReviewFiles`), fetched ONCE by the caller (never a per-row
+  /// fetch). `undefined`/`null` ⇒ no current review is set (or its files
+  /// haven't loaded yet) — every row renders exactly as it did pre-M3.
+  reviewFilePaths?: ReadonlySet<string> | null;
+  /// The repo `reviewFilePaths` was fetched FOR — a hit lane's `.repo` (or,
+  /// for the text lane, which carries no repo field, the page's own scope)
+  /// must match this before the chip is honest about which review it means.
+  reviewFileRepo?: string;
 }
 
 function rowClassName(active: boolean): string {
@@ -104,12 +113,27 @@ export default function SearchSection({
   onNavigate,
   onPopover,
   onRamp,
+  reviewFilePaths,
+  reviewFileRepo,
 }: SearchSectionProps) {
   const rowCount = laneRowCount(section);
   const headerActive = cursor.section === laneIndex && cursor.row === HEADER_ROW;
 
   function isRowActive(i: number): boolean {
     return cursor.section === laneIndex && cursor.row === i;
+  }
+
+  /// V80-M3 — a small, line-style (never hue-only) chip marking a hit whose
+  /// path is in the current review's changed files. `null` whenever there
+  /// is no current review, its files haven't loaded, or `hitRepo` isn't the
+  /// one `reviewFilePaths` was fetched for (never a guess across repos).
+  function reviewChip(hitRepo: string, hitPath: string): ReactNode {
+    if (!reviewFilePaths || hitRepo !== reviewFileRepo || !reviewFilePaths.has(hitPath)) return null;
+    return (
+      <span className="kbc-search__inreview" data-kbc-search-inreview>
+        in review diff
+      </span>
+    );
   }
 
   function handleNavClick(e: React.MouseEvent) {
@@ -250,6 +274,7 @@ export default function SearchSection({
             <>
               {hit.repo} · {marked(hit.path, ranges)}
               {typeof hit.score === "number" ? ` · ${hit.score.toFixed(0)}` : ""}
+              {reviewChip(hit.repo, hit.path)}
             </>,
           );
         });
@@ -268,6 +293,7 @@ export default function SearchSection({
             </>,
             <>
               <span className="kbc-search__chip">{hit.kind}</span> {hit.repo} · {hit.path}:{hit.line_start}
+              {reviewChip(hit.repo, hit.path)}
             </>,
           );
         });
@@ -281,7 +307,14 @@ export default function SearchSection({
               <mark className="kbc-search__mark">{match}</mark>
               {after}
             </>,
-            `${row.path}:${row.line_no}`,
+            <>
+              {row.path}:{row.line_no}
+              {/* No `.repo` field on this lane's own hit shape — the page's
+                  own scope (`repo` prop) is the only signal available, so the
+                  chip only ever appears while the search itself is scoped to
+                  the review's repo (see the prop's own doc). */}
+              {repo && reviewChip(repo, row.path)}
+            </>,
           );
         });
       case "semantic":
@@ -289,7 +322,10 @@ export default function SearchSection({
           readerRow(
             i,
             hit.snippet,
-            `${hit.repo} · ${hit.path}:${hit.span_start}-${hit.span_end} · ${hit.score.toFixed(2)}`,
+            <>
+              {hit.repo} · {hit.path}:{hit.span_start}-{hit.span_end} · {hit.score.toFixed(2)}
+              {reviewChip(hit.repo, hit.path)}
+            </>,
           ),
         );
       case "sessions":

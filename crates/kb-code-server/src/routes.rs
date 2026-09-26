@@ -35,6 +35,7 @@
 use crate::annotations::{self, DiffAnchor2, SymbolDescriptor};
 use crate::config::RepoEntry;
 use crate::extract::Symbol;
+use crate::git::roots::{GitCtx, WorkTreeRoot};
 use crate::git::{GitError, GitRepo, RefKind, RefRange, Revspec, DEFAULT_BLOB_SIZE_CAP};
 use crate::ingest;
 use crate::lang;
@@ -124,6 +125,24 @@ pub struct IdentityResponse {
     /// themselves; this field only lets a client render the capability
     /// (e.g. a Settings chip) without probing.
     pub remote_mutations: bool,
+    /// V80-F2 — the loopback pre-probe: whether a review-mutation route
+    /// family gated by [`crate::review_gate::review_mutations_gate`] would
+    /// admit *THIS* request, computed from the SAME peer classification
+    /// the gate itself runs (`kb_server::middleware::is_loopback_origin`
+    /// over `ConnectInfo` + `state.auth.trusted_proxies` — the identical
+    /// carve-out [`repos`]/`actions::actions_route`/`search::unified`
+    /// already take, see their docs for why a plain handler may read
+    /// `ConnectInfo` directly). `true` for a loopback caller unconditionally;
+    /// for a non-loopback caller it mirrors `remote_mutations` above
+    /// (`false` by default, `true` once `[review] remote_mutations` is
+    /// set) — the two fields therefore agree for a non-loopback caller and
+    /// `review_mutations_admitted` is strictly the more precise of the two
+    /// (`remote_mutations` alone can't tell a loopback caller from a
+    /// non-loopback one). Computed fresh per request — nothing here is
+    /// cached — so a Settings chip or a disabled-button caption built off
+    /// this field can never disagree with the gate's own 404/200 verdict
+    /// on the very next request from the same caller.
+    pub review_mutations_admitted: bool,
     /// V75-M1 — the Workspace re-key backfill's state: `pending` |
     /// `running` | `done` (`crate::rekey::state_label`).
     ///
@@ -140,7 +159,21 @@ pub struct IdentityResponse {
 
 /// `GET /api/identity` — under the `/api` nest, so it's behind
 /// `auth_bearer` (loopback bypasses per invariant #4).
-pub async fn identity(State(state): State<SharedState>) -> impl IntoResponse {
+///
+/// V80-F2 reads `ConnectInfo` directly (the same carve-out [`repos`]'s own
+/// doc names) purely to compute `review_mutations_admitted` — this route
+/// itself stays on the ordinary `auth_bearer` gate, never
+/// `review_mutations_gate`.
+pub async fn identity(
+    State(state): State<SharedState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let review_mutations_admitted = kb_server::middleware::is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.auth.trusted_proxies,
+    ) || state.review.remote_mutations;
     // Every configured repo was `upsert_repo`'d in `bind_and_spawn`, so
     // `id` is always `Some` in practice; `unwrap_or_default()` (zero
     // counts) is the defensive fallback rather than a panic if that ever
@@ -192,6 +225,7 @@ pub async fn identity(State(state): State<SharedState>) -> impl IntoResponse {
         sibling_major: kb_core::sibling::SIBLING_MAJOR,
         schema_epoch: crate::store::schema_epoch(),
         remote_mutations: state.review.remote_mutations,
+        review_mutations_admitted,
         rekey: crate::rekey::state_label(&state.rekey),
         repos,
         started_at: state.started_at.to_rfc3339(),
@@ -410,6 +444,12 @@ impl From<StoreError> for ApiError {
             StoreError::SlugTakenByOtherKind { .. } => {
                 ApiError::new(StatusCode::CONFLICT, e.to_string())
             }
+            // V80-M5 — a finding-adoption insert losing a race for the same
+            // `annotation_id` is a client error (409), the same class as
+            // the two constraint collisions above, never an opaque 500.
+            StoreError::AnnotationAlreadyFinding(_) => {
+                ApiError::new(StatusCode::CONFLICT, e.to_string())
+            }
             // V4.C2 — batch unknown-id path. 400 (not 404) so a batch
             // never reports a partial apply via a not-found status.
             StoreError::NotFound(_) => ApiError::bad_request(e.to_string()),
@@ -512,11 +552,103 @@ pub(crate) struct FileRead {
     pub(crate) blob_hash: String,
 }
 
+/// RS-U4 (design §6 S8) — HOW [`read_repo_file`] finds the bytes. It
+/// replaces the old bare `rev: Option<&str>`; its constructors ARE the
+/// classification, so a call site cannot compile without choosing one:
+///
+/// * [`RevResolver::work_tree`] — the live working-tree bytes (the old
+///   `None`), for LSP-live/boards/lanes/dossier-style reads.
+/// * [`RevResolver::user_repo`] — a rev read from the USER repo only (the
+///   old `Some(rev)` verbatim). General code-intel whose rev does not
+///   address review data, or a helper not yet bridged.
+/// * [`RevResolver::bridged`] / [`RevResolver::lookup`] — a store-aware
+///   read: a store-addressable rev (full sha, `refs/kbc/*`) is resolved
+///   through [`crate::git::roots::GitCtx::read_rev_with_fallback`], which
+///   reads the review store FIRST and the work tree second for a class
+///   the store does not import, and the store ALONE for a class it is
+///   authoritative for (`is_store_authoritative`, per ref class); any
+///   other name (`HEAD`, `main`) stays on the work tree, since it means
+///   something else in a bare store. `lookup` resolves the `GitCtx`
+///   lazily, only for store-addressable revs, so a hot loop pays no store
+///   query for `None`/branch names. With no ready store (today) both
+///   equal `user_repo`.
+#[derive(Clone, Copy)]
+pub(crate) struct RevResolver<'a> {
+    rev: Option<&'a str>,
+    via: RevVia<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum RevVia<'a> {
+    UserRepo,
+    Ctx(&'a crate::git::roots::GitCtx),
+    Lookup(&'a Store),
+}
+
+impl<'a> RevResolver<'a> {
+    pub(crate) fn work_tree() -> Self {
+        Self {
+            rev: None,
+            via: RevVia::UserRepo,
+        }
+    }
+
+    pub(crate) fn user_repo(rev: Option<&'a str>) -> Self {
+        Self {
+            rev,
+            via: RevVia::UserRepo,
+        }
+    }
+
+    pub(crate) fn bridged(ctx: &'a crate::git::roots::GitCtx, rev: Option<&'a str>) -> Self {
+        Self {
+            rev,
+            via: RevVia::Ctx(ctx),
+        }
+    }
+
+    /// [`Self::bridged`] when a context was resolved (see [`bridge_ctx`]),
+    /// else [`Self::user_repo`].
+    pub(crate) fn maybe_bridged(ctx: Option<&'a GitCtx>, rev: Option<&'a str>) -> Self {
+        match ctx {
+            Some(c) => Self::bridged(c, rev),
+            None => Self::user_repo(rev),
+        }
+    }
+
+    /// Sync store query inside — call from a blocking context only (the
+    /// same rule as every other `&Store` method).
+    pub(crate) fn lookup(store: &'a Store, rev: Option<&'a str>) -> Self {
+        Self {
+            rev,
+            via: RevVia::Lookup(store),
+        }
+    }
+}
+
+/// RS-U4 — the `GitCtx` a caller-supplied `rev` needs, resolved (async,
+/// one store query) ONLY when that rev is store-addressable; `None` for
+/// the working tree and for names, which never touch the store. Pair with
+/// [`RevResolver::maybe_bridged`].
+pub(crate) async fn bridge_ctx(
+    state: &SharedState,
+    repo: &RepoEntry,
+    rev: Option<&str>,
+) -> Option<GitCtx> {
+    match rev {
+        Some(r) if crate::git::roots::is_store_addressable(r) => {
+            Some(GitCtx::resolve_entry(&state.store, repo).await)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn read_repo_file(
     repo: &RepoEntry,
     path: &str,
-    rev: Option<&str>,
+    rev: RevResolver<'_>,
 ) -> Result<FileRead, ApiError> {
+    let RevResolver { rev, via } = rev;
     // V70-A2 — three checks, in this order, all BEFORE any bytes move:
     //   1. `safe_rel_path` — the pre-existing LEXICAL gate (`..`,
     //      absolute, prefix), kept as the first check per SEC-13's fix.
@@ -535,8 +667,31 @@ pub(crate) fn read_repo_file(
             // injection shapes) and an ODB resolve second (404
             // `urn:kb:errors:unknown-ref` on a well-formed miss).
             let spec = parse_revspec(rev)?;
-            let git = GitRepo::open(&repo.path)?;
-            git.read_blob(spec.as_str(), path, DEFAULT_BLOB_SIZE_CAP)?
+            let read_at = |root: &dyn crate::git::roots::GitRoot| -> Result<Vec<u8>, ApiError> {
+                let git = GitRepo::open(root.git_path())?;
+                Ok(git.read_blob(spec.as_str(), path, DEFAULT_BLOB_SIZE_CAP)?)
+            };
+            let work = crate::git::roots::WorkTreeRoot::of_repo(repo);
+            // Two predicates, both from `git::roots`, and the second one
+            // never re-derives the first's verdict: `is_store_addressable`
+            // asks "could a store hold this rev at ALL" (a full sha, or a
+            // `refs/kbc/*` name) and decides only WHETHER to open a
+            // `GitCtx`; `read_rev_with_fallback` then asks, per REF CLASS
+            // (`is_store_authoritative`), whether the store is the whole
+            // answer. A rev that is not addressable never reaches a
+            // store, so `HEAD`/`main` keep meaning what they mean in the
+            // user clone.
+            let addressable = crate::git::roots::is_store_addressable(spec.as_str());
+            match via {
+                RevVia::Ctx(ctx) if addressable => {
+                    ctx.read_rev_with_fallback(spec.as_str(), read_at)?
+                }
+                RevVia::Lookup(store) if addressable => {
+                    crate::git::roots::GitCtx::for_repo(store, &repo.name, work)
+                        .read_rev_with_fallback(spec.as_str(), read_at)?
+                }
+                _ => read_at(&work)?,
+            }
         }
         None => {
             let abs = crate::security::paths::contained_abs_path(&repo.path, path)?;
@@ -610,6 +765,20 @@ pub struct RepoListEntry {
     /// when they are absent, the same way it already does for `writable`.
     pub workspace_id: Option<String>,
     pub worktree_id: Option<String>,
+    /// V77-P2 (E6) — whether the sink worker still has slow-lane work (a
+    /// `FullReconcile` or the boot HEAD-tree walk, chunked — see
+    /// `sink`'s module doc) outstanding for this repo. Scoped to the SLOW
+    /// lane only: an ordinary live edit completing in a couple of seconds
+    /// never flips this on, by design — this field answers E6's "queued
+    /// behind a 20-minute walk, or broken?" question, not "is anything at
+    /// all happening right now".
+    pub catching_up: bool,
+    /// Unix timestamp of the last time `catching_up` went from `true` to
+    /// `false` for this repo. `null` while still catching up, and also
+    /// `null` for a repo this daemon has never run slow-lane work for at
+    /// all — an honest "nothing to catch up on", not a missing value
+    /// standing in for "settled" (see `sink::RepoActivity`'s doc).
+    pub settled_at: Option<i64>,
 }
 
 /// PRR-L2 — one repo's lip/1 provider status
@@ -956,6 +1125,9 @@ fn repos_entry_for(store: &Store, state: &SharedState, r: &RepoEntry) -> RepoLis
         })
         .collect();
     let identity = store.repo_identity(&r.name).ok().flatten();
+    // V77-P2 (E6) — see `sink::RepoActivity`'s doc; scoped to the slow lane
+    // only (a `FullReconcile`/boot-walk job), never the fast per-edit path.
+    let (catching_up, settled_at) = state.repo_activity.snapshot(&r.name);
     RepoListEntry {
         name: r.name.clone(),
         path: r.path.display().to_string(),
@@ -974,6 +1146,8 @@ fn repos_entry_for(store: &Store, state: &SharedState, r: &RepoEntry) -> RepoLis
         // disagree about what a repo's identity is.
         workspace_id: identity.as_ref().map(|(w, _)| w.clone()),
         worktree_id: identity.as_ref().map(|(_, t)| t.clone()),
+        catching_up,
+        settled_at,
     }
 }
 
@@ -1259,7 +1433,12 @@ pub async fn file(
     // `read_repo_file` re-checks the floor for every caller that has no
     // `AppState`; see `security::secrets`' two-level split.
     state.secret_policy.check(&params.path)?;
-    let read = read_repo_file(repo, &params.path, params.rev.as_deref())?;
+    let git_ctx = bridge_ctx(&state, repo, params.rev.as_deref()).await;
+    let read = read_repo_file(
+        repo,
+        &params.path,
+        RevResolver::maybe_bridged(git_ctx.as_ref(), params.rev.as_deref()),
+    )?;
     let lang_info = lang::detect(&params.path, Some(&read.bytes));
     // V72-H1 — the same registry lookup `ingest` makes, so the wire can
     // never disagree with what the pipeline actually did.
@@ -1384,7 +1563,12 @@ pub async fn symbols(
         )),
         (None, None) => Err(ApiError::bad_request("pass one of `path` or `q`")),
         (Some(path), None) => {
-            let read = read_repo_file(repo, path, params.rev.as_deref())?;
+            let git_ctx = bridge_ctx(&state, repo, params.rev.as_deref()).await;
+            let read = read_repo_file(
+                repo,
+                path,
+                RevResolver::maybe_bridged(git_ctx.as_ref(), params.rev.as_deref()),
+            )?;
             let lang_info = lang::detect(path, Some(&read.bytes));
             // 2026-08-31 incident (store.rs module doc): single store call,
             // still wrapped so it can never park this async worker.
@@ -1904,14 +2088,18 @@ pub async fn blame(
     let path = safe_rel_path(&params.path)?.to_string();
     let line_range = parse_line_range(params.start, params.end)?;
 
-    let repo_root = repo.path.clone();
+    // RS-U4 (S8 bridge) — blame stays on the user clone; a ready review
+    // store's objects ride along read-only (per-process alternates).
+    let repo_root = GitCtx::resolve_entry(&state.store, repo)
+        .await
+        .bridged_work_tree();
     let cache = state.blame_cache.clone();
     let rev = params.rev.clone();
     let path_for_task = path.clone();
     let result =
         tokio::task::spawn_blocking(move || -> Result<crate::blame::BlameResult, ApiError> {
-            let git = GitRepo::open(&repo_root)?;
-            crate::blame::blame_file(
+            let git = GitRepo::open(repo_root.work_tree().path())?;
+            crate::blame::blame_file_bridged(
                 &cache,
                 &git,
                 repo_id,
@@ -2808,20 +2996,22 @@ struct ReviewCreateScope {
     side: String,
 }
 
+/// Shared core of [`resolve_review_create_scope`] and (V80-M0)
+/// [`resolve_review_bind_scope`]: review exists + belongs to `repo_name` +
+/// `ps` resolves (default latest) + `side` is `old`/`new` (default `new`).
+/// Returns the review row alongside the resolved patchset+side so a bind
+/// caller that also needs `review.state` doesn't re-fetch it.
 /// 2026-08-31 incident (store.rs module doc): takes `store: &Store` plus
 /// the specific primitives it needs (not `&CreateAnnotationBody`, which
 /// isn't `'static`-cloneable-for-free) so every async call site can run
 /// this inside its own `run_blocking` closure.
-fn resolve_review_create_scope(
+fn resolve_review_ps_side(
     store: &Store,
-    review_id: Option<i64>,
+    review_id: i64,
     repo_name: &str,
     ps: Option<i64>,
     side: Option<&str>,
-) -> Result<Option<ReviewCreateScope>, ApiError> {
-    let Some(review_id) = review_id else {
-        return Ok(None);
-    };
+) -> Result<(store::ReviewRow, store::ReviewPatchsetRow, String), ApiError> {
     let review = store
         .get_review(review_id)?
         .ok_or_else(|| ApiError::bad_request(format!("no such review: {review_id}")))?;
@@ -2845,16 +3035,68 @@ fn resolve_review_create_scope(
             "invalid side: {side:?} (expected \"old\" or \"new\")"
         )));
     }
+    Ok((review, ps, side.to_string()))
+}
+
+/// `None` when the body has no `review_id` (plain create, unchanged).
+fn resolve_review_create_scope(
+    store: &Store,
+    review_id: Option<i64>,
+    repo_name: &str,
+    ps: Option<i64>,
+    side: Option<&str>,
+) -> Result<Option<ReviewCreateScope>, ApiError> {
+    let Some(review_id) = review_id else {
+        return Ok(None);
+    };
+    let (_review, ps, side) = resolve_review_ps_side(store, review_id, repo_name, ps, side)?;
     Ok(Some(ReviewCreateScope {
         review_id,
         ps,
-        side: side.to_string(),
+        side,
     }))
+}
+
+/// V80-M0 — `PUT /api/annotations/{id}/review` validation: the SAME
+/// existence/repo-match/ps/side ladder [`resolve_review_create_scope`]
+/// uses for create (via the shared [`resolve_review_ps_side`] helper),
+/// PLUS a closed-review refusal create does NOT have. Binding is a
+/// deliberate action a human takes on an ALREADY-EXISTING comment from the
+/// plain file reader, at any point after creation — unlike create (whose
+/// gap predates this unit, has no test pinning either behavior, and is
+/// intentionally left alone here), a closed review is a settled one and
+/// gets no new bindings. 409 (not 400): this is a conflict with the
+/// review's current state, the same class `PreparedAnnotationOp`'s sibling
+/// `StoreError::NameConflict`/`SlugTakenByOtherKind` mappings and
+/// `reviews::review_closed_error_body` already use `StatusCode::CONFLICT`
+/// for, reusing `reviews::ERR_REVIEW_CLOSED`'s URN so a client can branch
+/// on the same machine code `start-pr`'s closed refusal carries.
+fn resolve_review_bind_scope(
+    store: &Store,
+    review_id: i64,
+    repo_name: &str,
+    ps: Option<i64>,
+    side: Option<&str>,
+) -> Result<ReviewCreateScope, ApiError> {
+    let (review, ps, side) = resolve_review_ps_side(store, review_id, repo_name, ps, side)?;
+    if review.state == "closed" {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!("review {review_id} is closed; cannot bind a comment to a closed review"),
+        )
+        .with_problem_type(crate::reviews::ERR_REVIEW_CLOSED));
+    }
+    Ok(ReviewCreateScope {
+        review_id,
+        ps,
+        side,
+    })
 }
 
 /// Read the pinned blob for `side` of `ps` — same ODB path the `diff`
 /// create branch uses (`read_repo_file` at a full sha).
 fn read_pinned_review_file(
+    git_ctx: &GitCtx,
     repo: &RepoEntry,
     path: &str,
     ps: &store::ReviewPatchsetRow,
@@ -2865,7 +3107,8 @@ fn read_pinned_review_file(
     } else {
         ps.tip_sha.as_str()
     };
-    let read = read_repo_file(repo, path, Some(sha))?;
+    // RS-U4 (S6) — a patchset pin: store first once it is ready.
+    let read = read_repo_file(repo, path, RevResolver::bridged(git_ctx, Some(sha)))?;
     String::from_utf8(read.bytes)
         .map_err(|_| ApiError::bad_request(format!("{path} at {sha}: not valid UTF-8")))
 }
@@ -3199,7 +3442,16 @@ async fn assemble_top_level_annotation(
     // arms below can share it. Plain creates leave this None and take
     // the existing working-tree read in each arm.
     let pinned_content = match &review_scope {
-        Some(scope) => Some(read_pinned_review_file(repo, path, &scope.ps, &scope.side)?),
+        Some(scope) => {
+            let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
+            Some(read_pinned_review_file(
+                &git_ctx,
+                repo,
+                path,
+                &scope.ps,
+                &scope.side,
+            )?)
+        }
         None => None,
     };
 
@@ -3213,7 +3465,11 @@ async fn assemble_top_level_annotation(
                     "sha must be 4-64 hex characters (got {sha:?})"
                 )));
             }
-            let repo_root = repo.path.clone();
+            // RS-U4 (S8 bridge) — a diff anchor may name a commit that only
+            // the review store holds: resolve it in the user repo widened
+            // (read-only) to the store's objects, then read the file at it.
+            let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
+            let repo_root = git_ctx.bridged_work_tree();
             let sha_owned = sha.to_string();
             let full_sha = tokio::task::spawn_blocking(move || {
                 crate::history::commit::commit_meta(&repo_root, &sha_owned).map(|m| m.sha)
@@ -3225,7 +3481,7 @@ async fn assemble_top_level_annotation(
                     format!("sha resolve task panicked: {e}"),
                 )
             })??;
-            let read = read_repo_file(repo, path, Some(&full_sha))?;
+            let read = read_repo_file(repo, path, RevResolver::bridged(&git_ctx, Some(&full_sha)))?;
             let content = String::from_utf8(read.bytes).map_err(|_| {
                 ApiError::bad_request(format!("{path} at {full_sha}: not valid UTF-8"))
             })?;
@@ -3522,6 +3778,158 @@ pub async fn delete_annotation(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// --- V80-M0 — bind/rebind/unbind a review scope after creation ------------
+
+#[derive(Debug, Deserialize)]
+pub struct BindAnnotationReviewBody {
+    pub review_id: i64,
+    /// Patchset to bind against. Default: the review's latest.
+    #[serde(default)]
+    pub ps: Option<i64>,
+    /// `"old"` | `"new"` (default `"new"`).
+    #[serde(default)]
+    pub side: Option<String>,
+}
+
+/// `PUT /api/annotations/{id}/review` (V80-M0) — bind or REBIND a
+/// TOP-LEVEL annotation's review scope after the fact. Lets a human,
+/// working from the plain file reader, write a comment (or reuse an
+/// OLDER working-tree note) and attach it to a review so it shows in that
+/// review's Room beside the agent's findings — the only pre-existing way
+/// to set `review_id`/`ps_number`/`side` was at CREATE time
+/// (`CreateAnnotationBody`; `PATCH /api/annotations/{id}` never touches
+/// scope, same as it never touches an anchor). Validation mirrors
+/// [`resolve_review_create_scope`] via the shared [`resolve_review_ps_side`]
+/// helper, plus [`resolve_review_bind_scope`]'s closed-review 409. A REPLY
+/// has no scope of its own (it inherits its parent's,
+/// `assemble_reply_annotation`'s ladder) — `400` naming `parent_id`.
+///
+/// This route does NOT read the pinned blob and never refuses on a
+/// path/line absent at the target patchset's sha — that resolves lazily,
+/// as an honest orphan, on the NEXT `GET /api/reviews/{id}/comments`
+/// (`review_comments::resolve_for_ps`'s job, never this route's: "a wrong
+/// line is worse than an honest orphan," that module's own doc).
+///
+/// Emits `annotation.changed{repo,path,review_id}` for the NEW review,
+/// and — on a REBIND onto a DIFFERENT review — a SECOND event carrying
+/// the OLD `review_id`, so both Rooms' SSE-bridge caches invalidate (kb
+/// root CLAUDE.md #24; `web-code/src/lib/queryClient.ts` keys its review
+/// cache invalidation on this field). BEARER — the same plain `api`
+/// router `POST /api/annotations` sits on, NOT `review_remote`/loopback:
+/// binding an annotation carries the same trust as creating one.
+pub async fn bind_annotation_review(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<BindAnnotationReviewBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let now = chrono::Utc::now().timestamp();
+    let state_bg = state.clone();
+    let id_bg = id.clone();
+    // 2026-08-31 incident (store.rs module doc): fetch + validate + write +
+    // read-back are all synchronous (no `.await` in this handler at all) —
+    // one closure.
+    let (view, repo_name, path, old_review_id, new_review_id) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let row = store
+                .get_annotation(&id_bg)?
+                .ok_or_else(|| ApiError::not_found(format!("annotation {id_bg:?}")))?;
+            if row.parent_id.is_some() {
+                return Err(ApiError::bad_request(
+                    "a reply has no review scope of its own — bind its parent (see parent_id)",
+                ));
+            }
+            let repo = find_repo_by_id(&state_bg, row.repo_id)?;
+            let repo_name = repo.name.clone();
+            let scope = resolve_review_bind_scope(
+                store,
+                payload.review_id,
+                &repo_name,
+                payload.ps,
+                payload.side.as_deref(),
+            )?;
+            let old_review_id = row.review_id;
+            store.update_annotation_review_scope(
+                &id_bg,
+                Some((scope.review_id, scope.ps.ps_number, scope.side.as_str())),
+                now,
+            )?;
+            let updated = store.get_annotation(&id_bg)?.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("annotation {id_bg:?} vanished immediately after bind"),
+                )
+            })?;
+            // V70-A2 (SEC-13) — same containment-checked read `patch_
+            // annotation` uses for its own post-update view content.
+            let content = crate::security::paths::contained_abs_path(&repo.path, &updated.path)
+                .ok()
+                .and_then(|abs| std::fs::read_to_string(abs).ok())
+                .unwrap_or_default();
+            let path = updated.path.clone();
+            let new_review_id = updated.review_id;
+            let view = annotation_view(store, updated, &repo_name, &content)?;
+            Ok((view, repo_name, path, old_review_id, new_review_id))
+        })
+        .await?;
+    emit_annotation_changed(&state.bus, &repo_name, &path, new_review_id);
+    if old_review_id.is_some() && old_review_id != new_review_id {
+        emit_annotation_changed(&state.bus, &repo_name, &path, old_review_id);
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+
+/// `DELETE /api/annotations/{id}/review` (V80-M0) — unbind: clears
+/// `review_id`/`ps_number`/`side`. Idempotent — an already-unbound (or
+/// never-bound) annotation still `200`s with its (unchanged) view, since
+/// "unbind" names a target STATE, not a state transition. `404` only when
+/// `id` itself does not exist. A REPLY has no scope of its own — `400`
+/// naming `parent_id`, same as bind. Emits
+/// `annotation.changed{repo,path,review_id}` naming the review that LOST
+/// this comment (the OLD `review_id`, so its Room refreshes) — the key is
+/// simply absent (the ordinary plain-annotation shape) when it was
+/// already unbound.
+pub async fn unbind_annotation_review(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let now = chrono::Utc::now().timestamp();
+    let state_bg = state.clone();
+    let id_bg = id.clone();
+    let (view, repo_name, path, old_review_id) = state
+        .store
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let row = store
+                .get_annotation(&id_bg)?
+                .ok_or_else(|| ApiError::not_found(format!("annotation {id_bg:?}")))?;
+            if row.parent_id.is_some() {
+                return Err(ApiError::bad_request(
+                    "a reply has no review scope of its own — unbind its parent (see parent_id)",
+                ));
+            }
+            let repo = find_repo_by_id(&state_bg, row.repo_id)?;
+            let repo_name = repo.name.clone();
+            let old_review_id = row.review_id;
+            store.update_annotation_review_scope(&id_bg, None, now)?;
+            let updated = store.get_annotation(&id_bg)?.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("annotation {id_bg:?} vanished immediately after unbind"),
+                )
+            })?;
+            let content = crate::security::paths::contained_abs_path(&repo.path, &updated.path)
+                .ok()
+                .and_then(|abs| std::fs::read_to_string(abs).ok())
+                .unwrap_or_default();
+            let path = updated.path.clone();
+            let view = annotation_view(store, updated, &repo_name, &content)?;
+            Ok((view, repo_name, path, old_review_id))
+        })
+        .await?;
+    emit_annotation_changed(&state.bus, &repo_name, &path, old_review_id);
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+
 // --- V4.C2 suggestion storage + batch ------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -3639,7 +4047,8 @@ fn capture_suggestion_from_row(
             ))
         })?;
         // side != old is already rejected; C1's new-side path is tip_sha.
-        let content = read_pinned_review_file(repo, &row.path, &ps, "new")?;
+        let git_ctx = GitCtx::for_entry(store, repo);
+        let content = read_pinned_review_file(&git_ctx, repo, &row.path, &ps, "new")?;
         let original = original_from_content(&content, lines, &row.path)?;
         Ok(SuggestionCapture {
             original,
@@ -3806,6 +4215,22 @@ pub enum AnnotationBatchOp {
         replacement: String,
     },
     ClearSuggestion {
+        id: String,
+    },
+    /// V80-M0 — bind/rebind an EXISTING top-level annotation's review
+    /// scope. Same validation as `PUT /api/annotations/{id}/review`
+    /// (`resolve_review_bind_scope`); a reply → 400.
+    BindReview {
+        id: String,
+        review_id: i64,
+        #[serde(default)]
+        ps: Option<i64>,
+        #[serde(default)]
+        side: Option<String>,
+    },
+    /// V80-M0 — clear an EXISTING annotation's review scope. Same
+    /// validation as `DELETE /api/annotations/{id}/review`; a reply → 400.
+    UnbindReview {
         id: String,
     },
 }
@@ -4086,6 +4511,55 @@ pub async fn batch_annotations(
                             annotation_id: id,
                         });
                     }
+                    AnnotationBatchOp::BindReview {
+                        id,
+                        review_id,
+                        ps,
+                        side,
+                    } => {
+                        let row = require_existing_annotation(store, &id)?;
+                        if row.parent_id.is_some() {
+                            return Err(ApiError::bad_request(
+                                "a reply has no review scope of its own — bind its parent \
+                                 (see parent_id)",
+                            ));
+                        }
+                        let scope = resolve_review_bind_scope(
+                            store,
+                            review_id,
+                            &repo_label_bg,
+                            ps,
+                            side.as_deref(),
+                        )?;
+                        // Post-op state (the NEW scope), mirroring
+                        // `AddComment`'s own `built.row.review_id` above —
+                        // the Room that needs to know about this change is
+                        // the one the comment now belongs to.
+                        paths.push(row.path);
+                        review_ids.push(Some(scope.review_id));
+                        prepared.push(store::PreparedAnnotationOp::BindReview {
+                            id,
+                            review_id: scope.review_id,
+                            ps_number: scope.ps.ps_number,
+                            side: scope.side,
+                        });
+                    }
+                    AnnotationBatchOp::UnbindReview { id } => {
+                        let row = require_existing_annotation(store, &id)?;
+                        if row.parent_id.is_some() {
+                            return Err(ApiError::bad_request(
+                                "a reply has no review scope of its own — unbind its parent \
+                                 (see parent_id)",
+                            ));
+                        }
+                        // Pre-op state (the OLD scope) — the Room that
+                        // needs to know is the one losing this comment;
+                        // after the op there is no review to attribute it
+                        // to.
+                        paths.push(row.path.clone());
+                        review_ids.push(row.review_id);
+                        prepared.push(store::PreparedAnnotationOp::UnbindReview { id });
+                    }
                 }
             }
 
@@ -4233,15 +4707,24 @@ pub async fn checkout_route(
     // this route's wire shape is unchanged.
     let target = crate::git::Revspec::parse(&params.target)
         .map_err(|e| ApiError::bad_request(crate::checkout::CheckoutError::from(e).to_string()))?;
-    let result =
-        tokio::task::spawn_blocking(move || crate::checkout::switch_repo(&repo_root, &target))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("checkout task panicked: {e}"),
-                )
-            })?;
+    // RS-U8 — resolve which review store (if any, and if `ready`) backs
+    // this repo BEFORE the blocking git work. `GitCtx::resolve_entry` is
+    // the ONE place that decision is made (`git/roots.rs`'s own module
+    // doc) and it counts an unresolved/fallback hit for the "0 fallback
+    // after ready" acceptance gate; a repo whose store isn't `ready`
+    // resolves to `None` here, so `switch_repo` below is byte-identical to
+    // before this unit (README §10.1).
+    let git_ctx = crate::git::roots::GitCtx::resolve_entry(&state.store, repo).await;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::checkout::switch_repo(&repo_root, &target, git_ctx.store_root())
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("checkout task panicked: {e}"),
+        )
+    })?;
 
     match result {
         Ok(outcome) => Ok((
@@ -4365,8 +4848,10 @@ pub async fn commit_route(
     let repo_root = repo.path.clone();
     let sha_owned = sha.to_string();
     let (meta, files) = tokio::task::spawn_blocking(move || {
-        let meta = crate::history::commit::commit_meta(&repo_root, &sha_owned)?;
-        let files = crate::history::commit::commit_files(&repo_root, &meta.sha)?;
+        let meta =
+            crate::history::commit::commit_meta(&WorkTreeRoot::user_clone(&repo_root), &sha_owned)?;
+        let files =
+            crate::history::commit::commit_files(&WorkTreeRoot::user_clone(&repo_root), &meta.sha)?;
         Ok::<_, crate::history::HistoryError>((meta, files))
     })
     .await
@@ -4470,7 +4955,12 @@ pub async fn compare_route(
     Query(params): Query<CompareParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (repo, repo_id) = find_repo(&state, &params.repo)?;
-    let repo_root = repo.path.clone();
+    // RS-U4 (S8 bridge) — names resolve in the user repo; objects a ready
+    // review store holds (a patchset sha the clone never fetched) are
+    // visible read-only through per-process alternates.
+    let repo_root = GitCtx::resolve_entry(&state.store, repo)
+        .await
+        .bridged_work_tree();
     let from = parse_revspec(&params.from)?;
     let to = parse_revspec(&params.to)?;
     let three_dot = params.three_dot;
@@ -4847,7 +5337,7 @@ pub async fn branches_route(
                     let ab = tokio::task::spawn_blocking(move || {
                         let _permit = permit;
                         crate::history::branches::ahead_behind(
-                            &repo_root,
+                            &WorkTreeRoot::user_clone(&repo_root),
                             &RefRange::new(default_owned, branch_owned, true),
                         )
                     })
@@ -4977,7 +5467,12 @@ pub async fn file_history_route(
     let path_for_task = path.clone();
     let before = params.before;
     let (entries, truncated) = tokio::task::spawn_blocking(move || {
-        crate::history::file_history::file_history(&repo_root, &path_for_task, limit, before)
+        crate::history::file_history::file_history(
+            &WorkTreeRoot::user_clone(&repo_root),
+            &path_for_task,
+            limit,
+            before,
+        )
     })
     .await
     .map_err(|e| {
@@ -5046,7 +5541,7 @@ pub async fn file_stops_route(
     let agent_emails = state.branches.resolved_agent_emails();
     let page = tokio::task::spawn_blocking(move || {
         crate::history::scrub::file_stops(
-            &repo_root,
+            &WorkTreeRoot::user_clone(&repo_root),
             &path_for_task,
             rev.as_ref(),
             limit,
@@ -5111,7 +5606,13 @@ pub async fn file_at_route(
     let at = params.at;
     let agent_emails = state.branches.resolved_agent_emails();
     let hit = tokio::task::spawn_blocking(move || {
-        crate::history::scrub::file_at(&repo_root, &path_for_task, rev.as_ref(), at, &agent_emails)
+        crate::history::scrub::file_at(
+            &WorkTreeRoot::user_clone(&repo_root),
+            &path_for_task,
+            rev.as_ref(),
+            at,
+            &agent_emails,
+        )
     })
     .await
     .map_err(|e| {
@@ -5141,7 +5642,9 @@ pub async fn file_at_route(
     if stop.path != path {
         state.secret_policy.check(&stop.path)?;
     }
-    let read = read_repo_file(repo, &stop.path, Some(&stop.sha))?;
+    // RS-U4 — the stop's sha came out of the WORK TREE's own history walk
+    // (`scrub::file_at` above), so it is read there.
+    let read = read_repo_file(repo, &stop.path, RevResolver::user_repo(Some(&stop.sha)))?;
     let (encoding, content) = match String::from_utf8(read.bytes.clone()) {
         Ok(s) => ("utf8", s),
         Err(_) => (
@@ -5236,7 +5739,7 @@ pub async fn stacks_route(
     let default_for_task = default.clone();
     let detected = tokio::task::spawn_blocking(move || {
         crate::history::stacks::detect_stacks(
-            &repo_root,
+            &WorkTreeRoot::user_clone(&repo_root),
             &branch_tips,
             default_for_task.as_deref(),
             include_all,
@@ -5306,7 +5809,7 @@ pub async fn stacks_layer_diff_route(
     let branch = parse_revspec(&params.branch)?;
     let ld = tokio::task::spawn_blocking(move || {
         crate::history::stacks::layer_diff(
-            &repo_root,
+            &WorkTreeRoot::user_clone(&repo_root),
             &branch_tips,
             default_for_task.as_deref(),
             &branch,
@@ -5390,7 +5893,12 @@ pub async fn merge_check_route(
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mc = tokio::task::spawn_blocking(move || {
-        crate::history::merge_check::merge_check(&repo_root, &scratch_root, &from, &to)
+        crate::history::merge_check::merge_check(
+            &WorkTreeRoot::user_clone(&repo_root),
+            &scratch_root,
+            &from,
+            &to,
+        )
     })
     .await
     .map_err(|e| {
@@ -5451,7 +5959,7 @@ pub async fn range_diff_route(
     let old = parse_ref_range(&params.old)?;
     let new = parse_ref_range(&params.new)?;
     let rd = tokio::task::spawn_blocking(move || {
-        crate::history::range_diff::range_diff(&repo_root, &old, &new)
+        crate::history::range_diff::range_diff(&WorkTreeRoot::user_clone(&repo_root), &old, &new)
     })
     .await
     .map_err(|e| {
@@ -5913,6 +6421,71 @@ pub async fn prs_fetch_route(
     let (repo, _repo_id) = find_repo(&state, &body.repo)?;
     let repo_root = repo.path.clone();
     let number = body.number;
+    // RS-U6 — a ready review store: the PR head is fetched INTO THE STORE
+    // (README §5.3 `pr fetch` trigger; the user clone is never written), and
+    // an open review bound to this PR gets its `pr_head_sha` synced.
+    if let Some(handle) = crate::reviews::admit_store(&state, &body.repo).await? {
+        let member = crate::reviews::store_member(&state, &body.repo)?;
+        let repo_for_base = body.repo.clone();
+        let root_for_base = repo.path.clone();
+        let rep = crate::reviews::with_store_ctx(&state, handle, member, move |ctx| {
+            // README §5.3: `pr fetch` fetches the base with the PR head —
+            // the tracked base branch of the open review bound to this PR,
+            // if any, in the same fetch.
+            let branches: Vec<String> = ctx
+                .store
+                .get_review_by_pr_binding(&repo_for_base, number as i64)
+                .ok()
+                .flatten()
+                .filter(|r| r.state == "open")
+                .map(|r| crate::reviews::review_base_block(ctx.store, &r, &root_for_base, None).0)
+                .filter(|b| b.mode.as_deref() == Some("track"))
+                .and_then(|b| b.branch)
+                .into_iter()
+                .collect();
+            let access = ctx.access();
+            ctx.fetch_forge(
+                access.as_ref().map_err(String::as_str),
+                &branches,
+                Some(number),
+            )
+        })
+        .await?;
+        let Some(sha) = rep.pr_head else {
+            return Err(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "git fetch failed: PR #{number} could not be fetched into the review store ({})",
+                    rep.pr_error
+                        .as_deref()
+                        .or(rep.code.as_deref())
+                        .unwrap_or("failed")
+                ),
+            ));
+        };
+        let repo_name = body.repo.clone();
+        let sha_c = sha.clone();
+        state
+            .store
+            .run_blocking(move |store| -> Result<(), ApiError> {
+                if let Some(r) = store.get_review_by_pr_binding(&repo_name, number as i64)? {
+                    if r.state == "open" {
+                        store.set_review_pr_head_sha(r.id, &sha_c)?;
+                    }
+                }
+                Ok(())
+            })
+            .await?;
+        return Ok((
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(PrFetchResponse {
+                repo: body.repo,
+                number,
+                ref_: crate::reviews::pr_ref(number),
+                sha,
+            }),
+        ));
+    }
     let (ref_, sha) =
         tokio::task::spawn_blocking(move || crate::github::fetch_pr_ref(&repo_root, number))
             .await

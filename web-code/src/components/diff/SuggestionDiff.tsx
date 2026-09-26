@@ -7,11 +7,18 @@
 // Syntax paint: one `useHighlight` batch (`id: "old"` / `id: "new"`,
 // `lang: null`, `path` from the thread) composed with token marks in
 // `lib/suggestionPaint.ts`. Never blocks the diff on the paint.
+//
+// The apply-preview's working-tree slice paints from the `GET /api/file`
+// body THIS component already holds (`useFile` below) through the same
+// `lib/paintSpans.ts` primitives `LiveRefCard` uses — one painter, one
+// `.kbc-hl-*` class table, and NO second request for bytes already in hand.
 
 import { useMemo } from "react";
 import type { ReviewComment } from "../../api/types";
 import { useFile } from "../../hooks/useFile";
 import { useHighlight } from "../../hooks/useHighlight";
+import { paintLine, type PaintedSegment } from "../../lib/diffHighlight";
+import { byteSpansToHighlightSpans, wireSpansToLineMap } from "../../lib/paintSpans";
 import { sliceAnchoredLines, splitSuggestionLines } from "../../lib/suggestions";
 import {
   composePaintedRows,
@@ -101,6 +108,31 @@ function TokenSpan({ seg }: { seg: ComposedSeg }) {
   );
 }
 
+/// One painted line — the same classed-span DOM every other `.kbc-hl-*`
+/// surface emits (`data-kbc-hl` is the painted-span contract the e2e
+/// suite reads). An unclassed segment stays bare text, exactly as
+/// `UnifiedHunks`' `PaintedText` renders it: this output is a `<pre>` of
+/// file text, so the segment must carry no element of its own beyond the
+/// paint. `data-kbc-hl` is spelled like `TokenSpan`'s above — only the
+/// attribute's PRESENCE is ever read (CSS `:not([data-kbc-hl])`, the e2e
+/// selector), never its value.
+function PaintLine({ segs }: { segs: PaintedSegment[] }) {
+  if (segs.length === 1 && !segs[0].cls) return <>{segs[0].text}</>;
+  return (
+    <>
+      {segs.map((s, i) =>
+        s.cls ? (
+          <span key={i} className={s.cls} data-kbc-hl="">
+            {s.text}
+          </span>
+        ) : (
+          s.text
+        ),
+      )}
+    </>
+  );
+}
+
 /// Apply-confirm body: token diff plus the target lines' current working-tree
 /// state. `pinned` / `drifted` is the wire's `resolution.orphaned` — not a
 /// client guess. The WT slice is shown beside it so a 409 is not a surprise.
@@ -117,8 +149,23 @@ export function ApplySuggestionPreview({
   const start = thread.resolution.line ?? 1;
   const end = thread.resolution.line_end ?? start;
   const wt = useFile(repo || undefined, thread.path, undefined);
-  const currentLines =
-    wt.data?.encoding === "utf8" ? sliceAnchoredLines(wt.data.content, start, end) : null;
+  const currentLines = useMemo(
+    () => (wt.data?.encoding === "utf8" ? sliceAnchoredLines(wt.data.content, start, end) : null),
+    [wt.data, start, end],
+  );
+  // `wt.data.highlights` are byte offsets into the WHOLE file, so they are
+  // converted on the whole content (giving a map keyed by FILE line) and
+  // then read at `start + i` — the slice is verbatim file text, so the
+  // per-line integrity check the diff renderers do is satisfied by
+  // construction. No spans / unindexed blob / non-utf8 ⇒ an empty map ⇒
+  // `paintLine` returns one unclassed segment, i.e. the same DOM as the
+  // unpainted `<pre>` this replaced.
+  const wtPainted: PaintedSegment[][] | null = useMemo(() => {
+    if (!currentLines || wt.data?.encoding !== "utf8") return null;
+    const wire = byteSpansToHighlightSpans(wt.data.content, wt.data.highlights ?? []);
+    const byLine = wireSpansToLineMap(wt.data.content, wire);
+    return currentLines.map((text, i) => paintLine(text, byLine.get(start + i)));
+  }, [currentLines, start, wt.data]);
   const original = suggestion?.original ?? "";
   const blobState = thread.resolution.orphaned ? "drifted" : "pinned";
   const wtMatches =
@@ -146,9 +193,14 @@ export function ApplySuggestionPreview({
                 ? " · working tree no longer matches original"
                 : ""}
       </p>
-      {currentLines && (
+      {wtPainted && (
         <pre className="kbc-sugdiff-apply__wt" data-kbc-suggestion-wt>
-          {currentLines.join("\n")}
+          {wtPainted.map((segs, i) => (
+            <span key={i}>
+              <PaintLine segs={segs} />
+              {i < wtPainted.length - 1 ? "\n" : null}
+            </span>
+          ))}
         </pre>
       )}
       <label className="kbc-suggestion__resolve">

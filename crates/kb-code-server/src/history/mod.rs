@@ -47,8 +47,8 @@ pub mod scratch;
 pub mod scrub;
 pub mod stacks;
 
+use crate::git::roots::GitRoot;
 use crate::numstat::FileChange;
-use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, thiserror::Error)]
@@ -124,10 +124,15 @@ impl From<crate::git::RevspecError> for HistoryError {
 /// Run `git -C repo_root <args>`, returning raw stdout bytes on a zero
 /// exit or [`HistoryError::GitFailed`] otherwise. Shared by every
 /// submodule below.
-pub(crate) fn run_git_raw(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+///
+/// RS-U4 — takes a CLASSIFIED root ([`GitRoot`]: a `WorkTreeRoot` or a
+/// `StoreRoot`), never a bare `&Path`; a review read picks its root through
+/// `GitCtx::read_with_fallback` (see `crate::git::roots`).
+pub(crate) fn run_git_raw(repo_root: &dyn GitRoot, args: &[&str]) -> Result<Vec<u8>> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
+        .envs(crate::git::roots::alternates_env(repo_root))
         .args(args)
         .output()
         .map_err(HistoryError::Spawn)?;
@@ -148,7 +153,11 @@ pub(crate) fn run_git_raw(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
 /// on), then merges them via `crate::numstat::merge`. Used by
 /// [`commit::commit_files`] (`subcmd = "diff-tree"`) and
 /// [`compare::compare`] (`subcmd = "diff"`).
-pub(crate) fn diff_files(repo_root: &Path, subcmd: &str, args: &[&str]) -> Result<Vec<FileChange>> {
+pub(crate) fn diff_files(
+    repo_root: &dyn GitRoot,
+    subcmd: &str,
+    args: &[&str],
+) -> Result<Vec<FileChange>> {
     let mut numstat_args = vec![subcmd, "--numstat", "-z"];
     numstat_args.extend_from_slice(args);
     let mut name_status_args = vec![subcmd, "--name-status", "-z"];
@@ -259,7 +268,7 @@ pub struct Resolved {
 /// `git rev-parse --verify <spec>^{commit}` — the full, disambiguated sha
 /// one side of a compare/merge-check resolves to. Shared by `compare` and
 /// `merge_check`.
-pub(crate) fn resolve_sha(repo_root: &Path, spec: &str) -> Result<String> {
+pub(crate) fn resolve_sha(repo_root: &dyn GitRoot, spec: &str) -> Result<String> {
     let out = run_git_raw(
         repo_root,
         &["rev-parse", "--verify", &format!("{spec}^{{commit}}")],
@@ -274,7 +283,7 @@ pub(crate) fn resolve_sha(repo_root: &Path, spec: &str) -> Result<String> {
 /// ordinary answer (an unborn HEAD, a symref with no target) and not a
 /// request error to propagate. `pub` because `crate::branches` is that
 /// caller.
-pub fn resolve_ref_commit(repo_root: &Path, spec: &str) -> Option<String> {
+pub fn resolve_ref_commit(repo_root: &dyn GitRoot, spec: &str) -> Option<String> {
     let spec = crate::git::Revspec::parse(spec).ok()?;
     let out = resolve_sha(repo_root, spec.as_str()).ok()?;
     (!out.is_empty()).then_some(out)
@@ -284,17 +293,18 @@ pub fn resolve_ref_commit(repo_root: &Path, spec: &str) -> Option<String> {
 /// resolved shas. `pub` for `crate::branches`, and it validates the ref
 /// through `Revspec` first: `merge_base` below takes shas this daemon
 /// resolved itself, so its own argv carries no validator.
-pub fn merge_base_of(repo_root: &Path, spec: &str, to_sha: &str) -> Option<String> {
+pub fn merge_base_of(repo_root: &dyn GitRoot, spec: &str, to_sha: &str) -> Option<String> {
     let spec = crate::git::Revspec::parse(spec).ok()?;
     merge_base(repo_root, spec.as_str(), to_sha)
 }
 
 /// `git merge-base <from> <to>` — `None` (not an error) on a non-zero exit
 /// (no common ancestor). Shared by `compare` and `merge_check`.
-pub(crate) fn merge_base(repo_root: &Path, from_sha: &str, to_sha: &str) -> Option<String> {
+pub(crate) fn merge_base(repo_root: &dyn GitRoot, from_sha: &str, to_sha: &str) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
+        .arg(repo_root.git_path())
+        .envs(crate::git::roots::alternates_env(repo_root))
         .args(["merge-base", from_sha, to_sha])
         .output()
         .ok()?;

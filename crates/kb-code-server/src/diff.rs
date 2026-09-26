@@ -131,6 +131,49 @@ pub fn diff_file(
     }
 }
 
+/// `git -C repo_root diff --no-color -U3 <from_sha>:<from_path>
+/// <to_sha>:<to_path>` — a BLOB-to-blob diff (V80-F3,
+/// `review_finding_touches`'s rename branch). Unlike [`diff_file`], which
+/// compares one PATH across two trees, this compares two specific BLOBS
+/// directly, so it stays correct when the path itself moved between the
+/// two endpoints (a single-pathspec diff across a rename shows the file as
+/// wholesale deleted at the old path — see the caller's own tests for why
+/// that shortcut is wrong).
+///
+/// `from_sha`/`to_sha` are daemon-minted (a patchset's own `tip_sha`,
+/// already 40 hex characters), and `from_path`/`to_path` come from git's
+/// OWN rename detection (`history::diff_files` with `-M`) rather than
+/// caller input. Each combined `sha:path` token is ONE argv entry that
+/// always starts with a hex digit, so it can never be read as a flag
+/// regardless of what the path itself contains — the same `<oid>:<path>,
+/// oid is 40 hex git itself printed` precedent `history/radar.rs`
+/// documents for its own use of this shape; SEC-17's `--`-before-pathspec
+/// rule is about a caller-supplied PATH reaching a bare revspec slot, and
+/// neither token here is a pathspec argument at all.
+pub fn diff_blob_pair(
+    repo_root: &Path,
+    from_sha: &str,
+    from_path: &str,
+    to_sha: &str,
+    to_path: &str,
+) -> Result<String> {
+    let from_spec = format!("{from_sha}:{from_path}");
+    let to_spec = format!("{to_sha}:{to_path}");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["diff", "--no-color", "-U3", &from_spec, &to_spec])
+        .output()
+        .map_err(DiffError::Spawn)?;
+    match output.status.code() {
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        other => Err(DiffError::GitFailed {
+            status: other.unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }),
+    }
+}
+
 /// V70-A2 (SEC-17) — a `RevspecError` from a route's own
 /// `Revspec::parse` folds into this module's error type, so the wire shape
 /// of a rejected `?from=`/`?to=` is byte-identical to the pre-V70-A2
@@ -303,5 +346,34 @@ mod tests {
 
         let diff = diff_file(dir, &rs(&sha1), Some(&rs(&sha2)), "bin.dat").unwrap();
         assert!(diff.contains("Binary files"), "got: {diff}");
+    }
+
+    #[test]
+    fn diff_blob_pair_compares_across_a_rename() {
+        let tmp = init_repo();
+        let dir = tmp.path();
+        std::fs::write(dir.join("old.txt"), "line1\nline2\nline3\n").unwrap();
+        git(dir, &["add", "old.txt"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        let sha1 = git_out(dir, &["rev-parse", "HEAD"]);
+
+        git(dir, &["mv", "old.txt", "new.txt"]);
+        std::fs::write(dir.join("new.txt"), "line1\nCHANGED\nline3\n").unwrap();
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "c2 rename+edit"]);
+        let sha2 = git_out(dir, &["rev-parse", "HEAD"]);
+
+        // A plain single-pathspec diff on the OLD name sees only a
+        // deletion (the shortcut this fn exists to avoid) —
+        let naive = diff_file(dir, &rs(&sha1), Some(&rs(&sha2)), "old.txt").unwrap();
+        assert!(naive.contains("deleted file"), "got: {naive}");
+
+        // — while the blob-to-blob form correctly diffs the SAME content
+        // across the rename, reporting only the actual line change.
+        let real = diff_blob_pair(dir, &sha1, "old.txt", &sha2, "new.txt").unwrap();
+        assert!(real.contains("@@"), "expected a hunk header, got: {real}");
+        assert!(real.contains("-line2"), "got: {real}");
+        assert!(real.contains("+CHANGED"), "got: {real}");
+        assert!(!real.contains("deleted file"), "got: {real}");
     }
 }

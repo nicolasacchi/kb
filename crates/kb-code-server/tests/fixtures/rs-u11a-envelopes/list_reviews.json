@@ -1,0 +1,58 @@
+{
+  "reviews": [
+    {
+      "artifact_hint_id": "null",
+      "artifact_hint_kb": "null",
+      "base_ref": "string",
+      "created_at": "number",
+      "files_count": "number",
+      "has_report": "bool",
+      "head_ref": "string",
+      "id": "number",
+      "latest_ps": "number",
+      "open_annotations": "number",
+      "pr_head_sha": "string",
+      "pr_meta": {
+        "author": "string",
+        "base_ref": "string",
+        "base_source": "string",
+        "body": "string",
+        "checks": [
+          {
+            "duration": "number",
+            "name": "string",
+            "note": "string",
+            "status": "string"
+          }
+        ],
+        "draft": "bool",
+        "head_ref": "string",
+        "labels": [
+          "string"
+        ],
+        "merge_state_status": "string",
+        "merged": "bool",
+        "state": "string",
+        "title": "string"
+      },
+      "pr_meta_fetched_at": "number",
+      "pr_number": "number",
+      "pr_repo_slug": "string",
+      "repo": "string",
+      "report_risk_score": "number",
+      "session_id": "null",
+      "state": "string",
+      "title": "null",
+      "updated_at": "number",
+      "verdict": {
+        "at": "number",
+        "note": "string",
+        "ps": "number",
+        "state": "string"
+      },
+      "verdict_stale": "bool",
+      "viewed_count": "number"
+    }
+  ],
+  "schema": "string"
+}

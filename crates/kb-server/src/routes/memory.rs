@@ -1,4 +1,4 @@
-//! `GET /api/memory/recall?q=&scope=all|global|project&project=&limit=`
+//! `GET /api/memory/recall?q=&scope=all|global|project&project=&limit=[&session=]`
 //! — agent-memory recall. Fans out across the in-scope memory corpora,
 //! over-fetches per corpus, then re-ranks globally by
 //! `rank-position × salience × recency-decay` (`kb_core::memory::rerank`),
@@ -15,7 +15,7 @@ use axum::{
     Json,
 };
 use kb_core::memory::{rerank_with_policy_scored, DecayPolicy, RecallHit, DEFAULT_SALIENCE};
-use kb_core::storage::sqlite::CodeRefRow;
+use kb_core::storage::sqlite::{CodeRefRow, ServedRecallRow};
 use kb_core::types::KbName;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -28,6 +28,16 @@ const MAX_LIMIT: usize = 50;
 /// CT-C4 — per-hit cap on `RecallResult::code_hints`. Truncation is always
 /// explicit: `code_hints_total` carries the pre-cap distinct count.
 const CODE_HINTS_CAP: usize = 5;
+/// Live-serve ledger append cap. The response page is already bounded by
+/// `limit` (≤ [`MAX_LIMIT`]); this is a second bound so a serve-time write
+/// cannot append an unbounded batch even if that page cap moves.
+const SERVED_RECALL_WRITE_CAP: usize = MAX_LIMIT;
+/// Stored title cap, on a char boundary. [`ServedRecall::injected_chars`]
+/// still counts the full served title + summary, not this clipped copy.
+const SERVED_RECALL_TITLE_CAP: usize = 240;
+/// Session ids on the wire are UUIDs / ulids. Anything longer is not a
+/// session id we will key a ledger row on.
+const SERVED_SESSION_ID_CAP: usize = 128;
 
 #[derive(Debug, Deserialize)]
 pub struct Params {
@@ -75,6 +85,10 @@ pub struct Params {
     /// (absent data, not a zero reading).
     #[serde(default)]
     pub with_weekly: bool,
+    /// Optional recall budget in milliseconds. An arm that misses it is
+    /// dropped and named in `degraded` (`error_class: timeout`); absent
+    /// means no cap.
+    pub deadline_ms: Option<u64>,
 }
 
 fn default_scope() -> String {
@@ -86,6 +100,14 @@ fn default_scope() -> String {
 pub struct RecallResponse {
     pub hits: Vec<RecallResult>,
     pub ms: u64,
+    /// Swallowed per-corpus failures. Absent when empty so a healthy
+    /// recall stays byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "ts-export",
+        ts(as = "Option<Vec<crate::routes::context::DegradedLane>>", optional)
+    )]
+    pub degraded: Vec<crate::routes::context::DegradedLane>,
 }
 
 #[cfg_attr(
@@ -597,11 +619,169 @@ pub async fn recall(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<crate::middleware::Identity>,
     Query(params): Query<Params>,
+    Query(served): Query<ServedSessionQuery>,
 ) -> Response<Body> {
-    match recall_compose(state, identity, params).await {
-        Ok(out) => Json(out).into_response(),
+    // `session` is not a field of [`Params`]: `routes::context` builds that
+    // struct literally, and an in-process compose has no recalling session.
+    // Absent / blank `session=` is today's response, degraded included.
+    let session = served.session;
+    match recall_compose(Arc::clone(&state), identity, params).await {
+        Ok(out) => {
+            if let Some(session_id) = session {
+                record_served_recalls(&state, &session_id, &out.hits);
+            }
+            Json(out).into_response()
+        }
         Err(resp) => resp,
     }
+}
+
+/// `session=` on `GET /api/memory/recall` only. Not part of [`Params`], so
+/// the in-process compose path stays byte-identical.
+#[derive(Debug, Default, Deserialize)]
+pub struct ServedSessionQuery {
+    #[serde(default)]
+    session: Option<String>,
+}
+
+/// One hit this serve actually returned, for the recall ledger.
+///
+/// Field names are the serve-time record (`kb`, `id`, `pos`, `title`,
+/// `injected_chars`, `served_at`). The sessions storage row, once it
+/// exists, maps `kb` → `memory_kb` and `id` → `memory_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServedRecall {
+    pub kb: String,
+    pub id: String,
+    /// 1-based rank in the pack this response returned (1 = top).
+    pub pos: u32,
+    pub title: String,
+    /// Chars of the served title + summary. The hook may clip the summary
+    /// further by rank when it renders the block; this is the size the
+    /// route served, not a reconstruction of `kb-recall.sh`.
+    pub injected_chars: u32,
+    /// Unix seconds, taken once for the batch.
+    pub served_at: i64,
+}
+
+/// Fire-and-forget: build the capped serve-time rows and hand them off.
+/// A missing append, a missing sessions corpus, or a bad `session=` must
+/// not fail or delay the recall response. Never calls
+/// `memory_recalls_replace` — that deletes one capture's rows, and a live
+/// serve is not a capture.
+fn record_served_recalls(state: &KbHandles, session_id: &str, hits: &[RecallResult]) {
+    let Some(session_id) = accept_session_id(session_id) else {
+        return;
+    };
+    let served_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let rows = served_recall_rows(hits, served_at);
+    if rows.is_empty() {
+        return;
+    }
+    let Some(storage) = sessions_storage(state) else {
+        tracing::debug!(
+            session_id,
+            n = rows.len(),
+            "served recall ledger skipped: no sessions corpus"
+        );
+        return;
+    };
+    let n = rows.len();
+    tokio::spawn(async move {
+        if let Err(e) = append_served_recalls(storage, session_id.clone(), rows).await {
+            tracing::debug!(
+                session_id,
+                n,
+                error = %e,
+                "served recall ledger not written"
+            );
+        }
+    });
+}
+
+fn accept_session_id(raw: &str) -> Option<String> {
+    let id = raw.trim();
+    if id.is_empty() || id.chars().count() > SERVED_SESSION_ID_CAP {
+        return None;
+    }
+    if id.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn served_recall_rows(hits: &[RecallResult], served_at: i64) -> Vec<ServedRecall> {
+    hits.iter()
+        .take(SERVED_RECALL_WRITE_CAP)
+        .enumerate()
+        .map(|(i, hit)| {
+            let title_chars = hit.title.chars().count();
+            let summary_chars = hit
+                .summary
+                .as_deref()
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
+            ServedRecall {
+                kb: hit.kb.clone(),
+                id: hit.id.clone(),
+                pos: (i as u32).saturating_add(1),
+                title: clip_chars(&hit.title, SERVED_RECALL_TITLE_CAP),
+                injected_chars: u32::try_from(title_chars.saturating_add(summary_chars))
+                    .unwrap_or(u32::MAX),
+                served_at,
+            }
+        })
+        .collect()
+}
+
+fn clip_chars(s: &str, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        s.to_string()
+    } else {
+        s.chars().take(cap).collect()
+    }
+}
+
+/// Sessions corpus: `default_search_category = "memory-session"`, else a
+/// kb named `sessions`. The ledger lives there, not on the memory corpus.
+fn sessions_storage(state: &KbHandles) -> Option<kb_core::storage::StorageHandle> {
+    let by_category = state
+        .kbs
+        .iter()
+        .find(|(_, ctx)| ctx.default_search_category.as_deref() == Some("memory-session"));
+    let (_, ctx) = by_category.or_else(|| {
+        state
+            .kbs
+            .iter()
+            .find(|(name, _)| name.as_str() == "sessions")
+    })?;
+    Some(ctx.storage.clone())
+}
+
+/// Map serve-time hits onto the sessions ledger and append them.
+/// INSERT only — never `memory_recalls_replace`, which deletes one
+/// capture's rows. A live serve is not a capture. The caller spawns
+/// this; a write error is logged and must not fail the HTTP response.
+async fn append_served_recalls(
+    storage: kb_core::storage::StorageHandle,
+    session_id: String,
+    rows: Vec<ServedRecall>,
+) -> kb_core::Result<()> {
+    let rows = rows
+        .into_iter()
+        .map(|row| ServedRecallRow {
+            memory_kb: row.kb,
+            memory_id: row.id,
+            pos: row.pos,
+            title: row.title,
+            injected_chars: row.injected_chars,
+            served_at: row.served_at,
+        })
+        .collect();
+    storage.memory_recalls_append(session_id, rows).await
 }
 
 /// The recall engine, split out of the axum handler so a SECOND in-process
@@ -647,6 +827,24 @@ pub(crate) async fn recall_compose(
         .iter()
         .map(|(name, ctx)| (name.to_string(), ctx.source_path.clone()))
         .collect();
+    let deadline = crate::routes::context::deadline_at(params.deadline_ms);
+    if deadline.is_some_and(|d| d.saturating_duration_since(Instant::now()).is_zero()) {
+        let degraded = corpora
+            .iter()
+            .map(|(name, _)| {
+                crate::routes::context::degraded_of(
+                    name.as_str(),
+                    "recall",
+                    crate::routes::context::QueryErrorClass::Timeout,
+                )
+            })
+            .collect();
+        return Ok(RecallResponse {
+            hits: Vec::new(),
+            ms: started.elapsed().as_millis() as u64,
+            degraded,
+        });
+    }
 
     let has_query = !params.q.trim().is_empty();
 
@@ -662,7 +860,7 @@ pub(crate) async fn recall_compose(
     if has_query {
         for (_, ctx) in &corpora {
             if let Some(emb) = &ctx.embedder {
-                let model = emb.lock().unwrap_or_else(|e| e.into_inner()).model_name();
+                let model = crate::embed_cache::embedder_model_name(emb);
                 if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
                     if let Ok(out) =
                         crate::embed_cache::embed_query(&state.embed_cache, emb, &params.q).await
@@ -723,14 +921,15 @@ pub(crate) async fn recall_compose(
     // the fold so it sees the complete links_by_id / pinned_by_kb — its result
     // is unchanged (a memory's links live only in its owning corpus) and the
     // globals stay authoritative for the response projection. No
-    // std::sync::Mutex guard crosses an await (invariant 15): model_name()
-    // returns &'static str, so the embedder guard drops at the `let model`.
+    // std::sync::Mutex guard crosses an await (invariant 15): the model
+    // name is cached beside the embedder mutex, so the fan-out never locks it.
     struct RecallArm {
         pinned: Option<HashSet<String>>,
         links: HashMap<String, HashSet<String>>,
         rows: Vec<kb_core::storage::lance::DocSummary>,
         tombstones: Vec<String>,
         policy: DecayPolicy,
+        degraded: Option<crate::routes::context::DegradedLane>,
     }
     type RecallArmFut<'a> =
         std::pin::Pin<Box<dyn std::future::Future<Output = (&'a KbName, RecallArm)> + Send + 'a>>;
@@ -739,98 +938,138 @@ pub(crate) async fn recall_compose(
     let mut futs: Vec<RecallArmFut<'_>> = Vec::new();
     for &(name, ctx) in &corpora {
         futs.push(Box::pin(async move {
-            let (pinned, links, fts, supersede) = tokio::join!(
-                ctx.storage.pinned_memories_set(),
-                ctx.storage.memory_links_all(),
-                ctx.storage.ensure_fts_index(),
-                ctx.storage.list_supersede_targets(),
-            );
-            let pinned = match pinned {
-                Ok(set) => Some(set),
-                Err(e) => {
-                    tracing::warn!(
-                        kb = %name,
-                        error = %e,
-                        "recall: pinned-set read failed; skipping the decay floor for this corpus so a pinned memory isn't dropped"
-                    );
-                    None
-                }
-            };
-            // ensure_fts_index is Ok when the index already exists; a real
-            // Err would make BM25 fail with a less-specific message, so
-            // surface it here and fall back to empty rows for this corpus
-            // (invariant #28 — one corpus never 500s the fleet).
-            if let Err(e) = fts {
-                if has_query {
-                    tracing::warn!(
-                        kb = %name,
-                        error = %e,
-                        "recall: ensure_fts_index failed; skipping corpus query arm"
-                    );
-                    return (
-                        name,
-                        RecallArm {
-                            pinned,
-                            links: links.unwrap_or_default(),
-                            rows: Vec::new(),
-                            tombstones: supersede.unwrap_or_default(),
-                            policy: ctx.memory_decay_policy.unwrap_or(daemon_policy),
-                        },
-                    );
-                }
-                // Empty-query path uses list_docs (no FTS); keep going.
-                tracing::warn!(
-                    kb = %name,
-                    error = %e,
-                    "recall: ensure_fts_index failed; continuing list_docs path"
+            let work = async move {
+                let (pinned, links, fts, supersede) = tokio::join!(
+                    ctx.storage.pinned_memories_set(),
+                    ctx.storage.memory_links_all(),
+                    ctx.storage.ensure_fts_index(),
+                    ctx.storage.list_supersede_targets(),
                 );
-            }
-            let rows = if has_query {
-                match &ctx.embedder {
-                    Some(emb) => {
-                        let model = emb.lock().unwrap_or_else(|e| e.into_inner()).model_name();
-                        if let Err(e) = ctx.storage.ensure_vector_index().await {
-                            tracing::warn!(
-                                kb = %name,
-                                error = %e,
-                                "recall: ensure_vector_index failed; falling back to BM25"
-                            );
-                            ctx.storage
-                                .bm25_query(params.q.clone(), per_corpus, false)
-                                .await
-                        } else {
-                            match vec_by_model.get(model) {
-                                Some(qv) => {
-                                    ctx.storage
-                                        .hybrid_query(params.q.clone(), qv.clone(), per_corpus)
-                                        .await
-                                }
-                                // Embed failed for this model → keyword fallback.
-                                None => {
-                                    ctx.storage
-                                        .bm25_query(params.q.clone(), per_corpus, false)
-                                        .await
+                let pinned = match pinned {
+                    Ok(set) => Some(set),
+                    Err(e) => {
+                        tracing::warn!(
+                            kb = %name,
+                            error = %e,
+                            "recall: pinned-set read failed; skipping the decay floor for this corpus so a pinned memory isn't dropped"
+                        );
+                        None
+                    }
+                };
+                // ensure_fts_index is Ok when the index already exists; a real
+                // Err would make BM25 fail with a less-specific message, so
+                // surface it here and fall back to empty rows for this corpus
+                // (invariant #28 — one corpus never 500s the fleet).
+                if let Err(e) = fts {
+                    if has_query {
+                        tracing::warn!(
+                            kb = %name,
+                            error = %e,
+                            "recall: ensure_fts_index failed; skipping corpus query arm"
+                        );
+                        return (
+                            name,
+                            RecallArm {
+                                pinned,
+                                links: links.unwrap_or_default(),
+                                rows: Vec::new(),
+                                tombstones: supersede.unwrap_or_default(),
+                                policy: ctx.memory_decay_policy.unwrap_or(daemon_policy),
+                                degraded: Some(crate::routes::context::degraded_of(
+                                    name.as_str(),
+                                    "recall",
+                                    crate::routes::context::classify_query_error(&e.to_string()),
+                                )),
+                            },
+                        );
+                    }
+                    // Empty-query path uses list_docs (no FTS); keep going.
+                    tracing::warn!(
+                        kb = %name,
+                        error = %e,
+                        "recall: ensure_fts_index failed; continuing list_docs path"
+                    );
+                }
+                let rows_result = if has_query {
+                    match &ctx.embedder {
+                        Some(emb) => {
+                            let model = crate::embed_cache::embedder_model_name(emb);
+                            if let Err(e) = ctx.storage.ensure_vector_index().await {
+                                tracing::warn!(
+                                    kb = %name,
+                                    error = %e,
+                                    "recall: ensure_vector_index failed; falling back to BM25"
+                                );
+                                ctx.storage
+                                    .bm25_query(params.q.clone(), per_corpus, false)
+                                    .await
+                            } else {
+                                match vec_by_model.get(model) {
+                                    Some(qv) => {
+                                        ctx.storage
+                                            .hybrid_query(params.q.clone(), qv.clone(), per_corpus)
+                                            .await
+                                    }
+                                    // Embed failed for this model → keyword fallback.
+                                    None => {
+                                        ctx.storage
+                                            .bm25_query(params.q.clone(), per_corpus, false)
+                                            .await
+                                    }
                                 }
                             }
                         }
+                        // No embedder configured → keyword fallback.
+                        None => ctx.storage.bm25_query(params.q.clone(), per_corpus, false).await,
                     }
-                    // No embedder configured → keyword fallback.
-                    None => ctx.storage.bm25_query(params.q.clone(), per_corpus, false).await,
-                }
-            } else {
-                // Loose/empty query → recency timeline.
-                ctx.storage.list_docs(per_corpus).await
+                } else {
+                    // Loose/empty query → recency timeline.
+                    ctx.storage.list_docs(per_corpus).await
+                };
+                let (rows, query_degraded) = match rows_result {
+                    Ok(rows) => (rows, None),
+                    Err(e) => {
+                        tracing::warn!(kb = %name, error = %e, "recall: query failed; skipping corpus");
+                        (
+                            Vec::new(),
+                            Some(crate::routes::context::degraded_of(
+                                name.as_str(),
+                                "recall",
+                                crate::routes::context::classify_query_error(&e.to_string()),
+                            )),
+                        )
+                    }
+                };
+                (
+                    name,
+                    RecallArm {
+                        pinned,
+                        links: links.unwrap_or_default(),
+                        rows,
+                        tombstones: supersede.unwrap_or_default(),
+                        policy: ctx.memory_decay_policy.unwrap_or(daemon_policy),
+                        degraded: query_degraded,
+                    },
+                )
             };
-            (
-                name,
-                RecallArm {
-                    pinned,
-                    links: links.unwrap_or_default(),
-                    rows: rows.unwrap_or_default(),
-                    tombstones: supersede.unwrap_or_default(),
-                    policy: ctx.memory_decay_policy.unwrap_or(daemon_policy),
-                },
-            )
+            match crate::routes::context::within_deadline(deadline, work).await {
+                Ok(v) => v,
+                Err(()) => (
+                    name,
+                    RecallArm {
+                        pinned: None,
+                        links: HashMap::new(),
+                        rows: Vec::new(),
+                        tombstones: Vec::new(),
+                        policy: ctx.memory_decay_policy.unwrap_or(daemon_policy),
+                        degraded: Some(crate::routes::context::degraded_of(
+                            name.as_str(),
+                            "recall",
+                            crate::routes::context::QueryErrorClass::Timeout,
+                        )),
+                    },
+                ),
+            }
         }));
     }
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
@@ -844,8 +1083,12 @@ pub(crate) async fn recall_compose(
         Vec<kb_core::storage::lance::DocSummary>,
         DecayPolicy,
     )> = Vec::new();
+    let mut degraded = Vec::new();
     for (name, arm) in arms {
         let kb_str = name.as_str().to_string();
+        if let Some(d) = arm.degraded {
+            degraded.push(d);
+        }
         match arm.pinned {
             Some(set) => {
                 pinned_by_kb.insert(kb_str.clone(), set);
@@ -1188,7 +1431,7 @@ pub(crate) async fn recall_compose(
         }
     }
 
-    Ok(RecallResponse { hits, ms })
+    Ok(RecallResponse { hits, ms, degraded })
 }
 
 /// Shared recall-usage fan-out: for every `(hit_kb, ids)` pair, sum
@@ -3344,6 +3587,47 @@ mod tests {
         }
     }
 
+    /// Serve-time ledger rows: one per returned hit, 1-based rank, title
+    /// clipped on a char boundary, injected_chars counted before the clip,
+    /// and never more than the write cap.
+    #[test]
+    fn served_recall_rows_rank_clip_and_cap() {
+        let mut hits = vec![hit("notes", "aaaaaaaaaaaa"), hit("memory", "bbbbbbbbbbbb")];
+        hits[0].title = "alpha".into();
+        hits[0].summary = Some("sum".into());
+        hits[1].title = "β".repeat(SERVED_RECALL_TITLE_CAP + 3);
+        let rows = served_recall_rows(&hits, 1_700_000_000);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kb, "notes");
+        assert_eq!(rows[0].id, "aaaaaaaaaaaa");
+        assert_eq!(rows[0].pos, 1);
+        assert_eq!(rows[0].title, "alpha");
+        assert_eq!(
+            rows[0].injected_chars,
+            u32::try_from("alpha".chars().count() + "sum".chars().count()).unwrap()
+        );
+        assert_eq!(rows[0].served_at, 1_700_000_000);
+        assert_eq!(rows[1].pos, 2);
+        assert_eq!(rows[1].title.chars().count(), SERVED_RECALL_TITLE_CAP);
+        assert!(rows[1].title.chars().all(|c| c == 'β'));
+        assert_eq!(
+            rows[1].injected_chars,
+            u32::try_from(SERVED_RECALL_TITLE_CAP + 3).unwrap()
+        );
+
+        let many: Vec<_> = (0..SERVED_RECALL_WRITE_CAP + 5)
+            .map(|i| hit("notes", &format!("{i:012x}")))
+            .collect();
+        let capped = served_recall_rows(&many, 0);
+        assert_eq!(capped.len(), SERVED_RECALL_WRITE_CAP);
+        assert_eq!(capped[0].pos, 1);
+        assert_eq!(capped.last().unwrap().pos, SERVED_RECALL_WRITE_CAP as u32);
+
+        assert!(accept_session_id("  ").is_none());
+        assert!(accept_session_id(&"x".repeat(SERVED_SESSION_ID_CAP + 1)).is_none());
+        assert_eq!(accept_session_id("  abc-1  ").as_deref(), Some("abc-1"));
+    }
+
     /// MI-W1.3 — `apply_recall_stats` must NEVER reorder, drop, or add
     /// hits: it only ever writes `recall_count`/`last_recalled_at` onto the
     /// existing slice, in place, by `(kb, id)` lookup. The rerank ordering
@@ -4104,6 +4388,7 @@ mod tests {
             atlas: None,
             templates: std::collections::BTreeMap::new(),
             memory_scope: memory_scope.map(str::to_string),
+            project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
             decay_policy: None,
@@ -4115,6 +4400,7 @@ mod tests {
             capture_dir: None,
             resurface: None,
             slo: None,
+            id_patterns: Vec::new(),
         }
     }
 

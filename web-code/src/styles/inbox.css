@@ -7,24 +7,16 @@
  * Same token discipline as every other kb-code stylesheet: tokens only,
  * `color-mix` for washes, no raw hex. */
 
+/* V80-R1 — `.kbc-inboxpage__head`/`__title` (a hand-rolled header block)
+ * were dead: `routes/Inbox.tsx` already builds its header from `PageHeader`
+ * (V80-R0), and nothing else read either selector (grepped first) —
+ * deleted rather than left as debt. `__badge`/`__refresh` survive; they
+ * are handed to `PageHeader`'s `title`/`actions` slots, not part of a
+ * header this file owns anymore. */
 .kbc-inboxpage {
   max-width: 1100px;
   margin: 0 auto;
   padding: 32px 16px 64px;
-}
-.kbc-inboxpage__head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-.kbc-inboxpage__title {
-  font-size: 24px;
-  margin: 0;
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 .kbc-inboxpage__badge {
   display: inline-flex;
@@ -37,8 +29,9 @@
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
   color: var(--accent-soft);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .kbc-inboxpage__refresh {
   display: inline-flex;
@@ -50,7 +43,7 @@
   border-radius: var(--radius-sm);
   color: var(--ink-mute);
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kbc-inboxpage__refresh:hover:not(:disabled) {
@@ -69,9 +62,13 @@
 .kbc-inboxpage__repo-group:last-child {
   margin-bottom: 0;
 }
+/* V80-R1 — "consistent h2/h3 ladder": was `--fs-xs`, a size step below
+ * this lane's kb-lane sibling `h3` (`.kbc-inboxpage__kb-sub-title`,
+ * `--fs-sm`) despite both being an `h3` one level under the SAME `h2`
+ * lane title. */
 .kbc-inboxpage__repo-label {
   margin: 0 0 6px;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--ink-faint);
   font-family: var(--font-mono);
@@ -130,12 +127,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* V80-R1 — "lane meta ≥13px": was `--fs-xs` (12px). */
 .kbc-inboxpage__ann-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--ink-mute);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }
 
 /* ── kb lane ───────────────────────────────────────────────────────────── */
@@ -219,8 +217,12 @@
   white-space: nowrap;
   color: var(--ink-faint);
 }
+/* V80-R1 — "the kb lane's degrade caption readable": was `--fs-xs`
+ * (12px), same floor as `.kbc-inboxpage__kb-reason` above (the OTHER
+ * degrade caption — kb unavailable/unreachable/mismatch — already
+ * `--fs-sm`). */
 .kbc-inboxpage__kb-caption {
   margin: 6px 0 0;
   color: var(--ink-faint);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import RepoPill from "./RepoPill";
+import CurrentReviewChip from "./CurrentReviewChip";
 import NavMenu from "./NavMenu";
 import NavSheet from "./NavSheet";
 import { Icon } from "./icons";
@@ -49,6 +50,10 @@ export default function TopBar() {
       <RefChip />
       {explicitRepo && !isMobile && (
         <>
+          {/* V80-M3 — "which review am I working," hidden entirely when
+              unset (see the component's own doc). ≤860px it moves into the
+              NavSheet instead (below). */}
+          <CurrentReviewChip />
           {reviewItems.map((item) => {
             const on = active?.key === item.key;
             const ItemIcon = item.icon;

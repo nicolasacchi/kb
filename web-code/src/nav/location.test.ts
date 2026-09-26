@@ -52,6 +52,11 @@ const ROUND_TRIP_URLS = [
   "/r/kb?ent=Shop%3A%3AOrder",
   "/r/kb/app/models/shop/order.rb?ent=Shop%3A%3AOrder",
   "/r/kb/a.rb?ref=main&line=12&ent=Shop%3A%3AOrder",
+  // V80-M3 — `?review=` (the reader's current-review mirror), appended LAST
+  // among the reader's own params — after `sym`/`ent`.
+  "/r/kb/src/main.rs?review=7",
+  "/r/kb/src/main.rs?line=42&review=7",
+  "/r/kb/src/main.rs?line=42&sym=rust%3AFoo&ent=Shop%3A%3AOrder&review=7",
   // Not modelled — must survive verbatim.
   "/session/abc/diff?repo=kb",
   "/~lens/notes/by-path/a/b.html",
@@ -199,6 +204,28 @@ describe("the transition table (§P7)", () => {
       reader({ anchor: { line: 3 }, trail: { id: "t", step: 0 } }),
       "replace",
     ],
+    [
+      // V80-M3 — the reader's `?review=` mirror is view state over the SAME
+      // file, never a navigation: `samePlace` never looks at `review` for
+      // `mode: "reader"`, so this falls through to the generic encode-diff
+      // check in rule 5 and comes out a `replace`.
+      "setting the current-review mirror on the same file is view state",
+      reader(),
+      reader({ review: { id: "1" } }),
+      "replace",
+    ],
+    [
+      "changing the current-review mirror on the same file is view state",
+      reader({ review: { id: "1" } }),
+      reader({ review: { id: "2" } }),
+      "replace",
+    ],
+    [
+      "clearing the current-review mirror on the same file is view state",
+      reader({ review: { id: "1" } }),
+      reader(),
+      "replace",
+    ],
   ];
 
   for (const [name, from, to, want] of CASES) {
@@ -270,5 +297,50 @@ describe("`?ent=` is a PLACE, and its grammar is codeUrl.ts's", () => {
     expect(transition(at(), at("Shop::Order"))).toBe("push");
     // The SAME entity, re-rendered, is not a navigation at all.
     expect(transition(at("Shop::Order"), at("Shop::Order"))).toBe("none");
+  });
+});
+
+// --- V80-M3 — `?review=` joins the contract (reader mode only) ------------
+
+describe("`?review=` is a reader-only view-state mirror", () => {
+  it("decodes to the reader mode carrying `review.id`", () => {
+    const loc = decode("/r/kb/a.rb?review=7");
+    expect(loc.mode).toBe("reader");
+    expect(loc.path).toBe("a.rb");
+    expect(loc.review).toEqual({ id: "7" });
+  });
+
+  it("a BLANK `review=` names no review — never a review with an empty id", () => {
+    expect(decode("/r/kb/a.rb?review=").review).toBeUndefined();
+    expect(decode("/r/kb/a.rb?review=%20%20").review).toBeUndefined();
+  });
+
+  it("is absent on every non-reader mode this contract models", () => {
+    // The brief's own scope: the mirror rides READER urls only. A `review=`
+    // stray on a page URL is not this contract's grammar to interpret —
+    // `mode: "page"`/`"home"`/… never populate `Location.review` from it.
+    expect(decode("/").review).toBeUndefined();
+    expect(decode("/r/kb/~branches?review=7").review).toBeUndefined();
+  });
+
+  it("`encode` never emits `review=` when unset — byte-identical to pre-M3", () => {
+    expect(encode({ repo: "kb", mode: "reader", path: "a.rb", panes: { focused: 1 } })).toBe(
+      "/r/kb/a.rb",
+    );
+  });
+
+  it("round-trips alongside sym/ent, review always last", () => {
+    const loc: Location = {
+      repo: "kb",
+      mode: "reader",
+      path: "a.rb",
+      sym: "rust:Foo",
+      ent: "Shop::Order",
+      review: { id: "7" },
+      panes: { focused: 1 },
+    };
+    const url = encode(loc);
+    expect(url).toBe("/r/kb/a.rb?sym=rust%3AFoo&ent=Shop%3A%3AOrder&review=7");
+    expect(decode(url).review).toEqual({ id: "7" });
   });
 });
