@@ -1133,6 +1133,7 @@ pub async fn bind_and_spawn(
         &config.repos,
         &repo_ids,
     ));
+    store.set_review_store_readable(review_stores.reads_can_use_store());
     let _auto_capture = reviews::spawn_auto_capture_worker(
         store.clone(),
         bus.clone(),
@@ -1464,6 +1465,7 @@ pub(crate) async fn build_state_for_test(
         &config_for_security.repos,
         &review_store_repo_ids,
     ));
+    store.set_review_store_readable(review_stores.reads_can_use_store());
     let _auto_capture = reviews::spawn_auto_capture_worker(
         store.clone(),
         bus.clone(),

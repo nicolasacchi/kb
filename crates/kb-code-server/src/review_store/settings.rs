@@ -125,6 +125,8 @@ pub struct StoreSettings {
     /// `Some(reason)` = the store is disabled for this boot (e.g. the root
     /// sits inside a browsed repo — SEC-13/15). Reads fall back to the
     /// user repo exactly as before the store existed.
+    /// Enforced on the read side by `Store::review_store_readable`,
+    /// published at boot from `ReviewStores::reads_can_use_store`.
     pub disabled: Option<String>,
 }
 

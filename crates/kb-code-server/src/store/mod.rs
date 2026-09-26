@@ -56,7 +56,7 @@ pub(in crate::store) use parking_lot::Mutex;
 pub(in crate::store) use rusqlite::{params, Connection, OptionalExtension, Transaction};
 pub(in crate::store) use std::collections::HashMap;
 pub(in crate::store) use std::path::Path;
-pub(in crate::store) use std::sync::atomic::{AtomicU64, Ordering};
+pub(in crate::store) use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub(in crate::store) use crate::extract::Symbol;
 pub(in crate::store) use crate::highlight::Span;
@@ -293,6 +293,18 @@ pub struct Store {
     /// review store (`crate::git::roots`). Shared (`Arc`) because every
     /// `GitCtx` built against this store carries a handle to bump it.
     git_fallbacks: std::sync::Arc<crate::git::roots::GitFallbackStats>,
+    /// RS — boot-published "may a READ resolve a store root for this
+    /// boot?". `git::roots::resolve_ready_store` sees only `&Store`, so
+    /// the `review_store::StoreSettings::disabled` verdict (and the
+    /// store git spawner being unbuildable) is pushed here once, by
+    /// `bind_and_spawn`, instead of pulled. The `true` default is
+    /// deliberate: a `Store` opened with no `ReviewStores` at all — the
+    /// CLI, benches, fixtures — keeps the pre-existing read behaviour
+    /// exactly, and a disabled boot is a *configured* refusal, not a
+    /// default to guess. `Relaxed` is right because the write lands
+    /// during boot, before any request-serving task can reach
+    /// `GitCtx::for_repo`.
+    review_store_readable: AtomicBool,
 }
 
 /// The ONE sanctioned way to touch the store from async context — see the
@@ -463,6 +475,7 @@ impl Store {
             generation: AtomicU64::new(0),
             opens_generation: AtomicU64::new(0),
             git_fallbacks: Default::default(),
+            review_store_readable: AtomicBool::new(true),
         })
     }
 
@@ -476,6 +489,14 @@ impl Store {
         &self,
     ) -> std::sync::Arc<crate::git::roots::GitFallbackStats> {
         std::sync::Arc::clone(&self.git_fallbacks)
+    }
+
+    pub(crate) fn set_review_store_readable(&self, readable: bool) {
+        self.review_store_readable.store(readable, Ordering::Relaxed);
+    }
+
+    pub(crate) fn review_store_readable(&self) -> bool {
+        self.review_store_readable.load(Ordering::Relaxed)
     }
 
     fn lock(&self) -> parking_lot::MutexGuard<'_, Connection> {

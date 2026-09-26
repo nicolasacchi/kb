@@ -318,6 +318,8 @@ impl ReviewStores {
     /// Build from config. Never fails boot: a spawner that cannot be
     /// built, or a disabled root, leaves every store `unavailable` and
     /// reads fall back to the user repos.
+    /// The read half of that promise is [`Self::reads_can_use_store`],
+    /// which `bind_and_spawn` publishes onto the `Store` at boot.
     pub fn new(
         review: &ReviewSection,
         state_dir: &Path,
@@ -386,6 +388,18 @@ impl ReviewStores {
 
     pub fn settings(&self) -> &StoreSettings {
         &self.settings
+    }
+
+    /// May a READ resolve a store root for this boot? The read path
+    /// (`crate::git::roots::GitCtx`) sees only `&Store`, never
+    /// `StoreSettings`, so the flag is PUSHED boot → `Store` once, in the
+    /// same RS-artifact-parked-on-`Store` shape as the `git_fallbacks`
+    /// counters. Covers both arms `unavailable_reason` reports as
+    /// `Disabled` (no spawner, or a disabled root) and deliberately
+    /// EXCLUDES its `GitTooOld` arm, which gates store MUTATION (a
+    /// `git -C <store>` write), not a plain read.
+    pub fn reads_can_use_store(&self) -> bool {
+        self.settings.disabled.is_none() && self.git.is_some()
     }
 
     pub fn git(&self) -> Option<&StoreGit> {
