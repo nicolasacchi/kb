@@ -130,6 +130,14 @@ fn fixture_repo() -> (Repo, String) {
             clone.to_str().unwrap(),
         ],
     );
+    // `git clone` does not inherit `author`'s repo-local identity, and
+    // these tests commit directly in the clone (to plant the de-registered
+    // member's work refs). Without this the fixture only works on a
+    // developer machine that has a global identity — CI has none, and the
+    // failure reads as "Author identity unknown". Same fix as
+    // rs_u7_retrack::fixture_repo.
+    git(&clone, &["config", "user.email", "test@example.com"]);
+    git(&clone, &["config", "user.name", "Test"]);
     (
         Repo {
             _tmp: tmp,
