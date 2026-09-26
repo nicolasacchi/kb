@@ -17,7 +17,11 @@
 //!   The two mutexes are per-process maps, so every path that WRITES a
 //!   store admits through the `flock` as well — [`ReviewStores::open`],
 //!   [`ReviewStores::seed`] and [`ReviewStores::import_pending_members`] —
-//!   which is what makes one-writer-per-store hold across daemons.
+//!   which is what makes one-writer-per-store hold across daemons: each
+//!   of them puts the claim in `held` and KEEPS it there for the rest of
+//!   this process's life, so the guarantee covers the whole write, not
+//!   just an admission check. A `store-locked` refusal therefore means
+//!   another PROCESS holds the store, never this one.
 //!
 //! # The API later units call
 //!
@@ -550,15 +554,31 @@ impl ReviewStores {
     /// step under the store's ops lock. Blocking (uses `blocking_lock`):
     /// call from `spawn_blocking`, never while holding either lock.
     ///
+    /// Admits through the same helper `open` uses before touching a
+    /// single ref or config: this process then holds the store's
+    /// lifetime `flock` for the WHOLE import, not just for a check, so
+    /// a second daemon cannot take the store mid-import and prune the
+    /// `refs/remotes/work-<id>/*` refs this just wrote. A store this
+    /// process has not admitted yet is manifest-checked on the way in, so
+    /// admitting it here is exactly as safe as opening it.
+    ///
     /// Refused outright with `store-locked` when another process holds the
     /// store: `configure_remote`/`update-ref` here would contend with
     /// whichever daemon is driving it. The pending marker is only cleared
     /// on success, so the next boot pass or route trigger retries.
+    ///
+    /// A member whose import FAILS comes back in
+    /// [`PendingImport::errors`], never in `members`: it is not marked
+    /// imported, so it stays PENDING and the next boot pass or route
+    /// trigger retries it. The reason travels as `"<repo>: <slug>"` —
+    /// the shape `plan_for`'s dropped-member problems use, so a seed
+    /// report carries both kinds of unimported member on ONE list. Its
+    /// siblings are unaffected: one bad member never aborts the rest.
     pub fn import_pending_members(
         &self,
         store: &Store,
         store_id: i64,
-    ) -> Result<Vec<seed::MemberImport>, StoreUnavailable> {
+    ) -> Result<PendingImport, StoreUnavailable> {
         if let Some(u) = self.unavailable_reason() {
             return Err(u);
         }
@@ -571,22 +591,22 @@ impl ReviewStores {
             .map_err(db)?
             .ok_or(StoreUnavailable::NotRegistered)?;
         if row.state != "ready" {
-            return Ok(vec![]);
+            return Ok(PendingImport::default());
         }
         // The per-member fetch lock and the per-store ops lock are
         // in-process maps, so they cannot see a second daemon writing the
-        // same store. Admit through the same `locked_elsewhere` predicate
-        // `open` uses, before touching a single ref or config.
+        // same store. Admit through `open`'s admission, before touching
+        // a single ref or config, and keep the claim for the import.
         if !is_store_uuid(&row.uuid) {
             return Err(StoreUnavailable::Broken {
                 code: "bad-uuid".into(),
             });
         }
-        self.refuse_if_locked_elsewhere(&row.uuid)?;
+        self.admit_locked(store, &row)?;
         let dir = PathBuf::from(&row.git_dir);
         let (members, _) = self.members_of(store, store_id);
         let ops = self.ops_lock(store_id);
-        let mut out = Vec::new();
+        let mut out = PendingImport::default();
         for (r, m) in members {
             let pending = store
                 .repo_store(r.id)
@@ -600,7 +620,12 @@ impl ReviewStores {
             let imp = match seed::import_member(git, &dir, &m, seed::SEED_FETCH_TIMEOUT) {
                 Ok(i) => i,
                 Err(e) => {
+                    // This warn IS the reporting channel for the
+                    // background route trigger, which owns no report to
+                    // carry the reason; the callers that do own one (the
+                    // seed report, the boot summary) get it in `errors`.
                     tracing::warn!(repo = %r.name, class = %e.class, "review store: member import failed");
+                    out.errors.push(format!("{}: {}", r.name, e.slug()));
                     continue;
                 }
             };
@@ -631,7 +656,7 @@ impl ReviewStores {
                 }
             }
             mark_imported(store, &imp);
-            out.push(imp);
+            out.members.push(imp);
         }
         Ok(out)
     }
@@ -669,9 +694,11 @@ impl ReviewStores {
         self.ops_locks.lock().entry(store_id).or_default().clone()
     }
 
-    /// Take the lifetime flock on `uuid`. The caller holds the `held`
-    /// guard for the whole check-acquire-insert, so two same-process opens
-    /// can never race each other into a self-inflicted `store-locked`.
+    /// Take the lifetime flock on `uuid`. PRECONDITION: the caller holds
+    /// the `held` guard for the whole check-acquire-insert, so two
+    /// same-process writers can never race each other into a
+    /// self-inflicted `store-locked`. Every call site is
+    /// [`Self::admit_locked`] or `seed`'s own guarded block.
     fn acquire_lock(&self, uuid: &str) -> Result<StoreLock, StoreUnavailable> {
         std::fs::create_dir_all(&self.settings.root).map_err(|e| StoreUnavailable::Error {
             detail: format!("store root: {}", e.kind()),
@@ -691,31 +718,58 @@ impl ReviewStores {
         }
     }
 
-    /// The `locked_elsewhere` predicate for a caller about to WRITE a
-    /// store: `Err(StoreUnavailable::LockedElsewhere)` when another
-    /// process is the one holding it. Exactly the admission `open` and
-    /// `seed` use — our own lifetime flock if we have it, else the
-    /// `try_acquire` inside [`Self::acquire_lock`], which is what
-    /// maintains `locked_elsewhere` — so a store another daemon drives
-    /// is refused here as `open` refuses it, and a store nobody holds
-    /// goes on untouched.
+    /// Admit `row` as a store this process owns: our lifetime `flock` on
+    /// its uuid, plus a manifest check of its directory. Idempotent — a
+    /// uuid already in `held` was admitted (and verified) by whoever put
+    /// it there, so it is admitted as-is.
     ///
-    /// The claim is deliberately NOT kept: this refuses a write, it is
-    /// not a second way to admit a store. Holding it would leave the
-    /// uuid in `held` and so skip `open`'s manifest re-check on that
-    /// store's first open.
-    fn refuse_if_locked_elsewhere(&self, uuid: &str) -> Result<(), StoreUnavailable> {
-        let ours = self.held.lock().contains_key(uuid);
-        if ours {
+    /// The check, the `try_acquire` and the insert all happen under the
+    /// `held` guard, as [`Self::acquire_lock`] requires: two same-process
+    /// writers serialize here instead of one of them contending with the
+    /// other's own claim, which is what would otherwise turn this
+    /// process's transient lock into a `store-locked` refusal and a
+    /// sticky `locked_elsewhere` entry for a store we own.
+    ///
+    /// The claim is KEPT in `held` for the rest of this process's life,
+    /// which is the point: a caller about to write a store must hold the
+    /// one-writer claim for the whole write, not just for the check. A
+    /// manifest check runs before the insert, so a store admitted here is
+    /// exactly as verified as one `open` admits — nothing reaches
+    /// `held` unverified, and `open` still skips its own re-check only
+    /// for stores this process has already verified.
+    ///
+    /// Refusals: `LockedElsewhere` when another PROCESS holds the store
+    /// (`acquire_lock` records it in `locked_elsewhere`, so a refusal is
+    /// reported and then retried on the next attempt), and
+    /// `Absent`/`Broken` with the row's state corrected when the
+    /// directory is gone or does not match the row.
+    fn admit_locked(&self, store: &Store, row: &ReviewStoreRow) -> Result<(), StoreUnavailable> {
+        let mut held = self.held.lock();
+        if held.contains_key(&row.uuid) {
             return Ok(());
         }
-        match self.acquire_lock(uuid) {
-            Ok(lock) => {
-                drop(lock);
-                Ok(())
-            }
-            Err(u) => Err(u),
+        let lock = self.acquire_lock(&row.uuid)?;
+        let dir = PathBuf::from(&row.git_dir);
+        if let Err(p) = manifest::check(&dir, &row.uuid, &row.store_key) {
+            drop(lock);
+            let code = p.code();
+            let _ = store.set_review_store_state(
+                row.id,
+                if matches!(p, ManifestProblem::DirMissing) {
+                    "absent"
+                } else {
+                    "broken"
+                },
+                Some(&serde_json::json!({ "code": code, "detail": p.to_string() }).to_string()),
+            );
+            return Err(if matches!(p, ManifestProblem::DirMissing) {
+                StoreUnavailable::Absent
+            } else {
+                StoreUnavailable::Broken { code: code.into() }
+            });
         }
+        held.insert(row.uuid.clone(), lock);
+        Ok(())
     }
 
     // --- handles ----------------------------------------------------------
@@ -797,30 +851,7 @@ impl ReviewStores {
             });
         }
         let dir = PathBuf::from(&row.git_dir);
-        let mut held = self.held.lock();
-        if !held.contains_key(&row.uuid) {
-            let lock = self.acquire_lock(&row.uuid)?;
-            if let Err(p) = manifest::check(&dir, &row.uuid, &row.store_key) {
-                drop(lock);
-                let code = p.code();
-                let _ = store.set_review_store_state(
-                    row.id,
-                    if matches!(p, ManifestProblem::DirMissing) {
-                        "absent"
-                    } else {
-                        "broken"
-                    },
-                    Some(&serde_json::json!({ "code": code, "detail": p.to_string() }).to_string()),
-                );
-                return Err(if matches!(p, ManifestProblem::DirMissing) {
-                    StoreUnavailable::Absent
-                } else {
-                    StoreUnavailable::Broken { code: code.into() }
-                });
-            }
-            held.insert(row.uuid.clone(), lock);
-        }
-        drop(held);
+        self.admit_locked(store, row)?;
         Ok(StoreHandle {
             id: row.id,
             uuid: row.uuid.clone(),
@@ -1276,8 +1307,14 @@ impl ReviewStores {
             // adopt only if the manifest matches.
             return match manifest::check(&dir, &row.uuid, &row.store_key) {
                 Ok(_) => {
-                    // Re-verify connectivity for the adopted store.
-                    let (plan, _) = self
+                    // Re-verify connectivity for the adopted store. The
+                    // plan's SECOND return — the members it dropped — is
+                    // this call's only evidence that the adopted directory
+                    // is not a complete mirror, so it rides out on the
+                    // report (it used to be dropped here, leaving a 200 that
+                    // said `ready` over a store that had silently never
+                    // imported a member).
+                    let (plan, problems) = self
                         .plan_for(store, &row)
                         .map_err(|d| StoreUnavailable::Error { detail: d })?;
                     let ops = self.ops_lock(row.id);
@@ -1306,11 +1343,36 @@ impl ReviewStores {
                             ),
                         )
                         .map_err(db)?;
-                    // An adopted directory may predate some members.
-                    let _ = self.import_pending_members(store, row.id);
+                    // An adopted directory may predate some members; the
+                    // imports it performs are this call's member work, so
+                    // they are reported rather than thrown away. A refusal
+                    // here (another daemon holds the store) is non-fatal,
+                    // exactly as the post-seed repack further down this
+                    // function is — but never silent: an unlogged `Err`
+                    // would make this report's empty member list read as
+                    // "nothing to import" rather than "the import did not
+                    // run". A member whose import FAILS is in the same
+                    // condition as one the plan dropped — neither imported
+                    // nor connectivity-checked, and this store still goes
+                    // `ready` — so its reason joins the plan's problems on
+                    // the report's one `member_problems` list.
+                    let imported = match self.import_pending_members(store, row.id) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                code = e.code(),
+                                uuid = %row.uuid,
+                                "kb-code: adopted-store member import failed (non-fatal)"
+                            );
+                            PendingImport::default()
+                        }
+                    };
+                    let mut member_problems = problems;
+                    member_problems.extend(imported.errors);
                     Ok(SeedReport {
                         git_dir: dir.clone(),
-                        members: vec![],
+                        members: imported.members,
+                        member_problems,
                         base: BaseFetch::Skipped {
                             code: "adopted-existing".into(),
                         },
@@ -1388,6 +1450,13 @@ impl ReviewStores {
                 for m in &report.members {
                     mark_imported(store, m);
                 }
+                // `problems` is off the same `members_of` call as the plan's
+                // members (`plan_for`), i.e. the members this seed did NOT
+                // import. Put it on the report — the same value goes into
+                // `state_json` just below, so the response and the durable
+                // record are one list, never two — and carry it here by
+                // clone because `sj` below consumes the original.
+                report.member_problems = problems.clone();
                 let sj = serde_json::json!({
                     "code": "ready",
                     "seeded_at": now(),
@@ -1402,8 +1471,23 @@ impl ReviewStores {
                     .set_review_store_state(row.id, "ready", Some(&sj.to_string()))
                     .map_err(db)?;
                 // Repos that joined WHILE this seed ran were not in its
-                // plan snapshot: import them now.
-                let _ = self.import_pending_members(store, row.id);
+                // plan snapshot: import them now. One that fails to
+                // import is reported like a plan-dropped member — its
+                // refs are just as unimported and this pass still says
+                // `ready` — and stays PENDING for the next boot pass or
+                // route trigger. `state_json` above was written from the
+                // plan's problems alone, so this late reason is
+                // response-only.
+                match self.import_pending_members(store, row.id) {
+                    Ok(late) => report.member_problems.extend(late.errors),
+                    Err(e) => {
+                        tracing::warn!(
+                            code = e.code(),
+                            uuid = %row.uuid,
+                            "kb-code: post-seed member import failed (non-fatal)"
+                        );
+                    }
+                }
                 // RS-U9 (RS-U3's own follow-up note): a multi-member seed
                 // leaves one pack per imported member — repack to one now,
                 // rather than waiting for the next scheduled weekly/monthly
@@ -1578,6 +1662,19 @@ pub struct SyncReport {
     pub member_problems: Vec<String>,
     pub base: BaseFetch,
     pub objects_missing: Vec<i64>,
+}
+
+/// What [`ReviewStores::import_pending_members`] did: the members it
+/// imported, and the ones it could not. `members` alone would read
+/// "every pending member is in the store now" over a member whose
+/// fetch hard-failed.
+#[derive(Debug, Default, Clone)]
+pub struct PendingImport {
+    pub members: Vec<seed::MemberImport>,
+    /// One `"<repo>: <slug>"` per member whose import failed. Such a
+    /// member is not marked imported — it stays PENDING and is retried —
+    /// so this is the only record of it until an import succeeds.
+    pub errors: Vec<String>,
 }
 
 struct SeedClaim<'a> {

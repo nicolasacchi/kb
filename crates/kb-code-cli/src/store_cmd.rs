@@ -462,32 +462,76 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
             }
             let report = &body["report"];
             let base_state = report["base"]["state"].as_str().unwrap_or("");
-            // `member_errors` and `member_problems` are siblings off the same
-            // `members_of` call and both mean a member was skipped: a
-            // `problems` member is dropped from `plan.members`, so its refs are
-            // neither imported nor connectivity-verified, yet the pass still
-            // reports `ready`. Ignoring it reported a store whose deleted
-            // worktree was never seeded as a clean sync. The GC path folds the
-            // same signal into its own `partial`.
-            let partial = ["member_errors", "member_problems"]
-                .iter()
-                .any(|k| report[*k].as_array().is_some_and(|a| !a.is_empty()));
+            // `store_sync_route` answers with ONE schema and TWO shapes,
+            // told apart by `body["action"]`: `"seeded"` carries a
+            // `SeedReport`, `"synced"` a `SyncReport`. BOTH carry
+            // `member_problems` under that one key — the members the
+            // pass could NOT import: their repo is unconfigured, or
+            // their worktree no longer resolves to a git dir, or their
+            // fetch hard-failed — so their refs are neither imported
+            // nor connectivity-checked while the pass still reports
+            // `ready` — i.e. the same "reported ready, never imported"
+            // case as `members[].skipped_refs`, which is on BOTH shapes
+            // and also counts as partial here. So ONE check covers
+            // dropped members on BOTH paths: on the sync shape
+            // `member_problems` is a sibling of `member_errors` off
+            // the same `members_of` call (and the GC path folds the
+            // same signal into its own `partial`); on the seeding
+            // branch it is the plan's own list, also written to the
+            // store row's `state_json` (a member that joined while the
+            // seed ran and then failed to import is response-only —
+            // `state_json` was written before that catch-up ran), while
+            // the adopted-existing branch re-verifies an on-disk store
+            // and reports it with no `state_json` key at all.
+            //
+            // NOT covered on the seed path is `seed::seed_store` ITSELF:
+            // a member whose import hard-fails THERE aborts the whole
+            // seed on the first such failure (the route answers non-2xx,
+            // so there is no report at all). The post-seed/adopted
+            // `import_pending_members` catch-up is covered instead — it
+            // reports such a member on `member_problems`, so the check
+            // below already counts it as partial. What is still true is
+            // that `member_errors` is a `SyncReport` field with no
+            // `SeedReport` twin: the seed shape carries ONE list of
+            // unimported members, not two.
+            let skipped_refs: u64 = report["members"]
+                .as_array()
+                .map(|ms| {
+                    ms.iter()
+                        .map(|m| m["skipped_refs"].as_u64().unwrap_or(0))
+                        .sum()
+                })
+                .unwrap_or(0);
+            let partial = skipped_refs > 0
+                || ["member_errors", "member_problems"]
+                    .iter()
+                    .any(|k| report[*k].as_array().is_some_and(|a| !a.is_empty()));
+            // A base fetch SKIPPED for a credential reason is not a benign
+            // skip: D12 makes a wrong-account answer an error, and the
+            // capture path already reports it that way. Classify by the
+            // skip's `FailureClass` rather than by a literal state
+            // string, so `--offline` and a base-less remote keep their
+            // honest exit 0.
             let upstream = base_is_upstream(&report["base"]);
             if json {
                 envelope::print_ok("kbc-store-sync/1", &body, vec![], partial || upstream, None);
             } else {
                 println!("{}: {}", repo, s(&body["action"]));
                 for m in report["members"].as_array().into_iter().flatten() {
+                    let mut note = m["conflicts"]
+                        .as_array()
+                        .filter(|c| !c.is_empty())
+                        .map(|c| format!(", {} conflict(s)", c.len()))
+                        .unwrap_or_default();
+                    if m["skipped_refs"].as_u64().is_some_and(|n| n > 0) {
+                        note.push_str(&format!(", {} skipped ref(s)", s(&m["skipped_refs"])));
+                    }
                     println!(
                         "  work-{}: {} heads, {} review refs{}",
                         s(&m["repo_id"]),
                         s(&m["heads"]),
                         s(&m["review_refs"]),
-                        m["conflicts"]
-                            .as_array()
-                            .filter(|c| !c.is_empty())
-                            .map(|c| format!(", {} conflict(s)", c.len()))
-                            .unwrap_or_default()
+                        note
                     );
                 }
                 println!(

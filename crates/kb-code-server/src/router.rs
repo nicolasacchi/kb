@@ -1516,6 +1516,13 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // the bearer `api` gate returns a kb-internal path. The sibling
         // `/repos/{name}/credentials` read stays on bearer: kind, account
         // and reason — never a path, never a secret.
+        //
+        // The loopback gate here is a REVIEWED decision, not the accident of
+        // which `Router::new()` this `.route()` call landed in:
+        // `store_card_route_gate_is_pinned` (tests/doclens/doclens_route.rs)
+        // 404s this whole family for a non-loopback caller, so moving it back
+        // onto the bearer `api` router above fails a test. The CORS half of
+        // the same pin is `cors_layer_route_set_is_pinned`.
         .route(
             "/repos/{name}/store",
             get(crate::review_store::routes::store_show_route),
