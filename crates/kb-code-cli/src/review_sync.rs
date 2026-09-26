@@ -45,8 +45,9 @@ pub struct SyncArgs {
     /// Sync EVERY open PR of the repo (the morning loop).
     #[arg(long)]
     pub open: bool,
-    /// With `--open`: also sync PRs merged since DATE (`YYYY-MM-DD` or
-    /// RFC 3339). (Checked by [`check_args`]: clap's `requires` is always
+    /// With `--open`: also sync PRs merged since DATE — `YYYY-MM-DD`
+    /// (meaning 00:00 UTC that day) or an RFC 3339 timestamp with its own
+    /// offset (`2026-09-24T08:00:00+02:00`). (Checked by [`check_args`]: clap's `requires` is always
     /// satisfied by a `SetTrue` flag's implicit `false` default.)
     #[arg(long = "merged-since", value_name = "DATE")]
     pub merged_since: Option<String>,
@@ -60,6 +61,11 @@ pub struct SyncArgs {
     /// Compute what a sync would do; fetch and write nothing.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+    /// Reopen a CLOSED review whose PR is open again (after a successful
+    /// capture). Without it sync never reopens a review: it reports
+    /// `review-closed-pr-open` and captures nothing.
+    #[arg(long)]
+    pub reopen: bool,
     /// How long to poll the daemon job, in seconds (`--wait` alone = 600;
     /// omitted = 600 for one PR, 3600 for `--open`). `--wait=0` returns
     /// the job id at once.
@@ -114,7 +120,7 @@ pub fn check_args(a: &SyncArgs) -> Result<(), AgentError> {
 
 /// The sync body (never carries a token — that is added by the caller).
 pub fn sync_payload(a: &SyncArgs) -> Value {
-    let mut p = json!({ "repo": a.repo, "dry_run": a.dry_run });
+    let mut p = json!({ "repo": a.repo, "dry_run": a.dry_run, "reopen": a.reopen });
     match a.pr {
         Some(n) => p["pr_number"] = json!(n),
         None => p["open"] = json!(true),
@@ -155,6 +161,9 @@ pub fn rerun_argv(a: &SyncArgs) -> NextArgv {
     if a.dry_run {
         v.push("--dry-run".into());
     }
+    if a.reopen {
+        v.push("--reopen".into());
+    }
     v.push("--json".into());
     v
 }
@@ -178,9 +187,35 @@ pub fn warning_strings(v: &Value) -> Vec<String> {
 
 /// The natural follow-up for one sync answer.
 pub fn sync_next(item: &Value) -> Vec<NextArgv> {
+    let repo_pr = (item["repo"].as_str(), item["pr_number"].as_u64());
+    let has_warning = |code: &str| {
+        item["warnings"]
+            .as_array()
+            .is_some_and(|ws| ws.iter().any(|w| w["code"] == code))
+    };
+    // A closed review whose PR is open again: the same sync, with --reopen.
+    if has_warning("review-closed-pr-open") {
+        if let (Some(r), Some(n)) = repo_pr {
+            return vec![argv(&[
+                "kb-code",
+                "review",
+                "sync",
+                "--repo",
+                r,
+                "--pr",
+                &n.to_string(),
+                "--reopen",
+                "--json",
+            ])];
+        }
+    }
     let Some(id) = item["review_id"].as_i64() else {
-        // A dry run of a review that does not exist yet.
-        return match (item["repo"].as_str(), item["pr_number"].as_u64()) {
+        // A dry run of a review that does not exist yet (a closed PR that
+        // gets no review has no follow-up).
+        if item["reason"] != "created" {
+            return vec![];
+        }
+        return match repo_pr {
             (Some(r), Some(n)) => vec![argv(&[
                 "kb-code",
                 "review",
@@ -196,18 +231,16 @@ pub fn sync_next(item: &Value) -> Vec<NextArgv> {
     };
     let id = id.to_string();
     if item["dry_run"] == true {
-        if let (Some(r), Some(n)) = (item["repo"].as_str(), item["pr_number"].as_u64()) {
-            if item["minted"] == true {
-                return vec![argv(&[
-                    "kb-code",
-                    "review",
-                    "sync",
-                    "--repo",
-                    r,
-                    "--pr",
-                    &n.to_string(),
-                    "--json",
-                ])];
+        let reopen = has_warning("would-reopen");
+        if let (Some(r), Some(n)) = repo_pr {
+            if item["minted"] == true || reopen {
+                let n = n.to_string();
+                let mut v = argv(&["kb-code", "review", "sync", "--repo", r, "--pr", &n]);
+                if reopen {
+                    v.push("--reopen".into());
+                }
+                v.push("--json".into());
+                return vec![v];
             }
         }
         return vec![argv(&["kb-code", "review", "status", &id, "--json"])];
@@ -270,7 +303,7 @@ pub fn sync_open_envelope(result: &Value) -> (Value, bool) {
     }
     if result["truncated"] == true {
         warnings.push(
-            "truncated: the forge listed more PRs than one sync reads; re-run to continue".into(),
+            "truncated: the forge listed more PRs than one sync reads (300 per list); the rest were NOT synced — re-running reads the same first 300, so sync the others with --pr".into(),
         );
     }
     let partial = failed > 0;
@@ -858,6 +891,50 @@ mod tests {
         let env = sync_envelope(&none);
         assert_shape(&env, SYNC_DATA);
         assert_eq!(env["next"][0][2], "sync");
+    }
+
+    #[test]
+    fn closed_reviews_suggest_the_explicit_reopen() {
+        let mut v = sync_body("unchanged", false, false);
+        v["review_state"] = json!("closed");
+        v["warnings"] = json!([{ "code": "review-closed-pr-open", "message": "…" }]);
+        let env = sync_envelope(&v);
+        assert_shape(&env, SYNC_DATA);
+        assert_eq!(
+            env["next"][0],
+            json!([
+                "kb-code", "review", "sync", "--repo", "widgets", "--pr", "7", "--reopen", "--json"
+            ])
+        );
+        // A dry run that would reopen suggests the real sync WITH --reopen.
+        let mut d = sync_body("unchanged", false, true);
+        d["warnings"] = json!([{ "code": "would-reopen", "message": "…" }]);
+        let env = sync_envelope(&d);
+        assert_eq!(env["next"][0][2], "sync");
+        assert!(env["next"][0]
+            .as_array()
+            .unwrap()
+            .contains(&json!("--reopen")));
+        // A closed-unmerged PR that gets no review has no follow-up.
+        let mut c = sync_body("unchanged", false, false);
+        c["review_id"] = Value::Null;
+        c["ps"] = Value::Null;
+        c["warnings"] = json!([{ "code": "pr-closed", "message": "…" }]);
+        let env = sync_envelope(&c);
+        assert_shape(&env, SYNC_DATA);
+        assert!(env["next"].as_array().unwrap().is_empty());
+        // --reopen rides the payload and the rerun argv.
+        let a = parse(&["--repo", "widgets", "--pr", "7", "--reopen"]).unwrap();
+        assert_eq!(sync_payload(&a)["reopen"], true);
+        assert!(rerun_argv(&a).contains(&"--reopen".to_string()));
+    }
+
+    #[test]
+    fn a_job_conflict_is_a_typed_conflict() {
+        let body = json!({ "error": "a sync job … is already running with a different request (job_0123456789ab)", "type": "urn:kb:errors:job-conflict", "job_id": "job_0123456789ab" });
+        let e = AgentError::from_http(409, &body, "review sync");
+        assert_eq!(e.exit, envelope::EXIT_CONFLICT);
+        assert_eq!(e.code, "urn:kb:errors:job-conflict");
     }
 
     #[test]

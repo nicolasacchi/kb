@@ -241,6 +241,12 @@ async fn status(client: &reqwest::Client, base: &str, id: i64, fetch: bool) -> (
     (status, resp.json().await.unwrap_or(Value::Null))
 }
 
+fn has_warning(v: &Value, code: &str) -> bool {
+    v["warnings"]
+        .as_array()
+        .is_some_and(|ws| ws.iter().any(|w| w["code"] == code))
+}
+
 /// The documented `kbc-review-sync/1` keys and their JSON types.
 fn assert_sync_shape(v: &Value) {
     let is_int_or_null = |x: &Value| x.is_i64() || x.is_u64() || x.is_null();
@@ -341,14 +347,21 @@ async fn sync_creates_then_is_idempotent_then_follows_pushes_and_merge_is_final(
         .lock()
         .unwrap()
         .insert(7, pull(7, &tip2, 2, "open", None));
+    // A plain status inside the 60 s forge cache still sees the answer the
+    // last sync wrote through (tip1)…
     let (_, s) = status(&client, &base, id, false).await;
-    assert_eq!(s["head_moved"], true, "{s:#}");
-    assert_eq!(s["remote_head"], tip2);
-    assert_eq!(s["latest_tip"], tip1);
-    assert_eq!(s["drift"]["equal"], false);
-    // `?fetch=1` with no ready store fetches nothing and says so.
+    assert_eq!(s["forge_cached"], true, "{s:#}");
+    assert_eq!(s["head_moved"], false, "{s:#}");
+    // …`?fetch=1` asks the forge fresh. With no ready store it fetches
+    // nothing into a store and says so.
     let (st, s) = status(&client, &base, id, true).await;
     assert_eq!(st, 200, "{s:#}");
+    assert_eq!(s["forge_cached"], false);
+    assert_eq!(s["head_moved"], true, "{s:#}");
+    assert_eq!(s["remote_head"], tip2);
+    assert_eq!(s["remote_head_source"], "forge-api");
+    assert_eq!(s["latest_tip"], tip1);
+    assert_eq!(s["drift"]["equal"], false);
     assert_eq!(s["fetched"], false);
     assert!(
         s["warnings"]
@@ -422,7 +435,64 @@ async fn sync_creates_then_is_idempotent_then_follows_pushes_and_merge_is_final(
     assert_sync_shape(&done["result"]);
     assert_eq!(done["result"]["reason"], "unchanged");
 
-    // 5. Merged: final — a later head is NOT captured.
+    // 5. A CLOSED review whose PR is open again is never reopened
+    //    unattended.
+    let resp = client
+        .patch(format!("{base}/api/reviews/{id}"))
+        .json(&json!({ "state": "closed" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    let tip2b = fx.push_pr(7, &tip2, &["feature2b.txt"]);
+    pulls
+        .lock()
+        .unwrap()
+        .insert(7, pull(7, &tip2b, 3, "open", None));
+    let (st, v) = sync(&client, &base, json!({ "repo": REPO, "pr_number": 7 })).await;
+    assert_eq!(st, 200, "{v:#}");
+    assert_sync_shape(&v);
+    assert_eq!(v["reason"], "unchanged");
+    assert_eq!(v["minted"], false);
+    assert_eq!(v["review_state"], "closed");
+    assert_eq!(v["ps"], 2, "nothing captured");
+    assert!(has_warning(&v, "review-closed-pr-open"), "{v:#}");
+    // Dry run with --reopen: `would-reopen`, still nothing written.
+    let (_, v) = sync(
+        &client,
+        &base,
+        json!({ "repo": REPO, "pr_number": 7, "dry_run": true, "reopen": true }),
+    )
+    .await;
+    assert!(has_warning(&v, "would-reopen"), "{v:#}");
+    assert_eq!(v["review_state"], "closed");
+    // --reopen with a failing fetch (the PR ref is gone from the forge):
+    // the review STAYS closed.
+    git(&fx.bare, &["update-ref", "-d", "refs/pull/7/head"]);
+    let (st, v) = sync(
+        &client,
+        &base,
+        json!({ "repo": REPO, "pr_number": 7, "reopen": true }),
+    )
+    .await;
+    assert_eq!(st, 400, "{v:#}");
+    let (_, s) = status(&client, &base, id, false).await;
+    assert_eq!(s["state"], "closed", "a failed capture never reopens");
+    // --reopen with the ref back: captured, then reopened.
+    git(&fx.bare, &["update-ref", "refs/pull/7/head", &tip2b]);
+    let (st, v) = sync(
+        &client,
+        &base,
+        json!({ "repo": REPO, "pr_number": 7, "reopen": true }),
+    )
+    .await;
+    assert_eq!(st, 200, "{v:#}");
+    assert_eq!(v["review_state"], "open");
+    assert_eq!(v["reason"], "head-moved");
+    assert_eq!(v["ps"], 3);
+    let tip2 = tip2b;
+
+    // 6. Merged: final — a later head is NOT captured.
     let tip3 = fx.push_pr(7, &tip2, &["feature3.txt"]);
     pulls
         .lock()
@@ -433,7 +503,7 @@ async fn sync_creates_then_is_idempotent_then_follows_pushes_and_merge_is_final(
     assert_sync_shape(&v);
     assert_eq!(v["reason"], "merged-final");
     assert_eq!(v["minted"], false);
-    assert_eq!(v["ps"], 2);
+    assert_eq!(v["ps"], 3);
     assert_eq!(v["head_sha"], tip2);
     assert_eq!(v["forge"]["state"], "merged");
 }
@@ -445,6 +515,7 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
     let t1 = fx.push_pr(1, &m, &["one.txt"]);
     let t2 = fx.push_pr(2, &m, &["two-a.txt", "two-b.txt"]);
     let t4 = fx.push_pr(4, &m, &["four.txt"]);
+    let t6 = fx.push_pr(6, &m, &["six.txt"]);
     let pulls: Pulls = Arc::new(Mutex::new(HashMap::new()));
     {
         let mut p = pulls.lock().unwrap();
@@ -455,7 +526,13 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
         p.insert(3, pull(3, &"3".repeat(40), 1, "open", None));
         // Merged inside the window / before it.
         p.insert(4, pull(4, &t4, 1, "closed", Some("2026-09-24T10:00:00Z")));
-        p.insert(5, pull(5, &t4, 1, "closed", Some("2026-09-01T10:00:00Z")));
+        // Updated before the window too: the closed listing stops paging
+        // here (it is the oldest-updated).
+        let mut p5 = pull(5, &t4, 1, "closed", Some("2026-09-01T10:00:00Z"));
+        p5["updated_at"] = json!("2026-09-01T10:00:00Z");
+        p.insert(5, p5);
+        // Closed WITHOUT merging.
+        p.insert(6, pull(6, &t6, 1, "closed", None));
     }
     let (gh, _gh_task) = mock_github(pulls.clone()).await;
     let (_home, base) = boot(cfg(&fx.repo, gh)).await;
@@ -497,6 +574,15 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
         .unwrap()
         .contains("PR fetch failed"));
     assert_eq!(bad["error"]["status"], 400);
+
+    // A closed-unmerged PR synced by number gets NO review.
+    let (st, v) = sync(&client, &base, json!({ "repo": REPO, "pr_number": 6 })).await;
+    assert_eq!(st, 200, "{v:#}");
+    assert_sync_shape(&v);
+    assert_eq!(v["reason"], "unchanged");
+    assert!(v["review_id"].is_null(), "{v:#}");
+    assert_eq!(v["created"], false);
+    assert!(has_warning(&v, "pr-closed"), "{v:#}");
 
     // Run again: the three good ones are quiet, PR 4 is merged-final.
     let (_, v) = sync(
