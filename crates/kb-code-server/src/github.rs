@@ -1268,6 +1268,10 @@ pub struct PrSyncOut {
     pub head_ref: String,
     pub base_ref: String,
     pub changed_files: Option<u64>,
+    /// RS-U10b review fix — GitHub's `updated_at` (RFC 3339): the closed
+    /// listing is sorted by it, and a merge inside a `--merged-since`
+    /// window always updates it, so paging stops once it falls behind.
+    pub updated_at: Option<String>,
 }
 
 /// `GET /repos/{o}/{r}/pulls/{n}` AND each element of the list endpoint,
@@ -1289,6 +1293,8 @@ struct GhPullSync {
     base: GhRef,
     #[serde(default)]
     changed_files: Option<u64>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
 impl From<GhPullSync> for PrSyncOut {
@@ -1306,6 +1312,7 @@ impl From<GhPullSync> for PrSyncOut {
             head_ref: p.head.r,
             base_ref: p.base.r,
             changed_files: p.changed_files,
+            updated_at: p.updated_at,
         }
     }
 }
@@ -1339,29 +1346,82 @@ impl GithubClient {
         Ok(p.into())
     }
 
-    /// RS-U10b — the PR LIST for `review sync --open`: `state` is `open`
-    /// or `closed` (`closed` is sorted most-recently-updated first, so a
-    /// `--merged-since` window is at the head of the list). Follows
+    /// RS-U10b — the OPEN PR list for `review sync --open`. Follows
     /// `Link: rel="next"` up to [`MAX_SYNC_PULLS`]; `truncated` says more
-    /// existed.
-    pub async fn list_pulls_sync(
+    /// open PRs existed than one sync reads.
+    pub async fn list_open_pulls_sync(
         &self,
         owner: &str,
         repo: &str,
-        state: &str,
     ) -> ApiResult<(Vec<PrSyncOut>, bool)> {
         let client = self.client()?;
-        let state = if state == "closed" { "closed" } else { "open" };
-        let path = if state == "closed" {
-            format!(
-                "/repos/{owner}/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100"
-            )
-        } else {
-            format!("/repos/{owner}/{repo}/pulls?state=open&per_page=100")
-        };
+        let path = format!("/repos/{owner}/{repo}/pulls?state=open&per_page=100");
         let (rows, truncated): (Vec<GhPullSync>, bool) =
             self.fetch_paginated(client, &path, MAX_SYNC_PULLS).await?;
         Ok((rows.into_iter().map(PrSyncOut::from).collect(), truncated))
+    }
+
+    /// RS-U10b — the CLOSED PRs updated at or after `since` (unix seconds),
+    /// most recently updated first, for `review sync --open --merged-since`.
+    /// Pages stop as soon as a page reaches a PR updated BEFORE the window
+    /// (a merge inside the window always bumps `updated_at`, so nothing
+    /// older can qualify). `truncated` = the [`MAX_SYNC_PULLS`] cap cut the
+    /// listing while still INSIDE the window.
+    pub async fn list_closed_pulls_since(
+        &self,
+        owner: &str,
+        repo: &str,
+        since: i64,
+    ) -> ApiResult<(Vec<PrSyncOut>, bool)> {
+        let client = self.client()?;
+        let mut next_url = Some(format!(
+            "{}/repos/{owner}/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100",
+            self.cfg.api_base.trim_end_matches('/')
+        ));
+        let mut out: Vec<PrSyncOut> = Vec::new();
+        while let Some(url) = next_url.take() {
+            let resp = self
+                .get_url(client, &url)
+                .send()
+                .await
+                .map_err(|e| GithubApiError::Unreachable(url.clone(), e.to_string()))?;
+            Self::classify_status(&resp)?;
+            let link_next = resp
+                .headers()
+                .get(reqwest::header::LINK)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_link_next);
+            let page: Vec<GhPullSync> = resp
+                .json()
+                .await
+                .map_err(|e| GithubApiError::Parse(e.to_string()))?;
+            let mut left_window = false;
+            for p in page {
+                let p = PrSyncOut::from(p);
+                if !updated_within(p.updated_at.as_deref(), since) {
+                    left_window = true;
+                    break;
+                }
+                if out.len() >= MAX_SYNC_PULLS {
+                    return Ok((out, true));
+                }
+                out.push(p);
+            }
+            if left_window {
+                break;
+            }
+            next_url = link_next;
+        }
+        Ok((out, false))
+    }
+}
+
+/// Is an RFC 3339 `updated_at` at or after `since`? An unparseable or
+/// missing stamp counts as inside (never silently skip a PR). Pure.
+pub fn updated_within(updated_at: Option<&str>, since: i64) -> bool {
+    match updated_at.map(chrono::DateTime::parse_from_rfc3339) {
+        Some(Ok(d)) => d.timestamp() >= since,
+        _ => true,
     }
 }
 
