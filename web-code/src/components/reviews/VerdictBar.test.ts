@@ -36,6 +36,8 @@ const REVIEW: ReviewDetail = {
   patchsets: [],
   verdict: null,
   verdict_stale: false,
+  base: { mode: null, branch: null, set_by: "legacy", source: null, state: null, merge_base: null, fetched_at: null, last_fetch: null, fetched_via: null },
+  warnings: [],
 };
 
 /// `admitted === undefined` seeds the identity cache WITHOUT the field at
