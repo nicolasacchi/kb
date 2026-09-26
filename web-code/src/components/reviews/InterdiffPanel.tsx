@@ -4,6 +4,7 @@ import DiffFile from "../diff/DiffFile";
 import RangeDiffTable from "./RangeDiffTable";
 import { statusGlyph } from "./ReviewFileItem";
 import { useDiff } from "../../hooks/useDiff";
+import { useDiffHighlights } from "../../hooks/useDiffHighlights";
 import { parseUnifiedDiff } from "../../lib/diff";
 import { loadDiffMode, saveDiffMode } from "../../lib/prefs";
 import type { DiffMode } from "../../lib/prefs";
@@ -120,6 +121,22 @@ function InterdiffFileDiff({
 }) {
   const diff = useDiff(repo, path, from, to);
   const parsed = useMemo(() => (diff.data ? parseUnifiedDiff(diff.data.diff) : null), [diff.data]);
+  // `hasRemoves` gates the BASE read (an add-only side has no pre-image
+  // text to paint) — same derivation DiffView / ReviewFileItem make.
+  const hasRemoves = useMemo(
+    () => (parsed ? parsed.hunks.some((h) => h.lines.some((l) => l.kind === "remove")) : false),
+    [parsed],
+  );
+  // Both tips are REAL shas here (`fromTipSha` / `toTipSha` off the
+  // patchset rows), so both sides are paintable and the shared
+  // `useFile` cache key makes the per-side read a hit for a reader who
+  // already has either blob open.
+  const highlights = useDiffHighlights(
+    parsed ? repo : undefined,
+    parsed ? path : undefined,
+    { oldSha: from, newSha: to },
+    { hasRemoves, parsed },
+  );
   const [mode, setMode] = useState<DiffMode>(() => loadDiffMode());
 
   if (diff.isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
@@ -135,6 +152,7 @@ function InterdiffFileDiff({
         saveDiffMode(next);
         setMode(next);
       }}
+      highlights={highlights}
     />
   );
 }

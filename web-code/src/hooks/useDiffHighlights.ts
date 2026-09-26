@@ -8,6 +8,15 @@
 // unindexed blobs, pseudo-files, interdiff snippets) fall back to
 // `POST /api/highlight` over the file content or a reconstructed hunk
 // side. The per-line integrity guard is unchanged.
+//
+// Working-tree tip — a diff rendered with no `to` diffs `from` against the
+// WORKING TREE, so the tip query asks for the working tree
+// (`ref: undefined`, the same `["file", …, null]` entry `useFile` already
+// keeps for the reader's own read) instead of disabling the side and
+// leaving every ADDED line plain. The V76-C1 fallback additionally clamps
+// each side to the per-snippet ceiling `highlight/batch` enforces: an
+// oversize side is dropped rather than sent, because one refused item
+// 400s the WHOLE batch and would strip the other side's legitimate paint.
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -29,13 +38,78 @@ import { useHighlight, type HighlightItem } from "./useHighlight";
 /// Same 1.5 MiB ceiling the brief named; `FileResponse.size` is bytes.
 export const DIFF_HIGHLIGHT_MAX_BYTES = 1.5 * 1024 * 1024;
 
+/// Per-SNIPPET ceiling `POST /api/highlight/batch` enforces: one item's
+/// `text` may not exceed this many UTF-8 bytes, and a violation refuses the
+/// WHOLE batch with a 400 (`MAX_SNIPPET_BYTES`,
+/// crates/kb-code-server/src/highlight.rs:424, enforced :751-759). It is
+/// well under this hook's own `DIFF_HIGHLIGHT_MAX_BYTES`, which only bounds
+/// what is worth READING — a side between the two would enqueue an item the
+/// server rejects, and the batch's 400 would strip the OTHER side's paint
+/// with it. (Two in-cap sides total ≤ 512 KiB, so the batch TOTAL cap of
+/// 1 MiB — `highlight.rs:428`, enforced :761-765 — is unreachable once
+/// each side is clamped.)
+export const HIGHLIGHT_SNIPPET_MAX_BYTES = 256 * 1024;
+
 export interface UseDiffHighlightsOpts {
   /// Base (`oldSha`) is fetched ONLY when the parsed diff has remove
   /// lines — an add-only file has no pre-image text to paint.
   hasRemoves?: boolean;
+  /// Tip (`newSha`) — the post-image — is fetched whenever the diff has
+  /// add lines, INCLUDING the working-tree read a no-`to` diff makes (see
+  /// `tipSideEnabled`). Unset/omitted means "assume it has adds", so only
+  /// an explicit `false` — the deleted file — closes the gate.
+  hasAdds?: boolean;
   /// When file spans are missing, reconstruct a side from this parsed
   /// diff and POST it to highlight/1.
   parsed?: ParsedDiff | null;
+}
+
+/// Tip-side fetch gate. The tip ref is `newSha`, and it is ABSENT whenever
+/// the diff is rendered without a `to` — which per `GET /api/diff`'s
+/// contract (`crates/kb-code-server/src/routes.rs:2086-2090`) is exactly
+/// the working tree, i.e. the new side's real content, not "nothing to
+/// read". So the gate asks for that working tree rather than dropping the
+/// side and painting every ADDED line plain.
+///
+/// `hasAdds` is the one gate that survives, and only for the UNPINNED read:
+/// a deleted file has no working-tree blob, so the read would be a
+/// guaranteed 404 whose only effect is a wasted request
+/// (`shouldFallbackToSnippet` refuses on a failed read, so nothing would
+/// paint). Same symmetric line-mix gate `hasRemoves` gives the base side.
+/// A PINNED tip is never gated on `hasAdds` — that blob exists whatever the
+/// diff's line mix says, which is today's behaviour, unchanged.
+export function tipSideEnabled(side: {
+  prefOn: boolean;
+  repo: string | undefined;
+  path: string | undefined;
+  newSha: string | undefined;
+  hasAdds: boolean;
+}): boolean {
+  return (
+    side.prefOn &&
+    side.repo !== undefined &&
+    side.path !== undefined &&
+    (!!side.newSha || side.hasAdds)
+  );
+}
+
+/// Base-side fetch gate — untouched by the tip fix, and extracted beside it
+/// so both rules read (and are pinned) side by side. The base is only ever
+/// read at a pinned `oldSha`, so BOTH the ref and the line-mix gate apply.
+export function baseSideEnabled(side: {
+  prefOn: boolean;
+  repo: string | undefined;
+  path: string | undefined;
+  oldSha: string | undefined;
+  hasRemoves: boolean;
+}): boolean {
+  return (
+    side.prefOn &&
+    side.repo !== undefined &&
+    side.path !== undefined &&
+    !!side.oldSha &&
+    side.hasRemoves
+  );
 }
 
 /// EXACT key `useFile` uses — do not drift the 4-tuple or `ref ?? null`.
@@ -83,11 +157,12 @@ export function useDiffHighlights(
 ): DiffHighlights | null {
   const prefOn = loadDiffSyntaxHighlight();
   const hasRemoves = opts.hasRemoves === true;
+  const hasAdds = opts.hasAdds !== false;
   const parsed = opts.parsed ?? null;
   const { oldSha, newSha } = shas;
 
-  const tipEnabled = prefOn && repo !== undefined && path !== undefined && !!newSha;
-  const baseEnabled = prefOn && repo !== undefined && path !== undefined && !!oldSha && hasRemoves;
+  const tipEnabled = tipSideEnabled({ prefOn, repo, path, newSha, hasAdds });
+  const baseEnabled = baseSideEnabled({ prefOn, repo, path, oldSha, hasRemoves });
 
   const tip = useQuery({
     queryKey: fileQueryKey(repo, path, newSha),
@@ -113,7 +188,14 @@ export function useDiffHighlights(
           : parsed
             ? reconstructSide(parsed, "new")
             : null;
-      if (text) {
+      // An oversize side is DROPPED, not sent: the server refuses the whole
+      // batch, and the OTHER side has a legitimate paint to lose. UTF-8
+      // BYTES, never `.length` — the server measures `item.text.len()`, so
+      // a non-ASCII side under-counts on a UTF-16 length.
+      if (
+        text &&
+        new TextEncoder().encode(text).length <= HIGHLIGHT_SNIPPET_MAX_BYTES
+      ) {
         items.push({
           id: "new",
           lang: tip.data?.lang ?? null,
@@ -132,7 +214,10 @@ export function useDiffHighlights(
           : parsed
             ? reconstructSide(parsed, "old")
             : null;
-      if (text) {
+      if (
+        text &&
+        new TextEncoder().encode(text).length <= HIGHLIGHT_SNIPPET_MAX_BYTES
+      ) {
         items.push({
           id: "old",
           lang: base.data?.lang ?? null,
