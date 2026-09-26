@@ -133,8 +133,18 @@ pub fn run_boot(rs: &ReviewStores, store: &Store) -> BootSummary {
                 Ok(_) => {
                     s.opened += 1;
                     // Members that joined after the seed (BLOCKER 1).
+                    // One that fails to import is a failure of THIS
+                    // store's import pass, not a silently missing member,
+                    // and the boot job reports through `failed` — the
+                    // same list every store-level refusal below lands
+                    // in, which the boot log counts.
                     match rs.import_pending_members(store, id) {
-                        Ok(v) => s.imported += v.len(),
+                        Ok(v) => {
+                            s.imported += v.members.len();
+                            for e in v.errors {
+                                s.failed.push(format!("{}: {}", row.store_key, e));
+                            }
+                        }
                         Err(u) => s.failed.push(format!("{}: {}", row.store_key, u.code())),
                     }
                 }

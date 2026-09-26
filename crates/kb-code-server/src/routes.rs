@@ -562,12 +562,16 @@ pub(crate) struct FileRead {
 ///   old `Some(rev)` verbatim). General code-intel whose rev does not
 ///   address review data, or a helper not yet bridged.
 /// * [`RevResolver::bridged`] / [`RevResolver::lookup`] — a store-aware
-///   read: a store-addressable rev (full sha, `refs/kbc/*`) is read from
-///   the review store first and the work tree second; any other name
-///   (`HEAD`, `main`) stays on the work tree, since it means something
-///   else in a bare store. `lookup` resolves the `GitCtx` lazily, only for
-///   store-addressable revs, so a hot loop pays no store query for `None`/
-///   branch names. With no ready store (today) both equal `user_repo`.
+///   read: a store-addressable rev (full sha, `refs/kbc/*`) is resolved
+///   through [`crate::git::roots::GitCtx::read_rev_with_fallback`], which
+///   reads the review store FIRST and the work tree second for a class
+///   the store does not import, and the store ALONE for a class it is
+///   authoritative for (`is_store_authoritative`, per ref class); any
+///   other name (`HEAD`, `main`) stays on the work tree, since it means
+///   something else in a bare store. `lookup` resolves the `GitCtx`
+///   lazily, only for store-addressable revs, so a hot loop pays no store
+///   query for `None`/branch names. With no ready store (today) both
+///   equal `user_repo`.
 #[derive(Clone, Copy)]
 pub(crate) struct RevResolver<'a> {
     rev: Option<&'a str>,
@@ -668,6 +672,15 @@ pub(crate) fn read_repo_file(
                 Ok(git.read_blob(spec.as_str(), path, DEFAULT_BLOB_SIZE_CAP)?)
             };
             let work = crate::git::roots::WorkTreeRoot::of_repo(repo);
+            // Two predicates, both from `git::roots`, and the second one
+            // never re-derives the first's verdict: `is_store_addressable`
+            // asks "could a store hold this rev at ALL" (a full sha, or a
+            // `refs/kbc/*` name) and decides only WHETHER to open a
+            // `GitCtx`; `read_rev_with_fallback` then asks, per REF CLASS
+            // (`is_store_authoritative`), whether the store is the whole
+            // answer. A rev that is not addressable never reaches a
+            // store, so `HEAD`/`main` keep meaning what they mean in the
+            // user clone.
             let addressable = crate::git::roots::is_store_addressable(spec.as_str());
             match via {
                 RevVia::Ctx(ctx) if addressable => {

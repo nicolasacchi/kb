@@ -432,6 +432,103 @@ fn missing_tips_mark_reviews_while_the_store_goes_ready() {
     );
 }
 
+/// A member dropped from the seed plan — its repo row is configured, but
+/// its worktree no longer resolves to a git dir — used to be invisible on
+/// the wire: the seed went `ready` and the report said nothing, so
+/// `store sync` reported a clean success over a store that had never
+/// imported that member. The list the seed ALREADY computed and wrote to
+/// `state_json` now rides out on the response, under the same key the
+/// incremental path uses.
+#[test]
+fn a_dropped_member_rides_out_on_the_seed_report() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-01", None));
+    // widgets-02 normalizes to the same store key, so it JOINS this store.
+    assert_eq!(
+        member_id(&e.rs.register_repo(&e.store, "widgets-02", None)),
+        id
+    );
+    // Its worktree is gone, so `members_of` drops it and names the reason.
+    std::fs::remove_dir_all(&e.fx.two).unwrap();
+
+    let rep = e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(rep.members.len(), 1, "only the member that resolved seeds");
+    assert_eq!(rep.members[0].repo_id, e.ids["widgets-01"]);
+    assert_eq!(rep.member_problems.len(), 1, "{:?}", rep.member_problems);
+    assert!(
+        rep.member_problems[0].starts_with("widgets-02: "),
+        "must name the dropped member: {:?}",
+        rep.member_problems
+    );
+
+    // The KEY is the contract — the CLI reads `report["member_problems"]`
+    // off both response shapes — so assert it on the wire, not on the field.
+    let v = serde_json::to_value(&rep).unwrap();
+    let wire = v["member_problems"]
+        .as_array()
+        .expect("member_problems on the seeded response");
+    assert_eq!(wire.len(), 1);
+    assert!(wire[0].as_str().unwrap().starts_with("widgets-02: "));
+
+    // One list, two carriers: the response and the durable record are the
+    // SAME `problems`, so they cannot drift apart.
+    let row = e.store.get_review_store(id).unwrap().unwrap();
+    assert_eq!(row.state, "ready");
+    let sj: serde_json::Value = serde_json::from_str(row.state_json.as_deref().unwrap()).unwrap();
+    assert_eq!(sj["member_problems"], v["member_problems"]);
+}
+
+/// The adopted-existing branch — the store directory is already on disk, so
+/// the seed re-verifies connectivity over the same plan instead of
+/// re-fetching. It used to DISCARD that plan's dropped-member list and
+/// return an empty member list, so this path returned a 200 saying `ready`
+/// over a store that had silently never imported a member. Both halves of
+/// that are pinned here: the import it DOES perform is reported, and the
+/// member it dropped is named.
+#[test]
+fn the_adopted_store_reports_what_it_imported_and_what_it_dropped() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.seed(&e.store, id, false).unwrap();
+    // widgets-01 gets a review, then joins the now-`ready` store: pending,
+    // never imported.
+    let late = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    assert_eq!(
+        member_id(&e.rs.register_repo(&e.store, "widgets-01", None)),
+        id
+    );
+    assert_eq!(
+        e.rs.handle_for_repo(&e.store, "widgets-01").unwrap_err(),
+        StoreUnavailable::MemberPending
+    );
+    let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
+
+    // Second seed: `git_dir` is on disk, so this is the adopt branch.
+    let rep = e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(rep.base.code(), "adopted-existing");
+    assert!(rep.member_problems.is_empty(), "{:?}", rep.member_problems);
+    assert_eq!(
+        rep.members.len(),
+        1,
+        "the pending member's import is reported"
+    );
+    assert_eq!(rep.members[0].repo_id, e.ids["widgets-01"]);
+    let refs = store_refs(&dir);
+    assert!(refs.contains(&patchset_ref(late, 1)), "{refs:?}");
+
+    // Now the adopted store loses a member. An empty member list is honest
+    // (nothing new was imported) — the dropped member must not be invisible.
+    std::fs::remove_dir_all(&e.fx.two).unwrap();
+    let rep = e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(rep.base.code(), "adopted-existing");
+    assert_eq!(rep.member_problems.len(), 1, "{:?}", rep.member_problems);
+    assert!(
+        rep.member_problems[0].starts_with("widgets-02: "),
+        "must name the dropped member: {:?}",
+        rep.member_problems
+    );
+}
+
 /// README §15.3: a many-pack source seeds into ONE pack.
 #[test]
 fn a_many_pack_source_seeds_one_pack() {
@@ -737,8 +834,9 @@ fn a_member_joining_a_ready_store_is_imported_and_falls_back_until_then() {
     let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
     assert!(!store_refs(&dir).contains(&patchset_ref(late, 1)));
     let imported = e.rs.import_pending_members(&e.store, id).unwrap();
-    assert_eq!(imported.len(), 1);
-    assert_eq!(imported[0].repo_id, e.ids["widgets-01"]);
+    assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+    assert_eq!(imported.members.len(), 1);
+    assert_eq!(imported.members[0].repo_id, e.ids["widgets-01"]);
     let refs = store_refs(&dir);
     assert!(refs.contains(&patchset_ref(late, 1)), "{refs:?}");
     assert!(refs.contains(&format!(
@@ -747,11 +845,9 @@ fn a_member_joining_a_ready_store_is_imported_and_falls_back_until_then() {
     )));
     assert!(e.rs.handle_for_repo(&e.store, "widgets-01").is_ok());
     // Idempotent: nothing pending any more.
-    assert!(e
-        .rs
-        .import_pending_members(&e.store, id)
-        .unwrap()
-        .is_empty());
+    let again = e.rs.import_pending_members(&e.store, id).unwrap();
+    assert!(again.members.is_empty(), "{:?}", again.members);
+    assert!(again.errors.is_empty(), "{:?}", again.errors);
     // The boot job does the same for a ready store.
     let e2 = env();
     let id2 = member_id(&e2.rs.register_repo(&e2.store, "widgets-02", None));
@@ -1062,7 +1158,7 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
     let delete = gc::delete_candidates(&attributed);
     let delete_names: Vec<String> = delete.iter().map(|c| c.refname.clone()).collect();
     assert_eq!(delete_names, vec![patchset_ref(r1, 1)], "{delete_names:?}");
-    gc::apply(e.rs.git().unwrap(), &dir, &delete).unwrap();
+    gc::apply(&gc::ApplyGuard::mint(), e.rs.git().unwrap(), &dir, &delete).unwrap();
 
     let after = store_refs(&dir);
     assert!(!after.contains(&patchset_ref(r1, 1)), "{after:?}");
@@ -1085,17 +1181,17 @@ fn store_wide_gc_deletes_a_gone_reviews_refs_and_never_a_siblings() {
 }
 
 /// RS-U5 — `delete_review_with_refs` on a READY store deletes the
-/// review's `ps<n>`/`ps<n>-base` refs from the STORE (never the user
-/// clone) AND — RS-U5 review fix, temporary until U6 makes
-/// `capture_patchset` store-aware — from the member clone's OWN legacy
-/// copies too (capture still always writes `ps<n>` there today, so a
-/// store-only delete would otherwise leak them forever). Under
-/// `PrRefScope::StoreWide` the STORE's shared `refs/kbc/pr/<n>` is left
-/// alone (deferred to the store-wide GC, see the test above, since it can
-/// be bound by ANOTHER member) — but the CLONE's own `pr/<n>` copy is
-/// always this-repo-only, so it IS cleaned up.
+/// review's `ps<n>`/`ps<n>-base` refs from the STORE, and — the D19 half,
+/// pinned here after RS-U5's `legacy_work_tree` root was removed — writes
+/// NOTHING to the member's user clone. The legacy `ps<n>`/`pr/<n>` copies
+/// a pre-RS-U6 capture left there are modelled below and must STILL be
+/// there afterwards: reclaiming them is the explicit, MANUAL
+/// `store legacy-refs` (`review_store::legacy_refs`), never a side effect
+/// of deleting a review. Under `PrRefScope::StoreWide` the STORE's shared
+/// `refs/kbc/pr/<n>` is left alone too (deferred to the store-wide GC, see
+/// the test above, since it can be bound by ANOTHER member).
 #[test]
-fn delete_review_with_refs_on_a_ready_store_removes_store_and_legacy_clone_refs() {
+fn delete_review_with_refs_on_a_ready_store_cleans_the_store_and_never_the_clone() {
     let e = env();
     // widgets-01 alone carries TWO forge remotes and cannot resolve on its
     // own; register widgets-02 (a single remote) FIRST to mint the store
@@ -1151,7 +1247,6 @@ fn delete_review_with_refs_on_a_ready_store_removes_store_and_legacy_clone_refs(
         &e.store,
         &bus,
         ctx.primary(),
-        Some(ctx.work_tree()),
         &review,
         PrRefScope::StoreWide,
     )
@@ -1165,17 +1260,16 @@ fn delete_review_with_refs_on_a_ready_store_removes_store_and_legacy_clone_refs(
         refs.contains(&pr_ref(9)),
         "StoreWide scope leaves the STORE's refs/kbc/pr/<n> for the store-wide GC to decide: {refs:?}"
     );
-    // The legacy work-tree copies are cleaned up too (the leak this fix
-    // closes) — never left dangling once the review itself is gone.
+    // The user clone is byte-for-byte untouched: a store-primary delete
+    // never writes it (D19). `store legacy-refs` is what reclaims these.
     let clone_refs = git(&e.fx.one, &["for-each-ref", "--format=%(refname)"]);
-    assert!(!clone_refs.contains(&patchset_ref(id, 1)), "{clone_refs:?}");
     assert!(
-        !clone_refs.contains(&patchset_base_ref(id, 1)),
-        "{clone_refs:?}"
+        clone_refs.contains(&patchset_ref(id, 1)),
+        "the legacy clone copy must be left for `store legacy-refs`: {clone_refs:?}"
     );
     assert!(
-        !clone_refs.contains(&pr_ref(9)),
-        "the clone's OWN pr/<n> copy is this-repo-only, so it is always cleaned up: {clone_refs:?}"
+        clone_refs.contains(&pr_ref(9)),
+        "same for the clone's own pr/<n> copy: {clone_refs:?}"
     );
 }
 

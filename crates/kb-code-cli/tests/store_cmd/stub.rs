@@ -4,7 +4,8 @@
 //! the decision is inline in the arm (there is no pure helper to call), so
 //! the only way to pin it is to hand the real `kb-code` binary a daemon
 //! answer of our choosing. This serves exactly that: HTTP 200 + a JSON
-//! body, for at most `max` requests, then it stops.
+//! body, for at most `max` requests (`max = 0` serves for the whole
+//! window), then it stops.
 //!
 //! The one-shot shape is deliberate — each `kb-code store …` invocation
 //! makes exactly ONE round trip, so a stub that served more would be
@@ -12,23 +13,26 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub struct StubDaemon {
     pub url: String,
     requests: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl StubDaemon {
     /// Answer up to `max` requests with `body` (HTTP 200, `application/json`)
-    /// while `window` is open, then stop listening.
+    /// while `window` is open, then stop listening. `max = 0` means
+    /// "serve everything that arrives until `window` closes".
     ///
-    /// `max = 0` is the "the CLI must not talk to the daemon at all" probe:
-    /// the listener stays bound for the whole `window`, so a stray request
-    /// is REFUSED (and would show up as a transport error, not a 200).
+    /// A caller that wants to assert the CLI made NO request must keep the
+    /// stub bound across the whole CLI run and read `request_count()` via
+    /// `join()`: a request that arrives after `window` closed is never
+    /// counted, so a short window turns the check into a vacuous pass.
     pub fn json(body: &str, max: usize, window: Duration) -> StubDaemon {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub");
         let addr = listener.local_addr().expect("stub addr");
@@ -38,12 +42,18 @@ impl StubDaemon {
         let body = body.to_string();
         let requests = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&requests);
+        let stop = Arc::new(AtomicBool::new(false));
+        let halted = Arc::clone(&stop);
         let handle = std::thread::spawn(move || {
             let deadline = Instant::now() + window;
-            // `max == 0` polls the whole window and never accepts, so a
-            // request the CLI was NOT supposed to make cannot be served
-            // into a passing test.
-            while Instant::now() < deadline && (max == 0 || counted.load(Ordering::SeqCst) < max) {
+            // `max == 0` disables the cap, NOT the stub: it answers every
+            // request that arrives before `window` closes. "The CLI must
+            // not talk to the daemon" is therefore a count assertion made
+            // while the listener is still bound (see `join`).
+            while !halted.load(Ordering::SeqCst)
+                && Instant::now() < deadline
+                && (max == 0 || counted.load(Ordering::SeqCst) < max)
+            {
                 match listener.accept() {
                     Ok((sock, _)) => {
                         counted.fetch_add(1, Ordering::SeqCst);
@@ -59,17 +69,24 @@ impl StubDaemon {
         StubDaemon {
             url: format!("http://{addr}"),
             requests,
+            stop,
             handle: Some(handle),
         }
     }
 
-    /// How many requests the CLI actually made.
+    /// How many requests the stub has accepted so far. Only requests it
+    /// actually accepted are counted, so this reads 0 for a request that
+    /// arrived after the stub stopped listening.
     pub fn request_count(&self) -> usize {
         self.requests.load(Ordering::SeqCst)
     }
 
-    /// Wait for the stub's window to close and stop it.
+    /// Stop the stub now (without waiting out its `window`), wait for its
+    /// thread, and return `request_count()`. Safe to call at any point:
+    /// the listener stays bound until then, so any round trip the CLI
+    /// managed to complete before this call is already counted.
     pub fn join(mut self) -> usize {
+        self.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }

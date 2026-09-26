@@ -8,9 +8,12 @@
 //! the full accounting). [`run_pass_for_store`] (the scheduler, and
 //! `store maintain`) ALWAYS computes the GC candidate list as a dry run
 //! and records it (`state_json.last_gc_dry_run`); NEITHER ever reaches
-//! [`super::gc::apply`]. That function has exactly ONE caller in the
-//! crate — [`apply_gc_candidates`] — and that has exactly TWO entry
-//! points, BOTH funnelling through [`run_gc_pass`]: the operator's
+//! `super::gc::apply` — which is `pub(crate)` and takes a
+//! `super::gc::ApplyGuard` nothing outside `review_store` can mint, so
+//! that is enforced by the compiler, not by this comment. It has exactly
+//! ONE production caller — [`apply_gc_candidates`], the sole minter of
+//! the token — and that has exactly TWO entry points, BOTH funnelling
+//! through [`run_gc_pass`]: the operator's
 //! explicit `kb-code store gc --repo R --yes` ([`run_gc_now`], which is
 //! what the `--yes` acknowledgement is for) and the legacy
 //! `kb-code review refs gc --repo R --apply` route
@@ -840,10 +843,11 @@ fn restore_suspected_review_id(
         })
 }
 
-/// [`gc_pass`]'s guard-checked apply half — the ONLY function in this
-/// crate that calls [`super::gc::apply`], and therefore the ONLY place a
-/// ref-delete transaction can originate. Reached from exactly two entry
-/// points, both [`run_gc_pass`]: the operator's `store gc --yes` and the
+/// [`gc_pass`]'s guard-checked apply half — the only PRODUCTION caller of
+/// `super::gc::apply` (and the only minter of its `ApplyGuard`), and
+/// therefore the only place a ref-delete transaction can originate.
+/// Reached from exactly two entry points, both [`run_gc_pass`]: the
+/// operator's `store gc --yes` and the
 /// `review refs gc --apply` route. In order: nothing to do →
 /// sentinel restore-guard (bypassable only by the caller having already
 /// acknowledged THIS store, [`run_gc_now`]) → the UNCONDITIONAL,
@@ -937,7 +941,10 @@ fn apply_gc_candidates(
             return Ok(report);
         }
     }
-    super::gc::apply(git, git_dir, candidates).map_err(|e| e.to_string())?;
+    // The token is mintable only inside `review_store`, and this is the
+    // one production site that mints it — after the three checks above.
+    super::gc::apply(&super::gc::ApplyGuard::mint(), git, git_dir, candidates)
+        .map_err(|e| e.to_string())?;
     report.applied = true;
     report.reason = "applied";
     Ok(report)
@@ -1428,7 +1435,7 @@ pub struct MaintPassReport {
     pub swept_tmp_pack: usize,
     pub invariant: Option<InvariantReport>,
     /// Always a DRY RUN — the scheduler (and `store maintain`) NEVER call
-    /// [`super::gc::apply`] (operator ruling, see the module doc's top).
+    /// `super::gc::apply` (operator ruling, see the module doc's top).
     /// The only paths that apply are [`run_gc_now`] and [`run_gc_pass`]
     /// (the `review refs gc --apply` route), and neither is reachable
     /// from here.
@@ -1621,8 +1628,8 @@ pub fn run_pass_for_store(
 }
 
 /// THE store-wide GC entry point — the single funnel every store-backed
-/// apply goes through, and therefore the only route to
-/// [`super::gc::apply`]. Two callers, and they MUST stay the only two:
+/// apply goes through, and therefore the only PRODUCTION route to
+/// `super::gc::apply`. Two callers, and they MUST stay the only two:
 ///
 /// * [`run_gc_now`] — `kb-code store gc --repo R [--yes]`, the operator's
 ///   explicit verb (route + CLI share it). Its `--yes` is what
@@ -1630,7 +1637,7 @@ pub fn run_pass_for_store(
 /// * [`crate::reviews::gc_review_refs_inner`] — the legacy
 ///   `kb-code review refs gc --repo R --apply` route, which passes
 ///   `bypass_guard = false` (it has no `--yes`) and MUST delegate here
-///   rather than call [`super::gc::apply`] itself: an unguarded apply on
+///   rather than call `super::gc::apply` itself: an unguarded apply on
 ///   that route deleted store refs with no backup, no restore-guard check
 ///   and no high-water check, and left `state_json.last_gc_apply`
 ///   stale so the monthly cruft cooldown was judged from a lie.
@@ -1711,7 +1718,26 @@ pub fn run_gc_pass(
     // acted on: a guard refusal must still report what it refused.
     let refnames: Vec<String> = candidates.iter().map(|c| c.refname.clone()).collect();
 
-    let mut sj = state_json_value(&fresh);
+    // Should-fix: never write back a STALE `fresh.state`/`fresh.state_json`
+    // — re-read once more (cheap) so a state transition that happened
+    // during this pass is not silently overwritten with what the caller saw
+    // at entry. The classify/bundle/apply above spend SECONDS in git, and a
+    // `seed()` failure, boot's interrupted-seeding reset or `open`'s
+    // manifest check can flip the row to `absent`/`broken` in that window;
+    // writing the entry-time copy back would resurrect a store whose
+    // `git_dir` is gone. Merged into THAT read, so a concurrent writer's
+    // keys survive and only this pass's own keys below are set.
+    let latest = store
+        .get_review_store(fresh.id)
+        .map_err(|e| e.to_string())?;
+    let write_state = latest
+        .as_ref()
+        .map(|f| f.state.clone())
+        .unwrap_or_else(|| fresh.state.clone());
+    let mut sj = match latest.as_ref() {
+        Some(f) => state_json_value(f),
+        None => state_json_value(&fresh),
+    };
     if final_report.applied {
         sj["last_gc_apply"] = serde_json::json!({
             "at": now,
@@ -1727,7 +1753,7 @@ pub fn run_gc_pass(
             "member_problems": final_report.member_problems,
         });
     }
-    if let Err(e) = store.set_review_store_state(fresh.id, &fresh.state, Some(&sj.to_string())) {
+    if let Err(e) = store.set_review_store_state(fresh.id, &write_state, Some(&sj.to_string())) {
         log_state_write_failure(&fresh.uuid, "run_gc_pass", &e);
     }
     Ok((final_report, refnames))
