@@ -366,7 +366,7 @@ pub async fn credentials_route(
         let source = row
             .as_ref()
             .ok()
-            .flatten()
+            .and_then(|r| r.as_ref())
             .map(|r| rs.credential_source_for(&st.store, r.id));
         (row, source)
     })
