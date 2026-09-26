@@ -14,7 +14,7 @@
 //! 5. the repo's single forge remote;
 //! 6. `upstream`, only when the forge API verifies `origin` is a fork of
 //!    it ([`ForkCheck`]; the daemon's own implementation is
-//!    [`NoForkCheck`] until the api slot is wired — see its doc);
+//!    [`NoForkCheck`] — see its doc for why rung 6 is still inert);
 //! 7. otherwise REFUSE with `base-url-ambiguous`. No guessing.
 //!
 //! **Membership** (README §5.1 "Joining"): before rungs 3–7 run, a repo
@@ -85,14 +85,46 @@ pub trait ForkCheck {
     fn origin_is_fork_of(&self, origin_key: &str, upstream_key: &str) -> Option<bool>;
 }
 
-/// The daemon's rung-6 implementation in RS-U3: always "could not ask".
+/// The daemon's rung-6 implementation: always "could not ask".
 ///
-/// Verifying a fork needs a forge API GET (`/repos/{origin}` → `parent`)
-/// through the api credential slot, which `github.rs`'s REST ladder is
-/// rewired onto in a later unit. Until then rung 6 is honestly
-/// unavailable — never assumed — and a repo that would need it refuses
-/// with `base-url-ambiguous`, which the operator resolves in one line of
-/// config (`base_url`) or `store set-base-url`.
+/// **Why rung 6 is still inert.** (The api slot IS live on this branch —
+/// the gh-cli token and the GitHub REST client are wired, and
+/// `review_sync` already reads `/repos/{o}/{r}/pulls/{n}` — so the old
+/// "until `github.rs`'s REST ladder is rewired" reason is no longer
+/// true.) Turning rung 6 on needs a `GET /repos/{o}/{r}` → `fork` +
+/// `parent.full_name` read, and TWO things this branch does not have:
+///
+/// 1. **The read does not exist.** [`crate::github::GithubClient`] has no
+///    repo-metadata method at all — every method on it is
+///    PR/check/review-shaped (`list_pulls`, `get_pull`, `list_checks`,
+///    `list_reviews`, `get_pull_sync`, `list_open_pulls_sync`,
+///    `list_closed_pulls_since`). Nothing anywhere in the crate reads
+///    `fork` or `parent`, so this is a NEW endpoint on that client, not a
+///    wiring change.
+/// 2. **Registration is sync, credential-free, and pre-store.**
+///    [`ReviewStores::register_repo`](super::registry::ReviewStores::register_repo)
+///    is called inside `spawn_blocking` and takes `&Store` — never
+///    [`SharedState`](crate::state::SharedState) — so it cannot reach
+///    `state.github`; the boot job
+///    ([`run_boot`](super::boot::run_boot)) calls it the same way. The api
+///    credential is a `gh`/token read performed only by
+///    `reviews::github_with_gh_cli_warned`, which needs `&SharedState`
+///    AND a `StoreHandle`. Rung 6 fires BEFORE any store row exists, so
+///    there is no handle, and D12's `cred_account` check would have
+///    nothing recorded to check against. Making rung 6 work is
+///    therefore the first registration step that needs BOTH a network
+///    call and a token, on a path that today does neither and that runs
+///    at every boot for every repo with reviews — plus a new way to get
+///    a `SharedState` (or a `GithubClient` + api credential) into a
+///    blocking, `&Store`-only function.
+///
+/// So rung 6 stays honestly unavailable — never assumed — and a
+/// fork-shaped clone (e.g. rails-01: an `origin` that is a personal fork
+/// beside a second forge remote) refuses with `base-url-ambiguous`, which
+/// the operator resolves in one line of config (`base_url` in
+/// `[[review.repos]]`) or `kb-code store set-base-url`. That refusal is
+/// the DESIGNED outcome (README §5.1 rung 7, "there is no guessing"), not
+/// a gap to work around.
 pub struct NoForkCheck;
 
 impl ForkCheck for NoForkCheck {

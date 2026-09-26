@@ -136,6 +136,47 @@ impl FailureClass {
         }
     }
 
+    /// The class a wire slug names — the exact inverse of [`Self::slug`].
+    ///
+    /// A `BaseFetch::Skipped`/`Failed` `code` crosses the wire as a bare
+    /// string, so a consumer that must tell a CREDENTIAL skip (`offline`
+    /// is not one) from a benign one has to parse it. `None` for a code
+    /// that names no class at all — the structural skips
+    /// (`no-base-remote`, `offline-seed`, `adopted-existing`,
+    /// `store-disabled`), which are exactly the ones that must NOT read
+    /// as failures.
+    ///
+    /// Exhaustive by construction: `from_slug`/`slug` are two `match`es
+    /// over the same variants, and `from_slug_is_the_exact_inverse_of_slug`
+    /// in the tests fails if a new class is added to one and not the
+    /// other. Use [`Self::is_auth`] on the result rather than comparing
+    /// slugs, so the credential set stays defined in ONE place.
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Some(match slug {
+            "vanished" => Self::Vanished,
+            "offline" => Self::Offline,
+            "timeout" => Self::Timeout,
+            "credential-rejected" => Self::CredentialRejected,
+            "credential-wrong-repo" => Self::CredentialWrongRepo,
+            "repo-not-found" => Self::RepoNotFound,
+            "auth-no-access" => Self::AuthNoAccess,
+            "host-key-unknown" => Self::HostKeyUnknown,
+            "host-key-mismatch" => Self::HostKeyMismatch,
+            "auth-required" => Self::AuthRequired,
+            "tls" => Self::Tls,
+            "disk-full" => Self::DiskFull,
+            "shallow" => Self::Shallow,
+            "protocol-refused" => Self::ProtocolRefused,
+            "url-rejected" => Self::UrlRejected,
+            "credential-account-mismatch" => Self::CredentialAccountMismatch,
+            "credential-unavailable" => Self::CredentialUnavailable,
+            "no-credentials" => Self::NoCredentials,
+            "spawn-failed" => Self::SpawnFailed,
+            "failed" => Self::Failed,
+            _ => return None,
+        })
+    }
+
     /// `urn:kb:errors:<slug>`.
     pub fn urn(self) -> String {
         format!("urn:kb:errors:{}", self.slug())
@@ -148,6 +189,13 @@ impl FailureClass {
     }
 
     /// Auth-shaped: grounds for re-probing the credential ladder (§5.1).
+    ///
+    /// This is ALSO the set `store sync` reads a base-fetch skip against: a
+    /// skip whose code lands here means a credential could not be resolved,
+    /// which D12 calls an error, not a warning. It deliberately excludes
+    /// the structural skips (`no-base-remote`, `offline-seed`, …) and the
+    /// network classes — `store sync --offline` is a supported, successful
+    /// operation, so `Offline` must never join this set.
     pub fn is_auth(self) -> bool {
         matches!(
             self,
@@ -395,5 +443,83 @@ mod tests {
         assert_eq!(F::Timeout.slug(), "timeout");
         assert!(F::Offline.is_transient());
         assert!(F::AuthRequired.is_auth());
+    }
+
+    /// Every class, so the `slug`/`from_slug` pair can be checked for
+    /// being inverses. A class added to the enum and to `slug()` but
+    /// forgotten in `from_slug()` would make a real failure code parse as
+    /// "no class at all" — i.e. silently benign, which is the exact defect
+    /// `from_slug` exists to prevent.
+    const ALL: &[F] = &[
+        F::Vanished,
+        F::Offline,
+        F::Timeout,
+        F::CredentialRejected,
+        F::CredentialWrongRepo,
+        F::RepoNotFound,
+        F::AuthNoAccess,
+        F::HostKeyUnknown,
+        F::HostKeyMismatch,
+        F::AuthRequired,
+        F::Tls,
+        F::DiskFull,
+        F::Shallow,
+        F::ProtocolRefused,
+        F::UrlRejected,
+        F::CredentialAccountMismatch,
+        F::CredentialUnavailable,
+        F::NoCredentials,
+        F::SpawnFailed,
+        F::Failed,
+    ];
+
+    #[test]
+    fn from_slug_is_the_exact_inverse_of_slug() {
+        for &c in ALL {
+            assert_eq!(F::from_slug(c.slug()), Some(c), "slug {}", c.slug());
+        }
+        // A structural skip names no class: parsing it must yield `None`,
+        // never a fallback that could be mistaken for a failure.
+        for code in [
+            "no-base-remote",
+            "offline-seed",
+            "no-base-branches",
+            "adopted-existing",
+            "store-disabled",
+            "",
+            "Offline",
+        ] {
+            assert_eq!(F::from_slug(code), None, "{code:?} must name no class");
+        }
+    }
+
+    /// The two halves `store sync` decides on, read through the wire slug
+    /// a `BaseFetch::Skipped { code }` actually carries: a credential skip
+    /// is an ERROR (D12), a structural or offline skip is not.
+    #[test]
+    fn is_auth_separates_a_credential_skip_from_a_benign_one() {
+        for code in [
+            "credential-account-mismatch",
+            "credential-rejected",
+            "credential-wrong-repo",
+            "credential-unavailable",
+            "no-credentials",
+            "auth-required",
+            "auth-no-access",
+        ] {
+            assert_eq!(
+                F::from_slug(code).map(F::is_auth),
+                Some(true),
+                "{code} is a credential failure and must not read as benign"
+            );
+        }
+        for code in ["offline", "timeout", "vanished", "tls", "repo-not-found"] {
+            assert_eq!(
+                F::from_slug(code).map(F::is_auth),
+                Some(false),
+                "{code} is not a credential failure"
+            );
+        }
+        assert_eq!(F::from_slug("no-base-remote").map(F::is_auth), None);
     }
 }

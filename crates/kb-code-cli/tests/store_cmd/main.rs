@@ -12,4 +12,5 @@
 
 mod gc_exit_contract;
 mod stub;
+mod sync_base_upstream;
 mod sync_partial;
