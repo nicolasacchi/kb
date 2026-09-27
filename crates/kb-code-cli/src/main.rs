@@ -17260,7 +17260,11 @@ async fn poll_review_job(
         let path = declared_path.replace("{id}", job_id);
         let (status, body) = get_json_raw(client, daemon, &path, &[]).await?;
         if status == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!("review job {job_id} vanished (unknown or swept past its 1 h TTL)");
+            anyhow::bail!(
+                "review job {job_id} vanished — it finished and was swept, or the daemon \
+                 cancelled it at its stuck-job horizon (6 h). A RUNNING job is never swept \
+                 on the 1 h settled TTL; re-submit the request to start a fresh one."
+            );
         }
         if !status.is_success() {
             return Err(loopback_or_api_error(

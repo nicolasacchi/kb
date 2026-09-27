@@ -14,10 +14,21 @@
 // (RS-U9) `lib/reviewStore.ts`'s parse of the maintenance/GC facts riding
 // the opaque `state_json` blob (no route turns those into a typed field
 // or a doctor finding — see that module's own doc).
+//
+// The two sections do NOT share a gate, and the difference is why the
+// "quiet inline note" above is a loopback hint rather than a shrug: the
+// card route is loopback-only (the router pins the whole
+// `/repos/{name}/store` family there — it reports `store.git_dir`, the
+// daemon's absolute state path) and answers a remote session with a
+// bodyless 404, while `…/credentials` is the family's ONE bearer read
+// (kind, account, reason, flags — never a path, never a secret). So the
+// store section's failure is the gate speaking, and the credential
+// section's `fetch.amber` is a fact that a remote operator CAN be shown.
 import { useReviewCredentials, useReviewStoreCard } from "../../hooks/useReviewStore";
 import { formatBytes, relativeTime } from "../../lib/format";
 import { parseLastGcApply, parseLastGcDryRun, parseLastMaint } from "../../lib/reviewStore";
 import MetaLine from "../MetaLine";
+import { isLoopbackRefusal, LOOPBACK_HINT } from "../reviews/ReviewHeader";
 
 export function ReviewStoreSection({ repo }: { repo: string }) {
   const storeQ = useReviewStoreCard(repo);
@@ -32,7 +43,14 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
       {storeQ.isLoading ? (
         <p className="kbc-home-card__muted">Loading…</p>
       ) : storeQ.error ? (
-        <p className="kbc-home-card__error">Couldn't load the review store</p>
+        // `GET /api/repos/{name}/store` is LOOPBACK-ONLY (the router pins the
+        // whole family there — the card reports `store.git_dir`, the daemon's
+        // absolute state path), and `store_show_route` never answers 404
+        // itself, so a 404 here IS the gate: the codebase's standard hint,
+        // not a generic "couldn't load" that hides WHY.
+        <p className="kbc-home-card__error" data-kbc-home-store-loopback>
+          {isLoopbackRefusal(storeQ.error) ? LOOPBACK_HINT : "Couldn't load the review store"}
+        </p>
       ) : storeQ.data ? (
         <>
           <MetaLine
@@ -139,6 +157,21 @@ export function ReviewCredentialSection({ repo }: { repo: string }) {
             {credQ.data.fetch.broader_than_needed && (
               <p className="kbc-home-card__cred-amber" data-kbc-home-cred-broader>
                 broader than needed — used read-only (fetch + GET only, never a push)
+              </p>
+            )}
+            {/* `fetch.amber` is the D12 flag: `cred_kind == "inherit"`
+                (review_store/routes.rs's own `credentials_route`), i.e. the
+                fetch ladder resolved the AMBIENT environment rather than a
+                repo-scoped credential. The doctor finding that says the same
+                thing (`credential-inherit`) rides the loopback-only card
+                above, so before this it was typed on the wire and read
+                nowhere in the SPA — remotely, the one credential warning the
+                operator could actually be shown was the one the UI dropped.
+                This route is the bearer one, so it does reach them. */}
+            {credQ.data.fetch.amber && (
+              <p className="kbc-home-card__cred-amber" data-kbc-home-cred-amber>
+                ambient environment — fetches run with the inherited credential, not a repo-scoped one
+                (D12)
               </p>
             )}
             {credQ.data.fetch.reason && <p className="kbc-home-card__muted">{credQ.data.fetch.reason}</p>}

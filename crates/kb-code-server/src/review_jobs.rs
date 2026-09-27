@@ -31,9 +31,10 @@
 //! The two horizons are deliberately UNLIKE each other: a SETTLED entry
 //! is dropped [`JOB_TTL_SECS`] (1 h) after it settled, and a RUNNING one
 //! is never swept on that rule at all — only by the stuck-job horizon
-//! [`STUCK_JOB_HORIZON_SECS`] (6 h after creation). A `review sync
-//! --open` loop legitimately runs for as long as its caller's poll
-//! budget, so creation age is not a safe way to bound a running entry.
+//! [`STUCK_JOB_HORIZON_SECS`] (6 h after creation), which is an ABSOLUTE
+//! ceiling on any running job, and which CANCELS the task it drops (the
+//! table holds each task's abort handle, so an entry and the work behind
+//! it leave as one event — see [`sweep`]).
 //!
 //! The synchronous behaviour of `POST /api/reviews/pr` is untouched
 //! (`?async=0` or the flag absent — see
@@ -62,8 +63,9 @@ use std::time::{Duration, Instant};
 /// a whole-repo loop whose CLI poller waits up to 3600 s by default, so
 /// a creation-age sweep killed legitimate work mid-run (the review row
 /// it would have written was lost, and a re-run started a second loop).
-/// Only [`STUCK_JOB_HORIZON_SECS`] may drop one. The review row, once
-/// created, is the durable record — never the job.
+/// Only [`STUCK_JOB_HORIZON_SECS`] may drop one, and it CANCELS the
+/// task it drops. The review row, once created, is the durable record —
+/// never the job.
 pub const JOB_TTL_SECS: u64 = 3600;
 
 /// Stuck-job horizon: the ONLY rule that may drop a RUNNING entry, and
@@ -76,31 +78,48 @@ pub const JOB_TTL_SECS: u64 = 3600;
 /// attach to a job that reports `"status": "running"` forever, and
 /// leaks, because `sweep` is the only removal path.
 ///
-/// 21 600 s = 6 h, six times the longest wait any caller actually
-/// imposes: `kb-code review sync --open`'s `--wait` default is 3600 s
-/// (`kb_code_cli::review_sync`'s `DEFAULT_WAIT_OPEN`; a single PR is
-/// 600 s). A job that burns its entire client-side budget is still
-/// five hours inside the horizon. When the horizon DOES fire the entry
-/// is simply dropped: the next admission mints a FRESH job instead of
-/// attaching to a corpse, and the corpse's own poller gets a 404
-/// rather than a status that will never change.
+/// **It is a ceiling, not a promise.** 21 600 s = 6 h is longer than any
+/// budget the CLI imposes BY DEFAULT — `kb-code review sync --open`'s
+/// `--wait` default is 3600 s (`kb_code_cli::review_sync`'s
+/// `DEFAULT_WAIT_OPEN`; a single PR is 600 s), so a job that burns its
+/// whole client-side budget is still five hours inside it — but
+/// `--wait` is an unbounded `Option<u64>`, so a caller that asks to poll
+/// LONGER than this has its job CANCELLED and a 404 at the horizon,
+/// rather than after its own budget. Nothing server-side can extend it:
+/// the horizon runs from creation and the admission API carries no wait
+/// budget ([`start_job`] takes none). A poller must therefore read a 404
+/// past the horizon as "cancelled, re-submit", never as "already done".
+///
+/// What the horizon DOES guarantee is that the entry and the work behind
+/// it leave as one event: [`sweep`] holds each live task's
+/// [`tokio::task::AbortHandle`], CANCELS the task at the horizon, and
+/// drops the entry only once that cancellation has landed — so a corpse
+/// can never keep holding [`crate::review_sync::repo_guard`] (the
+/// per-repo lock the next admission blocks on) while the map has already
+/// forgotten it. The corpse's own poller gets a 404 rather than a status
+/// that will never change.
 pub const STUCK_JOB_HORIZON_SECS: u64 = 6 * 3600;
 
-/// Mirror of `kb_code_cli::review_sync`'s `DEFAULT_WAIT_OPEN` — the
-/// longest budget any caller imposes on a running job. That constant is
-/// private to the CLI crate, which does not depend on this one, so the
-/// value is restated here on purpose; the assertions below are what stop
-/// this from silently drifting away from the CLI's actual default.
+/// Mirror of `kb_code_cli::review_sync`'s `DEFAULT_WAIT_OPEN` — the budget
+/// a poller imposes on a running job unless the operator asks for another.
+/// That constant is private to the CLI crate, which does not depend on
+/// this one, so the value is restated here on purpose; the assertions
+/// below are what stop this from silently drifting away from the CLI's
+/// actual default.
+///
+/// It is the DEFAULT, not the maximum: `--wait` is an unbounded
+/// `Option<u64>`, and no server-side pin can turn an operator's larger
+/// budget into a longer horizon (see [`STUCK_JOB_HORIZON_SECS`]).
 const DEFAULT_WAIT_OPEN: u64 = 3600;
 
 /// The horizon is only honest if it is comfortably LONGER than the
-/// longest job anyone waits for: a `review sync --open` poller waits up
-/// to [`DEFAULT_WAIT_OPEN`] s by default, and a job that spends all of
-/// it must not be swept from under a live poller; `>= 2x` leaves the
-/// second wait a client makes after a corpse 404s inside the horizon,
-/// and the horizon must also outlast the [`JOB_TTL_SECS`] a settled
-/// entry gets, or a long job would be indistinguishable from a wedged
-/// one.
+/// budget a poller waits for BY DEFAULT: a `review sync --open` poller
+/// waits up to [`DEFAULT_WAIT_OPEN`] s unless told otherwise, and a job
+/// that spends all of it must not be cancelled from under a live poller;
+/// `>= 2x` leaves the second wait a client makes after a job 404s inside
+/// the horizon, and the horizon must also outlast the [`JOB_TTL_SECS`] a
+/// settled entry gets, or a long job would be indistinguishable from a
+/// wedged one.
 ///
 /// These were a `#[test]`. Every operand is a constant, so the relation
 /// belongs to the COMPILER: it is checked on every build, by everyone
@@ -136,7 +155,9 @@ pub struct ReviewJob {
     /// TTL runs from HERE, and a RUNNING entry (`None`) is never swept
     /// by the TTL — only by [`STUCK_JOB_HORIZON_SECS`], measured from
     /// `created`. It stays `None` for the whole life of a task that
-    /// never returns, which is exactly what that horizon exists for.
+    /// never returns, which is exactly what that horizon exists for —
+    /// and a horizon sweep CANCELS that task, so the entry and the work
+    /// it describes never outlive each other.
     pub settled: Option<Instant>,
     /// RS-U10b review fix — a fingerprint of the request (sync: dry_run,
     /// open, merged_since, base, title, reopen). A request only attaches to
@@ -160,10 +181,28 @@ pub struct ReviewJob {
     pub error_status: Option<u16>,
 }
 
-/// The job table: `job_id` → job. `parking_lot::Mutex` (the 2026-09-01
+/// The job table: `job_id` → job, plus the abort handle of every task
+/// that entry still has behind it. `parking_lot::Mutex` (the 2026-09-01
 /// starvation incident's ruling for every short in-process lock in this
 /// crate); the guard never crosses an `.await`.
-pub type ReviewJobs = parking_lot::Mutex<HashMap<String, ReviewJob>>;
+///
+/// The task map is what makes [`sweep`] honest. A running job's body
+/// holds [`crate::review_sync::repo_guard`] for its whole life, so
+/// dropping its entry while the body goes on is not a cleanup — it is a
+/// lie the map tells (the next admission mints a fresh job that then
+/// blocks on a lock the "forgotten" corpse still holds) and a lock leak
+/// nothing else can see. [`tokio::task::AbortHandle`] rather than the
+/// `JoinHandle` because it is `Clone` + `Send` and this table hands out
+/// clones of itself; the `JoinHandle` stays with the spawn site, which
+/// drops it, exactly as before.
+#[derive(Debug, Default)]
+pub struct JobTable {
+    jobs: HashMap<String, ReviewJob>,
+    tasks: HashMap<String, tokio::task::AbortHandle>,
+}
+
+/// The shared table. `Default` is what `AppState` builds per boot.
+pub type ReviewJobs = parking_lot::Mutex<JobTable>;
 
 /// The progress handle [`crate::reviews::create_review_pr_value`] takes:
 /// the shared table plus this job's id.
@@ -173,14 +212,14 @@ pub type JobHandle = (Arc<ReviewJobs>, String);
 /// near the guard.
 pub fn set_stage(job: &Option<JobHandle>, stage: &'static str) {
     if let Some((jobs, id)) = job {
-        if let Some(j) = jobs.lock().get_mut(id) {
+        if let Some(j) = jobs.lock().jobs.get_mut(id) {
             j.stage = stage;
         }
     }
 }
 
 /// Drop every SETTLED entry whose result has been readable for
-/// [`JOB_TTL_SECS`], and every RUNNING entry that has outlived
+/// [`JOB_TTL_SECS`], and CANCEL every RUNNING entry that has outlived
 /// [`STUCK_JOB_HORIZON_SECS`]. The horizon is how a job whose task never
 /// settles is bounded at all (RS-U10b review fix: `settled` is only
 /// written after `run` returns, so a wedged task leaves the entry
@@ -189,13 +228,63 @@ pub fn set_stage(job: &Option<JobHandle>, stage: &'static str) {
 /// mid-run lost the result and let a rerun start a second loop. Called
 /// on admission and on every read — O(map), and the map is tiny by
 /// construction.
+///
+/// **The removal and the cancellation are ONE event, in that order.**
+/// An entry is only dropped once there is provably no work left behind
+/// it; an expired entry whose task is still alive is `abort()`ed and
+/// KEPT, and the next sweep drops it once
+/// [`tokio::task::AbortHandle::is_finished`] reports the cancellation
+/// landed. Both halves matter, and the defect this fixes is what
+/// happens when only the first one does:
+///
+/// * dropping an entry whose body is still running makes the map lie.
+///   The next `POST …?async=1` mints a fresh job which blocks on the
+///   `repo_guard` the "forgotten" corpse still holds, and
+///   `GET /api/reviews/jobs/{id}` for the new id reports
+///   `"running","stage":"fetch"` until the daemon restarts.
+/// * cancelling without checking is the same lie one sweep later.
+///
+/// `abort()` takes effect at the task's next poll, so a body parked at
+/// an `.await` (a wedged channel, a pending lock) is cancelled
+/// immediately and its entry goes on the next sweep. A body stuck
+/// inside `spawn_blocking` — which no `abort()` can interrupt, and which
+/// only a git deadline it ignores can produce — keeps its entry, and
+/// keeps 409ing its `(kind, repo, pr)` key: which is TRUE, because the
+/// work really is still in flight. Its entry goes on the first sweep
+/// after that body returns.
+///
+/// A cancellation-pending entry is deliberately still ATTACHABLE and
+/// still 409s a different request: the alternative — minting a fresh
+/// job for the same key while the corpse may still hold `repo_guard` —
+/// is the exact queue-behind-a-dead-lock this pairing exists to stop.
+/// The attached poller gets the 404 one or two sweeps later and
+/// re-submits, which is what `STUCK_JOB_HORIZON_SECS`'s own doc tells
+/// it to do.
 fn sweep(jobs: &ReviewJobs) {
     let ttl = Duration::from_secs(JOB_TTL_SECS);
     let horizon = Duration::from_secs(STUCK_JOB_HORIZON_SECS);
-    jobs.lock().retain(|_, j| match j.settled {
-        Some(at) => at.elapsed() < ttl,
-        None => j.created.elapsed() < horizon,
-    });
+    let mut table = jobs.lock();
+    let expired: Vec<String> = table
+        .jobs
+        .iter()
+        .filter(|(_, j)| match j.settled {
+            Some(at) => at.elapsed() >= ttl,
+            None => j.created.elapsed() >= horizon,
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in expired {
+        // A live task behind this entry: cancel it, and keep the entry
+        // until the cancellation has actually landed.
+        if let Some(task) = table.tasks.get(&id) {
+            if !task.is_finished() {
+                task.abort();
+                continue;
+            }
+        }
+        table.tasks.remove(&id);
+        table.jobs.remove(&id);
+    }
 }
 
 /// The `urn:kb:errors:job-conflict` URN: a running job of the same kind for
@@ -233,6 +322,10 @@ pub async fn start_or_attach(
 /// would answer; a success status settles `done` with the body under
 /// `result`, anything else `failed`. `pr_number` is `0` for a job that is
 /// not about one PR (`review sync --open`).
+///
+/// There is deliberately NO wait-budget parameter: a caller's `--wait`
+/// cannot reach here, which is why [`STUCK_JOB_HORIZON_SECS`] is an
+/// absolute ceiling rather than something the caller negotiates.
 pub async fn start_job<F, Fut>(
     state: SharedState,
     kind: &'static str,
@@ -255,8 +348,10 @@ where
     // work again (start-pr: OPEN → reuse 200; CLOSED → 409 unless
     // `on_closed=reopen|new`; sync: idempotent by construction).
     let running = {
-        let jobs = state.review_jobs.lock();
-        jobs.values()
+        let table = state.review_jobs.lock();
+        table
+            .jobs
+            .values()
             .find(|j| {
                 j.status == "running"
                     && j.kind == kind
@@ -298,7 +393,8 @@ where
     // (`annotations::short_random_hex`, same as `set_`/`clm_`/`trl_`).
     let job_id = format!("job_{}", crate::annotations::short_random_hex());
     {
-        state.review_jobs.lock().insert(
+        let mut table = state.review_jobs.lock();
+        table.jobs.insert(
             job_id.clone(),
             ReviewJob {
                 id: job_id.clone(),
@@ -321,12 +417,12 @@ where
 
     let state2 = state.clone();
     let id2 = job_id.clone();
-    tokio::spawn(async move {
+    let join = tokio::spawn(async move {
         let handle: JobHandle = (state2.review_jobs.clone(), id2.clone());
         let outcome = run(state2.clone(), handle).await;
         // One lock, dropped before this task ends — never across an await.
-        let mut jobs = state2.review_jobs.lock();
-        if let Some(j) = jobs.get_mut(&id2) {
+        let mut table = state2.review_jobs.lock();
+        if let Some(j) = table.jobs.get_mut(&id2) {
             j.settled = Some(Instant::now());
             match outcome {
                 Ok((status, value)) if status.is_success() => {
@@ -364,6 +460,15 @@ where
             }
         }
     });
+    // The handle the horizon needs. Registering it AFTER the spawn is
+    // the only ordering that is sound: a task that finished (or was
+    // swept) before this line cannot have been aborted anyway, and one
+    // that has not yet been polled has not yet taken `repo_guard`.
+    state
+        .review_jobs
+        .lock()
+        .tasks
+        .insert(job_id.clone(), join.abort_handle());
 
     Ok((
         StatusCode::ACCEPTED,
@@ -386,10 +491,16 @@ pub async fn review_job_route(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
     sweep(&state.review_jobs);
-    let snap = { state.review_jobs.lock().get(&id).cloned() };
+    let snap = { state.review_jobs.lock().jobs.get(&id).cloned() };
     let Some(j) = snap else {
+        // Two rules can reach here, and they are different events: the
+        // TTL drops a job that SETTLED [`JOB_TTL_SECS`] ago, and the
+        // stuck-job horizon CANCELS one that was still running at
+        // [`STUCK_JOB_HORIZON_SECS`]. A poller that reaches the second
+        // one must re-submit — the work was cancelled, not finished.
         return Err(ApiError::not_found(format!(
-            "no such review job {id:?} (unknown, or swept: the TTL once it settled, the stuck-job horizon while it ran)"
+            "no such review job {id:?} (unknown, or swept: the {}s TTL once it settled, the {}s stuck-job horizon — which CANCELLED it — while it ran)",
+            JOB_TTL_SECS, STUCK_JOB_HORIZON_SECS
         )));
     };
     Ok((
@@ -440,6 +551,8 @@ pub const V76_R1A_ROUTES: &[crate::entities::RouteContract] = &[REVIEW_JOB_ROUTE
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Edition 2021: no prelude `Future`.
+    use std::future::Future;
 
     #[test]
     fn the_declared_route_is_api_nested() {
@@ -456,7 +569,7 @@ mod tests {
 
     #[test]
     fn the_sweep_drops_settled_entries_past_the_ttl_and_wedged_ones_past_the_horizon() {
-        let jobs: ReviewJobs = parking_lot::Mutex::new(HashMap::new());
+        let jobs: ReviewJobs = parking_lot::Mutex::new(JobTable::default());
         let fresh = ReviewJob {
             id: "job_fresh".into(),
             kind: "start-pr",
@@ -496,15 +609,15 @@ mod tests {
         wedged.id = "job_wedged".into();
         wedged.created = Instant::now() - Duration::from_secs(STUCK_JOB_HORIZON_SECS + 1);
         for j in [fresh, long_running, stale, just_done, wedged] {
-            jobs.lock().insert(j.id.clone(), j);
+            jobs.lock().jobs.insert(j.id.clone(), j);
         }
         sweep(&jobs);
-        let jobs = jobs.lock();
-        assert!(jobs.contains_key("job_fresh"));
-        assert!(jobs.contains_key("job_long"));
-        assert!(jobs.contains_key("job_just_done"));
-        assert!(!jobs.contains_key("job_stale"));
-        assert!(!jobs.contains_key("job_wedged"));
+        let table = jobs.lock();
+        assert!(table.jobs.contains_key("job_fresh"));
+        assert!(table.jobs.contains_key("job_long"));
+        assert!(table.jobs.contains_key("job_just_done"));
+        assert!(!table.jobs.contains_key("job_stale"));
+        assert!(!table.jobs.contains_key("job_wedged"));
     }
 
     async fn booted_state() -> (tempfile::TempDir, SharedState) {
@@ -550,6 +663,116 @@ mod tests {
         std::future::pending()
     }
 
+    /// A job body that reports its own CANCELLATION when the runtime
+    /// drops the future. A wedged body is `Pending` forever, so the
+    /// only observable that the horizon really cancelled the work —
+    /// rather than merely forgetting it — is this flag: with the entry
+    /// gone and the body still alive, the next admission would block on
+    /// the `repo_guard` the corpse holds, and the job would report
+    /// `"running","stage":"fetch"` forever.
+    struct DropFlag(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl Future for DropFlag {
+        type Output = Result<(StatusCode, serde_json::Value), ApiError>;
+        fn poll(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            std::task::Poll::Pending
+        }
+    }
+
+    /// The horizon is the ONLY thing that can drop a running entry, and
+    /// it must take the ENTRY and the TASK with it. The defect this
+    /// pins: `sweep` removed the entry and left the spawned body
+    /// running, so the corpse kept `repo_guard` for the life of the
+    /// process while the map claimed the job was gone — the next
+    /// `POST …?async=1` minted a fresh job that blocked on that mutex
+    /// forever, reporting `"running","stage":"fetch"` until the daemon
+    /// restarted. Cancelling without dropping is the same lie a sweep
+    /// later, so the order is pinned too: the entry outlives the work
+    /// and goes only once the work is provably finished.
+    ///
+    /// No sleeping: the entry is aged by rewriting `created` (the field
+    /// the horizon reads), and the cancellation is observed through the
+    /// future's own `Drop`, which the runtime runs as soon as the
+    /// aborted task is polled.
+    #[tokio::test]
+    async fn a_running_entry_past_the_horizon_takes_its_task_with_it() {
+        let (_tmp, state) = booted_state().await;
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = dropped.clone();
+        let resp = start_job(
+            state.clone(),
+            "sync",
+            "widget".into(),
+            7,
+            "key-a".into(),
+            move |_state, _handle| DropFlag(flag),
+        )
+        .await
+        .expect("start_job admits");
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 1 << 20)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let job_id = body["job_id"].as_str().expect("job_id").to_string();
+        // Let the task actually start (and park) before the sweep.
+        tokio::task::yield_now().await;
+
+        // Inside the horizon: kept, and its task is NOT cancelled.
+        sweep(&state.review_jobs);
+        assert!(state.review_jobs.lock().jobs.contains_key(&job_id));
+        assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
+
+        // Age it past the horizon the way six hours of wall clock would.
+        state
+            .review_jobs
+            .lock()
+            .jobs
+            .get_mut(&job_id)
+            .unwrap()
+            .created = Instant::now() - Duration::from_secs(STUCK_JOB_HORIZON_SECS + 1);
+        sweep(&state.review_jobs);
+        for _ in 0..64 {
+            if dropped.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+            "the horizon dropped the entry without cancelling the task — the corpse keeps \
+             repo_guard and the next admission blocks on it forever"
+        );
+
+        // The entry goes as soon as the cancellation has landed, and not
+        // before: `sweep` is what a later admission or read calls, so a
+        // poller's next 404 needs no reaper of its own.
+        for _ in 0..64 {
+            sweep(&state.review_jobs);
+            if !state.review_jobs.lock().jobs.contains_key(&job_id) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !state.review_jobs.lock().jobs.contains_key(&job_id),
+            "a cancelled job's entry is never dropped"
+        );
+        // The task handle went with it, so nothing keeps a corpse around
+        // after the map has forgotten it.
+        assert!(!state.review_jobs.lock().tasks.contains_key(&job_id));
+    }
+
     /// RS-U10b — the CONSUMER of `crate::review_sync::sync_job_key`.
     /// `sync_job_key`'s own unit test only pins the PRODUCER (that two
     /// different requests hash apart); delete the 409 arm below and the
@@ -579,7 +802,7 @@ mod tests {
         assert_eq!(attach["job_id"], job_id, "{attach}");
 
         // The job itself never settled and is still readable as running.
-        let job = state.review_jobs.lock()[&job_id].clone();
+        let job = state.review_jobs.lock().jobs[&job_id].clone();
         assert_eq!(job.status, "running");
         assert_eq!(job.settled, None);
     }
@@ -618,8 +841,8 @@ mod tests {
     #[test]
     fn set_stage_is_a_no_op_without_a_handle_and_updates_with_one() {
         set_stage(&None, "base");
-        let jobs: ReviewJobs = parking_lot::Mutex::new(HashMap::new());
-        jobs.lock().insert(
+        let jobs: ReviewJobs = parking_lot::Mutex::new(JobTable::default());
+        jobs.lock().jobs.insert(
             "job_x".to_string(),
             ReviewJob {
                 id: "job_x".into(),
@@ -640,7 +863,7 @@ mod tests {
         );
         let handle: JobHandle = (Arc::new(jobs), "job_x".to_string());
         set_stage(&Some(handle.clone()), "patchset");
-        assert_eq!(handle.0.lock()["job_x"].stage, "patchset");
+        assert_eq!(handle.0.lock().jobs["job_x"].stage, "patchset");
         // An unknown id never panics (a swept job mid-run is unobservable).
         set_stage(&Some((handle.0.clone(), "job_gone".to_string())), "base");
     }

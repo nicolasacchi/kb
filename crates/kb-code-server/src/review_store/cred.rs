@@ -125,6 +125,18 @@ pub enum CredError {
     },
     #[error("credential unavailable: {0}")]
     Unavailable(String),
+    /// A `gh` call that outlived [`GH_TIMEOUT`] — the shape a locked or
+    /// slow keyring produces, NOT a statement about identity. It is its
+    /// own variant because it must not be read as one: a transient
+    /// timeout is worth retrying and is grounds for falling back to
+    /// cached refs, exactly as [`FailureClass::Timeout`] is, while every
+    /// other `CredentialUnavailable` (gh absent, not logged in, a
+    /// token file that cannot be read) is a statement about the
+    /// credential itself. Folding it into `Unavailable` made a laptop
+    /// resuming from suspend a D12 refusal: the seed died and the row
+    /// held `absent` on a credential that was fine.
+    #[error("gh timed out after {0:?} (keyring locked?)")]
+    TimedOut(Duration),
     #[error("invalid credential: {0}")]
     Invalid(&'static str),
     #[error("{0}")]
@@ -136,6 +148,10 @@ pub enum CredError {
 impl CredError {
     pub fn class(&self) -> FailureClass {
         match self {
+            // A deadline that fired is a `Timeout`, and `Timeout` is
+            // transient: `is_transient()` keeps it and `is_auth()` leaves
+            // it out, which is the whole point of the split.
+            Self::TimedOut(_) => FailureClass::Timeout,
             Self::GhNotInstalled | Self::GhNotLoggedIn { .. } | Self::Unavailable(_) => {
                 FailureClass::CredentialUnavailable
             }
@@ -409,9 +425,14 @@ impl GhCli {
             }
         })?;
         if cap.timed_out {
-            return Err(CredError::Unavailable(
-                "gh timed out (keyring locked?)".into(),
-            ));
+            // `TimedOut`, not `Unavailable`: a deadline that fired says
+            // nothing about WHICH account gh holds, and D12 reads the
+            // class. As a `CredentialUnavailable` this reached
+            // `is_auth()`, so a store bound to a gh account on a host
+            // whose keyring needs more than [`GH_TIMEOUT`] to answer was
+            // refused and held `absent` — a slow machine, reported as a
+            // broken credential.
+            return Err(CredError::TimedOut(self.timeout));
         }
         Ok(cap)
     }

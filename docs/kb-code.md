@@ -1089,6 +1089,10 @@ silent degradation. Enum-valued keys are TOLERANT: an unknown value warns
 and falls back to the default, so a typo never stops the daemon.
 
 `base_fetch_timeout_secs` (default `1800`, i.e. 30 min) bounds ONE base
+A value outside `10 × WORK_FETCH_TIMEOUT … SEED_FETCH_TIMEOUT` (1200 s … 3600 s) is still
+honoured — it is the operator's lever — but it warns, and the warning is a `store doctor`
+finding. The compile-time pins in `git.rs` guard the DEFAULT only; a configured value is
+range-checked at boot, not by the compiler.
 (network) fetch — the fleet README §5.2 targets is five member clones
 carrying ~3.6 GB of `.git` between them, one ~748 MB, which no link moves in
 30 s. It is enforced on the fetch's PROCESS GROUP and SIGKILLs it, so a hung
@@ -1189,16 +1193,22 @@ prints the D20 envelope; exit codes are the shipped table below.
 
 | verb | what it does |
 |---|---|
-| `show` | the store card (`GET /api/repos/R/store`): key, state, members, disk, doctor findings |
-| `members` | the clones sharing R's store |
-| `doctor` | the card's findings plus the fetch credential; **exits 1 when any finding is an `error`** |
+| `show` | the store card (`GET /api/repos/R/store`): key, state, members, disk, doctor findings (**loopback-only**) |
+| `members` | the clones sharing R's store — the SAME card route, so the same gate (**loopback-only**) |
+| `doctor` | the card's findings plus the fetch credential; **exits 1 when any finding is an `error`** (the card read is **loopback-only**; the credential read is the bearer one) |
 | `sync [--offline]` | seed an absent store or sync a ready one (loopback-only) |
-| `set-base-url <URL>` | the ladder's explicit rung; registers, or updates a member store's base URL when it names the SAME project — never a re-key (409 `base-url-key-mismatch`) |
-| `credentials [--test]` | the fetch credential as last resolved; `--test` walks the ladder LIVE (loopback-only; runs `gh`) |
-| `legacy-refs [--yes]` | delete a member clone's `refs/kbc/{pr,review}/*` ONLY where the store holds the same ref name at the same commit; a dry run unless `--yes` (there is no `--dry-run` flag) |
-| `gc [--dry-run\|--yes]` | the store-wide ref GC; dry run by default, `--yes` applies and acknowledges the restore guard |
-| `export-legacy` | write the store's `refs/kbc/{pr,review}/*` back into the clone, CREATE-ONLY |
-| `maintain [--task daily\|weekly\|monthly]` | run the housekeeping cadences now, or whatever is due |
+| `set-base-url <URL>` | the ladder's explicit rung; registers, or updates a member store's base URL when it names the SAME project — never a re-key (409 `base-url-key-mismatch`) (loopback-only) |
+| `credentials [--test]` | the fetch credential as last resolved (**bearer** — the family's one non-loopback read); `--test` walks the ladder LIVE (loopback-only; runs `gh`) |
+| `legacy-refs [--yes]` | delete a member clone's `refs/kbc/{pr,review}/*` ONLY where the store holds the same ref name at the same commit; a dry run unless `--yes` (there is no `--dry-run` flag) (loopback-only) |
+| `gc [--dry-run\|--yes]` | the store-wide ref GC; dry run by default, `--yes` applies and acknowledges the restore guard (loopback-only) |
+| `export-legacy` | write the store's `refs/kbc/{pr,review}/*` back into the clone, CREATE-ONLY (loopback-only) |
+| `maintain [--task daily\|weekly\|monthly]` | run the housekeeping cadences now, or whatever is due (loopback-only) |
+
+Every verb above needs the daemon's host EXCEPT the bare `credentials` READ,
+and each verb is one row of the gate table below: `show`, `members` and
+`doctor` are three CLI names for the SAME `GET /api/repos/R/store` card, so
+all three 404 off-loopback together. That table is the authority — read a
+verb's gate there, not off this list.
 
 `store doctor`'s findings are typed `error` / `warn` / `info` with stable
 codes: `store-disabled`, `config`, `store-not-registered`, `store-broken`,
@@ -1238,6 +1248,15 @@ sections ride the existing Home `RepoCard`
 (`components/home/ReviewStoreSection.tsx`, mounted from `RepoCard.tsx`),
 each an independent React Query consumer that renders a quiet inline note
 when its fetch fails rather than breaking the whole card.
+
+The two cards do not share a gate, and the gap is visible from here: the
+store card is the loopback-only row of the table above, so a remote session's
+failure note is the codebase's standard loopback hint rather than a generic
+"couldn't load", while the credential card — the bearer route — is where the
+D12 `amber` flag ("fetches run with the inherited credential") reaches an
+operator who is not on the daemon's host. The review header carries the same
+distinction: a store card that could not be read renders a `store unknown`
+chip rather than letting the failed read pass for "this forge is verified".
 
 "Review store" reads the store card: state (a per-state CSS class), the
 `store_key`, the member count, the disk facts, the doctor findings mapped

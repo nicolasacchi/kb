@@ -1,7 +1,10 @@
 // RS-U11 — the review header's base-policy chip (README §12): `tracking
-// main · merge-base 7c1ed0c` for `track`/`local`, an amber `pinned
-// 7c1ed0c` for `pin`, or `legacy` for a pre-upgrade row `classify_base`
-// could not resolve to a policy — each with a Retrack affordance. Same
+// main · merge-base 7c1ed0c` for `track`/`local`, an amber `pinned ·
+// merge-base 7c1ed0c` for `pin`, or `legacy` for a pre-upgrade row
+// `classify_base` could not resolve to a policy — each with a Retrack
+// affordance. A `pin`'s chip names no commit of its own: `ReviewBaseOut`
+// carries no pin field, so the sha beside it is labelled for what the wire
+// says it is (see `basePinNote`). Same
 // "ONE token drives wash, border and glyph" chip primitive
 // `components/reviews/RoomChips.tsx` uses (`.kbc-room-chip`,
 // `--kbc-room-chip-color`), duplicated here in miniature rather than
@@ -13,14 +16,19 @@ import type { BaseWarningOut, ReviewBaseOut } from "../../api/types";
 import {
   BASE_WARNING_CHIP,
   FORGE_UNVERIFIED_CHIP,
+  STORE_UNKNOWN_CHIP,
+  STORE_UNKNOWN_LABEL,
   baseChipLabel,
   baseChipSpec,
   baseMergeBaseSuffix,
   baseNeedsRetrack,
+  basePinNote,
   baseSourceLabel,
   retrackCommandLine,
+  storeUnknownTitle,
   warningShortLabel,
   type BaseChipSpec,
+  type StoreCardFailure,
 } from "../../lib/reviewBase";
 import { Icon } from "../icons";
 import { toast } from "../../lib/toast";
@@ -75,11 +83,15 @@ export default function BaseChip({ reviewId, base }: BaseChipProps) {
   const spec = baseChipSpec(base);
   const label = baseChipLabel(base);
   const mergeBaseSuffix = baseMergeBaseSuffix(base);
-  const sourceTitle = baseSourceLabel(base.source) ?? undefined;
+  // The tooltip carries both halves of the chip's own claim: where the
+  // policy came from, and — for a `pin` only — why the sha beside it is the
+  // merge-base rather than the pin (`base` has no pin field; see
+  // `basePinNote`).
+  const title = [baseSourceLabel(base.source), basePinNote(base)].filter(Boolean).join(" — ") || undefined;
 
   return (
     <span className="kbc-review__base" data-kbc-review-base data-kbc-review-base-mode={base.mode ?? "legacy"}>
-      <span className="kbc-room-chip" style={chipStyle(spec)} title={sourceTitle} data-kbc-review-base-chip>
+      <span className="kbc-room-chip" style={chipStyle(spec)} title={title} data-kbc-review-base-chip>
         <Glyph name={spec.icon} /> {label}
       </span>
       {mergeBaseSuffix && (
@@ -92,10 +104,34 @@ export default function BaseChip({ reviewId, base }: BaseChipProps) {
   );
 }
 
+/// D8's companion for the case the chip above cannot cover: the store card
+/// itself did not load. `GET /api/repos/{name}/store` is loopback-only (the
+/// router pins the whole family there — the card reports `store.git_dir`,
+/// the daemon's absolute state path), so a remote session gets a bodyless
+/// 404, `getJson` throws, and the store row the forge verdict lives on never
+/// arrives. Rendering nothing there reads as "this forge is verified" in
+/// exactly the configuration `forge-unverified` exists to flag, so the
+/// header says the store's state is UNKNOWN instead. Rendered next to
+/// `ForgeUnverifiedChip`, in the same row and to its right.
+export function StoreUnknownChip({ failure, detail }: { failure: StoreCardFailure; detail?: string | null }) {
+  return (
+    <span
+      className="kbc-room-chip"
+      style={chipStyle(STORE_UNKNOWN_CHIP)}
+      title={storeUnknownTitle(failure, detail)}
+      data-kbc-review-store-unknown
+    >
+      <Glyph name={STORE_UNKNOWN_CHIP.icon} /> {STORE_UNKNOWN_LABEL}
+    </span>
+  );
+}
+
 /// D8: GitHub is the only live-verified forge for Phase 1; every other
 /// forge ships `forge-unverified` (a STORE-level fact, so the caller
 /// reads it off `useReviewStoreCard` and renders nothing while that's
-/// still loading or the repo has no store row).
+/// still loading or the repo has no store row). A card that FAILED to
+/// load is neither of those — it is `StoreUnknownChip` above, because
+/// this chip's silence is otherwise read as "verified".
 export function ForgeUnverifiedChip() {
   return (
     <span
