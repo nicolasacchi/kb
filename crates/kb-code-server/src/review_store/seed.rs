@@ -58,7 +58,8 @@ use super::url::{FetchRefspec, RefName, RefSource, RemoteName, RemoteUrl};
 /// Deadline for one member's seed fetch. A first local fetch copies the
 /// whole object graph (measured in the RS-U3 benchmark); the 120 s
 /// `WORK_FETCH_TIMEOUT` is for incremental work fetches, not this.
-pub const SEED_FETCH_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+pub const SEED_FETCH_TIMEOUT_SECS: u64 = 60 * 60;
+pub const SEED_FETCH_TIMEOUT: Duration = Duration::from_secs(SEED_FETCH_TIMEOUT_SECS);
 /// Cap on by-sha recovery attempts per seed (each is one local fetch).
 const MAX_SHA_RECOVERY: usize = 64;
 

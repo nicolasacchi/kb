@@ -126,9 +126,14 @@ pub const LS_REMOTE_TIMEOUT: Duration = Duration::from_secs(15);
 /// lever, which is why it is a key and not a constant alone. Raising
 /// it buys the fleet; lowering it is how an operator buys back a
 /// faster failure on a link they know is fast.
-pub const BASE_FETCH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-/// Work (local) fetch / materialize deadline.
-pub const WORK_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
+pub const BASE_FETCH_TIMEOUT_SECS: u64 = 30 * 60;
+/// Work (local) fetch / materialize deadline, in seconds — the unit the
+/// compile-time pins below are stated in.
+pub const WORK_FETCH_TIMEOUT_SECS: u64 = 120;
+/// The deadlines above as `Duration`s, derived so there is one number
+/// to change and the pins cannot drift from it.
+pub const BASE_FETCH_TIMEOUT: Duration = Duration::from_secs(BASE_FETCH_TIMEOUT_SECS);
+pub const WORK_FETCH_TIMEOUT: Duration = Duration::from_secs(WORK_FETCH_TIMEOUT_SECS);
 /// Short local plumbing (config, rev-parse, update-ref).
 pub const LOCAL_OP_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -137,14 +142,19 @@ pub const LOCAL_OP_TIMEOUT: Duration = Duration::from_secs(60);
 /// so the relationship is checked by the BUILD and no test has to
 /// sleep for the deadline.
 ///
-/// * `>= 10 x WORK_FETCH_TIMEOUT`: a network fetch of the same graph
-///   that crosses local disk in two minutes must not be cut off first.
-/// * `<= SEED_FETCH_TIMEOUT`: the whole-clone seed import that
+/// * `>= 10 x WORK_FETCH_TIMEOUT_SECS`: a network fetch of the same
+///   graph that crosses local disk in two minutes must not be cut off
+///   first.
+/// * `<= SEED_FETCH_TIMEOUT_SECS`: the whole-clone seed import that
 ///   PRECEDES a base fetch already gets a full hour; a base fetch
 ///   that outlived it would make the cheaper call the more expensive
 ///   one to survive.
-const _: () = assert!(BASE_FETCH_TIMEOUT >= 10 * WORK_FETCH_TIMEOUT);
-const _: () = assert!(BASE_FETCH_TIMEOUT <= super::seed::SEED_FETCH_TIMEOUT);
+///
+/// The pins are stated in SECONDS, not `Duration`s, because `Duration`'s
+/// comparison and multiplication are not `const` — asserting over the
+/// `Duration` constants is `E0015`/`E0658`, not a stronger check.
+const _: () = assert!(BASE_FETCH_TIMEOUT_SECS >= 10 * WORK_FETCH_TIMEOUT_SECS);
+const _: () = assert!(BASE_FETCH_TIMEOUT_SECS <= super::seed::SEED_FETCH_TIMEOUT_SECS);
 
 const STDERR_CAP: usize = 64 * 1024;
 const DEFAULT_STDOUT_CAP: usize = 16 * 1024 * 1024;
