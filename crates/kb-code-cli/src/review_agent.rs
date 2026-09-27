@@ -52,7 +52,13 @@ pub const DEFAULT_DAEMON: &str = "http://127.0.0.1:4747";
 
 /// Daemon work (a diff over a large change set on a cold cache) is not
 /// timed out client-side at the old 10 s; this is a backstop only.
-const READ_TIMEOUT: Duration = Duration::from_secs(600);
+///
+/// The ONE such number in the CLI. `retrack_cmd` and the capture verbs in
+/// `main.rs` (`review start`, `review snapshot`) share it rather than
+/// each carrying their own copy — three copies of 600 is how the capture
+/// verbs ended up on the 10 s default while the rest of the CLI was
+/// already safe.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub const VERIFY_SCHEMA: &str = "kbc-review-verify/1";
 pub const START_SCHEMA: &str = "kbc-review-start/1";

@@ -7820,6 +7820,29 @@ fn http_client() -> Result<reqwest::Client> {
         .context("build http client")
 }
 
+/// The client for a verb that makes the DAEMON do minutes of work
+/// before it can answer: creating a review, or snapshotting one. Both
+/// capture — they fetch the base and the head into the store, walk the
+/// changed files, and write a patchset — so on a cold cache over a
+/// large repository either outlives [`http_client`]'s 10 s by a wide
+/// margin.
+///
+/// The failure that fixed was silent and confusing: the client gave up,
+/// printed "is kb-code-server running", and exited 5, while the daemon
+/// finished the capture minutes later. That is the same lesson
+/// `start-pr` already learned the hard way (V76-R1b's poll-and-`--wait`)
+/// and the same one `review retrack` already avoids through
+/// `retrack_cmd`'s 600 s client. `start-pr` and `sync` are the two verbs
+/// that went further still and became daemon-side jobs; these two have
+/// no job to attach to, so the honest answer is a backstop long enough
+/// for the work rather than a timeout short enough to be a default.
+fn capture_client() -> Result<reqwest::Client> {
+    client_builder()
+        .timeout(review_agent::READ_TIMEOUT)
+        .build()
+        .context("build http client")
+}
+
 /// The shared HTTP helpers' non-2xx answer, rendered for a human.
 ///
 /// These used to hand the response to reqwest's CONSUMING
@@ -15174,7 +15197,7 @@ async fn review_start_cmd(
     if let Some(s) = session {
         payload["session_id"] = serde_json::json!(s);
     }
-    let client = http_client()?;
+    let client = capture_client()?;
     let (status, body) = post_json_raw(&client, daemon, "/api/reviews", &payload).await?;
     if status.is_success() {
         // RS-U6 — README §12's one stderr line.
@@ -15447,7 +15470,7 @@ async fn review_snapshot_cmd(
     no_fetch: bool,
     json: bool,
 ) -> Result<()> {
-    let client = http_client()?;
+    let client = capture_client()?;
     let mut payload = serde_json::json!({});
     if force {
         payload["force"] = serde_json::json!(true);
