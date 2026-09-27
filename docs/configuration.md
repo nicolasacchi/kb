@@ -946,6 +946,7 @@ working tree. The whole table is optional and is resolved **once at boot**
 | `root` | string (path) | `<state_dir>/git` | Where the stores live. `~` is expanded (`settings.rs:141`); absent ⇒ the daemon's own `kb-code` state dir joined with `git` (`config.rs:1391`, `settings.rs:15`). Every store is one bare repo at `<root>/<uuid>.git` (`seed::store_dir`, `review_store/seed.rs:233`) — nothing else lives under `root`, and the `keys/`/`ssh/` directories the section's own doc comment names (`config.rs:1382`) deliberately do **not** follow it. (This build creates neither directory: its fetch ladder has no deploy-key rung — see `credential` below.) **Must be absolute, and must neither sit inside nor contain any configured `[[repos]]` entry or its git directories** (work tree, `.git`, shared common dir) — see "the store-disabled guard" below. |
 | `seed_on_boot` | bool | `true` | Seed `absent` stores in the background after boot, for repos that already have reviews (`config.rs:1394`). **Local only — no credential, no network**: a boot seed never fetches, and base branches arrive with the first explicit `store sync` or capture (`review_store/boot.rs:15-18`). |
 | `allow_inherited_credentials` | bool | `false` | Whether the ambient-environment (`inherit`) rung of the fetch ladder may be used at all (`config.rs:1413`). **`false` (the default) REMOVES the rung**: under `auto` it is **skipped** with the recorded reason `allow_inherited_credentials = false` (`review_store/cred.rs:1080-1092`), and an explicit `credential = "inherit"` is a **refused error**, not a fall-through to another rung (`cred.rs:983-988`). `inherit` is the weakest rung — the only one that neither clears the environment nor resets `credential.helper` — so an unconfigured daemon does not start there; set this to `true` to opt back in (a deliberately ambient-identity install), which resolves amber rather than silently (`cred_kind = inherit`, a `credential-inherit` doctor warning). |
+| `base_fetch_timeout_secs` | integer (seconds) | `1800` (30 min) | The deadline for **one base (network) store fetch** — the fetch a review `create`/`snapshot`/`store sync` makes against the forge (`config.rs:1415-1428`). Absent ⇒ the daemon's own `BASE_FETCH_TIMEOUT` (`review_store/git.rs:129`), resolved at boot into `StoreSettings::base_fetch_timeout` (`settings.rs:139-143`, `settings.rs:180-195`) and threaded into the store spawner once (`git.rs:554-557`, `review_store/registry.rs:465-467`); every base fetch reads it back off the spawner (`git.rs:546-548`) — there is no second path to the value. **Why 1800 and not 30:** the fleet this store exists for is five member clones carrying ~3.6 GB of `.git` between them, one ~748 MB (README §5.2); 1800 s moves that clone at a sustained ~0.4 MB/s, and a 30 s bound could not (it is exactly what failed the U13 acceptance run's `create` and `snapshot`). **It is still a hard deadline**, enforced on the fetch's whole PROCESS GROUP, which is SIGKILLed when it expires (`review_store/proc.rs:181-198`) — a hung fetch cannot wedge a store. `0` is **not** "no deadline": it is refused at resolve time with a warning and the default is used (`settings.rs:186-193`). |
 
 ### `[[review.repos]]`
 
@@ -974,6 +975,7 @@ remote_mutations = false
 [review.store]
 root = "/var/lib/kb-code/kb-code/git"
 seed_on_boot = true
+base_fetch_timeout_secs = 1800
 
 [[review.repos]]
 name = "kb-rs"
@@ -1001,6 +1003,17 @@ written after one of those headers is read as a key of that subtable and the
   warning (collected in `StoreSettings::warnings`, logged at boot and shown
   by `store doctor`) plus a fall-back to the default — a typo never stops the
   daemon (`settings.rs:1-5`, `settings.rs:46-63`, `cred.rs:694-701`).
+- **A slow fetch and a hung fetch are not told apart.** The deadline is one
+  number and the only thing it can do is kill: `proc::run` polls the child and,
+  past the deadline, `killpg`s the group (`proc.rs:181-198`) — there is no
+  progress signal in the capture (a stalled socket and a transferring one are
+  the same bytes), so a fetch that is making headway and one that is wedged
+  are indistinguishable, and the second is only prevented from wedging the
+  store by being killed. `base_fetch_timeout_secs` is therefore the whole
+  operator lever: raise it for a big clone on a slow link, lower it for a
+  small one where a fast failure is worth more than a patient wait. A real
+  liveness signal (bytes on the wire, a negotiated rate floor) would be a
+  separate design change to `proc.rs`, not a knob.
 - **Three ignored-entry classes.** A `[[review.repos]]` entry is dropped with
   a warning, and the rest of the config keeps working, when it has no `name`,
   when its `name` matches no configured `[[repos]]`, or when the same `name`

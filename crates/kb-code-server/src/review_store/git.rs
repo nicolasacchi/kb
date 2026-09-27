@@ -100,12 +100,51 @@ pub const NO_PUSH_URL: &str = "kbcode-no-push://refused";
 
 /// `ls-remote` probe deadline (design §4.4).
 pub const LS_REMOTE_TIMEOUT: Duration = Duration::from_secs(15);
-/// Base (network) fetch deadline.
-pub const BASE_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// Base (network) fetch deadline — the DEFAULT. `[review.store]
+/// base_fetch_timeout_secs` overrides it per install
+/// ([`StoreGit::with_base_fetch_timeout`], resolved once at boot in
+/// [`super::settings`]).
+///
+/// Sized for the fleet this store exists for (README §5.2): the
+/// 1000farmacie deployment is FIVE member clones carrying ~3.6 GB of
+/// `.git` between them, one of them ~748 MB. The previous 30 s could
+/// not carry that — it is the budget that failed the U13 acceptance
+/// run, where `create` and `snapshot` both died on `store git call
+/// timed out; process group killed … timeout=30s` while every
+/// no-fetch operation passed. 1800 s moves the 748 MB clone at a
+/// sustained ~0.4 MB/s, which is the floor a loaded host's link
+/// manages, and stays an ORDER OF MAGNITUDE above the 120 s
+/// [`WORK_FETCH_TIMEOUT`] the same graph crosses on local disk — a
+/// base fetch can never be the thing that starves a work fetch. See
+/// the compile-time pins below.
+///
+/// It is deliberately NOT unbounded: [`super::proc`] enforces it on
+/// the fetch's PROCESS GROUP and SIGKILLs the group when it expires,
+/// so a hung fetch cannot wedge a store. The kill cannot tell a SLOW
+/// fetch from a HUNG one (nothing in the capture distinguishes a
+/// stalled socket from a transferring one) — this number is the only
+/// lever, which is why it is a key and not a constant alone. Raising
+/// it buys the fleet; lowering it is how an operator buys back a
+/// faster failure on a link they know is fast.
+pub const BASE_FETCH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Work (local) fetch / materialize deadline.
 pub const WORK_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 /// Short local plumbing (config, rev-parse, update-ref).
 pub const LOCAL_OP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Compile-time pins on the default's relationship to the reason it
+/// exists — the same technique `review_jobs`' stuck-job horizon uses,
+/// so the relationship is checked by the BUILD and no test has to
+/// sleep for the deadline.
+///
+/// * `>= 10 x WORK_FETCH_TIMEOUT`: a network fetch of the same graph
+///   that crosses local disk in two minutes must not be cut off first.
+/// * `<= SEED_FETCH_TIMEOUT`: the whole-clone seed import that
+///   PRECEDES a base fetch already gets a full hour; a base fetch
+///   that outlived it would make the cheaper call the more expensive
+///   one to survive.
+const _: () = assert!(BASE_FETCH_TIMEOUT >= 10 * WORK_FETCH_TIMEOUT);
+const _: () = assert!(BASE_FETCH_TIMEOUT <= super::seed::SEED_FETCH_TIMEOUT);
 
 const STDERR_CAP: usize = 64 * 1024;
 const DEFAULT_STDOUT_CAP: usize = 16 * 1024 * 1024;
@@ -442,6 +481,12 @@ pub struct StoreGit {
     /// DEFINITIVE answer; `None` = never probed or the probe failed (a
     /// failure is never cached — the next call probes again).
     inherit_ssh_probe: Arc<Mutex<Option<bool>>>,
+    /// The base (network) fetch deadline, as resolved from
+    /// `[review.store] base_fetch_timeout_secs` at boot. Boot-only by
+    /// construction: a deadline that could change between two fetches
+    /// would make the bound depend on WHEN a store happened to be
+    /// used, which is not a property an operator can reason about.
+    base_fetch_timeout: Duration,
     /// Test hook: the "ambient environment" `inherit` mode inspects.
     ambient_override: Option<Arc<Vec<(OsString, OsString)>>>,
 }
@@ -483,6 +528,7 @@ impl StoreGit {
             passthrough,
             safe_dirs: Default::default(),
             inherit_ssh_probe: Default::default(),
+            base_fetch_timeout: BASE_FETCH_TIMEOUT,
             ambient_override: None,
         };
         sg.write_global_config(&BTreeSet::new())?;
@@ -491,6 +537,23 @@ impl StoreGit {
 
     pub fn git_home(&self) -> &Path {
         &self.git_home
+    }
+
+    /// The resolved `[review.store] base_fetch_timeout_secs`. Every
+    /// base (network) fetch passes THIS to [`Self::fetch`] — see
+    /// [`Self::fetch`]'s own note; there is no second path to the
+    /// deadline.
+    pub fn base_fetch_timeout(&self) -> Duration {
+        self.base_fetch_timeout
+    }
+
+    /// Set the base (network) fetch deadline from
+    /// `[review.store] base_fetch_timeout_secs` (resolved by
+    /// [`StoreSettings::resolve`](super::settings::StoreSettings::resolve)).
+    #[must_use]
+    pub fn with_base_fetch_timeout(mut self, timeout: Duration) -> Self {
+        self.base_fetch_timeout = timeout;
+        self
     }
 
     /// The `git` a scrubbed call will execute (first executable `git` on
@@ -845,6 +908,13 @@ impl StoreGit {
     /// `git fetch` from a configured remote NAME with explicit refspecs:
     /// `--no-tags --no-write-fetch-head --no-auto-gc --no-auto-maintenance
     /// --quiet` (README §5.3).
+    ///
+    /// `timeout` is the call's deadline, and for every BASE (network)
+    /// fetch it is [`Self::base_fetch_timeout`] — the value
+    /// `[review.store] base_fetch_timeout_secs` resolved to. Passing
+    /// anything else (a local work fetch passes [`WORK_FETCH_TIMEOUT`])
+    /// is a different operation, not a different opinion about the
+    /// base deadline.
     pub fn fetch(
         &self,
         git_dir: &Path,

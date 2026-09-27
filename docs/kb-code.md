@@ -1081,12 +1081,19 @@ leave a store a dead process left `seeding` wedged for good.
 `seed_on_boot` (default `true`), `allow_inherited_credentials` (default
 **`false`** — the weakest credential rung is opt-in, so an unconfigured
 daemon never falls through to the operator's ambient gitconfig helpers,
-ssh-agent and `~/.netrc`; see "### `inherit` and its knob" below). A store
+`ssh-agent and `~/.netrc`; see "### `inherit` and its knob" below). A store
 root that sits inside a browsed repo — its work tree, its `.git` directory,
 or its shared git common dir — disables the store for the whole boot
 (SEC-13/15) and reads fall back; the reason is a doctor finding, never a
 silent degradation. Enum-valued keys are TOLERANT: an unknown value warns
 and falls back to the default, so a typo never stops the daemon.
+
+`base_fetch_timeout_secs` (default `1800`, i.e. 30 min) bounds ONE base
+(network) fetch — the fleet README §5.2 targets is five member clones
+carrying ~3.6 GB of `.git` between them, one ~748 MB, which no link moves in
+30 s. It is enforced on the fetch's PROCESS GROUP and SIGKILLs it, so a hung
+fetch still cannot wedge a store; `0` is not a deadline and warns into the
+same fall-back. Read once at boot.
 
 ### GC attribution
 
