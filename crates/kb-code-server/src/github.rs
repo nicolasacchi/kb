@@ -34,6 +34,23 @@
 //!    (GitHub's lower unauthenticated rate limit); a private repo 404s
 //!    and is reported as [`PrMetaUnavailableCode::NoCredentials`].
 //!
+//! # A store BOUND to a gh account (D12)
+//!
+//! The rungs above are the PRE-STORE posture and stay exactly as they are
+//! when no review store is involved. A store that pins `gh_user`, or has
+//! recorded a `cred_account`, is BOUND to that gh account — the same
+//! `bound` predicate the fetch ladder uses
+//! ([`review_store::cred::resolve_fetch_credential`]), where any gh
+//! failure STOPS the ladder instead of falling through to
+//! `token_file` → anonymous → `inherit`. The api slot obeys the same rule
+//! through [`ApiBinding::Bound`]: `[github] token_file` and
+//! `KB_CODE_GITHUB_TOKEN` are not rungs of a bound store, so an ambient
+//! token can never answer for the account the store fetches as. What
+//! remains is the store's own gh-cli read, and — because the operator
+//! handed it in for THIS request, off loopback — the CLI-supplied token.
+//! Neither being available means an unauthenticated read, never another
+//! identity's.
+//!
 //! A network failure or a non-2xx response is reported as a
 //! [`GithubApiError`] the ROUTE then folds into a typed
 //! [`PrMetaUnavailable`] (`no-credentials|not-found|forbidden|
@@ -702,6 +719,18 @@ fn token_from_file(cfg: &GithubSection) -> Option<String> {
     cfg.bearer_token()
 }
 
+/// Is the api slot BOUND to a gh account (D12)?
+///
+/// [`Unbound`](Self::Unbound) is the pre-store posture: the ambient rungs
+/// answer, in order. [`Bound`](Self::Bound) means a review store has pinned
+/// `gh_user` or recorded a `cred_account`; see the module doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApiBinding {
+    #[default]
+    Unbound,
+    Bound,
+}
+
 /// Credential ladder: `token_file` (0600) > env `KB_CODE_GITHUB_TOKEN` >
 /// CLI-supplied token > none. Pure in the env/cli arguments so tests do
 /// not have to mutate process environment.
@@ -711,26 +740,40 @@ fn token_from_file(cfg: &GithubSection) -> Option<String> {
 /// CALLER-SUPPLIED api credential
 /// (`review_store::cred::ApiCredentialSource::CallerSupplied`) and stays
 /// exactly as it is; the daemon's own `gh-cli` read
-/// (`review_store::cred::ApiCredential::from_gh_cli`) is a new rung a later
-/// unit wires in here. Neither ever fills the store's FETCH slot.
+/// (`review_store::cred::ApiCredential::from_gh_cli`) is the store's rung.
+/// Neither ever fills the store's FETCH slot.
 pub fn resolve_github_token(
     cfg: &GithubSection,
     env_token: Option<&str>,
     cli_token: Option<&str>,
 ) -> Option<String> {
-    resolve_github_token_with(cfg, env_token, None, cli_token)
+    resolve_github_token_with(cfg, env_token, None, cli_token, ApiBinding::Unbound)
 }
 
-/// RS-U6 — the full api-slot ladder (README §8): `token_file` > env
-/// `KB_CODE_GITHUB_TOKEN` > the daemon's own `gh-cli` read
-/// (`review_store::cred::ApiCredential`, pinned account, memory only) >
-/// the CALLER-supplied token (`--gh-token-from-cli`) > none.
+/// The api slot's ladder under the store's account pin (README §8, D12):
+/// `gh-cli` (the pinned/recorded account) first, and — unlike the unbound
+/// ladder — the ambient rungs (`token_file`, `KB_CODE_GITHUB_TOKEN`) are
+/// not consulted at all, exactly as the fetch ladder refuses to fall
+/// through to `token_file`/anonymous/`inherit` once the store is bound.
+/// `gh_cli_token` is `None` when the caller could not produce it; the
+/// failure itself is a warning on the review envelope, never a silent
+/// substitution of somebody else's token.
 pub fn resolve_github_token_with(
     cfg: &GithubSection,
     env_token: Option<&str>,
     gh_cli_token: Option<&str>,
     cli_token: Option<&str>,
+    binding: ApiBinding,
 ) -> Option<String> {
+    if binding == ApiBinding::Bound {
+        for t in [gh_cli_token, cli_token].into_iter().flatten() {
+            let t = t.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+        return None;
+    }
     if let Some(t) = token_from_file(cfg) {
         return Some(t);
     }
@@ -773,6 +816,10 @@ pub struct GithubClient {
     /// RS-U6 — the daemon's own `gh-cli` api credential, set only by
     /// [`Self::with_api_credential`] for one request.
     api_cred: Option<crate::review_store::ApiCredential>,
+    /// D12: whether the store this request belongs to is BOUND to a gh
+    /// account. A bound client resolves the store's own rung first and
+    /// never the ambient ones — see the module doc.
+    api_binding: ApiBinding,
     client: std::result::Result<reqwest::Client, String>,
 }
 
@@ -789,6 +836,7 @@ impl std::fmt::Debug for GithubClient {
                 "api_cred",
                 &self.api_cred.as_ref().map(|c| c.source().clone()),
             )
+            .field("api_binding", &self.api_binding)
             .finish()
     }
 }
@@ -804,39 +852,52 @@ impl GithubClient {
             cfg: cfg.clone(),
             cli_token: None,
             api_cred: None,
+            api_binding: ApiBinding::Unbound,
             client,
         }
     }
 
     /// Overlay a loopback-only CLI token for one call. The file and env
-    /// rungs still win if they resolve.
+    /// rungs still win if they resolve — unless the store is bound, where
+    /// they are not rungs at all.
     pub fn with_cli_token(&self, token: Option<String>) -> Self {
         Self {
             cfg: self.cfg.clone(),
             cli_token: token,
             api_cred: self.api_cred.clone(),
+            api_binding: self.api_binding,
             client: self.client.clone(),
         }
     }
 
     /// RS-U6 — overlay the daemon's own `gh-cli` api credential (README
-    /// §8) for one request: below file/env, above the caller's token.
-    pub fn with_api_credential(&self, cred: Option<crate::review_store::ApiCredential>) -> Self {
+    /// §8) for one request, and record whether the store is BOUND to an
+    /// account (D12): bound resolves the store's rung first and drops the
+    /// ambient rungs, unbound keeps the whole ladder.
+    pub fn with_api_credential(
+        &self,
+        cred: Option<crate::review_store::ApiCredential>,
+        binding: ApiBinding,
+    ) -> Self {
         Self {
             cfg: self.cfg.clone(),
             cli_token: self.cli_token.clone(),
             api_cred: cred,
+            api_binding: binding,
             client: self.client.clone(),
         }
     }
 
-    /// Is a file or env token configured (the rungs above `gh-cli`)?
+    /// Is a file or env token configured (the rungs above `gh-cli` for an
+    /// UNBOUND store)? Never consulted for a bound one.
     pub fn has_ambient_token(&self) -> bool {
         let env = std::env::var(GITHUB_TOKEN_ENV).ok();
-        resolve_github_token_with(&self.cfg, env.as_deref(), None, None).is_some()
+        resolve_github_token_with(&self.cfg, env.as_deref(), None, None, self.api_binding).is_some()
     }
 
-    /// Request-time credential resolution (file > env > gh-cli > cli).
+    /// Request-time credential resolution (unbound: file > env > gh-cli >
+    /// cli; bound: the store's gh-cli, then the caller's token — see the
+    /// module doc).
     pub fn resolve_token(&self) -> Option<String> {
         let env = std::env::var(GITHUB_TOKEN_ENV).ok();
         resolve_github_token_with(
@@ -844,6 +905,7 @@ impl GithubClient {
             env.as_deref(),
             self.api_cred.as_ref().map(|c| c.bearer_token()),
             self.cli_token.as_deref(),
+            self.api_binding,
         )
     }
 
@@ -2259,6 +2321,95 @@ mod tests {
         assert!(resolve_github_token(&cfg, None, None).is_none());
     }
 
+    /// D12 — a store BOUND to a gh account does not read GitHub with the
+    /// ambient token. The api slot's own rung answers first, and when it
+    /// could not be produced there is no fall-through to `token_file` →
+    /// env → anonymous: the request goes out with no credential at all,
+    /// which the caller already reports as `no-credentials`. The UNBOUND
+    /// ladder beside it is unchanged (pre-store posture).
+    #[cfg(unix)]
+    #[test]
+    fn a_bound_store_never_answers_with_the_ambient_token() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("token");
+        std::fs::write(&path, "file-token\n").unwrap();
+        let mut p = std::fs::metadata(&path).unwrap().permissions();
+        p.set_mode(0o600);
+        std::fs::set_permissions(&path, p).unwrap();
+        let cfg = GithubSection {
+            token_file: Some(path),
+            api_base: GithubSection::DEFAULT_API_BASE.to_string(),
+        };
+        let bound = |gh: Option<&str>| {
+            resolve_github_token_with(
+                &cfg,
+                Some("env-token"),
+                gh,
+                Some("cli-token"),
+                ApiBinding::Bound,
+            )
+        };
+        assert_eq!(
+            bound(Some("gh-token")).as_deref(),
+            Some("gh-token"),
+            "the store's own account answers, not token_file"
+        );
+        assert_eq!(
+            bound(None).as_deref(),
+            Some("cli-token"),
+            "the caller's own token is the only rung left, and it is explicit"
+        );
+        assert!(
+            resolve_github_token_with(&cfg, Some("env-token"), None, None, ApiBinding::Bound)
+                .is_none(),
+            "a bound store with no gh-cli credential must not fall through \
+             to token_file/env — that is the fetch ladder's forbidden swap"
+        );
+        // Control: the same inputs, unbound, keep the pre-store order.
+        assert_eq!(
+            resolve_github_token_with(
+                &cfg,
+                Some("env-token"),
+                Some("gh-token"),
+                None,
+                ApiBinding::Unbound
+            )
+            .as_deref(),
+            Some("file-token")
+        );
+    }
+
+    #[test]
+    fn an_unbound_store_keeps_the_pre_store_ladder() {
+        let cfg = GithubSection {
+            token_file: None,
+            api_base: GithubSection::DEFAULT_API_BASE.to_string(),
+        };
+        assert_eq!(
+            resolve_github_token_with(
+                &cfg,
+                Some("env-token"),
+                Some("gh-token"),
+                Some("cli-token"),
+                ApiBinding::Unbound
+            )
+            .as_deref(),
+            Some("env-token")
+        );
+        assert_eq!(
+            resolve_github_token_with(
+                &cfg,
+                None,
+                Some("gh-token"),
+                Some("cli-token"),
+                ApiBinding::Unbound
+            )
+            .as_deref(),
+            Some("gh-token")
+        );
+    }
+
     #[test]
     fn cli_token_is_refused_off_loopback() {
         assert!(admit_cli_github_token(false, Some("ghp_secret")).is_err());
@@ -2306,5 +2457,249 @@ mod tests {
         let dbg = format!("{client:?}");
         assert!(!dbg.contains(TOKEN), "{dbg}");
         assert!(dbg.contains("[redacted]"), "{dbg}");
+    }
+
+    // --- GithubClient::list_closed_pulls_since (RS-U10b) ---------------------
+    //
+    // `review sync --open --merged-since DATE` is the ONLY consumer of
+    // this listing and the ONLY place the `truncated_merged` flag on the
+    // wire comes from. The integration test
+    // (`tests/review/rs_u10b_sync.rs`) mocks a single page with NO `Link`
+    // header, so without these two tests the multi-page continuation and
+    // the `MAX_SYNC_PULLS` cap are both unpinned: revert either one to a
+    // single `per_page=100` fetch and the whole suite stays green.
+
+    /// A closed-PR row as the list endpoint returns it. `GhPullSync`
+    /// requires only `number`, `head` and `base`; the rest default.
+    fn closed_pull(n: u64, updated_at: &str) -> serde_json::Value {
+        serde_json::json!({
+            "number": n,
+            "state": "closed",
+            "merged_at": updated_at,
+            "updated_at": updated_at,
+            "head": { "ref": format!("feature-{n}"), "sha": format!("{n:040x}") },
+            "base": { "ref": "main" },
+        })
+    }
+
+    /// The `--merged-since` window every case below pages inside.
+    const WINDOW: &str = "2026-09-24T00:00:00Z";
+
+    fn window_start() -> i64 {
+        chrono::DateTime::parse_from_rfc3339(WINDOW)
+            .unwrap()
+            .timestamp()
+    }
+
+    /// Serve `router` on an ALREADY-bound `listener` and hand back the
+    /// base URL it is reachable at — a GitHub `Link` target is always
+    /// ABSOLUTE, so the caller has to know the port before it can bake
+    /// the header, which is why these bind the listener themselves
+    /// rather than going through `mock_kb_server`.
+    async fn serve_with_listener(listener: tokio::net::TcpListener, router: Router) -> String {
+        let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// Page 1 carries `Link: rel="next"` to page 2; page 2 carries none,
+    /// so the walk must stop there. The rows on page 2 can ONLY have come
+    /// from following the header, which is what makes this fixture
+    /// load-bearing.
+    ///
+    /// The header is the MULTI-VALUE `prev`/`next`/`last`/`first` form
+    /// real GitHub sends, not a lone `rel="next"` entry: a single-entry
+    /// header would still pass if [`parse_link_next`] had lost its comma
+    /// split, and that regression silently caps EVERY paginated read in
+    /// this crate at one page.
+    fn two_page_router(
+        addr: std::net::SocketAddr,
+        page1: Vec<serde_json::Value>,
+        page2: Vec<serde_json::Value>,
+    ) -> Router {
+        let page1_url = format!("http://{addr}/repos/acme/widget/pulls?page=1");
+        let page2_url = format!("http://{addr}/repos/acme/widget/pulls2");
+        let link_header = format!(
+            r#"<{page1_url}>; rel="prev", <{page2_url}>; rel="next", <{page2_url}>; rel="last", <{page1_url}>; rel="first""#
+        );
+        Router::new()
+            .route(
+                "/repos/acme/widget/pulls",
+                get(move || {
+                    let next = link_header.clone();
+                    let page = serde_json::Value::Array(page1.clone());
+                    async move { ([(axum::http::header::LINK, next)], Json(page)) }
+                }),
+            )
+            .route(
+                "/repos/acme/widget/pulls2",
+                get(move || {
+                    let page = serde_json::Value::Array(page2.clone());
+                    async move { Json(page) }
+                }),
+            )
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_follows_link_next_to_the_last_page() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = two_page_router(
+            addr,
+            vec![
+                closed_pull(7, "2026-09-25T00:00:00Z"),
+                closed_pull(6, WINDOW),
+            ],
+            vec![closed_pull(5, WINDOW)],
+        );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        let numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+        assert_eq!(numbers, [7, 6, 5], "PR 5 exists only on page 2");
+        assert!(!truncated, "the window closed before the cap: {numbers:?}");
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_stops_reading_once_a_page_leaves_the_window() {
+        // The listing is sorted by `updated_at` DESC, so the first PR
+        // behind the window ends the walk. Page 3 is a trap: if the walk
+        // did not break, it would be fetched and its PR (in-window, and
+        // so the one thing a caller must NOT silently lose) counted.
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits2 = hits.clone();
+        let hits3 = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let next2 = format!(r#"<http://{addr}/repos/acme/widget/pulls2>; rel="next""#);
+        let next3 = format!(r#"<http://{addr}/repos/acme/widget/pulls3>; rel="next""#);
+        let router = Router::new()
+            .route(
+                "/repos/acme/widget/pulls",
+                get(move || {
+                    let next2 = next2.clone();
+                    async move {
+                        (
+                            [(axum::http::header::LINK, next2)],
+                            Json(serde_json::json!([closed_pull(7, "2026-09-25T00:00:00Z")])),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/repos/acme/widget/pulls2",
+                get(move || {
+                    let next3 = next3.clone();
+                    let hits = hits2.clone();
+                    async move {
+                        hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        (
+                            [(axum::http::header::LINK, next3)],
+                            // A day older than the window: the walk stops
+                            // here. The second row is unreachable in
+                            // practice (the list is sorted), and pinning
+                            // that it is NOT read is the contract.
+                            Json(serde_json::json!([
+                                closed_pull(6, "2026-09-23T00:00:00Z"),
+                                closed_pull(5, WINDOW),
+                            ])),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/repos/acme/widget/pulls3",
+                get(move || {
+                    let hits = hits3.clone();
+                    async move {
+                        hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Json(serde_json::json!([closed_pull(4, WINDOW)]))
+                    }
+                }),
+            );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        let numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+        assert_eq!(
+            numbers,
+            [7],
+            "the out-of-window row ends the walk: {numbers:?}"
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "page 2 was read, page 3 was never requested"
+        );
+        assert!(!truncated, "leaving the window is not truncation");
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_reports_truncated_when_the_cap_cuts_inside_the_window() {
+        // One page of `MAX_SYNC_PULLS + 1` in-window rows: the cap fires
+        // on the 301st, so the caller is told the answer is partial
+        // (`truncated_merged` on the wire) rather than handed a silent
+        // 300-row window.
+        let rows: Vec<serde_json::Value> = (0..=MAX_SYNC_PULLS as u64)
+            .map(|i| closed_pull(i + 1, WINDOW))
+            .collect();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let router = Router::new().route(
+            "/repos/acme/widget/pulls",
+            get(move || {
+                let rows = serde_json::Value::Array(rows.clone());
+                async move { Json(rows) }
+            }),
+        );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), MAX_SYNC_PULLS);
+        assert!(
+            truncated,
+            "{} rows existed inside the window",
+            MAX_SYNC_PULLS + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn list_closed_pulls_since_is_not_truncated_at_exactly_the_cap() {
+        // The other side of the same predicate: a listing that ends
+        // exactly ON the cap is complete, and reporting it truncated
+        // would send every caller hunting a PR that does not exist.
+        let rows: Vec<serde_json::Value> = (0..MAX_SYNC_PULLS as u64)
+            .map(|i| closed_pull(i + 1, WINDOW))
+            .collect();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let router = Router::new().route(
+            "/repos/acme/widget/pulls",
+            get(move || {
+                let rows = serde_json::Value::Array(rows.clone());
+                async move { Json(rows) }
+            }),
+        );
+        let base = serve_with_listener(listener, router).await;
+
+        let client = GithubClient::new(&test_cfg(base));
+        let (prs, truncated) = client
+            .list_closed_pulls_since("acme", "widget", window_start())
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), MAX_SYNC_PULLS);
+        assert!(!truncated, "the last row is the cap, not past it");
     }
 }

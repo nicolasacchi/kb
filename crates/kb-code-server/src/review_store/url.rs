@@ -12,6 +12,11 @@
 //!   must be `git` (the forge-deploy-key convention; anything else is a
 //!   personal account smuggled into the store).
 //!
+//! A port equal to the scheme's DEFAULT is folded out of the authority, so
+//! `https://host:443/path` and `https://host/path` are one URL — the same
+//! folding [`super::key::store_key_for_url`] does, and the spelling git
+//! itself asks a credential helper about. See [`authority_ok`].
+//!
 //! Everything else is rejected, including `file://`, plain `http://`, any
 //! `<transport>::<address>` remote-helper form (`ext::`, `fd::`), control
 //! characters and whitespace, IPv6 literals (they need `::`), and
@@ -133,8 +138,21 @@ fn port_ok(p: &str) -> bool {
     }
 }
 
-/// `host` or `host:port`.
-fn authority_ok(a: &str) -> Result<String, UrlRejected> {
+/// `host` or `host:port`, with the SCHEME'S DEFAULT PORT folded out.
+///
+/// `https://github.com:443/acme/widgets` and `https://github.com/acme/widgets`
+/// name one endpoint, and the store already treats them as one project
+/// ([`super::key::store_key_for_url`] drops the default port). git does the
+/// same before it ever asks a credential helper: `git credential fill` for
+/// either remote is sent `host=github.com`, while the store's helper compares
+/// the scope's authority as an EXACT quoted string (correctly injection-free,
+/// and exactly why a kept `:443` could never match — a correct remote
+/// failing closed as a credential fault).
+///
+/// A NON-default port stays in the authority: it is a different endpoint
+/// (`h.example:7999`), and [`RemoteUrl::https_equivalent`] refuses an ssh URL
+/// carrying one as unsupported rather than guessing an https twin.
+fn authority_ok(a: &str, protocol: Protocol) -> Result<String, UrlRejected> {
     let (host, port) = match a.split_once(':') {
         Some((h, p)) => (h, Some(p)),
         None => (a, None),
@@ -146,8 +164,22 @@ fn authority_ok(a: &str) -> Result<String, UrlRejected> {
         if !port_ok(p) {
             return Err(UrlRejected::BadPort);
         }
+        if Some(p) != default_port(protocol) {
+            return Ok(format!("{}:{}", host.to_ascii_lowercase(), p));
+        }
     }
     Ok(host.to_ascii_lowercase())
+}
+
+/// A transport's default port, or `None` when it has none.
+fn default_port(p: Protocol) -> Option<&'static str> {
+    match p {
+        Protocol::Https => Some("443"),
+        Protocol::Ssh => Some("22"),
+        #[cfg(test)]
+        Protocol::Http => Some("80"),
+        _ => None,
+    }
 }
 
 fn path_ok(p: &str) -> bool {
@@ -185,14 +217,17 @@ impl RemoteUrl {
             if auth.contains('@') {
                 return Err(UrlRejected::Userinfo);
             }
-            let host = authority_ok(auth)?;
+            let authority = authority_ok(auth, Protocol::Https)?;
             if !path_ok(path) {
                 return Err(UrlRejected::BadPath);
             }
+            let host = authority
+                .split_once(':')
+                .map_or_else(|| authority.clone(), |(h, _)| h.to_string());
             return Ok(Self {
-                raw: format!("https://{}/{}", auth.to_ascii_lowercase(), path),
+                raw: format!("https://{authority}/{path}"),
                 protocol: Protocol::Https,
-                authority: auth.to_ascii_lowercase(),
+                authority,
                 host,
                 path: path.to_string(),
             });
@@ -204,14 +239,17 @@ impl RemoteUrl {
             if user != "git" {
                 return Err(UrlRejected::SshUserNotGit);
             }
-            let host = authority_ok(hostport)?;
+            let authority = authority_ok(hostport, Protocol::Ssh)?;
             if !path_ok(path) {
                 return Err(UrlRejected::BadPath);
             }
+            let host = authority
+                .split_once(':')
+                .map_or_else(|| authority.clone(), |(h, _)| h.to_string());
             return Ok(Self {
-                raw: format!("ssh://git@{}/{}", hostport.to_ascii_lowercase(), path),
+                raw: format!("ssh://git@{authority}/{path}"),
                 protocol: Protocol::Ssh,
-                authority: hostport.to_ascii_lowercase(),
+                authority,
                 host,
                 path: path.to_string(),
             });
@@ -226,7 +264,7 @@ impl RemoteUrl {
             if host.contains('/') {
                 return Err(UrlRejected::Unsupported);
             }
-            let host_l = authority_ok(host)?;
+            let host_l = authority_ok(host, Protocol::Ssh)?;
             let path_trim = path.strip_prefix('/').unwrap_or(path);
             if !path_ok(path_trim) {
                 return Err(UrlRejected::BadPath);
@@ -513,6 +551,33 @@ mod tests {
         assert_eq!(
             u.https_equivalent().unwrap().as_str(),
             "https://github.com/acme/widgets.git"
+        );
+    }
+
+    #[test]
+    fn an_explicit_default_port_is_the_same_authority() {
+        // git normalises the default port out of a remote before it fills a
+        // credential query, so a kept `:443` would ask the helper for a host
+        // it never asks about — a correct remote failing closed as a
+        // credential fault. Same for ssh `:22`.
+        let bare = RemoteUrl::parse_remote("https://github.com/acme/widgets.git").unwrap();
+        let ported = RemoteUrl::parse_remote("https://github.com:443/acme/widgets.git").unwrap();
+        assert_eq!(ported.authority(), "github.com");
+        assert_eq!(ported.host(), "github.com");
+        assert_eq!(ported.as_str(), bare.as_str());
+        assert_eq!(ported, bare);
+        assert_eq!(
+            RemoteUrl::parse_remote("ssh://git@github.com:22/acme/widgets.git")
+                .unwrap()
+                .authority(),
+            "github.com"
+        );
+        // A non-default port is a DIFFERENT endpoint and stays.
+        assert_eq!(
+            RemoteUrl::parse_remote("https://github.com:8443/acme/widgets.git")
+                .unwrap()
+                .authority(),
+            "github.com:8443"
         );
     }
 

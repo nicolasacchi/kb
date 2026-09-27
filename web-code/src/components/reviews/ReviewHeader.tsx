@@ -7,11 +7,14 @@ import {
   usePatchReview,
   useSnapshotReview,
 } from "../../hooks/useReviews";
+import { useReviewStoreCard } from "../../hooks/useReviewStore";
 import { reviewDiffHref, reviewsUrl } from "../../lib/codeUrl";
 import { setCurrentReview, useCurrentReview } from "../../lib/currentReview";
 import { shortSha } from "../../lib/format";
+import { forgeUnverified, type StoreCardFailure } from "../../lib/reviewBase";
 import { toast } from "../../lib/toast";
 import AgentVerdictCard from "./AgentVerdictCard";
+import BaseChip, { BaseWarningChips, ForgeUnverifiedChip, StoreUnknownChip } from "./BaseChip";
 import DialecticLedger from "./DialecticLedger";
 import PrChip from "./PrChip";
 import StalenessBanner from "./StalenessBanner";
@@ -59,6 +62,33 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
   const snapshot = useSnapshotReview(repo);
   const patch = usePatchReview(repo);
   const del = useDeleteReview(repo);
+  // RS-U11 — `store.forge_verified`/`forge_kind` is a STORE-level fact
+  // (D8), not a per-review one; renders nothing while still loading or
+  // when the repo has no store row yet (`forgeUnverified` degrades to
+  // `false` on either).
+  //
+  // A card that FAILED to load is a third case, and `forgeUnverified`
+  // cannot see it: the card route is loopback-only (the router pins the
+  // whole `/repos/{name}/store` family there — it reports `store.git_dir`,
+  // the daemon's absolute state path), so a remote session's `getJson`
+  // throws on a bodyless 404 and `storeQ.data` is `undefined` — the exact
+  // shape of "no store row yet". Left alone, that drops the D8 signal in
+  // silence in precisely the non-GitHub configuration it exists for, so the
+  // error state renders `StoreUnknownChip` instead: the store's state is
+  // UNKNOWN, which is neither "no store" nor "verified". Still loading is
+  // deliberately NOT covered — nothing is claimed in either direction there.
+  const storeQ = useReviewStoreCard(repo);
+  const showForgeUnverified = forgeUnverified(storeQ.data?.store ?? null);
+  // Scoped to a card that yielded NO store row at all: an error over a card
+  // already in hand is a failed refresh, not an unknown store, and the forge
+  // answer from that card still stands. The condition below is the one that
+  // leaves the header with nothing to say — the remote-session case above.
+  const storeCardFailure: StoreCardFailure | null =
+    storeQ.isError && storeQ.data === undefined
+      ? isLoopbackRefusal(storeQ.error)
+        ? "loopback"
+        : "transport"
+      : null;
 
   const viewedCount = files.filter((f) => f.viewed && !f.viewed_stale).length;
   const filesCount = files.length;
@@ -136,7 +166,7 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
       <div className="kbc-review__refs">
         <code>{review.head_ref}</code>
         <span aria-hidden="true">→</span>
-        <code>{review.base_ref}</code>
+        <BaseChip reviewId={id} base={review.base} />
         {activePs && (
           <span className="kbc-reviews__row-time">
             · ps{activePs.ps_number} @ {shortSha(activePs.tip_sha_full || activePs.tip_sha)} ·{" "}
@@ -144,6 +174,13 @@ export default function ReviewHeader({ repo, id, review, activePs, files, report
           </span>
         )}
       </div>
+      {(showForgeUnverified || storeCardFailure || review.warnings.length > 0) && (
+        <div className="kbc-review__base-warnings" data-kbc-review-base-warnings>
+          {showForgeUnverified && <ForgeUnverifiedChip />}
+          {storeCardFailure && <StoreUnknownChip failure={storeCardFailure} detail={msg(storeQ.error)} />}
+          <BaseWarningChips warnings={review.warnings} />
+        </div>
+      )}
       <PrChip repo={repo} reviewId={id} review={reviewPr} />
       <StalenessBanner review={review} latestPs={latestPs} />
       <div className="kbc-review__actions">

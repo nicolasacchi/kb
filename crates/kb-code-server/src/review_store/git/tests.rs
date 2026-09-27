@@ -798,3 +798,101 @@ fn a_hung_remote_times_out_and_the_whole_group_dies() {
     }
     drop(held);
 }
+
+/// The known-literal pass belongs to `GitOutput`, not to the caller: a
+/// credentialed call whose child prints the token on STDOUT must not
+/// surface it in `Debug` (or in `stdout_redacted()`), whatever the caller
+/// does with the value afterwards.
+///
+/// The token is deliberately one NO shape rule knows (a self-hosted
+/// forge's opaque token, not a `ghp_`/`glpat-`/header credential) —
+/// otherwise the redactor's rule 1 would mask it and this test would pass
+/// with the known-literal pass removed.
+#[test]
+fn a_token_on_stdout_does_not_survive_into_the_debug_rendering() {
+    const OPAQUE: &str = "opaque-forge-9f2b7c4d1e6a5b3c8d0f4a7e1c5b8d3e";
+    // Control: no shape rule matches it, so only the known-literal pass
+    // can redact it.
+    assert_eq!(crate::review_store::redact::redact(OPAQUE), OPAQUE);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let fake_dir = tmp.path().join("fakebin");
+    std::fs::create_dir_all(&fake_dir).unwrap();
+    let fake = fake_dir.join("git");
+    // A stand-in git that relays the helper payload AND echoes the token
+    // back on a line of its own, the way a misbehaving credential
+    // subcommand would.
+    //
+    // Only shell BUILTINS. The store scrubs the child's environment and
+    // sets PATH to this directory ALONE, so an external `cat` is not
+    // found, the helper payload never reaches stdout, and the
+    // `password=[redacted]` assertion below would fail for a reason
+    // that has nothing to do with the type. Reading fd 3 with `read` +
+    // `printf` needs nothing off the PATH.
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done <&3\nprintf '%s\\n' '{OPAQUE}'\n"
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::review_store::cred::tests::wait_executable(&fake);
+
+    let fake_path = fake_dir.clone();
+    let sg = StoreGit::with_env_fn(tmp.path().join("git-home"), move |k| match k {
+        "PATH" => Some(fake_path.clone().into()),
+        _ => None,
+    })
+    .unwrap();
+    let url = RemoteUrl::test_http_loopback(4242, "acme/widgets.git");
+    let cred = HttpsCredential::new(
+        CredentialScope::for_url(&url).unwrap(),
+        "x-access-token",
+        SecretToken::new(OPAQUE).unwrap(),
+    )
+    .unwrap();
+    let out = sg
+        .run(
+            GitCall::new("credential", GitArgs::new("credential").flag("fill"))
+                .auth(FetchAuth::Token(&cred)),
+        )
+        .unwrap();
+    // The raw bytes are intact for the one caller that needs them.
+    assert!(
+        out.stdout_str().contains(OPAQUE),
+        "control: the token really is on stdout"
+    );
+    // The renderings are not — this is what the type now guarantees.
+    assert!(
+        !out.stdout_redacted().contains(OPAQUE),
+        "{}",
+        out.stdout_redacted()
+    );
+    assert!(!format!("{out:?}").contains(OPAQUE), "{out:?}");
+    // The shape rules still run on top: the credential-protocol line the
+    // helper payload carried is masked, not dropped.
+    assert!(out.stdout_redacted().contains("password=[redacted]"));
+}
+
+/// The deadline a base fetch is given comes from the spawner, which is
+/// built once at boot from `[review.store] base_fetch_timeout_secs`.
+/// No fetch runs here: what is asserted is the value every caller
+/// reads, and the default's relationship to the constants it was sized
+/// against is pinned at compile time in the module (the stuck-job
+/// horizon's technique — nothing sleeps for the deadline).
+#[test]
+fn the_base_fetch_deadline_is_the_one_the_spawner_was_built_with() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert_eq!(
+        store_git(tmp.path()).base_fetch_timeout(),
+        BASE_FETCH_TIMEOUT
+    );
+    assert_eq!(
+        store_git(tmp.path())
+            .with_base_fetch_timeout(Duration::from_secs(900))
+            .base_fetch_timeout(),
+        Duration::from_secs(900)
+    );
+}

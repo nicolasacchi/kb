@@ -75,11 +75,14 @@ export default function Prs() {
     }
   }
 
-  async function handleStartReview(number: number, baseRef: string) {
+  // RS-U11 — the daemon resolves the PR's target branch itself now
+  // (`buildCreateReviewPrInput`'s own doc); this no longer takes a
+  // `baseRef` at all.
+  async function handleStartReview(number: number) {
     if (startLoopback) return;
     setStartingNumber(number);
     try {
-      const out = await createReviewPr.mutateAsync(buildCreateReviewPrInput(repo, { number, base_ref: baseRef }));
+      const out = await createReviewPr.mutateAsync(buildCreateReviewPrInput(repo, { number }));
       navigate(reviewUrl(repo, out.id));
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
@@ -174,7 +177,7 @@ export default function Prs() {
                           ? "loopback-only — open kb-code from the machine running kb-code-server"
                           : undefined
                       }
-                      onClick={() => void handleStartReview(pr.number, pr.base_ref)}
+                      onClick={() => void handleStartReview(pr.number)}
                       data-kbc-prs-start={pr.number}
                     >
                       {startingNumber === pr.number ? "Starting…" : "Start review"}
