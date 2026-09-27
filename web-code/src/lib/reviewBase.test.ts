@@ -10,16 +10,20 @@ import {
   BASE_WARNING_CHIP,
   FORGE_UNVERIFIED_CHIP,
   PATCHSET_KIND_CHIPS,
+  STORE_UNKNOWN_CHIP,
+  STORE_UNKNOWN_LABEL,
   baseChipLabel,
   baseChipSpec,
   baseMergeBaseSuffix,
   baseNeedsRetrack,
+  basePinNote,
   baseSourceLabel,
   forgeUnverified,
   patchsetBaseShort,
   patchsetKindLabel,
   patchsetKindSpec,
   retrackCommandLine,
+  storeUnknownTitle,
   warningChipSpec,
   warningShortLabel,
 } from "./reviewBase";
@@ -47,13 +51,24 @@ describe("baseChipSpec / baseChipLabel", () => {
     expect(baseChipLabel(base({ mode: "local", branch: "feature-x" }))).toBe("local feature-x");
   });
 
-  it("pin reads amber and its label IS the merge-base, short", () => {
+  it("pin reads amber, and its label names NO commit", () => {
     expect(baseChipSpec(base({ mode: "pin" }))).toEqual({ token: "--warn", icon: "Pin" });
-    expect(baseChipLabel(base({ mode: "pin", merge_base: "7c1ed0cfdd1234567890" }))).toBe("pinned 7c1ed0c");
+    expect(baseChipLabel(base({ mode: "pin", merge_base: "7c1ed0cfdd1234567890" }))).toBe("pinned");
   });
 
-  it("a pin with no merge-base yet degrades to a bare 'pinned'", () => {
-    expect(baseChipLabel(base({ mode: "pin", merge_base: null }))).toBe("pinned");
+  // A `pin` policy stores the pin in `policy.pin` and leaves `branch` NULL
+  // (`BasePolicy::pin`, `review_base.rs`), and `ReviewBaseOut` projects only
+  // `branch` — so `base` carries no pin at all, for ANY pin. The one sha it
+  // does carry is the patchset's merge-base, equal to the pin only when the
+  // pin is an ancestor of the head. The client cannot tell those apart, so
+  // no pin's label may name a commit.
+  it("never puts a sha in a pin's label — neither an ancestor pin's nor an unrelated one's", () => {
+    const ancestorPin = base({ mode: "pin", branch: null, merge_base: "7c1ed0cfdd1234567890" });
+    const unrelatedPin = base({ mode: "pin", branch: null, merge_base: "3f9a1b2c4d5e6f7a8b9" });
+    for (const b of [ancestorPin, unrelatedPin]) {
+      expect(baseChipLabel(b)).toBe("pinned");
+      expect(baseChipLabel(b)).not.toMatch(/[0-9a-f]{7}/);
+    }
   });
 
   it("a row with no resolved policy (mode absent) reads 'legacy', same amber tone as pin", () => {
@@ -77,12 +92,36 @@ describe("baseMergeBaseSuffix", () => {
     );
   });
 
-  it("is absent for pin — the label already IS the merge-base", () => {
-    expect(baseMergeBaseSuffix(base({ mode: "pin", merge_base: "7c1ed0cfdd1234567890" }))).toBeNull();
+  // The pin case is exactly why the label above carries no sha: a pin whose
+  // merge-base is an OLDER COMMON ANCESTOR — `RetrackClass::Custom`, "a
+  // `pin` that is NOT an ancestor — hand-chosen, unrelated history" — would
+  // otherwise put that commit's short sha under the word "pinned", naming a
+  // commit the operator never named. The suffix labels every mode's sha for
+  // what the wire says it is.
+  it("labels a pin's sha as the merge-base it is — identically for an ancestor and an unrelated pin", () => {
+    expect(baseMergeBaseSuffix(base({ mode: "pin", merge_base: "7c1ed0cfdd1234567890" }))).toBe(
+      "merge-base 7c1ed0c",
+    );
+    expect(baseMergeBaseSuffix(base({ mode: "pin", merge_base: "3f9a1b2c4d5e6f7a8b9" }))).toBe(
+      "merge-base 3f9a1b2",
+    );
   });
 
   it("is absent with no captured merge-base yet (no patchset)", () => {
     expect(baseMergeBaseSuffix(base({ mode: "track", merge_base: null }))).toBeNull();
+    expect(baseMergeBaseSuffix(base({ mode: "pin", merge_base: null }))).toBeNull();
+  });
+});
+
+describe("basePinNote", () => {
+  it("corrects the pin chip's sha for every pin, and only for a pin", () => {
+    const note = basePinNote(base({ mode: "pin" }));
+    expect(note).toContain("merge-base");
+    expect(note).toContain("NOT the pin");
+    expect(basePinNote(base({ mode: "track" }))).toBeNull();
+    expect(basePinNote(base({ mode: "local" }))).toBeNull();
+    expect(basePinNote(base({ mode: null }))).toBeNull();
+    expect(basePinNote(base({ mode: "a-future-mode" }))).toBeNull();
   });
 });
 
@@ -167,6 +206,38 @@ describe("forgeUnverified", () => {
   });
 });
 
+describe("the store card that could not be read", () => {
+  // `GET /api/repos/{name}/store` is loopback-only (the router pins the whole
+  // family there: the card reports `store.git_dir`, the daemon's absolute
+  // state path), so a remote session's `getJson` throws and `storeQ.data` is
+  // `undefined` — indistinguishable, to `forgeUnverified`, from a repo with
+  // no store row at all. The header therefore renders THIS chip off the
+  // query's error state, and it must never assert a store state it could not
+  // read: `false` from `forgeUnverified` on a failed card is the D8 signal
+  // being silently dropped, in exactly the non-GitHub configuration it exists
+  // for.
+  it("says the state is UNKNOWN, on a loopback refusal and on any other failure", () => {
+    for (const t of [storeUnknownTitle("loopback"), storeUnknownTitle("transport", "ECONNREFUSED")]) {
+      expect(t).toContain("UNKNOWN");
+      expect(t).toContain("not verified");
+    }
+  });
+
+  it("names the gate on a loopback refusal, and the failure otherwise", () => {
+    expect(storeUnknownTitle("loopback")).toContain("loopback-only");
+    expect(storeUnknownTitle("loopback")).not.toContain("ECONNREFUSED");
+    expect(storeUnknownTitle("transport", "ECONNREFUSED")).toContain("ECONNREFUSED");
+  });
+
+  it("never reports an absent or broken store — a card that did not load is a hole in what this session knows, and only that", () => {
+    for (const t of [storeUnknownTitle("loopback"), storeUnknownTitle("transport")]) {
+      expect(t).not.toMatch(/no store|not registered|absent|broken|unhealthy/);
+    }
+    expect(STORE_UNKNOWN_LABEL).toBe("store unknown");
+    expect(STORE_UNKNOWN_CHIP.token).toBe("--warn");
+  });
+});
+
 describe("patchset kind", () => {
   it("every known kind maps to a spec; an unknown/absent kind degrades to neutral", () => {
     expect(patchsetKindSpec("push")).toEqual({ token: "--ink-mute", icon: "Dot" });
@@ -199,11 +270,12 @@ describe("patchset kind", () => {
 });
 
 describe("every mapped icon name is a REAL key of the icon set", () => {
-  it("base-mode, legacy, forge-unverified, warning and patchset-kind chips", () => {
+  it("base-mode, legacy, forge-unverified, store-unknown, warning and patchset-kind chips", () => {
     const names = new Set<string>();
     for (const spec of Object.values(BASE_MODE_CHIPS)) names.add(spec.icon);
     names.add(BASE_LEGACY_CHIP.icon);
     names.add(FORGE_UNVERIFIED_CHIP.icon);
+    names.add(STORE_UNKNOWN_CHIP.icon);
     names.add(BASE_WARNING_CHIP.icon);
     for (const spec of Object.values(PATCHSET_KIND_CHIPS)) names.add(spec.icon);
     names.add("Dot"); // the patchset-kind fallback

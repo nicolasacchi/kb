@@ -10,10 +10,18 @@
 //!   repo ([`ReviewStores::register_repo`]);
 //! * **seeding** — [`ReviewStores::seed`] drives `seed::seed_store` and the
 //!   DB state machine (`absent → seeding → ready`, or `broken`). A store
-//!   reaches `ready` only over a credential that WORKED: a credential the
-//!   operator supplied and that came back refused (D12) is
-//!   [`StoreUnavailable::CredentialRefused`], and the row stays `absent`
-//!   carrying the class — never a `ready` row over a base nobody fetched.
+//!   reaches `ready` over a NETWORK pass only over a credential that
+//!   WORKED: a credential the operator supplied and that came back
+//!   refused (D12) is [`StoreUnavailable::CredentialRefused`], and the
+//!   row goes back to `absent` carrying the class — never a `ready` row
+//!   over a base nobody fetched. That record is also what the NEXT boot
+//!   pass reads: a boot seed is local-only and cannot resolve a
+//!   credential, so [`crate::review_store::boot::run_boot`] leaves a row
+//!   whose last refusal was a credential class `absent` and reports it,
+//+//!   rather than re-seeding it straight back to `ready` over the same
+//!   broken credential. A LOCAL pass (`network = false`: a boot seed, an
+//!   offline `store sync`) is the one documented exception and is always
+//!   recorded as such — `base: offline-seed`/`offline` in `state_json`.
 //! * **locks** — a per-(store, remote) FETCH mutex and a short per-store
 //!   OPS mutex (design §4.2), plus the lifetime `flock` per store
 //!   (`manifest::StoreLock`). `tokio::sync::Mutex`es: a fetch guard is held
@@ -95,6 +103,14 @@ pub enum Registration {
         /// working clone over a second remote's typo), so these are the
         /// only trace that remote is there at all: reported, never
         /// dropped, and never reclassified into the store's key.
+        ///
+        /// Recomputed on EVERY registration, not only the one that
+        /// minted the store: a repo already registered whose clone later
+        /// grows a hostile remote reports it here, on every boot
+        /// thereafter, exactly as the first registration did (via
+        /// [`ladder::refused_remotes`]). Best effort — a member whose
+        /// remotes cannot be read reports an empty list rather than
+        /// refusing a membership that stands.
         refused_remotes: Vec<RefusedRemote>,
     },
     Refused {
@@ -935,6 +951,14 @@ impl ReviewStores {
             Ok(v) => v,
             Err(e) => return err("db", e.to_string()),
         };
+        // The refusals a MEMBER's clone carries right now, read BEFORE
+        // the membership short-circuit below decides anything. The
+        // ladder never runs for a repo that is already a member, so this
+        // is the only place a hostile remote added after registration
+        // can be reported: hard-coding `vec![]` here made
+        // `Registration::Member::refused_remotes` a once-per-repo
+        // answer, on a branch that runs on every boot.
+        let refused_now = self.refused_remotes_of(&repo);
         if let Some(m) = existing {
             let row = match store.get_review_store(m.store_id) {
                 Ok(Some(r)) => r,
@@ -970,15 +994,25 @@ impl ReviewStores {
                     store_key: row.store_key,
                     source: "explicit".into(),
                     joined_existing: true,
-                    refused_remotes: vec![],
+                    refused_remotes: refused_now,
                 };
+            }
+            for r in &refused_now {
+                tracing::warn!(
+                    repo = %name,
+                    remote = %r.name,
+                    code = ladder::REMOTE_URL_REFUSED,
+                    reason = %r.reason,
+                    "kb-code: a member's clone carries a remote refused as unsafe; the store is \
+                     keyed from another remote and is NOT re-keyed"
+                );
             }
             return Registration::Member {
                 store_id: row.id,
                 store_key: row.store_key,
                 source: row.base_url_source.unwrap_or_else(|| "member".into()),
                 joined_existing: true,
-                refused_remotes: vec![],
+                refused_remotes: refused_now,
             };
         }
 
@@ -1096,6 +1130,35 @@ impl ReviewStores {
                 )
             }
             Err(e) => err("db", e.to_string()),
+        }
+    }
+
+    /// The remotes this clone refuses as unsafe RIGHT NOW, for a repo
+    /// that is already a member — the classification the ladder would
+    /// have made on first registration, made again on every later one.
+    ///
+    /// Best effort, deliberately. A member whose clone cannot be read
+    /// (the path moved, the directory is gone, git cannot read a
+    /// foreign-owned config) still HAS a membership, and turning a
+    /// diagnostic into a registration error would strand a working
+    /// store over a missing directory. So every failure here is an
+    /// empty list — the same list a clone with no hostile remote
+    /// produces — and the next registration, with the clone readable
+    /// again, reports the refusal.
+    fn refused_remotes_of(&self, repo: &RepoRef) -> Vec<RefusedRemote> {
+        let Some(git) = self.git.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(common) = seed::common_dir_of(&repo.root) else {
+            return Vec::new();
+        };
+        // Same call the ladder path makes before it reads remotes: a
+        // local source that is not on the safe-directory list is
+        // unreadable to this daemon user.
+        let _ = git.allow_local_source(&common);
+        match seed::read_remotes(git, &common) {
+            Ok(remotes) => ladder::refused_remotes(&remotes),
+            Err(_) => Vec::new(),
         }
     }
 
@@ -1509,6 +1572,13 @@ impl ReviewStores {
         // identity than the operator asked for. `FailureClass::is_auth`
         // is the one grouping both sides already read, so the split is
         // never spelled twice.
+        //
+        // It also EXCLUDES what a slow host produces: a `gh` call that
+        // outlives `cred::GH_TIMEOUT` is [`FailureClass::Timeout`], a
+        // transient class, not an identity failure — a keyring taking
+        // 20 s to answer (a laptop resuming from suspend) degrades to a
+        // skip and comes up on cached refs, as it always did, instead of
+        // refusing the seed.
         let mut cred_note = None;
         let cred = if network && plan.base_url.is_some() {
             match self.resolve_settings_member(store, &row) {
@@ -1516,14 +1586,29 @@ impl ReviewStores {
                     Ok(r) => Some(r.credential),
                     Err(e) if e.class().is_auth() => {
                         // Never `ready`: the row goes back to `absent`
-                        // carrying the class, so the next boot re-seeds it
-                        // once the operator fixes the credential.
+                        // carrying the class, which is the record
+                        // `boot::run_boot` reads before it re-seeds
+                        // (a boot seed is local-only and would
+                        // otherwise put the store straight back to
+                        // `ready` with `base: offline-seed` over a
+                        // credential that is still broken).
+                        //
+                        // That write is NOT best-effort. A row left
+                        // `seeding` in the DB is a store every later
+                        // action 503s on, with the refusal that explains
+                        // it never recorded — so a failed write is
+                        // reported as the error it is, carrying the
+                        // refusal with it.
                         let u = credential_refused(&row, &e);
-                        let _ = store.set_review_store_state(
-                            row.id,
-                            "absent",
-                            Some(&refused_state(&e)),
-                        );
+                        if let Err(w) =
+                            store.set_review_store_state(row.id, "absent", Some(&refused_state(&e)))
+                        {
+                            return Err(StoreUnavailable::Error {
+                                detail: format!(
+                                    "{u:?} (and the refusal could not be recorded: {w})"
+                                ),
+                            });
+                        }
                         return Err(u);
                     }
                     // A network-shaped failure (offline, timeout) is not a

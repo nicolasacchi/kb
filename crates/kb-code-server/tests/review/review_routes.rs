@@ -2502,6 +2502,166 @@ fn gh_pull_router(pr_number: u32, pr_sha: &str, delay: std::time::Duration) -> R
     router
 }
 
+/// `gh_pull_router` with an explicit PR target branch — the mock's `base.ref`
+/// is what the daemon's README §6 forge rung reads, so a PR targeting
+/// `develop` needs a mock that SAYS `develop`.
+fn gh_pull_router_targeting(pr_number: u32, pr_sha: &str, base_ref: &str) -> Router {
+    let pulls_path = format!("/repos/acme/widget/pulls/{pr_number}");
+    let checks_path = format!("/repos/acme/widget/commits/{pr_sha}/check-runs");
+    let pr_sha_owned = pr_sha.to_string();
+    let base_ref = base_ref.to_string();
+    Router::new()
+        .route(
+            &pulls_path,
+            get(move || {
+                let pr_sha = pr_sha_owned.clone();
+                let base_ref = base_ref.clone();
+                async move {
+                    Json(serde_json::json!({
+                        "number": 42,
+                        "title": "Add feature",
+                        "user": {"login": "octocat"},
+                        "head": {"ref": "pr-branch", "sha": pr_sha},
+                        "base": {"ref": base_ref},
+                        "updated_at": "2024-01-01T00:00:00Z",
+                        "draft": false,
+                        "state": "open",
+                        "merged": false,
+                        "labels": [],
+                        "mergeable_state": "clean"
+                    }))
+                }
+            }),
+        )
+        .route(
+            &checks_path,
+            get(|| async { Json(serde_json::json!({ "check_runs": [] })) }),
+        )
+}
+
+/// The `start-pr` fixture where the PR targets a NON-DEFAULT branch:
+/// `develop` forks at the base commit and takes its own commit BEFORE the
+/// PR branches off it, so the PR's true fork point is unreachable from
+/// `main` — a base resolved against the default branch is a DIFFERENT sha,
+/// not a mislabelled one. Both branches advance on origin afterwards, so
+/// the base rung's fetch is load-bearing. Returns the three tempdirs (all
+/// must outlive the test), the repo dir, the commit both branches forked
+/// from, the PR's true fork point on `develop`, the PR head sha, and
+/// `origin/main`'s advanced tip.
+#[allow(clippy::type_complexity)]
+fn fixture_pr_repo_remote_develop(
+    pr_number: u32,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    String,
+    String,
+    String,
+    String,
+) {
+    let bare_tmp = tempfile::tempdir().unwrap();
+    let bare_dir = bare_tmp.path().join("origin.git");
+    std::fs::create_dir_all(&bare_dir).unwrap();
+    git(&bare_dir, &["init", "-q", "--bare", "-b", "main"]);
+
+    let repo_tmp = tempfile::tempdir().unwrap();
+    let repo_dir = repo_tmp.path().to_path_buf();
+    git(&repo_dir, &["init", "-q", "-b", "main"]);
+    git(&repo_dir, &["config", "user.email", "test@example.com"]);
+    git(&repo_dir, &["config", "user.name", "Test"]);
+    std::fs::write(repo_dir.join("base.txt"), "base\n").unwrap();
+    git(&repo_dir, &["add", "-A"]);
+    git(&repo_dir, &["commit", "-q", "-m", "base"]);
+    let fork_sha = git_out(&repo_dir, &["rev-parse", "HEAD"]);
+    git(
+        &repo_dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    git(
+        &repo_dir,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", bare_dir.display()),
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    git(&repo_dir, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+
+    // `develop` forks at the base commit and adds its own commit, so the
+    // PR's fork point is NOT on `main`.
+    git(&repo_dir, &["checkout", "-q", "-b", "develop"]);
+    std::fs::write(repo_dir.join("dev.txt"), "dev\n").unwrap();
+    git(&repo_dir, &["add", "-A"]);
+    git(&repo_dir, &["commit", "-q", "-m", "develop commit"]);
+    let develop_fork_sha = git_out(&repo_dir, &["rev-parse", "HEAD"]);
+    git(
+        &repo_dir,
+        &["push", "-q", "origin", "HEAD:refs/heads/develop"],
+    );
+
+    // The PR branches off `develop`'s tip.
+    git(&repo_dir, &["checkout", "-q", "-b", "pr-branch"]);
+    std::fs::write(repo_dir.join("feature.txt"), "feature\n").unwrap();
+    git(&repo_dir, &["add", "-A"]);
+    git(&repo_dir, &["commit", "-q", "-m", "pr commit"]);
+    let pr_sha = git_out(&repo_dir, &["rev-parse", "HEAD"]);
+    git(
+        &repo_dir,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("HEAD:refs/pull/{pr_number}/head"),
+        ],
+    );
+    git(&repo_dir, &["checkout", "-q", "main"]);
+
+    // A second clone advances `main` on origin, so the mirror is stale and
+    // the fetch is the only fresh answer.
+    let clone_tmp = tempfile::tempdir().unwrap();
+    let clone_dir = std::fs::canonicalize(clone_tmp.path())
+        .unwrap()
+        .join("clone");
+    git(
+        &repo_dir,
+        &[
+            "clone",
+            "-q",
+            bare_dir.to_str().unwrap(),
+            clone_dir.to_str().unwrap(),
+        ],
+    );
+    git(&clone_dir, &["config", "user.email", "test@example.com"]);
+    git(&clone_dir, &["config", "user.name", "Test"]);
+    git(
+        &clone_dir,
+        &["commit", "-q", "--allow-empty", "-m", "main moves"],
+    );
+    let main_tip = git_out(&clone_dir, &["rev-parse", "HEAD"]);
+    git(
+        &clone_dir,
+        &["push", "-q", "origin", "HEAD:refs/heads/main"],
+    );
+
+    (
+        repo_tmp,
+        bare_tmp,
+        clone_tmp,
+        repo_dir,
+        fork_sha,
+        develop_fork_sha,
+        pr_sha,
+        main_tip,
+    )
+}
+
 async fn boot_pr_fixture(dir: &Path, gh_addr: SocketAddr) -> (tempfile::TempDir, String) {
     let cfg = KbCodeConfig {
         repos: vec![RepoEntry {
@@ -2813,4 +2973,100 @@ async fn start_pr_async_job_reports_the_stale_mirror_as_a_warning() {
         warnings.iter().any(|w| w["code"] == "stale-mirror"),
         "{settled}"
     );
+}
+
+/// THE DEFECT, end to end. A PR targeting `develop`, on a repo whose
+/// review store is not ready (the whole `start_pr_base` fallback this file
+/// exercises), sent with a bare `{repo, pr_number}` body — exactly what the
+/// SPA sends. The daemon must resolve `develop` from the forge and capture
+/// ps1 against it, so the base is the PR's true fork point and NOT the
+/// default branch's. Before the fix the base was `origin/main` and
+/// `base_sha` was a different commit; nothing on the envelope said so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_bases_a_develop_targeting_pr_on_develop_on_a_store_less_repo() {
+    let _guard = SERIAL.lock().await;
+    let (_r, _b, _c, dir, fork_sha, develop_fork_sha, pr_sha, _main_tip) =
+        fixture_pr_repo_remote_develop(50);
+    assert_ne!(fork_sha, develop_fork_sha, "the fixture must separate them");
+
+    let gh_router = gh_pull_router_targeting(50, &pr_sha, "develop");
+    let (gh_addr, _gh) = mock_github_server(gh_router).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    // The bare body the SPA sends — no `base_ref` at all.
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 50 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "{}", resp.text().await.unwrap());
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    // The PR's TARGET, fetched fresh and merge-based against.
+    assert_eq!(body["base_ref"], "refs/remotes/origin/develop", "{body}");
+    assert_eq!(body["base_source"], "merge-base", "{body}");
+    assert_eq!(body["base_sha"], develop_fork_sha.as_str(), "{body}");
+    // The base block reads back as an AUTO `track` policy on that branch —
+    // the property D15's retarget-follow and D18's auto-close gate on. A
+    // `user` pin here would silently disable both.
+    assert_eq!(body["base"]["mode"], "track", "{body}");
+    assert_eq!(body["base"]["branch"], "develop", "{body}");
+    assert_eq!(body["base"]["set_by"], "auto", "{body}");
+    // The fetch really refreshed the TARGET's remote-tracking ref. The
+    // default branch is not consulted at all once the forge names a usable
+    // target — the ladder stops at the first candidate that fetches.
+    assert_eq!(
+        git_out(&dir, &["rev-parse", "refs/remotes/origin/develop"]),
+        develop_fork_sha
+    );
+    // Nothing needed a warning: the forge named a target and it was used.
+    let warnings = body["warnings"].as_array().expect("warnings[]");
+    assert!(
+        !warnings.iter().any(|w| w["code"] == "pr-target-assumed"),
+        "{body}"
+    );
+}
+
+/// The other half of the contract: when the forge CANNOT name the target,
+/// the envelope must SAY the default branch was assumed. A PR whose
+/// metadata call 404s is the honest reproduction — the daemon cannot know
+/// the target, and must not let the default branch look like a decision.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_pr_says_so_when_the_forge_cannot_name_the_pr_target() {
+    let _guard = SERIAL.lock().await;
+    let (_r, _b, _c, dir, _base_sha, pr_sha, _main_tip) = fixture_pr_repo_remote_main(51, 2);
+
+    // No `pulls/{n}` route at all: `get_pull` 404s, so the forge names
+    // nothing — the honest "target unknown" shape.
+    let (gh_addr, _gh) = mock_github_server(Router::new()).await;
+    let (_tmp, base) = boot_pr_fixture(&dir, gh_addr).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 51 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "{}", resp.text().await.unwrap());
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    // The pre-existing degradation: the default branch, fetched fresh.
+    assert_eq!(body["base_ref"], "refs/remotes/origin/main", "{body}");
+    assert_eq!(body["base_source"], "merge-base", "{body}");
+    // …now SAYING so. Without this the operator cannot tell a PR against
+    // `main` from one against `develop` whose target never resolved.
+    let warnings = body["warnings"].as_array().expect("warnings[]");
+    let w = warnings
+        .iter()
+        .find(|w| w["code"] == "pr-target-assumed")
+        .unwrap_or_else(|| panic!("no pr-target-assumed warning: {body}"));
+    let msg = w["message"].as_str().unwrap();
+    assert!(msg.contains("main"), "{msg}");
+    assert!(msg.contains("--base"), "{msg}");
+    // …and the PR head still bound: the head FETCH, not the metadata call,
+    // is the load-bearing one.
+    assert_eq!(body["pr_head_sha"], pr_sha, "{body}");
 }

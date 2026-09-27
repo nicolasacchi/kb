@@ -38,32 +38,54 @@ export function baseChipSpec(base: Pick<ReviewBaseOut, "mode">): BaseChipSpec {
   return BASE_MODE_CHIPS[base.mode] ?? BASE_LEGACY_CHIP;
 }
 
-/// The chip's primary label — `tracking main`, `local main`, `pinned
-/// 7c1ed0c`, or `legacy` for a row with no resolved policy. A `pin`'s own
-/// commit IS its merge-base (an ancestor pin's merge-base with any later
-/// head is that same commit — the README §1 root cause, now surfaced
-/// honestly as "pinned <sha>" instead of silently behaving like a track).
-export function baseChipLabel(base: Pick<ReviewBaseOut, "mode" | "branch" | "merge_base">): string {
+/// The chip's primary label — `tracking main`, `local main`, a bare
+/// `pinned`, or `legacy` for a row with no resolved policy.
+///
+/// A `pin` never names a commit here, because the wire cannot support the
+/// claim. `ReviewBaseOut` carries NO pin field: the only sha on it is
+/// `merge_base`, the latest patchset's `base_sha` = `merge_base(base_tip,
+/// head)`, and for a pin `base_tip` IS the pin — so the two are the same
+/// commit only when the pin is an ANCESTOR of the head. The daemon models
+/// the other case as first-class: `RetrackClass::Custom` is "a `pin` that is
+/// NOT an ancestor — hand-chosen, unrelated history", and `classify_base`
+/// makes any resolvable non-branch rev (a tag, a short sha, `HEAD~3`) one.
+/// There, `merge_base` is an OLDER COMMON ANCESTOR the operator never
+/// named, and the old `pinned <sha>` label put that commit's short sha
+/// under the word "pinned" as though it were the pin itself. The sha is
+/// still on screen — `baseMergeBaseSuffix` renders it for every mode — but
+/// under the name the wire actually gives it, and `basePinNote` says why the
+/// pin's own commit is absent.
+export function baseChipLabel(base: Pick<ReviewBaseOut, "mode" | "branch">): string {
   switch (base.mode) {
     case "track":
       return `tracking ${base.branch ?? "?"}`;
     case "local":
       return `local ${base.branch ?? "?"}`;
     case "pin":
-      return base.merge_base ? `pinned ${shortSha(base.merge_base)}` : "pinned";
+      return "pinned";
     default:
       return "legacy";
   }
 }
 
-/// The `· merge-base <sha>` suffix shown for every mode EXCEPT `pin`
-/// (whose own label already IS the merge-base — showing it twice would
-/// say the same fact in two places). `null` when the review has no
-/// captured merge-base yet (no patchset).
-export function baseMergeBaseSuffix(base: Pick<ReviewBaseOut, "mode" | "merge_base">): string | null {
-  if (base.mode === "pin") return null;
+/// The `· merge-base <sha>` suffix, shown whenever a merge-base has been
+/// captured — INCLUDING for a `pin`, where it is the only sha on screen and
+/// the label above it says only that the base is frozen. `null` when the
+/// review has no captured merge-base yet (no patchset).
+export function baseMergeBaseSuffix(base: Pick<ReviewBaseOut, "merge_base">): string | null {
   if (!base.merge_base) return null;
   return `merge-base ${shortSha(base.merge_base)}`;
+}
+
+/// The pin-only half of the base chip's tooltip: the sha beside a `pinned`
+/// chip is the merge-base, NOT the pin, and why the pin's own commit is
+/// missing from `base` at all. `null` for every other mode, whose label
+/// makes no commit claim to correct. (The pin itself is not lost: the
+/// server-composed `base-pinned` warning beside the chip names it, and
+/// `kb-code review status <id> --json` reports it.)
+export function basePinNote(base: Pick<ReviewBaseOut, "mode">): string | null {
+  if (base.mode !== "pin") return null;
+  return "The sha beside it is the patchset's merge-base, NOT the pin: `base` carries no pin field, and the two are the same commit only when the pin is an ancestor of the head.";
 }
 
 /// Mirrors `BaseSource::label()` (`review_base.rs`) — display text for
@@ -130,6 +152,43 @@ export const FORGE_UNVERIFIED_CHIP: BaseChipSpec = { token: "--blue", icon: "Unl
 export function forgeUnverified(store: { forge_verified: string; forge_kind: string | null } | null | undefined): boolean {
   if (!store) return false;
   return store.forge_verified !== "verified" && store.forge_kind != null;
+}
+
+// ── store-card-unknown chip ───────────────────────────────────────────────
+// `forgeUnverified` above answers from a LOADED card, and its two
+// non-true answers ("no store row yet", "still loading") are true claims
+// about a card that was actually read. A card that could NOT be read is a
+// third state, and it must never be folded into either: the card is
+// `GET /api/repos/{name}/store`, which `router.rs` pins to the
+// loopback-only sub-router for the WHOLE family (it reports `store.git_dir`,
+// the daemon's absolute state path), so a remote session's `getJson`
+// throws on a bodyless 404 and `storeQ.data` is `undefined` — exactly the
+// shape of "no store row yet". `forgeUnverified` cannot tell those apart, so
+// the caller checks the query's error state itself and renders THIS chip:
+// the store's state is UNKNOWN, which is neither "no store" nor "fine".
+
+export const STORE_UNKNOWN_CHIP: BaseChipSpec = { token: "--warn", icon: "Warn" };
+
+/// Why the card could not be read. `"loopback"` is the bodyless 404 the
+/// loopback-only store family answers a non-loopback caller — the case
+/// `loopback_only` (`transcripts::search`) produces — where the correct
+/// advice is "open kb-code on the daemon's host". `"transport"` is any other
+/// failure, where the detail is the honest thing to show.
+export type StoreCardFailure = "loopback" | "transport";
+
+/// The chip's on-screen text. Deliberately NOT "no store" and NOT anything
+/// else about the store's health: a card that did not load is a hole in what
+/// this session knows, and only that.
+export const STORE_UNKNOWN_LABEL = "store unknown";
+
+/// The chip's tooltip: the fact kb-code could not DETERMINE from here, and
+/// the reason, so an operator knows whether to move or to look again.
+export function storeUnknownTitle(failure: StoreCardFailure, detail?: string | null): string {
+  const why =
+    failure === "loopback"
+      ? "`GET /api/repos/{name}/store` is loopback-only and this session is not on the daemon's host, so it answered a bodyless 404"
+      : `the card request failed${detail ? ` (${detail})` : ""}`;
+  return `kb-code could not read the review store — ${why}. The forge verification and base facts that card carries are UNKNOWN from here, not verified: open kb-code on the machine running kb-code-server.`;
 }
 
 // ── retrack command line ──────────────────────────────────────────────────

@@ -665,6 +665,68 @@ fn an_ambiguous_repo_refuses_and_an_explicit_url_resolves_it() {
     }
 }
 
+/// The `refused_remotes` a registration carries.
+fn refused_of(r: &Registration) -> Vec<String> {
+    match r {
+        Registration::Member {
+            refused_remotes, ..
+        } => refused_remotes.iter().map(|x| x.name.clone()).collect(),
+        other => panic!("expected Member, got {other:?}"),
+    }
+}
+
+/// A member's clone can grow a hostile remote AFTER the store was
+/// registered — a script, a hand edit, a tool that adds one. The ladder
+/// only runs for a repo that is not yet a member, and the
+/// already-a-member path hard-coded `refused_remotes: vec![]`, so the
+/// refusal was reported exactly ONCE per repo: on every boot thereafter
+/// the registration said `refused-remotes: []` and nothing named the
+/// remote. `Registration::Member`'s own doc — and the ladder's — say a
+/// refused remote is reported, never dropped, never reclassified.
+#[test]
+fn a_member_whose_clone_grows_a_hostile_remote_reports_it_on_every_registration() {
+    let e = env();
+    // widgets-02 carries ONE forge remote, so it registers
+    // unambiguously; the two-remote clone is correctly refused
+    // `base-url-ambiguous`, which would fail this test for a reason
+    // that has nothing to do with what it is testing.
+    let first = e.rs.register_repo(&e.store, "widgets-02", None);
+    assert_eq!(refused_of(&first), Vec::<String>::new(), "{first:?}");
+
+    // A percent-escaped path: kb-code will never fetch from it, and
+    // `key::classify_url` refuses it (the literal and the decoded
+    // reading name two different projects).
+    git(
+        &e.fx.two,
+        &[
+            "remote",
+            "add",
+            "hostile",
+            "https://github.com/acme/%2e%2e/secret.git",
+        ],
+    );
+
+    let again = e.rs.register_repo(&e.store, "widgets-02", None);
+    assert_eq!(refused_of(&again), vec!["hostile".to_string()], "{again:?}");
+    // …and the store is untouched: a refused remote never becomes a key.
+    assert_eq!(
+        row_for(&e, "widgets-02").store_key,
+        "github.com/acme/widgets"
+    );
+
+    // The boot pass reports it as well — it registers the same way, and
+    // the ladder does not run for a member, so this is the only place a
+    // member's clone is inspected at boot.
+    review_in(&e, "widgets-02", &e.fx.two, &e.fx.main_tip, &e.fx.main_tip);
+    let s = crate::review_store::boot::run_boot(&e.rs, &e.store);
+    assert!(
+        s.refused
+            .iter()
+            .any(|r| r.contains("hostile") && r.contains("remote-url-refused")),
+        "the boot log must name the refused remote: {s:?}"
+    );
+}
+
 #[test]
 fn a_repo_with_no_forge_remote_gets_a_local_store() {
     let e = env();
@@ -739,6 +801,61 @@ fn a_refused_credential_never_brings_the_store_up() {
         e.rs.handle_for_repo(&e.store, "widgets-02").unwrap_err(),
         StoreUnavailable::Absent
     );
+}
+
+/// The refusal is a RECORD, and the next boot must not erase it.
+/// `registry::seed` puts the row back to `absent` carrying the class so
+/// a store is never `ready` over a base nobody fetched — but the boot
+/// job re-seeds every `absent` row with `network = false`, which
+/// consults no credential at all, and put the store straight back to
+/// `ready` with `base: offline-seed`: the state the refused arm exists
+/// to prevent, restored by the next restart, with the credential still
+/// broken. A local pass resolves no credential, so it does not get to
+/// overrule the recorded refusal.
+#[test]
+fn a_refused_credential_is_not_erased_by_the_next_boot() {
+    let fx = fixture();
+    std::fs::create_dir_all(&fx.home).unwrap();
+    let token = empty_token_file(&fx.home);
+    let mut review = ReviewSection::default();
+    pin(&mut review, "widgets-02", "token", Some(&token));
+    let e = env_with(fx, review);
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    assert!(
+        matches!(
+            e.rs.seed(&e.store, id, true),
+            Err(StoreUnavailable::CredentialRefused { .. })
+        ),
+        "the credential must be refused"
+    );
+    assert_eq!(row_for(&e, "widgets-02").state, "absent");
+
+    // The repo has a review, so the boot pass registers it — which puts
+    // its `absent` row in scope for the local re-seed.
+    review_in(&e, "widgets-02", &e.fx.two, &e.fx.main_tip, &e.fx.main_tip);
+    let s = crate::review_store::boot::run_boot(&e.rs, &e.store);
+    let row = row_for(&e, "widgets-02");
+    assert_eq!(s.seeded, 0, "a boot seed resolves no credential: {s:?}");
+    assert_eq!(
+        row.state, "absent",
+        "the store must not come up over a credential that is still broken"
+    );
+    assert_eq!(
+        state_code(row.state_json.as_deref()).as_deref(),
+        Some("credential-rejected"),
+        "the refusal is still the recorded reason"
+    );
+    assert!(
+        s.refused.iter().any(|r| r.contains("credential-rejected")),
+        "the boot log must name the refusal it honoured: {s:?}"
+    );
+
+    // The control: nothing else holds this store back. A local pass —
+    // what an offline `store sync` runs — brings it up on cached refs,
+    // which is the documented exception and is recorded as one.
+    let rep = e.rs.seed(&e.store, id, false).unwrap();
+    assert!(matches!(rep.base, BaseFetch::Skipped { ref code } if code == "offline-seed"));
+    assert_eq!(row_for(&e, "widgets-02").state, "ready");
 }
 
 /// The control, and the boundary of the arm above: NO credential was
