@@ -177,9 +177,9 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     // the store means nothing else reports it. Without this finding a
     // hostile or typo'd remote is invisible on every boot after the one
     // that minted the store.
-    if let Registration::Member {
+    if let Some(Registration::Member {
         refused_remotes, ..
-    } = &registration
+    }) = &registration
     {
         for r in refused_remotes {
             doctor.push(finding(
@@ -194,7 +194,7 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     // store is fine" and "the store is fine because we gave up on the
     // base" — the row is `absent` in that case, but an operator reading
     // only the state would not know why.
-    if let Some(class) = super::boot::refused_credential(&row) {
+    if let Some(class) = row.as_ref().and_then(super::boot::refused_credential) {
         doctor.push(finding("error", "store-credential-refused", class));
     }
     let cfg = rs.settings().repo(name);
