@@ -10,7 +10,11 @@
 //!   the on-disk location, not the credentials.
 //! * `GET  /api/repos/{name}/credentials` — the fetch credential as last
 //!   RESOLVED (`kbc-credentials/1`): kind, account, reason, and the D9
-//!   "broader than needed" flag. Never secret bytes; never runs `gh`.
+//!   "broader than needed" flag. Never secret bytes; never runs `gh`. The
+//!   `config` block also names the member entry the STORE resolved with
+//!   (`settings_repo`) and any disagreement between members
+//!   (`credential_disagreement`) — a store-wide pin is never read off one
+//!   member in db order silently.
 //! * `POST /api/repos/{name}/store/sync` — LOOPBACK-ONLY. Registers the
 //!   repo if needed, seeds an `absent` store (with the base fetch unless
 //!   `?offline=1`), or syncs a `ready` one. A `seeding` store refuses with
@@ -32,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use super::cred::{FetchCredential, ProfileKind};
 use super::key::{split_key, store_key_for_url};
 use super::registry::{
-    state_code, Registration, ReviewStores, StoreRefusal, StoreUnavailable,
+    state_code, Registration, ReviewStores, StoreCredentialSource, StoreRefusal, StoreUnavailable,
     BROADER_THAN_NEEDED_MARK,
 };
 use super::seed;
@@ -167,6 +171,32 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     if let Some(Registration::Error { code, detail }) = &registration {
         doctor.push(finding("error", code, detail.clone()));
     }
+
+    // A refused remote on an otherwise-healthy store: the clone carries a
+    // URL the ladder would not key, and the good remote that DID decide
+    // the store means nothing else reports it. Without this finding a
+    // hostile or typo'd remote is invisible on every boot after the one
+    // that minted the store.
+    if let Some(Registration::Member {
+        refused_remotes, ..
+    }) = &registration
+    {
+        for r in refused_remotes {
+            doctor.push(finding(
+                "warn",
+                "remote-url-refused",
+                format!("remote {:?}: {}", r.name, r.reason),
+            ));
+        }
+    }
+    // A credential the operator supplied and which was REFUSED leaves its
+    // class on the row. Surfacing it here is the difference between "the
+    // store is fine" and "the store is fine because we gave up on the
+    // base" — the row is `absent` in that case, but an operator reading
+    // only the state would not know why.
+    if let Some(class) = row.as_ref().and_then(super::boot::refused_credential) {
+        doctor.push(finding("error", "store-credential-refused", class));
+    }
     let cfg = rs.settings().repo(name);
     let mut members = Vec::new();
     let mut disk = None;
@@ -258,6 +288,14 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
                     "fetches use the ambient environment (legacy, amber)",
                 ));
             }
+            // D12 — a store-wide pin read off ONE member, chosen by db
+            // order, is the account-confusion axis itself: reported, and no
+            // credential resolved on a guess.
+            if let StoreCredentialSource::Disagreement(detail) =
+                rs.credential_source_for(store, r.id)
+            {
+                doctor.push(finding("warn", "credential-settings-conflict", detail));
+            }
             if r.cred_reason
                 .as_deref()
                 .is_some_and(|s| s.ends_with(BROADER_THAN_NEEDED_MARK))
@@ -287,6 +325,16 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
                 ));
             }
         }
+    }
+    // Process-wide counters of review/PR git reads that could not use a
+    // store (`unresolved`: no ready store; `odb_miss`: a ready store lacked
+    // the object and the work tree served it). Acceptance gate 3 ("0 user-ODB
+    // fallback hits once every store is ready") reads `odb_miss` here.
+    if let Some(obj) = runtime.as_object_mut() {
+        obj.insert(
+            "git_fallbacks".to_string(),
+            serde_json::to_value(store.git_fallback_stats()).unwrap_or_default(),
+        );
     }
     Ok(StoreCard {
         schema: STORE_SCHEMA,
@@ -336,10 +384,31 @@ pub async fn credentials_route(
     }
     let st = state.clone();
     let n = name.clone();
-    let row = match tokio::task::spawn_blocking(move || st.store.store_for_repo_name(&n)).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return internal(e),
+    let rs = state.review_stores.clone();
+    let (row, source) = match tokio::task::spawn_blocking(move || {
+        let row = st.store.store_for_repo_name(&n);
+        // Which member's `[[review.repos]]` entry the STORE resolves with —
+        // not necessarily this repo's, and never silently (D12).
+        let source = row
+            .as_ref()
+            .ok()
+            .and_then(|r| r.as_ref())
+            .map(|r| rs.credential_source_for(&st.store, r.id));
+        (row, source)
+    })
+    .await
+    {
+        Ok(v) => v,
         Err(e) => return internal(e),
+    };
+    let row = match row {
+        Ok(r) => r,
+        Err(e) => return internal(e),
+    };
+    let (settings_repo, disagreement) = match &source {
+        Some(StoreCredentialSource::Member(m)) => ((!m.is_empty()).then(|| m.clone()), None),
+        Some(StoreCredentialSource::Disagreement(d)) => (None, Some(d.clone())),
+        None => (None, None),
     };
     let cfg = state.review_stores.settings().repo(&name);
     let (kind, reason, account, host) = match &row {
@@ -373,6 +442,10 @@ pub async fn credentials_route(
             "gh_user": cfg.gh_user,
             "token_file_configured": cfg.token_file.is_some(),
             "allow_inherited_credentials": state.review_stores.settings().allow_inherited_credentials,
+            // Which member's entry the store actually used, and whether its
+            // members disagreed (then nothing was resolved at all).
+            "settings_repo": settings_repo,
+            "credential_disagreement": disagreement,
         },
     }))
     .into_response()

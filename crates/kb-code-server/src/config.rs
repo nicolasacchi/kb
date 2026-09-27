@@ -1381,7 +1381,8 @@ pub struct ReviewSection {
 /// [review.store]
 /// root = "~/.local/state/kb/kb-code/git"   # keys/ and ssh/ never follow this
 /// seed_on_boot = true
-/// allow_inherited_credentials = true
+/// allow_inherited_credentials = false
+/// base_fetch_timeout_secs = 1800     # one store fetch; read at boot
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1393,8 +1394,51 @@ pub struct ReviewStoreSection {
     /// have reviews (D4).
     pub seed_on_boot: bool,
     /// Whether the ambient-environment (`inherit`) credential rung may be
-    /// used (D7: flips to `false` with the first shipped service unit).
+    /// used. DEFAULT `false` (D7, landed): `inherit` is the WEAKEST rung —
+    /// the only one that neither `env_clear()`s nor resets
+    /// `credential.helper`, so it hands the call to the operator's ambient
+    /// gitconfig helper chain, `ssh-agent` and `~/.netrc`. An unconfigured
+    /// daemon must not start there, so the rung is off unless an operator
+    /// asks for it. Setting it to `true` is still a supported, fully
+    /// recorded posture: the rung resolves amber (`cred_kind = inherit`,
+    /// `credential-inherit` in `doctor`, `inherit` in the recorded
+    /// `cred_reason`) rather than silently.
+    ///
+    /// Turn it back on when the store is deliberately driven by a human's
+    /// own git identity (a personal single-user install fetching a private
+    /// repo over SSH, say) and no scoped credential can be minted. Under
+    /// `auto` the ladder then SKIPS this rung with the reason
+    /// `allow_inherited_credentials = false`; an explicit
+    /// `credential = "inherit"` on a repo is a REFUSED ERROR, not a
+    /// fall-through (`review_store::cred.rs`).
     pub allow_inherited_credentials: bool,
+    /// Deadline for ONE base (network) store fetch, in seconds.
+    /// `None` (the default) = the daemon's own
+    /// `review_store::git::BASE_FETCH_TIMEOUT` (30 min), sized for the
+    /// fleet README §5.2 targets — five member clones, ~3.6 GB of
+    /// `.git` between them, one ~748 MB, which no link moves in 30 s
+    /// (that budget is what failed the U13 acceptance run's `create`
+    /// and `snapshot`).
+    ///
+    /// It is a DEADLINE, not a preference: it is enforced on the
+    /// fetch's process GROUP, which is SIGKILLed when the deadline
+    /// expires, so a hung fetch cannot wedge a store. `0` is not a
+    /// deadline and is refused at resolve time (warning + the
+    /// default), never honoured.
+    ///
+    /// A value OUTSIDE `10 x WORK_FETCH_TIMEOUT_SECS … SEED_FETCH_TIMEOUT_SECS`
+    /// is still honoured — it is the operator's lever — but it warns, and
+    /// the warning surfaces as a `store doctor` finding. The band exists
+    /// because both failure directions are real: below the floor the fetch
+    /// is killed before a 748 MB clone can transfer (the defect this key
+    /// was added to fix), and above the ceiling a base fetch outlives the
+    /// whole-clone seed import that precedes it, making the cheaper call
+    /// the more expensive one to survive.
+    ///
+    /// The compile-time pins in `review_store::git` guard the DEFAULT.
+    /// They do NOT guard this key: a configured value is range-checked at
+    /// resolve time, not by the compiler.
+    pub base_fetch_timeout_secs: Option<u64>,
 }
 
 impl Default for ReviewStoreSection {
@@ -1402,7 +1446,8 @@ impl Default for ReviewStoreSection {
         Self {
             root: None,
             seed_on_boot: true,
-            allow_inherited_credentials: true,
+            allow_inherited_credentials: false,
+            base_fetch_timeout_secs: None,
         }
     }
 }

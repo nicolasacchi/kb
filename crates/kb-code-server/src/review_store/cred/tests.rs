@@ -95,6 +95,82 @@ fn gh_url() -> RemoteUrl {
     RemoteUrl::parse_remote("https://github.com/acme/widgets.git").unwrap()
 }
 
+/// A `gh` that never answers — the shape a keyring locked by a
+/// suspending laptop leaves behind. The deadline is 200 ms rather than
+/// the production 20 s so the test is quick; the SCRIPT is what makes
+/// it deterministic (a real deadline race would not be), and the killed
+/// process group is what ends it.
+fn hung_gh() -> (tempfile::TempDir, GhCli) {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("gh");
+    std::fs::write(&p, "#!/bin/sh\nsleep 60\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    wait_executable(&p);
+    // Owned `PathBuf`, exactly as `FakeGh::gh` passes it: `from_env_fn`
+    // takes `impl Into<OsString>`.
+    let gh = GhCli::from_env_fn(p.clone(), |k| match k {
+        "PATH" => Some("/usr/bin:/bin".into()),
+        "HOME" => Some("/nonexistent-home".into()),
+        _ => None,
+    })
+    .with_timeout(std::time::Duration::from_millis(200));
+    (dir, gh)
+}
+
+/// A `gh` that outlives its deadline is NOT an identity failure, and the
+/// two predicates that decide it are the ones the store path reads:
+/// `registry::seed`/`sync_ready` stop the pass on `is_auth()` and
+/// degrade to a recorded skip otherwise, and `kb-code store sync` exits
+/// 6 only for an auth class. As a `CredentialUnavailable` a slow keyring
+/// was both — the store refused to seed and the row held `absent` on a
+/// credential that was perfectly good.
+#[test]
+fn a_gh_deadline_is_transient_and_never_an_identity_failure() {
+    let (_dir, gh) = hung_gh();
+    let err = gh.accounts("github.com").unwrap_err();
+    assert!(
+        matches!(err, CredError::TimedOut(_)),
+        "the deadline must be its own error, not `Unavailable`: {err:?}"
+    );
+    assert_eq!(err.class(), FailureClass::Timeout);
+    assert!(err.class().is_transient());
+    assert!(
+        !err.class().is_auth(),
+        "a timeout in `is_auth()` refuses the seed on a slow machine"
+    );
+    // The same probe shape through the ladder: a bound store still STOPS
+    // (no identity swap), and the class it stops with is the transient
+    // one, so the store degrades to a skip instead of being refused.
+    let p = Probes {
+        gh: Some(|| Err(CredError::TimedOut(GH_TIMEOUT))),
+        anon_ok: true,
+        ..Default::default()
+    };
+    let mut c = cfg();
+    c.gh_user = Some("alice".into());
+    let err = resolve_fetch_credential(&c, &gh_url(), &p).unwrap_err();
+    assert_eq!(err.class(), FailureClass::Timeout, "{err}");
+    assert_eq!(*p.log.borrow(), ["gh"], "no fall-through past a bound rung");
+}
+
+#[test]
+fn an_explicit_default_port_is_the_same_credential_scope() {
+    // git normalises the default port out of a remote before it fills a
+    // credential query, so a scope spelled `github.com:443` could never
+    // match the helper's exact `host=github.com` test — a semantically
+    // correct remote presenting as a credential fault. Fails closed, which
+    // is why it is easy to mistake for a real one.
+    let bare = RemoteUrl::parse_remote("https://github.com/acme/widgets.git").unwrap();
+    let ported = RemoteUrl::parse_remote("https://github.com:443/acme/widgets.git").unwrap();
+    let scope = |u: &RemoteUrl| CredentialScope::for_url(u).unwrap();
+    assert_eq!(scope(&ported), scope(&bare));
+    assert_eq!(scope(&ported).authority(), "github.com");
+    // A non-default port is a different endpoint and keeps its own scope.
+    let custom = RemoteUrl::parse_remote("https://github.com:8443/acme/widgets.git").unwrap();
+    assert_eq!(scope(&custom).authority(), "github.com:8443");
+}
+
 #[test]
 fn pinned_user_reads_that_accounts_token_even_when_another_is_active() {
     let f = FakeGh::new(&[("alice", false, "repo"), ("bob", true, "repo")]);
@@ -393,7 +469,12 @@ fn ladder_stops_on_an_account_mismatch() {
 
 #[test]
 fn a_bound_account_stops_the_ladder_on_any_gh_failure() {
-    // Every way gh can fail to produce the bound account's token.
+    // Every way gh can fail to produce the bound account's token, with
+    // the class each one now carries. The STOP is the rule under test
+    // (falling through would swap the store's identity); the class
+    // column is what D12 reads, so it is pinned here too — a timeout
+    // is deliberately NOT a credential class, and that difference is
+    // invisible to a loop that only checks "it stopped".
     fn logged_out() -> Result<GhCliCredential, CredError> {
         Err(CredError::GhNotLoggedIn {
             host: "github.com".into(),
@@ -403,19 +484,26 @@ fn a_bound_account_stops_the_ladder_on_any_gh_failure() {
         Err(CredError::GhNotInstalled)
     }
     fn locked() -> Result<GhCliCredential, CredError> {
-        Err(CredError::Unavailable(
-            "gh timed out (keyring locked?)".into(),
-        ))
+        Err(CredError::TimedOut(GH_TIMEOUT))
     }
     fn too_old() -> Result<GhCliCredential, CredError> {
         Err(CredError::Unavailable(
             "gh auth status: unknown flag: --json".into(),
         ))
     }
+    /// A gh rung that fails, and the class the failure must be reported
+    /// as. Named because the inline form trips `type_complexity`, and
+    /// because the pairing IS the assertion: every rung below must land
+    /// in the class its failure actually is, not merely in `is_auth`.
+    type FailingRung = (fn() -> Result<GhCliCredential, CredError>, FailureClass);
+    let failures: [FailingRung; 4] = [
+        (logged_out, FailureClass::CredentialUnavailable),
+        (missing, FailureClass::CredentialUnavailable),
+        (locked, FailureClass::Timeout),
+        (too_old, FailureClass::CredentialUnavailable),
+    ];
     for (bind_pin, bind_rec) in [(true, false), (false, true)] {
-        let failures: [fn() -> Result<GhCliCredential, CredError>; 4] =
-            [logged_out, missing, locked, too_old];
-        for gh in failures {
+        for (gh, class) in failures {
             let p = Probes {
                 gh: Some(gh),
                 anon_ok: true,
@@ -432,7 +520,7 @@ fn a_bound_account_stops_the_ladder_on_any_gh_failure() {
                 c.recorded_account = Some("alice".into());
             }
             let err = resolve_fetch_credential(&c, &gh_url(), &p).unwrap_err();
-            assert_eq!(err.class(), FailureClass::CredentialUnavailable, "{err}");
+            assert_eq!(err.class(), class, "{err}");
             assert_eq!(
                 *p.log.borrow(),
                 ["gh"],

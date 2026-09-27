@@ -18,11 +18,12 @@
 //!
 //! V76-R1a adds, for the `start-pr` base ladder ONLY
 //! ([`start_pr_base`]): `git fetch origin
-//! +refs/heads/<d>:refs/remotes/origin/<d>` (refresh the remote default
-//! branch before merge-basing against it — the only write outside
-//! `refs/kbc/`, and it is a remote-TRACKING ref, never a local branch) and
-//! `git rev-list --left-right --count <local>...<remote>` (the
-//! stale-mirror refusal's ahead/behind probe).
+//! +refs/heads/<b>:refs/remotes/origin/<b>` (refresh the remote-tracking ref
+//! of whichever branch the ladder settled on — the PR's own target when the
+//! forge named one, else the default branch — before merge-basing against
+//! it; the only write outside `refs/kbc/`, and it is a remote-TRACKING ref,
+//! never a local branch) and `git rev-list --left-right --count
+//! <local>...<remote>` (the stale-mirror warning's ahead/behind probe).
 //!
 //! `id` and `n` are daemon-generated integers; shas are validated as
 //! full 40-hex after `rev-parse` before any `update-ref`. User-supplied
@@ -1029,18 +1030,19 @@ pub fn default_base_ref(repo_root: &Path) -> String {
 
 // --- V76-R1a — the start-pr base ladder (explicit > merge-base > local-default) --
 
-/// V76-R1a — the stale-mirror refusal threshold. When `start-pr` is called
+/// V76-R1a — the stale-mirror WARNING threshold. When `start-pr` is called
 /// WITHOUT `--base` and the mirror's LOCAL default branch is behind the
 /// just-fetched remote default by MORE than this many commits, the route
-/// refuses with [`ERR_STALE_MIRROR`] instead of silently basing ps1 on a
-/// merge-base the operator never saw. 50 is a judgment call, not a
-/// measurement: a mirror a handful of commits behind is the ordinary case
-/// (the merge-base default handles it correctly), a mirror MONTHS behind is
-/// the incident this unit fixes — the operator must say so explicitly.
+/// attaches a `stale-mirror` warning to the envelope, so the operator sees
+/// that ps1 was based on a merge-base they never looked at. 50 is a
+/// judgment call, not a measurement: a mirror a handful of commits behind is
+/// the ordinary case (the merge-base default handles it correctly), a mirror
+/// MONTHS behind is the incident this unit fixes.
+///
+/// RS-U6 removed the 409 this used to raise — ps1 is now based on the
+/// freshly fetched remote tip either way, so a stale local default no longer
+/// changes the diff. Only the warning survives.
 pub const STALE_MIRROR_BEHIND_LIMIT: u64 = 50;
-
-/// The RFC 7807 `type` URN of the stale-mirror refusal.
-pub const ERR_STALE_MIRROR: &str = "urn:kb:errors:stale-mirror";
 
 /// What fed ps1's `base_sha` on a `start-pr` review — reported on the
 /// `POST /api/reviews/pr` envelope as `base_source` and merged into the
@@ -1077,13 +1079,15 @@ fn has_origin_remote(repo_root: &dyn GitRoot) -> bool {
 }
 
 /// `git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>` —
-/// refresh the ONE remote-tracking ref the merge-base default needs. An
+/// refresh the ONE remote-tracking ref the merge-base rung needs. An
 /// explicit refspec (rather than a bare `git fetch origin <branch>`) so the
 /// remote-tracking ref updates regardless of the repo's configured fetch
-/// refspec. `branch` is a validated [`Revspec`]; a `:` can never appear in
-/// a real branch name, so its presence here is refused outright rather than
-/// handed to git's refspec parser.
-fn fetch_remote_default(repo_root: &dyn GitRoot, branch: &Revspec) -> Result<(), ReviewGitError> {
+/// refspec. `branch` is a validated [`Revspec`]; a `:` can never appear in a
+/// real branch name, so its presence here is refused outright rather than
+/// handed to git's refspec parser. The branch is whatever the ladder settled
+/// on — the PR's own target when the forge named one, else the default
+/// branch — NOT necessarily the default.
+fn fetch_remote_base(repo_root: &dyn GitRoot, branch: &Revspec) -> Result<(), ReviewGitError> {
     let b = branch.as_str();
     if b.contains(':') {
         return Err(ReviewGitError::BadRef(b.to_string()));
@@ -1094,7 +1098,9 @@ fn fetch_remote_default(repo_root: &dyn GitRoot, branch: &Revspec) -> Result<(),
 }
 
 /// `git rev-list --left-right --count <local>...<remote>` → `(ahead,
-/// behind)` of the LOCAL default branch against the fetched remote tip.
+/// behind)` of the LOCAL branch of the same name against the fetched remote
+/// tip. Both endpoints are validated full shas, so the interpolated range
+/// token can only ever be `<hex>...<hex>`.
 /// Both endpoints are validated full shas, so the interpolated range token
 /// can only ever be `<hex>...<hex>`.
 fn ahead_behind(
@@ -1128,80 +1134,142 @@ fn ahead_behind(
     Ok((ahead, behind))
 }
 
-/// V76-R1a — the `start-pr` base ladder: **explicit > merge-base >
-/// local-default**, for a repo whose review store is NOT ready yet (the
-/// pre-store fallback; a ready store runs `review_base`'s resolution chain
-/// instead). Returns the `base_ref` to store on the review row, the
-/// [`BaseSource`] for the envelope, and `warnings[]`. Spawns git — call it
-/// from the blocking pool.
+/// The PR's target could not be used as ps1's base — the forge did not name
+/// one, or the one it named could not be fetched. `assumed` is the branch ps1
+/// is actually based on; `why` says which of the two it was. Reuses the
+/// chain's own [`crate::review_base::warn::PR_TARGET_ASSUMED`] code (the
+/// store path's rung-4 code) so one vocabulary covers both paths, and never
+/// a new one: an operator reading either path learns the same thing.
+fn pr_target_assumed(assumed: &str, why: &str) -> BaseWarningOut {
+    crate::review_base::warning(
+        crate::review_base::warn::PR_TARGET_ASSUMED,
+        format!(
+            "the PR's target branch could not be used as the base ({why}); ps1 is based on \
+             {assumed:?} — pass --base <branch> (or retrack) if the PR targets something else"
+        ),
+    )
+}
+
+/// V76-R1a — the `start-pr` base ladder: **explicit > the PR's own target
+/// (README §6 rung 2, the forge API's `base.ref`) > merge-base against the
+/// default branch > local-default**, for a repo whose review store is NOT
+/// ready yet (the pre-store fallback; a ready store runs `review_base`'s
+/// resolution chain and capture instead). Returns the `base_ref` to store on
+/// the review row, the [`BaseSource`] for the envelope, and `warnings[]`.
+/// Spawns git — call it from the blocking pool.
 ///
 /// - `explicit` (`--base`) wins outright and is validated exactly as before.
-/// - Otherwise, when the repo has an `origin` remote, the remote default
-///   branch is FETCHED first (`git fetch origin +refs/heads/<d>:refs/
-///   remotes/origin/<d>`) and the stored `base_ref` becomes
-///   `refs/remotes/origin/<d>` — so ps1's `base_sha` is the merge-base of
-///   the PR head against the FRESH remote tip, never the mirror's local
-///   branch.
-/// - RS-U6: the old stale-mirror REFUSAL (409 [`ERR_STALE_MIRROR`]) is gone
-///   — the base above already comes from the freshly fetched remote tip, so
-///   a stale local default branch no longer affects the diff. It is
-///   reported as a `stale-mirror` WARNING instead (design-general
-///   "Envelopes"); the URN constant stays for older clients.
-/// - A repo without an `origin` remote, a failed default-branch fetch, or
-///   a remote that lacks the branch degrades to the pre-V76 answer (the
-///   mirror's local default branch) with `base_source: local-default`.
+/// - `forge_base_ref` is the PR's target as the FORGE reported it — already
+///   read by the caller (`github.get_pull`, the same call the store path
+///   makes and the same answer `pr_enrichment` reuses, so the fallback costs
+///   no second round trip). It is the chain's FORGE rung, not a user
+///   `--base`: the stored `base_ref` is `refs/remotes/origin/<target>`, which
+///   reads back as `track(<target>)` with `set_by=auto` (D15 retarget-follow
+///   and D18's auto-close keep working) — never as a `user` pin. The head's
+///   own branch is never an answer, exactly as in
+///   [`crate::review_base::resolve_pr_base`].
+/// - Whichever branch the ladder settles on is FETCHED first (`git fetch
+///   origin +refs/heads/<b>:refs/remotes/origin/<b>`), so ps1's `base_sha`
+///   is the merge-base of the PR head against the FRESH remote tip, never
+///   the mirror's local branch. The candidates are tried best-first (the
+///   target, then the default branch), so a target that cannot be fetched
+///   falls through to the default rung exactly as it did before the forge
+///   rung existed.
+/// - RS-U6: the old stale-mirror REFUSAL is gone — the base above already
+///   comes from the freshly fetched remote tip, so a stale local branch no
+///   longer affects the diff. It is reported as a `stale-mirror` WARNING
+///   instead (design-general "Envelopes"), and the 409 URN is no longer
+///   produced on the wire at all.
+/// - When the PR's TARGET was known but is not what ps1 ended up based on
+///   (unusable name, the PR's own head branch, an unfetchable branch), or
+///   when the forge named no target at all, the envelope carries a
+///   `pr-target-assumed` WARNING naming both. Basing a PR on a branch it
+///   does not target is the one degradation that must never be silent. A
+///   repo with no `origin` remote, or no candidate that could be fetched,
+///   still degrades to the pre-V76 answer (the mirror's local default
+///   branch) with `base_source: local-default`.
 pub fn start_pr_base(
     repo_root: &dyn GitRoot,
     explicit: Option<&str>,
-    _pr_head_sha: &str,
-    _repo_name: &str,
-    _pr_number: u32,
+    forge_base_ref: Option<&str>,
+    pr_head_branch: Option<&str>,
 ) -> Result<(String, BaseSource, Vec<BaseWarningOut>), ApiError> {
     if let Some(b) = explicit {
         reject_user_ref(b)?;
         return Ok((b.to_string(), BaseSource::Explicit, vec![]));
     }
     let local_default = default_base_ref(repo_root.git_path());
-    if !has_origin_remote(repo_root) {
-        return Ok((local_default, BaseSource::LocalDefault, vec![]));
-    }
-    let branch = match parse_user_ref(&local_default) {
-        Ok(b) => b,
-        // A default branch name this crate's own validator cannot carry
-        // never reaches a fetch argv — degrade, naming the source.
-        Err(_) => return Ok((local_default, BaseSource::LocalDefault, vec![])),
-    };
-    if fetch_remote_default(repo_root, &branch).is_err() {
-        return Ok((local_default, BaseSource::LocalDefault, vec![]));
-    }
-    let remote_ref = format!("refs/remotes/origin/{}", branch.as_str());
-    let remote_spec = match parse_user_ref(&remote_ref) {
-        Ok(s) => s,
-        Err(_) => return Ok((local_default, BaseSource::LocalDefault, vec![])),
-    };
-    let remote_sha = match resolve_commit_sha(repo_root, &remote_spec) {
-        Ok(s) => s,
-        Err(_) => return Ok((local_default, BaseSource::LocalDefault, vec![])),
-    };
     let mut warnings = Vec::new();
-    let local_ref = format!("refs/heads/{}", branch.as_str());
-    if let Ok(local_spec) = parse_user_ref(&local_ref) {
-        if let Ok(local_sha) = resolve_commit_sha(repo_root, &local_spec) {
-            if let Ok((ahead, behind)) = ahead_behind(repo_root, &local_sha, &remote_sha) {
-                if behind > STALE_MIRROR_BEHIND_LIMIT {
-                    warnings.push(crate::review_base::warning(
-                        crate::review_base::warn::STALE_MIRROR,
-                        format!(
-                            "the local default branch {branch:?} is {behind} commits behind the \
-                             fetched origin/{branch} ({ahead} ahead); ps1 is based on the fetched \
-                             origin/{branch}, not the local branch"
-                        ),
-                    ));
+    // README §6 rung 2 — the forge named a target and it is usable as a
+    // base. Anything else (no answer, a name this crate's validator refuses,
+    // or the PR's own head branch) falls through to the default branch.
+    let target = forge_base_ref
+        .map(str::trim)
+        .filter(|b| crate::review_base::valid_branch_name(b))
+        .filter(|b| Some(*b) != pr_head_branch)
+        .map(str::to_string);
+    // The candidates, best first: the PR's target, then the default branch.
+    // A target that cannot be FETCHED is not the end of the ladder — the
+    // default branch may still be, exactly as it was before the forge rung
+    // existed — so this is a loop and not an early return.
+    let mut candidates: Vec<&str> = Vec::with_capacity(2);
+    if let Some(t) = target.as_deref() {
+        candidates.push(t);
+    }
+    if !candidates.contains(&local_default.as_str()) {
+        candidates.push(&local_default);
+    }
+    if target.is_none() {
+        warnings.push(pr_target_assumed(
+            &local_default,
+            "the forge did not name a usable target branch",
+        ));
+    }
+    if !has_origin_remote(repo_root) {
+        return Ok((local_default, BaseSource::LocalDefault, warnings));
+    }
+    for candidate in candidates {
+        // A branch name this crate's own validator cannot carry never
+        // reaches a fetch argv.
+        let Ok(branch) = parse_user_ref(candidate) else {
+            continue;
+        };
+        if fetch_remote_base(repo_root, &branch).is_err() {
+            if target.as_deref() == Some(candidate) {
+                warnings.push(pr_target_assumed(
+                    &local_default,
+                    &format!("origin/{candidate} could not be fetched"),
+                ));
+            }
+            continue;
+        }
+        let remote_ref = format!("refs/remotes/origin/{}", branch.as_str());
+        let Ok(remote_spec) = parse_user_ref(&remote_ref) else {
+            continue;
+        };
+        let Ok(remote_sha) = resolve_commit_sha(repo_root, &remote_spec) else {
+            continue;
+        };
+        let local_ref = format!("refs/heads/{}", branch.as_str());
+        if let Ok(local_spec) = parse_user_ref(&local_ref) {
+            if let Ok(local_sha) = resolve_commit_sha(repo_root, &local_spec) {
+                if let Ok((ahead, behind)) = ahead_behind(repo_root, &local_sha, &remote_sha) {
+                    if behind > STALE_MIRROR_BEHIND_LIMIT {
+                        warnings.push(crate::review_base::warning(
+                            crate::review_base::warn::STALE_MIRROR,
+                            format!(
+                                "the local {branch:?} branch is {behind} commits behind the \
+                                 fetched origin/{branch} ({ahead} ahead); ps1 is based on the \
+                                 fetched origin/{branch}, not the local branch"
+                            ),
+                        ));
+                    }
                 }
             }
         }
+        return Ok((remote_ref, BaseSource::MergeBase, warnings));
     }
-    Ok((remote_ref, BaseSource::MergeBase, warnings))
+    Ok((local_default, BaseSource::LocalDefault, warnings))
 }
 
 fn now_unix() -> i64 {
@@ -1717,11 +1785,22 @@ pub(crate) async fn github_with_gh_cli(
     .0
 }
 
-/// [`github_with_gh_cli`] with an explicit `gh` and the D12 surface: an
-/// answering account that is not the pinned/recorded one is a
-/// `credential-account-mismatch` WARNING (never a silent fall-through to
-/// "no credentials"). Any other gh failure (not installed, not logged in)
-/// simply leaves the rung unused.
+/// [`github_with_gh_cli`] with an explicit `gh` and the D12 surface.
+///
+/// A store BOUND to a gh account — `gh_user` pinned, or a `cred_account`
+/// recorded — is the same `bound` predicate the fetch ladder uses
+/// ([`crate::review_store::cred::resolve_fetch_credential`]). For such a
+/// store an ambient token (`[github] token_file`, `KB_CODE_GITHUB_TOKEN`)
+/// is not a rung at all: the daemon FETCHES as the pinned account and must
+/// not READ the forge as somebody else, so the ambient short-circuit does
+/// not fire and the request resolves through the store's own gh-cli
+/// credential alone. Every way that credential can fail to appear — a
+/// different account answering (`credential-account-mismatch`), gh missing,
+/// gh logged out, a locked keyring, a refused scope — is a WARNING naming
+/// the [`FailureClass`](crate::review_store::FailureClass), never a silent
+/// fall-through to "no credentials".
+/// An UNBOUND store keeps the pre-store posture exactly: the ambient token
+/// is honoured, and a gh failure simply leaves the rung unused.
 pub(crate) async fn github_with_gh_cli_warned(
     state: &SharedState,
     github: crate::github::GithubClient,
@@ -1729,8 +1808,9 @@ pub(crate) async fn github_with_gh_cli_warned(
     repo_name: &str,
     gh: crate::review_store::GhCli,
 ) -> (crate::github::GithubClient, Vec<BaseWarningOut>) {
-    use crate::review_store::{ApiCredential, CredError, CredentialPin, RemoteUrl};
-    if github.has_ambient_token() || handle.forge_kind.as_deref() != Some("github") {
+    use crate::github::ApiBinding;
+    use crate::review_store::{ApiCredential, CredentialPin, RemoteUrl};
+    if handle.forge_kind.as_deref() != Some("github") {
         return (github, vec![]);
     }
     let Some(url) = handle
@@ -1747,6 +1827,9 @@ pub(crate) async fn github_with_gh_cli_warned(
     ) {
         return (github, vec![]);
     }
+    // Read before the rung runs: whether an ambient token may answer at all
+    // is decided by the store's binding, not by the token's presence.
+    let has_ambient = github.has_ambient_token();
     let st = state.clone();
     let id = handle.id;
     let res = tokio::task::spawn_blocking(move || {
@@ -1756,32 +1839,61 @@ pub(crate) async fn github_with_gh_cli_warned(
             .ok()
             .flatten()
             .and_then(|r| r.cred_account);
-        match ApiCredential::from_gh_cli(
+        let bound = settings.gh_user.is_some() || recorded.is_some();
+        let binding = if bound {
+            ApiBinding::Bound
+        } else {
+            ApiBinding::Unbound
+        };
+        if !bound && has_ambient {
+            return (binding, None, vec![]);
+        }
+        let account = settings.gh_user.as_deref().or(recorded.as_deref());
+        let (cred, warnings) = match ApiCredential::from_gh_cli(
             &gh,
             &url,
             settings.gh_user.as_deref(),
             recorded.as_deref(),
         ) {
             Ok(c) => (Some(c), vec![]),
-            Err(CredError::AccountMismatch {
-                host,
-                expected,
-                found,
-            }) => (
-                None,
-                vec![crate::review_base::warning(
-                    crate::review_base::warn::CREDENTIAL_ACCOUNT_MISMATCH,
-                    format!(
-                        "gh answers for {host} as {found:?}, not the pinned/recorded account {expected:?} — the forge API was not read with it (gh auth switch, or set [[review.repos]] gh_user)"
-                    ),
-                )],
-            ),
-            Err(_) => (None, vec![]),
-        }
+            // Unbound: a gh fault is a skip, exactly as before.
+            Err(_) if !bound => (None, vec![]),
+            Err(e) => (None, vec![bound_gh_warning(&e, account, url.host())]),
+        };
+        (binding, cred, warnings)
     })
     .await
-    .unwrap_or((None, vec![]));
-    (github.with_api_credential(res.0), res.1)
+    .unwrap_or((ApiBinding::Unbound, None, vec![]));
+    (github.with_api_credential(res.1, res.0), res.2)
+}
+
+/// D12 — the warning a BOUND store's api slot carries when its gh-cli rung
+/// could not answer. The code IS the
+/// [`FailureClass`](crate::review_store::FailureClass) slug, the same
+/// vocabulary the fetch ladder records a skip with, and `is_auth` separates
+/// "your gh login could not be read" from "that was not a credential fault
+/// at all" — both of which stop the rung for a bound store, and neither of
+/// which may be answered with another identity's token.
+fn bound_gh_warning(
+    e: &crate::review_store::CredError,
+    account: Option<&str>,
+    host: &str,
+) -> BaseWarningOut {
+    let class = e.class();
+    let who = account.unwrap_or("<unrecorded>");
+    let why = if class.is_auth() {
+        "the forge API was NOT read as another account, and not anonymously either"
+    } else {
+        "not a credential fault, but a store bound to an account may not fall through"
+    };
+    crate::review_base::warning(
+        class.slug(),
+        format!(
+            "gh could not produce a token for the store's account {who:?} on {host} \
+             ({}: {e}) — {why}. Fix: `gh auth login --hostname {host} --git-protocol https --account {who}`",
+            class.slug()
+        ),
+    )
 }
 
 /// RS-U6 — the forge project (`owner/name`) of a GitHub review store, from
@@ -4027,7 +4139,7 @@ async fn reuse_pr_review(
                     &handle,
                     &repo.name,
                     pr_number,
-                    github.with_api_credential(None),
+                    github.with_api_credential(None, crate::github::ApiBinding::Unbound),
                     crate::review_store::GhCli::from_process_env(),
                 )
                 .await
@@ -4418,22 +4530,37 @@ pub(crate) async fn create_review_pr_value_known(
 
     crate::review_jobs::set_stage(&job, "base");
 
-    // V76-R1a — the base ladder (explicit > merge-base > local-default),
-    // [`start_pr_base`]. Runs in the blocking pool: it spawns git (the
-    // remote-default fetch, the ahead/behind probe). RS-U6: a stale local
-    // default branch is a `stale-mirror` WARNING now, never a 409.
+    // The PR's own target branch, read from the forge BEFORE the base is
+    // resolved (README §6 rung 2) — the same `get_pull` the store path
+    // makes, and the SAME answer `pr_enrichment` below reuses, so hoisting
+    // it here costs no extra round trip. It was previously read only AFTER
+    // capture, which is why this path could not use it: without it the
+    // ladder defaulted to the mirror's default branch and a PR targeting
+    // `develop` was diffed against `main` with nothing on the envelope
+    // saying so.
+    let pull = match &gh_repo {
+        Some(gh) => Some(github.get_pull(&gh.owner, &gh.name, number as u64).await),
+        None => None,
+    };
+    let (forge_base_ref, pr_head_branch) = match &pull {
+        Some(Ok(p)) => (Some(p.base_ref.clone()), Some(p.head_ref.clone())),
+        _ => (None, None),
+    };
+
+    // V76-R1a — the base ladder (explicit > the PR's target > merge-base
+    // against the default > local-default), [`start_pr_base`]. Runs in the
+    // blocking pool: it spawns git (the base-branch fetch, the ahead/behind
+    // probe). The forge rung keeps `set_by=auto` (D15/D18 still apply);
+    // RS-U6: a stale local branch is a `stale-mirror` WARNING now, never a
+    // 409, and an unusable target is a `pr-target-assumed` WARNING.
     let root_for_base = repo.path.clone();
     let explicit_base = body.base_ref.clone();
-    let head_for_base = fetched_sha.clone();
-    let repo_for_base = body.repo.clone();
-    let pr_for_base = body.pr_number;
     let (base_ref, base_source, base_warnings) = tokio::task::spawn_blocking(move || {
         start_pr_base(
             &WorkTreeRoot::user_clone(&root_for_base),
             explicit_base.as_deref(),
-            &head_for_base,
-            &repo_for_base,
-            pr_for_base,
+            forge_base_ref.as_deref(),
+            pr_head_branch.as_deref(),
         )
     })
     .await
@@ -4500,10 +4627,12 @@ pub(crate) async fn create_review_pr_value_known(
     crate::review_jobs::set_stage(&job, "enrich");
 
     let had_credentials = github.has_credentials();
+    // The `get_pull` already made above for the base rung — passing it here
+    // is what keeps the hoist free: one API call, not two.
     let (pr_meta_json, pr_meta_unavailable_reason) = pr_enrichment(
         &github,
         gh_repo.as_ref(),
-        None,
+        pull,
         number,
         had_credentials,
         base_source.as_str(),
@@ -4584,7 +4713,9 @@ async fn create_review_pr_in_store(
     })
     .await??;
     if !gh_warnings.is_empty() {
-        prepared.status.code = Some(crate::review_base::warn::CREDENTIAL_ACCOUNT_MISMATCH.into());
+        // The envelope's code is the gh failure's own class slug (the
+        // account mismatch, or whatever else stopped a bound store's rung).
+        prepared.status.code = Some(gh_warnings[0].code.clone());
         prepared.warnings.extend(gh_warnings);
     }
     let review = insert_store_review(
@@ -4635,8 +4766,10 @@ async fn create_review_pr_in_store(
 /// `pr_meta_json` shape). Only attempted when the origin resolved as
 /// GitHub; any failure (including "not GitHub") degrades to
 /// `pr_meta_json=null` + a reason — the review is already created either
-/// way. `pull` = an already-made `get_pull` answer (RS-U6: the store path
-/// reads the API BEFORE base resolution and reuses it here).
+/// way. `pull` = an already-made `get_pull` answer — BOTH creation paths
+/// read the API BEFORE base resolution (README §6 rung 2) and reuse it here,
+/// so `pr_meta_json`'s snapshot and the base decision describe the same
+/// moment in the PR's life.
 async fn pr_enrichment(
     github: &crate::github::GithubClient,
     gh_repo: Option<&crate::github::GithubRepo>,
@@ -6062,6 +6195,143 @@ mod tests {
         )
     }
 
+    /// The ladder fixture with the PR targeting a NON-DEFAULT branch
+    /// (`develop`) — the shape the fallback used to get wrong. `develop`
+    /// forks at the base commit and gets its own commit BEFORE the PR
+    /// branches off it, so the PR's true fork point is NOT reachable from
+    /// `main` at all; a base taken against `main` therefore yields a
+    /// DIFFERENT sha, which is what makes this a consumer-visible defect
+    /// rather than a labelling one. Both branches then advance on origin,
+    /// so the fetch is load-bearing too.
+    struct DevelopTarget {
+        // Keep the tempdirs alive for the whole test.
+        _repo_tmp: tempfile::TempDir,
+        _bare_tmp: tempfile::TempDir,
+        _clone_tmp: tempfile::TempDir,
+        dir: std::path::PathBuf,
+        /// The commit both branches forked from — the merge-base a
+        /// `main`-based base produces.
+        fork_sha: String,
+        /// The PR's own true fork point, on `develop`.
+        develop_fork_sha: String,
+        pr_sha: String,
+        /// `origin/develop`'s advanced tip.
+        develop_tip: String,
+    }
+
+    fn ladder_fixture_targeting_develop(pr_number: u32) -> DevelopTarget {
+        let bare_tmp = tempfile::tempdir().unwrap();
+        let bare_dir = bare_tmp.path().join("origin.git");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        lgit(&bare_dir, &["init", "-q", "--bare", "-b", "main"]);
+
+        let repo_tmp = tempfile::tempdir().unwrap();
+        let repo_dir = repo_tmp.path().to_path_buf();
+        lgit(&repo_dir, &["init", "-q", "-b", "main"]);
+        lgit(&repo_dir, &["config", "user.email", "t@e.com"]);
+        lgit(&repo_dir, &["config", "user.name", "T"]);
+        std::fs::write(repo_dir.join("base.txt"), "base\n").unwrap();
+        lgit(&repo_dir, &["add", "-A"]);
+        lgit(&repo_dir, &["commit", "-q", "-m", "base"]);
+        let fork_sha = lgit_out(&repo_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &repo_dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widget.git",
+            ],
+        );
+        lgit(
+            &repo_dir,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", bare_dir.display()),
+                "https://github.com/acme/widget.git",
+            ],
+        );
+        lgit(&repo_dir, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+
+        // `develop` forks at the base commit and gets its own commit, so
+        // the PR's true fork point is NOT reachable from `main`.
+        lgit(&repo_dir, &["checkout", "-q", "-b", "develop"]);
+        std::fs::write(repo_dir.join("dev.txt"), "dev\n").unwrap();
+        lgit(&repo_dir, &["add", "-A"]);
+        lgit(&repo_dir, &["commit", "-q", "-m", "develop commit"]);
+        let develop_fork_sha = lgit_out(&repo_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &repo_dir,
+            &["push", "-q", "origin", "HEAD:refs/heads/develop"],
+        );
+
+        // The PR branches off `develop`'s tip.
+        lgit(&repo_dir, &["checkout", "-q", "-b", "pr-branch"]);
+        std::fs::write(repo_dir.join("feature.txt"), "feature\n").unwrap();
+        lgit(&repo_dir, &["add", "-A"]);
+        lgit(&repo_dir, &["commit", "-q", "-m", "pr commit"]);
+        let pr_sha = lgit_out(&repo_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &repo_dir,
+            &[
+                "push",
+                "-q",
+                "origin",
+                &format!("HEAD:refs/pull/{pr_number}/head"),
+            ],
+        );
+        lgit(&repo_dir, &["checkout", "-q", "main"]);
+
+        // A second clone advances BOTH branches on origin, so the base
+        // rung's fetch is load-bearing and the mirror's own `main` is
+        // stale.
+        let clone_tmp = tempfile::tempdir().unwrap();
+        let clone_dir = clone_tmp.path().join("clone");
+        lgit(
+            repo_tmp.path(),
+            &[
+                "clone",
+                "-q",
+                bare_dir.to_str().unwrap(),
+                clone_dir.to_str().unwrap(),
+            ],
+        );
+        lgit(&clone_dir, &["config", "user.email", "t@e.com"]);
+        lgit(&clone_dir, &["config", "user.name", "T"]);
+        lgit(
+            &clone_dir,
+            &["commit", "-q", "--allow-empty", "-m", "main moves"],
+        );
+        lgit(
+            &clone_dir,
+            &["push", "-q", "origin", "HEAD:refs/heads/main"],
+        );
+        lgit(
+            &clone_dir,
+            &["checkout", "-q", "-B", "develop", "origin/develop"],
+        );
+        lgit(
+            &clone_dir,
+            &["commit", "-q", "--allow-empty", "-m", "develop moves"],
+        );
+        let develop_tip = lgit_out(&clone_dir, &["rev-parse", "HEAD"]);
+        lgit(
+            &clone_dir,
+            &["push", "-q", "origin", "HEAD:refs/heads/develop"],
+        );
+
+        DevelopTarget {
+            _repo_tmp: repo_tmp,
+            _bare_tmp: bare_tmp,
+            _clone_tmp: clone_tmp,
+            dir: repo_dir,
+            fork_sha,
+            develop_fork_sha,
+            pr_sha,
+            develop_tip,
+        }
+    }
+
     #[test]
     fn start_pr_base_without_a_remote_keeps_the_local_default() {
         let tmp = tempfile::tempdir().unwrap();
@@ -6072,10 +6342,14 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "x\n").unwrap();
         lgit(dir, &["add", "-A"]);
         lgit(dir, &["commit", "-q", "-m", "c1"]);
-        let head = lgit_out(dir, &["rev-parse", "HEAD"]);
 
-        let (base_ref, source, _) =
-            start_pr_base(&WorkTreeRoot::user_clone(dir), None, &head, "r", 1).unwrap();
+        let (base_ref, source, _) = start_pr_base(
+            &WorkTreeRoot::user_clone(dir),
+            None,
+            Some("main"),
+            Some("pr-branch"),
+        )
+        .unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::LocalDefault);
     }
@@ -6084,8 +6358,13 @@ mod tests {
     fn start_pr_base_against_a_slightly_ahead_origin_uses_the_merge_base_rung() {
         let (_r, _b, _c, dir, base_sha, pr_sha, remote_tip) = ladder_fixture(7, 2);
 
-        let (base_ref, source, warnings) =
-            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &pr_sha, "widget", 7).unwrap();
+        let (base_ref, source, warnings) = start_pr_base(
+            &WorkTreeRoot::user_clone(&dir),
+            None,
+            Some("main"),
+            Some("pr-branch"),
+        )
+        .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(source, BaseSource::MergeBase);
         assert_eq!(base_ref, "refs/remotes/origin/main");
@@ -6105,16 +6384,102 @@ mod tests {
         );
     }
 
+    /// THE DEFECT: a PR targeting `develop`, on a repo with no ready store.
+    /// The forge rung must win over the default branch, or ps1 is captured
+    /// as the `main` delta — a different review entirely, silently.
+    #[test]
+    fn start_pr_base_bases_a_develop_targeting_pr_on_develop_not_the_default() {
+        let fx = ladder_fixture_targeting_develop(7);
+
+        let (base_ref, source, warnings) = start_pr_base(
+            &WorkTreeRoot::user_clone(&fx.dir),
+            None,
+            Some("develop"),
+            Some("pr-branch"),
+        )
+        .unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(source, BaseSource::MergeBase);
+        assert_eq!(base_ref, "refs/remotes/origin/develop");
+        // The fetch really refreshed the TARGET's remote-tracking ref…
+        assert_eq!(
+            lgit_out(&fx.dir, &["rev-parse", "refs/remotes/origin/develop"]),
+            fx.develop_tip
+        );
+        // …and ps1's base_sha is the PR's true fork point on `develop`.
+        assert_eq!(
+            merge_base_sha(
+                &WorkTreeRoot::user_clone(&fx.dir),
+                &fx.develop_tip,
+                &fx.pr_sha
+            )
+            .unwrap(),
+            fx.develop_fork_sha
+        );
+        // …and NOT the answer this path used to produce. `origin/main`'s
+        // tip is not in the mirror yet (that is the point of the fetch
+        // rung), so bring it in and merge-base against it: `main` never
+        // saw the `develop` commit, so the answer is a DIFFERENT — and
+        // wrong — base_sha. That difference is the whole defect: the
+        // review's diff would have included develop's changes.
+        lgit(
+            &fx.dir,
+            &[
+                "fetch",
+                "-q",
+                "origin",
+                "+refs/heads/main:refs/remotes/origin/main",
+            ],
+        );
+        assert_ne!(fx.fork_sha, fx.develop_fork_sha);
+        assert_eq!(
+            merge_base_sha(
+                &WorkTreeRoot::user_clone(&fx.dir),
+                &lgit_out(&fx.dir, &["rev-parse", "refs/remotes/origin/main"]),
+                &fx.pr_sha
+            )
+            .unwrap(),
+            fx.fork_sha
+        );
+    }
+
+    /// The PR's head branch is never an answer — a PR that "targets" its
+    /// own head branch must fall through to the default branch and SAY so.
+    #[test]
+    fn start_pr_base_refuses_the_prs_own_head_branch_as_a_base() {
+        let fx = ladder_fixture_targeting_develop(7);
+
+        let (base_ref, source, warnings) = start_pr_base(
+            &WorkTreeRoot::user_clone(&fx.dir),
+            None,
+            Some("pr-branch"),
+            Some("pr-branch"),
+        )
+        .unwrap();
+        assert_eq!(base_ref, "refs/remotes/origin/main");
+        assert_eq!(source, BaseSource::MergeBase);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(
+            warnings[0].code,
+            crate::review_base::warn::PR_TARGET_ASSUMED
+        );
+    }
+
     #[test]
     fn start_pr_base_warns_on_a_stale_mirror_instead_of_refusing() {
         // RS-U6 — the old 409 is gone: the base already comes from the
         // freshly fetched remote tip, so a stale LOCAL default branch is a
         // `stale-mirror` warning, never a refusal.
         let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
-        let (_r, _b, _c, dir, _base_sha, pr_sha, _tip) = ladder_fixture(7, extra as u32);
+        let (_r, _b, _c, dir, _base_sha, _pr, _tip) = ladder_fixture(7, extra as u32);
 
-        let (base_ref, source, warnings) =
-            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &pr_sha, "widget", 7).unwrap();
+        let (base_ref, source, warnings) = start_pr_base(
+            &WorkTreeRoot::user_clone(&dir),
+            None,
+            Some("main"),
+            Some("pr-branch"),
+        )
+        .unwrap();
         assert_eq!(base_ref, "refs/remotes/origin/main");
         assert_eq!(source, BaseSource::MergeBase);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
@@ -6130,14 +6495,13 @@ mod tests {
     #[test]
     fn start_pr_base_explicit_bypasses_the_stale_mirror_refusal() {
         let extra = super::STALE_MIRROR_BEHIND_LIMIT + 10;
-        let (_r, _b, _c, dir, _base, pr_sha, _tip) = ladder_fixture(7, extra as u32);
+        let (_r, _b, _c, dir, _base, _pr, _tip) = ladder_fixture(7, extra as u32);
 
         let (base_ref, source, _) = start_pr_base(
             &WorkTreeRoot::user_clone(&dir),
             Some("main"),
-            &pr_sha,
-            "widget",
-            7,
+            Some("main"),
+            Some("pr-branch"),
         )
         .unwrap();
         assert_eq!(base_ref, "main");
@@ -6162,16 +6526,66 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "x\n").unwrap();
         lgit(&dir, &["add", "-A"]);
         lgit(&dir, &["commit", "-q", "-m", "c1"]);
-        let head = lgit_out(&dir, &["rev-parse", "HEAD"]);
         lgit(
             &dir,
             &["remote", "add", "origin", bare_dir.to_str().unwrap()],
         );
 
-        let (base_ref, source, _) =
-            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, &head, "r", 1).unwrap();
+        let (base_ref, source, _) = start_pr_base(
+            &WorkTreeRoot::user_clone(&dir),
+            None,
+            Some("main"),
+            Some("pr-branch"),
+        )
+        .unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::LocalDefault);
+    }
+
+    /// Honesty: when the forge named a target that cannot be fetched, ps1
+    /// ends up on the default branch — and the envelope must say the PR's
+    /// target was NOT used. Silently basing on `main` is the defect.
+    #[test]
+    fn start_pr_base_warns_when_the_forge_target_cannot_be_fetched() {
+        // An origin with a `main` but no `develop`: the PR targets
+        // `develop`, whose fetch fails, so the ladder falls to `main`.
+        let (_r, _b, _c, dir, _base, _pr, _tip) = ladder_fixture(7, 0);
+
+        let (base_ref, source, warnings) = start_pr_base(
+            &WorkTreeRoot::user_clone(&dir),
+            None,
+            Some("develop"),
+            Some("pr-branch"),
+        )
+        .unwrap();
+        assert_eq!(base_ref, "refs/remotes/origin/main");
+        assert_eq!(source, BaseSource::MergeBase);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(
+            warnings[0].code,
+            crate::review_base::warn::PR_TARGET_ASSUMED
+        );
+        assert!(
+            warnings[0].message.contains("develop"),
+            "the warning must name the target that was not used: {warnings:?}"
+        );
+    }
+
+    /// The forge said nothing usable — the ladder assumes the default
+    /// branch, and says THAT, not something else.
+    #[test]
+    fn start_pr_base_warns_when_the_forge_named_no_target() {
+        let (_r, _b, _c, dir, _base, _pr, _tip) = ladder_fixture(7, 2);
+
+        let (base_ref, source, warnings) =
+            start_pr_base(&WorkTreeRoot::user_clone(&dir), None, None, None).unwrap();
+        assert_eq!(base_ref, "refs/remotes/origin/main");
+        assert_eq!(source, BaseSource::MergeBase);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(
+            warnings[0].code,
+            crate::review_base::warn::PR_TARGET_ASSUMED
+        );
     }
 
     // --- normalize_report_shape (V70-A3X) -----------------------------
@@ -6457,5 +6871,40 @@ mod tests {
         assert_eq!(row["repo"], "r");
         assert_eq!(row["pr_number"], 9);
         assert_eq!(row["has_report"], false);
+    }
+
+    /// D12 — a BOUND store's api slot reports a gh failure in the fetch
+    /// ladder's own vocabulary (the `FailureClass` slug) and names the
+    /// account it could not produce, instead of falling through to "no
+    /// credentials" with nothing on the envelope.
+    #[test]
+    fn a_bound_gh_failure_warns_with_the_failure_class_and_the_account() {
+        use crate::review_store::CredError;
+        let w = bound_gh_warning(
+            &CredError::GhNotLoggedIn {
+                host: "github.com".into(),
+            },
+            Some("alice"),
+            "github.com",
+        );
+        assert_eq!(w.code, "credential-unavailable");
+        assert!(w.message.contains("\"alice\""), "{}", w.message);
+        assert!(w.message.contains("github.com"), "{}", w.message);
+        assert!(
+            w.message.contains("NOT read as another account"),
+            "{}",
+            w.message
+        );
+        let m = bound_gh_warning(
+            &CredError::AccountMismatch {
+                host: "github.com".into(),
+                expected: "alice".into(),
+                found: "mallory".into(),
+            },
+            Some("alice"),
+            "github.com",
+        );
+        assert_eq!(m.code, "credential-account-mismatch");
+        assert!(m.message.contains("mallory"), "{}", m.message);
     }
 }

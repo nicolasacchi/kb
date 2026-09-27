@@ -2722,3 +2722,32 @@ export function fetchLaneFacts(
 export function fetchLanesSummary(repo: string): Promise<LanesSummaryOut> {
   return getJson<LanesSummaryOut>("/api/lanes/summary", { repo });
 }
+
+// ── RS-U11 ── the review store + fetch-credential cards (own import
+// statement, same PRR-U3/PRR-U56 precedent above — this unit's diff never
+// touches the shared `import type {...}` block at the top of the file).
+import type { ReviewCredentialsOut, ReviewStoreCard } from "./types";
+
+/// `GET /api/repos/{name}/store` — `kbc-store/1` (`review_store/routes.rs`).
+/// **LOOPBACK-ONLY**, not bearer: `router.rs` registers the whole
+/// `/repos/{name}/store` family inside the `loopback_only` sub-router
+/// because the card reports `store.git_dir` — the ABSOLUTE path of the
+/// daemon's own state dir — plus `store.uuid` and internal store row ids. It
+/// carries no secret and no repo content, but the gate is about the on-disk
+/// LOCATION, and a non-loopback session gets a BODYLESS 404 (the handler
+/// never 404s on its own, so a 404 here IS the gate). Callers must treat a
+/// rejection as "the store's state is unknown", never as "no store" —
+/// `ReviewHeader` renders `BaseChip.tsx`'s `StoreUnknownChip` for it.
+export function fetchReviewStoreCard(repo: string): Promise<ReviewStoreCard> {
+  return getJson<ReviewStoreCard>(`/api/repos/${encodeURIComponent(repo)}/store`, {});
+}
+
+/// `GET /api/repos/{name}/credentials` — `kbc-credentials/1`. **Bearer** —
+/// the family's one non-loopback read: the fetch credential as last RESOLVED
+/// (kind, account, reason, the D9 `broader_than_needed` flag and the D12
+/// `amber` one), never secret bytes, never runs `gh`. Unlike the card above,
+/// a remote session really does get this one, which is why `amber` is
+/// rendered on the Home credential card rather than left on the wire.
+export function fetchReviewCredentials(repo: string): Promise<ReviewCredentialsOut> {
+  return getJson<ReviewCredentialsOut>(`/api/repos/${encodeURIComponent(repo)}/credentials`, {});
+}
