@@ -1382,6 +1382,7 @@ pub struct ReviewSection {
 /// root = "~/.local/state/kb/kb-code/git"   # keys/ and ssh/ never follow this
 /// seed_on_boot = true
 /// allow_inherited_credentials = false
+/// base_fetch_timeout_secs = 1800     # one store fetch; read at boot
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1411,6 +1412,20 @@ pub struct ReviewStoreSection {
     /// `credential = "inherit"` on a repo is a REFUSED ERROR, not a
     /// fall-through (`review_store::cred.rs`).
     pub allow_inherited_credentials: bool,
+    /// Deadline for ONE base (network) store fetch, in seconds.
+    /// `None` (the default) = the daemon's own
+    /// `review_store::git::BASE_FETCH_TIMEOUT` (30 min), sized for the
+    /// fleet README §5.2 targets — five member clones, ~3.6 GB of
+    /// `.git` between them, one ~748 MB, which no link moves in 30 s
+    /// (that budget is what failed the U13 acceptance run's `create`
+    /// and `snapshot`).
+    ///
+    /// It is a DEADLINE, not a preference: it is enforced on the
+    /// fetch's process GROUP, which is SIGKILLed when the deadline
+    /// expires, so a hung fetch cannot wedge a store. `0` is not a
+    /// deadline and is refused at resolve time (warning + the
+    /// default), never honoured.
+    pub base_fetch_timeout_secs: Option<u64>,
 }
 
 impl Default for ReviewStoreSection {
@@ -1419,6 +1434,7 @@ impl Default for ReviewStoreSection {
             root: None,
             seed_on_boot: true,
             allow_inherited_credentials: false,
+            base_fetch_timeout_secs: None,
         }
     }
 }

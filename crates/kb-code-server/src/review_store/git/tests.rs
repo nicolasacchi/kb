@@ -875,3 +875,24 @@ fn a_token_on_stdout_does_not_survive_into_the_debug_rendering() {
     // helper payload carried is masked, not dropped.
     assert!(out.stdout_redacted().contains("password=[redacted]"));
 }
+
+/// The deadline a base fetch is given comes from the spawner, which is
+/// built once at boot from `[review.store] base_fetch_timeout_secs`.
+/// No fetch runs here: what is asserted is the value every caller
+/// reads, and the default's relationship to the constants it was sized
+/// against is pinned at compile time in the module (the stuck-job
+/// horizon's technique — nothing sleeps for the deadline).
+#[test]
+fn the_base_fetch_deadline_is_the_one_the_spawner_was_built_with() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert_eq!(
+        store_git(tmp.path()).base_fetch_timeout(),
+        BASE_FETCH_TIMEOUT
+    );
+    assert_eq!(
+        store_git(tmp.path())
+            .with_base_fetch_timeout(Duration::from_secs(900))
+            .base_fetch_timeout(),
+        Duration::from_secs(900)
+    );
+}

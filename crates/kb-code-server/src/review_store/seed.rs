@@ -50,7 +50,7 @@ use serde::Serialize;
 
 use super::classify::{classify, AuthContext, FailureClass};
 use super::cred::FetchCredential;
-use super::git::{GitArgs, GitCall, StoreGit, StoreGitError, BASE_FETCH_TIMEOUT};
+use super::git::{GitArgs, GitCall, StoreGit, StoreGitError};
 use super::ladder::RemoteInfo;
 use super::manifest::{self, Manifest};
 use super::url::{FetchRefspec, RefName, RefSource, RemoteName, RemoteUrl};
@@ -647,7 +647,7 @@ pub fn fetch_base_branches(
         };
     }
     let base = RemoteName::base();
-    match git.fetch(git_dir, &base, &specs, auth, BASE_FETCH_TIMEOUT) {
+    match git.fetch(git_dir, &base, &specs, auth, git.base_fetch_timeout()) {
         Ok(_) => BaseFetch::Fetched {
             branches: names,
             vanished: vec![],
@@ -661,7 +661,7 @@ pub fn fetch_base_branches(
                     &base,
                     std::slice::from_ref(spec),
                     auth,
-                    BASE_FETCH_TIMEOUT,
+                    git.base_fetch_timeout(),
                 ) {
                     Ok(_) => ok.push(name),
                     Err(e) if e.class == FailureClass::Vanished => gone.push(name),

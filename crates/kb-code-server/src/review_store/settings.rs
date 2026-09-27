@@ -20,8 +20,10 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::cred::{CredentialPin, FetchCredentialConfig};
+use super::git::BASE_FETCH_TIMEOUT;
 use crate::config::{RepoEntry, ReviewSection};
 use crate::security::paths::canonicalize_lenient;
 
@@ -133,6 +135,11 @@ pub struct StoreSettings {
     pub restore_guard_path: PathBuf,
     pub seed_on_boot: bool,
     pub allow_inherited_credentials: bool,
+    /// `[review.store] base_fetch_timeout_secs` resolved to the
+    /// deadline every base (network) fetch is given
+    /// ([`super::git::StoreGit::with_base_fetch_timeout`]). The
+    /// default is [`BASE_FETCH_TIMEOUT`].
+    pub base_fetch_timeout: Duration,
     pub repos: BTreeMap<String, RepoStoreSettings>,
     /// Tolerant-parse and placement warnings (boot log + doctor).
     pub warnings: Vec<String>,
@@ -169,6 +176,22 @@ impl StoreSettings {
                 "[review.store] root overlaps the browsed repo `{r}` at {what}; the store must live outside every repo and its git dirs"
             ));
         }
+        // Tolerant like the enums, for the same reason: a typo never
+        // stops the daemon. `0` is refused rather than honoured — it
+        // is not "no timeout", it is "kill the fetch the instant it
+        // spawns", which is the opposite of the slow-fetch wait this
+        // key exists to buy.
+        let base_fetch_timeout = match review.store.base_fetch_timeout_secs {
+            None => BASE_FETCH_TIMEOUT,
+            Some(0) => {
+                warnings.push(
+                    "[review.store] base_fetch_timeout_secs = 0 is not a deadline; using the default"
+                        .to_string(),
+                );
+                BASE_FETCH_TIMEOUT
+            }
+            Some(secs) => Duration::from_secs(secs),
+        };
         let mut map = BTreeMap::new();
         for e in &review.repos {
             let name = e.name.trim();
@@ -225,6 +248,7 @@ impl StoreSettings {
             restore_guard_path: state_dir.join(RESTORE_GUARD_FILE),
             root,
             seed_on_boot: review.store.seed_on_boot,
+            base_fetch_timeout,
             allow_inherited_credentials: review.store.allow_inherited_credentials,
             repos: map,
             warnings,
@@ -416,6 +440,36 @@ mod tests {
         assert_eq!(r.credential, CredentialPin::Auto);
         assert_eq!(r.forge, ForgeKind::Auto);
         assert_eq!(s.warnings.len(), 4, "{:?}", s.warnings);
+    }
+
+    /// The default is the crate's fleet-sized deadline, and the key
+    /// moves it — including through a real TOML parse, because the
+    /// `_secs` suffix and the `Option<u64>` shape are the contract an
+    /// operator actually writes.
+    #[test]
+    fn the_base_fetch_deadline_resolves_from_config_or_falls_back() {
+        let absent = StoreSettings::resolve(&ReviewSection::default(), Path::new("/state"), &[]);
+        assert_eq!(absent.base_fetch_timeout, BASE_FETCH_TIMEOUT);
+        assert!(absent.warnings.is_empty(), "{:?}", absent.warnings);
+
+        let cfg: KbCodeConfig =
+            toml::from_str("[review.store]\nbase_fetch_timeout_secs = 900\n").expect("parses");
+        let s = StoreSettings::resolve(&cfg.review, Path::new("/state"), &repos());
+        assert_eq!(s.base_fetch_timeout, Duration::from_secs(900));
+        assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+
+        // 0 is not "no deadline", it is "kill the group the instant it
+        // spawns": warned about, never honoured.
+        let zero: KbCodeConfig =
+            toml::from_str("[review.store]\nbase_fetch_timeout_secs = 0\n").expect("parses");
+        let s = StoreSettings::resolve(&zero.review, Path::new("/state"), &repos());
+        assert_eq!(s.base_fetch_timeout, BASE_FETCH_TIMEOUT);
+        assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+        assert!(
+            s.warnings[0].contains("base_fetch_timeout_secs"),
+            "{:?}",
+            s.warnings
+        );
     }
 
     #[test]

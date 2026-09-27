@@ -462,7 +462,9 @@ impl ReviewStores {
         let (git, git_error) = if settings.disabled.is_some() {
             (None, None)
         } else {
-            match StoreGit::new(&settings.git_home) {
+            match StoreGit::new(&settings.git_home)
+                .map(|g| g.with_base_fetch_timeout(settings.base_fetch_timeout))
+            {
                 Ok(g) => (Some(g), None),
                 Err(e) => {
                     tracing::warn!(error = %e, "review store: cannot build the store git spawner");
