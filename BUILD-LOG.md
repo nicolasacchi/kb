@@ -27,6 +27,50 @@
 | 7 | existing suite + TS regen (CI) | UNRUN | not selected (`--gate 2`) |
 
 **Exit code 1** — NOT all seven gates PASS (not PASS: [1, 3, 4, 5, 6, 7]).
+---
+
+## Overall outcome across all runs (added by the orchestrator, not the driver)
+
+The driver REWRITES this file on every invocation, so a per-invocation summary is
+not the phase's acceptance. Across every run: **6 PASS, 1 BLOCKED — with no gate
+ever reporting a false pass.** Gates are run individually here because gate 1's
+isolation and the volume's cold-cache cost exceed one invocation's budget.
+
+| gate | verdict | evidence |
+|---|---|---|
+| 1 golden relocation | **BLOCKED — provably** | The pre-upgrade binary panics reading the volume: `prose_refs.rs:706:24: end byte index 54 is not a char boundary; it is inside 'à'`, the blocking-task wrapper re-panicking and dropping the connection. The cause is `is_delim` reading a UTF-8 continuation byte as a Latin-1 char, so `0xA0` counts as whitespace and a token is cut mid-character. **No commit is both pre-store and panic-free**: `main@9e1ac65` lacks the fix, current `main` has it, and it arrived with `539e2fc` (RS-U10) — part of this wave. The post-upgrade daemon logged **zero** such panics. Isolation cost: one unreadable review = **2m48s** through the harness's four transport retries, against 114 reviews. |
+| 2 user-repo invariance | **PASS** | 3 clones byte-identical across create, start-pr, sync, snapshot, auto-capture, retrack and GC. The 9 absent configured clones are named as out of scope, never silently dropped. |
+| 3 no fallback | **PASS** | Every store `ready`; `unresolved` and `odb_miss` both zero. |
+| 4 review 65 end to end | **PASS** | `retrack 65 --dry-run` → `stale-pin`; `retrack 65` → ps4 `kind=base-corrected`, tip `525631b506e7…`, base `7c1ed0cfdd7d…`, **10 commits / 40 files equal to live PR 15790**; findings and verdict held on ps3 with `verdict_scope_changed`. |
+| 5 live GitHub | **PASS** | All **45** open PRs listed; every `forge.base_ref` equal to `gh pr list`; the 2 stacked `feature/15646-statsig-*` PRs included. |
+| 6 secrets | **PASS** | No plausible full token and no literal `gh auth token` output in the daemon log, the envelopes or anywhere in the volume copy. 2 bare `ghp_`/`ghs_` prefixes EXCLUDED as fixture/doc text. |
+| 7 CI + TS regen | **PASS** | 15/15 check runs green on #166, including both TS-regen jobs. No local suite was run. |
+
+### The two product defects the gates found
+
+Both surfaced in gate 2's first, cold run and both are fixed on this branch:
+
+1. **The store's base-fetch deadline was hardcoded at 30 s.** A fetch from a
+   748 MB clone cannot finish in that; git was killed mid-fetch and the
+   operation dropped. Now `[review.store] base_fetch_timeout_secs`, default
+   1800 s, bounded by the compiler against the work and seed deadlines.
+2. **`review start` and `review snapshot` used a 10 s HTTP client.** Both make
+   the daemon capture, so any capture outlived the client, which exited 5 with
+   "is kb-code-server running" while the server finished minutes later. They
+   now share `review_agent::READ_TIMEOUT` with `retrack` rather than each
+   carrying a copy.
+
+Recorded rather than papered over: a SLOW fetch and a HUNG one are **not**
+distinguishable today — the capture carries no progress signal, so the
+process-group kill remains the only outcome.
+
+### What gate 1 would need
+
+Not more time: a baseline that can read the volume. Its pre-upgrade half must be
+a commit that is BOTH before the review store AND free of the `à` panic, and no
+such commit exists. The driver already supports comparing only the reviews the
+old binary can read and naming the rest; what it cannot do is invent the missing
+binary.
 
 ## Gate 1 — golden relocation
 **Asserts.** Every existing review's files, per-file blob ids, diff stats,
