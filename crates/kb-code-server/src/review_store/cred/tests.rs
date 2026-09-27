@@ -491,7 +491,12 @@ fn a_bound_account_stops_the_ladder_on_any_gh_failure() {
             "gh auth status: unknown flag: --json".into(),
         ))
     }
-    let failures: [(fn() -> Result<GhCliCredential, CredError>, FailureClass); 4] = [
+    /// A gh rung that fails, and the class the failure must be reported
+    /// as. Named because the inline form trips `type_complexity`, and
+    /// because the pairing IS the assertion: every rung below must land
+    /// in the class its failure actually is, not merely in `is_auth`.
+    type FailingRung = (fn() -> Result<GhCliCredential, CredError>, FailureClass);
+    let failures: [FailingRung; 4] = [
         (logged_out, FailureClass::CredentialUnavailable),
         (missing, FailureClass::CredentialUnavailable),
         (locked, FailureClass::Timeout),
