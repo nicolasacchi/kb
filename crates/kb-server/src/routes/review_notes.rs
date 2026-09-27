@@ -43,7 +43,7 @@ use crate::middleware::error_to_problem_json;
 use crate::state::KbHandles;
 use axum::{
     body::Body,
-    extract::{Query, State},
+    extract::{Query, RawQuery, State},
     http::Response,
     response::IntoResponse,
     Json,
@@ -147,15 +147,9 @@ pub struct ReviewNotesQuery {
     /// Restrict to one corpus. Absent → every configured kb (fleet-wide,
     /// like `/inbox`).
     pub kb: Option<String>,
-    /// Repeatable and AND ("carries every listed tag"). Each value is
-    /// slugified with the bare `kb_core::parser::slugify_tag`, NOT with the
-    /// write path's `normalize_comment_tags`: a filter is not a write, so it
-    /// deliberately does not inherit that path's product limits (8 tags,
-    /// 48 chars) or its dedupe. Only the degenerate case is refused — a
-    /// value that slugifies to empty is a 400, because a filter that was
-    /// silently ignored is worse than no filter at all.
-    #[serde(default, deserialize_with = "one_or_many")]
-    pub tag: Vec<String>,
+    /// `?tag=` is repeatable and AND ("carries every listed tag"). NOT a
+    /// struct field: a repeated key cannot be expressed by serde's derive
+    /// here, so it is parsed from the raw query by [`parse_tag_filters`].
     /// Case-insensitive substring of the comment BODY.
     pub q: Option<String>,
     /// `open` | `resolved` | `all` (DEFAULT `all` — a note browser wants
@@ -176,40 +170,30 @@ pub struct ReviewNotesQuery {
     pub bodies: Option<bool>,
 }
 
-/// `?tag=` is repeatable (`?tag=a&tag=b`), but a SINGLE occurrence must work
-/// too. axum's `Query` is backed by `serde_urlencoded`, which deserializes a
-/// lone `tag=x` as a plain string and rejects it against `Vec<String>` with
-/// "expected a sequence" — so without this the grammar's most common shape
-/// (one tag: the SPA's chip click, the CLI's single `--tag`) answers 400.
-/// Accepts both forms; the caller normalises with `parse_tag_filters` anyway.
-fn one_or_many<'de, D>(de: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct OneOrMany;
-    impl<'de> serde::de::Visitor<'de> for OneOrMany {
-        type Value = Vec<String>;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("a tag, or a repeated list of tags")
+/// Collect the repeated `?tag=` values out of the RAW query string.
+///
+/// Neither serde's derived struct nor axum's `Query` can express a repeated
+/// key here, and both fail in ways that look like a server bug rather than a
+/// grammar choice: a lone `tag=x` against `Vec<String>` is rejected
+/// "expected a sequence", and a repeated key against a `deserialize_with`
+/// field is rejected "duplicate field". `?tag=` is documented as repeatable,
+/// so it is parsed here instead — which also means a single `?tag=wording`
+/// and `?tag=a&tag=b` behave identically, as the grammar says they should.
+fn parse_tag_filters(raw: &str) -> Result<Vec<String>, kb_core::Error> {
+    let mut out = Vec::new();
+    for (key, value) in form_urlencoded::parse(raw.as_bytes()) {
+        if key != "tag" {
+            continue;
         }
-
-        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            Ok(vec![v.to_string()])
+        let slug = kb_core::parser::slugify_tag(&value);
+        if slug.is_empty() {
+            return Err(kb_core::Error::BadRequest(format!(
+                "tag filter {value:?} is empty once normalised; it would filter nothing"
+            )));
         }
-
-        fn visit_seq<A: serde::de::SeqAccess<'de>>(
-            self,
-            mut seq: A,
-        ) -> Result<Self::Value, A::Error> {
-            let mut out = Vec::new();
-            while let Some(v) = seq.next_element::<String>()? {
-                out.push(v);
-            }
-            Ok(out)
-        }
+        out.push(slug);
     }
-    de.deserialize_any(OneOrMany)
+    Ok(out)
 }
 
 /// Per-corpus partial: rows already carrying the review file's own recorded
@@ -220,10 +204,15 @@ type CorpusNotes = Vec<ReviewNoteRow>;
 /// `GET /api/review-notes?kb=&tag=&tag=&q=&status=&bodies=`
 pub async fn list(
     State(state): State<Arc<KbHandles>>,
+    // `RawQuery` before `Query` because the latter is a body extractor and
+    // must stay last. `?tag=` is read from the raw string (repeatable keys
+    // are inexpressible in the derived struct — see `parse_tag_filters`);
+    // every other filter comes off the struct as usual.
+    RawQuery(raw): RawQuery,
     Query(q): Query<ReviewNotesQuery>,
 ) -> Response<Body> {
     // Validate the filters BEFORE fanning out, so a typo costs no IO.
-    let want_tags = match parse_tag_filters(&q.tag) {
+    let want_tags = match parse_tag_filters(raw.as_deref().unwrap_or("")) {
         Ok(t) => t,
         Err(e) => return error_to_problem_json(&e),
     };
@@ -290,31 +279,6 @@ pub async fn list(
         tags_truncated,
     })
     .into_response()
-}
-
-/// Slugify the repeatable `?tag=` values into the filter list, refusing the
-/// one degenerate case.
-///
-/// Deliberately the bare `slugify_tag` and not the write path's
-/// `normalize_comment_tags`: a filter is not a write, so it must not carry
-/// the write path's product limits (8 tags, 48 chars) or its dedupe — an
-/// over-long or repeated `?tag=` still has an unambiguous meaning as a
-/// filter, and a sidecar written before a limit tightened must stay
-/// reachable. A value that slugifies to EMPTY has no meaning at all: it
-/// would match every row, which is a filter that was silently ignored, and
-/// that is worse than no filter.
-fn parse_tag_filters(raw: &[String]) -> Result<Vec<String>, kb_core::Error> {
-    let mut out = Vec::with_capacity(raw.len());
-    for value in raw {
-        let slug = kb_core::parser::slugify_tag(value);
-        if slug.is_empty() {
-            return Err(kb_core::Error::BadRequest(format!(
-                "tag filter {value:?} is empty once normalised; it would filter nothing"
-            )));
-        }
-        out.push(slug);
-    }
-    Ok(out)
 }
 
 /// `open` | `resolved` | `all`; absent or `all` → no status filter.
@@ -682,7 +646,6 @@ mod tests {
     fn bodies_defaults_to_true_when_the_query_omits_it() {
         let q: ReviewNotesQuery = serde_json::from_value(serde_json::json!({
             "kb": "kb-a",
-            "tag": ["api"],
         }))
         .unwrap();
         assert_eq!(q.bodies, None);
@@ -695,7 +658,7 @@ mod tests {
     #[test]
     fn a_tag_filter_that_slugifies_to_empty_is_rejected() {
         for bad in ["", "!!!", "   ", "---", "///"] {
-            let err = parse_tag_filters(&[bad.to_string()])
+            let err = parse_tag_filters(&format!("tag={bad}"))
                 .expect_err("empty slug must be a 400, not a filter that matches everything");
             assert!(
                 matches!(err, kb_core::Error::BadRequest(_)),
@@ -704,7 +667,33 @@ mod tests {
         }
         // Still rejected when it arrives alongside a usable tag — one bad
         // value fails the whole request rather than being dropped.
-        assert!(parse_tag_filters(&["api".to_string(), "!!!".to_string()]).is_err());
+        assert!(parse_tag_filters("tag=api&tag=%21%21%21").is_err());
+    }
+
+    /// WHY `?tag=` is parsed from the RAW query rather than off the derived
+    /// struct: a repeated key is inexpressible there, and both obvious
+    /// workarounds answer 400 — a lone value against `Vec<String>` is
+    /// "expected a sequence", a repeated one against a `deserialize_with`
+    /// field is "duplicate field". The grammar promises `?tag=a&tag=b`, so
+    /// this pins that the promise holds, that a SINGLE `?tag=a` is not the
+    /// special case it was in between, and that values are percent-decoded.
+    #[test]
+    fn a_repeated_tag_key_is_accepted_and_percent_decoded() {
+        assert_eq!(parse_tag_filters("").unwrap(), Vec::<String>::new());
+        assert_eq!(parse_tag_filters("kb=smoke").unwrap(), Vec::<String>::new());
+        assert_eq!(parse_tag_filters("tag=api").unwrap(), ["api"]);
+        assert_eq!(
+            parse_tag_filters("tag=api&tag=perf").unwrap(),
+            ["api", "perf"]
+        );
+        // Order is preserved, so the AND is applied in the caller's order.
+        assert_eq!(
+            parse_tag_filters("tag=one&tag=two&tag=one").unwrap(),
+            ["one", "two", "one"]
+        );
+        assert_eq!(parse_tag_filters("tag=Tag%20One").unwrap(), ["tag-one"]);
+        // A different key is not a tag.
+        assert_eq!(parse_tag_filters("q=api").unwrap(), Vec::<String>::new());
     }
 
     #[test]
@@ -718,7 +707,12 @@ mod tests {
         // `api` twice: the write path's dedupe has no business here.
         raw.push("api".to_string());
         raw.push("api".to_string());
-        let parsed = parse_tag_filters(&raw).unwrap();
+        let query = raw
+            .iter()
+            .map(|t| format!("tag={t}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let parsed = parse_tag_filters(&query).unwrap();
         assert_eq!(
             parsed.len(),
             raw.len(),
@@ -729,7 +723,7 @@ mod tests {
 
         // AND, not OR: a note must carry EVERY listed tag, so adding one can
         // only narrow.
-        let both = parse_tag_filters(&["api".into(), "perf".into()]).unwrap();
+        let both = parse_tag_filters("tag=api&tag=perf").unwrap();
         let (rows, _, _) = finish_notes(fleet(), &both, None, true);
         assert_eq!(ids(&rows), vec!["2".to_string()]);
         let (none, _, _) = finish_notes(fleet(), &both[..1], None, true);
@@ -770,7 +764,7 @@ mod tests {
         // facet row — computed by the route BEFORE those filters run — still
         // offers `perf`. That is the property the chip row depends on: a
         // second click narrows instead of emptying the list.
-        let want = parse_tag_filters(&["api".into()]).unwrap();
+        let want = parse_tag_filters("tag=api").unwrap();
         let (rows, _, _) = finish_notes(fleet(), &want, Some("nothing matches this"), true);
         assert!(rows.is_empty());
         let (pre_filter_facets, _) = facet_tags(&fleet());

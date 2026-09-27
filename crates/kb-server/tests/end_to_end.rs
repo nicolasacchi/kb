@@ -2714,16 +2714,11 @@ async fn patch_comment_meta_normalises_and_reports_effective_values() {
         }
     })
     .await;
-    let updates = buf
-        .lines()
-        .filter_map(|l| l.strip_prefix("data:"))
-        .filter_map(|d| serde_json::from_str::<serde_json::Value>(d.trim()).ok())
-        .filter_map(|v| v.get("payload").cloned())
-        .filter(|p| p["artifact_id"] == art)
-        .count();
+    let updates = comments_updated_frames(&buf, art).len();
     assert_eq!(
         updates, 2,
-        "expected the add + the changing PATCH to emit, and the no-op PATCH not to; frames:\n{buf}"
+        "expected the add + the changing PATCH to emit, and the no-op PATCH not to; \
+         saw {updates} for {art}; frames:\n{buf}"
     );
 }
 
@@ -2828,6 +2823,30 @@ async fn ledger_comment_counts(
         .map(|d| d["comments"].as_i64().unwrap_or(0))
         .sum();
     (rows, total)
+}
+
+/// The `comments.updated` frames in a captured `/api/events` body, in order,
+/// with the payload's `artifact_id` and `user` hoisted for filtering.
+///
+/// The EVENT NAME matters and is easy to lose: the SSE body interleaves
+/// `event: <type>` and `data: <envelope>` lines, so a filter that reads only
+/// the `data:` lines cannot tell `comments.updated` from `history.recorded`
+/// — and both carry an `artifact_id`, so a comment-count test that ignores
+/// the name silently counts the ledger row too.
+fn comments_updated_frames(body: &str, artifact_id: &str) -> Vec<serde_json::Value> {
+    let mut kind = String::new();
+    body.lines()
+        .filter_map(|line| {
+            if let Some(e) = line.strip_prefix("event:") {
+                kind = e.trim().to_string();
+                return None;
+            }
+            let data = line.strip_prefix("data:")?;
+            let v: serde_json::Value = serde_json::from_str(data.trim()).ok()?;
+            (kind == "comments.updated").then_some(v["payload"].clone())
+        })
+        .filter(|p| p["artifact_id"] == artifact_id)
+        .collect()
 }
 
 /// v0.40 TN2 — flipping an ALREADY-PUBLIC comment to a private note must
@@ -2995,15 +3014,8 @@ async fn comments_updated_counts_exclude_private() {
     // The LAST `comments.updated` for this artifact is the one the note's
     // creation produced. Its counts must be the ones from BEFORE the note
     // existed: overcounting would prove the note is there.
-    // The `data:` line is the ENVELOPE, so the payload sits one level down
-    // (`{"payload":{…},"ts":…,"v":1}`) — the event's own fields are not at
-    // the top level. Filtering on `v["artifact_id"]` matches nothing.
-    let last = buf
-        .lines()
-        .filter_map(|l| l.strip_prefix("data:"))
-        .filter_map(|d| serde_json::from_str::<serde_json::Value>(d.trim()).ok())
-        .filter_map(|v| v.get("payload").cloned())
-        .rfind(|p| p["artifact_id"] == art)
+    let last = comments_updated_frames(&buf, art)
+        .pop()
         .unwrap_or_else(|| panic!("no comments.updated for {art}; frames:\n{buf}"));
     assert_eq!(
         last["open_count"], 1,
