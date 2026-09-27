@@ -1163,6 +1163,117 @@ outside the diff surfaces in the map column's own "outside the diff" group
 REGARDLESS of `filesMode` — a thread is never hidden because its file has
 no hunks.
 
+**Diff-line syntax paint, and the ONE working-tree tip rule (V80-H1).**
+`hooks/useDiffHighlights.ts` is the whole diff-painting contract: two
+`useFile`-shaped queries that share `useFile`'s EXACT
+`["file", repo, path, ref ?? null]` key, bucketed by `lib/diffHighlight.ts`
+into per-line UTF-16 column maps that `UnifiedHunks`/`SplitHunks` paint
+behind the per-LINE integrity guard (`lib/diffHighlight.ts:5`) — a line
+whose text does not byte-equal the file's line at that number stays plain
+rather than being mis-coloured. `cssClassFor` (`lib/decorations.ts`) remains
+the ONE 18-role → `.kbc-hl-*` table, so a diff row and a fence cannot
+disagree. What a surface must supply is only the two refs and, optionally,
+`parsed` (the hook reconstructs a side from it when `GET /api/file` spans
+are missing — new files, unindexed blobs, pseudo-files).
+
+The tip side used to be gated on `!!newSha`, and that gate was wrong about
+the common case. A diff rendered with no `to` does not have no new side:
+`GET /api/diff`'s own contract says so (`crates/kb-code-server/src/
+routes.rs:2087-2090` — "Omitted = diff `from` against the CURRENT WORKING
+TREE", mirroring `GET /api/file`'s own "no `ref` = working tree" default),
+and the two readers that render it mostly pass no `to` — the compare
+strip's `to={gitRef ? pane2Loc?.ref : undefined}`
+(`routes/Reader.tsx:4528`) and the `~diff` route's optional `?to=`
+(`routes/Reader.tsx:501`, `searchParams.get("to") ?? undefined`). So the
+tip query runs at `ref: undefined` — the very `["file", …, null]` entry
+`useFile` already keeps for the reader's own read, so a diff opened on a
+file the reader has open costs no new request shape, only the one that was
+being suppressed. **Do not re-gate the tip on `!!newSha`**: that one
+expression is what put every ADDED line of a no-`to` diff back to plain,
+and it read as a correct "no ref, nothing to fetch" because the fetch was
+optional in the first place.
+
+Two gates, and only two, survive on the tip, and both are named exports so
+they are pinned by their own tests: `tipSideEnabled` sits beside its
+untouched twin `baseSideEnabled`, so the two rules read side by side rather
+than one being an inline condition inside the hook. `hasAdds` is the MIRROR
+of the base side's `hasRemoves` and closes the tip only for the UNPINNED
+read, where the blob may not exist at all — a DELETED file has no
+working-tree blob, so the read would be a guaranteed 404 whose only effect
+is a wasted request (`shouldFallbackToSnippet` refuses on a failed read, so
+nothing would have painted anyway). A PINNED tip is never gated on
+`hasAdds`: that blob exists whatever the line mix says, which is the
+pre-existing behaviour, unchanged. `DiffView.tsx:25-37` derives both flags
+from the parsed diff by the same `hunks.some(…)` shape, so a new
+`DiffFile` caller that forgets `hasAdds` is merely over-fetching — omit it
+and you are assumed to have adds, and only a deletion needs to say
+otherwise.
+
+**An oversize side is DROPPED, never sent — one bad item must not strip
+the other side's paint (V80-H1).** `useHighlight` sends every side in ONE
+`POST /api/highlight/batch`, and the server refuses the WHOLE batch when
+any single item exceeds `MAX_SNIPPET_BYTES` (256 KiB,
+`crates/kb-code-server/src/highlight.rs:424`, enforced :752-759). The
+hook's own `DIFF_HIGHLIGHT_MAX_BYTES` (1.5 MiB) only bounds what is worth
+READING and is six times the server's per-item cap, so a big side could
+400 the shared request and take the OTHER side's legitimate paint down with
+it — a failure that presents as "highlighting stopped working" on a diff
+whose base side was fine. Both sides are now clamped to
+`HIGHLIGHT_SNIPPET_MAX_BYTES` before they are enqueued, measured in UTF-8
+BYTES via `lib/decorations.ts`'s `utf8LengthOf`, never `.length` — a
+function rather than `new TextEncoder().encode(text).length` so a 1.5 MiB
+side is not copied into a throwaway byte array just to learn its length,
+which early-outs on `.length > cap` (sound: a UTF-8 byte length is never
+fewer than the UTF-16 code-unit count). The server measures
+`item.text.len()`, so a non-ASCII side under-counts on a UTF-16 length and
+would slip past the clamp. The affected side degrades to PLAIN TEXT, which
+is the honest outcome; this is a drop, never a truncate, because a
+truncated snippet would paint spans against the wrong bytes. Clamping each
+side also makes the batch TOTAL cap of 1 MiB (`highlight.rs:428`, enforced
+:761-765) unreachable — two in-cap sides are at most 512 KiB — so the hook
+never has to reason about the aggregate.
+
+**Four raw diff surfaces paint now, and two that deliberately do not
+(V80-H1).** `components/reviews/InterdiffPanel.tsx` passes the panel's real
+`from_tip`/`to_tip` shas, so both interdiff sides paint from blobs a reader
+of that review may already have open. `components/provenance/
+OriginatingChange.tsx` passes the blame commit as the tip and its
+`BlameRegion.previous_sha` — or `<sha>^` — as the base, and hands the hook
+the SLICE it renders (`slicedAsParsed(slice)`) rather than the full parse,
+so the base read is gated on a remove line that actually survives the
+slice's own row cap (`lib/hunkSlice.ts`'s `maxLines`).
+`components/diff/SuggestionEditor.tsx` reads BOTH sides from
+the one blob the editor already has open (`useFile(repo, path, sha)`, the
+same key), so its preview costs no extra request. The composer's DRAFT
+rows stay plain by design, and this is the rule to not undo: the draft is
+not the blob's text, so the shipped per-line integrity guard refuses it.
+Plain, never wrong — a guessed colour on a line the reader is about to
+replace is a worse failure than no colour. For the same reason the
+UNCOMMITTED originating change passes neither ref and stays unpainted
+(`UNCOMMITTED_SHA` names no commit, so there is no blob to read and
+inventing a revspec would be a claim). `components/diff/SuggestionDiff.tsx`'s
+`ApplySuggestionPreview` is the fourth: it paints through
+`lib/diffHighlight.ts`'s `paintLine` and the same `data-kbc-hl` span
+contract every other surface emits, out of the `GET /api/file` body it
+ALREADY holds — no second request for bytes already in memory.
+
+**Both `POST /api/highlight` handlers parse OFF the async worker (V80-H1).**
+`highlight_snippet` reaches `lang::parse`, which builds a FRESH
+`tree_sitter::Parser` and runs a full parse per call; the batch form does
+that up to `MAX_BATCH_ITEMS` (64) times. Run inline on an async runtime
+worker, one paint is a stall sized by the SUM of every item's parse, paid
+by every unrelated handler sharing that thread. `highlight_route` and
+`highlight_batch_route` now wrap their work in
+`tokio::task::spawn_blocking`
+(`crates/kb-code-server/src/highlight.rs:798-835`) — the same discipline
+`routes::diff_route` already used for its `git diff` subprocess
+(`routes.rs:2116`): there blocking I/O, here CPU. The caps are checked
+INSIDE the hop, not in front of it, so every oversize, duplicate-id and
+over-total refusal is still the same 400 out of `highlight_batch` with the
+same body, and both responses keep their `no-store`. A panicked task is
+the one genuinely new outcome, and it is a 500 naming the panic
+(`"highlight task panicked"`), never a hang.
+
 ## The review document (`kbc-review/1`, `V73-K2b`, design §D9/D9-a)
 
 `?tab=doc` is the Review Room's sixth cockpit tab. Four rules, each with a

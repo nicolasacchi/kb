@@ -443,13 +443,14 @@ fn missing_tips_mark_reviews_while_the_store_goes_ready() {
 fn a_dropped_member_rides_out_on_the_seed_report() {
     let e = env();
     // Order matters, and this is the established one in this file:
-    // `widgets-01` alone carries TWO forge remotes (`origin` = acme/widgets
-    // + `mine` = a personal fork), so with no PR binding and no store yet
-    // it REFUSES as `base-url-ambiguous` — it cannot mint a store on its
-    // own. `widgets-02` has ONE forge remote, so it mints the store
-    // unambiguously and `widgets-01` JOINS it by membership (README §5.1
-    // "Joining", the same order `the_adopted_store_reports_what_it_
-    // imported_and_what_it_dropped` and the two worktree tests use).
+    // `widgets-02` has ONE forge remote, so it mints the store
+    // unambiguously; `widgets-01` carries TWO (`origin` = acme/widgets +
+    // `mine` = a personal fork) and has no PR binding, so registering it
+    // first is refused `base-url-ambiguous` — correct ladder behaviour,
+    // wrong fixture order. `widgets-01` then JOINS by store key (README
+    // §5.1 "Joining"), the same order
+    // `the_adopted_store_reports_what_it_imported_and_what_it_dropped`
+    // and the two worktree tests use.
     let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
     // widgets-01 normalizes to the same store key, so it JOINS this store.
     assert_eq!(
