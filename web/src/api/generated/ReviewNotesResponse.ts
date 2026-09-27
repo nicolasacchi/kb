@@ -4,7 +4,9 @@ import type { TagSummary } from "./TagSummary";
 
 export type ReviewNotesResponse = { notes: Array<ReviewNoteRow>, 
 /**
- * Facet counts over the PRE-tag-filter, PRE-`q` set, sorted
+ * Facet counts over the PRE-`?tag=`, PRE-`?q=` and PRE-`?status=` set
+ * (the status filter runs inside the per-corpus walk, so it is already
+ * applied by the time this is computed), sorted
  * `count DESC, name ASC` (the exact `aggregate_tags` order, so the chip
  * row and the rail's tag list agree). Reused verbatim from
  * `routes::tags::TagSummary` — see the module doc on why the TYPE is

@@ -19,7 +19,14 @@ export type ReviewNoteRow = { kb: string, artifact_id: string,
  * Current title from storage, else the review file's own recorded title
  * (the artifact may have left lance while its sidecar lives on).
  */
-artifact_title: string, source_relative?: string, comment_id: string, status: CommentStatus, author: Author, body: string, anchor: Anchor, 
+artifact_title: string, source_relative?: string, comment_id: string, status: CommentStatus, author: Author, 
+/**
+ * The note text. `None` only under `?bodies=false` (see
+ * [`ReviewNotesQuery::bodies`]), and then the key is ABSENT from the
+ * JSON rather than present-and-empty: an empty string standing in for
+ * an omitted body is a lie the client cannot detect.
+ */
+body?: string, anchor: Anchor, 
 /**
  * COMMENT tags — never the artifact's `kb-tags`. Always a (possibly
  * empty) array, so the client never has to null-check.

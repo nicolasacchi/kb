@@ -932,7 +932,7 @@ impl ReviewFile {
     /// rolling `!c.private` beside a status check, which is how the two
     /// axes silently drift apart.
     pub fn visible(&self, v: Visibility) -> Vec<&Comment> {
-        self.comments.iter().filter(|c| v.includes(*c)).collect()
+        self.comments.iter().filter(|c| v.includes(c)).collect()
     }
 
     /// Open comments an agent may see. The ONE iterator behind

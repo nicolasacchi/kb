@@ -2459,10 +2459,7 @@ async fn private_comment_absent_from_reviews_unless_visibility_all() {
 
     // 1. No param ⇒ public only. The note is invisible.
     let rows: serde_json::Value = client
-        .get(url(
-            addr,
-            &format!("/api/kb/smoke/reviews?artifact_id=viz11112222"),
-        ))
+        .get(url(addr, "/api/kb/smoke/reviews?artifact_id=viz11112222"))
         .send()
         .await
         .unwrap()
@@ -3006,8 +3003,7 @@ async fn comments_updated_counts_exclude_private() {
         .filter_map(|l| l.strip_prefix("data:"))
         .filter_map(|d| serde_json::from_str::<serde_json::Value>(d.trim()).ok())
         .filter_map(|v| v.get("payload").cloned())
-        .filter(|p| p["artifact_id"] == art)
-        .next_back()
+        .rfind(|p| p["artifact_id"] == art)
         .unwrap_or_else(|| panic!("no comments.updated for {art}; frames:\n{buf}"));
     assert_eq!(
         last["open_count"], 1,

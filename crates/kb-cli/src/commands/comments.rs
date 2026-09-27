@@ -2341,13 +2341,24 @@ mod tests {
             remove_tags(&current, &["Fleet Doc".to_string()]),
             vec!["wording".to_string(), "todo".to_string()]
         );
-        // Removing the last tag empties the set; removing an absent tag is
-        // the identity (the daemon answers `changed:false`).
+        // Removing EVERY tag empties the set.
         assert!(remove_tags(
             &current,
-            &["a".to_string(), "b".to_string(), "c".to_string()]
+            &[
+                "fleet-doc".to_string(),
+                "wording".to_string(),
+                "todo".to_string()
+            ]
         )
         .is_empty());
+        // Removing an ABSENT tag is the identity, not a clear: a name that
+        // matches nothing must leave the set untouched (the daemon then
+        // answers `changed:false`). Clearing on a typo is the failure mode
+        // this guard exists to prevent.
+        assert_eq!(
+            remove_tags(&current, &["a".to_string(), "b".to_string()]),
+            current
+        );
         assert_eq!(remove_tags(&current, &["nope".to_string()]), current);
     }
 
