@@ -56,7 +56,7 @@ pub(in crate::store) use parking_lot::Mutex;
 pub(in crate::store) use rusqlite::{params, Connection, OptionalExtension, Transaction};
 pub(in crate::store) use std::collections::HashMap;
 pub(in crate::store) use std::path::Path;
-pub(in crate::store) use std::sync::atomic::{AtomicU64, Ordering};
+pub(in crate::store) use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub(in crate::store) use crate::extract::Symbol;
 pub(in crate::store) use crate::highlight::Span;
@@ -293,6 +293,38 @@ pub struct Store {
     /// review store (`crate::git::roots`). Shared (`Arc`) because every
     /// `GitCtx` built against this store carries a handle to bump it.
     git_fallbacks: std::sync::Arc<crate::git::roots::GitFallbackStats>,
+    /// RS — boot-published "may a READ resolve a store root for this
+    /// boot?". `git::roots::resolve_ready_store` sees only `&Store`, so
+    /// the `review_store::StoreSettings::disabled` verdict (and the
+    /// store git spawner being unbuildable) is pushed here once, by
+    /// `bind_and_spawn`, instead of pulled. The `true` default is
+    /// deliberate: a `Store` opened with no `ReviewStores` at all — the
+    /// CLI, benches, fixtures — keeps the pre-existing read behaviour
+    /// exactly, and a disabled boot is a *configured* refusal, not a
+    /// default to guess.
+    ///
+    /// `Release`/`Acquire`, NOT the `Relaxed` used by the counters
+    /// above: there a stale read costs one cache rebuild, but here it
+    /// is a GATE — a stale `true` serves a read from a store root the
+    /// operator refused for this boot, which is the whole defect this
+    /// flag exists to close.
+    ///
+    /// Defence in depth, NOT the mechanism. The flag is a lone
+    /// `AtomicBool` that publishes no other memory, so the Acquire load
+    /// synchronises with nothing an observer could act on. The edge
+    /// that actually holds is SPAWN ORDERING: the release store in
+    /// `bind_and_spawn` runs before any task that can construct a
+    /// `GitCtx` exists — the `[backfill] on_boot` spawn, the serve
+    /// spawn, the RS boot job, the maintenance worker, and
+    /// `run_blocking`'s dispatch of a route handler onto the blocking
+    /// pool. The load-bearing change was RELOCATING that backfill
+    /// block to after the publish (it used to sit up with the other
+    /// boot-time spawns, ahead of it). The stronger ordering is kept
+    /// because it costs nothing — one fence per boot, one acquire per
+    /// `GitCtx` construction, once per route entry and not once per git
+    /// subprocess — and because it stops the guarantee from depending
+    /// on that spawn order surviving the next edit.
+    review_store_readable: AtomicBool,
 }
 
 /// The ONE sanctioned way to touch the store from async context — see the
@@ -463,6 +495,7 @@ impl Store {
             generation: AtomicU64::new(0),
             opens_generation: AtomicU64::new(0),
             git_fallbacks: Default::default(),
+            review_store_readable: AtomicBool::new(true),
         })
     }
 
@@ -476,6 +509,24 @@ impl Store {
         &self,
     ) -> std::sync::Arc<crate::git::roots::GitFallbackStats> {
         std::sync::Arc::clone(&self.git_fallbacks)
+    }
+
+    /// Publish the boot's read verdict. The `Release` store pairs with
+    /// the `Acquire` load in [`Self::review_store_readable`]; see the
+    /// field doc for why a gate cannot be `Relaxed`.
+    pub fn set_review_store_readable(&self, readable: bool) {
+        self.review_store_readable
+            .store(readable, Ordering::Release);
+    }
+
+    /// `pub(crate)`: every read-side consumer is in-crate
+    /// (`git::roots::resolve_ready_store`). The setter above is `pub`
+    /// only because out-of-crate `AppState` builders — integration
+    /// tests, embedding crates — construct their own `ReviewStores` and
+    /// would otherwise silently keep the permissive `true` default while
+    /// their own `AppState` refuses the store.
+    pub(crate) fn review_store_readable(&self) -> bool {
+        self.review_store_readable.load(Ordering::Acquire)
     }
 
     fn lock(&self) -> parking_lot::MutexGuard<'_, Connection> {

@@ -7820,6 +7820,29 @@ fn http_client() -> Result<reqwest::Client> {
         .context("build http client")
 }
 
+/// The client for a verb that makes the DAEMON do minutes of work
+/// before it can answer: creating a review, or snapshotting one. Both
+/// capture — they fetch the base and the head into the store, walk the
+/// changed files, and write a patchset — so on a cold cache over a
+/// large repository either outlives [`http_client`]'s 10 s by a wide
+/// margin.
+///
+/// The failure that fixed was silent and confusing: the client gave up,
+/// printed "is kb-code-server running", and exited 5, while the daemon
+/// finished the capture minutes later. That is the same lesson
+/// `start-pr` already learned the hard way (V76-R1b's poll-and-`--wait`)
+/// and the same one `review retrack` already avoids through
+/// `retrack_cmd`'s 600 s client. `start-pr` and `sync` are the two verbs
+/// that went further still and became daemon-side jobs; these two have
+/// no job to attach to, so the honest answer is a backstop long enough
+/// for the work rather than a timeout short enough to be a default.
+fn capture_client() -> Result<reqwest::Client> {
+    client_builder()
+        .timeout(review_agent::READ_TIMEOUT)
+        .build()
+        .context("build http client")
+}
+
 /// The shared HTTP helpers' non-2xx answer, rendered for a human.
 ///
 /// These used to hand the response to reqwest's CONSUMING
@@ -15174,7 +15197,7 @@ async fn review_start_cmd(
     if let Some(s) = session {
         payload["session_id"] = serde_json::json!(s);
     }
-    let client = http_client()?;
+    let client = capture_client()?;
     let (status, body) = post_json_raw(&client, daemon, "/api/reviews", &payload).await?;
     if status.is_success() {
         // RS-U6 — README §12's one stderr line.
@@ -15447,7 +15470,7 @@ async fn review_snapshot_cmd(
     no_fetch: bool,
     json: bool,
 ) -> Result<()> {
-    let client = http_client()?;
+    let client = capture_client()?;
     let mut payload = serde_json::json!({});
     if force {
         payload["force"] = serde_json::json!(true);
@@ -16862,8 +16885,8 @@ async fn review_distill_cmd(daemon: &str, id: i64, json: bool) -> Result<()> {
 /// fetch completed server-side while the CLI had already given up, and a
 /// confusing second call "succeeded". The final envelope printed is the
 /// SAME one the synchronous route returns (the job carries it verbatim
-/// under `result`); the stale-mirror refusal
-/// (`urn:kb:errors:stale-mirror`) is printed verbatim, hint included.
+/// under `result`); a typed refusal (e.g. a closed review's
+/// `urn:kb:errors:review-closed`) is printed verbatim, hint included.
 ///
 /// V76-R1b — `--reopen`/`--new` become `?on_closed=reopen|new` (an OPEN
 /// existing (repo, PR) review is reused; a CLOSED one 409s without a flag).
@@ -17061,8 +17084,8 @@ fn start_pr_failed(
         }
         std::process::exit(envelope::EXIT_CONFLICT);
     }
-    // The refusal verbatim — the stale-mirror message's retry command is
-    // IN the text, so nothing is re-worded here.
+    // The refusal verbatim — a typed refusal's retry command is IN the
+    // text, so nothing is re-worded here.
     let urn = error_type.map(|t| format!(" [{t}]")).unwrap_or_default();
     Err(anyhow::anyhow!("review start-pr failed{urn}: {error}"))
 }
@@ -17237,7 +17260,11 @@ async fn poll_review_job(
         let path = declared_path.replace("{id}", job_id);
         let (status, body) = get_json_raw(client, daemon, &path, &[]).await?;
         if status == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!("review job {job_id} vanished (unknown or swept past its 1 h TTL)");
+            anyhow::bail!(
+                "review job {job_id} vanished — it finished and was swept, or the daemon \
+                 cancelled it at its stuck-job horizon (6 h). A RUNNING job is never swept \
+                 on the 1 h settled TTL; re-submit the request to start a fresh one."
+            );
         }
         if !status.is_success() {
             return Err(loopback_or_api_error(
@@ -28885,25 +28912,21 @@ mod tests {
 
     #[test]
     fn start_pr_job_classify_failed_keeps_the_refusal_verbatim() {
-        let hint = "stale mirror: the local default branch \"main\" is 214 commits behind \
-                    the fetched origin/main (0 ahead, 214 behind; refusal limit 50). \
-                    ps1 would be based on its merge-base with the PR head; to proceed \
-                    against that base explicitly, run:\n  \
-                    kb-code review start-pr --repo widget --pr 42 --base deadbeef";
+        let hint = "review 65 is closed; pass --reopen to sync it again, \
+                    or --new to open a fresh review against PR 42.\n  \
+                    kb-code review start-pr --repo widget --pr 42 --reopen";
         let body = serde_json::json!({
             "job_id": "job_abc", "status": "failed",
             "error": hint,
-            "error_type": "urn:kb:errors:stale-mirror",
+            "error_type": "urn:kb:errors:review-closed",
         });
         match classify_start_pr_job(&body) {
             StartPrJob::Failed { error, error_type } => {
                 // Verbatim, hint included — the CLI adds nothing and
                 // re-words nothing.
                 assert_eq!(error, hint);
-                assert!(
-                    error.contains("kb-code review start-pr --repo widget --pr 42 --base deadbeef")
-                );
-                assert_eq!(error_type.as_deref(), Some("urn:kb:errors:stale-mirror"));
+                assert!(error.contains("kb-code review start-pr --repo widget --pr 42 --reopen"));
+                assert_eq!(error_type.as_deref(), Some("urn:kb:errors:review-closed"));
             }
             _ => panic!("a failed job must classify as Failed"),
         }

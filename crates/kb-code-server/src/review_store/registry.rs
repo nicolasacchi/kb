@@ -9,7 +9,19 @@
 //! * **registration** — the base-URL ladder + membership, run once per
 //!   repo ([`ReviewStores::register_repo`]);
 //! * **seeding** — [`ReviewStores::seed`] drives `seed::seed_store` and the
-//!   DB state machine (`absent → seeding → ready`, or `broken`);
+//!   DB state machine (`absent → seeding → ready`, or `broken`). A store
+//!   reaches `ready` over a NETWORK pass only over a credential that
+//!   WORKED: a credential the operator supplied and that came back
+//!   refused (D12) is [`StoreUnavailable::CredentialRefused`], and the
+//!   row goes back to `absent` carrying the class — never a `ready` row
+//!   over a base nobody fetched. That record is also what the NEXT boot
+//!   pass reads: a boot seed is local-only and cannot resolve a
+//!   credential, so [`crate::review_store::boot::run_boot`] leaves a row
+//!   whose last refusal was a credential class `absent` and reports it,
+//+//!   rather than re-seeding it straight back to `ready` over the same
+//!   broken credential. A LOCAL pass (`network = false`: a boot seed, an
+//!   offline `store sync`) is the one documented exception and is always
+//!   recorded as such — `base: offline-seed`/`offline` in `state_json`.
 //! * **locks** — a per-(store, remote) FETCH mutex and a short per-store
 //!   OPS mutex (design §4.2), plus the lifetime `flock` per store
 //!   (`manifest::StoreLock`). `tokio::sync::Mutex`es: a fetch guard is held
@@ -44,12 +56,13 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use super::classify::FailureClass;
 use super::cred::{
     resolve_fetch_credential, CredError, FetchCredential, GhCli, LiveProbes, Resolution,
 };
 use super::git::StoreGit;
 use super::key::{https_url_for_key, local_store_key, split_key};
-use super::ladder::{self, LadderInput, LadderOutcome, NoForkCheck, RemoteInfo};
+use super::ladder::{self, LadderInput, LadderOutcome, NoForkCheck, RefusedRemote, RemoteInfo};
 use super::manifest::{self, ManifestProblem, StoreLock};
 use super::seed::{self, BaseFetch, ExpectedPatchset, SeedMember, SeedPlan, SeedReport};
 use super::settings::StoreSettings;
@@ -83,6 +96,22 @@ pub enum Registration {
         store_key: String,
         source: String,
         joined_existing: bool,
+        /// Remotes REFUSED as unsafe while another remote still decided
+        /// the store's project — the ladder's `remote-url-refused`, on
+        /// the same code the all-refused case refuses with. A good remote
+        /// keys the store regardless (refusing here would strand a
+        /// working clone over a second remote's typo), so these are the
+        /// only trace that remote is there at all: reported, never
+        /// dropped, and never reclassified into the store's key.
+        ///
+        /// Recomputed on EVERY registration, not only the one that
+        /// minted the store: a repo already registered whose clone later
+        /// grows a hostile remote reports it here, on every boot
+        /// thereafter, exactly as the first registration did (via
+        /// [`ladder::refused_remotes`]). Best effort — a member whose
+        /// remotes cannot be read reports an empty list rather than
+        /// refusing a membership that stands.
+        refused_remotes: Vec<RefusedRemote>,
     },
     Refused {
         code: String,
@@ -109,6 +138,19 @@ pub enum StoreUnavailable {
         code: String,
     },
     LockedElsewhere,
+    /// The credential the operator configured for this store came back
+    /// REFUSED (D12): a gh account that is not the pinned/recorded one,
+    /// a PINNED rung that failed, or a `token_file` that was present,
+    /// readable and owner-only but did not validate. `class` is the
+    /// `FailureClass` slug, `detail` the (redacted) reason.
+    ///
+    /// A store-level ERROR, never a recorded base-fetch skip: the store
+    /// is not brought up — or re-reported — on a credential that never
+    /// worked, and no other rung is tried in its place.
+    CredentialRefused {
+        class: String,
+        detail: String,
+    },
     /// The store is ready, but THIS member joined after the seed and its
     /// refs are not imported yet (background import pending). Reads fall
     /// back to the user repo, exactly like an absent store.
@@ -133,6 +175,7 @@ impl StoreUnavailable {
             Self::LockedElsewhere => "store-locked",
             Self::MemberPending => "store-member-pending",
             Self::GitTooOld { .. } => "git-too-old",
+            Self::CredentialRefused { .. } => "store-credential-refused",
             Self::Error { .. } => "store-error",
         }
     }
@@ -153,11 +196,23 @@ impl axum::response::IntoResponse for StoreRefusal {
             StoreUnavailable::LockedElsewhere => (StatusCode::CONFLICT, None),
             StoreUnavailable::NotRegistered => (StatusCode::CONFLICT, None),
             StoreUnavailable::Error { .. } => (StatusCode::INTERNAL_SERVER_ERROR, None),
+            StoreUnavailable::CredentialRefused { .. } => (StatusCode::FORBIDDEN, None),
             _ => (StatusCode::CONFLICT, None),
         };
         let code = self.0.code();
+        // A refused credential is the ONE arm whose class and reason the
+        // operator must read in the message itself, not only in `detail`:
+        // the class is what says WHICH half of the ladder refused, and a
+        // store that is not up is not something to go debug in a JSON blob.
+        let error = match &self.0 {
+            StoreUnavailable::CredentialRefused { class, detail } => format!(
+                "review store unavailable: {code} — the configured credential was refused \
+                 ({class}): {detail}"
+            ),
+            _ => format!("review store unavailable: {code}"),
+        };
         let mut body = serde_json::json!({
-            "error": format!("review store unavailable: {code}"),
+            "error": error,
             "type": format!("urn:kb:errors:{code}"),
             "title": status.canonical_reason().unwrap_or("Error"),
             "status": status.as_u16(),
@@ -318,10 +373,98 @@ pub fn base_branch_of(
     Some(r.to_string())
 }
 
+/// One member of a store, as `[[review.repos]]` declares it (or not).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberSettings {
+    pub repo: String,
+    /// Does this member have a `[[review.repos]]` entry at all? A member
+    /// without one contributes its DEFAULTS (`auto`, no `gh_user`), which
+    /// is why it cannot silently out-vote a member that declares a pin.
+    pub declared: bool,
+    pub credential: super::cred::CredentialPin,
+    pub gh_user: Option<String>,
+}
+
+/// Which member's `[[review.repos]]` entry a store's credential comes
+/// from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreCredentialSource {
+    /// `repo`'s entry drives the store.
+    Member(String),
+    /// More than one member declares a store-wide credential setting and
+    /// they do not agree — the `String` names EVERY member's value. No
+    /// credential is resolved on a guess: a store-wide pin read off one
+    /// member is exactly how repo B's `gh_user` gets silently ignored
+    /// (D12 binds the store, not the member).
+    Disagreement(String),
+}
+
+/// The member that drives a store's credential resolution, or the
+/// disagreement that stops one being chosen.
+///
+/// Members are visited in store-member (repo id) order, which is NOT an
+/// operator-visible priority: with a `[[review.repos]]` entry on repo A
+/// (id 1) and a `gh_user` pin on repo B, "first entry wins" binds the
+/// store to whatever A resolves — unbound, and so free to fall through.
+/// So when the DECLARED members disagree on `credential` or `gh_user`,
+/// none is chosen and every member's value is named.
+pub fn credential_source(members: &[MemberSettings]) -> StoreCredentialSource {
+    let declared: Vec<&MemberSettings> = members.iter().filter(|m| m.declared).collect();
+    let first = declared.first().copied().or_else(|| members.first());
+    let Some(first) = first else {
+        return StoreCredentialSource::Member(String::new());
+    };
+    let same = |m: &MemberSettings| {
+        m.credential == first.credential
+            && match (&m.gh_user, &first.gh_user) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                (None, None) => true,
+                _ => false,
+            }
+    };
+    if declared.len() < 2 || declared.iter().all(|m| same(m)) {
+        return StoreCredentialSource::Member(first.repo.clone());
+    }
+    let values: Vec<String> = members
+        .iter()
+        .map(|m| {
+            format!(
+                "{} credential={} gh_user={}",
+                m.repo,
+                m.credential_slug(),
+                m.gh_user.as_deref().unwrap_or("<unset>")
+            )
+        })
+        .collect();
+    StoreCredentialSource::Disagreement(format!(
+        "this store's members declare different credential settings ({}) — no \
+         credential is resolved until they agree (db order, not priority: \
+         `{}` would otherwise have won silently)",
+        values.join("; "),
+        first.repo
+    ))
+}
+
+impl MemberSettings {
+    fn credential_slug(&self) -> &'static str {
+        match self.credential {
+            super::cred::CredentialPin::Auto => "auto",
+            super::cred::CredentialPin::GhCli => "gh-cli",
+            super::cred::CredentialPin::DeployKey => "deploy-key",
+            super::cred::CredentialPin::Token => "token",
+            super::cred::CredentialPin::Anonymous => "anonymous",
+            super::cred::CredentialPin::Inherit => "inherit",
+            super::cred::CredentialPin::None => "none",
+        }
+    }
+}
+
 impl ReviewStores {
     /// Build from config. Never fails boot: a spawner that cannot be
     /// built, or a disabled root, leaves every store `unavailable` and
     /// reads fall back to the user repos.
+    /// The read half of that promise is [`Self::reads_can_use_store`],
+    /// which `bind_and_spawn` publishes onto the `Store` at boot.
     pub fn new(
         review: &ReviewSection,
         state_dir: &Path,
@@ -335,7 +478,9 @@ impl ReviewStores {
         let (git, git_error) = if settings.disabled.is_some() {
             (None, None)
         } else {
-            match StoreGit::new(&settings.git_home) {
+            match StoreGit::new(&settings.git_home)
+                .map(|g| g.with_base_fetch_timeout(settings.base_fetch_timeout))
+            {
                 Ok(g) => (Some(g), None),
                 Err(e) => {
                     tracing::warn!(error = %e, "review store: cannot build the store git spawner");
@@ -390,6 +535,18 @@ impl ReviewStores {
 
     pub fn settings(&self) -> &StoreSettings {
         &self.settings
+    }
+
+    /// May a READ resolve a store root for this boot? The read path
+    /// (`crate::git::roots::GitCtx`) sees only `&Store`, never
+    /// `StoreSettings`, so the flag is PUSHED boot → `Store` once, in the
+    /// same RS-artifact-parked-on-`Store` shape as the `git_fallbacks`
+    /// counters. Covers both arms `unavailable_reason` reports as
+    /// `Disabled` (no spawner, or a disabled root) and deliberately
+    /// EXCLUDES its `GitTooOld` arm, which gates store MUTATION (a
+    /// `git -C <store>` write), not a plain read.
+    pub fn reads_can_use_store(&self) -> bool {
+        self.settings.disabled.is_none() && self.git.is_some()
     }
 
     pub fn git(&self) -> Option<&StoreGit> {
@@ -794,6 +951,14 @@ impl ReviewStores {
             Ok(v) => v,
             Err(e) => return err("db", e.to_string()),
         };
+        // The refusals a MEMBER's clone carries right now, read BEFORE
+        // the membership short-circuit below decides anything. The
+        // ladder never runs for a repo that is already a member, so this
+        // is the only place a hostile remote added after registration
+        // can be reported: hard-coding `vec![]` here made
+        // `Registration::Member::refused_remotes` a once-per-repo
+        // answer, on a branch that runs on every boot.
+        let refused_now = self.refused_remotes_of(&repo);
         if let Some(m) = existing {
             let row = match store.get_review_store(m.store_id) {
                 Ok(Some(r)) => r,
@@ -829,13 +994,25 @@ impl ReviewStores {
                     store_key: row.store_key,
                     source: "explicit".into(),
                     joined_existing: true,
+                    refused_remotes: refused_now,
                 };
+            }
+            for r in &refused_now {
+                tracing::warn!(
+                    repo = %name,
+                    remote = %r.name,
+                    code = ladder::REMOTE_URL_REFUSED,
+                    reason = %r.reason,
+                    "kb-code: a member's clone carries a remote refused as unsafe; the store is \
+                     keyed from another remote and is NOT re-keyed"
+                );
             }
             return Registration::Member {
                 store_id: row.id,
                 store_key: row.store_key,
                 source: row.base_url_source.unwrap_or_else(|| "member".into()),
                 joined_existing: true,
+                refused_remotes: refused_now,
             };
         }
 
@@ -861,17 +1038,39 @@ impl ReviewStores {
             pr_slugs: &slugs,
             remotes: &remotes,
             existing_keys: &keys,
+            // Rung 6 is inert, so a fork-shaped clone refuses with
+            // `base-url-ambiguous` and the operator sets `base_url`. See
+            // `NoForkCheck`'s doc for the two things that have to exist
+            // first (a `GET /repos/{o}/{r}` fork read on `GithubClient`,
+            // and a way to reach the api credential from this
+            // sync, `&Store`-only, pre-store-row path).
             fork_check: &NoForkCheck,
         });
-        let (key, base_url, source) = match outcome {
+        let (key, base_url, source, refused) = match outcome {
             LadderOutcome::Resolved {
                 store_key,
                 url,
                 source,
+                refused,
                 ..
             } => {
                 let base = canonical_base_url(&url, &store_key);
-                (store_key, base, source.slug())
+                // A remote refused as unsafe while a GOOD remote still
+                // decided the project: the store is keyed from the good
+                // one, and the refusal is reported rather than lost with
+                // it (it is the same `remote-url-refused` the all-refused
+                // clone refuses with).
+                for r in &refused {
+                    tracing::warn!(
+                        repo = %name,
+                        remote = %r.name,
+                        code = ladder::REMOTE_URL_REFUSED,
+                        reason = %r.reason,
+                        "kb-code: a remote was refused as unsafe; the store is keyed from \
+                         another remote"
+                    );
+                }
+                (store_key, base, source.slug(), refused)
             }
             LadderOutcome::NoForgeRemote => {
                 let uuid = match new_store_uuid() {
@@ -885,6 +1084,9 @@ impl ReviewStores {
                     &local_store_key(&uuid),
                     None,
                     "local",
+                    // Unreachable in fact: a single refused remote stops
+                    // the ladder above, so nothing was refused here.
+                    vec![],
                 );
             }
             LadderOutcome::Refused {
@@ -909,6 +1111,7 @@ impl ReviewStores {
                     store_key: row.store_key,
                     source: source.into(),
                     joined_existing: true,
+                    refused_remotes: refused,
                 }
             }
             Ok(None) => {
@@ -916,12 +1119,53 @@ impl ReviewStores {
                     Ok(u) => u,
                     Err(e) => return err("failed", e.to_string()),
                 };
-                self.create_and_join(store, &repo, &uuid, &key, base_url.as_deref(), source)
+                self.create_and_join(
+                    store,
+                    &repo,
+                    &uuid,
+                    &key,
+                    base_url.as_deref(),
+                    source,
+                    refused,
+                )
             }
             Err(e) => err("db", e.to_string()),
         }
     }
 
+    /// The remotes this clone refuses as unsafe RIGHT NOW, for a repo
+    /// that is already a member — the classification the ladder would
+    /// have made on first registration, made again on every later one.
+    ///
+    /// Best effort, deliberately. A member whose clone cannot be read
+    /// (the path moved, the directory is gone, git cannot read a
+    /// foreign-owned config) still HAS a membership, and turning a
+    /// diagnostic into a registration error would strand a working
+    /// store over a missing directory. So every failure here is an
+    /// empty list — the same list a clone with no hostile remote
+    /// produces — and the next registration, with the clone readable
+    /// again, reports the refusal.
+    fn refused_remotes_of(&self, repo: &RepoRef) -> Vec<RefusedRemote> {
+        let Some(git) = self.git.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(common) = seed::common_dir_of(&repo.root) else {
+            return Vec::new();
+        };
+        // Same call the ladder path makes before it reads remotes: a
+        // local source that is not on the safe-directory list is
+        // unreadable to this daemon user.
+        let _ = git.allow_local_source(&common);
+        match seed::read_remotes(git, &common) {
+            Ok(remotes) => ladder::refused_remotes(&remotes),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    // Eight parameters, and the eighth is the refused-remote list: it is
+    // not part of the store's identity, so bundling it would mean a
+    // struct that exists only to satisfy a lint.
+    #[allow(clippy::too_many_arguments)]
     fn create_and_join(
         &self,
         store: &Store,
@@ -930,6 +1174,10 @@ impl ReviewStores {
         key: &str,
         base_url: Option<&str>,
         source: &str,
+        // Remotes the ladder refused as unsafe while `key` was still
+        // decided by another remote — reported on the registration,
+        // never folded into the key.
+        refused: Vec<RefusedRemote>,
     ) -> Registration {
         let git_dir = seed::store_dir(&self.settings.root, uuid);
         let id = match store.create_review_store(
@@ -983,6 +1231,7 @@ impl ReviewStores {
             store_key: key.to_string(),
             source: source.into(),
             joined_existing: false,
+            refused_remotes: refused,
         }
     }
 
@@ -1111,20 +1360,48 @@ impl ReviewStores {
         Ok(res)
     }
 
-    /// The first member with a `[[review.repos]]` entry, else the first
-    /// member — whose settings drive store-wide credential resolution.
-    pub fn settings_repo_for(&self, store: &Store, store_id: i64) -> Option<String> {
-        let names: Vec<String> = store
+    /// The member whose `[[review.repos]]` entry drives store-wide
+    /// credential resolution — or the DISAGREEMENT that stops one being
+    /// chosen (see [`credential_source_for`]).
+    pub fn credential_source_for(&self, store: &Store, store_id: i64) -> StoreCredentialSource {
+        let members: Vec<MemberSettings> = store
             .store_members(store_id)
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|id| self.repo_by_id(id).map(|r| r.name.clone()))
+            .filter_map(|id| self.repo_by_id(id))
+            .map(|r| {
+                let s = self.settings.repo(&r.name);
+                MemberSettings {
+                    repo: r.name.clone(),
+                    declared: self.settings.repos.contains_key(&r.name),
+                    credential: s.credential,
+                    gh_user: s.gh_user,
+                }
+            })
             .collect();
-        names
-            .iter()
-            .find(|n| self.settings.repos.contains_key(*n))
-            .or(names.first())
-            .cloned()
+        credential_source(&members)
+    }
+
+    /// The store's credential settings, refusing to guess when members
+    /// disagree. Returns the member name to resolve with, or a
+    /// [`StoreCredentialSource::Disagreement`] naming every member's value
+    /// — reported (tracing + the store card), never resolved on.
+    pub fn resolve_settings_member(
+        &self,
+        store: &Store,
+        row: &ReviewStoreRow,
+    ) -> Result<String, String> {
+        match self.credential_source_for(store, row.id) {
+            StoreCredentialSource::Member(name) => Ok(name),
+            StoreCredentialSource::Disagreement(detail) => {
+                tracing::warn!(
+                    store = %row.store_key,
+                    warning = %detail,
+                    "review store config"
+                );
+                Err(detail)
+            }
+        }
     }
 
     /// Seed store `store_id` (README §5.2). `network = false` is the boot
@@ -1284,13 +1561,70 @@ impl ReviewStores {
                 return Err(StoreUnavailable::Error { detail: d });
             }
         };
+        // D12 — a credential the operator SUPPLIED came back refused. The
+        // ladder already stops on these (`cred.rs`: an account that is not
+        // the pinned/recorded one, any gh failure on a bound store, a
+        // `token_file` that was present and readable but did not validate,
+        // a pinned rung that failed), so this call site must not put the
+        // fatality back: seeding the store with NO credential and filing
+        // the class as a `BaseFetch::Skipped` note is what left a store
+        // `ready` over a base that was never fetched, as a DIFFERENT
+        // identity than the operator asked for. `FailureClass::is_auth`
+        // is the one grouping both sides already read, so the split is
+        // never spelled twice.
+        //
+        // It also EXCLUDES what a slow host produces: a `gh` call that
+        // outlives `cred::GH_TIMEOUT` is [`FailureClass::Timeout`], a
+        // transient class, not an identity failure — a keyring taking
+        // 20 s to answer (a laptop resuming from suspend) degrades to a
+        // skip and comes up on cached refs, as it always did, instead of
+        // refusing the seed.
         let mut cred_note = None;
         let cred = if network && plan.base_url.is_some() {
-            let who = self.settings_repo_for(store, row.id).unwrap_or_default();
-            match self.resolve_credential(store, &row, &who) {
-                Ok(r) => Some(r.credential),
-                Err(e) => {
-                    cred_note = Some(e.class().slug());
+            match self.resolve_settings_member(store, &row) {
+                Ok(who) => match self.resolve_credential(store, &row, &who) {
+                    Ok(r) => Some(r.credential),
+                    Err(e) if e.class().is_auth() => {
+                        // Never `ready`: the row goes back to `absent`
+                        // carrying the class, which is the record
+                        // `boot::run_boot` reads before it re-seeds
+                        // (a boot seed is local-only and would
+                        // otherwise put the store straight back to
+                        // `ready` with `base: offline-seed` over a
+                        // credential that is still broken).
+                        //
+                        // That write is NOT best-effort. A row left
+                        // `seeding` in the DB is a store every later
+                        // action 503s on, with the refusal that explains
+                        // it never recorded — so a failed write is
+                        // reported as the error it is, carrying the
+                        // refusal with it.
+                        let u = credential_refused(&row, &e);
+                        if let Err(w) =
+                            store.set_review_store_state(row.id, "absent", Some(&refused_state(&e)))
+                        {
+                            return Err(StoreUnavailable::Error {
+                                detail: format!(
+                                    "{u:?} (and the refusal could not be recorded: {w})"
+                                ),
+                            });
+                        }
+                        return Err(u);
+                    }
+                    // A network-shaped failure (offline, timeout) is not a
+                    // credential fault: recorded as a skip, exactly as
+                    // before, and the store still comes up on cached refs.
+                    Err(e) => {
+                        cred_note = Some(e.class().slug());
+                        None
+                    }
+                },
+                // Members disagree: no credential is resolved on a guess.
+                // No credential was supplied and none was refused, so this
+                // is not the arm above — the pass continues and the store
+                // is reported with the reason.
+                Err(_) => {
+                    cred_note = Some(FailureClass::NoCredentials.slug());
                     None
                 }
             }
@@ -1430,16 +1764,33 @@ impl ReviewStores {
                 code: "offline".into(),
             }
         } else {
-            let who = self.settings_repo_for(store, row.id).unwrap_or_default();
-            match self.resolve_credential(store, &row, &who) {
-                Ok(r) => seed::fetch_base_branches(
-                    git,
-                    &handle.git_dir,
-                    &plan.base_branches,
-                    &r.credential,
-                ),
-                Err(e) => BaseFetch::Skipped {
-                    code: e.class().slug().into(),
+            match self.resolve_settings_member(store, &row) {
+                Ok(who) => match self.resolve_credential(store, &row, &who) {
+                    Ok(r) => seed::fetch_base_branches(
+                        git,
+                        &handle.git_dir,
+                        &plan.base_branches,
+                        &r.credential,
+                    ),
+                    // D12, the same rule the seed path applies: a
+                    // credential the operator supplied and that was
+                    // REFUSED stops the pass. Returning here — before
+                    // the `ready` write further down — is the point: the
+                    // store keeps the base status it last really had
+                    // instead of having a refused credential recorded
+                    // over it as its current one, and the caller gets
+                    // the refusal rather than a 200 carrying a warning.
+                    // A network-shaped failure still degrades to a skip.
+                    Err(e) if e.class().is_auth() => {
+                        return Err(credential_refused(&row, &e));
+                    }
+                    Err(e) => BaseFetch::Skipped {
+                        code: e.class().slug().into(),
+                    },
+                },
+                // Members disagree: no credential is resolved on a guess.
+                Err(_) => BaseFetch::Skipped {
+                    code: FailureClass::NoCredentials.slug().into(),
                 },
             }
         };
@@ -1542,6 +1893,41 @@ impl Drop for SeedClaim<'_> {
     }
 }
 
+/// The store-level refusal for a credential the operator supplied and
+/// that was REFUSED (D12), logged on the way out. The class is
+/// [`FailureClass::is_auth`]'s — the grouping `cred.rs` stops the ladder
+/// on and the CLI already reads off the wire — so "a credential fault"
+/// is defined in exactly one place and this call site only asks the
+/// question.
+fn credential_refused(row: &ReviewStoreRow, e: &CredError) -> StoreUnavailable {
+    let class = e.class();
+    tracing::warn!(
+        store = %row.store_key,
+        code = class.slug(),
+        detail = %e,
+        "kb-code: the store's configured credential was refused; the store is not brought \
+         up on another rung (D12)"
+    );
+    StoreUnavailable::CredentialRefused {
+        class: class.slug().into(),
+        detail: e.to_string(),
+    }
+}
+
+/// The `state_json` a row is left with when its credential was refused:
+/// the class as `code`, so `store show`/doctor name the same slug the
+/// refusal did instead of a bare "not seeded yet".
+fn refused_state(e: &CredError) -> String {
+    let class = e.class();
+    serde_json::json!({
+        "code": class.slug(),
+        "class": class.slug(),
+        "detail": e.to_string(),
+        "at": now(),
+    })
+    .to_string()
+}
+
 /// `state_json.code`, if any.
 pub fn state_code(state_json: Option<&str>) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(state_json?).ok()?;
@@ -1551,6 +1937,89 @@ pub fn state_code(state_json: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::review_store::cred::CredentialPin;
+
+    fn member(
+        repo: &str,
+        declared: bool,
+        credential: CredentialPin,
+        gh_user: Option<&str>,
+    ) -> MemberSettings {
+        MemberSettings {
+            repo: repo.to_string(),
+            declared,
+            credential,
+            gh_user: gh_user.map(str::to_string),
+        }
+    }
+
+    /// D12 — one member's entry drives a store-wide credential, and it is
+    /// the one that DECLARES one (a member without an entry contributes
+    /// defaults and never out-votes a member that pins an account).
+    #[test]
+    fn the_declaring_member_drives_the_store() {
+        assert_eq!(
+            credential_source(&[
+                member("a", false, CredentialPin::Auto, None),
+                member("b", true, CredentialPin::GhCli, Some("alice")),
+            ]),
+            StoreCredentialSource::Member("b".into())
+        );
+        // No member declares an entry: the first member's defaults, as
+        // before.
+        assert_eq!(
+            credential_source(&[
+                member("a", false, CredentialPin::Auto, None),
+                member("b", false, CredentialPin::Auto, None),
+            ]),
+            StoreCredentialSource::Member("a".into())
+        );
+    }
+
+    /// The reported defect: repo A (id 1) has an entry with no pin, repo B
+    /// pins `gh_user`. "First entry wins" binds the store to whatever A
+    /// resolves — unbound, and so free to fall through. No member is
+    /// chosen; every member's value is named.
+    #[test]
+    fn a_pin_on_a_later_member_is_never_silently_dropped() {
+        let src = credential_source(&[
+            member("a", true, CredentialPin::Auto, None),
+            member("b", true, CredentialPin::Auto, Some("alice")),
+        ]);
+        let StoreCredentialSource::Disagreement(detail) = src else {
+            panic!("a store-wide pin must not be resolved off another member");
+        };
+        assert!(
+            detail.contains("a credential=auto gh_user=<unset>"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("b credential=auto gh_user=alice"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn only_a_real_disagreement_stops_a_resolution() {
+        // The same pin, spelled differently, is agreement (D12 compares
+        // logins case-insensitively).
+        assert_eq!(
+            credential_source(&[
+                member("a", true, CredentialPin::GhCli, Some("alice")),
+                member("b", true, CredentialPin::GhCli, Some("ALICE")),
+            ]),
+            StoreCredentialSource::Member("a".into())
+        );
+        // A different `credential` IS a disagreement, pin or not.
+        let src = credential_source(&[
+            member("a", true, CredentialPin::GhCli, Some("alice")),
+            member("b", true, CredentialPin::Token, Some("alice")),
+        ]);
+        let StoreCredentialSource::Disagreement(detail) = src else {
+            panic!("two members pinning different rungs must not be resolved");
+        };
+        assert!(detail.contains("b credential=token"), "{detail}");
+    }
 
     #[test]
     fn uuids_are_v4_shaped_and_distinct() {
@@ -1619,5 +2088,43 @@ mod tests {
         );
         assert_eq!(StoreUnavailable::Seeding.code(), "store-seeding");
         assert_eq!(URN_STORE_SEEDING, "urn:kb:errors:store-seeding");
+    }
+
+    #[test]
+    fn reads_can_use_store_is_false_on_every_refusal_arm() {
+        // Arm 1 — the CONFIGURED refusal: the documented defect this whole
+        // predicate exists for. A relative/overlapping
+        // `[review.store] root` sets `disabled` with no spawner involved.
+        assert!(
+            !ReviewStores::disabled("fixture").reads_can_use_store(),
+            "a configured refusal must stop reads resolving a store root"
+        );
+
+        // Arm 2 — an unbuildable store git spawner with NOTHING
+        // configured wrong: `git` is `None` and the error is carried
+        // separately, exactly as `unavailable_reason` reports it
+        // (`Disabled`). This arm is a deliberate, PINNED behaviour change
+        // for reads: reads shell out through `history::run_git_raw` with
+        // the ambient environment and never use the scrubbed `StoreGit`,
+        // so a `read_store_only` `refs/kbc/*` lookup that used to resolve
+        // off a stale `ready` row now falls back to the user repo and
+        // misses. Mirroring `unavailable_reason` is the point; leaving it
+        // unpinned is not.
+        let settings =
+            StoreSettings::resolve(&ReviewSection::default(), Path::new("/nonexistent"), &[]);
+        assert!(
+            settings.disabled.is_none(),
+            "control: this arm is about the spawner, not a configured refusal"
+        );
+        let unbuildable = ReviewStores::from_parts(
+            settings,
+            None,
+            Some("store git spawner unavailable".to_string()),
+            Vec::new(),
+        );
+        assert!(
+            !unbuildable.reads_can_use_store(),
+            "a store whose git spawner could not be built must not resolve for reads"
+        );
     }
 }

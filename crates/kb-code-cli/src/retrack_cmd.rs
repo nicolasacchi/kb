@@ -23,12 +23,9 @@
 use anyhow::Result;
 use clap::Args;
 use serde_json::Value;
-use std::time::Duration;
 
 use crate::envelope;
 use crate::review_agent::{self, AgentError};
-
-const READ_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Args, Debug)]
 pub struct RetrackArgs {
@@ -67,7 +64,7 @@ pub struct RetrackArgs {
 
 async fn client() -> Result<reqwest::Client, AgentError> {
     crate::client_builder()
-        .timeout(READ_TIMEOUT)
+        .timeout(review_agent::READ_TIMEOUT)
         .build()
         .map_err(|e| AgentError::new("client", e.to_string(), envelope::EXIT_GENERIC))
 }

@@ -47,8 +47,7 @@ use crate::git::roots::{GitRoot, StoreRoot, WorkTreeRoot};
 use crate::git::Revspec;
 use crate::review_store::cred::FetchCredential;
 use crate::review_store::git::{
-    FetchAuth, GitArgs, GitCall, StoreGit, BASE_FETCH_TIMEOUT, LS_REMOTE_TIMEOUT,
-    WORK_FETCH_TIMEOUT,
+    FetchAuth, GitArgs, GitCall, StoreGit, LS_REMOTE_TIMEOUT, WORK_FETCH_TIMEOUT,
 };
 use crate::review_store::key::store_key_for_url;
 use crate::review_store::registry::{ReviewStores, StoreHandle};
@@ -775,7 +774,7 @@ impl<'a> StoreCtx<'a> {
                 "failed"
             }
         };
-        match git.fetch(dir, &base, &all, auth, BASE_FETCH_TIMEOUT) {
+        match git.fetch(dir, &base, &all, auth, git.base_fetch_timeout()) {
             Ok(_) => {
                 report.state = "fetched".into();
                 pr_fetched = pr_spec;
@@ -790,7 +789,7 @@ impl<'a> StoreCtx<'a> {
                             &base,
                             std::slice::from_ref(spec),
                             auth,
-                            BASE_FETCH_TIMEOUT,
+                            git.base_fetch_timeout(),
                         ),
                         label,
                     ) {
