@@ -137,7 +137,7 @@ pub const WORK_FETCH_TIMEOUT: Duration = Duration::from_secs(WORK_FETCH_TIMEOUT_
 /// Short local plumbing (config, rev-parse, update-ref).
 pub const LOCAL_OP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Compile-time pins on the default's relationship to the reason it
+/// Compile-time pins on the DEFAULT's relationship to the reason it
 /// exists — the same technique `review_jobs`' stuck-job horizon uses,
 /// so the relationship is checked by the BUILD and no test has to
 /// sleep for the deadline.
@@ -153,8 +153,26 @@ pub const LOCAL_OP_TIMEOUT: Duration = Duration::from_secs(60);
 /// The pins are stated in SECONDS, not `Duration`s, because `Duration`'s
 /// comparison and multiplication are not `const` — asserting over the
 /// `Duration` constants is `E0015`/`E0658`, not a stronger check.
-const _: () = assert!(BASE_FETCH_TIMEOUT_SECS >= 10 * WORK_FETCH_TIMEOUT_SECS);
-const _: () = assert!(BASE_FETCH_TIMEOUT_SECS <= super::seed::SEED_FETCH_TIMEOUT_SECS);
+const _: () = assert!(BASE_FETCH_TIMEOUT_SECS >= BASE_FETCH_TIMEOUT_FLOOR_SECS);
+const _: () = assert!(BASE_FETCH_TIMEOUT_SECS <= BASE_FETCH_TIMEOUT_CEILING_SECS);
+
+/// **What those pins do NOT cover: a CONFIGURED value.**
+/// `[review.store] base_fetch_timeout_secs` is a number an operator
+/// writes and [`super::settings::resolve`] turns into a `Duration` at
+/// boot; no `const` can see it, so the two relations above are exactly
+/// the ones a config value breaks silently. An operator who copies the
+/// pre-U13 hardcoded 30 s back into the key gets every base fetch
+/// SIGKILLed at 30 s — the defect the key exists to fix, silently
+/// reintroduced, with no warning and no doctor finding.
+///
+/// So the two relations are ALSO named as bounds, and the resolver
+/// checks every configured value against them and WARNS outside the
+/// band (never silently rewrites it: the key is the operator's lever).
+/// The pins above are stated through these two constants, which is what
+/// keeps the warning thresholds and the compile-time pins from drifting
+/// apart.
+pub const BASE_FETCH_TIMEOUT_FLOOR_SECS: u64 = 10 * WORK_FETCH_TIMEOUT_SECS;
+pub const BASE_FETCH_TIMEOUT_CEILING_SECS: u64 = super::seed::SEED_FETCH_TIMEOUT_SECS;
 
 const STDERR_CAP: usize = 64 * 1024;
 const DEFAULT_STDOUT_CAP: usize = 16 * 1024 * 1024;

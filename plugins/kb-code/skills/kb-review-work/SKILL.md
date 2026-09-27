@@ -120,7 +120,11 @@ The older verbs (`show`, `comments`, `findings list`, `timeline`,
    deterministic) instead of letting the WHOLE batch 400 on `invalid_slug`, and
    it is UTF-8-safe — every non-ASCII character (a title with `à`) is treated
    as a separator and never sliced, so it cannot panic. Author-written VALID
-   slugs are never touched. Then the MANDATORY post-compose gate:
+   slugs are never touched. `compose` is a LOOPBACK-ONLY route (D22): from a
+   remote session it 404s with an empty body and exits 8, which `verify` then
+   reports as a missing document — so on an empty 404, stop here and say the
+   authoring lane needs the daemon's host, rather than "fixing" the document.
+   Then the MANDATORY post-compose gate:
    `kb-code review verify <id> --json` — it checks the document is present and
    lints clean, counts findings (≥ `--min-findings` if given), that every
    finding anchor resolves, and that the verdict sits on the latest patchset;
@@ -158,14 +162,30 @@ silent.
 
 ## Bounded honesty
 
-Loopback-only verbs (`start-pr`, `snapshot`, `verdict`, `disposition`,
-`findings import/add`, `suggest apply`, `publish`, `sweep`, and now `sync`,
-`status --fetch`, `retrack`, plus `store sync`, `store gc`, `store set-base-url`,
-`store credentials --test`, `store legacy-refs`, `store export-legacy`,
-`store maintain`) need the daemon's host. If a call 404s from a remote
-session, say so and stop that lane — never route around the gate. If the repo
-isn't mounted in kb-code, findings orphan honestly; the metadata lanes still
-work.
+Verbs that need the daemon's HOST. A non-loopback session gets a **404 with
+an EMPTY body** — the gate hides the route rather than admitting it exists —
+so when one of these 404s, say so and stop that lane; never route around the
+gate.
+
+- **authoring** — `compose` (step 7's own step, and the reason the list used
+  to be a trap: everything around it runs, then this one 404s), `doc render`,
+  `report`, `start`, `start-pr`, `snapshot`, `sync`, `retrack`, `sweep`,
+  `close`, `reopen`, `delete`, `gc`, `refs gc`, `findings import`,
+  `suggest apply`/`apply-batch`
+- **store** — everything except the bare `store credentials` READ, which is
+  the family's one bearer route: `store show`, `store members`, `store
+  doctor` (all three read the SAME `GET /api/repos/{name}/store` card), `store
+  sync`, `store gc`, `store set-base-url`, `store credentials --test`, `store
+  legacy-refs`, `store export-legacy`, `store maintain`
+
+Not on that list, but they still stop a remote lane by default: `verdict`,
+`disposition`, `findings add` and `publish` sit behind `[review]
+remote_mutations` (default OFF) rather than on the loopback router, and
+answer the same empty 404 unless the operator turned that flag on; and
+`status --fetch` is a bearer read that refuses INSIDE the handler with a
+**403**, so it exits 4, not 8. `docs/kb-code.md`'s "The route gates" table is
+the complete map; this is the review-work slice of it. If the repo isn't
+mounted in kb-code, findings orphan honestly; the metadata lanes still work.
 
 **Exit codes** (the shipped table in `crates/kb-code-cli/src/envelope.rs`; the
 design's §13 table — `3 = not found`, `4 = conflict` — was NOT adopted, and

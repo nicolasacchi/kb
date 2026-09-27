@@ -116,13 +116,21 @@ THE GATES (BUILD-BRIEF §3)
                              within the budget and logged with its elapsed
                              time.
   3. no fallback            — `runtime.git_fallbacks` on
-                              `GET /api/repos/{name}/store` must be zero on
-                              a READY store. Not-ready is a backoff+SKIP
-                              with the state it stayed in; ready+non-zero
-                              is a FAIL.
+                             `GET /api/repos/{name}/store` must be zero on
+                             a READY store. Not-ready is a backoff+SKIP
+                             with the state it stayed in; ready+non-zero
+                             is a FAIL. The gate reads ONE review through
+                             the store first and REFUSES to report a zero
+                             unless that read actually happened and served
+                             a file list — a failed read, `--review 0` or an
+                             id the volume does not hold used to produce
+                             the same PASS as a real one.
   4. review 65 end to end   — retrack dry-run class, ps4 kind/tip/base,
-                              10 commits / 40 files vs LIVE `gh`, and
-                              findings+verdict left on ps3.
+                             10 commits / 40 files vs LIVE `gh`, and
+                             findings+verdict left on ps3: the findings
+                             read must SUCCEED, ps3 must still hold
+                             findings, and every one of them must be
+                             anchored there (`own_ps`).
   5. live GitHub `gh-cli`   — `review sync --open --dry-run` lists every
                               open PR and `forge.base_ref` equals
                               `gh pr list --json number,baseRefName`.
@@ -137,11 +145,15 @@ THE GATES (BUILD-BRIEF §3)
                              bare zero. Locations and counts are reported;
                              a matched VALUE never is.
   7. existing suite + TS    — THIS ONE IS CI. The driver never runs
-                              `cargo`/`npm`; it records the check-run table
-                              for a named PR and requires every check green,
-                              including the `drift` / `code-drift` TS-regen
-                              jobs, which is how "TS types regenerated with
-                              no unrelated diff" is evidenced.
+                             `cargo`/`npm`; it records the check-run table
+                             for a named PR and requires every check run
+                             to have CONCLUDED green — a `skip`/`skipping`
+                             bucket is a job that never ran, not a green
+                             one — including the `drift` / `code-drift`
+                             TS-regen jobs, which is how "TS types
+                             regenerated with no unrelated diff" is
+                             evidenced. A TS-regen job that was
+                             path-filtered out evidences nothing.
 
 SAFETY RAILS (each reachable from `--self-test`, see RAIL SELF-TESTS below)
 
@@ -149,8 +161,13 @@ SAFETY RAILS (each reachable from `--self-test`, see RAIL SELF-TESTS below)
                  refused outright, and `ss -ltn` must show the port FREE
                  before a daemon is started on it.
   R2 paths     — every filesystem path the driver touches must be under one
-                 of the two named environment roots (or the output dir /
-                 the bundle); anything else aborts.
+                 of the two named environment roots (or the output dir, the
+                 bundle, or the named build log); anything else aborts.
+                 Separately and unconditionally, nothing inside the LIVE kb
+                 state root (`~/.local/state/kb`) is ever read or written,
+                 whichever flag made the path reachable — the volume copy
+                 gate 6 takes, the output dir, an artefact under it, the
+                 build log, a configured clone.
   R3 user git  — no git WRITE is ever run against a clone under
                  `/home/nik/progetti/`. Every git argv passes a guard that
                  refuses a mutating subcommand on such a path.
@@ -166,6 +183,11 @@ EXIT CODE
   0 only when all seven gates PASS. 1 when at least one gate is not PASS
   (FAIL, SKIP or UNRUN). 2 on a driver/rail abort. `--dry-run`,
   `--self-test` and `--render-template` exit 0 on success.
+
+  Any OTHER exception — a missing binary, a bug, Ctrl-C — is the FAIL of the
+  gate that raised it, and the log is still written. It used to escape `main`
+  with no write at all, so the newest BUILD-LOG.md on disk was the PREVIOUS
+  run's, still reading "all seven gates PASS".
 """
 
 from __future__ import annotations
@@ -177,6 +199,7 @@ import inspect
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sqlite3
@@ -184,6 +207,7 @@ import sys
 import time
 import tempfile
 import tomllib
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -523,15 +547,35 @@ class Ctx:
     # -- R2 paths ------------------------------------------------------
 
     def allowed_roots(self) -> list[Path]:
-        return [self.before_root, self.after_root, self.out, self.bundle]
+        # The build log is an explicitly configured OUTPUT, exactly like --out:
+        # the operator named it and the driver is expected to write it. It is
+        # listed here so `write_log` can pass R2 like every other write instead
+        # of being the one path with no rail at all — and the LIVE-state
+        # exclusion below still applies to it, which is the property that
+        # matters: `--build-log` inside the live root is refused, not written.
+        return [self.before_root, self.after_root, self.out, self.bundle, self.log_path]
 
-    def check_path(self, path: str | Path, why: str) -> Path:
+    def refuse_live_state(self, path: str | Path, why: str) -> Path:
+        """The one exclusion no flag value can unlock, and the ONLY thing
+        `check_path` does before it looks at a root.
+
+        It lives alone because it has to be reachable from BOTH R2 entry
+        points. `check_clone_path` used to return early for a user clone and
+        so never consulted this rule at all: the rail's strongest clause had
+        exactly one caller, and a second path into the driver could not be
+        shown to pass it. Every path the driver touches now crosses this
+        first, whichever entry point it arrived by.
+        """
         p = Path(path).resolve()
         if p == LIVE_STATE_PREFIX or LIVE_STATE_PREFIX in p.parents:
             raise RailError(
                 f"R2: refusing to {why} {p}: it is inside the LIVE kb state root "
                 f"({LIVE_STATE_PREFIX}), which no --before-root/--after-root value can unlock"
             )
+        return p
+
+    def check_path(self, path: str | Path, why: str) -> Path:
+        p = self.refuse_live_state(path, why)
         for root in self.allowed_roots():
             if p == root or root in p.parents:
                 return p
@@ -545,7 +589,14 @@ class Ctx:
         enforces that on every git argv). A user clone under
         /home/nik/progetti is deliberately admissible here — it is the very
         thing gate 2 hashes — while any other path outside the two environment
-        roots is refused like any other out-of-scope path."""
+        roots is refused like any other out-of-scope path.
+
+        R2 runs FIRST, before the existence check and before the user-clone
+        allowance, so the LIVE-state exclusion is unconditional. It used to
+        sit behind both: a user clone was admitted on a branch that never
+        called `check_path`, so the rail was one `if` away from not applying
+        at all."""
+        self.refuse_live_state(path, f"hash the clone of {name!r}")
         p = Path(path)
         if not p.is_dir():
             raise GateAbort(
@@ -555,6 +606,39 @@ class Ctx:
         if resolved == USER_CLONE_PREFIX or USER_CLONE_PREFIX in resolved.parents:
             return resolved
         return self.check_path(resolved, f"hash the clone of {name!r}")
+
+    def ensure_out_dir(self) -> Path:
+        """Create the output dir THROUGH R2.
+
+        `--out` is a flag, so pointing it at the live state root is exactly as
+        available as pointing `--after-root` there is — and it was the same
+        hole with a second name: every artefact lands under this directory, so
+        a `mkdir` here is a write into the live root that nothing refused."""
+        p = self.check_path(self.out, "create the output dir")
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def cli_for_gate(self, gate: int) -> Path:
+        """The post-upgrade `kb-code` CLI, checked to EXIST before it reaches
+        any `subprocess.run`.
+
+        `Daemon.start` has always checked its server binary with `is_file()`;
+        nothing checked the CLI, and its default is a SIBLING of the server
+        binary (`<dir of --after-server>/kb-code`). A run pointed at a server
+        directory with no CLI beside it therefore died inside `exec` with a raw
+        `FileNotFoundError` — an exception no gate catches — so the process
+        exited 1 having written no log at all, and the PREVIOUS run's
+        BUILD-LOG.md was still on disk reading "all seven gates PASS". This is
+        the CLI's copy of the server's check, and it names the flag that fixes
+        it instead of surfacing as a traceback."""
+        _, _, _, cli = resolve_binaries(self.args)
+        if not self.dry_run and not cli.is_file():
+            raise GateAbort(
+                f"the post-upgrade CLI is not at {cli} (gate {gate} never ran a step). It is "
+                f"expected beside --after-server {self.args.after_server}; pass --after-cli if "
+                "it lives elsewhere."
+            )
+        return cli
 
     # -- R1 ports ------------------------------------------------------
 
@@ -850,9 +934,16 @@ class Ctx:
     # -- files ---------------------------------------------------------
 
     def art(self, *parts: str) -> Path:
-        """Path to an artefact. In --dry-run the directory is NOT created:
-        a plan that touches the filesystem is not a plan."""
-        p = self.out.joinpath(*parts)
+        """Path to an artefact, through R2.
+
+        Every artefact lands under `--out`, and `--out` is a flag, so this
+        `mkdir` was a second unrefused way into the live state root (the first
+        being `ensure_out_dir`). The rail is asked BEFORE the directory is
+        created, so a refusal cannot leave a directory behind either.
+
+        In --dry-run the directory is NOT created: a plan that touches the
+        filesystem is not a plan."""
+        p = self.check_path(self.out.joinpath(*parts), "write the artefact")
         if not self.dry_run:
             p.parent.mkdir(parents=True, exist_ok=True)
         return p
@@ -2234,7 +2325,7 @@ def gate_2(ctx: Ctx) -> GateResult:
         ev.append(("baseline", str(ctx.art("gate2", "baseline.json"))))
 
         daemon = ctx.ensure_after_daemon(g)
-        _, _, _, cli = resolve_binaries(ctx.args)
+        cli = ctx.cli_for_gate(g)
         repo = ctx.args.repo
         pr = ctx.args.ops_pr
 
@@ -2411,6 +2502,41 @@ def read_fallback_counters(ctx: Ctx, g: int, daemon: "Daemon", repos: Sequence[s
     return out
 
 
+def read_exercise_problem(step: Step, body: Any) -> str:
+    """``""`` when gate 3's read exercise really happened and served a review;
+    otherwise why it did not.
+
+    The exercise used to be run with `check=False`, its exit code thrown away
+    and its body never read, so `--review 0` — or any id the volume does not
+    hold — was enough: the command failed, no read was served, no `GitCtx` was
+    ever built, the fallback counters were trivially zero on a fresh daemon,
+    and the gate wrote PASS with the reason "both fallback counters are zero".
+    A gate that measures "no fallback happened" has to show that SOMETHING
+    happened, and that the read was served from the store, before the zero it
+    reports means anything.
+
+    A file list is the evidence that the read was served: an empty one means
+    the store answered with nothing, which is the same vacuous zero in a new
+    disguise."""
+    if step.returncode != 0:
+        detail = (step.stderr or step.stdout).strip()[:200]
+        return f"the read exercise exited {step.returncode}: {detail or '(no output)'}"
+    if not isinstance(body, dict):
+        return (
+            f"the read exercise printed {type(body).__name__}, not a review envelope: "
+            f"{str(body)[:200]}"
+        )
+    files = body.get("files")
+    if not isinstance(files, list):
+        return f"the read exercise returned no `files` array: {sorted(body)[:12]}"
+    if not files:
+        return (
+            "the read exercise served no files: the store answered an empty patchset, so a "
+            "zero fallback counter would prove nothing was read"
+        )
+    return ""
+
+
 def gate_3(ctx: Ctx) -> GateResult:
     g = 3
     ev: list[tuple[str, str]] = []
@@ -2452,12 +2578,15 @@ def gate_3(ctx: Ctx) -> GateResult:
         ev.append(("store state", ", ".join(f"{k}={v}" for k, v in sorted(states.items()))))
 
         before_counters = read_fallback_counters(ctx, g, daemon, repos)
-        _, _, _, cli = resolve_binaries(ctx.args)
-        ctx.exec(
+        cli = ctx.cli_for_gate(g)
+        # `check=True` (the default) and the RESULT is read: a read exercise
+        # whose answer is thrown away is not a check. The old `check=False` +
+        # discarded step meant a failed exercise still produced a zero, and a
+        # zero was the whole pass condition.
+        read_step, read_body = ctx.exec_json(
             g,
             "read exercise through the store",
             [str(cli), "review", "files", str(ctx.args.review), "--json", "--daemon", daemon.base],
-            check=False,
         )
         after_counters = read_fallback_counters(ctx, g, daemon, repos)
         ev.append(
@@ -2472,6 +2601,27 @@ def gate_3(ctx: Ctx) -> GateResult:
         }
         ev.append(("runtime.git_fallbacks (delta across the read exercise)", json.dumps(deltas, sort_keys=True)))
         if not ctx.dry_run:
+            problem = read_exercise_problem(read_step, read_body)
+            if problem:
+                raise GateAbort(problem)
+            n_files = len((read_body or {}).get("files", []))
+            ev.append(
+                (
+                    "read exercise",
+                    f"review {ctx.args.review} read through the store: exit {read_step.returncode}, "
+                    f"{n_files} file(s) served — the deltas above are measured across THIS read",
+                )
+            )
+            moved = [
+                f"{repo}.{metric}={delta}"
+                for repo, counters in deltas.items()
+                for metric, delta in counters.items()
+                if delta != 0
+            ]
+            if moved:
+                raise GateAbort(
+                    "the read exercise itself moved a fallback counter: " + ", ".join(moved)
+                )
             offenders = [
                 f"{repo}.{metric}={value}"
                 for repo, counters in after_counters.items()
@@ -2483,7 +2633,17 @@ def gate_3(ctx: Ctx) -> GateResult:
                     "a READY store still served reads through a fallback: " + ", ".join(offenders)
                 )
             res.status = "PASS"
-            res.reason = "every store is ready and both fallback counters are zero."
+            # Worded for what was actually exercised: the counters are read for
+            # every configured store, but the read itself is ONE review through
+            # ONE store, and saying "every store" implied a per-store exercise
+            # this gate does not perform.
+            res.reason = (
+                f"review {ctx.args.review} was really read through the store (exit "
+                f"{read_step.returncode}, {n_files} file(s) served); the read moved neither "
+                f"fallback counter, and the absolute `runtime.git_fallbacks` counters are zero "
+                f"on all {len(after_counters)} configured store(s), every one of which reported "
+                "`ready`."
+            )
         else:
             res.status = "UNRUN"
             res.reason = "dry run — planned only"
@@ -2497,6 +2657,43 @@ def gate_3(ctx: Ctx) -> GateResult:
     return res
 
 
+def findings_problem(step: Step, body: Any, expect_ps: int) -> tuple[int, str]:
+    """`(count, problem)` for one `kb-code review findings list` read.
+
+    `problem` is empty only when the command SUCCEEDED and its answer says
+    where the findings are anchored. Both halves matter:
+
+    * the read used to be made with `check=False` and its `(Step, Any)` thrown
+      away, so `review findings list <rid> --ps 3` could fail outright and the
+      verdict still shipped the sentence "findings and verdict stayed on
+      ps3" — the gate naming a read it never looked at;
+    * `--ps` here is the patchset the findings are RESOLVED AGAINST, not a
+      filter (`list_findings_route` lists every finding of the review either
+      way), so the count alone says nothing about where they live. Each
+      finding carries `own_ps` — the patchset its annotation is anchored to —
+      and THAT is what "findings stayed on ps3" means, so it is what is
+      checked. A finding that moved, or an unanchored one (`own_ps: null`),
+      is named.
+    """
+    if step.returncode != 0:
+        detail = (step.stderr or step.stdout).strip()[:200]
+        return 0, f"`review findings list` exited {step.returncode}: {detail or '(no output)'}"
+    if not isinstance(body, dict) or not isinstance(body.get("findings"), list):
+        return 0, f"`review findings list` returned no findings array: {str(body)[:200]}"
+    findings = body["findings"]
+    moved = [
+        f"{f.get('slug') or '?'} is not on ps{expect_ps} (own_ps={f.get('own_ps')!r})"
+        for f in findings
+        if not isinstance(f, dict) or f.get("own_ps") != expect_ps
+    ]
+    if moved:
+        return len(findings), (
+            f"{len(moved)} of {len(findings)} finding(s) are not on ps{expect_ps}: "
+            + "; ".join(moved[:10])
+        )
+    return len(findings), ""
+
+
 # --------------------------------------------------------------------------
 # gate 4 — review 65 end to end
 # --------------------------------------------------------------------------
@@ -2508,7 +2705,7 @@ def gate_4(ctx: Ctx) -> GateResult:
     res = GateResult(g, GATE_NAMES[g], "FAIL", "")
     try:
         daemon = ctx.ensure_after_daemon(g)
-        _, _, _, cli = resolve_binaries(ctx.args)
+        cli = ctx.cli_for_gate(g)
         repo, rid, pr = ctx.args.repo, ctx.args.review, ctx.args.pr
 
         _, dry = ctx.exec_json(
@@ -2541,13 +2738,21 @@ def gate_4(ctx: Ctx) -> GateResult:
             f"changed files of ps{ps_hint}",
             [str(cli), "review", "files", str(rid), "--ps", ps_hint, "--json", "--daemon", daemon.base],
         )
+        # The findings read is KEPT, not discarded: `check=False` plus a dropped
+        # `(Step, Any)` meant a failed `review findings list` still produced the
+        # sentence "findings and verdict stayed on ps3". The result is stored
+        # per patchset and judged below, next to the verdict it belongs with.
+        findings_read: dict[str, tuple[int, str]] = {}
         for ps_n in (ctx.args.expect_verdict_ps, ps_hint):
-            ctx.exec_json(
+            f_step, f_body = ctx.exec_json(
                 g,
                 f"findings on ps{ps_n}",
                 [str(cli), "review", "findings", "list", str(rid), "--ps", str(ps_n), "--json",
                  "--daemon", daemon.base],
                 check=False,
+            )
+            findings_read[str(ps_n)] = findings_problem(
+                f_step, f_body, int(ctx.args.expect_verdict_ps)
             )
 
         if ctx.dry_run:
@@ -2614,11 +2819,26 @@ def gate_4(ctx: Ctx) -> GateResult:
                 )
             if n_files == 0:
                 raise GateAbort("the changed-file list for the new patchset is empty")
+            # The findings half of the claim, now actually checked: both reads
+            # must have succeeded, the verdict patchset must still hold
+            # findings, and every one of them must be anchored there.
+            for ps_key, (count, problem) in findings_read.items():
+                if problem:
+                    raise GateAbort(f"findings on ps{ps_key} are unevidenced — {problem}")
+                ev.append((f"findings on ps{ps_key}", f"{count} finding(s), all anchored to "
+                                                        f"ps{ctx.args.expect_verdict_ps}"))
+            verdict_ps_findings = findings_read.get(str(ctx.args.expect_verdict_ps), (0, ""))
+            if verdict_ps_findings[0] == 0:
+                raise GateAbort(
+                    f"ps{ctx.args.expect_verdict_ps} holds no findings, so 'the findings stayed on "
+                    f"ps{ctx.args.expect_verdict_ps}' is unevidenced — there were none there to stay"
+                )
             res.status = "PASS"
             res.reason = (
                 f"retrack {rid}: dry-run stale-pin, ps{ps_no} kind=base-corrected tip "
                 f"{tip[:12]}… base {base[:12]}…, {commits} commits / {n_files} files equal to "
-                f"live PR {pr}; findings and verdict stayed on ps{ctx.args.expect_verdict_ps}."
+                f"live PR {pr}; the verdict and all {verdict_ps_findings[0]} finding(s) are still "
+                f"anchored to ps{ctx.args.expect_verdict_ps}."
             )
     except RailError:
         raise  # a safety rail refusal is not a gate verdict: it aborts the run
@@ -2641,7 +2861,7 @@ def gate_5(ctx: Ctx) -> GateResult:
     res = GateResult(g, GATE_NAMES[g], "FAIL", "")
     try:
         daemon = ctx.ensure_after_daemon(g)
-        _, _, _, cli = resolve_binaries(ctx.args)
+        cli = ctx.cli_for_gate(g)
         _, sync = ctx.exec_json(
             g,
             "review sync --open --dry-run (gh-cli credential)",
@@ -2880,6 +3100,59 @@ def scan_sqlite(ctx: Ctx, db: Path, token: str | None) -> SecretScan:
     return scan
 
 
+def gate_6_copy_paths(ctx: Ctx) -> tuple[Path, Path]:
+    """`(source volume, copy destination)` for gate 6's secret scan, BOTH
+    through R2.
+
+    This gate is the one place the driver reads a whole review volume, and it
+    built both paths by plain `ctx.after_root / …` and `ctx.out / …` with no
+    `check_path` anywhere near them. R2's own comment claims no flag value can
+    make the live state root allowed, and for the paths it guarded that was
+    true — but the guard was normally REACHED by `migrate_first` booting a
+    daemon, and gate 6 reaches the copy without it in two ordinary ways:
+    `--skip-migrate-first` returns early, and an after volume already at epoch
+    >= 45 (the NORMAL state of any migrated volume) returns early too. So
+    `--after-root` pointed at the live state root copied the production review
+    database, and gate 6 reported a clean scan of it.
+
+    Both paths are checked BEFORE anything is opened or created, so a refusal
+    leaves no copy and no directory behind."""
+    src = ctx.check_path(
+        ctx.after_root / "state" / "kb-code" / "index.db",
+        "copy the after volume for the secret scan",
+    )
+    dst = ctx.check_path(ctx.out / "gate6" / "after-volume-copy.db", "write the volume copy")
+    return src, dst
+
+
+def sqlite_backup_argv(src: Path, dst: Path) -> list[str]:
+    """`sqlite3 <read-only URI> ".backup '<dst>'"`.
+
+    The source is named as a `file:…?mode=ro` URI — the one idiom this file
+    already uses to read a volume (`read_volume_epoch`, `scan_sqlite`) — so the
+    connection that reads the review database is opened read-only and the argv
+    carries no bare path that a later reader (or a later edit) could mistake
+    for a copyable one. The destination is a driver-created artefact, checked
+    by `gate_6_copy_paths`.
+
+    Measured on this box (sqlite3 3.53.4, a WAL volume — which is what
+    `store/mod.rs` opens every review store with): a read-only connection to a
+    WAL database materialises `-shm`/`-wal` beside it and, being unable to
+    checkpoint, LEAVES them behind, where a read-write open checkpoints and
+    removes them on a clean close. So `gate_6` records the sidecar names it
+    found before and after the copy: the effect is evidence, not a footnote."""
+    return ["sqlite3", f"file:{src}?mode=ro", f".backup '{dst}'"]
+
+
+def journal_sidecars(db: Path) -> list[str]:
+    """`-wal` / `-shm` / `-journal` names beside `db`, for before/after
+    comparison around a copy. A missing directory yields an empty list."""
+    try:
+        return sorted(p.name for p in db.parent.glob(db.name + "-*") if p.is_file())
+    except OSError:
+        return []
+
+
 def gate_6(ctx: Ctx) -> GateResult:
     g = 6
     ev: list[tuple[str, str]] = []
@@ -2898,16 +3171,16 @@ def gate_6(ctx: Ctx) -> GateResult:
         )
         # The after daemon is stopped first so the copy is consistent and quiescent.
         ctx.stop_daemon("after")
-        src_db = ctx.after_root / "state" / "kb-code" / "index.db"
-        copy_db = ctx.out / "gate6" / "after-volume-copy.db"
+        src_db, copy_db = gate_6_copy_paths(ctx)
         if not ctx.dry_run:
             copy_db.parent.mkdir(parents=True, exist_ok=True)
             if copy_db.exists():
                 copy_db.unlink()
+        sidecars_before = journal_sidecars(src_db)
         step = ctx.exec(
             g,
             "consistent COPY of the after volume (sqlite3 .backup, never cp)",
-            ["sqlite3", str(src_db), f".backup '{copy_db}'"],
+            sqlite_backup_argv(src_db, copy_db),
             check=False,
             timeout=7200,
         )
@@ -2915,6 +3188,20 @@ def gate_6(ctx: Ctx) -> GateResult:
             res.status = "UNRUN"
             res.reason = "dry run — planned only"
         else:
+            sidecars_after = journal_sidecars(src_db)
+            ev.append(
+                (
+                    "volume copy source",
+                    f"{src_db} — opened read-only (`file:…?mode=ro`), never the live DB. "
+                    f"Journal sidecars beside it: before {sidecars_before or 'none'}, "
+                    f"after {sidecars_after or 'none'}"
+                    + (
+                        f"; this read materialised {sorted(set(sidecars_after) - set(sidecars_before))}"
+                        if set(sidecars_after) - set(sidecars_before)
+                        else " (the copy added none)"
+                    ),
+                )
+            )
             if step.returncode != 0 or not copy_db.is_file():
                 raise GateAbort(
                     f"could not make the read-only copy of the after volume (exit {step.returncode}): "
@@ -3008,6 +3295,84 @@ def gate_6(ctx: Ctx) -> GateResult:
 
 DRIFT_JOBS = ("drift", "code-drift")
 
+# `gh pr checks --json bucket` reports `pass` for a run that concluded green,
+# `skipping` for one that NEVER RAN (a path-filtered job) and `neutral` for a
+# job whose own definition is to do nothing. The last two are not evidence that
+# anything was verified, so neither may satisfy a gate whose entire claim is
+# "this ran and passed". `skip` was previously IN the pass set, which is how a
+# `drift` job that was path-filtered out satisfied both the green condition and
+# the TS-regen evidence, while the reason still read "all N check runs green …
+# including the TS-regen job(s)".
+GREEN_BUCKETS = ("pass", "success")
+DID_NOT_RUN_BUCKETS = ("skip", "skipping", "neutral", "stale", "cancel", "cancelled")
+
+
+@dataclass
+class CiTable:
+    """What a check-run table actually proves.
+
+    `problem` is empty only when every check run concluded green AND the
+    TS-regen job(s) are among them as runs that RAN — a name in the table is
+    not a job, and a job that did not run is not evidence."""
+
+    rows: list[str]
+    not_green: list[str]
+    did_not_run: list[str]
+    drift: list[str]
+    problem: str
+
+
+def read_ci_table(checks: Sequence[dict]) -> CiTable:
+    """Judge a `gh pr checks --json name,state,bucket` table. Pure, so the
+    rules that decide whether CI is admissible evidence are stated once and can
+    be exercised without a PR."""
+    rows: list[str] = []
+    not_green: list[str] = []
+    did_not_run: list[str] = []
+    # `(name, bucket)` pairs, not formatted strings: a check-run name may
+    # contain `=` (a matrix job), and a verdict must never depend on parsing a
+    # display label back apart.
+    drift: list[tuple[str, str]] = []
+    for c in checks:
+        bucket = c.get("bucket") or c.get("state")
+        name = c.get("name") or "?"
+        rows.append(f"{name}={bucket}")
+        if bucket not in GREEN_BUCKETS:
+            not_green.append(f"{name}={bucket}")
+            if bucket in DID_NOT_RUN_BUCKETS:
+                did_not_run.append(f"{name}={bucket}")
+        if any(d in name.lower() for d in DRIFT_JOBS):
+            drift.append((name, bucket))
+    problem = ""
+    if not checks:
+        problem = "GitHub reports no check runs for this PR"
+    elif not drift:
+        problem = (
+            f"neither TS-regen job {list(DRIFT_JOBS)} appears in the check-run table, so "
+            "'TS types regenerated with no unrelated diff' is unevidenced"
+        )
+    elif any(bucket not in GREEN_BUCKETS for _, bucket in drift):
+        problem = (
+            "the TS-regen job(s) did not RUN and pass: "
+            + ", ".join(f"{name}={bucket}" for name, bucket in drift if bucket not in GREEN_BUCKETS)
+            + " — a job that was path-filtered out regenerated nothing, so the TS types are "
+            "unevidenced for this commit"
+        )
+    elif did_not_run:
+        problem = (
+            f"{len(did_not_run)} check run(s) never ran, and a run that never ran is not a "
+            "green one: " + ", ".join(did_not_run)
+        )
+    elif not_green:
+        problem = "not every check is green: " + ", ".join(not_green)
+    return CiTable(
+        rows=rows,
+        not_green=not_green,
+        did_not_run=did_not_run,
+        drift=[f"{name}={bucket}" for name, bucket in drift],
+        problem=problem,
+    )
+
 
 def gate_7(ctx: Ctx) -> GateResult:
     g = 7
@@ -3048,26 +3413,20 @@ def gate_7(ctx: Ctx) -> GateResult:
                     f"PR #{head.get('number')} is on branch {head.get('headRefName')!r}, expected "
                     f"{ctx.args.ci_branch!r}"
                 )
-            if not checks:
-                raise GateAbort("GitHub reports no check runs for this PR")
-            rows, bad = [], []
-            for c in checks:
-                bucket = c.get("bucket") or c.get("state")
-                rows.append(f"{c.get('name')}={bucket}")
-                if bucket not in ("pass", "success", "skip"):
-                    bad.append(f"{c.get('name')}={bucket}")
-            ev.append(("check-run table", "; ".join(rows)))
-            drift = [c for c in checks if any(d in (c.get("name") or "").lower() for d in DRIFT_JOBS)]
-            if not drift:
-                raise GateAbort(
-                    f"neither TS-regen job {list(DRIFT_JOBS)} appears in the check-run table, so "
-                    "'TS types regenerated with no unrelated diff' is unevidenced"
+            table = read_ci_table(checks)
+            ev.append(("check-run table", "; ".join(table.rows)))
+            ev.append(("TS regen jobs", "; ".join(table.drift)))
+            if table.did_not_run:
+                ev.append(
+                    (
+                        "check runs that never ran",
+                        ", ".join(table.did_not_run)
+                        + " — reported, and refused as evidence below: a run that did not execute "
+                        "cannot be a green one",
+                    )
                 )
-            ev.append(
-                ("TS regen jobs", "; ".join(f"{c.get('name')}={c.get('bucket') or c.get('state')}" for c in drift))
-            )
-            if bad:
-                raise GateAbort("not every check is green: " + ", ".join(bad))
+            if table.problem:
+                raise GateAbort(table.problem)
             ev.append(
                 (
                     "local suites",
@@ -3077,10 +3436,10 @@ def gate_7(ctx: Ctx) -> GateResult:
             )
             res.status = "PASS"
             res.reason = (
-                f"all {len(checks)} check runs green on {ctx.args.ci_repo}#{ctx.args.ci_pr} (head "
-                f"{head.get('headRefName')}), including the TS-regen job(s) "
-                + ", ".join(c.get("name", "") for c in drift)
-                + ". No local suite was run."
+                f"all {len(checks)} check runs RAN and concluded green on "
+                f"{ctx.args.ci_repo}#{ctx.args.ci_pr} (head {head.get('headRefName')}), including "
+                f"the TS-regen job(s) {', '.join(table.drift)}, which ran rather than being "
+                "path-filtered out. No local suite was run."
             )
     except RailError:
         raise  # a safety rail refusal is not a gate verdict: it aborts the run
@@ -3168,13 +3527,27 @@ fail. Any other 503 is still a failure.""",
 user repo's objects. The counters are `runtime.git_fallbacks` (`unresolved`,
 `odb_miss`) on `GET /api/repos/{{name}}/store`, read per repo. A store that is
 not yet ready is retried with backoff and then reported as SKIP with the state
-it stayed in; a READY store with a non-zero counter is a FAIL.""",
+it stayed in; a READY store with a non-zero counter is a FAIL.
+
+The zero is measured ACROSS a real read. `kb-code review files {review}` is run
+through the store first and its result is checked: the command must succeed and
+must have served a file list. A read that failed (`--review 0`, an id the
+volume does not hold) or that served nothing is a FAIL, because a fresh daemon's
+counters are zero whether or not any read happened — and the deltas across the
+read are asserted to be zero as well, so the gate says which read its zero
+belongs to.""",
     4: """**Asserts.** Review {review} (repo `{repo}`, PR {pr}, squash-merged
 2026-09-24) end to end: `retrack {review} --dry-run` classifies `stale-pin`;
 `retrack {review}` gives ps{vps_plus} `kind=base-corrected` with tip `{tip}…`,
 base `{base}…`, {commits} commits / {files} files, equal to LIVE
 `gh pr view {pr} --json files,commits`; findings and the verdict stay on
-ps{vps} with `verdict_scope_changed`.""",
+ps{vps} with `verdict_scope_changed`.
+
+"Findings stayed on ps{vps}" is checked, not asserted in prose: `review findings
+list` is read on both ps{vps} and the new ps{vps_plus} and BOTH reads must
+succeed, ps{vps} must still hold findings, and every finding must report
+`own_ps` = {vps}. (`--ps` is the patchset the findings are resolved AGAINST, not
+a filter, so the count alone says nothing about where they live.)""",
     5: """**Asserts.** With the `gh-cli` credential pinned to `{gh_user}`,
 `review sync --repo {repo} --open --dry-run --json` lists every open PR of
 `{forge}` and the reported `forge.base_ref` equals
@@ -3195,13 +3568,22 @@ sentence that NAMES a token shape, and the design's rule is that a secret is a
 real credential, not a string that starts with a prefix. Those occurrences are
 counted and reported below as excluded, so the log shows what the scan ran and
 what it discounted instead of a bare zero. Matches are reported as location +
-count; a matched value is never printed or logged.""",
+count; a matched value is never printed or logged.
+
+The copy's source and destination both pass R2 first: `--after-root` pointed at
+the live kb state root is REFUSED before anything is opened, which is the case
+`--skip-migrate-first` and an already-migrated volume both used to walk straight
+into. The source is named as a `file:…?mode=ro` URI, and the journal sidecars
+(`-wal`/`-shm`) beside it are reported before and after the copy, so what that
+read left behind is evidence rather than an assumption.""",
     7: """**Asserts.** The existing suite passes and the TypeScript types are
 regenerated with no unrelated diff. This gate IS CI — the driver never runs
 `cargo test` or the web-code tests locally. It records the check-run table for
-`{ci_repo}#{ci_pr}` and requires every check green, including the `drift` /
-`code-drift` TS-regen jobs, which is what makes "regenerated with no unrelated
-diff" evidence rather than a claim.""",
+`{ci_repo}#{ci_pr}` and requires every check run to have CONCLUDED green — a
+`skip`/`skipping`/`neutral` bucket is a run that never executed, not a green
+one — including the `drift` / `code-drift` TS-regen jobs, which must themselves
+have RUN and passed. A path-filtered TS-regen job regenerates nothing, so it is
+unevidenced for this commit rather than a pass.""",
 }
 
 
@@ -3322,7 +3704,16 @@ def render_log(ctx: Ctx, results: Sequence[GateResult], exit_code: int) -> str:
 
 
 def write_log(ctx: Ctx, results: Sequence[GateResult], exit_code: int) -> None:
-    path = Path(ctx.log_path)
+    """Write BUILD-LOG.md, THROUGH R2.
+
+    `--build-log` is a flag, and the log is the driver's biggest write by far
+    (every command, every verdict, every piece of evidence). It went to
+    `Path(args.build_log)` unchecked, so `--build-log` inside the live kb state
+    root wrote the acceptance evidence into production. The path is an
+    explicitly configured output, so it is an allowed root — but it is refused
+    by the LIVE-state exclusion exactly like every other path, and that check
+    happens before the parent directory is created."""
+    path = ctx.check_path(ctx.log_path, "write BUILD-LOG.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_log(ctx, results, exit_code), encoding="utf-8")
     print(f"wrote {path}")
@@ -3382,6 +3773,102 @@ def self_test(args: argparse.Namespace) -> int:
     hostile = Ctx(argparse.Namespace(**{**vars(args), "before_root": str(LIVE_STATE_PREFIX)}))
     expect_refuse("R2 even when a flag makes the LIVE state root an allowed root",
                   lambda: hostile.check_path(LIVE_STATE_PREFIX / "kb-code" / "index.db", "read"))
+
+    # -- the R2 bypasses: a flag that makes a LIVE-state path reachable -----
+    #
+    # Every one of these is a path the driver used to build with a bare
+    # `ctx.out / …` or `Path(ctx.log_path)`, i.e. with no `check_path` anywhere
+    # on the way. `--after-root`, `--out` and `--build-log` are all flags, so
+    # all three reached the live state root just as easily.
+    live_after = Ctx(argparse.Namespace(**{**vars(args), "after_root": str(LIVE_STATE_PREFIX)}))
+    expect_refuse(
+        "R2 gate 6 refuses to copy the LIVE review database, even with --after-root on it",
+        lambda: gate_6_copy_paths(live_after),
+    )
+    live_out = Ctx(argparse.Namespace(**{**vars(args), "out": str(LIVE_STATE_PREFIX / "gates-out")}))
+    expect_refuse("R2 --out inside the live state root is refused before the dir is created",
+                  lambda: live_out.ensure_out_dir())
+    expect_refuse("R2 an artefact under such an --out is refused too, not just the dir",
+                  lambda: live_out.art("json", "gate1-after.json"))
+    live_log = Ctx(argparse.Namespace(
+        **{**vars(args), "build_log": str(LIVE_STATE_PREFIX / "kb-code" / "BUILD-LOG.md")}
+    ))
+    expect_refuse("R2 --build-log inside the live state root is refused before any write",
+                  lambda: write_log(live_log, [], EXIT_GATES))
+    # …and the refusals above created nothing: the whole point of asking the
+    # rail BEFORE the mkdir is that a refusal cannot litter either.
+    checks.append(
+        (
+            "R2 a refused --out / --build-log leaves the live state root untouched",
+            not (LIVE_STATE_PREFIX / "gates-out").exists()
+            and not (LIVE_STATE_PREFIX / "kb-code" / "BUILD-LOG.md").exists(),
+            f"{LIVE_STATE_PREFIX / 'gates-out'} and "
+            f"{LIVE_STATE_PREFIX / 'kb-code' / 'BUILD-LOG.md'} are both absent after the refusals",
+        )
+    )
+    # `--out` is itself one of the allowed roots ("or the output dir"), so R2
+    # has exactly ONE thing to refuse about it: the live state root. Pinned
+    # here so the allowed-roots list is not later "fixed" by someone who reads
+    # the exclusion as an oversight. `check_path`, not `ensure_out_dir` — this
+    # must not create the directory it is reasoning about.
+    stray_out = Ctx(argparse.Namespace(**{**vars(args), "out": "/tmp/run-gates-not-an-allowed-root"}))
+    expect_allow("R2 --out is itself an allowed root; the live state root is the only refusal",
+                 lambda: stray_out.check_path(stray_out.out, "create the output dir"))
+
+    # The build log is an explicitly configured output, so it is admissible —
+    # and that is the only reason `write_log` may pass R2 at all.
+    with tempfile.TemporaryDirectory(prefix="run-gates-log-") as tmp:
+        log_ok = Ctx(argparse.Namespace(**{**vars(args), "build_log": str(Path(tmp) / "BUILD-LOG.md")}))
+        expect_allow("R2 an explicit --build-log outside the live root is allowed",
+                     lambda: log_ok.check_path(log_ok.log_path, "write BUILD-LOG.md"))
+
+    # The two R2 entry points share ONE live-state exclusion, so a user clone
+    # — the one path `check_path` refuses and `check_clone_path` admits — is
+    # refused by the live-state rule too, and `check_path` still refuses it as
+    # an ordinary path.
+    expect_refuse("R2 a configured clone inside the LIVE state root is refused",
+                  lambda: ctx.check_clone_path(LIVE_STATE_PREFIX / "kb-code", "live-clone"))
+    expect_refuse("R2 a user clone is not an ordinary path (only check_clone_path admits it)",
+                  lambda: ctx.check_path("/home/nik/progetti/kb", "read"))
+    user_root_ctx = Ctx(argparse.Namespace(
+        **{**vars(args), "before_root": str(USER_CLONE_PREFIX), "after_root": str(USER_CLONE_PREFIX)}
+    ))
+    expect_allow(
+        "R2 check_clone_path admits a user clone even when a flag makes its parent an allowed root",
+        lambda: user_root_ctx.check_clone_path(
+            "/home/nik/progetti/1000farmacie/rails/1000farmacie.01", "1000farmacie-rails-01"
+        ),
+    )
+    expect_refuse(
+        "R2 …and the LIVE state root stays refused on that same context",
+        lambda: user_root_ctx.check_path(LIVE_STATE_PREFIX / "kb-code" / "index.db", "read"),
+    )
+
+    # The missing sibling `kb-code` CLI: `Daemon.start` has always checked its
+    # server binary; nothing checked the CLI, so it surfaced as a raw
+    # FileNotFoundError out of `exec` — an exception no gate caught, which left
+    # the PREVIOUS run's BUILD-LOG.md on disk still reading "all seven gates
+    # PASS". A named GateAbort is what the gate records instead.
+    missing_cli_ctx = Ctx(argparse.Namespace(
+        **{**vars(args), "after_server": "/tmp/run-gates-no-such-bin-dir/kb-code-server"}
+    ))
+    missing_cli_ctx.dry_run = False
+    try:
+        missing_cli_ctx.cli_for_gate(3)
+    except GateAbort as e:
+        checks.append(
+            (
+                "a missing sibling kb-code CLI is a named GateAbort, not a FileNotFoundError",
+                "CLI is not at" in str(e) and "--after-cli" in str(e),
+                str(e)[:150],
+            )
+        )
+    else:
+        checks.append(("a missing sibling kb-code CLI is a named GateAbort, not a FileNotFoundError",
+                       False, "cli_for_gate returned instead of refusing"))
+    missing_cli_ctx.dry_run = True
+    expect_allow("R2 a dry run never requires the CLI to exist",
+                 lambda: missing_cli_ctx.cli_for_gate(3))
 
     print("R3 (no git write on a user clone)")
     clone = "/home/nik/progetti/1000farmacie/rails/1000farmacie.01"
@@ -3976,6 +4463,356 @@ def self_test(args: argparse.Namespace) -> int:
         )
     )
 
+    # ------------------------------------------------------------------
+    # Gates 3 and 4 — a pass condition must depend on the evidence it
+    # names. Both gates used to DISCARD the result of a read (gate 3's read
+    # exercise, gate 4's two findings reads) and then print a sentence about
+    # what that read showed. The decisions are pure functions, so they are
+    # exercised here directly.
+    # ------------------------------------------------------------------
+
+    print("Gates 3 and 4 (a claim is only as good as the read behind it)")
+
+    def _step(rc: int | None, out: str = "", err: str = "") -> Step:
+        return Step(gate=3, label="read exercise", argv=["kb-code"], returncode=rc, stdout=out, stderr=err)
+
+    checks.append(
+        (
+            "gate 3 a read exercise that SUCCEEDED and served files is admissible",
+            read_exercise_problem(_step(0), {"files": [{"path": "a.rs"}]}) == "",
+            "exit 0 with one file served",
+        )
+    )
+    # The vacuous case the finding names: `--review 0`, or an id the volume
+    # does not hold. The command exits non-zero, no read is served, no GitCtx
+    # is built — and the counters are zero anyway on a fresh daemon.
+    checks.append(
+        (
+            "gate 3 a FAILED read exercise is a FAIL, not a trivially zero counter",
+            "exited 2" in read_exercise_problem(
+                _step(2, err="error: review 0 not found"), None
+            ),
+            read_exercise_problem(_step(2, err="error: review 0 not found"), None),
+        )
+    )
+    checks.append(
+        (
+            "gate 3 a read exercise that served NO files is not evidence either",
+            "served no files" in read_exercise_problem(_step(0), {"files": []}),
+            read_exercise_problem(_step(0), {"files": []}),
+        )
+    )
+    checks.append(
+        (
+            "gate 3 a non-JSON / non-envelope answer is a FAIL",
+            read_exercise_problem(_step(0), None) != ""
+            and read_exercise_problem(_step(0), ["not", "an", "envelope"]) != "",
+            "only a review envelope with a files array counts as a read",
+        )
+    )
+
+    # Gate 4: `--ps` is the patchset the findings are resolved AGAINST, not a
+    # filter, so "they stayed on ps3" is answered by each finding's own_ps.
+    ok_findings = _step(0)
+    ok_findings.gate = 4
+    checks.append(
+        (
+            "gate 4 a findings read that succeeded and is all anchored on ps3 is admissible",
+            findings_problem(ok_findings, {"findings": [{"slug": "f-1", "own_ps": 3}]}, 3) == (1, ""),
+            "1 finding, own_ps=3",
+        )
+    )
+    bad_step = _step(1, err="error: no such review")
+    bad_step.gate = 4
+    _, problem = findings_problem(bad_step, {}, 3)
+    checks.append(
+        (
+            "gate 4 a FAILED `findings list` is a FAIL, not an unchecked claim",
+            problem != "" and "exited 1" in problem,
+            problem[:150],
+        )
+    )
+    _, problem = findings_problem(
+        ok_findings, {"findings": [{"slug": "f-1", "own_ps": 3}, {"slug": "f-2", "own_ps": 4}]}, 3
+    )
+    checks.append(
+        (
+            "gate 4 a finding that MOVED to the new patchset is named, not averaged away",
+            problem != "" and "f-2" in problem and "1 of 2" in problem,
+            problem[:150],
+        )
+    )
+    _, problem = findings_problem(ok_findings, {"findings": [{"slug": "f-1", "own_ps": None}]}, 3)
+    checks.append(
+        (
+            "gate 4 a finding anchored to NO patchset does not count as 'stayed on ps3'",
+            problem != "" and "own_ps=None" in problem,
+            problem[:150],
+        )
+    )
+    _, problem = findings_problem(ok_findings, {"review": 65}, 3)
+    checks.append(
+        (
+            "gate 4 a findings read with no findings array is a FAIL, not a vacuous pass",
+            problem != "" and "no findings array" in problem,
+            problem[:150],
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # Gate 6 — the copy source. Two properties: the argv opens the volume
+    # read-only, and the sidecar effect of that open is visible rather than
+    # assumed. Both are measured on a real WAL database, because that is what
+    # `store/mod.rs` opens every review store with.
+    # ------------------------------------------------------------------
+
+    print("Gate 6 (the copy source is read-only, and that is measured)")
+    src_path, dst_path = Path("/vol/state/kb-code/index.db"), Path("/out/gate6/copy.db")
+    argv_ro = sqlite_backup_argv(src_path, dst_path)
+    checks.append(
+        (
+            "gate 6 the .backup source is a read-only URI, never a bare path",
+            argv_ro[1] == "file:/vol/state/kb-code/index.db?mode=ro"
+            # a BARE path is what sqlite3 opens read-write; the URI is not one
+            and not argv_ro[1].startswith(str(src_path))
+            and argv_ro[2] == ".backup '/out/gate6/copy.db'",
+            sh_quote(argv_ro),
+        )
+    )
+    if shutil.which("sqlite3") is None:
+        checks.append(("gate 6 the read-only copy leaves no journal sidecar behind", False,
+                       "sqlite3 is not installed, so the copy cannot be measured here"))
+    else:
+        with tempfile.TemporaryDirectory(prefix="run-gates-backup-") as tmp:
+            wal_db = Path(tmp) / "index.db"
+            seed = sqlite3.connect(wal_db)
+            seed.execute("PRAGMA journal_mode=wal")
+            seed.execute("create table t(x)")
+            seed.execute("insert into t values(1)")
+            seed.commit()
+            seed.close()
+            before_sidecars = journal_sidecars(wal_db)
+            copy_out = Path(tmp) / "copy.db"
+            proc = subprocess.run(
+                sqlite_backup_argv(wal_db, copy_out), capture_output=True, text=True, check=False
+            )
+            after_sidecars = journal_sidecars(wal_db)
+            served = 0
+            if copy_out.is_file():
+                served = sqlite3.connect(copy_out).execute("select count(*) from t").fetchone()[0]
+            checks.append(
+                (
+                    "gate 6 the read-only copy of a WAL volume SUCCEEDS and is complete",
+                    proc.returncode == 0 and served == 1,
+                    f"exit {proc.returncode}, copy holds {served} row(s) — a real consistent copy, "
+                    "not a refusal",
+                )
+            )
+            # Recorded rather than asserted: on this box (sqlite3 3.53.4) a
+            # read-only open of a WAL database materialises -shm/-wal and,
+            # unable to checkpoint, LEAVES them, where a read-write open
+            # removes them on a clean close. The gate reports this in its
+            # evidence; the check exists so the effect is measured on every
+            # --self-test rather than argued about.
+            checks.append(
+                (
+                    "gate 6 the read-only copy's journal sidecars are REPORTED, not assumed",
+                    True,
+                    f"before {before_sidecars or 'none'}, after {after_sidecars or 'none'}"
+                    + (
+                        f" — this sqlite3 leaves {sorted(set(after_sidecars) - set(before_sidecars))} "
+ "behind on a clean exit, so gate 6 prints them in its evidence"
+                        if set(after_sidecars) - set(before_sidecars)
+                        else ""
+                    ),
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # Gate 7 — CI is evidence only if it RAN. A path-filtered `drift` job
+    # reports `skipping`, which used to satisfy BOTH the green condition and
+    # the TS-regen evidence while the reason still said "all N check runs
+    # green … including the TS-regen job(s)".
+    # ------------------------------------------------------------------
+
+    print("Gate 7 (a check run that never ran is not a green one)")
+    green = read_ci_table([
+        {"name": "rust-core", "bucket": "pass"},
+        {"name": "code-drift (ts-regen)", "bucket": "pass"},
+        {"name": "docs", "bucket": "success"},
+    ])
+    checks.append(
+        (
+            "gate 7 every check run green AND the TS-regen job among them = admissible",
+            green.problem == "" and len(green.drift) == 1,
+            green.problem or "; ".join(green.rows),
+        )
+    )
+    skipped_drift = read_ci_table([
+        {"name": "rust-core", "bucket": "pass"},
+        {"name": "code-drift (ts-regen)", "bucket": "skipping"},
+    ])
+    checks.append(
+        (
+            "gate 7 a SKIPPED TS-regen job is not evidence of regenerated types",
+            skipped_drift.problem != "" and "code-drift" in skipped_drift.problem
+            and "code-drift (ts-regen)=skipping" in skipped_drift.did_not_run,
+            skipped_drift.problem[:150],
+        )
+    )
+    checks.append(
+        (
+            "gate 7 a `skip` bucket is not green for ANY job, drift or not",
+            read_ci_table([
+                {"name": "code-drift (ts-regen)", "bucket": "pass"},
+                {"name": "lint", "bucket": "skip"},
+            ]).problem != "",
+            read_ci_table([
+                {"name": "code-drift (ts-regen)", "bucket": "pass"},
+                {"name": "lint", "bucket": "skip"},
+            ]).problem[:150],
+        )
+    )
+    checks.append(
+        (
+            "gate 7 a PR with no TS-regen job at all is still unevidenced",
+            "TS-regen" in read_ci_table([{"name": "rust-core", "bucket": "pass"}]).problem,
+            read_ci_table([{"name": "rust-core", "bucket": "pass"}]).problem[:150],
+        )
+    )
+    checks.append(
+        (
+            "gate 7 a failing check run is still a FAIL",
+            read_ci_table([
+                {"name": "code-drift (ts-regen)", "bucket": "pass"},
+                {"name": "rust-core", "bucket": "fail"},
+            ]).problem != "",
+            read_ci_table([
+                {"name": "code-drift (ts-regen)", "bucket": "pass"},
+                {"name": "rust-core", "bucket": "fail"},
+            ]).problem[:150],
+        )
+    )
+    checks.append(
+        (
+            "gate 7 an empty check-run table is a FAIL, not an empty pass",
+            read_ci_table([]).problem == "GitHub reports no check runs for this PR",
+            read_ci_table([]).problem,
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # The stale-log crash. Every gate catches RailError and GateAbort and
+    # nothing else, so any other exception unwound out of `main` past
+    # `write_log`: the process exited 1 and the PREVIOUS run's BUILD-LOG.md
+    # was still on disk, still reading "all seven gates PASS". A crash must
+    # be the FAIL of the gate that raised it, and the rendered log must say
+    # so.
+    # ------------------------------------------------------------------
+
+    print("A crash is a FAIL, never a stale green log")
+
+    def _boom(ctx: Ctx) -> GateResult:
+        raise FileNotFoundError(2, "No such file or directory", "/tmp/gates-bin/kb-code")
+
+    real_gate_7 = GATES[7]
+    try:
+        GATES[7] = _boom  # type: ignore[assignment]
+        crash_ctx = Ctx(argparse.Namespace(**{**vars(args), "gate": [7]}))
+        crash_ctx.dry_run = True
+        crashed = run_gates(crash_ctx)
+    finally:
+        GATES[7] = real_gate_7
+    checks.append(
+        (
+            "a gate that raises an unhandled exception is recorded as a FAIL, not a traceback",
+            len(crashed) == 1 and crashed[0].status == "FAIL"
+            and "FileNotFoundError" in crashed[0].reason,
+            f"{crashed[0].status}: {crashed[0].reason.splitlines()[0][:130]}",
+        )
+    )
+    checks.append(
+        (
+            "a crash verdict names the exception AND carries its traceback",
+            "kb-code" in crashed[0].evidence[0][1] and "Traceback" in crashed[0].evidence[0][1],
+            crashed[0].evidence[0][0] + ": " + crashed[0].evidence[0][1].splitlines()[-1][:110],
+        )
+    )
+
+    # A rail refusal still aborts the run — but the gates that already ran
+    # must survive into the log, or an abort erases the very evidence the
+    # operator needs to decide whether to re-run.
+    def _pass(ctx: Ctx) -> GateResult:
+        return GateResult(1, GATE_NAMES[1], "PASS", "stubbed for the self-test")
+
+    def _refuse(ctx: Ctx) -> GateResult:
+        raise RailError("R2: refusing to read /etc/passwd: it is out of scope")
+
+    real_1, real_2 = GATES[1], GATES[2]
+    try:
+        GATES[1], GATES[2] = _pass, _refuse  # type: ignore[assignment]
+        rail_ctx = Ctx(argparse.Namespace(**{**vars(args), "gate": [1, 2]}))
+        rail_ctx.dry_run = True
+        kept: list[GateResult] = []
+        try:
+            run_gates(rail_ctx, kept)
+        except RailError:
+            rail_raised = True
+        else:
+            rail_raised = False
+    finally:
+        GATES[1], GATES[2] = real_1, real_2
+    checks.append(
+        (
+            "a rail refusal still aborts the run (it is not softened into a gate FAIL)",
+            rail_raised and [r.number for r in kept] == [1],
+            f"R2 propagated; {len(kept)} gate verdict(s) already recorded",
+        )
+    )
+    checks.append(
+        (
+            "…and the gates that DID run keep their verdict, so the abort log is not empty",
+            len(kept) == 1 and kept[0].ok and "**PASS**" in render_log(rail_ctx, kept, EXIT_ABORT),
+            "gate 1's PASS is in the aborted run's log, next to the abort",
+        )
+    )
+
+    # The exact green sentence, with its full stop, is what a reader skims for.
+    # The control below renders the SAME crashed results with exit 0 and shows
+    # the sentence is there, so this check discriminates rather than merely
+    # never matching.
+    crash_log = render_log(crash_ctx, crashed, EXIT_GATES)
+    green_sentence = "all seven gates PASS."
+    checks.append(
+        (
+            "a crashed gate can never leave a log reading 'all seven gates PASS'",
+            green_sentence not in crash_log
+            and "NOT all seven gates PASS" in crash_log
+            and "**FAIL**" in crash_log
+            and "| FAIL |" in crash_log
+            and "not PASS: [1, 2, 3, 4, 5, 6, 7]" in crash_log,
+            "the rendered log says NOT all seven gates PASS and gate 7 reads FAIL",
+        )
+    )
+    checks.append(
+        (
+            "…and that check is not vacuous: the same results at exit 0 DO say it",
+            green_sentence in render_log(crash_ctx, crashed, EXIT_OK),
+            f"rendered with exit 0 the verdict line reads {green_sentence!r}",
+        )
+    )
+    # main's own exit-code rule, applied to the crashed run: a FAIL is a gate
+    # FAIL (exit 1), not an abort (exit 2), and certainly not 0.
+    crash_not_pass = [r.number for r in crashed if not r.ok]
+    crash_exit = EXIT_OK if not crash_not_pass and not [n for n in sorted(GATES) if n not in crash_ctx.selected] else EXIT_GATES
+    checks.append(
+        (
+            "a crash in a gate exits 1 (a gate FAIL), never 0 and never an abort",
+            crash_exit == EXIT_GATES and crash_not_pass == [7],
+            f"exit {crash_exit}, not PASS: {crash_not_pass}",
+        )
+    )
+
     print()
     width = max(len(c[0]) for c in checks)
     failed = 0
@@ -4004,6 +4841,80 @@ GATES: dict[int, Callable[[Ctx], GateResult]] = {
     6: gate_6,
     7: gate_7,
 }
+
+
+def crash_result(ctx: Ctx, gate: int, exc: BaseException) -> GateResult:
+    """An UNHANDLED exception, as the FAIL of the gate that raised it.
+
+    Every gate catches `RailError` (re-raised: a rail refusal aborts the run)
+    and `GateAbort` (recorded as a FAIL). Nothing else was caught anywhere, so
+    any other exception — a `FileNotFoundError` from `subprocess.run` on a
+    missing binary, a `TypeError` in a new assertion, a `KeyboardInterrupt`
+    during a 95-minute boot — unwound straight out of `main`, skipping
+    `write_log` entirely. The process exited 1 and the PREVIOUS run's
+    BUILD-LOG.md was still on disk, still reading "all seven gates PASS", with
+    its old timestamp. A reader who trusted it read a green phase that never
+    happened.
+
+    So the crash IS the gate's verdict: FAIL, with the exception type, its
+    message and the traceback of the frames inside this driver, so the log
+    says what died rather than merely that something did. Never PASS, never
+    SKIP."""
+    # The WHOLE traceback, redacted like every other string this driver prints
+    # (an argv or a message in a frame can carry a token) and tail-truncated:
+    # the deepest frames say what actually died.
+    tb = ctx.redact("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+    where = f"gate {gate}" if gate in GATE_NAMES else "the migrate-first phase (before any gate ran)"
+    res = GateResult(
+        gate,
+        GATE_NAMES.get(gate, f"gate {gate}"),
+        "FAIL",
+        f"{where} raised an unhandled {type(exc).__name__} and did not finish: "
+        f"{ctx.redact(str(exc) or '(no message)')}. The driver records this as a FAIL rather "
+        "than dying with the previous run's log still on disk claiming seven green gates; the "
+        "traceback is below.",
+    )
+    res.evidence = [
+        (
+            "unhandled exception (traceback)",
+            tb[-4000:] or f"{type(exc).__name__}: {exc} (no traceback — the exception was never raised)",
+        ),
+        (
+            "steps this gate had already run",
+            str(len([s for s in ctx.steps if s.gate == gate])),
+        ),
+    ]
+    res.steps = [s for s in ctx.steps if s.gate == gate]
+    return res
+
+
+def run_gates(ctx: Ctx, results: list[GateResult] | None = None) -> list[GateResult]:
+    """Run every selected gate, in order, appending each verdict to `results`.
+
+    A rail refusal still propagates — it is an abort of the whole run, not a
+    gate verdict — so the list is FILLED AS THE RUN GOES and the caller's
+    `except RailError` can still write the verdicts of the gates that did run.
+    (Returning a fresh list and assigning it at the end would lose every
+    earlier gate the moment a rail fired, which is exactly when the operator
+    most needs to see what already passed.)
+
+    Anything else is turned into a FAIL for the gate that raised it (see
+    `crash_result`), so a crash can never leave a stale green log behind.
+    `BaseException`, not `Exception`: a `KeyboardInterrupt` during a first boot
+    is exactly the case where the operator needs the log to say the run did
+    not finish."""
+    out = [] if results is None else results
+    for n in ctx.selected:
+        print(f"→ gate {n}: {GATE_NAMES[n]}", flush=True)
+        try:
+            r = GATES[n](ctx)
+        except RailError:
+            raise
+        except BaseException as e:  # noqa: BLE001 — a crash is a FAIL, not a traceback
+            r = crash_result(ctx, n, e)
+        out.append(r)
+        print(f"  {r.status}: {r.reason.splitlines()[0] if r.reason else ''}", flush=True)
+    return out
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4104,6 +5015,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 GATES[n](ctx)
             except (GateAbort, RailError) as e:
                 problems.append(f"gate {n}: {e}")
+            except BaseException as e:  # noqa: BLE001
+                # A dry run writes no log, so there is no stale-green-log risk
+                # here; the crash is still reported as a preflight problem
+                # rather than as a traceback, so a plan that cannot run is
+                # never mistaken for a runnable one.
+                problems.append(f"gate {n}: unhandled {type(e).__name__}: {e}")
         print(ctx.plan_text())
         for note in ctx.notes:
             print(f"note: {note}\n")
@@ -4115,7 +5032,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Dry run complete: the plan above is what a real run would execute, in this order.")
         return EXIT_OK
 
-    ctx.out.mkdir(parents=True, exist_ok=True)
+    ctx.ensure_out_dir()
     for root in (ctx.before_root, ctx.after_root):
         if not root.is_dir():
             raise RailError(f"environment root {root} does not exist")
@@ -4134,11 +5051,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not args.no_log:
                 write_log(ctx, results, EXIT_ABORT)
             return EXIT_ABORT
-        for n in ctx.selected:
-            print(f"→ gate {n}: {GATE_NAMES[n]}", flush=True)
-            r = GATES[n](ctx)
-            results.append(r)
-            print(f"  {r.status}: {r.reason.splitlines()[0] if r.reason else ''}", flush=True)
+        except RailError:
+            raise  # the rail's own handler below writes the log
+        except BaseException as e:  # noqa: BLE001
+            # A crash BEFORE any gate has run still has to reach the log. The
+            # trigger is ordinary — a `--before-server` directory with no
+            # config, a missing binary, Ctrl-C during a 95-minute boot — and the
+            # old behaviour was a traceback and no write at all, leaving the
+            # previous run's green BUILD-LOG.md as the newest thing on disk.
+            crash = crash_result(ctx, 0, e)
+            print(f"\nABORTED before any gate: {crash.reason}", file=sys.stderr)
+            ctx.notes.append(f"driver crash before any gate ran:\n{crash.evidence[0][1]}")
+            if not args.no_log:
+                write_log(ctx, results, EXIT_ABORT)
+            return EXIT_ABORT
+        # `results` is filled gate by gate, so the rail abort above still
+        # writes the verdicts of the gates that DID run.
+        run_gates(ctx, results)
     except RailError as e:
         print(f"\nABORTED by a safety rail: {e}", file=sys.stderr)
         if not args.no_log:

@@ -15,7 +15,14 @@
 //! 4. open every `ready` store (manifest check + lifetime flock), and — when
 //!    `[review.store] seed_on_boot` — seed every `absent` one, LOCAL ONLY
 //!    (no credential, no network: base branches arrive with the first
-//!    explicit `store sync`/capture).
+//!    explicit `store sync`/capture). One `absent` row is EXEMPT: one
+//!    whose last attempt was refused on a CREDENTIAL. A local pass cannot
+//!    resolve a credential, so re-seeding it would restore the store to
+//!    `ready` over a credential that is still broken — the state the
+//!    refused arm in [`super::registry::ReviewStores::seed`] exists to
+//!    prevent. Those rows keep their `absent` + class, are reported in
+//!    [`BootSummary::refused`], and come up on the first explicit
+//!    `store sync`, which does resolve one.
 //!
 //! Steps 1–2 are CRASH RECOVERY and need no git spawner, so they run
 //! BEFORE the spawner gate that guards steps 3–4: skipping them when the
@@ -39,6 +46,12 @@ pub struct BootSummary {
     pub swept_tmp: usize,
     pub reset_seeding: usize,
     pub registered: Vec<String>,
+    /// Refusals the pass reported, each `"<what>: <why>"`: a
+    /// registration that refused, a member's clone carrying a remote
+    /// refused as unsafe, and a store whose last attempt was refused on
+    /// a CREDENTIAL and was therefore not re-seeded (step 4). One list,
+    /// because all three are the same thing to an operator reading the
+    /// boot log: something about this store needs a human.
     pub refused: Vec<String>,
     pub opened: usize,
     pub seeded: usize,
@@ -115,8 +128,24 @@ pub fn run_boot(rs: &ReviewStores, store: &Store) -> BootSummary {
         .collect::<Vec<_>>()
     {
         match rs.register_repo(store, &name, None) {
-            Registration::Member { store_id, .. } => {
+            Registration::Member {
+                store_id,
+                refused_remotes,
+                ..
+            } => {
                 store_ids.insert(store_id);
+                // A member's clone carrying a remote refused as unsafe
+                // is a refusal too, and the ladder never runs for a repo
+                // that is already a member — so this is the only place
+                // the boot pass can see it. Counted, not swallowed.
+                for r in refused_remotes {
+                    s.refused.push(format!(
+                        "{name}: {} on remote `{}` ({})",
+                        super::ladder::REMOTE_URL_REFUSED,
+                        r.name,
+                        r.reason
+                    ));
+                }
                 s.registered.push(name);
             }
             Registration::Refused { code, .. } => s.refused.push(format!("{name}: {code}")),
@@ -149,8 +178,15 @@ pub fn run_boot(rs: &ReviewStores, store: &Store) -> BootSummary {
                     }
                 }
                 // The directory vanished: `open` put the row back to
-                // `absent`; re-seed it now rather than a boot later.
+                // `absent`; re-seed it now rather than a boot later —
+                // unless the row's LAST recorded state is a refused
+                // credential, which is what the arm below is about.
                 Err(super::registry::StoreUnavailable::Absent) if rs.settings().seed_on_boot => {
+                    if let Some(why) = refused_credential(&row) {
+                        s.refused
+                            .push(format!("{}: {why} (not re-seeded)", row.store_key));
+                        continue;
+                    }
                     match rs.seed(store, id, false) {
                         Ok(_) => s.seeded += 1,
                         Err(u) => s.failed.push(format!("{}: {}", row.store_key, u.code())),
@@ -158,12 +194,53 @@ pub fn run_boot(rs: &ReviewStores, store: &Store) -> BootSummary {
                 }
                 Err(u) => s.failed.push(format!("{}: {}", row.store_key, u.code())),
             },
-            "absent" if rs.settings().seed_on_boot => match rs.seed(store, id, false) {
-                Ok(_) => s.seeded += 1,
-                Err(u) => s.failed.push(format!("{}: {}", row.store_key, u.code())),
+            // A boot seed is LOCAL ONLY (D4): no credential, no network.
+            // So it cannot find out whether the credential that stopped
+            // the last attempt has been fixed — and re-seeding anyway
+            // brought the row straight back to `ready` with
+            // `base: offline-seed`, over a base nobody fetched and a
+            // credential still broken: the exact state the refused arm
+            // in `registry::seed` exists to prevent, undone by the next
+            // boot. The recorded refusal is therefore honoured: the row
+            // stays `absent` with the class on it, and an explicit
+            // `store sync` (which does resolve a credential) re-seeds it
+            // the moment the operator has fixed it.
+            "absent" if rs.settings().seed_on_boot => match refused_credential(&row) {
+                Some(why) => s
+                    .refused
+                    .push(format!("{}: {why} (not re-seeded)", row.store_key)),
+                None => match rs.seed(store, id, false) {
+                    Ok(_) => s.seeded += 1,
+                    Err(u) => s.failed.push(format!("{}: {}", row.store_key, u.code())),
+                },
             },
             _ => {}
         }
     }
     s
+}
+
+/// The credential class this store's LAST attempt was refused on, read
+/// off the row the refusal left behind — or `None` for a row that was
+/// never refused on one (including the `seed-failed` codes, which name
+/// no class at all).
+///
+/// `FailureClass::from_slug` + `is_auth` is the same pairing
+/// `registry::seed` refuses on and the CLI reads off the wire, so
+/// "refused on a credential" is defined in exactly one place and this
+/// pass cannot drift from the write it is honouring. A store whose
+/// refusal is NOT a credential fault (offline, timeout — transient, by
+/// design) keeps the local re-seed: a boot seed needs no network, so
+/// there is nothing about it a stale network failure should block.
+/// The credential-refusal class recorded on a store row, if the row is
+/// `absent` because a credential the operator SUPPLIED was refused (as
+/// opposed to simply never having been seeded). Shared with the doctor
+/// card so an operator sees the class where they look, not only in the
+/// boot log.
+pub(crate) fn refused_credential(row: &crate::store::ReviewStoreRow) -> Option<String> {
+    use super::classify::FailureClass;
+    let code = super::registry::state_code(row.state_json.as_deref())?;
+    FailureClass::from_slug(&code)
+        .filter(|c| c.is_auth())
+        .map(|c| c.slug().to_string())
 }

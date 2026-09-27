@@ -171,6 +171,32 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     if let Some(Registration::Error { code, detail }) = &registration {
         doctor.push(finding("error", code, detail.clone()));
     }
+
+    // A refused remote on an otherwise-healthy store: the clone carries a
+    // URL the ladder would not key, and the good remote that DID decide
+    // the store means nothing else reports it. Without this finding a
+    // hostile or typo'd remote is invisible on every boot after the one
+    // that minted the store.
+    if let Registration::Member {
+        refused_remotes, ..
+    } = &registration
+    {
+        for r in refused_remotes {
+            doctor.push(finding(
+                "warn",
+                "remote-url-refused",
+                format!("remote {:?}: {}", r.name, r.reason),
+            ));
+        }
+    }
+    // A credential the operator supplied and which was REFUSED leaves its
+    // class on the row. Surfacing it here is the difference between "the
+    // store is fine" and "the store is fine because we gave up on the
+    // base" — the row is `absent` in that case, but an operator reading
+    // only the state would not know why.
+    if let Some(class) = super::boot::refused_credential(&row) {
+        doctor.push(finding("error", "store-credential-refused", class));
+    }
     let cfg = rs.settings().repo(name);
     let mut members = Vec::new();
     let mut disk = None;

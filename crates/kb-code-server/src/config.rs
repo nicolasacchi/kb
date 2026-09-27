@@ -1425,6 +1425,19 @@ pub struct ReviewStoreSection {
     /// expires, so a hung fetch cannot wedge a store. `0` is not a
     /// deadline and is refused at resolve time (warning + the
     /// default), never honoured.
+    ///
+    /// A value OUTSIDE `10 x WORK_FETCH_TIMEOUT_SECS … SEED_FETCH_TIMEOUT_SECS`
+    /// is still honoured — it is the operator's lever — but it warns, and
+    /// the warning surfaces as a `store doctor` finding. The band exists
+    /// because both failure directions are real: below the floor the fetch
+    /// is killed before a 748 MB clone can transfer (the defect this key
+    /// was added to fix), and above the ceiling a base fetch outlives the
+    /// whole-clone seed import that precedes it, making the cheaper call
+    /// the more expensive one to survive.
+    ///
+    /// The compile-time pins in `review_store::git` guard the DEFAULT.
+    /// They do NOT guard this key: a configured value is range-checked at
+    /// resolve time, not by the compiler.
     pub base_fetch_timeout_secs: Option<u64>,
 }
 

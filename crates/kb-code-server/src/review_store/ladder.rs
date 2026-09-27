@@ -32,6 +32,14 @@
 //! genuinely not a forge remote (a local path) is classified away, and
 //! it is not reported at all.
 //!
+//! **And it is reported on EVERY registration, not the first one.**
+//! The ladder itself only runs for a repo that is not yet a member, so
+//! a repo that gains a hostile remote AFTER registering is classified
+//! by [`refused_remotes`] on the already-a-member path and carries the
+//! same list on `Registration::Member::refused_remotes` — best effort:
+//! a clone whose remotes cannot be read reports none rather than
+//! refusing a membership that stands.
+//!
 //! **Membership** (README §5.1 "Joining"): before rungs 3–7 run, a repo
 //! whose remote normalizes to an EXISTING store's key joins that store.
 //! Rungs 1–2 are operator statements and run first — an operator who
@@ -204,6 +212,32 @@ pub struct RefusedRemote {
     pub name: String,
     /// [`NoStoreKey::reason`] — operator words, never the URL.
     pub reason: &'static str,
+}
+
+/// The remotes REFUSED as unsafe, with no ladder run — the SAME
+/// classification [`resolve`] applies before any rung picks a winner
+/// ([`NoStoreKey::is_refusal`]: a local path is not evidence of
+/// anything, a URL kb-code will not fetch from is the operator's
+/// problem), reported on its own.
+///
+/// It exists for the path [`resolve`] never reaches: a repo that is
+/// ALREADY a member. `register_inner` short-circuits that case before
+/// it reads a single remote, so a clone that grows a hostile remote
+/// after registration had no way to report it — the ladder's own doc
+/// promised a refusal is "reported, never dropped" and the steady state
+/// dropped it on every boot thereafter. Keys are NOT touched here and
+/// never will be: a refused remote is never reclassified into a store.
+pub fn refused_remotes(remotes: &[RemoteInfo]) -> Vec<RefusedRemote> {
+    remotes
+        .iter()
+        .filter_map(|r| match r.classify() {
+            Err(why) if why.is_refusal() => Some(RefusedRemote {
+                name: r.name.clone(),
+                reason: why.reason(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Stable refusal slug for rung 7.

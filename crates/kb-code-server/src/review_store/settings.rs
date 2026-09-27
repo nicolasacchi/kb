@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::cred::{CredentialPin, FetchCredentialConfig};
-use super::git::BASE_FETCH_TIMEOUT;
+use super::git::{
+    BASE_FETCH_TIMEOUT, BASE_FETCH_TIMEOUT_CEILING_SECS, BASE_FETCH_TIMEOUT_FLOOR_SECS,
+};
 use crate::config::{RepoEntry, ReviewSection};
 use crate::security::paths::canonicalize_lenient;
 
@@ -138,7 +140,10 @@ pub struct StoreSettings {
     /// `[review.store] base_fetch_timeout_secs` resolved to the
     /// deadline every base (network) fetch is given
     /// ([`super::git::StoreGit::with_base_fetch_timeout`]). The
-    /// default is [`BASE_FETCH_TIMEOUT`].
+    /// default is [`BASE_FETCH_TIMEOUT`]; a CONFIGURED value is taken
+    /// verbatim and is range-checked at resolve time against
+    /// [`BASE_FETCH_TIMEOUT_FLOOR_SECS`]/[`BASE_FETCH_TIMEOUT_CEILING_SECS`]
+    /// — a warning, never a rewrite.
     pub base_fetch_timeout: Duration,
     pub repos: BTreeMap<String, RepoStoreSettings>,
     /// Tolerant-parse and placement warnings (boot log + doctor).
@@ -181,6 +186,19 @@ impl StoreSettings {
         // is not "no timeout", it is "kill the fetch the instant it
         // spawns", which is the opposite of the slow-fetch wait this
         // key exists to buy.
+        //
+        // A POSITIVE value is honoured verbatim — it is the operator's
+        // lever, and `git.rs` says so — but the compile-time pins in
+        // `git.rs` are stated on the DEFAULT literal, so nothing the
+        // build can see stands between an operator and a value that
+        // reintroduces the pre-U13 30 s kill. The band below is the
+        // same two relations as numbers: outside it, the daemon WARNS
+        // (boot log + `store doctor`, which is where
+        // `StoreSettings::warnings` is read) instead of failing the
+        // fetch silently an hour later. Honoured either way — a
+        // deliberate lower bound on a fast link is still the operator's
+        // call, and rewriting it behind their back would be a worse
+        // lie than a warning.
         let base_fetch_timeout = match review.store.base_fetch_timeout_secs {
             None => BASE_FETCH_TIMEOUT,
             Some(0) => {
@@ -190,7 +208,19 @@ impl StoreSettings {
                 );
                 BASE_FETCH_TIMEOUT
             }
-            Some(secs) => Duration::from_secs(secs),
+            Some(secs) => {
+                if secs < BASE_FETCH_TIMEOUT_FLOOR_SECS {
+                    warnings.push(format!(
+                        "[review.store] base_fetch_timeout_secs = {secs} is below the {BASE_FETCH_TIMEOUT_FLOOR_SECS}s floor (10x the {}s work-fetch deadline): every base fetch is SIGKILLed at {secs}s, which is the budget that failed the U13 acceptance run; raise it or accept a store that cannot fetch a large clone",
+                        super::git::WORK_FETCH_TIMEOUT_SECS
+                    ));
+                } else if secs > BASE_FETCH_TIMEOUT_CEILING_SECS {
+                    warnings.push(format!(
+                        "[review.store] base_fetch_timeout_secs = {secs} is above the {BASE_FETCH_TIMEOUT_CEILING_SECS}s ceiling (the seed deadline of the whole-clone import this fetch follows): a base fetch that outlives its own seed pass is the more expensive call to survive"
+                    ));
+                }
+                Duration::from_secs(secs)
+            }
         };
         let mut map = BTreeMap::new();
         for e in &review.repos {
@@ -452,10 +482,14 @@ mod tests {
         assert_eq!(absent.base_fetch_timeout, BASE_FETCH_TIMEOUT);
         assert!(absent.warnings.is_empty(), "{:?}", absent.warnings);
 
+        // A value inside the band is the operator's alone: taken
+        // verbatim, no warning. (900 was the example here before the
+        // band existed; it is below the floor now, and the case below
+        // covers exactly that.)
         let cfg: KbCodeConfig =
-            toml::from_str("[review.store]\nbase_fetch_timeout_secs = 900\n").expect("parses");
+            toml::from_str("[review.store]\nbase_fetch_timeout_secs = 1800\n").expect("parses");
         let s = StoreSettings::resolve(&cfg.review, Path::new("/state"), &repos());
-        assert_eq!(s.base_fetch_timeout, Duration::from_secs(900));
+        assert_eq!(s.base_fetch_timeout, Duration::from_secs(1800));
         assert!(s.warnings.is_empty(), "{:?}", s.warnings);
 
         // 0 is not "no deadline", it is "kill the group the instant it
@@ -469,6 +503,51 @@ mod tests {
             s.warnings[0].contains("base_fetch_timeout_secs"),
             "{:?}",
             s.warnings
+        );
+    }
+
+    /// The compile-time pins in `git.rs` are stated on the DEFAULT
+    /// literal, so the config path is the one no build check can see.
+    /// An operator who puts the pre-U13 30 s back into the key gets
+    /// every base fetch SIGKILLed at 30 s — the exact defect the key
+    /// exists to fix, silently reintroduced, with no boot warning and no
+    /// `store doctor` finding. The value is still HONOURED (it is the
+    /// operator's lever); what the resolver owes them is the warning,
+    /// and this is the one path that carries it to the doctor.
+    #[test]
+    fn a_configured_deadline_outside_the_band_warns_and_is_still_honoured() {
+        let of = |secs: u64| {
+            let cfg: KbCodeConfig = toml::from_str(&format!(
+                "[review.store]\nbase_fetch_timeout_secs = {secs}\n"
+            ))
+            .expect("parses");
+            StoreSettings::resolve(&cfg.review, Path::new("/state"), &repos())
+        };
+        // The reported defect: 30 s, verbatim, for every base fetch.
+        let low = of(30);
+        assert_eq!(low.base_fetch_timeout, Duration::from_secs(30));
+        assert_eq!(low.warnings.len(), 1, "{:?}", low.warnings);
+        assert!(
+            low.warnings[0].contains("base_fetch_timeout_secs = 30")
+                && low.warnings[0].contains(&BASE_FETCH_TIMEOUT_FLOOR_SECS.to_string()),
+            "{:?}",
+            low.warnings
+        );
+        // One second inside the floor is quiet again — the band edge is
+        // the contract, not "anything unusual warns".
+        assert!(of(BASE_FETCH_TIMEOUT_FLOOR_SECS).warnings.is_empty());
+        assert!(of(BASE_FETCH_TIMEOUT_CEILING_SECS).warnings.is_empty());
+        // And a deadline past the seed import's own budget is named too.
+        let high = of(BASE_FETCH_TIMEOUT_CEILING_SECS + 1);
+        assert_eq!(
+            high.base_fetch_timeout,
+            Duration::from_secs(BASE_FETCH_TIMEOUT_CEILING_SECS + 1)
+        );
+        assert_eq!(high.warnings.len(), 1, "{:?}", high.warnings);
+        assert!(
+            high.warnings[0].contains(&BASE_FETCH_TIMEOUT_CEILING_SECS.to_string()),
+            "{:?}",
+            high.warnings
         );
     }
 

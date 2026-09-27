@@ -53,7 +53,13 @@ Both surfaced in gate 2's first, cold run and both are fixed on this branch:
 1. **The store's base-fetch deadline was hardcoded at 30 s.** A fetch from a
    748 MB clone cannot finish in that; git was killed mid-fetch and the
    operation dropped. Now `[review.store] base_fetch_timeout_secs`, default
-   1800 s, bounded by the compiler against the work and seed deadlines.
+   1800 s. The compiler bounds the DEFAULT (two `const` pins against the
+   work-fetch and seed deadlines, `review_store/git.rs`); a CONFIGURED
+   value is a runtime number no `const` can see, so the resolver range-checks
+   every one of them against the same two bounds and warns outside the band
+   (`review_store/settings.rs` — boot log and `store doctor`) instead of
+   letting a copied 30 s stand silently. The bounds are named constants the
+   pins are stated through, so the two cannot drift.
 2. **`review start` and `review snapshot` used a 10 s HTTP client.** Both make
    the daemon capture, so any capture outlived the client, which exited 5 with
    "is kb-code-server running" while the server finished minutes later. They
