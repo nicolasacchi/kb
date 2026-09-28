@@ -74,9 +74,18 @@ pub const EXIT_UPSTREAM: i32 = 6;
 /// The verb partly succeeded (e.g. `store sync` fetched some members but
 /// not all). The JSON envelope carries `degraded: true` and the details.
 pub const EXIT_PARTIAL: i32 = 7;
-/// The named thing does not exist (an unknown repo name). Only used by
-/// verbs whose route answers an unambiguous not-found body (see the module
-/// doc on why a bare loopback-only 404 is NOT mapped here).
+/// Every HTTP 404, decided on the STATUS ALONE — including a loopback-only
+/// route's bodiless refusal. It does NOT mean "definitely absent": a
+/// `loopback_only` route answers the same 404 for a route that exists but is
+/// not yours, so 8 is structurally ambiguous between "no such review" and "you
+/// cannot see this". Read the body's `code`/`hint` before concluding the thing
+/// is missing — `docs/kb-code.md`'s exit-code table says the same, and this
+/// constant is what that table is transcribed from.
+///
+/// Mapped in `review_agent::AgentError::from_http`. Note `exit_code_for` (the
+/// mapper for every NON-review verb) has no 404 arm, so a 404 reaching a
+/// non-review verb exits 1, not 8 — recorded as M9 in
+/// `docs/research/kb-week-review-2026-09-28.md`.
 pub const EXIT_NOT_FOUND: i32 = 8;
 // ── RS-U3 (review store) — end ──
 
