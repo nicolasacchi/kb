@@ -415,6 +415,41 @@ distinguish a refusal from a missing grammar.
 
 ---
 
+## Disposition — what was fixed here and what was not, and why
+
+**Fixed in the same session** (each a fact that was wrong, so no behaviour decision):
+M9, M10, N5b, N7, T1, plus the five `code-*` skip messages that named four of seven prefixes.
+M9 is the only CODE change: `exit_code_for` gained the 404/503 arms the documented table already
+promised, verified with `cargo check -p kb-code-cli`.
+
+**Deliberately NOT fixed, because fixing needs a decision that is not mine to make:**
+
+- **B1 (BLOCKER)** — porting kb-code's `host_allowed` to kb-server means adding a `[server]
+  hostnames` key and deciding the fail-open/fail-closed boundary for a non-loopback peer behind a
+  trusted proxy. kb-code's own module doc records that getting this wrong "takes a deployed
+  daemon down on upgrade — a hardening unit that bricks the deployment it hardens is not a
+  hardening unit." That trade-off is a product call. It is also the highest-value item here and
+  should be the next piece of work.
+- **M6** — whether the in-process scheduler *should* copy off-host, or whether `remote_cmd` is
+  CLI-only by design, is a config-contract decision. The current behaviour contradicts
+  `self-host.md:667` either way, so it needs an owner.
+- **M7** — making the serve and capture writers exclusive is a data-model change with a retention
+  dimension (`memory_recalls_prune_served` is age-based by design). Which record wins is a
+  product question about what "a recall" means.
+- **M1 / M2** — both fail *open* to a more privileged credential. The fix is to fail closed, which
+  is right for a security rule but changes behaviour for an operator whose store currently reads
+  fine off an ambient token. That trade should be named, not slipped in.
+- **M3 / M4 / M5** — real defects, but each is a concurrency design change in a subsystem that
+  just shipped, and each needs its own tests. Folding them into a docs-and-CI commit would make
+  the change harder to review, not easier.
+- **M12** — the fix belongs in the hook and changes a component's public return type, so it
+  touches four call sites.
+
+Every one of these is a *unit of work*, not a line. The point of this document is that the next
+person starts from evidence rather than from scratch.
+
+---
+
 ## Checked and found clean
 
 Recorded so a future reviewer does not redo the work.
