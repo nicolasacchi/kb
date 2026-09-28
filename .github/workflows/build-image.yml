@@ -102,7 +102,7 @@ jobs:
     #                         (workspace-lint/workspace-test/drift/code-drift/
     #                         embedder-lint/embedder-test/code-lint/
     #                         code-test/code-spa/e2e/code-e2e/web-unit/
-    #                         supply-chain) feeds ci.yml's own
+    #                         supply-chain/gates-binary) feeds ci.yml's own
     #                         conclusion and none of them runs with
     #                         continue-on-error, so `success` means the whole
     #                         sweep was green. The tag published here is what
