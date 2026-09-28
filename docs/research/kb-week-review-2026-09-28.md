@@ -8,6 +8,32 @@ recorded; findings that did not reproduce were dropped rather than reported.
 **Status of this document:** findings only. Nothing here has been fixed except where a
 commit message says otherwise. They are ordered by user-visible impact, not by file.
 
+## Verification pass
+
+Every finding below was then put through an adversarial pass whose only job was to REFUTE it.
+Two did not survive, and are marked ~~struck through~~ where they appear — **M8** (a deliberate,
+unit-pinned design) and **M11** (the function is covered by 9 unit cases and 2 e2e specs; only
+one call site is a real hole). Do not act on those two.
+
+Nine survived. Three of those carry corrections to the original text, applied inline:
+- **M1** — the `SQLITE_BUSY` trigger is unreachable (`Store` holds a single `Mutex<Connection>`
+  and `lock()` is `parking_lot`). The reachable errors are I/O and rusqlite row-decode failures.
+  Still a fail-open on read error, narrower trigger than first written.
+- **M2** — the semantics are confirmed but no reachable panic source in the closure was found,
+  so this is defensive hardening rather than a demonstrable live bug.
+- **M4** — survives on `seed.rs` only. The `capture.rs` half is **refuted** (its N is at most 2,
+  not the store's branch count), and "a complete network fetch per spec" is wrong: git raises
+  `couldn't find remote ref` during ref negotiation, before pack transfer, so retries move a
+  delta. The *time* multiplication `1 + N` × 1800 s is real; the byte multiplication is not.
+
+Severity changes: **M11** drops from MAJOR to MINOR. **M12** stays MAJOR, with one correction —
+a 400 renders as a permanent `pending` tier, not as "no grammar", so the symptom is a spinner
+that never resolves. **M7**'s FSRS impact is behind `scoring_v2_stability`, which defaults to
+**false**; the display paths (census, `/recalled-by`, `/sessions/{id}/recalls`) are hit
+unconditionally. **M6** has a partial mitigation: `scripts/kb-backup-cron.sh` drives
+`kb backup --all`, which does call `run_remote_copy` — but that is the author's host cron, not a
+shipped mitigation, and the defect is specific to the new in-process `[backup] schedule_hours`.
+
 ---
 
 ## BLOCKER
@@ -97,7 +123,7 @@ plus a warning, or to "no credential" plus a warning.
 
 ### M3. The `start-pr` fallback path fetches with no deadline and no git hardening
 
-`crates/kb-code-server/src/reviews.rs:421-436` (used by `start_pr_base` at :1090) and
+`crates/kb-code-server/src/reviews.rs:421-436` (used by `start_pr_base` (at :1191, via `fetch_remote_base` at :1090)) and
 `crates/kb-code-server/src/github.rs:203-210`
 
 `run_git` is a bare `std::process::Command::new("git")…output()`: no timeout, no
@@ -219,28 +245,41 @@ overlap.
 `(session_id, memory_id, pos)` in the same transaction. Add a regression test writing
 both rows for the SAME memory.
 
-### M8. A rejected registry secret is admitted and attributed to `operator`
+### M8. ~~A rejected registry secret is admitted and attributed to `operator`~~ — REFUTED, do not "fix"
 
-`crates/kb-server/src/middleware.rs:296-312` and :369-373
+An adversarial verification pass tried to kill this one and could not — but then found it is the
+**documented, unit-pinned design**, not an oversight. Recorded here so nobody re-raises it.
 
-`request_is_admitted` cannot distinguish "no credential presented" from "a credential was
-presented and did not match". With a token **registry** configured (no legacy token) and
-`KB_ALLOW_NO_AUTH=1`, a request bearing a wrong, expired, revoked or typo'd
-`X-Kb-Token` returns **200**, and `resolve_identity` falls through to
-`Identity { user: auth.operator, source: Loopback }`.
+The mechanism is real: `registry_match` (`middleware.rs:379-391`) returns `None` on a miss,
+`request_is_admitted` falls through to `allow_no_auth` (`:306-312`), and `resolve_identity`
+ends at the `Loopback` arm (`:369-373`) → `auth.operator`. So with a token registry configured
+AND `KB_ALLOW_NO_AUTH=1`, a wrong `X-Kb-Token` does get a 200.
 
-**Failure:** revoking a secret is a no-op — the client keeps full read/write forever,
-and every mutation lands in the audit trail as the **operator** user
-(`routes/comments.rs:322-323`, `routes/history.rs:118`). A misconfigured credential both
-opens the door and forges the attribution.
+That is the chosen posture, in three places:
+- the comment at `middleware.rs:306-311` states the decision — honour the override
+  "REGARDLESS of registry emptiness … must never tighten admission for browser users carrying
+  only Remote-User";
+- `docs/architecture-invariants.md:237-242` — "**Attribution never gates.** … a non-empty token
+  registry … must NEVER tighten `KB_ALLOW_NO_AUTH=1` … (unit-pinned)";
+- a unit test at `middleware.rs:1528-1557`
+  (`request_is_admitted_registry_never_tightens_allow_no_auth`) whose doc names this trade-off.
 
-**Fix:** distinguish "presented and rejected" from "absent" and refuse the former
-regardless of `KB_ALLOW_NO_AUTH`.
+`docs/self-host.md:84-88` documents `KB_ALLOW_NO_AUTH=1` as the posture where "an **upstream proxy
+is the authentication gate** … you deliberately run kb token-less behind it". The proposed fix —
+reject a presented-but-wrong credential — would 401 exactly those browser users the invariant
+protects. The "forged attribution" half also does not arise in the documented deployment: that
+same traefik setup forwards `Remote-User` (`self-host.md:800`), so the ladder resolves to the
+real user at `middleware.rs:337-355`.
 
-### M9. One documented exit-code table, two implementations that disagree
+**Residuals worth a doc line, not a behaviour change:** the test pins only the *absent*-credential
+case, so the wrong-token case is unpinned; and in a gate that forwards no identity header,
+mutations are recorded as `operator`. Fail-closed is preserved by default — registry set,
+`KB_ALLOW_NO_AUTH` unset, non-loopback peer, wrong token → 401.
+
+### M9. ~~One documented exit-code table, two implementations that disagree~~ — FIXED (`e245b1b` doc, follow-up commit)
 
 `crates/kb-code-cli/src/envelope.rs:204-220` vs
-`crates/kb-code-cli/src/review_agent.rs:200-232`; table at `docs/kb-code.md:1541-1551`
+`crates/kb-code-cli/src/review_agent.rs:200-232`; table at `docs/kb-code.md:1542-1552`
 
 `exit_code_for` (wired once, `main.rs:7426`, for **every** non-review verb) has arms for
 only 401/403 and 409. `AgentError::from_http` (the review/agent verbs) also maps
@@ -253,10 +292,11 @@ read it. It finds no arm, and the process exits **1**. A 503
 (`urn:kb:errors:store-seeding`, `review_store/registry.rs:76`) likewise. The table says
 8 and 3.
 
-**Fix:** add `404 => EXIT_NOT_FOUND` and `503 => EXIT_CONFLICT` to `exit_code_for`, or
-split the table into two labelled ones and say which verbs use which.
+**Fix (applied):** `exit_code_for` now carries `404 => EXIT_NOT_FOUND` and
+`503 => EXIT_CONFLICT`, so the one documented table is true for the whole CLI. Verified with
+`cargo check -p kb-code-cli`.
 
-### M10. `EXIT_NOT_FOUND`'s doc asserts the opposite of the shipped behaviour
+### M10. ~~`EXIT_NOT_FOUND`'s doc asserts the opposite of the shipped behaviour~~ — FIXED
 
 `crates/kb-code-cli/src/envelope.rs:77-80`
 
@@ -266,30 +306,36 @@ loopback-refusal 404, and `docs/kb-code.md:1551` documents it that way while war
 that 8 is structurally ambiguous. An integrator reading the constant concludes exit 8
 means "definitely absent" and writes exactly the wrong-but-confident branch.
 
-**Fix:** rewrite the doc to the shipped truth and cross-reference
-`review_agent::AgentError::from_http`.
+**Fix (applied):** the doc now states the shipped truth — every 404 on the status alone,
+including a loopback-only route's bodiless refusal, and that 8 is structurally ambiguous — and
+names `review_agent::AgentError::from_http` as the mapper.
 
-### M11. The snippet→spans paint path has zero test coverage
+### M11. ~~`wireSpansToLineMap` has zero test coverage~~ — REFUTED as stated; a narrower MINOR survives
 
-`web-code/src/lib/paintSpans.ts:65` (`wireSpansToLineMap`),
-`web-code/src/hooks/useDiffHighlights.ts:148`
+The headline was wrong and is retracted. `wireSpansToLineMap`
+(`web-code/src/lib/paintSpans.ts:65`) is called from *inside* `paintSpans` at
+`paintSpans.ts:97`, so `paintSpans` is not a separate code path — it is a thin wrapper over the
+function the finding called untested. Every `paintSpans` assertion IS a `wireSpansToLineMap`
+assertion.
 
-`wireSpansToLineMap` — the mapper from `highlight/1` UTF-8 byte columns to per-line
-display columns, called from three production sites — has **no test anywhere**.
-`paintSpans.test.ts` covers only `paintSpans` and `byteSpansToHighlightSpans`.
-`useDiffHighlights.test.ts`'s `seed` is typed to accept only `FileResponse`, so no test
-seeds a `highlight-batch/1` response and `snippet.byId` is empty in all five cases;
-`sideFromSnippet` always takes its degraded branch.
+It is covered by **9 unit cases** (`paintSpans.test.ts:15-29`;
+`highlightConsumers.test.ts:17-24, 26-32, 34-41, 43-51, 53-59`;
+`suggestionPaint.test.ts:60, 71`) and **2 e2e specs** the original finding did not mention:
+`web-code/e2e/highlight.spec.ts:68` and `web-code/e2e/diff-highlight-surfaces.spec.ts:217`, the
+latter asserting `[data-kbc-hl]` through `SuggestionDiff.tsx:166`, which calls the function
+*directly* — one of the three production sites named. Replacing `paintSpans.ts:97` with
+`new Map()` fails 9 unit assertions and 2 e2e specs, not zero.
 
-**Concrete failure:** set `useDiffHighlights.ts:148` to `spans: new Map()`. Every test
-still passes, and in production every unindexed blob, new file, interdiff snippet,
-pseudo-file buffer and markdown fence renders completely unhighlighted — the precise
-regression class PR #168 landed to kill.
-
-**Fix:** widen `seed` to accept any data value, seed a `HighlightBatchOut`, and assert
-the resulting spans for an ASCII line, a CJK line, and a span crossing a newline. Add a
-`describe("wireSpansToLineMap")` mirroring `diffHighlight.test.ts:48-60`'s multi-byte
-cases.
+**What survives, at MINOR:** the specific call at
+`web-code/src/hooks/useDiffHighlights.ts:148` is genuinely unexercised. Its test file's `seed`
+is typed `ReadonlyArray<readonly [readonly unknown[], FileResponse]>`
+(`useDiffHighlights.test.ts:69`), so no test can seed a `HighlightBatchOut`; `snippet.byId` is
+empty in all five cases and `sideFromSnippet` always takes the degraded branch at `:144-146`.
+No e2e reaches it either — the snippet fallback needs an unindexed/oversize/404 blob, and
+`diff-syntax.spec.ts:53-65` deliberately 404s and asserts the *unpainted* outcome, so it would
+not catch the mutation. Secondary: all three wire-path test files are pure ASCII, so the
+multi-byte column mapping is untested through this entry point (the mapper itself is covered at
+`decorations.test.ts:10-51` and the parallel path at `diffHighlight.test.ts:48-71`).
 
 ### M12. The per-snippet byte cap lives in one caller, not in the hook
 
@@ -343,6 +389,10 @@ distinguish a refusal from a missing grammar.
   named the wrong struct. Recorded here because the underlying rot is unfixed — nothing
   enforces these citations. A test extracting every `X.rs:N` from the file and asserting
   the cited line is near the named identifier would keep them honest.
+- **N5b.** ~~`docs/kb-code.md`'s `base_fetch_timeout_secs` paragraph had a four-line block spliced
+  into the middle of its first sentence~~ — FIXED. "bounds ONE base" was cut off and resumed four
+  lines later at "(network) fetch". Reordered so the sentence is whole and the range warning is its
+  own paragraph.
 - **N8.** `crates/kb-code-server/src/review_store/registry.rs:1834` and the
   `code-*` path filters: `rust-toolchain.toml` and `.github/workflows/ci.yml` match no
   branch of the filter, so a PR that bumps the pinned toolchain or edits the `code-*`
