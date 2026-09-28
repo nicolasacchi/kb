@@ -219,7 +219,21 @@ pub fn exit_code_for(err: &anyhow::Error) -> i32 {
             if let Some(status) = re.status() {
                 match status.as_u16() {
                     401 | 403 => return EXIT_REFUSED,
-                    409 => return EXIT_CONFLICT,
+                    // 404 and 503 must agree with
+                    // `review_agent::AgentError::from_http`, which maps
+                    // 404 -> EXIT_NOT_FOUND and 503 -> EXIT_CONFLICT.
+                    // `docs/kb-code.md`'s exit-code table documents BOTH,
+                    // but this function is the ONLY mapper for non-review
+                    // verbs (review verbs exit through `AgentError::emit`), so
+                    // without these arms a well-formed revspec that does not
+                    // resolve (404 `urn:kb:errors:unknown-ref`, raised at
+                    // kb-code-server routes.rs and deliberately preserved in
+                    // the anyhow chain for exactly this lookup) and a
+                    // store-still-seeding 503 both exited 1 where the table
+                    // says 8 and 3. Recorded as M9 in
+                    // `docs/research/kb-week-review-2026-09-28.md`.
+                    404 => return EXIT_NOT_FOUND,
+                    409 | 503 => return EXIT_CONFLICT,
                     _ => {}
                 }
             }
