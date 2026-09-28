@@ -146,6 +146,27 @@ skip = [
     { crate = "cssparser", version = "0.36.0", reason = "lol_html 3 (scraper 0.27 uses 0.37)" },
     { crate = "cssparser-macros", version = "0.6.1", reason = "via cssparser 0.36" },
     { crate = "selectors", version = "0.37.0", reason = "lol_html 3 (scraper 0.27 uses 0.38)" },
+    # ammonia 4.2 moves the whole html5ever stack off the 0.39 line that
+    # scraper 0.27 still pins, so both lines end up in the graph: the
+    # 0.40.1/0.40.0/0.3.0 set via ammonia (kb-core's own sanitiser) and the
+    # 0.39.0/0.39.0/0.2.5 set via scraper 0.27. Nothing on kb's own
+    # Cargo.toml edge can collapse it — both are direct kb-core
+    # requirements and neither accepts the other's line — so the older of
+    # each pair is skipped, per the house rule used throughout this list.
+    # web_atoms 0.2.5 also drags string_cache 0.9 / string_cache_codegen
+    # 0.6.1 in as build deps (the 0.3.0 line uses 0.11).
+    #
+    # Until the ammonia 4.2 bump lands, these five read as
+    # `unnecessary-skip` WARNINGS on the current graph — cargo-deny exits 0
+    # on those, so the supply-chain gate stays green either way. They live
+    # here rather than on the dependabot branch because that branch is
+    # force-pushed on re-resolve, which would drop them. Prune any that are
+    # still single-version once the bump has merged and the graph settles.
+    { crate = "html5ever", version = "0.39.0", reason = "scraper 0.27 (ammonia 4.2 uses 0.40)" },
+    { crate = "markup5ever", version = "0.39.0", reason = "via html5ever 0.39 (scraper 0.27)" },
+    { crate = "web_atoms", version = "0.2.5", reason = "via markup5ever 0.39 (scraper 0.27)" },
+    { crate = "string_cache", version = "0.9.0", reason = "via web_atoms 0.2.5 (scraper 0.27 html stack)" },
+    { crate = "string_cache_codegen", version = "0.6.1", reason = "build dep of web_atoms 0.2.5 (scraper 0.27 html stack)" },
     { crate = "darling", version = "0.20.11", reason = "derive_builder 0.20 (transitive)" },
     { crate = "darling_core", version = "0.20.11", reason = "via darling 0.20" },
     { crate = "darling_macro", version = "0.20.11", reason = "via darling 0.20" },
@@ -168,6 +189,13 @@ skip = [
     { crate = "ndarray", version = "0.16.1", reason = "lance-index 11 (fastembed/ort use 0.17)" },
     { crate = "nom", version = "7.1.3", reason = "spm_precompiled (tokenizer chain)" },
     { crate = "phf", version = "0.12.1", reason = "chrono-tz 0.10" },
+    # phf_codegen/phf_generator 0.13 come in as build deps of the
+    # scraper-side html5ever stack (web_atoms 0.2.5) that the ammonia 4.2
+    # bump introduces, and 0.13.1 also serves comrak 0.52, jieba-macros and
+    # selectors 0.37/0.38; the ammonia side uses the 0.14 line. See the
+    # ammonia note above for why these read as warnings until that merges.
+    { crate = "phf_codegen", version = "0.13.1", reason = "comrak 0.52 (build) / jieba-macros / selectors 0.37-0.38 / web_atoms 0.2.5" },
+    { crate = "phf_generator", version = "0.13.1", reason = "via phf_codegen 0.13 (string_cache_codegen 0.6.1 build)" },
     { crate = "phf_shared", version = "0.12.1", reason = "via phf 0.12" },
     { crate = "quick-xml", version = "0.39.4", reason = "object_store 0.13" },
     { crate = "r-efi", version = "5.3.0", reason = "getrandom 0.3 (uefi target)" },
