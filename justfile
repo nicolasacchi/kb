@@ -59,6 +59,24 @@ licenses-check: licenses
       exit 1
     fi
 
+# CI-reproducible NOTICE gate — the replacement for `licenses-check` as a
+# workflow step, NOT its replacement in general (both stay: see below).
+# `licenses-check` byte-compares the committed NOTICE against a fresh render,
+# and that can never pass on a hosted runner. Measured on this commit: the same
+# `cargo about generate about.hbs` rendered with a warm ~/.cargo and with an
+# empty CARGO_HOME differs by ~90 lines — the per-crate `used_by` entries
+# reorder (e.g. `jsonb 0.5.6` moves) and `subtle 2.6.1`'s body shifts, because
+# cargo-about gathers license text per crate and emits sections in a
+# cache-dependent order. CI is always a cold cache, so the byte gate is
+# permanently RED there and must not be a CI step. The `## Overview` per-license
+# counts are byte-identical across cache states, so THIS recipe compares that
+# set: it is the part of the NOTICE carrying the supply-chain signal (a new,
+# dropped, or re-counted license). It never writes THIRD-PARTY-LICENSES.md —
+# the fresh render goes to a mktemp cleaned by a trap. Like `licenses`, the
+# render is a `cargo metadata` resolve + handlebars render and compiles nothing.
+licenses-set-check:
+    scripts/check-license-set.sh
+
 # Re-derive the distinct SPDX id set after a big dependency bump, so
 # deny.toml [licenses].allow + about.toml accepted can be updated BEFORE the
 # gate fails on a newly-pulled license. Prints one SPDX id per line.
