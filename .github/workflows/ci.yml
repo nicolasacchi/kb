@@ -4,6 +4,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # `workflow_dispatch` exists so any branch can be gated on demand —
+  # `gh workflow run ci.yml --ref <branch>` — without pushing a throwaway
+  # commit or opening a PR purely to make something run. Locally these
+  # gates are a 6-40 minute cargo build, so "just push an empty commit"
+  # is not a cheap way to test a branch.
+  # It lands in the same concurrency group as push/PR (keyed on
+  # github.ref), so a dispatch cancels an in-flight run for the same ref.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -974,6 +982,25 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         run: just ci-code-spa
 
+      - name: Audit web-code production deps (high+ severity)
+        if: steps.changes.outputs.run == 'true'
+        working-directory: web-code
+        # Same gate and SAME flags as `web-unit`'s audit for web/ (ci.yml
+        # below): web-code is a separate npm tree with its own
+        # package-lock.json, and until this step existed nothing in CI
+        # audited it — a high-sever advisory in one of its 10 production
+        # deps (CodeMirror 6, React 18, @tanstack/react-query 5,
+        # react-router 7) landed green because only web/ was checked.
+        # The lane is the right home: `ci-code-spa` is node-only, runs
+        # whatever changed under web-code/, and is where a bad web-code
+        # dependency is actually noticed. Runs AFTER `just ci-code-spa`
+        # because that recipe already did `npm ci` for this exact tree —
+        # `npm audit` resolves the lockfile and posts it to the registry
+        # advisory endpoint, so a second install would buy nothing.
+        # Dependabot's web-code updates ride the same lane (they touch
+        # web-code/package.json, which the filter matches).
+        run: npm audit --audit-level=high --omit=dev
+
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
         run: echo "No changes under crates/kb-code-*/, web-code/, Cargo.toml, Cargo.lock, or justfile — skipping."
@@ -983,9 +1010,11 @@ jobs:
     # Runs `just ci-code-e2e` (a fast-profile kb-code-server build + web-code/e2e/'s
     # own Playwright suite, driven against a fresh git fixture repo) — mirrors
     # the root `e2e` job in shape (same runner, same disk-space/toolchain/
-    # protoc/node setup) but for kb-code's sibling daemon+SPA. It installs
-    # its own browser: `just ci-code-e2e` runs `npx playwright install
-    # chromium --with-deps` itself. Path-filtered with the SAME
+    # protoc/node setup) but for kb-code's sibling daemon+SPA. It caches
+    # its OWN Playwright browsers (a `code-`-prefixed key — see the cache
+    # step) and `just ci-code-e2e` still runs `npx playwright install
+    # chromium --with-deps` itself, which then finds the binaries already
+    # present and skips the ~150 MB download. Path-filtered with the SAME
     # change-detection pattern as the `code-*` jobs above (their own comment
     # explains why the filter gates each step via `if:` rather than a
     # job-level `if:`).
@@ -1067,6 +1096,34 @@ jobs:
         with:
           node-version: "22"
 
+      # The `e2e` job's two browser-cache steps, copied (path, key shape
+      # and version-detection) rather than reinvented — this job was
+      # re-downloading Chromium on every single run.
+      - name: Resolve Playwright version (browser-cache key)
+        id: playwright-version
+        if: steps.changes.outputs.run == 'true'
+        working-directory: web-code/e2e
+        run: |
+          echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          # `code-` in the key, NOT a shared entry with `e2e`'s
+          # `playwright-<os>-<version>`: same path, DIFFERENT content.
+          # `e2e` caches chromium+firefox, this job only ever installs
+          # chromium, and an Actions cache entry is immutable — whoever
+          # saves first owns the key forever. Share it and whichever job
+          # won the race (last measured: `e2e`, the shorter one) silently
+          # becomes the only writer, the other re-downloads its missing
+          # browser every run, and `e2e`'s existing warm-cache
+          # optimisation is the thing that breaks. The version alone
+          # cannot separate them: both suites pin `^1.62.1` and both
+          # locks currently resolve 1.62.1.
+          key: playwright-code-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
       - name: just ci-code-e2e
         if: steps.changes.outputs.run == 'true'
         run: just ci-code-e2e
@@ -1136,11 +1193,39 @@ jobs:
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
         with:
           tool: cargo-deny
+      # cargo-about is the same shape as cargo-deny: a prebuilt release binary
+      # via taiki-e/install-action, no source build. Installed from source it
+      # would need `--features cli` (justfile:47) and a full compile — which
+      # this job must never do.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2
+        with:
+          tool: cargo-about
+      - name: Install just (NOTICE drift recipe)
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: cargo-deny (advisories)
         run: cargo-deny check advisories
       - name: cargo-deny (licenses + bans + sources)
         run: cargo-deny check licenses bans sources
-
+      - name: NOTICE drift (just licenses-check)
+        # cargo-deny above gates deny.toml's license ALLOW-list; it never
+        # looks at the committed NOTICE. So a dependency bump could land with
+        # THIRD-PARTY-LICENSES.md stale — a new crate, a new license, no
+        # failure anywhere — because `just licenses-check` (justfile:52), the
+        # drift guard for that file, had ZERO workflow references, unlike
+        # types-check / api-docs-check. That asymmetry is the `gap-licenses`
+        # finding (medium) in
+        # docs/research/kb-review-coverage-gaps-2026-07.html:206-210.
+        # Cheap in this job, and the reason it lives here rather than in a
+        # compile job: `just licenses` is `cargo about generate about.hbs` —
+        # a `cargo metadata` resolve (the crates.io index is already warm from
+        # cargo-deny above) plus a handlebars render of about.toml/about.hbs
+        # reading license text out of the registry cache. No compile.
+        # `!cancelled()` for the same reason as api-docs-check (:295): a
+        # cargo-deny failure is an independent signal and must not also hide
+        # the NOTICE verdict.
+        if: ${{ !cancelled() }}
+        run: just licenses-check
   # CI-ONLY (branch rs/gates-binary, never merged): build the kb-code daemon +
   # CLI for the review-store acceptance gates, which run against private data
   # off-CI. The operator's rule is "compile only on CI", so the gates consume

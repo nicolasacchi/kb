@@ -1,9 +1,9 @@
-# EXPERIMENT profile for the in-container hang investigation.
-# ci.yml's required `workspace` job still runs
-# `cargo test -- --test-threads=1` (see that step's comment); this file is
-# not used by default anywhere. Flip the required step only after this
-# profile stays green for 3 consecutive manual
-# `.github/workflows/nextest-experiment.yml` runs.
+# [profile.ci] is the LIVE CI profile, not an experiment: ci.yml:263
+# (`workspace-test`) runs `cargo nextest run --profile ci` since the
+# PF-C1 flip (2026-09-04) and nothing else runs this file. The
+# `lance-heavy` override below (test-threads=1 for
+# `binary(memo) | test(atlas)`) applies ONLY in CI, so a green local
+# `cargo test` is NOT evidence the CI timeout holds.
 
 [profile.ci]
 test-threads = 4
