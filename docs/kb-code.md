@@ -1089,15 +1089,16 @@ silent degradation. Enum-valued keys are TOLERANT: an unknown value warns
 and falls back to the default, so a typo never stops the daemon.
 
 `base_fetch_timeout_secs` (default `1800`, i.e. 30 min) bounds ONE base
-A value outside `10 × WORK_FETCH_TIMEOUT … SEED_FETCH_TIMEOUT` (1200 s … 3600 s) is still
-honoured — it is the operator's lever — but it warns, and the warning is a `store doctor`
-finding. The compile-time pins in `git.rs` guard the DEFAULT only; a configured value is
-range-checked at boot, not by the compiler.
 (network) fetch — the fleet README §5.2 targets is five member clones
 carrying ~3.6 GB of `.git` between them, one ~748 MB, which no link moves in
 30 s. It is enforced on the fetch's PROCESS GROUP and SIGKILLs it, so a hung
 fetch still cannot wedge a store; `0` is not a deadline and warns into the
 same fall-back. Read once at boot.
+
+A value outside `10 × WORK_FETCH_TIMEOUT … SEED_FETCH_TIMEOUT` (1200 s … 3600 s) is still
+honoured — it is the operator's lever — but it warns, and the warning is a `store doctor`
+finding. The compile-time pins in `git.rs` guard the DEFAULT only; a configured value is
+range-checked at boot, not by the compiler.
 
 ### GC attribution
 
