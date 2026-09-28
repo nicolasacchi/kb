@@ -390,7 +390,7 @@ jobs:
           if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-code-(server|cli)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -741,8 +741,11 @@ jobs:
     # same reasoning as dco.yml) and gates each step via `if:`, not a
     # job-level `if:`, so the job itself always reports success/failure (safe
     # to mark as a required check; a job-level skip can leave a required
-    # check permanently pending). All three `code-*` jobs carry the SAME
-    # filter, byte for byte.
+    # check permanently pending). All FIVE `code-*` jobs (code-drift,
+    # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
+    # for byte — `crates/kb-core/` and `crates/kb-server/` are in it because
+    # kb-code-server path-depends on both, so a change to either can break
+    # the only jobs that compile or test it.
     runs-on: ubuntu-latest
     # SPLIT out of the old `code` job (2026-09-06), which ran clippy, the
     # test sweep and the SPA build serially for 31.1 min cold. clippy is
@@ -770,7 +773,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-code-(server|cli)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -833,8 +836,11 @@ jobs:
     # same reasoning as dco.yml) and gates each step via `if:`, not a
     # job-level `if:`, so the job itself always reports success/failure (safe
     # to mark as a required check; a job-level skip can leave a required
-    # check permanently pending). All three `code-*` jobs carry the SAME
-    # filter, byte for byte.
+    # check permanently pending). All FIVE `code-*` jobs (code-drift,
+    # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
+    # for byte — `crates/kb-core/` and `crates/kb-server/` are in it because
+    # kb-code-server path-depends on both, so a change to either can break
+    # the only jobs that compile or test it.
     runs-on: ubuntu-latest
     # 26.5 min cold (19.8 of it compiling, 5.7 running) once clippy and the
     # SPA moved to their own jobs. The old single `code` job was widened
@@ -872,7 +878,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-code-(server|cli)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -933,8 +939,11 @@ jobs:
     # same reasoning as dco.yml) and gates each step via `if:`, not a
     # job-level `if:`, so the job itself always reports success/failure (safe
     # to mark as a required check; a job-level skip can leave a required
-    # check permanently pending). All three `code-*` jobs carry the SAME
-    # filter, byte for byte.
+    # check permanently pending). All FIVE `code-*` jobs (code-drift,
+    # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
+    # for byte — `crates/kb-core/` and `crates/kb-server/` are in it because
+    # kb-code-server path-depends on both, so a change to either can break
+    # the only jobs that compile or test it.
     runs-on: ubuntu-latest
     # SPLIT out of the old `code` job (2026-09-06). `just ci-code-spa` is
     # node-only — npm ci + vite build + the kbc-theme/1 contrast oracle +
@@ -962,7 +971,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-code-(server|cli)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1044,7 +1053,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-code-(server|cli)/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
