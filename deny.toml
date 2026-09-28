@@ -117,6 +117,17 @@ exceptions = [
 # site moved to kb-cli's in-house SSE parser; 0.12 stays transitive-only
 # via goosefs-sdk, see below).
 multiple-versions = "deny"
+# READ THIS BEFORE ADDING A SKIP ENTRY: `skip` is CRATE-NAME scoped, not
+# version scoped. An entry `{ crate = "X", version = "1.2.3" }` suppresses
+# EVERY duplicate error for crate X — the version field is documentation of
+# which line you meant to keep, not a filter (verified: naming a version
+# that matches nothing still suppresses the error, and `unnecessary-skip`
+# fires only when the crate has a single version, so a dead version on a
+# multi-version crate stays silent forever). Each entry therefore silences
+# a crate name permanently: a future THIRD line of html5ever or phf_codegen
+# would pass unnoticed. The consequence is that a stale entry is worse than
+# no entry, and the only thing that surfaces one is a deliberate re-read of
+# this list after a dependency bump.
 wildcards = "allow"
 deny = []
 skip = [
@@ -222,7 +233,6 @@ skip = [
     # windows platform crates: 0.52.6 family via tokio/mio-era consumers,
     # 0.53.x via windows-sys 0.60/0.61.
     { crate = "windows-sys", version = "0.52.0", reason = "mio / older tokio chain" },
-    { crate = "windows-sys", version = "0.59.0", reason = "windows 0.58-era consumers" },
     { crate = "windows-sys", version = "0.60.2", reason = "windows 0.60 consumers" },
     { crate = "windows-targets", version = "0.52.6", reason = "via windows-sys 0.52" },
     { crate = "windows_aarch64_gnullvm", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_aarch64_msvc", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_i686_gnu", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_i686_gnullvm", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_i686_msvc", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_x86_64_gnu", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_x86_64_gnullvm", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "windows_x86_64_msvc", version = "0.52.6", reason = "windows 0.52.6 target family (via windows-targets 0.52.6)" },{ crate = "wit-bindgen", version = "0.51.0", reason = "wasip3 (wasi 0.3 toolchain)" },
