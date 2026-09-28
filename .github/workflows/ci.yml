@@ -9,8 +9,11 @@ on:
   # commit or opening a PR purely to make something run. Locally these
   # gates are a 6-40 minute cargo build, so "just push an empty commit"
   # is not a cheap way to test a branch.
-  # It lands in the same concurrency group as push/PR (keyed on
-  # github.ref), so a dispatch cancels an in-flight run for the same ref.
+  # It lands in the same concurrency group as a push (keyed on
+  # github.ref), so a dispatch on a branch cancels an in-flight push run
+  # for that branch. A pull_request run is keyed on refs/pull/N/merge and
+  # is therefore in a DIFFERENT group — deliberately, so dispatching on a
+  # branch can never cancel that branch's open PR checks.
   workflow_dispatch:
 
 concurrency:
@@ -390,7 +393,7 @@ jobs:
           if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -743,9 +746,18 @@ jobs:
     # to mark as a required check; a job-level skip can leave a required
     # check permanently pending). All FIVE `code-*` jobs (code-drift,
     # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
-    # for byte — `crates/kb-core/` and `crates/kb-server/` are in it because
-    # kb-code-server path-depends on both, so a change to either can break
-    # the only jobs that compile or test it.
+    # for byte. Each entry is there because a job below actually reads that
+    # path, not because the crate sounds related:
+    #   crates/kb-core/, crates/kb-server/ — kb-code-server path-depends on
+    #     both, so a change to either can break the only jobs that compile
+    #     or test kb-code.
+    #   plugins/kb-code/ — code-test/code-lint EXECUTE
+    #     plugins/kb-code/hooks/kb-code-annotations.sh (and the codex twin)
+    #     as real subprocesses; see annotations_hook.rs's hook_script_path.
+    #   web/ — web-code/src/lib/iconParity.test.ts readFileSync's
+    #     web/src/components/icons.tsx and asserts the shared glyph SVG
+    #     bodies are byte-identical, so a web/-only PR would otherwise skip
+    #     the only job that catches icon divergence.
     runs-on: ubuntu-latest
     # SPLIT out of the old `code` job (2026-09-06), which ran clippy, the
     # test sweep and the SPA build serially for 31.1 min cold. clippy is
@@ -773,7 +785,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -838,9 +850,18 @@ jobs:
     # to mark as a required check; a job-level skip can leave a required
     # check permanently pending). All FIVE `code-*` jobs (code-drift,
     # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
-    # for byte — `crates/kb-core/` and `crates/kb-server/` are in it because
-    # kb-code-server path-depends on both, so a change to either can break
-    # the only jobs that compile or test it.
+    # for byte. Each entry is there because a job below actually reads that
+    # path, not because the crate sounds related:
+    #   crates/kb-core/, crates/kb-server/ — kb-code-server path-depends on
+    #     both, so a change to either can break the only jobs that compile
+    #     or test kb-code.
+    #   plugins/kb-code/ — code-test/code-lint EXECUTE
+    #     plugins/kb-code/hooks/kb-code-annotations.sh (and the codex twin)
+    #     as real subprocesses; see annotations_hook.rs's hook_script_path.
+    #   web/ — web-code/src/lib/iconParity.test.ts readFileSync's
+    #     web/src/components/icons.tsx and asserts the shared glyph SVG
+    #     bodies are byte-identical, so a web/-only PR would otherwise skip
+    #     the only job that catches icon divergence.
     runs-on: ubuntu-latest
     # 26.5 min cold (19.8 of it compiling, 5.7 running) once clippy and the
     # SPA moved to their own jobs. The old single `code` job was widened
@@ -878,7 +899,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -941,9 +962,18 @@ jobs:
     # to mark as a required check; a job-level skip can leave a required
     # check permanently pending). All FIVE `code-*` jobs (code-drift,
     # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
-    # for byte — `crates/kb-core/` and `crates/kb-server/` are in it because
-    # kb-code-server path-depends on both, so a change to either can break
-    # the only jobs that compile or test it.
+    # for byte. Each entry is there because a job below actually reads that
+    # path, not because the crate sounds related:
+    #   crates/kb-core/, crates/kb-server/ — kb-code-server path-depends on
+    #     both, so a change to either can break the only jobs that compile
+    #     or test kb-code.
+    #   plugins/kb-code/ — code-test/code-lint EXECUTE
+    #     plugins/kb-code/hooks/kb-code-annotations.sh (and the codex twin)
+    #     as real subprocesses; see annotations_hook.rs's hook_script_path.
+    #   web/ — web-code/src/lib/iconParity.test.ts readFileSync's
+    #     web/src/components/icons.tsx and asserts the shared glyph SVG
+    #     bodies are byte-identical, so a web/-only PR would otherwise skip
+    #     the only job that catches icon divergence.
     runs-on: ubuntu-latest
     # SPLIT out of the old `code` job (2026-09-06). `just ci-code-spa` is
     # node-only — npm ci + vite build + the kbc-theme/1 contrast oracle +
@@ -971,7 +1001,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1053,7 +1083,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|web-code/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1121,16 +1151,16 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           # `code-` in the key, NOT a shared entry with `e2e`'s
-          # `playwright-<os>-<version>`: same path, DIFFERENT content.
-          # `e2e` caches chromium+firefox, this job only ever installs
-          # chromium, and an Actions cache entry is immutable — whoever
-          # saves first owns the key forever. Share it and whichever job
-          # won the race (last measured: `e2e`, the shorter one) silently
-          # becomes the only writer, the other re-downloads its missing
-          # browser every run, and `e2e`'s existing warm-cache
-          # optimisation is the thing that breaks. The version alone
-          # cannot separate them: both suites pin `^1.62.1` and both
-          # locks currently resolve 1.62.1.
+          # `playwright-<os>-<version>`. Today the two keys differ anyway,
+          # because the suites are on different Playwright lines:
+          # tests/e2e pins ^1.63.0 and resolves 1.63.0, web-code/e2e pins
+          # ^1.62.1 and resolves 1.62.1. The prefix is what keeps them
+          # separate if a bump ever re-converges them — and it is the
+          # content difference that would bite then, not the version:
+          # `e2e` caches chromium+firefox while this job only ever installs
+          # chromium, and an Actions cache entry is immutable, so whoever
+          # saves first owns the key forever and the other job silently
+          # re-downloads its missing browser every run.
           key: playwright-code-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: just ci-code-e2e
@@ -1216,25 +1246,39 @@ jobs:
         run: cargo-deny check advisories
       - name: cargo-deny (licenses + bans + sources)
         run: cargo-deny check licenses bans sources
-      - name: NOTICE drift (just licenses-check)
+      - name: NOTICE drift (just licenses-set-check)
         # cargo-deny above gates deny.toml's license ALLOW-list; it never
         # looks at the committed NOTICE. So a dependency bump could land with
         # THIRD-PARTY-LICENSES.md stale — a new crate, a new license, no
-        # failure anywhere — because `just licenses-check` (justfile:52), the
-        # drift guard for that file, had ZERO workflow references, unlike
-        # types-check / api-docs-check. That asymmetry is the `gap-licenses`
-        # finding (medium) in
+        # failure anywhere — because the drift guard for that file had ZERO
+        # workflow references, unlike types-check / api-docs-check. That
+        # asymmetry is the `gap-licenses` finding (medium) in
         # docs/research/kb-review-coverage-gaps-2026-07.html:206-210.
+        #
+        # `licenses-set-check`, NOT `licenses-check`, and the difference is
+        # load-bearing. `licenses-check` regenerates the file and byte-compares
+        # it, which is UNSOUND on a runner: `cargo about generate` embeds each
+        # license's full text and a per-license `used_by` list whose ORDER
+        # depends on cargo cache state, so the same commit renders differently
+        # on a cold runner than on a warm dev box. Measured on this repo: ~90
+        # lines differ between a warm render and a cold-CARGO_HOME render of
+        # the SAME commit. A byte gate is therefore permanently red off the
+        # author's machine. `licenses-set-check` compares the `## Overview`
+        # per-license COUNTS, which ARE byte-identical across cache states
+        # because they come from the resolved graph — and that is the part
+        # carrying the supply-chain signal. `just licenses-check` remains the
+        # local byte-level sweep for a deliberate regeneration.
+        #
         # Cheap in this job, and the reason it lives here rather than in a
-        # compile job: `just licenses` is `cargo about generate about.hbs` —
-        # a `cargo metadata` resolve (the crates.io index is already warm from
-        # cargo-deny above) plus a handlebars render of about.toml/about.hbs
-        # reading license text out of the registry cache. No compile.
-        # `!cancelled()` for the same reason as api-docs-check (:295): a
-        # cargo-deny failure is an independent signal and must not also hide
-        # the NOTICE verdict.
+        # compile job: the render is a `cargo metadata` resolve (the crates.io
+        # index is already warm from cargo-deny above) plus a handlebars
+        # render of about.toml/about.hbs. No compile. The script writes the
+        # fresh render to a mktemp file and never touches the committed one.
+        # `!cancelled()` for the same reason as api-docs-check: a cargo-deny
+        # failure is an independent signal and must not also hide the NOTICE
+        # verdict.
         if: ${{ !cancelled() }}
-        run: just licenses-check
+        run: just licenses-set-check
   # CI-ONLY (branch rs/gates-binary, never merged): build the kb-code daemon +
   # CLI for the review-store acceptance gates, which run against private data
   # off-CI. The operator's rule is "compile only on CI", so the gates consume
