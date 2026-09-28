@@ -99,7 +99,7 @@ jobs:
     #   head_branch         — that push was to main.
     #   head_repository     — and it landed in this repo, not in a fork.
     #   conclusion          — the publishing gate proper. Every ci.yml job
-    #                         (workspace-lint/workspace-test/drift/
+    #                         (workspace-lint/workspace-test/drift/code-drift/
     #                         embedder-lint/embedder-test/code-lint/
     #                         code-test/code-spa/e2e/code-e2e/web-unit/
     #                         supply-chain) feeds ci.yml's own
