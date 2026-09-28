@@ -40,6 +40,20 @@ updates:
     groups:
       web-code-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # react-router 8 hard-requires `react >=19.2.7`; web-code is still on
+      # the React 18 line (react/react-dom ^18.3.1, @types/* ^18.3.x) and
+      # the React 19 migration is a separate, much larger piece of work
+      # than a dependency bump. Without this, Dependabot keeps opening a
+      # react-router 8 PR that can only ever be `npm install`-red with
+      # ERESOLVE (it did on 2026-09-28: PR #174, 7.18.3 -> 8.4.0).
+      #
+      # Scoped to 8.x on purpose: 7.x minor/patch updates stay in the
+      # web-code-minor-patch group and keep landing. Drop this line only
+      # once web-code is on React >=19.2.7 — and when react-router 9
+      # ships, check its react peer before letting it through.
+      - dependency-name: "react-router"
+        versions: ["8.x"]
 
   - package-ecosystem: npm
     directory: "/web-code/e2e"
