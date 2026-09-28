@@ -1594,7 +1594,7 @@ Used by:
 - [reqsign-tencent-cos 3.0.6](https://github.com/apache/opendal-reqsign)
 - [reqsign-volcengine-tos 3.1.2](https://github.com/apache/opendal-reqsign)
 - [safetensors 0.7.0](https://github.com/huggingface/safetensors)
-- [scip 0.9.0](https://github.com/scip-code/scip)
+- [scip 0.10.0](https://github.com/scip-code/scip)
 - [spm_precompiled 0.1.4](https://github.com/huggingface/spm_precompiled)
 - [tokenizers 0.22.2](https://github.com/huggingface/tokenizers)
 
@@ -2026,7 +2026,7 @@ Used by:
 - [prost-types 0.14.3](https://github.com/tokio-rs/prost)
 - [prost 0.14.3](https://github.com/tokio-rs/prost)
 - [ring 0.17.14](https://github.com/briansmith/ring)
-- [similar 2.7.0](https://github.com/mitsuhiko/similar)
+- [similar 3.2.0](https://github.com/mitsuhiko/similar)
 - [sqlparser 0.62.0](https://github.com/apache/datafusion-sqlparser-rs)
 - [sqlparser_derive 0.5.0](https://github.com/sqlparser-rs/sqlparser-rs)
 
