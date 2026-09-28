@@ -1236,10 +1236,22 @@ jobs:
       # via taiki-e/install-action, no source build. Installed from source it
       # would need `--features cli` (justfile:47) and a full compile — which
       # this job must never do.
+      #
+      # The version is PINNED, and it has to be. Unpinned, this job installed
+      # cargo-about `latest` and the NOTICE gate below compared a render made
+      # by one tool version against a file committed by another. The counts
+      # are not stable across versions: 0.9.0 resolves the graph to
+      # MIT 606 / Apache-2.0 151 / ISC 10 / BSD-3-Clause 8, and 0.9.2 to
+      # MIT 611 / Apache-2.0 152 / ISC 25 / BSD-3-Clause 10 — verified by
+      # rendering this same commit with each. That is not a cache artefact
+      # (a cold CARGO_HOME reproduces the warm result exactly); it is the
+      # tool. So: bumping this pin REQUIRES re-running `just licenses` with
+      # that same version and committing the result, or the gate goes red for
+      # a reason that has nothing to do with the dependency graph.
       - name: Install cargo-about
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
         with:
-          tool: cargo-about
+          tool: cargo-about@0.9.2
       - name: Install just (NOTICE drift recipe)
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: cargo-deny (advisories)

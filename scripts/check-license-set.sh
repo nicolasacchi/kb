@@ -16,11 +16,20 @@
 #
 # So the byte gate is not "flaky" — it is unsatisfiable off the author's
 # machine. What IS deterministic is the `## Overview` block: the per-license
-# counts (`- MIT License: 606`) are byte-identical between warm and cold,
-# because they come from the resolved graph and not from per-crate text
-# gathering or output order. That is the invariant this script checks, and it
-# is the one that carries the supply-chain signal: a newly-pulled license, a
+# counts (`- MIT License: 611`) are byte-identical between a warm and a cold
+# CARGO_HOME, because they come from the resolved graph and not from per-crate
+# text gathering or output order. That is the invariant this script checks, and
+# it is the one that carries the supply-chain signal: a newly-pulled license, a
 # dropped license, or a license whose usage count moved.
+#
+# ONE MORE THING has to be pinned for this to hold, and it is not obvious: the
+# cargo-about VERSION. The counts are stable across cache states but NOT across
+# tool versions — rendering this same commit with cargo-about 0.9.0 gives
+# MIT 606 / Apache-2.0 151 / ISC 10 / BSD-3-Clause 8, and with 0.9.2 gives
+# MIT 611 / Apache-2.0 152 / ISC 25 / BSD-3-Clause 10. ci.yml pins 0.9.2 for
+# that reason. If you regenerate this file with a different cargo-about than
+# the pin, this script will report drift that is really just a version skew,
+# and re-running it with the pinned version is the fix, not a `git checkout`.
 #
 # WHAT IT WILL CATCH:   the license SET drifting from the dep graph — a new
 #   SPDX id / license name appearing, one disappearing, or a count changing,
