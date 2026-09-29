@@ -9,7 +9,8 @@
 //! `Host:` (artifact subdomain → artifact serve, otherwise the SPA shell).
 
 use crate::middleware::{
-    auth_bearer, count_requests, is_loopback_web_origin, origin_allowlist, rate_limit, RateLimiter,
+    auth_bearer, count_requests, host_guard, is_loopback_web_origin, origin_allowlist, rate_limit,
+    RateLimiter,
 };
 use crate::routes;
 use crate::state::KbHandles;
@@ -977,7 +978,16 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
                     origin.to_str().map(is_loopback_web_origin).unwrap_or(false)
                 }))
                 .allow_methods([Method::GET]),
-        );
+        )
+        // SEC-02 — the DNS-rebinding `Host` guard, OUTERMOST on /api
+        // (axum's `.layer()` is last-called-is-outermost, so this is the
+        // last `.layer()` on the nest): it must decide BEFORE
+        // `auth_bearer` and before the loopback bypass hands a rebound
+        // request operator authority. Deliberately NOT on the top-level
+        // router — the artifact iframe is served on
+        // `<id>.artifacts.localhost`, which a Host allowlist would
+        // break, and the SPA fallback serves no corpus bytes.
+        .layer(from_fn_with_state(state.origin.clone(), host_guard));
 
     // U2 (v0.25 quick capture) TRAP — the Web Share Target action posts to
     // bare `/capture`, OUTSIDE the `/api` nest (that's the manifest's
@@ -994,7 +1004,13 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
     let capture_share = Router::new()
         .route("/capture", post(routes::capture::share_target))
         .layer(DefaultBodyLimit::max(capture_body_limit))
-        .route_layer(from_fn_with_state(state.auth.clone(), auth_bearer));
+        .route_layer(from_fn_with_state(state.auth.clone(), auth_bearer))
+        // SEC-02 — `/capture` is a corpus WRITE (a quick-capture upload)
+        // and sits outside the /api nest by design, so the guard above
+        // does not reach it. A rebound POST /capture must be refused
+        // here, not merely 401'd. `route_layer` wraps only the routes
+        // registered above it — same contract as auth_bearer.
+        .route_layer(from_fn_with_state(state.origin.clone(), host_guard));
 
     Router::new()
         .nest("/api", api)

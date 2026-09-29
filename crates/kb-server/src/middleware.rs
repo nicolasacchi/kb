@@ -57,7 +57,7 @@ pub async fn origin_allowlist(
         .get(header::HOST)
         .and_then(|v| v.to_str().ok());
     if !origin_allowed(origin, host, &origin_cfg) {
-        return forbidden(format!("origin {origin} not allowed"));
+        return forbidden(ERR_ORIGIN_REFUSED, format!("origin {origin} not allowed"));
     }
     next.run(req).await
 }
@@ -90,13 +90,18 @@ fn origin_allowed(origin: &str, host: Option<&str>, cfg: &OriginConfig) -> bool 
         // If origin's host:port matches the request's Host header, this
         // is by definition not CSRF — accept.
         //
-        // v0.7.1 P2 note: `Host` is client-controlled, so `Origin ==
-        // Host` is not a cryptographic guarantee. But a genuine
-        // cross-site request carries the *victim's* origin, which won't
-        // equal an attacker-chosen `Host` value — and for non-loopback
-        // clients the bearer token (`auth_bearer`) is the real CSRF
-        // backstop. This gate exists to keep the SPA's own same-origin
-        // POSTs flowing regardless of which hostname it was loaded from.
+        // v0.7.1 P2 note, REVISED by SEC-02: `Host` is client-controlled,
+        // so `Origin == Host` is not a cryptographic guarantee, and the
+        // v0.7.1 reasoning ("a genuine cross-site request carries the
+        // victim's origin, which won't equal an attacker-chosen Host")
+        // is FALSE under DNS rebinding — the rebound page's origin IS
+        // the attacker-chosen name, which is exactly what made this arm
+        // a hole. The rebinding defence is now `host_guard`, layered
+        // OUTSIDE this one on `/api`. What is left here is the
+        // same-origin CONVENIENCE: the SPA the daemon itself served
+        // POSTs with `Origin` = its own scheme+Host, whatever hostname
+        // it was reached on, and must keep working regardless of which
+        // one that is. Do not treat this arm as a security boundary.
         if let Some(host) = host {
             if rest == host {
                 return true;
@@ -154,9 +159,20 @@ pub fn is_loopback_web_origin(origin: &str) -> bool {
     host == "localhost" || host == "127.0.0.1"
 }
 
-fn forbidden(detail: String) -> Response<Body> {
+/// `urn:kb:errors:origin-refused` — the Origin-allowlist (CSRF) refusal.
+pub const ERR_ORIGIN_REFUSED: &str = "urn:kb:errors:origin-refused";
+/// `urn:kb:errors:host-refused` — the DNS-rebinding `Host` refusal.
+///
+/// Deliberately a DIFFERENT urn from the Origin one: the SPA and the CLI
+/// must be able to tell "your `Host` is not on this daemon's allowlist,
+/// add `[server] hostnames`" (a one-line config fix) from "your `Origin`
+/// is not allowed" (a CORS-shaped problem). Collapsing them would make
+/// the self-diagnosing 403 body ambiguous.
+pub const ERR_HOST_REFUSED: &str = "urn:kb:errors:host-refused";
+
+fn forbidden(urn: &'static str, detail: String) -> Response<Body> {
     let body = serde_json::json!({
-        "type": "urn:kb:errors:forbidden",
+        "type": urn,
         "title": "Forbidden",
         "status": 403,
         "detail": detail,
@@ -166,7 +182,177 @@ fn forbidden(detail: String) -> Response<Body> {
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
     );
+    // A security refusal must not be cached by anything in between.
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
     resp
+}
+
+// --- SEC-02 — the `Host` guard (DNS rebinding) ----------------------------
+//
+// WHY this exists, in the victim's own words: a page served from
+// `http://evil.example:4000` whose DNS the attacker re-points at
+// `127.0.0.1` makes the victim's browser connect from the box, so
+// `is_loopback_origin` says "loopback", `request_is_admitted` hands it
+// OPERATOR authority with no credential, and `origin_allowlist`'s
+// `Origin == Host` arm is satisfied because under rebinding the page's
+// origin IS the rebound name. Every /api verb, including
+// `DELETE /api/kb`, is then reachable from a web page. `Host` is the
+// only value in that request the attacker does not fully control, so it
+// is the only place the attack can be stopped.
+//
+// The sibling implementation is `kb-code-server`'s
+// `security::origin::origin_host_guard`. The ADMISSION TABLE here is
+// deliberately kb's own (kb-server has `parent_origin` /
+// `artifact_host_suffix` / an SPA fallback the sibling has no analogue
+// for), but the PARSERS below are shared, `pub` facts about HTTP: a fix
+// to the IPv6 or case handling must land in both daemons at once, or one
+// of them is one-sided-bypassable.
+//
+// ## Where it is layered, and where it deliberately is NOT
+//
+// OUTERMOST on the `/api` nest (last `.layer()` in `build_router`, and
+// a `route_layer` on `/capture`) — so it decides BEFORE `auth_bearer`
+// and before the loopback bypass can hand out authority. Not on the
+// top-level router: the artifact iframe is reached on
+// `<id>.artifacts.localhost`, which is neither a loopback label nor a
+// listable entry, so a top-level layer would break annotations. The SPA
+// fallback is likewise unguarded on purpose — it serves public static
+// bytes only, no corpus, and gating it buys nothing.
+//
+// ## The ONE place this fails open, and why that is the right trade
+//
+// `host_gate_applies` enforces `Host` for a loopback peer ALWAYS (no
+// configuration required — the rebinding victim is by definition a
+// loopback peer, and no config state distinguishes a rebound request
+// from a legitimate one except the Host value itself) and for a
+// non-loopback peer only once `[server] hostnames` is non-empty. A
+// non-loopback peer is by construction arriving through a reverse proxy
+// that is already the authentication gate, and refusing its `Host`
+// before the operator has had a chance to write `hostnames` would take
+// a deployed daemon down on upgrade: a hardening unit that bricks the
+// deployment it hardens is not a hardening unit. The boot warning in
+// `serve_with_paths` names the key instead of silently doing nothing.
+
+/// A hostname (no scheme, possibly with a port, possibly bracketed IPv6)
+/// split into its host label and optional port. `None` for an empty or
+/// unparseable value. The label is lower-cased and, for IPv6, KEEPS its
+/// brackets so it compares equal to the `[::1]` spelling operators write.
+///
+/// `pub` (SEC-02): `kb-code-server`'s `security::origin` imports this
+/// rather than keeping a second copy — a parser that mishandles
+/// `[::1]:4000` in one daemon and not the other is a silent one-sided
+/// bypass. Never re-derive it.
+pub fn split_host_port(value: &str) -> Option<(String, Option<&str>)> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    if let Some(rest) = v.strip_prefix('[') {
+        let (inner, tail) = rest.split_once(']')?;
+        let port = tail.strip_prefix(':');
+        return Some((format!("[{}]", inner.to_ascii_lowercase()), port));
+    }
+    match v.rsplit_once(':') {
+        // An unbracketed value with MORE than one colon is a bare IPv6
+        // literal (`::1`), not host:port.
+        Some((host, port)) if !host.contains(':') => Some((host.to_ascii_lowercase(), Some(port))),
+        _ => Some((v.to_ascii_lowercase(), None)),
+    }
+}
+
+/// The always-allowed loopback host labels, in every spelling a client
+/// can send one.
+pub fn is_loopback_host_label(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+}
+
+/// Normalise a configured `[server] hostnames` entry to the same shape
+/// [`host_allowed`] compares a request label in: lower-cased, port
+/// stripped. Called once at boot by `OriginConfig::from_server_section`
+/// so a config entry and a `Host:` value can never mean different
+/// things (the sibling compares a port-stripped request label against
+/// entries that were never stripped, so `["kbc.example.com:443"]` there
+/// can never match — I do not inherit that).
+pub fn normalize_host_label(entry: &str) -> Option<String> {
+    split_host_port(entry).map(|(label, _port)| label)
+}
+
+/// The host literal of a `[server] addr` value, or `None` for a
+/// wildcard. `addr = "192.168.1.5:4000"` → `Some("192.168.1.5")`;
+/// `0.0.0.0` / `[::]` → `None`, because a wildcard is not a name anyone
+/// can be reached on, and admitting it would hand a rebound
+/// `Host: 0.0.0.0` a pass.
+///
+/// An `addr` with no port yields `None` too: it is not the bindable
+/// `host:port` form `validate` requires, and guessing at it would mean
+/// guessing which name the operator is reachable on.
+pub fn addr_host_literal(addr: &str) -> Option<String> {
+    let (label, port) = split_host_port(addr)?;
+    port?;
+    let bare = label.trim_matches(|c| c == '[' || c == ']');
+    if bare.is_empty() {
+        return None;
+    }
+    if let Ok(ip) = bare.parse::<IpAddr>() {
+        if ip.is_unspecified() {
+            return None;
+        }
+    }
+    Some(label)
+}
+
+/// `Host:` admission. `None` (header absent) PASSES: HTTP/1.0 and
+/// some in-process clients send no `Host`, and those callers were never
+/// a rebinding vector (a browser always sends one). An unparseable
+/// `Host` is refused.
+pub fn host_allowed(host: Option<&str>, cfg: &OriginConfig) -> bool {
+    let Some(host) = host else {
+        return true;
+    };
+    let Some((label, _port)) = split_host_port(host) else {
+        return false;
+    };
+    is_loopback_host_label(&label)
+        || cfg.hostnames.iter().any(|h| *h == label)
+        || cfg.addr_host.as_deref() == Some(label.as_str())
+}
+
+/// When the `Host` check applies. Pure, so the fail-open boundary can
+/// be unit-tested as a table without a socket — same decomposition as
+/// [`request_is_admitted`].
+pub fn host_gate_applies(peer_is_loopback: bool, hostnames_configured: bool) -> bool {
+    peer_is_loopback || hostnames_configured
+}
+
+/// SEC-02 — the `Host` guard. See the section comment above for the
+/// threat, the layering, and the single deliberate fail-open.
+pub async fn host_guard(
+    State(origin_cfg): State<Arc<OriginConfig>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    // invariant #4: reuse the loopback determination, never re-derive.
+    let peer_is_loopback = request_is_loopback(&req, &origin_cfg.trusted_proxies);
+    if !host_gate_applies(peer_is_loopback, !origin_cfg.hostnames.is_empty()) {
+        return next.run(req).await;
+    }
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok());
+    if !host_allowed(host, &origin_cfg) {
+        return forbidden(
+            ERR_HOST_REFUSED,
+            format!(
+                "Host {:?} is not in this daemon's allowlist. Add it to `[server] hostnames`.",
+                host.unwrap_or("")
+            ),
+        );
+    }
+    next.run(req).await
 }
 
 // --- v0.4 A2 — bearer-token auth + v0.34 Y1 identity ----------------------
@@ -873,7 +1059,21 @@ mod tests {
         OriginConfig {
             artifact_host_suffix: ".artifacts.example.com".to_string(),
             parent_origin: "https://kb.example.com".to_string(),
-            trusted_proxies: Arc::new(Vec::new()),
+            ..OriginConfig::default()
+        }
+    }
+
+    /// `[server] hostnames = [...]` resolved the way boot resolves it.
+    fn with_hostnames(hostnames: &[&str], addr: &str) -> OriginConfig {
+        OriginConfig {
+            hostnames: Arc::new(
+                hostnames
+                    .iter()
+                    .filter_map(|h| normalize_host_label(h))
+                    .collect(),
+            ),
+            addr_host: addr_host_literal(addr),
+            ..OriginConfig::default()
         }
     }
 
@@ -1554,5 +1754,339 @@ mod tests {
         assert!(!request_is_admitted(&with_legacy, false, &no_creds, false));
         // Loopback always admits.
         assert!(request_is_admitted(&with_registry, true, &no_creds, false));
+    }
+
+    // --- SEC-02 — the Host guard (DNS rebinding) ------------------------
+    //
+    // The table tests pin the pure predicates; the `#[tokio::test]`s
+    // drive a REAL router through `host_guard` + `origin_allowlist` with
+    // a wired `ConnectInfo` loopback peer, which is exactly the shape of
+    // the rebinding victim. Deleting the guard fails them.
+
+    #[test]
+    fn loopback_hosts_are_allowed_on_any_port_with_no_config() {
+        let p = with_hostnames(&[], "127.0.0.1:4000");
+        for h in [
+            "localhost",
+            "localhost:4747",
+            "127.0.0.1",
+            "127.0.0.1:4747",
+            "[::1]",
+            "[::1]:4747",
+            "::1",
+            "LOCALHOST:4747",
+        ] {
+            assert!(host_allowed(Some(h), &p), "{h} must be allowed");
+        }
+        // Absent Host passes — see `host_allowed`'s doc.
+        assert!(host_allowed(None, &p));
+    }
+
+    #[test]
+    fn a_rebound_hostname_is_refused() {
+        let p = with_hostnames(&[], "127.0.0.1:4000");
+        for h in ["attacker.com", "attacker.com:4747", "kb.example.com"] {
+            assert!(!host_allowed(Some(h), &p), "{h} must be refused");
+        }
+        // An unparseable Host is refused too (empty label), while an
+        // ABSENT one passes — the two are not the same input.
+        assert!(!host_allowed(Some("   "), &p));
+    }
+
+    #[test]
+    fn configured_hostnames_join_the_allowlist() {
+        let p = with_hostnames(&["kbc.example.com"], "127.0.0.1:4000");
+        assert!(host_allowed(Some("kbc.example.com"), &p));
+        // Case-folded and port-stripped on BOTH sides.
+        assert!(host_allowed(Some("KBC.EXAMPLE.COM:443"), &p));
+        assert!(!host_allowed(Some("evil.example.com"), &p));
+    }
+
+    #[test]
+    fn a_configured_entry_may_carry_a_port_and_it_is_stripped() {
+        // The sibling compares a port-stripped request label against
+        // entries that were never stripped, so `["kbc.example.com:443"]`
+        // can never match there. I normalise at resolve time instead, so
+        // it DOES match — pinned here so a future "simplification" back
+        // to raw-entry comparison is a test failure, not a silent
+        // turn-off of the guard in production.
+        let p = with_hostnames(&["kbc.example.com:443"], "127.0.0.1:4000");
+        assert!(host_allowed(Some("kbc.example.com"), &p));
+        assert!(host_allowed(Some("kbc.example.com:8443"), &p));
+    }
+
+    #[test]
+    fn split_host_port_handles_ipv6_and_ports() {
+        assert_eq!(
+            split_host_port("[::1]:4747"),
+            Some(("[::1]".to_string(), Some("4747")))
+        );
+        assert_eq!(split_host_port("::1"), Some(("::1".to_string(), None)));
+        assert_eq!(
+            split_host_port("localhost:4747"),
+            Some(("localhost".to_string(), Some("4747")))
+        );
+        assert_eq!(split_host_port(""), None);
+    }
+
+    #[test]
+    fn the_addr_host_literal_is_allowed_and_a_wildcard_is_not() {
+        let lan = with_hostnames(&[], "192.168.1.5:4000");
+        assert!(host_allowed(Some("192.168.1.5:4000"), &lan));
+        assert!(host_allowed(Some("192.168.1.5"), &lan));
+        assert!(!host_allowed(Some("attacker.com"), &lan));
+        // A wildcard bind is not a name anyone can be reached on.
+        for wildcard in ["0.0.0.0:4000", "[::]:4000", ":::4000"] {
+            let p = with_hostnames(&[], wildcard);
+            assert!(!host_allowed(Some("0.0.0.0"), &p), "{wildcard}");
+            assert!(!host_allowed(Some("::"), &p), "{wildcard}");
+            assert!(!host_allowed(Some("[::]"), &p), "{wildcard}");
+        }
+    }
+
+    #[test]
+    fn the_artifact_iframe_host_is_never_allowlisted() {
+        // Pins WHY the guard is layered on the `/api` nest and NOT on the
+        // top-level router: the artifact iframe is served on
+        // `<id>.artifacts.<suffix>`, an unbounded set nobody can list in
+        // `[server] hostnames`. If this ever starts returning true, the
+        // guard was widened past `/api` and annotations are broken.
+        for p in [
+            with_hostnames(&[], "127.0.0.1:4000"),
+            with_hostnames(&["kb.example.com"], "127.0.0.1:4000"),
+        ] {
+            assert!(!host_allowed(
+                Some("kitchen-sink.artifacts.localhost:4000"),
+                &p
+            ));
+        }
+    }
+
+    #[test]
+    fn the_gate_applies_to_loopback_always_and_to_others_only_once_configured() {
+        // The rebinding victim IS a loopback peer → enforced with zero
+        // configuration. The single deliberate fail-open, pinned.
+        assert!(host_gate_applies(true, false));
+        assert!(host_gate_applies(true, true));
+        assert!(!host_gate_applies(false, false));
+        assert!(host_gate_applies(false, true));
+    }
+
+    /// A miniature `/api` tree with the real middleware stack, driven
+    /// through tower's `oneshot` — no socket, no port, no daemon.
+    fn guarded_api(cfg: Arc<OriginConfig>) -> Router {
+        Router::new()
+            .route("/kbs", get(|| async { "kbs" }))
+            .route("/kb", axum::routing::delete(|| async { "deleted" }))
+            .route(
+                "/kb/{kb}/proposals",
+                axum::routing::post(|| async { "proposed" }),
+            )
+            .fallback(|| async { StatusCode::NOT_FOUND })
+            // Same order as `build_router`: host_guard is the LAST
+            // `.layer()`, hence outermost, so it runs before
+            // origin_allowlist — exactly the production wiring.
+            .layer(axum::middleware::from_fn_with_state(
+                cfg.clone(),
+                origin_allowlist,
+            ))
+            .layer(axum::middleware::from_fn_with_state(cfg, host_guard))
+    }
+
+    fn guarded_request(
+        peer: &str,
+        method: Method,
+        uri: &str,
+        host: Option<&str>,
+        origin: Option<&str>,
+    ) -> Request<Body> {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .extension(ConnectInfo(SocketAddr::new(ip(peer), 50000)));
+        if let Some(h) = host {
+            b = b.header("host", h);
+        }
+        if let Some(o) = origin {
+            b = b.header("origin", o);
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    /// THE regression this whole guard exists for: a page at
+    /// `http://attacker.example:4000` whose DNS is pointed at 127.0.0.1
+    /// connects FROM the box, so the loopback bypass would hand it
+    /// operator authority and `Origin == Host` would be satisfied. Every
+    /// verb — read, write, delete — must be refused with the
+    /// self-diagnosing urn, with NO configuration at all.
+    #[tokio::test]
+    async fn a_rebound_host_is_refused_on_a_loopback_peer_with_no_config() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+        let cfg = Arc::new(with_hostnames(&[], "127.0.0.1:4000"));
+        for (method, uri) in [
+            (Method::GET, "/kbs"),
+            (Method::POST, "/kb/x/proposals"),
+            (Method::DELETE, "/kb"),
+        ] {
+            let resp = guarded_api(cfg.clone())
+                .oneshot(guarded_request(
+                    "127.0.0.1",
+                    method.clone(),
+                    uri,
+                    Some("attacker.example:4000"),
+                    Some("http://attacker.example:4000"),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{method} {uri}");
+            let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            assert!(body.contains(ERR_HOST_REFUSED), "{body}");
+            // The operator can diagnose it from the response alone.
+            assert!(body.contains("[server] hostnames"), "{body}");
+        }
+    }
+
+    /// The non-regression that matters more than the hole: the default
+    /// install must keep working. A loopback SPA POST — matching `Host`
+    /// and same-origin `Origin` — reaches the handler.
+    #[tokio::test]
+    async fn a_legitimate_spa_post_still_works() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+        let cfg = Arc::new(with_hostnames(&[], "127.0.0.1:4000"));
+        let resp = guarded_api(cfg.clone())
+            .oneshot(guarded_request(
+                "127.0.0.1",
+                Method::POST,
+                "/kb/kb1/proposals",
+                Some("localhost:4000"),
+                Some("http://localhost:4000"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"proposed");
+    }
+
+    #[tokio::test]
+    async fn a_plain_loopback_read_is_admitted_unchanged() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+        let cfg = Arc::new(with_hostnames(&[], "127.0.0.1:4000"));
+        for host in ["localhost:4000", "127.0.0.1:4000", "[::1]:4000"] {
+            let resp = guarded_api(cfg.clone())
+                .oneshot(guarded_request(
+                    "127.0.0.1",
+                    Method::GET,
+                    "/kbs",
+                    Some(host),
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{host}");
+            let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(&body[..], b"kbs");
+        }
+    }
+
+    /// A request with no `Host` at all (HTTP/1.0, some in-process
+    /// clients) is not a rebinding vector and must not change admission.
+    #[tokio::test]
+    async fn a_request_without_a_host_header_is_admitted() {
+        use tower::ServiceExt;
+        let cfg = Arc::new(with_hostnames(&["kb.example.com"], "127.0.0.1:4000"));
+        let resp = guarded_api(cfg)
+            .oneshot(guarded_request("127.0.0.1", Method::GET, "/kbs", None, None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_configured_hostname_is_admitted() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+        let cfg = Arc::new(with_hostnames(&["kb.example"], "127.0.0.1:4000"));
+        let resp = guarded_api(cfg.clone())
+            .oneshot(guarded_request(
+                "127.0.0.1",
+                Method::GET,
+                "/kbs",
+                Some("kb.example"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body[..], b"kbs");
+    }
+
+    /// No route oracle: a legitimate caller asking for a path that does
+    /// not exist still gets 404, not 403. A 403 on unmatched paths would
+    /// let anyone with a rebound name probe which routes exist.
+    #[tokio::test]
+    async fn an_unmatched_api_path_is_still_404_for_a_legitimate_host() {
+        use tower::ServiceExt;
+        let cfg = Arc::new(with_hostnames(&[], "127.0.0.1:4000"));
+        let resp = guarded_api(cfg.clone())
+            .oneshot(guarded_request(
+                "127.0.0.1",
+                Method::GET,
+                "/nope",
+                Some("localhost:4000"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// The fail-open boundary, end to end: a NON-loopback peer with no
+    /// `hostnames` is admitted on any Host (the reverse-proxy deployment
+    /// that already has `auth_bearer` in front of it), and the very same
+    /// peer is refused the moment `hostnames` is non-empty.
+    #[tokio::test]
+    async fn a_non_loopback_peer_is_only_host_checked_once_hostnames_is_set() {
+        use tower::ServiceExt;
+        let unconfigured = Arc::new(with_hostnames(&[], "172.17.0.1:4000"));
+        let resp = guarded_api(unconfigured.clone())
+            .oneshot(guarded_request(
+                "172.17.0.1",
+                Method::GET,
+                "/kbs",
+                Some("kb.example.com"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "the pinned fail-open");
+
+        // Once `hostnames` is set the gate applies to EVERY peer, so an
+        // UNLISTED host is refused from a non-loopback peer too — that is the
+        // point of configuring it. The listed host is of course still
+        // admitted; asserting otherwise would pin the allowlist to refuse the
+        // very name it exists to permit.
+        let configured = Arc::new(with_hostnames(&["kb.example.com"], "172.17.0.1:4000"));
+        for (host, expected) in [
+            ("kb.example.com", StatusCode::OK),
+            ("other.example", StatusCode::FORBIDDEN),
+        ] {
+            let resp = guarded_api(configured.clone())
+                .oneshot(guarded_request(
+                    "172.17.0.1",
+                    Method::GET,
+                    "/kbs",
+                    Some(host),
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), expected, "{host}");
+        }
     }
 }
