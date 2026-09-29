@@ -314,7 +314,7 @@ pub fn host_allowed(host: Option<&str>, cfg: &OriginConfig) -> bool {
         return false;
     };
     is_loopback_host_label(&label)
-        || cfg.hostnames.iter().any(|h| *h == label)
+        || cfg.hostnames.contains(&label)
         || cfg.addr_host.as_deref() == Some(label.as_str())
 }
 
