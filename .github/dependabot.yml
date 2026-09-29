@@ -54,6 +54,20 @@ updates:
       # ships, check its react peer before letting it through.
       - dependency-name: "react-router"
         versions: ["8.x"]
+      # React 19 itself is deferred the same way, and for the same reason.
+      # Dependabot splits one coupled move into separate PRs per package, and
+      # neither half installs: #110 (react + @types/react) died on
+      # "@types/react-dom@18.3.7 peer @types/react@^18", #106 (react-dom +
+      # @types/react-dom) on the mirror image. They also conflict with each
+      # other (4 hunks across package.json and the lock), so neither can be
+      # merged first. And @types/react 19 removes the global `JSX` namespace
+      # that RecipeResultViews.tsx:23 and TimelinePanel.tsx:54 still use, so
+      # `tsc -b` fails before vite does. Moving all four packages together
+      # plus that namespace fix is the migration; it is not a dependency bump.
+      - dependency-name: "react"
+        versions: ["19.x"]
+      - dependency-name: "react-dom"
+        versions: ["19.x"]
 
   - package-ecosystem: npm
     directory: "/web-code/e2e"

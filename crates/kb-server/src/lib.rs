@@ -251,6 +251,33 @@ pub async fn serve_with_paths(
         }
     }
 
+    // SEC-02 — the ONE place the DNS-rebinding `Host` guard fails open:
+    // a NON-loopback peer with no `[server] hostnames` configured. The
+    // rebinding victim is a loopback peer and is refused unconditionally
+    // (see `middleware::host_guard`), so this is not that hole; this is
+    // the "token-less public bind behind a proxy that IS the auth gate"
+    // shape, where a public name resolving to the host's own IP is still
+    // a genuine rebinding vector. Warn on BOTH triggers — the non-loopback
+    // bind AND `KB_ALLOW_NO_AUTH=1` (which admits any non-loopback peer
+    // with no kb-level credential at all, even on a loopback-ish bind).
+    // Refusing to start instead would take a documented deployment down
+    // on upgrade, so the warning is the honest middle.
+    if !config.server.hostnames.is_empty() {
+        tracing::info!(
+            count = config.server.hostnames.len(),
+            "loaded [server] hostnames — the Host allowlist is now enforced for every peer"
+        );
+    } else if !local_addr.ip().is_loopback() || crate::middleware::allow_no_auth() {
+        tracing::warn!(
+            addr = %local_addr,
+            allow_no_auth = crate::middleware::allow_no_auth(),
+            "no [server] hostnames configured — the Host allowlist is enforced on loopback \
+             peers only, so a non-loopback client (e.g. a public name resolving to this host) \
+             is not Host-checked. Set `[server] hostnames = [\"<the name you publish>\"]` for \
+             strict Host checking on every peer."
+        );
+    }
+
     let started_at = chrono::Utc::now();
     let spa_dist = routes::spa::resolve_spa_dist();
     // v0.4 A2 — load the bearer-token file (None when absent → auth
@@ -303,11 +330,11 @@ pub async fn serve_with_paths(
     }
     auth.trusted_proxies = trusted_proxies.clone();
     let rate_limits = crate::state::RateLimits::from_section(config.server.rate_limit.as_ref());
-    let origin = crate::state::OriginConfig {
-        artifact_host_suffix: config.server.artifact_host_suffix.clone(),
-        parent_origin: config.server.parent_origin.clone(),
-        trusted_proxies: trusted_proxies.clone(),
-    };
+    // SEC-02 — the `Host` allowlist (and the `addr` host literal) is
+    // resolved ONCE here, so the guard compares a request's Host label
+    // against config entries in exactly the same shape.
+    let origin =
+        crate::state::OriginConfig::from_server_section(&config.server, trusted_proxies.clone());
     let mut handles = KbHandles::new(paths.daemon_name.clone(), paths.clone(), started_at)
         .with_ui(config.ui.clone())
         .with_spa_dist(spa_dist)
@@ -1503,11 +1530,8 @@ pub async fn serve_on_random_port_with_paths_and_spa(
     ));
     auth.trusted_proxies = trusted_proxies.clone();
     let rate_limits = crate::state::RateLimits::from_section(config.server.rate_limit.as_ref());
-    let origin = crate::state::OriginConfig {
-        artifact_host_suffix: config.server.artifact_host_suffix.clone(),
-        parent_origin: config.server.parent_origin.clone(),
-        trusted_proxies: trusted_proxies.clone(),
-    };
+    let origin =
+        crate::state::OriginConfig::from_server_section(&config.server, trusted_proxies.clone());
     let mut handles = KbHandles::new(paths.daemon_name.clone(), paths.clone(), started_at)
         .with_ui(config.ui.clone())
         .with_spa_dist(spa_dist)
