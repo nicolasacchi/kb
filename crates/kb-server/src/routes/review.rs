@@ -7,6 +7,12 @@
 //! the same skeleton from a 404 and stay tolerant of older daemons).
 //! Always sets an `ETag` header derived from `kb_core::review::etag_for`.
 //!
+//! v0.40 TN2 — **GET takes `?visibility=public|all`, default `public`.**
+//! This is one of only two reads (with `list_reviews`) that can surface a
+//! private note, and it does so without a parameter being an error of
+//! omission: absent means public. The `ETag` is a disk-revision token and
+//! is deliberately NOT recomputed from the filtered body — see `with_etag`.
+//!
 //! The whole-document write POST was retired in R8: every mutation now
 //! goes through the fine-grained endpoints in `routes::comments` (add /
 //! reply / resolve / unresolve / edit / delete), which run the load →
@@ -23,11 +29,20 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use kb_core::review::{self, ExportFormat, ReviewFile};
+use kb_core::review::{self, ExportFormat, ReviewFile, Visibility};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use super::is_safe_id;
+
+/// v0.40 TN2 — query for the per-artifact review read. `visibility` is the
+/// only opt-in on this route; every other value is part of the kb-comments/1
+/// document itself.
+#[derive(Debug, Default, Deserialize)]
+pub struct ReviewGetQuery {
+    /// `public` (default) | `all`. Absent ⇒ public.
+    pub visibility: Option<String>,
+}
 
 /// Memory cap for the rendered `/export` body. v0.7 P2 dropped the v0.5
 /// 1 MB cap entirely (it 413'd legit 200-comment reviews) — but with
@@ -38,9 +53,22 @@ use super::is_safe_id;
 /// v0.7.1 H7.
 const EXPORT_MAX_BYTES: usize = 32 * 1024 * 1024;
 
+/// `GET /api/kb/{kb}/review/{id}[?visibility=public|all]`
+///
+/// v0.40 TN2 — `visibility` is the ONE opt-in that can surface a private
+/// note on a read route, and it is a query param rather than identity
+/// plumbing on purpose: the only safe identity discriminator (loopback vs.
+/// `Token`, `middleware.rs`) breaks the operator's own remote SPA behind
+/// traefik, where its requests arrive as `Legacy`. Gating on an explicit
+/// param is honest and testable; gating on a guess is neither. Absent means
+/// `public`, never "everything" — a client that forgets the param must not
+/// see a note. An unrecognised value is a 400
+/// (`Visibility::from_query` → `None` → refuse rather than guess), mirroring
+/// `ExportFormat::from_query` on the export route below.
 pub async fn get(
     State(state): State<Arc<KbHandles>>,
     Path((kb, id)): Path<(String, String)>,
+    Query(q): Query<ReviewGetQuery>,
 ) -> Response<Body> {
     let (kb_name, _ctx) = match super::resolve_kb(&state, &kb) {
         Ok(v) => v,
@@ -51,9 +79,20 @@ pub async fn get(
             "artifact id {id:?} contains illegal characters"
         )));
     }
+    let visibility = match q.visibility.as_deref() {
+        None => Visibility::Public,
+        Some(raw) => match Visibility::from_query(raw) {
+            Some(v) => v,
+            None => {
+                return error_to_problem_json(&kb_core::Error::BadRequest(format!(
+                    "visibility {raw:?} not one of public|all"
+                )))
+            }
+        },
+    };
     let path = state.paths.kb_review_file(&kb_name, &id);
     match review::load(&path) {
-        Ok(Some(file)) => with_etag(file, &path),
+        Ok(Some(file)) => with_etag(filter_visibility(file, visibility), &path),
         // D7 (W1.D) — an artifact with no comments yet is an ordinary state,
         // not an error: 200 + the canonical empty kb-comments/1 skeleton
         // (the same shape routes/artifact.rs injects and every consumer
@@ -64,6 +103,24 @@ pub async fn get(
     }
 }
 
+/// v0.40 TN2 — drop the comments this reader may not see, IN PLACE on the
+/// loaded document (no clone; `review::load` already produced an owned
+/// `ReviewFile` that is about to be serialised and dropped).
+fn filter_visibility(mut file: ReviewFile, v: Visibility) -> ReviewFile {
+    if v == Visibility::All {
+        return file;
+    }
+    file.comments.retain(|c| !c.is_private());
+    file
+}
+
+/// v0.40 TN2 — the ETag is `etag_for(path)`, a DISK-REVISION token
+/// (mtime + size + bytes), and it stays exactly that. It is deliberately
+/// NOT a hash of the body we serialise: `?visibility=public` and
+/// `?visibility=all` return different bytes for the same file, so a body
+/// hash would 304 a filtered read against a full read the client never
+/// received (and vice versa). The token describes the file on disk; the
+/// client's own cache key must carry the visibility it asked for.
 fn with_etag(file: ReviewFile, path: &std::path::Path) -> Response<Body> {
     let etag = review::etag_for(path).ok().flatten();
     let mut resp = Json(file).into_response();

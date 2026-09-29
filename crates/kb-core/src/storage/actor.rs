@@ -655,6 +655,13 @@ pub enum StorageMsg {
         user: String,
         reply: oneshot::Sender<Result<i64>>,
     },
+    /// v0.40 TN2: delete one comment's ledger row (a comment flipped from
+    /// public to a private note). Returns the rows deleted.
+    HistoryForgetComment {
+        artifact_id: String,
+        comment_id: String,
+        reply: oneshot::Sender<Result<usize>>,
+    },
     /// v0.6+ H1: newest-first list with optional kind filter and
     /// `started_at < before_unix` cursor.
     HistoryList {
@@ -2940,6 +2947,13 @@ impl StorageActor {
                     &user,
                 ));
             }
+            StorageMsg::HistoryForgetComment {
+                artifact_id,
+                comment_id,
+                reply,
+            } => {
+                let _ = reply.send(self.db.history_forget_comment(&artifact_id, &comment_id));
+            }
             StorageMsg::HistoryList {
                 limit,
                 before_unix,
@@ -4551,6 +4565,23 @@ impl StorageHandle {
             comment_id,
             now_unix,
             user,
+            reply,
+        })
+        .await
+    }
+
+    /// v0.40 TN2 — delete one comment's ledger row. Called on the single
+    /// transition that must un-write history: a comment raised public and
+    /// later flipped to a private note. Returns the rows deleted (0 = it
+    /// never had one, the normal case for a note created private).
+    pub async fn history_forget_comment(
+        &self,
+        artifact_id: String,
+        comment_id: String,
+    ) -> Result<usize> {
+        self.send_and_await(|reply| StorageMsg::HistoryForgetComment {
+            artifact_id,
+            comment_id,
             reply,
         })
         .await

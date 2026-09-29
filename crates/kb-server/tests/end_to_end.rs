@@ -2401,6 +2401,917 @@ async fn comments_add_illegal_artifact_id_returns_400() {
     assert_eq!(resp.status(), 400);
 }
 
+// === v0.40 TN1/TN2 — comment tags, private notes, the note browser ===
+//
+// Two of the tests below (`inbox_omits_private_comments`,
+// `annotator_payload_omits_private_comments`) assert over surfaces this
+// unit does NOT own — `routes/inbox.rs` and `routes/artifact.rs`. They are
+// written here, against the fixed behaviour, so the ONE e2e owner carries
+// every leak assertion in the same file.
+
+/// Boot the smoke corpus but hand back `KbPaths` too, so a test can read the
+/// review sidecar / proposals dir off disk. The anchors-stale tests use the
+/// same shape; `boot()` hides the paths because most tests do not need them.
+async fn boot_with_paths() -> (tempfile::TempDir, std::net::SocketAddr, KbPaths) {
+    let (tmp, cfg, paths) = fixture_corpus();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths.clone())
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 4).await;
+    (tmp, addr, paths)
+}
+
+/// POST one comment onto `base`, returning `(comment_id, raw_json)`.
+async fn add_comment_at(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    base: &str,
+    body: &str,
+    private: bool,
+) -> (String, serde_json::Value) {
+    let resp = client
+        .post(url(addr, &format!("{base}/comments")))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({
+            "body": body,
+            "anchor": {"kind": "file"},
+            "author": "you",
+            "private": private,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "add comment {body}");
+    let c: serde_json::Value = resp.json().await.unwrap();
+    (c["id"].as_str().unwrap().to_string(), c)
+}
+
+#[tokio::test]
+async fn private_comment_absent_from_reviews_unless_visibility_all() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/viz11112222";
+    let (public_id, _) = add_comment_at(&client, addr, base, "public one", false).await;
+    let (private_id, created) = add_comment_at(&client, addr, base, "note body", true).await;
+    // The flag round-trips on the created document — the write edge accepted
+    // it, so the read filters below are a real filter and not a no-op.
+    assert_eq!(created["private"], true);
+
+    // 1. No param ⇒ public only. The note is invisible.
+    let rows: serde_json::Value = client
+        .get(url(addr, "/api/kb/smoke/reviews?artifact_id=viz11112222"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = rows["comments"].as_array().expect("comments array");
+    assert_eq!(rows.len(), 1, "default read must hide the note: {rows:?}");
+    assert_eq!(rows[0]["comment_id"], public_id.as_str());
+    assert_eq!(rows[0]["private"], false);
+    // `tags` is additive on the row, always an array — a `| jq` consumer
+    // reads it without a null check.
+    assert_eq!(rows[0]["tags"], serde_json::json!([]));
+
+    // 2. `?visibility=all` ⇒ the operator opt-in, and `private` is `true`.
+    let rows: serde_json::Value = client
+        .get(url(
+            addr,
+            "/api/kb/smoke/reviews?artifact_id=viz11112222&visibility=all",
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = rows["comments"].as_array().expect("comments array");
+    assert_eq!(rows.len(), 2, "visibility=all must include the note");
+    let note = rows
+        .iter()
+        .find(|r| r["comment_id"] == private_id.as_str())
+        .expect("note row");
+    assert_eq!(note["private"], true);
+    assert_eq!(note["body"], "note body");
+
+    // 3. An unrecognised value is a 400, not a silent public read.
+    let resp = client
+        .get(url(
+            addr,
+            "/api/kb/smoke/reviews?artifact_id=viz11112222&visibility=bogus",
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "unknown visibility must be refused");
+}
+
+#[tokio::test]
+async fn private_comment_absent_from_review_get_unless_visibility_all() {
+    // The per-artifact read is the OTHER opt-in, and it has a different
+    // failure mode from `/reviews`: it returns the whole kb-comments/1
+    // document, so a missed filter would inline the note's body verbatim.
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/get1111222233";
+    add_comment_at(&client, addr, base, "public one", false).await;
+    add_comment_at(&client, addr, base, "the secret note", true).await;
+
+    let public: serde_json::Value = client
+        .get(url(addr, base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(public["comments"].as_array().unwrap().len(), 1);
+    assert!(
+        !serde_json::to_string(&public)
+            .unwrap()
+            .contains("the secret note"),
+        "the default review GET must not carry a private note"
+    );
+
+    let all: serde_json::Value = client
+        .get(url(addr, &format!("{base}?visibility=all")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(all["comments"].as_array().unwrap().len(), 2);
+
+    let resp = client
+        .get(url(addr, &format!("{base}?visibility=bogus")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn import_refusal_does_not_disclose_a_private_note() {
+    // The overwrite guard answers BEFORE it writes, so a sidecar holding
+    // ONLY private notes used to answer 400 where an empty one answered
+    // 200 — the status code alone was a per-artifact existence oracle for
+    // a comment no agent may see. The guard now keys off the PUBLIC count.
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let notes_art = "importguardnotes";
+    let notes_base = &format!("/api/kb/smoke/review/{notes_art}");
+    let (note_id, created) = add_comment_at(&client, addr, notes_base, "operator note", true).await;
+    // The payload IS the sidecar: one private comment, echoed back from the
+    // write edge so it is a genuinely schema-valid `kb-comments/1` document
+    // (a body rejected for a shape reason would make the 200 below vacuous).
+    let doc = serde_json::json!({
+        "schema": "kb-comments/1",
+        "artifact": {"id": notes_art, "title": "T", "kb": "smoke", "tags": [], "pages": []},
+        "generatedAt": "2026-05-14T10:00:00Z",
+        "comments": [created],
+    });
+
+    // 1. A notes-only sidecar does NOT refuse. 400 here would prove, to
+    // anyone who can POST an import, that a hidden comment exists.
+    let resp = client
+        .post(url(addr, &format!("{notes_base}/import")))
+        .header("Origin", ORIGIN)
+        .json(&doc)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "a sidecar holding only private notes must not refuse an unforced import"
+    );
+    let ok: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        ok["imported"], 0,
+        "the count in the body is public-only: {ok}"
+    );
+
+    // 2. …and the write is LOSSLESS, so the operator's note survived. A
+    // "fix" that stripped private comments would pass the 200 above and
+    // silently destroy the data this route exists to move.
+    let all: serde_json::Value = client
+        .get(url(addr, &format!("{notes_base}?visibility=all")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = all["comments"].as_array().expect("comments array");
+    assert_eq!(rows.len(), 1, "the import must write the note back: {all}");
+    assert_eq!(rows[0]["id"], note_id.as_str());
+    assert_eq!(rows[0]["body"], "operator note");
+    assert_eq!(rows[0]["private"], true, "the note must stay a note");
+
+    // 3. Contrast: the guard still refuses a sidecar holding a PUBLIC
+    // comment, and the number it reports counts public comments only — one
+    // private note alongside must not turn "1" into "2". Ids here carry no
+    // digits, so the first number in the message IS the count.
+    let pub_art = "importguardpublic";
+    let pub_base = &format!("/api/kb/smoke/review/{pub_art}");
+    add_comment_at(&client, addr, pub_base, "public one", false).await;
+    add_comment_at(&client, addr, pub_base, "hidden note", true).await;
+    let resp = client
+        .post(url(addr, &format!("{pub_base}/import")))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({
+            "schema": "kb-comments/1",
+            "artifact": {"id": pub_art, "title": "T", "kb": "smoke", "tags": [], "pages": []},
+            "generatedAt": "2026-05-14T10:00:00Z",
+            "comments": [],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "a public comment must still block an unforced import"
+    );
+    let problem: serde_json::Value = resp.json().await.unwrap();
+    let detail = problem["detail"].as_str().expect("problem detail");
+    let n: usize = detail
+        .split(|c: char| !c.is_ascii_digit())
+        .find_map(|w| w.parse().ok())
+        .unwrap_or_else(|| panic!("no count in the refusal: {detail}"));
+    assert_eq!(
+        n, 1,
+        "the refusal must count public comments only, notes included nowhere: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn patch_comment_meta_normalises_and_reports_effective_values() {
+    use futures::StreamExt;
+    let (_tmp, addr, paths) = boot_with_paths().await;
+    let client = reqwest::Client::new();
+    let art = "meta1111222233";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    let (cid, _) = add_comment_at(&client, addr, base, "tag me", false).await;
+    let meta = format!("{base}/comments/{cid}/meta");
+
+    // `["A","a"]` slugifies + dedupes + sorts to `["a"]`; the response
+    // carries the EFFECTIVE values so the SPA never re-derives them.
+    let r: serde_json::Value = client
+        .patch(url(addr, &meta))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"tags": ["A", "a"], "private": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(r["ok"], true);
+    assert_eq!(r["changed"], true);
+    assert_eq!(r["tags"], serde_json::json!(["a"]));
+    assert_eq!(r["private"], true);
+
+    let review_file = paths.kb_review_file(&KbName::new("smoke").unwrap(), art);
+    let before = std::fs::read(&review_file).unwrap();
+
+    // Immediately repeating the identical PATCH is a no-op (G8): same
+    // effective values, `changed: false`, and — the load-bearing part — the
+    // sidecar's bytes are untouched, so the mtime/ETag did not churn.
+    let again: serde_json::Value = client
+        .patch(url(addr, &meta))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"tags": ["A", "a"], "private": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(again["changed"], false, "identical PATCH must be a no-op");
+    assert_eq!(again["tags"], serde_json::json!(["a"]));
+    assert_eq!(again["private"], true);
+    assert_eq!(
+        std::fs::read(&review_file).unwrap(),
+        before,
+        "a no-op meta PATCH must not rewrite the review file"
+    );
+
+    // …and it must not have re-emitted. The bus ring replays, so the whole
+    // history for this artifact is: the `add`, then the FIRST PATCH. Two
+    // emits, not three — a handler that ignored the changed-flag would show
+    // a third for the no-op.
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(800), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+    let updates = comments_updated_frames(&buf, art).len();
+    assert_eq!(
+        updates, 2,
+        "expected the add + the changing PATCH to emit, and the no-op PATCH not to; \
+         saw {updates} for {art}; frames:\n{buf}"
+    );
+}
+
+#[tokio::test]
+async fn patch_comment_meta_rejects_over_limit_and_empty_patch() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/lim1111222233";
+    let (cid, _) = add_comment_at(&client, addr, base, "x", false).await;
+    let meta = format!("{base}/comments/{cid}/meta");
+
+    // Nine distinct tags: one over the cap. Rejected, never truncated — a
+    // silent cap would leave the operator believing all nine were stored.
+    let nine: Vec<String> = (1..=9).map(|i| format!("t{i}")).collect();
+    let resp = client
+        .patch(url(addr, &meta))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"tags": nine}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "9 tags must be refused");
+
+    // A 49-char slug is one over the per-tag limit.
+    let long = "a".repeat(49);
+    let resp = client
+        .patch(url(addr, &meta))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"tags": [long]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "an over-long tag must be refused");
+
+    // Neither field set is a 400 too, not a silent no-op.
+    let resp = client
+        .patch(url(addr, &meta))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "an empty meta patch must be refused");
+
+    // None of the rejected patches landed: the file still carries no tags.
+    let got: serde_json::Value = client
+        .get(url(addr, &format!("{base}?visibility=all")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // The key is ABSENT, not `[]`: an untagged comment serialises with
+    // `skip_serializing_if = "Vec::is_empty"`, and that absence is what makes
+    // a legacy sidecar re-save byte-identically. The SPA reads `c.tags ?? []`.
+    assert!(
+        got["comments"][0].get("tags").is_none(),
+        "a comment with no tags must omit the key entirely: {got}"
+    );
+}
+
+/// The two UNFILTERED agent-facing readers of the `kind='comment'` history
+/// ledger: the list route and the calendar's per-day grid. `history` rows
+/// carry no visibility bit and neither route has a `.review/` to join
+/// against, so a private note that leaves a row behind shows up in both.
+/// Returns `(list rows, calendar total)` so one assertion covers both.
+async fn ledger_comment_counts(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+) -> (usize, i64) {
+    let list: serde_json::Value = client
+        .get(url(addr, "/api/kb/smoke/history?kind=comment&limit=1000"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = list["entries"].as_array().expect("entries array").len();
+    // A window around now, so the comment just added is the only row in it.
+    let now = chrono::Utc::now().timestamp();
+    let cal: serde_json::Value = client
+        .get(url(
+            addr,
+            &format!(
+                "/api/kb/smoke/history/calendar?from={}&to={}",
+                now - 3600,
+                now + 3600
+            ),
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let total: i64 = cal["days"]
+        .as_array()
+        .expect("days array")
+        .iter()
+        .map(|d| d["comments"].as_i64().unwrap_or(0))
+        .sum();
+    (rows, total)
+}
+
+/// The `comments.updated` frames in a captured `/api/events` body, in order,
+/// with the payload's `artifact_id` and `user` hoisted for filtering.
+///
+/// The EVENT NAME matters and is easy to lose: the SSE body interleaves
+/// `event: <type>` and `data: <envelope>` lines, so a filter that reads only
+/// the `data:` lines cannot tell `comments.updated` from `history.recorded`
+/// — and both carry an `artifact_id`, so a comment-count test that ignores
+/// the name silently counts the ledger row too.
+fn comments_updated_frames(body: &str, artifact_id: &str) -> Vec<serde_json::Value> {
+    let mut kind = String::new();
+    body.lines()
+        .filter_map(|line| {
+            if let Some(e) = line.strip_prefix("event:") {
+                kind = e.trim().to_string();
+                return None;
+            }
+            let data = line.strip_prefix("data:")?;
+            let v: serde_json::Value = serde_json::from_str(data.trim()).ok()?;
+            (kind == "comments.updated").then_some(v["payload"].clone())
+        })
+        .filter(|p| p["artifact_id"] == artifact_id)
+        .collect()
+}
+
+/// v0.40 TN2 — flipping an ALREADY-PUBLIC comment to a private note must
+/// take its history-ledger row with it. A note is created without one
+/// (`add_comment`), so leaving the row a public comment wrote would make the
+/// two entry paths disagree, and the ledger's readers are unfiltered by
+/// design: the note's existence would keep showing up in the daycard's
+/// activity lane and the calendar's per-day comment count, which are exactly
+/// the overcounting direction the public-only rule exists to prevent.
+#[tokio::test]
+async fn flipping_a_comment_private_removes_its_history_row() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "ledg1111222233";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    let (cid, _) = add_comment_at(&client, addr, base, "a public remark", false).await;
+
+    // A public comment writes its row at creation, so both ledger readers
+    // see it — the "before" half of the regression.
+    assert_eq!(
+        ledger_comment_counts(&client, addr).await,
+        (1, 1),
+        "a public comment must be counted by the unfiltered ledger readers"
+    );
+
+    let r: serde_json::Value = client
+        .patch(url(addr, &format!("{base}/comments/{cid}/meta")))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"private": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(r["ok"], true);
+    assert_eq!(r["changed"], true);
+    assert_eq!(r["private"], true, "the flip must have landed on disk");
+
+    assert_eq!(
+        ledger_comment_counts(&client, addr).await,
+        (0, 0),
+        "a comment flipped to a private note must leave NO history-ledger row: \
+         the ledger has no visibility bit, so a surviving row is an existence \
+         leak in every count built on it"
+    );
+}
+
+/// The same public→private flip as
+/// `flipping_a_comment_private_removes_its_history_row`, driven through the
+/// BATCH `apply` route instead of `PATCH …/meta`. Two write paths reach the
+/// same mutation (`set_comment_meta`), and the ledger delete is a second piece
+/// of behaviour that each path owns: if `apply` skipped it, an agent could
+/// turn any of its own public comments into notes while the unfiltered ledger
+/// readers kept counting them — the existence leak the public-only rule
+/// exists to prevent, reachable by simply using the other route.
+#[tokio::test]
+async fn flipping_a_comment_private_through_apply_removes_its_history_row() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "ledg44445556";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    let (cid, _) = add_comment_at(&client, addr, base, "a public remark", false).await;
+
+    assert_eq!(
+        ledger_comment_counts(&client, addr).await,
+        (1, 1),
+        "a public comment must be counted by the unfiltered ledger readers"
+    );
+
+    let resp = client
+        .post(url(addr, &format!("{base}/apply")))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"ops": [
+            {"op":"set_meta","comment_id":cid,"private":true}
+        ]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let r: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(r["applied"], 1);
+    // The flip landed on disk — the summary counts public comments only, so a
+    // successful flip drops this one to 0.
+    assert_eq!(r["total_count"], 0, "the flip must have landed on disk");
+
+    assert_eq!(
+        ledger_comment_counts(&client, addr).await,
+        (0, 0),
+        "a comment flipped to a private note by the batch path must leave NO \
+         history-ledger row, exactly as through PATCH"
+    );
+}
+
+#[tokio::test]
+async fn keep_refuses_a_private_note_without_writing_a_proposal() {
+    let (_tmp, addr, paths) = boot_with_paths().await;
+    let client = reqwest::Client::new();
+    let art = "keep1111222233";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    let (cid, _) = add_comment_at(&client, addr, base, "a note, not a task", true).await;
+
+    // `keep` → 409, and NO proposal file on disk. A proposal is what the
+    // agent is handed next session; promoting a note into one is the worst
+    // promotion in the system.
+    let resp = client
+        .post(url(addr, &format!("{base}/comments/{cid}/keep")))
+        .header("Origin", ORIGIN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409, "keep on a note must be a conflict");
+
+    let smoke = KbName::new("smoke").unwrap();
+    let proposals = paths.kb_proposals_dir(&smoke);
+    let written: Vec<PathBuf> = std::fs::read_dir(&proposals)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        written.is_empty(),
+        "keep must write no proposal for a private note, found {written:?}"
+    );
+
+    // A POSITIVE control on the same fixture: a PUBLIC comment on the same
+    // artifact still keeps normally, so the 409 above is the visibility
+    // guard firing and not a broken route.
+    let (pub_cid, _) = add_comment_at(&client, addr, base, "a real task", false).await;
+    let resp = client
+        .post(url(addr, &format!("{base}/comments/{pub_cid}/keep")))
+        .header("Origin", ORIGIN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "a public comment keeps normally");
+    let written: Vec<PathBuf> = std::fs::read_dir(&proposals)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        written.len(),
+        1,
+        "exactly the PUBLIC comment's proposal is on disk, got {written:?}"
+    );
+}
+
+#[tokio::test]
+async fn keep_memory_refuses_a_private_note() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/projmem/review/kmem1111222233";
+    let (cid, _) = add_comment_at(&client, addr, base, "a note, not a memory", true).await;
+
+    let resp = client
+        .post(url(addr, &format!("/api/kb/projmem/comments/{cid}/keep")))
+        .header("Origin", ORIGIN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        409,
+        "a memory artifact is agent-readable forever; a note must not become one"
+    );
+    // …and nothing was ingested: the target memory corpus is still empty.
+    // A 409 that had already written the HTML would be a 409 too late.
+    let written: Vec<PathBuf> = std::fs::read_dir(tmp.path().join("globalmem"))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("html"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        written.is_empty(),
+        "a refused keep must not have written a memory artifact: {written:?}"
+    );
+}
+
+#[tokio::test]
+async fn comments_updated_counts_exclude_private() {
+    use futures::StreamExt;
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "cnt111122223344";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    add_comment_at(&client, addr, base, "public one", false).await;
+    add_comment_at(&client, addr, base, "a private note", true).await;
+
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(800), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+
+    // The LAST `comments.updated` for this artifact is the one the note's
+    // creation produced. Its counts must be the ones from BEFORE the note
+    // existed: overcounting would prove the note is there.
+    let last = comments_updated_frames(&buf, art)
+        .pop()
+        .unwrap_or_else(|| panic!("no comments.updated for {art}; frames:\n{buf}"));
+    assert_eq!(
+        last["open_count"], 1,
+        "open_count must exclude the note: {last}"
+    );
+    assert_eq!(
+        last["total_count"], 1,
+        "total_count must exclude the note: {last}"
+    );
+}
+
+#[tokio::test]
+async fn review_notes_index_filters_and_counts() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/rn1111222233";
+    let (a, _) = add_comment_at(&client, addr, base, "first note", true).await;
+    let (b, _) = add_comment_at(&client, addr, base, "second note", true).await;
+    // A PUBLIC comment on the same artifact must never appear here, however
+    // it is tagged.
+    add_comment_at(&client, addr, base, "public, not a note", false).await;
+
+    async fn set_tags(
+        client: &reqwest::Client,
+        addr: std::net::SocketAddr,
+        base: &str,
+        cid: &str,
+        tags: &[&str],
+    ) {
+        let meta = format!("{base}/comments/{cid}/meta");
+        let r: serde_json::Value = client
+            .patch(url(addr, &meta))
+            .header("Origin", ORIGIN)
+            .json(&serde_json::json!({"tags": tags}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(r["changed"], true, "tagging {cid} should change it");
+    }
+
+    async fn fetch(
+        client: &reqwest::Client,
+        addr: std::net::SocketAddr,
+        q: &str,
+    ) -> serde_json::Value {
+        // Status and raw body are surfaced on failure: axum's `Query`
+        // rejection answers 400 with a PLAIN-TEXT body, so a
+        // `serde_json` "expected value" from a bare `.json().unwrap()` is
+        // indistinguishable from a server panic without them.
+        let target = url(addr, &format!("/api/review-notes{q}"));
+        let resp = client.get(&target).send().await.unwrap();
+        let status = resp.status();
+        let body = resp.text().await.unwrap();
+        serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("GET {target} -> {status}: {body}\njson error: {e}"))
+    }
+
+    set_tags(&client, addr, base, &a, &["wording"]).await;
+    set_tags(&client, addr, base, &b, &["wording", "fleet-doc"]).await;
+
+    // Unfiltered: exactly the two notes, never the public comment.
+    let all = fetch(&client, addr, "").await;
+    let notes = all["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 2, "only private notes are listed: {all:#}");
+    assert_eq!(all["total"], 2);
+    assert_eq!(all["truncated"], false);
+    let ids: Vec<&str> = notes
+        .iter()
+        .filter_map(|n| n["comment_id"].as_str())
+        .collect();
+    assert!(ids.contains(&a.as_str()) && ids.contains(&b.as_str()));
+    for n in notes {
+        assert_eq!(n["private"], true);
+        assert!(!n["body"].as_str().unwrap().contains("public"));
+    }
+
+    // Facets over the PRE-filter set: `count DESC, name ASC`.
+    let facets = all["tags"].as_array().expect("facets array");
+    let facet = |name: &str| -> u64 {
+        facets
+            .iter()
+            .find(|f| f["name"] == name)
+            .map(|f| f["count"].as_u64().expect("facet count"))
+            .unwrap_or(0)
+    };
+    assert_eq!(facet("wording"), 2);
+    assert_eq!(facet("fleet-doc"), 1);
+
+    // `?tag=wording` — both notes carry it.
+    let one = fetch(&client, addr, "?tag=wording").await;
+    assert_eq!(one["notes"].as_array().unwrap().len(), 2);
+    assert_eq!(one["total"], 2);
+
+    // THE facet contract: a tag nobody has returns zero ROWS but a
+    // NON-EMPTY facet list, because the counts describe the kb, not the
+    // selection. If facets were computed post-filter this would be empty and
+    // the page would have no way back.
+    let none = fetch(&client, addr, "?tag=nope").await;
+    assert_eq!(none["notes"].as_array().unwrap().len(), 0);
+    assert_eq!(none["total"], 0);
+    let facets = none["tags"].as_array().expect("facets array");
+    assert!(
+        !facets.is_empty(),
+        "facets are pre-filter: an empty match must still list the tags"
+    );
+    let w = facets.iter().find(|f| f["name"] == "wording").unwrap();
+    assert_eq!(w["count"], 2, "facet count is pre-filter");
+
+    // Repeatable `?tag=` is AND: wording AND fleet-doc is only note B.
+    let both = fetch(&client, addr, "?tag=wording&tag=fleet-doc").await;
+    let notes = both["notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1, "repeated tag= is AND");
+    assert_eq!(notes[0]["comment_id"], b.as_str());
+
+    // `?q=` is a case-insensitive body substring.
+    let hit = fetch(&client, addr, "?q=SECOND").await;
+    assert_eq!(hit["notes"].as_array().unwrap().len(), 1);
+    assert_eq!(hit["notes"][0]["comment_id"], b.as_str());
+    let miss = fetch(&client, addr, "?q=nothing-like-this").await;
+    assert_eq!(miss["notes"].as_array().unwrap().len(), 0);
+
+    // Bad filters are 400s, never silently-ignored filters.
+    let resp = client
+        .get(url(addr, "/api/review-notes?status=bogus"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "unknown status must be refused");
+    let resp = client
+        .get(url(addr, "/api/review-notes?tag=%21%21"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "a tag that normalises to nothing must be refused, not ignored"
+    );
+}
+
+#[tokio::test]
+async fn review_notes_index_has_no_visibility_escape_hatch() {
+    // The route is PRIVATE NOTES ONLY, always. A `?visibility=public` mode
+    // would be a second `/reviews` with a different sort, and every extra
+    // default is another place to get the hide-rule wrong — so the param
+    // does not exist, and asking for it must not widen the result.
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/rnvis11112222";
+    add_comment_at(&client, addr, base, "a note", true).await;
+    add_comment_at(&client, addr, base, "a public comment", false).await;
+    let body: serde_json::Value = client
+        .get(url(addr, "/api/review-notes?visibility=public"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let notes = body["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 1, "the param must not add public comments");
+    assert_eq!(notes[0]["private"], true);
+}
+
+#[tokio::test]
+async fn inbox_omits_private_comments() {
+    // Asserts over `routes/inbox.rs` — owned by the leak-guard unit, not
+    // this one. It is the ONE open-comments collector, so `/api/inbox`,
+    // `routes::resurface` and the context pack all inherit this filter;
+    // pinning it here is what makes the other two safe by construction.
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/inb1111222233";
+    add_comment_at(&client, addr, base, "public open question", false).await;
+    add_comment_at(&client, addr, base, "a private note", true).await;
+
+    let body: serde_json::Value = client
+        .get(url(addr, "/api/inbox"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        body["total_open"], 1,
+        "the fleet inbox must not count a note: {body:#}"
+    );
+    let items = body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    let raw = serde_json::to_string(&body).unwrap();
+    assert!(
+        !raw.contains("a private note"),
+        "the inbox must not carry a private note: {raw}"
+    );
+}
+
+#[tokio::test]
+async fn annotator_payload_omits_private_comments() {
+    // Asserts over `routes/artifact.rs` — owned by the leak-guard unit. This
+    // is the highest-consequence surface in the feature: the
+    // artifact-subdomain serve path is UNAUTHENTICATED, so a note inlined
+    // into `?cm=on` HTML is world-readable. That is also why
+    // `web/src/scripts/annotate.ts` gains zero bytes for this feature.
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    // Resolve the artifact id the subdomain handler will use.
+    let probe = client
+        .get(url(addr, "/"))
+        .header("Host", "kitchen-sink.artifacts.localhost")
+        .send()
+        .await
+        .unwrap();
+    let art = probe
+        .headers()
+        .get("x-kb-artifact-id")
+        .and_then(|v| v.to_str().ok())
+        .expect("x-kb-artifact-id header")
+        .to_string();
+
+    let base = format!("/api/kb/smoke/review/{art}");
+    add_comment_at(&client, addr, &base, "public annotation text", false).await;
+    add_comment_at(&client, addr, &base, "PRIVATE ANNOTATION TEXT", true).await;
+
+    let body = client
+        .get(url(addr, "/?cm=on"))
+        .header("Host", "kitchen-sink.artifacts.localhost")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains("window.__KB_COMMENTS"),
+        "the annotator payload should still be inlined"
+    );
+    assert!(
+        body.contains("public annotation text"),
+        "public comments must still reach the annotator"
+    );
+    assert!(
+        !body.contains("PRIVATE ANNOTATION TEXT"),
+        "a private note inlined into UNAUTHENTICATED HTML is the worst leak in the feature"
+    );
+}
+
 // === D4 — content-hash artifact subdomain ===
 
 #[tokio::test]

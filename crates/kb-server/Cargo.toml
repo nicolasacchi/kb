@@ -37,6 +37,13 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 mdns-sd = { workspace = true }
 zip = { workspace = true }
+# `?tag=` is repeatable, and neither serde's derived struct nor axum's
+# `Query` can express that: a repeated key against `Vec<String>` is
+# rejected as "expected a sequence", and against a `deserialize_with` field
+# as "duplicate field". The raw-query parser is the only honest form, and
+# this crate is already in the graph via serde_urlencoded — so it adds no
+# new compile cost, only a direct dependency edge.
+form_urlencoded = "1.2"
 # X1 — the event→webhook bridge POSTs envelopes with the daemon's own
 # HTTP client. Already in the dep graph (lancedb → reqwest); promoting it
 # from a dev-dep to a runtime dep adds no new compile cost.

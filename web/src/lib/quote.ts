@@ -35,7 +35,12 @@ export type CiteCommentInput = {
   title: string;
   anchor: Anchor;
   commentId: string;
-  body: string;
+  /// Optional: a row served with `?bodies=false` on the note index has no
+  /// body to quote, and the `#:~:text=` fragment is already best-effort —
+  /// it is inert inside the SPA's cross-origin iframe. Absent body ⇒ no
+  /// fragment, which is the same URL minus a cosmetic suffix, not a
+  /// different destination.
+  body?: string;
   /// Injectable for tests; defaults to `window.location.origin`.
   origin?: string;
 };
@@ -60,7 +65,7 @@ export function buildCiteUrl(input: CiteCommentInput): string {
   const origin =
     input.origin ??
     (typeof window !== "undefined" ? window.location.origin : "");
-  const quote = normalizeQuote(input.body);
+  const quote = normalizeQuote(input.body ?? "");
   const fragment = quote ? `#:~:text=${encodeURIComponent(quote)}` : "";
   return `${origin}${withComment}${fragment}`;
 }
@@ -69,9 +74,12 @@ export function buildCiteUrl(input: CiteCommentInput): string {
 /// `> <quoted body>` + a blank-line-free attribution line linking back to
 /// the comment's location (`buildCiteUrl` above).
 export function buildCiteMarkdown(input: CiteCommentInput): string {
-  const quote = normalizeQuote(input.body);
+  const quote = normalizeQuote(input.body ?? "");
   const label = anchorLocationLabel({ anchor: input.anchor });
   const url = buildCiteUrl(input);
+  if (!quote) {
+    return `[${input.title} § ${label}](${url})`;
+  }
   return `> ${quote}\n— [${input.title} § ${label}](${url})`;
 }
 

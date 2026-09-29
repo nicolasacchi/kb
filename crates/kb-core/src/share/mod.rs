@@ -805,6 +805,12 @@ h1{font-size:1.5rem;margin:0 0 .35rem;letter-spacing:-.01em}\
 /// file, append a read-only rendered comment thread + copy its attachment
 /// blobs (per-page-relative `attachments/<aid>-<name>`). Best-effort — a
 /// missing review / unresolved id / unreadable blob is skipped, never fatal.
+///
+/// Private notes are dropped here and nowhere else: the bundle is
+/// world-readable, so neither a private body nor a private attachment blob
+/// may be staged, whatever `--include-comments` says. The filter is a
+/// property of this function, not of its caller — there is no flag that
+/// turns it off.
 async fn inject_comments(
     staged: &mut Vec<(String, Vec<u8>)>,
     file_list: &[(String, PathBuf)],
@@ -819,10 +825,24 @@ async fn inject_comments(
         let Some(id) = resolve_id(ctx.handle, abs).await else {
             continue;
         };
-        let review = match crate::review::load(&review_dir.join(format!("{id}.json"))) {
+        let mut review = match crate::review::load(&review_dir.join(format!("{id}.json"))) {
             Ok(Some(r)) if !r.comments.is_empty() => r,
             _ => continue,
         };
+        // v0.40 TN2 — a staged bundle is a WORLD-READABLE static site, so a
+        // private note must not ship in one. Filtered here, ONCE, because
+        // both consumers below read `review.comments` wholesale:
+        // `render_comments_section` renders every comment it is handed (no
+        // status filter, let alone a visibility one), and the `to_copy` loop
+        // would publish a private note's screenshot under a public page URL
+        // — a leak that still looks like a successful share. A thread is one
+        // unit (replies inherit the root), so retaining roots drops replies
+        // with them. A file left with nothing public injects no section at
+        // all rather than an empty "Comments" heading.
+        review.comments.retain(|c| !c.is_private());
+        if review.comments.is_empty() {
+            continue;
+        }
         // Per-page-relative attachment paths: a page at `sub/x.html` refs
         // `attachments/<aid>-<name>` (resolved against itself) → deployed at
         // `sub/attachments/<aid>-<name>`.
@@ -880,6 +900,12 @@ fn collect_atts(
 /// read-only HTML section. Bodies render via `render_comment_fragment`
 /// (untrusted → raw HTML stripped) AFTER `attachment:<aid>` refs are
 /// rewritten to the per-page relative paths in `ref_map`.
+///
+/// Renders EVERY comment in `file.comments` — no status filter, no
+/// visibility filter. The caller must hand over a file whose private
+/// comments are already gone ([`inject_comments`] does, by retaining on
+/// [`crate::review::Comment::is_private`]); passing a raw sidecar publishes
+/// private notes to a world-readable site.
 fn render_comments_section(file: &ReviewFile, ref_map: &BTreeMap<String, String>) -> String {
     let mut out = String::from("\n<section class=\"kb-comments\" id=\"kb-comments\">\n");
     out.push_str(KB_COMMENTS_CSS);
@@ -2092,18 +2118,40 @@ mod tests {
 
     // --- Y-track: comment publishing into a static share -----------------
 
-    #[test]
-    fn render_comments_section_rewrites_refs_escapes_html_and_lists_attachments() {
+    /// Runs the REAL publish path — `inject_comments` over a staged bundle,
+    /// a review sidecar on disk and real attachment blobs under
+    /// `<attachments_root>/<artifact_id>/<aid>` — so the assertions cover
+    /// the `to_copy` loop and not a restatement of the filter. Also carries
+    /// the renderer coverage this test always had (inline `attachment:` refs
+    /// rewritten, untrusted raw HTML neutralized, attachment thumbnails
+    /// listed), now sourced from a real staging run instead of a hand-built
+    /// ref map.
+    #[tokio::test]
+    async fn inject_comments_skips_private_comments_and_their_attachments() {
+        let (h, src) = handle().await;
+        let root = src.path();
+        let page_abs = root.join("page.html");
+        write(&page_abs, "<html><body><h1>Hi</h1></body></html>");
+        // `resolve_id` reads the artifact id off the indexed source path.
+        let canon = page_abs.canonicalize().unwrap();
+        h.upsert_doc(crate::storage::schema::Doc::placeholder(
+            "id1",
+            canon.to_string_lossy().to_string(),
+        ))
+        .await
+        .unwrap();
+
         let kb = crate::types::KbName::new("kb").unwrap();
         let mut file = ReviewFile::empty_skeleton(&kb, "id1", "T");
         file.comments.push(crate::review::Comment {
-            id: "c_1".into(),
+            id: "c_pub".into(),
             status: CommentStatus::Open,
             file: "id1".into(),
             file_label: "main".into(),
             anchor: Anchor::File,
             author: Author::You,
-            body: "see ![chart](attachment:a_1) <script>alert(1)</script>".into(),
+            body: "PUBLIC-THREAD-BODY see ![chart](attachment:a_1) <script>alert(1)</script>"
+                .into(),
             created_at: chrono::Utc::now(),
             edited_at: None,
             replies: vec![],
@@ -2118,20 +2166,182 @@ mod tests {
                 user: None,
             }],
             user: None,
+            tags: vec!["wording".into()],
+            private: false,
         });
-        let mut map = BTreeMap::new();
-        map.insert("a_1".to_string(), "attachments/a_1-chart.png".to_string());
-        let html = render_comments_section(&file, &map);
+        // A private note on the same artifact: a distinctive body AND a real
+        // screenshot blob. Shipping either is a leak — the bundle is public.
+        file.comments.push(crate::review::Comment {
+            id: "c_priv".into(),
+            status: CommentStatus::Open,
+            file: "id1".into(),
+            file_label: "main".into(),
+            anchor: Anchor::File,
+            author: Author::You,
+            body: "PRIVATE-NOTE-BODY see ![shot](attachment:a_priv)".into(),
+            created_at: chrono::Utc::now(),
+            edited_at: None,
+            replies: vec![],
+            choices: vec![],
+            attachments: vec![Attachment {
+                id: "a_priv".into(),
+                filename: "shot.png".into(),
+                content_type: "image/png".into(),
+                size: 11,
+                created_at: chrono::Utc::now(),
+                author: Author::You,
+                user: None,
+            }],
+            user: None,
+            tags: vec!["wording".into()],
+            private: true,
+        });
+        let review_dir = root.join("reviews");
+        std::fs::create_dir_all(&review_dir).unwrap();
+        crate::review::save_atomic(&review_dir.join("id1.json"), &file, None).unwrap();
+
+        // A second artifact whose ONLY comment is a private note: it must
+        // ship no section at all (not even an empty "Comments" heading)
+        // and no blob.
+        let secret_abs = root.join("secret.html");
+        write(&secret_abs, "<html><body><h1>Hi</h1></body></html>");
+        let secret_canon = secret_abs.canonicalize().unwrap();
+        h.upsert_doc(crate::storage::schema::Doc::placeholder(
+            "id2",
+            secret_canon.to_string_lossy().to_string(),
+        ))
+        .await
+        .unwrap();
+        let mut secret_file = ReviewFile::empty_skeleton(&kb, "id2", "T2");
+        secret_file.comments.push(crate::review::Comment {
+            id: "c_priv2".into(),
+            status: CommentStatus::Open,
+            file: "id2".into(),
+            file_label: "main".into(),
+            anchor: Anchor::File,
+            author: Author::You,
+            body: "PRIVATE-ONLY-BODY".into(),
+            created_at: chrono::Utc::now(),
+            edited_at: None,
+            replies: vec![],
+            choices: vec![],
+            attachments: vec![Attachment {
+                id: "a_s2".into(),
+                filename: "shot.png".into(),
+                content_type: "image/png".into(),
+                size: 12,
+                created_at: chrono::Utc::now(),
+                author: Author::You,
+                user: None,
+            }],
+            user: None,
+            tags: vec![],
+            private: true,
+        });
+        crate::review::save_atomic(&review_dir.join("id2.json"), &secret_file, None).unwrap();
+
+        // Every blob is really on disk, so "the private blobs are absent"
+        // below can only fail because the filter ran — never because the
+        // copy silently skipped an unreadable file.
+        let att_root = root.join(".attachments");
+        std::fs::create_dir_all(att_root.join("id1")).unwrap();
+        std::fs::create_dir_all(att_root.join("id2")).unwrap();
+        std::fs::write(att_root.join("id1/a_1"), b"PUBLIC-BLOB-BYTES").unwrap();
+        std::fs::write(att_root.join("id1/a_priv"), b"PRIVATE-BLOB-BYTES").unwrap();
+        std::fs::write(att_root.join("id2/a_s2"), b"PRIVATE-ONLY-BLOB").unwrap();
+
+        let ctx = ShareCtx {
+            handle: &h,
+            source_path: root,
+            kb_name: "kb",
+            suffix: crate::iframe::DEFAULT_HOST_SUFFIX,
+            live_origin: None,
+            outbound: None,
+        };
+        let mut staged: Vec<(String, Vec<u8>)> = vec![
+            (
+                "page.html".to_string(),
+                b"<html><body><h1>Hi</h1></body></html>".to_vec(),
+            ),
+            (
+                "secret.html".to_string(),
+                b"<html><body><h1>Hi</h1></body></html>".to_vec(),
+            ),
+        ];
+        let file_list = vec![
+            ("page.html".to_string(), page_abs),
+            ("secret.html".to_string(), secret_abs),
+        ];
+        inject_comments(&mut staged, &file_list, &ctx, &review_dir, Some(&att_root)).await;
+
+        // (1) The rendered section carries the public thread, not the note.
+        let page = String::from_utf8(
+            staged
+                .iter()
+                .find(|(p, _)| p == "page.html")
+                .expect("page staged")
+                .1
+                .clone(),
+        )
+        .unwrap();
+        assert!(page.contains("PUBLIC-THREAD-BODY"), "public: {page}");
+        assert!(
+            !page.contains("PRIVATE-NOTE-BODY"),
+            "private body published to a world-readable bundle: {page}"
+        );
         // Inline `attachment:` ref rewritten to the relative bundle path.
         assert!(
-            html.contains("attachments/a_1-chart.png"),
-            "ref rewritten: {html}"
+            page.contains("attachments/a_1-chart.png"),
+            "ref rewritten: {page}"
         );
         // Untrusted raw HTML in the body is neutralized (no live <script>).
-        assert!(!html.contains("<script>"), "raw html neutralized: {html}");
+        assert!(!page.contains("<script>"), "raw html neutralized: {page}");
         // The attachment strip renders a thumbnail.
-        assert!(html.contains("kb-c-thumb"), "strip thumbnail: {html}");
-        assert!(html.contains("Comments</h2>"));
+        assert!(page.contains("kb-c-thumb"), "strip thumbnail: {page}");
+        assert!(page.contains("Comments</h2>"));
+
+        // (2) The public blob IS staged (the real path works) and the
+        // private one is not — the leak that still looks like a success.
+        let blobs: Vec<&str> = staged
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .filter(|p| p.starts_with("attachments/"))
+            .collect();
+        assert_eq!(
+            blobs,
+            vec!["attachments/a_1-chart.png"],
+            "only the public comment's attachment is staged"
+        );
+        assert_eq!(
+            staged
+                .iter()
+                .find(|(p, _)| p == "attachments/a_1-chart.png")
+                .map(|(_, b)| b.as_slice()),
+            Some(&b"PUBLIC-BLOB-BYTES"[..]),
+        );
+        assert!(
+            !staged
+                .iter()
+                .any(|(p, _)| p.contains("a_priv") || p.contains("a_s2")),
+            "private attachment published: {:?}",
+            staged.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>()
+        );
+
+        // (3) A page whose only comment is a private note gets no section
+        // at all — an empty "Comments" heading would still be a tell.
+        let secret = String::from_utf8(
+            staged
+                .iter()
+                .find(|(p, _)| p == "secret.html")
+                .expect("secret page staged")
+                .1
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            !secret.contains("PRIVATE-ONLY-BODY") && !secret.contains("kb-comments"),
+            "private-only page published a comment section: {secret}"
+        );
     }
 
     #[test]

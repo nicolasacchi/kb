@@ -1018,18 +1018,70 @@ DELETE /api/slates/{slug}?purge=true        LOOPBACK-ONLY hard delete of the who
                                             # Filter server-side with `?filter=slug:<slug>` on /api/events.
 
 # v0.2 — comments + graph
-GET  /api/kb/{kb}/review/{id}               kb-comments/1 JSON + ETag (read).
+GET  /api/kb/{kb}/review/{id}[?visibility=public|all]
+                                            kb-comments/1 JSON + ETag (read).
+                                            v0.40 TN2: `?visibility=all`
+                                            is the ONLY way this read can
+                                            surface a private note, and an
+                                            ABSENT param means `public`,
+                                            never "everything" — that
+                                            default is the security
+                                            property, and it is why the
+                                            CLI's `kb comments list`
+                                            (which never sends it) can
+                                            never see one. An unknown
+                                            value is a 400, not a fallback.
+                                            The ETag describes the file ON
+                                            DISK, not the bytes served, so a
+                                            client's cache key must carry
+                                            the visibility it asked for.
                                             R8: the whole-doc write POST is
                                             retired; mutate via the fine-grained
                                             endpoints below (each runs load →
                                             mutate → save under review_lock +
                                             emits comments.updated, no If-Match).
-POST   /api/kb/{kb}/review/{id}/comments              add a comment → 201
+POST   /api/kb/{kb}/review/{id}/comments              add a comment → 201.
+                                            Body also takes `tags[]` and
+                                            `private` (v0.40 TN1/TN2), the
+                                            same two fields `/meta` sets
+                                            later; `private:true` creates a
+                                            private NOTE.
 PATCH  /api/kb/{kb}/review/{id}/comments/{cid}        edit a comment body
 DELETE /api/kb/{kb}/review/{id}/comments/{cid}        delete a comment
 POST   /api/kb/{kb}/review/{id}/comments/{cid}/replies        add a reply → 201
 PATCH  /api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}  edit a reply body
 PATCH  /api/kb/{kb}/review/{id}/comments/{cid}/anchor         re-point the anchor (R9)
+PATCH  /api/kb/{kb}/review/{id}/comments/{cid}/meta           v0.40 TN1/TN2: set
+                                            this comment's tags and/or make
+                                            it a private NOTE. Body
+                                            {tags?, private?} — each field
+                                            is tri-state: absent = don't
+                                            touch, `tags:[]` clears the
+                                            set, `private:false`
+                                            un-privates. Setting NEITHER
+                                            is a 400, not a silent no-op.
+                                            Tags are slug-normalised,
+                                            deduped and sorted server-side
+                                            (same `slugify_tag` the
+                                            artifact tags use; 8 tags × 48
+                                            chars max, over is a 400, never
+                                            truncated), and the response is
+                                            the EFFECTIVE
+                                            {ok,changed,tags,private} read
+                                            back off the file just written
+                                            — `["A","a"]` stores `["a"]`
+                                            and a client re-deriving the
+                                            normalisation would drift.
+                                            `changed:false` skips the save
+                                            and the `comments.updated` SSE
+                                            (G8), so a chip click or lock
+                                            toggle can re-fire for free.
+                                            Owner-only, same 403 as body
+                                            edit: `private:false` is a
+                                            disclosure — it hands the whole
+                                            thread back to every
+                                            agent-facing surface. (See
+                                            "Comment visibility" below.)
 DELETE /api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}  delete a reply
 POST   /api/kb/{kb}/review/{id}/comments/{cid}/resolve        resolve one
 POST   /api/kb/{kb}/review/{id}/comments/{cid}/unresolve      reopen one
@@ -1058,8 +1110,23 @@ DELETE /api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}/attachments/{aid}  
                                             add/reply gain attachment_ids[] to
                                             adopt staged blobs; body markdown
                                             embeds them with ![](attachment:aid).
-GET  /api/kb/{kb}/reviews[?folder=&status=open|resolved|all&author=you|claude&stale=]
+GET  /api/kb/{kb}/reviews[?folder=&status=open|resolved|all&author=you|claude&stale=&visibility=public|all]
                                             list/query comments across a kb.
+                                            v0.40 TN2: second and last
+                                            `?visibility=` read; ABSENT
+                                            MEANS `public` (same rule, same
+                                            400 on an unknown value). Every
+                                            returned row carries `tags[]` and
+                                            `private`, and `private` can only
+                                            be `true` on a call that passed
+                                            `?visibility=all` — the default
+                                            public read cannot produce one.
+                                            One row PER comment, not a
+                                            rollup: a note is absent from
+                                            the public read rather than
+                                            counted out of it, so this
+                                            route reports no number an
+                                            agent could subtract from.
 GET  /api/inbox[?kb=NAME&limit=N]           Z4: fleet-wide inbox of OPEN comments
                                             across EVERY kb (fanned out, #28),
                                             newest activity first. {items,total_open}
@@ -1067,6 +1134,50 @@ GET  /api/inbox[?kb=NAME&limit=N]           Z4: fleet-wide inbox of OPEN comment
                                             source-rel + title, comment id, excerpt,
                                             reply_count, anchor scope + stale,
                                             created_at/updated_at.
+GET  /api/review-notes[?kb=NAME&tag=T&tag=T&q=S&status=open|resolved
+   |all&bodies=false]           v0.40 TN1/TN2: the operator's PRIVATE NOTES,
+                                            fleet-wide like /inbox and listed
+                                            PRIVATE ONLY — there is no
+                                            `visibility` param on this route
+                                            and there must never be one: a
+                                            notes browser with a public mode
+                                            is a second /reviews with a
+                                            different sort, and every extra
+                                            default is another place to get
+                                            the hide-rule wrong. `tag` is
+                                            REPEATABLE and ANDs (the note
+                                            must carry every listed tag; a
+                                            lone `?tag=a` works as well as
+                                            `?tag=a&tag=b`, and a value with
+                                            nothing sluggable in it is a 400
+                                            — a silently ignored filter is
+                                            worse than none), `q` is a
+                                            case-insensitive substring of
+                                            the BODY, `status` DEFAULTS TO
+                                            `all` (deliberately the opposite
+                                            of /reviews, whose default is
+                                            `open`: a note browser wants the
+                                            notes you already closed).
+                                            `bodies=false` drops the per-row
+                                            `body` key — a PROJECTION for
+                                            id resolution, never a visibility
+                                            switch; the row set is identical
+                                            to the default call's. Facet
+                                            `tags[]` counts are computed
+                                            PRE-`?tag=`/PRE-`?q=`, so a
+                                            second tag narrows the rows
+                                            instead of emptying them.
+                                            {notes,tags,total,truncated,
+                                            tags_truncated}, 500-row cap with
+                                            an honest `truncated`; rows carry
+                                            kb, artifact id + source-rel +
+                                            title, comment id, status, author,
+                                            body?, anchor, tags, private
+                                            (always true), reply_count,
+                                            stale, created_at/updated_at.
+                                            CLI: `kb comments notes`,
+                                            `kb comments tags`. SPA:
+                                            /review-notes.
 POST /api/kb/{kb}/review/{id}/export?format=claude|json|md
                                             v0.5 P3: server-side render via
                                             kb_core::review::export. Chunked
@@ -1828,6 +1939,68 @@ anchor stores). Detection never rewrites an anchor — the frozen original is
 re-evaluated each pass; the only rewrite is the explicit `PATCH
 …/comments/{cid}/anchor`. Full workflow:
 [`comment-workflow.md`](comment-workflow.md).
+
+## Comment visibility (`private` notes)
+
+A comment with `"private": true` is a **note**: written for the human, never
+to be seen by an LLM. The guarantee is structural rather than a filter somebody
+has to remember to apply — every renderer, lister, indexer and **counter**
+drops private comments and takes no opt-in parameter, so the fail-closed
+direction is that a missed call site *undercounts* rather than leaks.
+
+**A count is a leak too.** A note is excluded from every number an agent can
+observe: the `comments.updated` payload's open count, `/api/inbox` and its
+`total_open`, `kb desk`'s `comments_open`/`comments_total`, `/api/notes`, the
+daycard and its `pivot_activity` lane, the memory-recall marks, the session
+lanes, the **unauthenticated** `?cm=on` in-iframe annotator payload, and the
+**world-readable** static share bundle (a note's attachment blobs go with it).
+An agent cannot see a note and cannot observe a figure from which one could be
+inferred.
+
+Exactly four things can surface one:
+
+1. `GET /api/kb/{kb}/review/{id}?visibility=all` and
+   `GET /api/kb/{kb}/reviews?visibility=all` — the only two reads that take
+   the param. **An absent `?visibility=` means `public`**, never "everything";
+   that default *is* the security property, which is why the CLI's
+   `kb comments list` (it never sends one) can never surface a note, and why
+   an unrecognised value is a 400 rather than a permissive fallback. The GET
+   `ETag` describes the file on disk, not the filtered bytes, so a client
+   caching the review read must key on the visibility it asked for.
+2. `GET /api/review-notes` — the note browser. Private comments only, and no
+   `visibility` parameter at all, by design.
+3. The operator's own surfaces: the SPA's `/review-notes` page, and
+   `kb comments notes` / `kb comments tags`.
+4. The two **lossless** transports: `embed_into_html`
+   (`kb comments export --embed`, whose embedded `kb-comments/1` block) and
+   `POST /api/kb/{kb}/review/{id}/import` (`kb comments import`). Both carry
+   notes verbatim and **must not be "fixed"** — filtering them would delete the
+   operator's data on every export → import move, a far worse failure than the
+   leak it would prevent, and one that needs the operator to hand an HTML
+   bundle to an agent to trigger. `kb backup` copies `.review/` verbatim for
+   the same reason. Neither transport is agent-reachable by default: `--embed`
+   is an operator verb, and an import overwrites nothing without `force=true`.
+
+Two consequences of the same rule, both deliberate. `keep` and `keep_memory`
+refuse a note with a **409** before writing any file, because both produce
+agent-readable artifacts (a `kb-proposal/1` and a `kb-memory/1`) and
+promoting a note into either would publish it. And a note writes **no
+`history` ledger row** — that table carries no visibility bit, so a row would
+keep proving the note exists to the four surfaces that read it unfiltered: the
+daycard's `pivot_activity` comments lane, the history calendar's per-day
+count, the `kind='comment'` list, and the timeline.
+Flipping an existing comment to private therefore *deletes* the row it wrote;
+un-privating does **not** backfill one, because the ledger is an event log
+("a comment was authored at T"), not a derived index, and the operator's own
+note list is built from the sidecar's `created_at`.
+
+Replies inherit their root's visibility, and the thread model is flat, so
+un-privating a note reveals its whole thread at once. Comment `tags` are a
+separate namespace from an artifact's `kb-tags` frontmatter and are never
+mirrored onto it (a comment tag must not re-key the artifact): the verdict
+`status-approved` / `status-changes-requested` shortcut is the only thing a
+*comment* ever writes there. Operator workflow, including the note browser and
+`kb comments tag`/`untag`: [`comment-workflow.md`](comment-workflow.md).
 
 ## What `POST /api/kb/{kb}/atlas/recompute` computes
 

@@ -3592,6 +3592,105 @@ select:focus-visible,
   color: var(--bg) !important;
   border-color: var(--err) !important;
 }
+/* v0.40 TN — comment tags + the private-note flag. The strip reads as a
+   quiet annotation under the meta line, never as a second status badge. */
+.cp__note-strip {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 2px 0 4px;
+  font-size: 10px;
+}
+.cp__note-lock {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.cp__note-tag {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+/* The row-action buttons carrying the tag editor / note toggle, pressed. */
+.cp__row-actions button.is-active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.cp__tags-editor {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-top: 6px;
+}
+.cp__tags-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.cp__tags-save,
+.cp__tags-cancel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.cp__tags-save {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.cp__tags-save:disabled,
+.cp__tags-cancel:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Composer note controls — one quiet line above either editor. */
+.cp__compose-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.cp__compose-note {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cp__compose-note.is-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+.cp__compose-tags {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11px;
+}
 /* R3 — quick-response buttons (canned + Claude-authored choices). Pill
    shape distinguishes them from the square row-action buttons. */
 .cp__quick {

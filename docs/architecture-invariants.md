@@ -319,6 +319,92 @@ scrub CAN strip it on non-loopback (opt-in per kb via
   at read time from timestamps plus the #11 live registry, never written by
   a clock (the desk refusal), and `slate.updated` fires once per append,
   never per read (#24).
+- **NOTES amendment (v0.40 TN1/TN2) — a `private` comment is a NOTE: a comment
+  no agent may ever see. The hide rule is STRUCTURAL, not a flag; the tags axis
+  rides the same document.** An amendment to #6, not a new slot (same reason
+  as SLATE: the budget is capped at 35 and full). `Comment` gains two fields,
+  `tags: Vec<String>` and `private: bool`, both appended LAST and both
+  `skip_serializing_if` (empty vec / false). That pairing — additive at the end
+  of the struct, absent when it has nothing to say — is what ships them with NO
+  schema bump: a pre-notes `kb-comments/1` sidecar re-saves BYTE-IDENTICALLY,
+  and absence on disk is indistinguishable from `false`/`[]`. `tags` is
+  slug-normalised, deduped and sorted by the ONE `normalize_comment_tags` at
+  the write edge (reusing `kb_core::parser::slugify_tag`, never a second
+  slugifier), so the same tag SET always serialises to the same bytes and a
+  no-op re-tag cannot churn the `ETag`. Comment tags are a DIFFERENT namespace
+  from an artifact's `kb-tags` and are NEVER mirrored onto it — sharing it
+  would let a comment tag re-key the artifact. `private` is a visibility AXIS,
+  not a status: a note may be open or resolved, and `is_private` is never
+  folded into `is_open`, so "public and open" stays expressible. Replies
+  inherit the root's visibility and the thread model is flat, which is why
+  un-privating a note reveals its whole thread.
+  - **FAIL CLOSED, and the asymmetry IS the rule.** Every surface that
+    renders, lists, indexes or COUNTS comments selects through
+    `ReviewFile::visible` / `Visibility::includes` / `Comment::is_private` and
+    takes NO opt-in parameter — there is no flag a caller could pass, and no
+    `open_count_public()` sibling, so a call site nobody updates UNDERCOUNTS.
+    That is deliberate: an undercount is a cosmetic lie, whereas one opt-in
+    parameter makes the entire class opt-in and puts a leak one
+    future-signature-change away. A COUNT is a leak too, so `open_count` means
+    public-only (signature unchanged since v0.2, meaning changed in place), and
+    `set_all_status` skips notes in the flip AND in the count: `flipped` is
+    answered in the same JSON object as the public-only `open_count`, so
+    counting a note yields `flipped: 1, open_count: 0` — an existence
+    disclosure needing no arithmetic at all. Never widen one of these
+    renderers/counters with a parameter to fix a single surface; fix the
+    surface. Only TWO read routes may opt in, both through
+    `?visibility=public|all` where **absent = public**, never "everything" (an
+    unparseable value 400s rather than guessing):
+    `GET /api/kb/{kb}/review/{id}` and `GET /api/kb/{kb}/reviews`, the latter
+    also the operator's SPA + CLI path. The operator's exact figure comes from
+    the review file itself, not from a count. `GET /api/review-notes` carries
+    NO `visibility` parameter and there must never be one — it lists private
+    notes ONLY, and a `?visibility=public` mode would be a second `/reviews`
+    with a different sort, i.e. one more default to get the hide rule wrong.
+    `?bodies=false` is a per-row PROJECTION (identical row set, `body` dropped)
+    for id resolution, never a visibility switch. Also excluded because they
+    are counts, not merely because they are renderers: the `comments.updated`
+    payload, `/api/inbox` (via the ONE canonical collector `collect_open`),
+    `kb desk`, `/api/notes`, the daycard, the memory recall `flagged` marks, the
+    session lanes. `keep` and `keep_memory` answer 409 BEFORE writing any file
+    — a kb-proposal/1 (and a memory artifact, recalled on every future prompt)
+    is agent-readable work by construction, so there is no note-shaped output
+    to write.
+  - **A NOTE WRITES NO `history` LEDGER ROW, AND A PUBLIC→PRIVATE FLIP DELETES
+    THE ROW IT WROTE.** The ledger carries no visibility bit, and FOUR surfaces
+    read it UNFILTERED: `daycard`'s `pivot_activity` comments lane, the history
+    calendar's per-day count, the `kind='comment'` list, and the timeline. A row
+    written for a note would render its existence — and later its title, via
+    `session_comments`' title rows — to every agent, and one overcounted
+    agent-facing number is the whole leak. Skipping the write is therefore the
+    single decision that keeps those four surfaces consistent FOR FREE;
+    post-filtering them instead would cost a second `.review/` walk per surface
+    AND still leave counts disagreeing with the id list. The flip is handled at
+    the write edge for the same reason: `history_forget_comment` deletes exactly
+    that one row (the only per-row delete in `sqlite.rs`; delete-class in
+    `StorageKind`, not the history lane its inverse insert sits in), with the
+    predicate read off the file BEFORE the mutation so it is a real transition
+    rather than "is it private now". Stated consequence: the ledger is an event
+    log, never a derived index, so un-privating a note does NOT restore the row
+    (it writes none).
+  - **EXACTLY TWO SANCTIONED NON-FILTERS, and both are about MOVING operator
+    data, not about showing it to a reader.** (1) The LOSSLESS transports:
+    `review::embed_into_html` / `extract_from_html` and `POST …/import` carry
+    notes verbatim, and `kb backup` copies `.review/` verbatim — a move, an
+    export/reimport or a restore must not destroy the operator's own text.
+    (2) The anchor-stale sidecar (`.anchors-stale.json`,
+    `kb_core::anchors::StaleAnchor`): artifact id + comment id +
+    `anchor_kind` + `fuzzy_score`, and NOTHING ELSE — no body, no tags — so it
+    is a re-resolution tracker, not a comment surface, and filtering it would
+    corrupt the tracker without protecting a secret. Everything else is a
+    filter, including the two that look like opt-ins but are not: the
+    UNAUTHENTICATED `?cm=on` in-iframe annotator payload (the artifact-subdomain
+    serve path is world-readable, so `build_comments_payload` strips — and
+    `annotate.ts`, a hand-written strict subset, never learns a
+    `tags`/`private` field), and the WORLD-READABLE `kb share` static bundle
+    (`inject_comments` drops notes AND their attachment blobs before
+    `render_comments_section`, which itself renders every comment it is handed
+    and applies no visibility filter of its own).
 
 ### 7. `artifact_host_suffix` is runtime config, not a const
 

@@ -1293,9 +1293,13 @@ async fn funnel_commented(state: &Arc<KbHandles>, folder: &Option<String>) -> (u
                 else {
                     continue;
                 };
+                // LEAK GUARD (agent-facing count) — this open count reaches
+                // the agent as "events" on the session, so a private note
+                // must not be counted: the count would otherwise prove one
+                // exists. Public-only, no opt-in.
                 let open = file
-                    .comments
-                    .iter()
+                    .visible(kb_core::review::Visibility::Public)
+                    .into_iter()
                     .filter(|c| c.status == kb_core::review::CommentStatus::Open)
                     .count() as u64;
                 if open > 0 {
@@ -2974,9 +2978,14 @@ pub async fn session_comments(
                 let Ok(Some(file)) = kb_core::review::load(&path) else {
                     continue;
                 };
+                // LEAK GUARD (agent-facing bodies) — this is the session's
+                // comment text, handed to the agent verbatim, so private
+                // notes are filtered BEFORE the map: a private note's body
+                // must never reach `SessionCommentOut`. Public-only, no
+                // opt-in parameter.
                 let comments: Vec<SessionCommentOut> = file
-                    .comments
-                    .iter()
+                    .visible(kb_core::review::Visibility::Public)
+                    .into_iter()
                     .filter(|c| c.status == kb_core::review::CommentStatus::Open)
                     .map(|c| SessionCommentOut {
                         comment_id: c.id.clone(),
@@ -3072,6 +3081,14 @@ pub async fn session_comments(
                 let Some(c) = file.comments.iter().find(|c| c.id == cid) else {
                     continue;
                 };
+                // LEAK GUARD (agent-facing bodies) — a `history` row is
+                // written when a comment is RAISED, so a note raised while
+                // public keeps its row forever (the ledger is an event log,
+                // never rewritten). Drop the whole row here, not just its
+                // body: the title row is itself an existence leak.
+                if c.is_private() {
+                    continue;
+                }
                 let title = Some(if let Some(t) = title_cache.get(&aid) {
                     t.clone()
                 } else {

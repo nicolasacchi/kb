@@ -953,6 +953,22 @@ fn wants_raw(uri: &Uri) -> bool {
 /// Build the kb-comments/1 payload to inline. If a review file already
 /// exists for this artifact, load it; otherwise emit an empty skeleton
 /// so the annotator always sees a well-formed `window.__KB_COMMENTS`.
+///
+/// LEAK GUARD (matrix row #6) — private notes are stripped here, with no
+/// opt-in flag. `?cm=on` is a *rendering* flag, not an authorization
+/// mechanism: the artifact-subdomain serve path is unauthenticated
+/// (`middleware.rs:218-224`, "the artifact subdomain handler stays
+/// open"), so anything inlined here is world-readable. This is why
+/// `web/src/scripts/annotate.ts` — a hand-written strict subset of the
+/// comment shape, capped at 12 KiB in CI — never learns a `tags`/
+/// `private` field: the payload it receives can contain neither. The
+/// note browser (`/review-notes`, operator route) is where notes are
+/// read.
+///
+/// `etag` stays the disk-revision token from `etag_for(&path)`: it must
+/// describe the file on disk, not the filtered body, or an
+/// `If-None-Match` 304 would be computed over bytes the client never
+/// received.
 fn build_comments_payload(
     state: &Arc<KbHandles>,
     ctx: &crate::state::KbContext,
@@ -966,8 +982,18 @@ fn build_comments_payload(
     Ok(serde_json::json!({
         "v": 1,
         "etag": etag,
-        "file": file,
+        "file": strip_private_comments(file),
     }))
+}
+
+/// Drop private notes from a loaded review file, in place. Split out of
+/// [`build_comments_payload`] so the leak guard is unit-testable without
+/// standing up `KbHandles`/`KbContext`: the whole safety argument of row #6
+/// is this one `retain`, and the artifact-subdomain serve path is
+/// UNAUTHENTICATED — a note inlined there is world-readable.
+fn strip_private_comments(mut file: ReviewFile) -> ReviewFile {
+    file.comments.retain(|c| !c.is_private());
+    file
 }
 
 /// Helper retained for future code that may need a typed PathBuf result.
@@ -1205,6 +1231,41 @@ mod tests {
         assert!(!p("/a.html?raw"));
         // Must not collide with the annotator flag.
         assert!(!p("/a.html?cm=1"));
+    }
+
+    /// The `?cm=on` payload is inlined into an HTML body served by the
+    /// UNAUTHENTICATED artifact-subdomain handler, so a private note must
+    /// never survive into `window.__KB_COMMENTS`. This is the one place the
+    /// guard is a bare `retain`, hence a direct test of the extracted
+    /// helper: the public body is kept (the annotator would otherwise lose
+    /// a comment the reader can see) and the private one is gone entirely,
+    /// not blanked.
+    #[test]
+    fn annotator_payload_drops_private_comments() {
+        let kb_name = KbName::new("smoke").expect("valid kb name");
+        let mut file = kb_core::review::ReviewFile::empty_skeleton(&kb_name, "aaaaaaaaaaaa", "t");
+        for (body, private) in [("public body", false), ("PRIVATE NOTE BODY", true)] {
+            file.add_comment(kb_core::review::NewComment {
+                file: "aaaaaaaaaaaa".to_string(),
+                file_label: "main".to_string(),
+                anchor: kb_core::review::Anchor::File,
+                author: kb_core::review::Author::Claude,
+                body: body.to_string(),
+                choices: Vec::new(),
+                attachments: Vec::new(),
+                user: None,
+                tags: Vec::new(),
+                private,
+            });
+        }
+
+        let payload = serde_json::json!({ "file": strip_private_comments(file) });
+        let rendered = payload.to_string();
+        assert!(rendered.contains("public body"), "{rendered}");
+        assert!(
+            !rendered.contains("PRIVATE NOTE BODY"),
+            "a private note reached the unauthenticated annotator payload: {rendered}"
+        );
     }
 
     #[test]
