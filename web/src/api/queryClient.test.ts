@@ -129,12 +129,13 @@ describe("SSE → TanStack invalidation bridge (invariant #23)", () => {
     ]);
   });
 
-  it("comments.updated targets the open document's review + the fleet inbox + resurface", () => {
+  it("comments.updated targets the open document's review + the fleet inbox + resurface + the note browser", () => {
     emit("comments.updated", { kb: "demo", artifact_id: "a1" });
     expect(keys()).toEqual([
       ["review", "demo", "a1"],
       ["inbox"],
       ["resurface", "demo"],
+      ["review-notes"],
     ]);
   });
 

@@ -60,6 +60,26 @@ describe("buildCiteUrl", () => {
     );
   });
 
+  // A row served with `?bodies=false` on the note index has no body to
+  // quote, and the fragment is inert inside the SPA's iframe anyway — so
+  // the link must still reach the comment, just without the cosmetic
+  // `#:~:text=` suffix. A link that lost its `comment=` here would be a
+  // dead row, which is why the whole prefix is pinned.
+  it("no body: same destination, no text fragment", () => {
+    const anchor: Anchor = { kind: "section", id: "retry-budget", tag: null, snippet: null };
+    const url = buildCiteUrl({
+      kb: "canon",
+      sourceRelative: "ingest.html",
+      title: "Ingest",
+      anchor,
+      commentId: "c_4f2a91b0c7d3",
+      origin: ORIGIN,
+    });
+    expect(url).toBe(
+      "https://kb.example/a/canon/ingest.html?sec=retry-budget&panel=comments&comment=c_4f2a91b0c7d3",
+    );
+  });
+
   it("selection anchor: omits ?sec= (still opens the panel + jumps to the comment)", () => {
     const anchor: Anchor = { kind: "selection", css_path: "p:nth-child(2)", offset: 4, snippet: "hello" };
     const url = buildCiteUrl({

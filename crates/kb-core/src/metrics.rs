@@ -187,6 +187,10 @@ impl StorageKind {
             | StorageMsg::CascadeDeleteDoc { .. }
             | StorageMsg::SweepOrphans { .. }
             | StorageMsg::HistoryPurge { .. }
+            // v0.40 TN2 — a per-row ledger delete (comment flipped to a
+            // private note), so delete-class like the purge above, not the
+            // history lane the insert it inverses sits in.
+            | StorageMsg::HistoryForgetComment { .. }
             | StorageMsg::DropKbData { .. } => StorageKind::Delete,
 
             StorageMsg::HistoryRecordOpen { .. }

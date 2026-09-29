@@ -2821,6 +2821,45 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
+    /// Browse the operator's PRIVATE notes — the comments the agent must
+    /// never see (`GET /api/review-notes`), fleet-wide by default. This and
+    /// `tags` are the only CLI reads that can show one; every other read
+    /// verb is public-only and stays that way, because those verbs are
+    /// agent-reachable too. `--status` defaults to `all` (a note browser
+    /// wants the notes you already closed), `--tag` repeats and ANDs.
+    Notes {
+        /// Restrict to one corpus (default: every configured kb).
+        #[arg(long)]
+        kb: Option<String>,
+        /// Only notes carrying this tag (repeatable; a note must carry
+        /// EVERY listed tag).
+        #[arg(long = "tag")]
+        tag: Vec<String>,
+        /// Only notes whose body contains this substring (case-insensitive).
+        #[arg(long)]
+        q: Option<String>,
+        /// open | resolved | all (default: all — unlike `comments list`,
+        /// a note browser wants what you already closed).
+        #[arg(long, default_value = "all")]
+        status: String,
+        /// Emit the raw `{notes,tags,total,truncated,tags_truncated}`
+        /// response instead of the table.
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        daemon: Option<String>,
+    },
+    /// The comment-tag index: every tag in use across your notes, with the
+    /// number of notes carrying it, heaviest first. Same `| jq` shape as
+    /// `notes --json` — the index is in its `.tags` array. Comment tags are
+    /// their own namespace, unrelated to an artifact's `kb-tags`.
+    Tags {
+        /// Emit the raw response (index in `.tags`) instead of the table.
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        daemon: Option<String>,
+    },
     /// Print one artifact's full comment thread (bodies, replies,
     /// choices, timestamps) via `GET /review/{id}`.
     Show {
@@ -3037,6 +3076,17 @@ enum CommentsAction {
         /// adopted onto the new comment, and its inline ref appended to --body.
         #[arg(long)]
         attach: Vec<String>,
+        /// Label the comment so like things group together (repeatable).
+        /// The daemon slug-normalises (`Fleet Doc` → `fleet-doc`), dedupes
+        /// and sorts them, caps at 8 tags × 48 chars, and rejects over that
+        /// rather than truncating. Browse them with `kb comments tags`.
+        #[arg(long = "tag")]
+        tag: Vec<String>,
+        /// Make it a PRIVATE note — a comment for you alone. The agent never
+        /// sees it: not in the inbox, not in the exports, not in
+        /// `kb comments list`. Read yours with `kb comments notes`.
+        #[arg(long)]
+        note: bool,
         #[arg(long)]
         daemon: Option<String>,
     },
@@ -3183,6 +3233,52 @@ enum CommentsAction {
         /// selection:CSS:OFFSET:SNIPPET (same grammar as `add --anchor`).
         #[arg(long)]
         anchor: String,
+        #[arg(long)]
+        daemon: Option<String>,
+    },
+    /// Label a comment (or a private note) — `PATCH …/comments/{cid}/meta`
+    /// with the FULL new tag set, so existing tags are kept. Tags are
+    /// slug-normalised, deduped and sorted by the daemon, and the printed
+    /// list is what it stored. A private note's id resolves without
+    /// `--kb`/`--path` (the public review list can't see one); with several
+    /// kbs, pass `--kb` to pick one.
+    Tag {
+        /// The comment id to label.
+        comment_id: String,
+        /// Tag(s) to add (repeatable, at least one).
+        #[arg(long = "tag", required = true)]
+        tag: Vec<String>,
+        /// kb name. Optional when only one kb is configured.
+        #[arg(long)]
+        kb: Option<String>,
+        /// 12-hex artifact id. Conflicts with `--path`.
+        #[arg(long)]
+        artifact_id: Option<String>,
+        /// Source-relative path / unique filename, resolved via /lookup.
+        #[arg(long, conflicts_with = "artifact_id")]
+        path: Option<String>,
+        #[arg(long)]
+        daemon: Option<String>,
+    },
+    /// Drop label(s) from a comment, leaving its other tags alone — the
+    /// `/meta` endpoint replaces the whole set, so the current tags are
+    /// read first and only the named ones dropped. Names are matched in
+    /// slug form (`"Fleet Doc"` hits the stored `fleet-doc`).
+    Untag {
+        /// The comment id to un-label.
+        comment_id: String,
+        /// Tag(s) to remove (repeatable, at least one).
+        #[arg(long = "tag", required = true)]
+        tag: Vec<String>,
+        /// kb name. Optional when only one kb is configured.
+        #[arg(long)]
+        kb: Option<String>,
+        /// 12-hex artifact id. Conflicts with `--path`.
+        #[arg(long)]
+        artifact_id: Option<String>,
+        /// Source-relative path / unique filename, resolved via /lookup.
+        #[arg(long, conflicts_with = "artifact_id")]
+        path: Option<String>,
         #[arg(long)]
         daemon: Option<String>,
     },
@@ -5899,6 +5995,30 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            CommentsAction::Notes {
+                kb,
+                tag,
+                q,
+                status,
+                json,
+                daemon,
+            } => {
+                let bearer = read_bearer();
+                commands::comments::notes(
+                    kb.as_deref(),
+                    &tag,
+                    q.as_deref(),
+                    &status,
+                    json,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await
+            }
+            CommentsAction::Tags { json, daemon } => {
+                let bearer = read_bearer();
+                commands::comments::tags(json, daemon.as_deref(), bearer.as_deref()).await
+            }
             CommentsAction::Show {
                 kb,
                 artifact_id,
@@ -6103,6 +6223,8 @@ async fn main() -> Result<()> {
                 page,
                 choice_json,
                 attach,
+                tag,
+                note,
                 daemon,
             } => {
                 let bearer = read_bearer();
@@ -6122,6 +6244,8 @@ async fn main() -> Result<()> {
                     &choice_json,
                     page.as_deref(),
                     &attach,
+                    &tag,
+                    note,
                     daemon.as_deref(),
                     bearer.as_deref(),
                 )
@@ -6186,6 +6310,46 @@ async fn main() -> Result<()> {
                     &comment_id,
                     path.as_deref(),
                     &anchor,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await
+            }
+            CommentsAction::Tag {
+                comment_id,
+                tag,
+                kb,
+                artifact_id,
+                path,
+                daemon,
+            } => {
+                let bearer = read_bearer();
+                commands::comments::tag(
+                    kb.as_deref(),
+                    artifact_id.as_deref(),
+                    &comment_id,
+                    path.as_deref(),
+                    &tag,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await
+            }
+            CommentsAction::Untag {
+                comment_id,
+                tag,
+                kb,
+                artifact_id,
+                path,
+                daemon,
+            } => {
+                let bearer = read_bearer();
+                commands::comments::untag(
+                    kb.as_deref(),
+                    artifact_id.as_deref(),
+                    &comment_id,
+                    path.as_deref(),
+                    &tag,
                     daemon.as_deref(),
                     bearer.as_deref(),
                 )

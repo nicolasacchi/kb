@@ -4626,6 +4626,8 @@ mod tests {
                 choices: vec![],
                 attachments: vec![],
                 user: None,
+                tags: Vec::new(),
+                private: false,
             });
         }
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
@@ -4769,6 +4771,8 @@ mod tests {
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -7197,6 +7201,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -7298,6 +7304,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -7410,6 +7418,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let legacy_path = review_dir.join(format!("{}.json", content_hash.as_str()));
         crate::review::save_atomic(&legacy_path, &review, None).unwrap();
@@ -7500,6 +7510,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -7654,6 +7666,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -7808,6 +7822,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -7901,6 +7917,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -8003,6 +8021,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -8091,6 +8111,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let review_path = review_dir.join(format!("{}.json", id.as_str()));
         crate::review::save_atomic(&review_path, &review, None).unwrap();
@@ -8194,6 +8216,8 @@ done
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         crate::review::save_atomic(
             &review_dir.join(format!("{}.json", id.as_str())),

@@ -571,9 +571,18 @@ async fn build_since_response(
     let comments_truncated = comment_rows.len() == DAYCARD_SINCE_LANE_CAP;
     let review_dir = state.paths.kb_review_dir(kb_name);
     let open_items = collect_open(kb_name.as_str(), ctx, &review_dir).await;
+    // LEAK GUARD (agent-facing lane) — the ledger has no visibility bit, so
+    // the private ids of the window's artifacts are joined in here. See
+    // `collect_private_comment_ids` for why this walk is bounded.
+    let private_ids = collect_private_comment_ids(review_dir.clone(), comment_rows.clone()).await;
     let docs_by_id: HashMap<&str, &DocSummary> = docs.iter().map(|d| (d.id.as_str(), d)).collect();
-    let (comments, comments_still_open) =
-        build_comment_items(&comment_rows, &open_items, &docs_by_id, &ctx.source_path);
+    let (comments, comments_still_open) = build_comment_items(
+        &comment_rows,
+        &open_items,
+        &docs_by_id,
+        &ctx.source_path,
+        &private_ids,
+    );
 
     Ok(DaycardSinceResponse {
         kb: kb_name.as_str().to_string(),
@@ -746,17 +755,72 @@ fn filter_docs_in_window(
     (memories, memories_truncated, artifacts, artifacts_truncated)
 }
 
+/// LEAK GUARD (matrix row #11) — the ONE new `.review/` walk in this
+/// feature, and it exists only because `history_comments_in_window` rows
+/// carry no visibility bit: the ledger records that a comment was raised,
+/// not whether it is a private note. Without this join a private note
+/// whose ledger row predates its `private` flag renders in the daycard as
+/// a row with `open: false` — a wrong row AND an existence leak (the
+/// ledger is never filtered, deliberately: a note raised while public keeps
+/// its event-log row, and un-privating never backfills).
+///
+/// Bounded by the window's DISTINCT artifact count, never by the comment
+/// count and never by the size of `.review/`: one `review::load` per
+/// artifact that actually has an in-window comment row, and
+/// `DAYCARD_SINCE_LANE_CAP` already caps those rows. That is the
+/// per-request review-cache shape `routes::sessions`'s `review_cache`
+/// (`:3063-3072`) uses for the same reason, and the same
+/// `spawn_blocking` posture as every other walk in this file. A walk over
+/// the whole directory instead would tax an ambient poller to answer a
+/// question only the in-window rows ask.
+async fn collect_private_comment_ids(
+    review_dir: std::path::PathBuf,
+    rows: Vec<HistoryRow>,
+) -> HashSet<String> {
+    if rows.is_empty() {
+        return HashSet::new();
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut private: HashSet<String> = HashSet::new();
+        for row in &rows {
+            let Some(artifact_id) = row.artifact_id.as_deref() else {
+                continue;
+            };
+            if !seen.insert(artifact_id) {
+                continue;
+            }
+            let review_path = review_dir.join(format!("{artifact_id}.json"));
+            let Ok(Some(file)) = kb_core::review::load(&review_path) else {
+                continue;
+            };
+            // Agent-facing surface (the daycard is an LLM-readable panel):
+            // a private note is not an item here, whatever the ledger says.
+            for c in file.comments.iter().filter(|c| c.is_private()) {
+                private.insert(c.id.clone());
+            }
+        }
+        private
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// `comments` lane: cross-reference comments RAISED in-window
 /// (`history_comments_in_window` rows — kb-comments/1 has no `resolved_at`,
 /// so "raised" is the only honest window signal) against the SAME
 /// `.review/` walk `/inbox`/`/resurface` already use ([`collect_open`]) to
 /// answer "still open" — never a second bespoke walk. Pure/testable without
 /// a DB (the caller does the two async reads; this just joins them).
+///
+/// `private_ids` is the leak guard above: rows naming a private note are
+/// dropped outright, so a note can never reach the lane as a closed row.
 fn build_comment_items(
     rows: &[HistoryRow],
     open_items: &[InboxItem],
     docs_by_id: &HashMap<&str, &DocSummary>,
     source_path: &std::path::Path,
+    private_ids: &HashSet<String>,
 ) -> (Vec<DaycardCommentItem>, u32) {
     let open_by_comment: HashMap<&str, &InboxItem> = open_items
         .iter()
@@ -769,6 +833,11 @@ fn build_comment_items(
         else {
             continue;
         };
+        // LEAK GUARD (agent-facing lane) — a private note is dropped, not
+        // rendered as a closed row: its existence must not leak either.
+        if private_ids.contains(&comment_id) {
+            continue;
+        }
         let (title, source_relative, open) =
             if let Some(item) = open_by_comment.get(comment_id.as_str()) {
                 (item.title.clone(), item.source_relative.clone(), true)
@@ -1583,7 +1652,8 @@ mod tests {
         let doc2 = doc("art2", "Resolved doc", 200, None);
         let docs_by_id: HashMap<&str, &DocSummary> = [("art2", &doc2)].into_iter().collect();
         let source = std::path::Path::new("/corpus");
-        let (items, still_open) = build_comment_items(&rows, &open_items, &docs_by_id, source);
+        let (items, still_open) =
+            build_comment_items(&rows, &open_items, &docs_by_id, source, &HashSet::new());
         assert_eq!(items.len(), 2);
         // newest raised_at first.
         assert_eq!(items[0].comment_id, "c-resolved");
@@ -1599,8 +1669,31 @@ mod tests {
     fn build_comment_items_empty_is_honest_zero() {
         let docs_by_id: HashMap<&str, &DocSummary> = HashMap::new();
         let source = std::path::Path::new("/corpus");
-        let (items, still_open) = build_comment_items(&[], &[], &docs_by_id, source);
+        let (items, still_open) =
+            build_comment_items(&[], &[], &docs_by_id, source, &HashSet::new());
         assert!(items.is_empty());
+        assert_eq!(still_open, 0);
+    }
+
+    /// A note raised while public keeps its `history` row (the ledger is an
+    /// event log, never rewritten), so the daycard lane must drop the row
+    /// itself — not render it as a closed item. `open_items` is empty here
+    /// on purpose: `collect_open` already hides private notes, so if this
+    /// lane relied on the open set alone the note would appear with
+    /// `open: false` and its existence would leak.
+    #[test]
+    fn build_comment_items_drops_private_notes_rather_than_rendering_them_closed() {
+        let rows = vec![
+            history_comment("art1", "c-note", 100),
+            history_comment("art1", "c-public", 200),
+        ];
+        let doc1 = doc("art1", "Doc", 200, None);
+        let docs_by_id: HashMap<&str, &DocSummary> = [("art1", &doc1)].into_iter().collect();
+        let private: HashSet<String> = ["c-note".to_string()].into_iter().collect();
+        let source = std::path::Path::new("/corpus");
+        let (items, still_open) = build_comment_items(&rows, &[], &docs_by_id, source, &private);
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].comment_id, "c-public");
         assert_eq!(still_open, 0);
     }
 
