@@ -295,7 +295,7 @@ pub fn extract_symbols(lang_id: &str, source: &[u8]) -> Result<Vec<Symbol>> {
     while let Some(m) = matches.next() {
         let mut def: Option<(String, tree_sitter::Node<'_>)> = None;
         let mut name: Option<String> = None;
-        for cap in m.captures {
+        for cap in m.captures() {
             let cname = capture_names[cap.index as usize];
             if let Some(suffix) = cname.strip_prefix("definition.") {
                 def = Some((suffix.to_string(), cap.node));
