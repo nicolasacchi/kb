@@ -9,11 +9,11 @@ binaries and the full text of each license that governs them.
 
 ## Overview
 
-- MIT License: 611
+- MIT License: 617
 - Apache License 2.0: 152
 - ISC License: 25
 - Unicode License v3: 23
-- Mozilla Public License 2.0: 11
+- Mozilla Public License 2.0: 12
 - BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License: 10
 - zlib License: 7
 - BSD 2-Clause &quot;Simplified&quot; License: 5
@@ -4679,6 +4679,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [string_cache 0.11.0](https://github.com/servo/string-cache)
 - [string_cache 0.9.0](https://github.com/servo/string-cache)
 
 ```
@@ -5105,8 +5106,11 @@ DEALINGS IN THE SOFTWARE.
 Used by:
 
 - [html5ever 0.39.0](https://github.com/servo/html5ever)
+- [html5ever 0.40.1](https://github.com/servo/html5ever)
 - [markup5ever 0.39.0](https://github.com/servo/html5ever)
+- [markup5ever 0.40.0](https://github.com/servo/html5ever)
 - [web_atoms 0.2.5](https://github.com/servo/html5ever)
+- [web_atoms 0.3.0](https://github.com/servo/html5ever)
 
 ```
 Copyright (c) 2014 The html5ever Project Developers
@@ -5714,7 +5718,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [ammonia 4.1.4](https://github.com/rust-ammonia/ammonia)
+- [ammonia 4.2.0](https://github.com/rust-ammonia/ammonia)
 
 ```
 Copyright (c) 2015-2022 The ammonia Developers
@@ -7680,7 +7684,42 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [getrandom 0.4.2](https://github.com/rust-random/getrandom)
+- [zeroize 1.9.0](https://github.com/RustCrypto/utils)
+
+```
+Copyright (c) 2018-2026 The RustCrypto Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the &quot;Software&quot;), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License (`MIT`)
+
+Used by:
+
+- [getrandom 0.4.3](https://github.com/rust-random/getrandom)
 
 ```
 Copyright (c) 2018-2026 The rust-random Project Developers
@@ -9183,9 +9222,9 @@ Used by:
 - [anstyle-parse 1.0.0](https://github.com/rust-cli/anstyle.git)
 - [anstyle-query 1.1.5](https://github.com/rust-cli/anstyle.git)
 - [anstyle 1.0.14](https://github.com/rust-cli/anstyle.git)
-- [clap 4.6.6](https://github.com/clap-rs/clap)
-- [clap_builder 4.6.6](https://github.com/clap-rs/clap)
-- [clap_derive 4.6.4](https://github.com/clap-rs/clap)
+- [clap 4.6.7](https://github.com/clap-rs/clap)
+- [clap_builder 4.6.7](https://github.com/clap-rs/clap)
+- [clap_derive 4.6.7](https://github.com/clap-rs/clap)
 - [clap_lex 1.1.0](https://github.com/clap-rs/clap)
 - [colorchoice 1.0.5](https://github.com/rust-cli/anstyle.git)
 - [is_terminal_polyfill 1.70.2](https://github.com/polyfill-rs/is_terminal_polyfill)
@@ -10262,37 +10301,6 @@ SOFTWARE.
 
 Used by:
 
-- [zeroize 1.8.2](https://github.com/RustCrypto/utils)
-
-```
-MIT License
-
-Copyright (c) 2018-2021 The RustCrypto Project Developers
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the &quot;Software&quot;), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-## MIT License (`MIT`)
-
-Used by:
-
 - [geographiclib-rs 0.2.7](https://github.com/georust/geographiclib-rs)
 
 ```
@@ -11161,7 +11169,7 @@ SOFTWARE.
 
 Used by:
 
-- [mdns-sd 0.21.3](https://github.com/keepsimple1/mdns-sd)
+- [mdns-sd 0.21.4](https://github.com/keepsimple1/mdns-sd)
 
 ```
 MIT License
@@ -11997,9 +12005,9 @@ Used by:
 - [syn 2.0.117](https://github.com/dtolnay/syn)
 - [syn 3.0.5](https://github.com/dtolnay/syn)
 - [thiserror-impl 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror-impl 2.0.20](https://github.com/dtolnay/thiserror)
+- [thiserror-impl 2.0.21](https://github.com/dtolnay/thiserror)
 - [thiserror 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror 2.0.20](https://github.com/dtolnay/thiserror)
+- [thiserror 2.0.21](https://github.com/dtolnay/thiserror)
 - [unicode-ident 1.0.24](https://github.com/dtolnay/unicode-ident)
 - [unsafe-libyaml 0.2.11](https://github.com/dtolnay/unsafe-libyaml)
 - [utf8-zero 0.8.1](https://github.com/algesten/utf8-zero)
@@ -12381,11 +12389,13 @@ Used by:
 
 - [phf 0.12.1](https://github.com/rust-phf/rust-phf)
 - [phf 0.13.1](https://github.com/rust-phf/rust-phf)
+- [phf 0.14.0](https://github.com/rust-phf/rust-phf)
 - [phf_codegen 0.13.1](https://github.com/rust-phf/rust-phf)
 - [phf_generator 0.13.1](https://github.com/rust-phf/rust-phf)
 - [phf_macros 0.13.1](https://github.com/rust-phf/rust-phf)
 - [phf_shared 0.12.1](https://github.com/rust-phf/rust-phf)
 - [phf_shared 0.13.1](https://github.com/rust-phf/rust-phf)
+- [phf_shared 0.14.0](https://github.com/rust-phf/rust-phf)
 
 ```
 The MIT License (MIT)
@@ -13992,6 +14002,7 @@ Used by:
 - [cssparser-macros 0.7.0](https://github.com/servo/rust-cssparser)
 - [cssparser 0.36.0](https://github.com/servo/rust-cssparser)
 - [cssparser 0.37.0](https://github.com/servo/rust-cssparser)
+- [cssparser 0.38.0](https://github.com/servo/rust-cssparser)
 
 ```
 Mozilla Public License Version 2.0
