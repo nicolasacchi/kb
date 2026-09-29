@@ -183,10 +183,8 @@ fn forbidden(urn: &'static str, detail: String) -> Response<Body> {
         HeaderValue::from_static("application/problem+json"),
     );
     // A security refusal must not be cached by anything in between.
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
@@ -2000,7 +1998,13 @@ mod tests {
         use tower::ServiceExt;
         let cfg = Arc::new(with_hostnames(&["kb.example.com"], "127.0.0.1:4000"));
         let resp = guarded_api(cfg)
-            .oneshot(guarded_request("127.0.0.1", Method::GET, "/kbs", None, None))
+            .oneshot(guarded_request(
+                "127.0.0.1",
+                Method::GET,
+                "/kbs",
+                None,
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
