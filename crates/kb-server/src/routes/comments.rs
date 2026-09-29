@@ -1329,6 +1329,23 @@ pub async fn apply_batch(
             }
         }
     }
+    // v0.40 TN2 — a note gets NO history-ledger row, so a `set_meta` that
+    // turns an ALREADY-PUBLIC comment into a note has to un-write the row
+    // that comment wrote at creation. `apply_ops` reports ids, not
+    // transitions, so the visibility bit is snapshotted off the file BEFORE
+    // the ops run (the predicate is a real transition, not "is it private
+    // now") and compared against the post-save file below — the same
+    // before/after read the `PATCH …/meta` route does.
+    let was_public: std::collections::HashSet<String> = payload
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            review::BatchOp::SetMeta { comment_id, .. } => Some(comment_id),
+            _ => None,
+        })
+        .filter(|cid| file.comments.iter().any(|c| &c.id == cid && !c.is_private()))
+        .cloned()
+        .collect();
     let report = match file.apply_ops(&payload.ops, &id) {
         Ok(r) => r,
         // Atomic: apply_ops mutated only its working clone, so nothing is
@@ -1385,6 +1402,43 @@ pub async fn apply_batch(
                     "comment_id": cid,
                     "user": hist_user,
                 }),
+            );
+        }
+    }
+
+    // The mirror of the delete in `set_comment_meta`: the comment is now a
+    // note, so the row its public self wrote at creation must go, or the four
+    // unfiltered ledger readers (daycard activity lane, calendar per-day
+    // count, `kind='comment'` list, timeline) keep proving it exists. Ids the
+    // batch CREATED are excluded: `report.created_comment_ids` is where those
+    // are enumerated, and a comment born in this batch was never public, so it
+    // wrote no row to remove.
+    for cid in &was_public {
+        if report.created_comment_ids.contains(cid) {
+            continue;
+        }
+        if !file.comments.iter().any(|c| &c.id == cid && c.is_private()) {
+            continue;
+        }
+        // Ordering + failure semantics copied from the PATCH route: the
+        // delete runs after the review lock is dropped, and a failure does NOT
+        // fail the request. The sidecar file is the source of truth and now
+        // says `private: true`, so a 500 would report a mutation as failed
+        // when it landed, and the client's retry would find no transition left
+        // — turning a transient storage error into a permanent, silent leak. A
+        // surviving row over-counts, the leaking direction, so it is logged at
+        // `warn` with the artifact + comment id rather than swallowed.
+        if let Err(e) = ctx
+            .storage
+            .history_forget_comment(id.clone(), cid.clone())
+            .await
+        {
+            tracing::warn!(
+                kb = kb_name.as_str(),
+                artifact = id.as_str(),
+                comment = cid.as_str(),
+                error = %e,
+                "comment is now a private note but its history row could not be deleted"
             );
         }
     }

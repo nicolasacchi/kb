@@ -2895,6 +2895,52 @@ async fn flipping_a_comment_private_removes_its_history_row() {
     );
 }
 
+/// The same public→private flip as
+/// `flipping_a_comment_private_removes_its_history_row`, driven through the
+/// BATCH `apply` route instead of `PATCH …/meta`. Two write paths reach the
+/// same mutation (`set_comment_meta`), and the ledger delete is a second piece
+/// of behaviour that each path owns: if `apply` skipped it, an agent could
+/// turn any of its own public comments into notes while the unfiltered ledger
+/// readers kept counting them — the existence leak the public-only rule
+/// exists to prevent, reachable by simply using the other route.
+#[tokio::test]
+async fn flipping_a_comment_private_through_apply_removes_its_history_row() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "ledg44445556";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    let (cid, _) = add_comment_at(&client, addr, base, "a public remark", false).await;
+
+    assert_eq!(
+        ledger_comment_counts(&client, addr).await,
+        (1, 1),
+        "a public comment must be counted by the unfiltered ledger readers"
+    );
+
+    let resp = client
+        .post(url(addr, &format!("{base}/apply")))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"ops": [
+            {"op":"set_meta","comment_id":cid,"private":true}
+        ]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let r: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(r["applied"], 1);
+    // The flip landed on disk — the summary counts public comments only, so a
+    // successful flip drops this one to 0.
+    assert_eq!(r["total_count"], 0, "the flip must have landed on disk");
+
+    assert_eq!(
+        ledger_comment_counts(&client, addr).await,
+        (0, 0),
+        "a comment flipped to a private note by the batch path must leave NO \
+         history-ledger row, exactly as through PATCH"
+    );
+}
+
 #[tokio::test]
 async fn keep_refuses_a_private_note_without_writing_a_proposal() {
     let (_tmp, addr, paths) = boot_with_paths().await;
