@@ -1343,7 +1343,11 @@ pub async fn apply_batch(
             review::BatchOp::SetMeta { comment_id, .. } => Some(comment_id),
             _ => None,
         })
-        .filter(|cid| file.comments.iter().any(|c| &c.id == cid && !c.is_private()))
+        .filter(|cid| {
+            file.comments
+                .iter()
+                .any(|c| &c.id == *cid && !c.is_private())
+        })
         .cloned()
         .collect();
     let report = match file.apply_ops(&payload.ops, &id) {
