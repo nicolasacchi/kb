@@ -39,6 +39,8 @@ A comment carries:
 | `anchor` | where it points (see below) |
 | `body` | the comment text |
 | `replies[]` | threaded `{id, author, user?, body, createdAt}` replies |
+| `tags[]` | v0.40, optional — comment-scoped labels, slug-normalised + deduped + sorted at the write edge. Skipped on disk when empty. **Not** the artifact's `kb-tags` (see [Tags and private notes](#tags-and-private-notes)). |
+| `private` | v0.40, optional — `true` makes this comment a **note**: a comment for you alone that no agent may ever see (same section). Absent == public. |
 
 **Role vs identity (v0.34).** `author` answers *human or agent*; `user`
 answers *which teammate*. Filter either way: `kb comments list --author
@@ -150,6 +152,144 @@ the artifact with `--path` (or `--artifact-id` + `--kb`).
 > Don't `resolve` until the fix is actually applied — the human uses
 > status to track what's left. Don't invent comment ids; use only ones
 > from `kb comments list` (the review file is the source of truth).
+
+## Tags and private notes (v0.40)
+
+Two axes ride on every comment, orthogonal to each other and to `status`:
+
+- **`tags`** — comment-scoped labels, so like things group. A different
+  namespace from an artifact's `kb-tags` frontmatter and never mirrored onto
+  it: a comment tag must never re-key the artifact.
+- **`private`** — the comment is a **note**: yours alone (below).
+
+### Tagging a comment
+
+Three ways in, one normalized set out. The daemon slugifies (`Fleet Doc` →
+`fleet-doc`, using the same `slugify_tag` the artifact tags use), dedupes
+*after* slugifying, and sorts, so the same set always serialises to the same
+bytes. Over the caps — 8 tags, 48 chars each — is a **400, never a silent
+truncation**.
+
+```bash
+# At write time, on any new comment:
+kb comments add --path atlas.html --body "Rewrite this paragraph" \
+  --tag wording --tag "fleet doc"          # → [fleet-doc, wording]
+kb comments add --path atlas.html --body "For my eyes only" --note
+#   (this `--note` is the private flag; `kb comments verdict --note` below
+#   takes free text for a different thing entirely)
+
+# After the fact. `tag` unions into the existing set, `untag` removes from
+# it — the /meta route REPLACES the whole set, so both verbs read the
+# current tags first and PATCH the merged result. Names are matched in slug
+# form, so `untag c_aa05 "Fleet Doc"` really does hit the stored fleet-doc.
+kb comments tag   c_aa05 --tag tone --kb canon
+kb comments untag c_aa05 --tag tone --kb canon
+
+# The label index, heaviest first. The counts are NOTE counts — the facet
+# list is computed over the note browser's own row set, so a tag used only
+# on public comments reads as absent.
+kb comments tags
+```
+
+In the SPA, the composer carries a `tags (comma separated)` field beside the
+`🔒 private note` checkbox, and every row grows a `🏷 tags (N)` popover and a
+`🔒 note` / `🔓 note` toggle once it is tagged or private. Both PATCH
+`…/comments/{cid}/meta` and re-render the effective (normalized) set. From
+the batch path, `add_comment` takes `tags` and `private` directly and
+`set_meta` retags an existing one:
+
+```json
+{"ops": [
+  {"op": "add_comment", "anchor": {"kind": "file"}, "author": "you",
+   "body": "for my eyes only", "private": true, "tags": ["wording"]},
+  {"op": "set_meta", "comment_id": "c_aa05", "tags": ["tone"]}
+]}
+```
+
+Retagging is **owner-only** (a 403, like a body edit), because
+`private: false` is a disclosure: it hands the whole thread back to every
+agent-facing surface. A patch that changes nothing is a no-op — no file
+rewrite, no `comments.updated` SSE — so the chips and the lock toggle are
+free to re-fire.
+
+### What a note is
+
+`private: true` marks a comment **for the human only**. The agent must never
+see it: not in `kb comments list`, not in `/api/inbox`, not in `kb desk`, not
+in an export, not in a comments count, not in the daycard, not in the recall
+marks or the session lanes. Replies inherit their root's visibility, so
+`--note` on a root makes the whole thread yours.
+
+> **This is by design, not a bug.** If you are an agent and a note is missing
+> from a read, the missing note IS the answer — do not file it, do not try to
+> "recover" it, and do not add a visibility opt-in to a read an agent can
+> reach. Every renderer, lister and **counter** filters on `!private` and
+> takes no opt-in parameter, precisely so that a call site someone forgot
+> undercounts instead of leaking. A count is a leak too.
+
+Two consequences worth knowing before you write one:
+
+- **`keep` / `keep_memory` refuse a note with a 409**, before writing any
+  file. Both produce agent-readable artifacts — a `kb-proposal/1` and a
+  `kb-memory/1` — so promoting a note into either would publish it exactly
+  the thing you marked private. Un-private the comment first, or write the
+  proposal by hand.
+- **A note gets no `history` ledger row.** The ledger records "a comment was
+  authored at T" and carries no visibility bit, so a row would keep proving
+  the note exists to the four surfaces that read it unfiltered (the daycard's
+  `pivot_activity` lane, the history calendar's per-day count, the
+  `kind='comment'` list, the timeline). Flipping an existing comment to
+  private therefore *deletes* the row it wrote. **Un-privating does not
+  backfill one** — the ledger is an event log, not a derived index, and
+  inventing an event that never happened is worse than the missing row. The
+  operator's own note list is built from the sidecar's `created_at`, which
+  never moves.
+
+**Un-privating reveals the whole thread.** The thread model is flat and
+visibility is a property of the root, so there is no half-public thread to
+reason about — one `private: false` and every reply under it becomes
+readable by every agent-facing surface at once, the ledger row stays gone,
+and the note leaves the note browser.
+
+### Browsing notes
+
+Every read above hides notes by default, which leaves exactly one page in the
+browser to read them all: **`/review-notes`**. (It is not `/notes`, which is
+a different entity — kb Markdown note artifacts.) A tag-facet chip row sits
+over rows grouped per artifact, each row deep-linked through the existing
+`buildCiteUrl` to the anchored text, so a note is one click from what it
+points at. Its filter grammar is the URL query and nothing else:
+
+| filter | grammar |
+|---|---|
+| kb | `?kb=<name>`; absent means every configured kb (fleet-wide) |
+| tag | `?tag=<slug>` repeated, ANDed — the note must carry **every** listed tag. Facet counts are computed *before* the tag and `q` filters, so clicking a second tag narrows the rows instead of emptying them. |
+| q | `?q=<substring>`, case-insensitive, over the note BODY |
+| status | `?status=open\|resolved\|all`, default **`all`** — deliberately the opposite of `comments list`, whose default is `open`: a note browser wants the notes you already closed |
+
+No sort param and no paging; the server caps at 500 rows and says so with
+`truncated` rather than quietly dropping the tail.
+
+```bash
+kb comments notes                       # every note, every kb
+kb comments notes --kb canon --status open
+kb comments notes --tag wording --tag "fleet doc"   # both tags
+kb comments notes --q "rewrite this" --json | jq -r '.notes[].comment_id'
+kb comments notes --json | jq -r '.tags[] | "\(.count)\t\(.name)"'
+```
+
+`kb comments notes` and `kb comments tags` are the only two CLI reads that
+can show a note; every other verb rides a public-only route. `kb comments
+tag`/`untag` also resolve a **note's** id without `--kb`/`--path`, by scanning
+the note index (`?bodies=false` — the id lookup never pulls note text into
+the process), since the public review read cannot see one at all.
+
+The other two transports are deliberately **lossless**: `kb comments export
+--embed` bakes the whole `kb-comments/1` document, notes included, into the
+HTML copy, and `kb comments import` reads it back verbatim. Filtering notes
+out of either would destroy your own data on every export → import move, so
+don't "fix" them — and note that moving a bundle through an agent is how that
+loss would get triggered.
 
 ## Review-pass verdicts (`kb comments verdict`)
 
@@ -398,11 +538,15 @@ Notes and limits:
 | piece | path |
 |---|---|
 | Comment / Anchor / Reply / Verdict structs | `crates/kb-core/src/review.rs` |
-| `reply` / `verdict` verbs | `crates/kb-cli/src/commands/comments.rs` |
+| `reply` / `verdict` / `tag` / `untag` / `notes` / `tags` verbs | `crates/kb-cli/src/commands/comments.rs` |
 | `[kb-flag]` tag grammar (`FLAG_COMMENT_PREFIX`/`is_flag_comment`/`flag_reason`) | `crates/kb-core/src/memory.rs` |
 | `kb memory flag` verb | `crates/kb-cli/src/commands/memory.rs` (`flag`) |
 | triage `flagged` reason + recall `flagged` field | `crates/kb-server/src/routes/memory.rs` (`triage`/`recall`), `crates/kb-core/src/triage.rs` |
 | verdict routes + status-tag mirror | `crates/kb-server/src/routes/comments.rs` (`set_verdict`/`clear_verdict`/`apply_status_tag_shortcut`) |
+| `…/comments/{cid}/meta` (tags + private), `?visibility=` on the two review reads | `crates/kb-server/src/routes/comments.rs` (`set_comment_meta`), `crates/kb-server/src/routes/review.rs` |
+| note browser (`GET /api/review-notes`) | `crates/kb-server/src/routes/review_notes.rs` |
+| tag normalisation + the ONE visibility predicate | `crates/kb-core/src/review.rs` (`normalize_comment_tags`, `Comment::is_private`, `ReviewFile::visible`) |
 | `watch` loop (SSE scope + diff) | `crates/kb-cli/src/commands/comments_watch.rs` |
 | review GET/POST + `comments.updated` emit | `crates/kb-server/src/routes/review.rs` |
 | SPA live refetch | `web/src/hooks/useReview.ts`, `web/src/components/CommentsPanel.tsx` |
+| SPA tag editor + 🔒 toggle, `/review-notes` page | `web/src/components/CommentsPanel.tsx`, `web/src/routes/reviewNotes.tsx`, `web/src/hooks/useReviewNotes.ts` |

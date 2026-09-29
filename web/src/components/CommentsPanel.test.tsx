@@ -13,6 +13,9 @@ import CommentsPanel, { type CommentsPanelProps } from "./CommentsPanel";
 import ConfirmProvider from "./ConfirmProvider";
 import { emptyReview, type Anchor } from "../api/client";
 import { __resetDraftsForTests, readDraft } from "../lib/drafts";
+// v0.40 TN — the meta PATCH path, mocked so a test can prove it is NOT
+// taken on the create (see the note-meta describe at the bottom).
+import { patchCommentMeta } from "../api/reviewNotes";
 
 vi.mock("./LazyMarkdownEditor", () => ({
   default: forwardRef(function StubEditor(
@@ -40,6 +43,10 @@ vi.mock("./CommentBody", () => ({
 
 vi.mock("../hooks/useReview", () => ({
   useReview: () => ({ setVerdict: vi.fn() }),
+}));
+
+vi.mock("../api/reviewNotes", () => ({
+  patchCommentMeta: vi.fn().mockResolvedValue({ ok: true, changed: true, tags: [], private: false }),
 }));
 
 vi.mock("../hooks/useArtifactHost", () => ({
@@ -198,5 +205,80 @@ describe("CommentsPanel — routed-anchor composer (anchor-switch round trip)", 
     await waitFor(() =>
       expect(readDraft("kb1", "art1", "compose:section:h1::")).toBe(""),
     );
+  });
+});
+
+// v0.40 TN — a note's flag and tags must ride the CREATE request. A
+// create-then-PATCH order leaves the comment public for a round trip, and
+// the create records a history row, so the note's EXISTENCE would stay
+// countable by an agent in the daycard activity bar and the calendar's
+// per-day comment count — the one thing the flag promises it can never
+// see. The two composers are a ternary, so exactly one is mounted and the
+// shared label queries are unambiguous.
+describe("CommentsPanel — note meta rides the create (v0.40 TN)", () => {
+  const anchor: Anchor = { kind: "section", id: "h1", tag: null, snippet: null };
+
+  beforeEach(() => {
+    vi.mocked(patchCommentMeta).mockClear();
+  });
+
+  it("file-scope: 🔒 + tags go out on the create, and no meta PATCH follows", () => {
+    vi.useFakeTimers();
+    const onAddComment = vi.fn().mockResolvedValue({ id: "c1" });
+    renderPanel({ onAddComment });
+    fireEvent.change(screen.getByLabelText("file-scope comment"), {
+      target: { value: "an agent-blind note" },
+    });
+    vi.advanceTimersByTime(400);
+    fireEvent.change(screen.getByLabelText("tags for this comment"), {
+      target: { value: "fleet-doc, wording" },
+    });
+    fireEvent.click(screen.getByLabelText(/private note/));
+    fireEvent.click(screen.getByText("add file-scope"));
+
+    expect(onAddComment).toHaveBeenCalledTimes(1);
+    const opts = onAddComment.mock.calls[0][2];
+    expect(opts.private).toBe(true);
+    // Split RAW, never slugified here — the daemon's
+    // `normalize_comment_tags` is the one normaliser, and it runs on the
+    // create route.
+    expect(opts.tags).toEqual(["fleet-doc", "wording"]);
+    expect(patchCommentMeta).not.toHaveBeenCalled();
+  });
+
+  it("routed-anchor: its own tags + note flag reach the create", () => {
+    vi.useFakeTimers();
+    const onAddComment = vi.fn().mockResolvedValue({ id: "c2" });
+    renderPanel({ composeAnchor: anchor, onCloseCompose: vi.fn(), onAddComment });
+    fireEvent.change(screen.getByLabelText("new comment body"), {
+      target: { value: "note on the section" },
+    });
+    vi.advanceTimersByTime(400);
+    fireEvent.change(screen.getByLabelText("tags for this comment"), {
+      target: { value: "wording" },
+    });
+    fireEvent.click(screen.getByText("add comment"));
+
+    const opts = onAddComment.mock.calls[0][2];
+    expect("private" in opts).toBe(false); // unchecked 🔒 ⇒ key absent, not false
+    expect(opts.tags).toEqual(["wording"]);
+    expect(patchCommentMeta).not.toHaveBeenCalled();
+  });
+
+  it("a plain comment puts NEITHER key on the wire (body byte-unchanged)", () => {
+    vi.useFakeTimers();
+    const onAddComment = vi.fn().mockResolvedValue({ id: "c3" });
+    renderPanel({ onAddComment });
+    fireEvent.change(screen.getByLabelText("file-scope comment"), {
+      target: { value: "an ordinary comment" },
+    });
+    vi.advanceTimersByTime(400);
+    fireEvent.click(screen.getByText("add file-scope"));
+
+    const opts = onAddComment.mock.calls[0][2];
+    // Not merely falsy: the keys must be ABSENT, so a plain add's JSON
+    // body is byte-identical to the pre-TN one.
+    expect("tags" in opts).toBe(false);
+    expect("private" in opts).toBe(false);
   });
 });

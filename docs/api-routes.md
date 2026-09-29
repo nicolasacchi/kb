@@ -134,6 +134,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | POST | `/api/kb/{kb}/review/{id}/comments/{cid}/attachments` | `routes::attachments::upload_to_comment` |
 | DELETE | `/api/kb/{kb}/review/{id}/comments/{cid}/attachments/{aid}` | `routes::attachments::detach_comment` |
 | POST | `/api/kb/{kb}/review/{id}/comments/{cid}/keep` | `routes::comments::keep` |
+| PATCH | `/api/kb/{kb}/review/{id}/comments/{cid}/meta` | `routes::comments::set_comment_meta` |
 | POST | `/api/kb/{kb}/review/{id}/comments/{cid}/replies` | `routes::comments::add_reply` |
 | DELETE | `/api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}` | `routes::comments::delete_reply` |
 | PATCH | `/api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}` | `routes::comments::edit_reply` |
@@ -180,6 +181,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/notes` | `routes::notes::list_all` |
 | GET | `/api/proposals` | `routes::proposals::list` |
 | GET | `/api/queries/zero-hit` | `routes::search::queries_zero_hit_all` |
+| GET | `/api/review-notes` | `routes::review_notes::list` |
 | GET | `/api/saved-queries` | `routes::saved_queries::list` |
 | POST | `/api/saved-queries` | `routes::saved_queries::upsert` |
 | DELETE | `/api/saved-queries/{name}` | `routes::saved_queries::delete` |
@@ -236,4 +238,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_226 routes._
+_228 routes._

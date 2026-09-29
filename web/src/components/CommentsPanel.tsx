@@ -33,6 +33,10 @@ import UserChip from "./UserChip";
 import { relTime, anchorLabel } from "../lib/commentFmt";
 import { canEditComment } from "../lib/canEditComment";
 import { fetchArtifactHtml, importReview } from "../api/client";
+import {
+  patchCommentMeta,
+  type CommentMetaResult,
+} from "../api/reviewNotes";
 import { currentDaemonBase } from "../api/base";
 import { embedReviewIntoHtml, extractReviewFromHtml } from "../lib/reviewEmbed";
 import { buildCiteMarkdown } from "../lib/quote";
@@ -55,6 +59,39 @@ import { useReview } from "../hooks/useReview";
 
 type Filter = "open" | "resolved" | "all";
 
+// v0.40 TN — what a composer collects before the comment exists: the note
+// flag and a free-text tag field. Both ride the CREATE request itself (see
+// `addComment`) — a note must never exist as a public comment for even one
+// round trip, or its creation lands in the agent-readable history ledger.
+type ComposerMeta = { private: boolean; tags: string };
+
+const NO_META: ComposerMeta = { private: false, tags: "" };
+
+/// Split a typed tag field into the raw list the daemon normalises. This is
+/// a field SPLITTER, not a slugifier: it never lowercases, never rewrites
+/// and never dedupes, because `normalize_comment_tags` (kb-core) is the one
+/// normaliser and the response hands back its effective values. Both commas
+/// and whitespace separate, because "fleet-doc, wording" and
+/// "fleet-doc wording" are the same intent.
+function splitTags(text: string): string[] {
+  return text
+    .split(/[,\s]+/)
+    .map((t) => t.trim())
+    .filter((t) => t !== "");
+}
+
+/// The create-time meta for a composer, spread into the `onAddComment`
+/// opts. A key is present only when it carries a value, so a plain comment
+/// (no note flag, no tags) puts NOTHING new on the wire and its body stays
+/// byte-identical to the pre-TN one.
+function createMeta(meta: ComposerMeta): { tags?: string[]; private?: boolean } {
+  const tags = splitTags(meta.tags);
+  return {
+    ...(tags.length > 0 ? { tags } : {}),
+    ...(meta.private ? { private: true } : {}),
+  };
+}
+
 export type CommentsPanelProps = {
   kb: string;
   artifactId: string;
@@ -70,7 +107,15 @@ export type CommentsPanelProps = {
   onAddComment: (
     anchor: Anchor,
     body: string,
-    opts?: { author?: "you" | "claude"; choices?: Choice[]; attachmentIds?: string[] },
+    opts?: {
+      author?: "you" | "claude";
+      choices?: Choice[];
+      attachmentIds?: string[];
+      /// v0.40 TN1/TN2 — the note flag + comment tags, sent ON the create
+      /// (`api/client.ts` → `AddCommentInput`), never as a follow-up PATCH.
+      tags?: string[];
+      private?: boolean;
+    },
   ) => Promise<Comment>;
   onAddReply: (
     commentId: string,
@@ -166,6 +211,45 @@ function dndProps(
   };
 }
 
+/// v0.40 TN — the composer's note controls: a 🔒 "private note" toggle and a
+/// free-text tag field, one line, above the editor. Rendered by BOTH
+/// composers (file-scope and routed-anchor) because "make this a note" is
+/// the panel's one creation path for a comment the agent must never see, and
+/// whichever box you typed it in must be able to say so — the two feed the
+/// same `addComment`, which carries both values on the create itself.
+function ComposeNoteMeta({
+  meta,
+  onChange,
+  inputId,
+}: {
+  meta: ComposerMeta;
+  onChange: (next: ComposerMeta) => void;
+  inputId: string;
+}) {
+  return (
+    <div className="cp__compose-meta">
+      <label className={`cp__compose-note ${meta.private ? "is-active" : ""}`}>
+        <input
+          type="checkbox"
+          checked={meta.private}
+          onChange={(e) => onChange({ ...meta, private: e.target.checked })}
+        />
+        <span title="agents will never see this comment, its replies, or any count that would reveal it">
+          🔒 private note
+        </span>
+      </label>
+      <input
+        id={inputId}
+        className="cp__compose-tags"
+        value={meta.tags}
+        onChange={(e) => onChange({ ...meta, tags: e.target.value })}
+        placeholder="tags (comma separated) — optional"
+        aria-label="tags for this comment"
+      />
+    </div>
+  );
+}
+
 export default function CommentsPanel({
   kb,
   artifactId,
@@ -213,6 +297,14 @@ export default function CommentsPanel({
   const composeDraftStore = useDraft(kb, artifactId, composeSlot);
   const composeDraft = composeDraftStore.text;
   const setComposeDraft = composeDraftStore.setText;
+  // v0.40 TN — per-composer note meta: a 🔒 toggle and a tag field. A
+  // private comment is creatable HERE and nowhere else (no CLI verb, by
+  // design — every CLI verb is agent-reachable), so both composers carry
+  // the control. Two independent states, not one shared pair: the routed
+  // composer is a DIFFERENT draft (a different anchor), and a note flag
+  // must never ride from one to the other.
+  const [fileMeta, setFileMeta] = useState<ComposerMeta>(NO_META);
+  const [composeMeta, setComposeMeta] = useState<ComposerMeta>(NO_META);
   const [exportOpen, setExportOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [importErr, setImportErr] = useState<string | null>(null);
@@ -297,27 +389,52 @@ export default function CommentsPanel({
 
   // Add a new comment on `anchor` via the fine-grained endpoint. Shared
   // by the file-scope box and the routed-anchor composer.
-  function addComment(anchor: Anchor, body: string, attachmentIds?: string[]) {
+  //
+  // v0.40 TN — the note flag and the tag list go out ON this create
+  // (`AddCommentInput.tags` / `.private`, honoured by the create route
+  // through the same `normalize_comment_tags` the PATCH /meta path uses).
+  // They must NOT be a follow-up PATCH: the comment exists as a PUBLIC
+  // comment between the two calls, and the create records a history row —
+  // so a note's EXISTENCE (the daycard activity bar, the calendar's
+  // per-day comment count) would stay visible to an agent forever after,
+  // which is the one thing the flag promises it can never see. Edits to an
+  // EXISTING comment's tags / visibility still go through PATCH /meta
+  // (`setPrivate`, the row's tag editor); the daemon 400s on a meta patch
+  // with neither field, so one is never sent for a plain comment.
+  function addComment(
+    anchor: Anchor,
+    body: string,
+    attachmentIds?: string[],
+    meta: ComposerMeta = NO_META,
+  ) {
     const text = body.trim();
     if (!text && !(attachmentIds && attachmentIds.length > 0)) return;
-    void onAddComment(anchor, text, { attachmentIds }).catch(() =>
-      toast.err("Couldn't add comment"),
-    );
+    void onAddComment(anchor, text, {
+      attachmentIds,
+      ...createMeta(meta),
+    }).catch(() => toast.err("Couldn't add comment"));
   }
 
   function addFileScope() {
     if (!draft.trim() && fileScopeAtt.attachmentIds.length === 0) return;
-    addComment({ kind: "file" }, draft, fileScopeAtt.attachmentIds);
+    addComment({ kind: "file" }, draft, fileScopeAtt.attachmentIds, fileMeta);
     fileDraft.clear();
     fileScopeAtt.reset();
+    setFileMeta(NO_META);
   }
 
   function addRoutedComment() {
     if (!composeAnchor) return;
     if (!composeDraft.trim() && composeAtt.attachmentIds.length === 0) return;
-    addComment(composeAnchor, composeDraft, composeAtt.attachmentIds);
+    addComment(
+      composeAnchor,
+      composeDraft,
+      composeAtt.attachmentIds,
+      composeMeta,
+    );
     composeDraftStore.clear();
     composeAtt.reset();
+    setComposeMeta(NO_META);
     onCloseCompose?.();
   }
 
@@ -335,6 +452,33 @@ export default function CommentsPanel({
     composeDraftStore.clear();
     composeAtt.reset();
     onCloseCompose?.();
+  }
+
+  // v0.40 TN — flip one comment's private flag. Going PRIVATE is one click;
+  // coming back is the irreversible-feeling direction (the whole thread
+  // becomes agent-readable again), so it confirms first and says exactly
+  // what is about to be exposed. No local optimistic flag: the row renders
+  // from the cached review file, which the `comments.updated` the daemon
+  // emits on a real change refreshes — the same path every other mutation
+  // in this panel takes (invariant #23).
+  async function setPrivate(commentId: string, next: boolean) {
+    if (!next) {
+      const ok = await confirm({
+        title: "Make this comment public?",
+        body: "It and every reply under it become visible to agents again — in prompts, exports and counts.",
+        confirmLabel: "Make public",
+      });
+      if (!ok) return;
+    }
+    try {
+      await patchCommentMeta(kb, artifactId, commentId, { private: next });
+    } catch {
+      toast.err(
+        next
+          ? "Couldn't make this a private note"
+          : "Couldn't make this comment public",
+      );
+    }
   }
 
   function toggleResolved(commentId: string, status: "open" | "resolved") {
@@ -496,6 +640,11 @@ export default function CommentsPanel({
           <div className="cp__compose-label">
             commenting on: {anchorLabel({ anchor: composeAnchor })}
           </div>
+          <ComposeNoteMeta
+            meta={composeMeta}
+            onChange={setComposeMeta}
+            inputId={`cp-note-tags-${artifactId}-compose`}
+          />
           <MarkdownEditor
             ref={composeEditor}
             value={composeDraft}
@@ -539,6 +688,11 @@ export default function CommentsPanel({
           className="cp__file-scope"
           {...dndProps(fileScopeAtt, fileScopeEditor)}
         >
+          <ComposeNoteMeta
+            meta={fileMeta}
+            onChange={setFileMeta}
+            inputId={`cp-note-tags-${artifactId}-file`}
+          />
           <MarkdownEditor
             ref={fileScopeEditor}
             value={draft}
@@ -594,6 +748,8 @@ export default function CommentsPanel({
                 onJump={onRequestFlash ? () => onRequestFlash(c.id) : undefined}
                 onHover={(on) => onHoverComment?.(on ? c.id : null)}
                 onToggleResolved={() => toggleResolved(c.id, c.status)}
+                onTogglePrivate={() => setPrivate(c.id, c.private !== true)}
+                onSaveTags={(tags) => patchCommentMeta(kb, artifactId, c.id, { tags })}
                 onDelete={() => removeComment(c.id)}
                 onReply={(author, body, attachmentIds) =>
                   addReply(c.id, author, body, attachmentIds)
@@ -895,6 +1051,8 @@ function CommentRow({
   onJump,
   onHover,
   onToggleResolved,
+  onTogglePrivate,
+  onSaveTags,
   onDelete,
   onReply,
   onChoose,
@@ -914,6 +1072,12 @@ function CommentRow({
   onHover: (on: boolean) => void;
   onToggleResolved: () => void;
   onDelete: () => void;
+  /// v0.40 TN — flip the private flag (the parent owns the confirm-on-
+  /// un-private copy and the toast).
+  onTogglePrivate: () => void;
+  /// v0.40 TN — PATCH /meta with a raw tag list; resolves to the server's
+  /// EFFECTIVE values, which the editor renders verbatim.
+  onSaveTags: (tags: string[]) => Promise<CommentMetaResult>;
   onReply: (
     author: "you" | "claude",
     body: string,
@@ -925,6 +1089,15 @@ function CommentRow({
   onDetachAttachment: (aid: string) => void;
   onDetachReplyAttachment: (replyId: string, aid: string) => void;
 }) {
+  // v0.40 TN — comment-scoped tags + the private flag, read off the row
+  // itself. Both keys are ABSENT on a pre-TN sidecar (serde skips them
+  // when empty/false), so the `?? []` / `=== true` normalisation is
+  // load-bearing, not defensive padding.
+  const tags = comment.tags ?? [];
+  const isPrivate = comment.private === true;
+  const [tagsOpen, setTagsOpen] = useState(false);
+  const [tagsDraft, setTagsDraft] = useState(tags.join(", "));
+  const [tagsBusy, setTagsBusy] = useState(false);
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyAuthor, setReplyAuthor] = useState<"you" | "claude">("you");
   // A-SPA — shares its slot (`reply:<commentId>`) with CommentModal's own
@@ -979,6 +1152,28 @@ function CommentRow({
       .catch(() => toast.err("copy failed"));
   }
 
+  // v0.40 TN — save the tag set. The text is split on commas/whitespace and
+  // sent RAW: slugifying, de-duping and sorting happen once, server-side
+  // (`normalize_comment_tags`), and the response carries the effective
+  // values — so the editor shows what the sidecar actually says ("Fleet
+  // Doc" → "fleet-doc") instead of a second client-side normaliser that
+  // could disagree. An unchanged set comes back as `changed: false` with
+  // the same values; that is a no-op, not a failure, and the editor simply
+  // settles on the server's answer.
+  async function saveTags() {
+    setTagsBusy(true);
+    try {
+      const res = await onSaveTags(splitTags(tagsDraft));
+      setTagsDraft(res.tags.join(", "));
+      setTagsOpen(false);
+    } catch {
+      setTagsDraft(tags.join(", "));
+      toast.err("Couldn't save tags");
+    } finally {
+      setTagsBusy(false);
+    }
+  }
+
   const cls = [
     "cp__row",
     comment.status === "resolved" ? "cp__row--resolved" : "",
@@ -1010,6 +1205,23 @@ function CommentRow({
           </span>
         )}
       </div>
+      {(isPrivate || tags.length > 0) && (
+        <div className="cp__note-strip">
+          {isPrivate && (
+            <span
+              className="cp__note-lock"
+              title="private — agents never see this comment, its replies or its count"
+            >
+              🔒 note
+            </span>
+          )}
+          {tags.map((t) => (
+            <span key={t} className="cp__note-tag">
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
       <CommentBody
         body={comment.body}
         kb={kb}
@@ -1079,6 +1291,32 @@ function CommentRow({
         >
           ❝ cite
         </button>
+        <button
+          className={tagsOpen ? "is-active" : ""}
+          aria-expanded={tagsOpen}
+          disabled={tagsBusy}
+          onClick={() => {
+            // Re-seed the field from the row on every open, so an edit
+            // another tab made (or a saved value) is what you see.
+            setTagsDraft(tags.join(", "));
+            setTagsOpen((o) => !o);
+          }}
+          title="tag this comment — tags group it in the notes browser"
+        >
+          🏷 tags{tags.length > 0 ? ` (${tags.length})` : ""}
+        </button>
+        <button
+          className={isPrivate ? "is-active" : ""}
+          aria-pressed={isPrivate}
+          onClick={onTogglePrivate}
+          title={
+            isPrivate
+              ? "private — agents can't see this. Click to make it public again."
+              : "keep this comment private — agents will never see it"
+          }
+        >
+          {isPrivate ? "🔒 note" : "🔓 note"}
+        </button>
         {comment.status === "open" && (
           <KeepCommentButton kb={kb} commentId={comment.id} />
         )}
@@ -1101,6 +1339,41 @@ function CommentRow({
           ⌫ delete
         </button>
       </div>
+      {tagsOpen && (
+        <div className="cp__tags-editor">
+          <input
+            className="cp__tags-input"
+            value={tagsDraft}
+            onChange={(e) => setTagsDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+                e.preventDefault();
+                void saveTags();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setTagsDraft(tags.join(", "));
+                setTagsOpen(false);
+              }
+            }}
+            placeholder="fleet-doc, wording"
+            aria-label="comment tags"
+            disabled={tagsBusy}
+          />
+          <button className="cp__tags-save" onClick={() => void saveTags()} disabled={tagsBusy}>
+            {tagsBusy ? "saving…" : "save"}
+          </button>
+          <button
+            className="cp__tags-cancel"
+            onClick={() => {
+              setTagsDraft(tags.join(", "));
+              setTagsOpen(false);
+            }}
+            disabled={tagsBusy}
+          >
+            cancel
+          </button>
+        </div>
+      )}
       {replyOpen && (
         <div
           className="cp__reply-composer"

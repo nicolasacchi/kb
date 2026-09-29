@@ -1083,6 +1083,11 @@ async fn matching_artifacts(
 /// surfaced, per memory, as `flagged` / `drift_open` on the memories lane
 /// (CT-C1 / CT-C4). Emitting them here too would double-report the same
 /// marker in one pack and inflate the scent line the hook injects.
+///
+/// LEAK GUARD — private notes never enter here: this lane has no visibility
+/// parameter of its own and inherits the public-only projection from
+/// `inbox::collect_open` (the ONE canonical collector). A filter added here
+/// would be a second, driftable copy of the same rule.
 async fn collect_scoped_comments(
     state: &Arc<KbHandles>,
     scope_ids: &HashSet<(String, String)>,

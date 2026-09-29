@@ -29,4 +29,28 @@ attachments: Array<Attachment>,
  * [`Author`] (you|claude ROLE). Additive + skip if none so old
  * review files round-trip byte-identically.
  */
-user?: string, };
+user?: string, 
+/**
+ * v0.40 TN1 — comment-scoped labels, slug-normalised + sorted + deduped
+ * at the write edge by [`normalize_comment_tags`] (the ONE normaliser
+ * both the `PATCH …/meta` route and `BatchOp::SetMeta` go through, so
+ * the two write paths cannot diverge). NEVER mirrored onto the
+ * artifact's own `kb-tags`: that namespace belongs to frontmatter tags
+ * and to the `status-approved` / `status-changes-requested` verdict
+ * display shortcut, and sharing it would make a comment tag re-key the
+ * artifact. Additive + skipped when empty, so a pre-TN sidecar
+ * round-trips BYTE-IDENTICALLY.
+ */
+tags?: Array<string>, 
+/**
+ * v0.40 TN2 — a private note: a comment no agent may ever see. The
+ * read side is fail-closed: every kb-core renderer filters on
+ * [`ReviewFile::visible`] / [`Comment::is_private`] with no opt-in
+ * parameter, and [`ReviewFile::open_count`] counts public comments
+ * only, so a missed filter undercounts (cosmetic) rather than leaking.
+ * The two LOSSLESS transports ([`embed_into_html`] and `kb backup`,
+ * which copies `.review/` verbatim) deliberately carry it — a move or a
+ * restore must not destroy operator data. Additive + skipped when
+ * false, so absence is indistinguishable from `false` on disk.
+ */
+private?: boolean, };

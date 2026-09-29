@@ -773,6 +773,8 @@ mod tests {
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: Vec::new(),
+            private: false,
         });
         let old_review = fx.review_dir.join(format!("{old_id}.json"));
         review::save_atomic(&old_review, &review, None).unwrap();

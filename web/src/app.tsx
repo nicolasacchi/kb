@@ -68,6 +68,12 @@ const ReplayRoute = lazy(() => import("./routes/replay"));
 // a spare monitor. Lazy like every other route, so its chunk (and
 // `styles/ambient.css`) only ships to someone who opens it.
 const AmbientRoute = lazy(() => import("./routes/ambient"));
+// v0.40 TN — the private-comment browser. Lazy like every other route; its
+// chunk + `styles/reviewNotes.css` (imported by the route itself, like
+// ambient's) only ship when someone opens their notes. NOT the /notes route
+// below: that one lists kb Markdown note artifacts (`kb_core::notes`); this
+// one lists private comments in `.review/*.json`.
+const ReviewNotesRoute = lazy(() => import("./routes/reviewNotes"));
 
 // SPA shell. Persistent two-row chrome (topbar + main body with left
 // rail) wraps the routed view. The left rail mirrors HOME-tab sidebar
@@ -328,11 +334,25 @@ export default function App() {
             </RailShell>
           }
         />
+        {/* kb Markdown note artifacts (`kb_core::notes`) — NOT the private
+            comments in `.review/*.json`, which is /review-notes below. */}
         <Route
           path="/notes"
           element={
             <RailShell rail={false}>
               <NotesRoute />
+            </RailShell>
+          }
+        />
+        {/* v0.40 TN — tag-filtered PRIVATE comments, one deep link per row.
+            Not `/notes` above (kb note artifacts — a different entity with
+            an unfortunately similar name); this is the review-comments
+            namespace, and only the operator ever gets here. */}
+        <Route
+          path="/review-notes"
+          element={
+            <RailShell rail={false}>
+              <ReviewNotesRoute />
             </RailShell>
           }
         />

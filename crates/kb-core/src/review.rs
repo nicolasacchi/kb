@@ -21,6 +21,17 @@
 //!
 //! Anchors use a tagged enum (4 scopes per topic 10 §I) so future
 //! migrations can add fields without breaking serde compat.
+//!
+//! Comments carry two orthogonal v0.40 axes: `tags` (comment-scoped
+//! labels, normalised by [`normalize_comment_tags`]) and `private` (a
+//! note no agent may see). The read rule is fail-closed and enforced
+//! structurally: all three renderers behind [`export`] take NO visibility
+//! parameter at all, so there is no flag a caller could pass;
+//! [`ReviewFile::open_count`] counts public comments only; and
+//! [`ReviewFile::visible`] / [`Visibility::includes`] are the only ways to
+//! opt in, which only the two operator `?visibility=` reads do. The two
+//! transports ([`embed_into_html`] / [`extract_from_html`]) and
+//! `kb backup` carry everything verbatim on purpose.
 
 use crate::types::KbName;
 use crate::{Error, Result};
@@ -104,8 +115,17 @@ pub struct ArtifactRef {
     pub pages: Vec<PageRef>,
 }
 
+/// serde's `skip_serializing_if` takes `&T -> bool`; a hand-rolled
+/// `is_false` is clippy's `nonminimal_bool` alternative to
+/// `std::ops::Not::not`. Used only by [`Comment::private`] (absent on
+/// disk == public).
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct PageRef {
     pub src: String,
     pub label: String,
@@ -146,6 +166,34 @@ pub struct Comment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub user: Option<String>,
+    /// v0.40 TN1 — comment-scoped labels, slug-normalised + sorted + deduped
+    /// at the write edge by [`normalize_comment_tags`] (the ONE normaliser
+    /// both the `PATCH …/meta` route and `BatchOp::SetMeta` go through, so
+    /// the two write paths cannot diverge). NEVER mirrored onto the
+    /// artifact's own `kb-tags`: that namespace belongs to frontmatter tags
+    /// and to the `status-approved` / `status-changes-requested` verdict
+    /// display shortcut, and sharing it would make a comment tag re-key the
+    /// artifact. Additive + skipped when empty, so a pre-TN sidecar
+    /// round-trips BYTE-IDENTICALLY.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // No `ts(optional)`: ts-rs permits it only on `Option<T>`, and the
+    // `choices`/`attachments` precedent above already emits a skipped
+    // `Vec` as a required TS field. Callers still read `c.tags ?? []` and
+    // `c.private === true`, which stays correct against an older daemon
+    // whose sidecars predate both keys.
+    pub tags: Vec<String>,
+    /// v0.40 TN2 — a private note: a comment no agent may ever see. The
+    /// read side is fail-closed: every kb-core renderer filters on
+    /// [`ReviewFile::visible`] / [`Comment::is_private`] with no opt-in
+    /// parameter, and [`ReviewFile::open_count`] counts public comments
+    /// only, so a missed filter undercounts (cosmetic) rather than leaking.
+    /// The two LOSSLESS transports ([`embed_into_html`] and `kb backup`,
+    /// which copies `.review/` verbatim) deliberately carry it — a move or a
+    /// restore must not destroy operator data. Additive + skipped when
+    /// false, so absence is indistinguishable from `false` on disk.
+    #[serde(default, skip_serializing_if = "is_false")]
+    // No `ts(optional)` — see `tags` above.
+    pub private: bool,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -162,6 +210,134 @@ impl Comment {
     pub fn is_open(&self) -> bool {
         matches!(self.status, CommentStatus::Open)
     }
+
+    /// `true` when this comment is a private note — i.e. one no agent may
+    /// see. Visibility is a SEPARATE axis from [`Comment::is_open`]: a
+    /// note can be open or resolved, and a private resolved comment is still
+    /// private. Every renderer pairs the two predicates rather than folding
+    /// them together, so "public and open" stays expressible.
+    pub fn is_private(&self) -> bool {
+        self.private
+    }
+}
+
+/// How much of a review file a read may see. `Public` is the fail-closed
+/// default every agent-facing surface uses; `All` is the operator opt-in
+/// carried by the `?visibility=` query param on the two review read routes.
+///
+/// Deliberately NOT ts-exported and never serialised: it is a request-side
+/// selector, not a wire value. The only wire form is the query string
+/// [`Visibility::from_query`] parses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Visibility {
+    /// Only non-private comments. The default — an absent `?visibility=`
+    /// means this, never "everything".
+    #[default]
+    Public,
+    /// Every comment, private notes included. Reached only through an
+    /// explicit operator read.
+    All,
+}
+
+impl Visibility {
+    /// Parse the `?visibility=` query value. Unknown values return `None`
+    /// so the route answers 400 rather than guessing (mirrors
+    /// [`ExportFormat::from_query`]).
+    pub fn from_query(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "public" => Some(Visibility::Public),
+            "all" => Some(Visibility::All),
+            _ => None,
+        }
+    }
+
+    /// Does this reader get to see `c`?
+    pub fn includes(self, c: &Comment) -> bool {
+        matches!(self, Visibility::All) || !c.is_private()
+    }
+}
+
+/// v0.40 TN1 — max comment tags on one comment. A chip row plus a facet
+/// list, not a metadata field.
+pub const MAX_COMMENT_TAGS: usize = 8;
+
+/// v0.40 TN1 — max length of ONE comment tag, measured on the SLUG (so it
+/// bounds what actually lands on disk, not the user's pre-slug phrasing).
+pub const MAX_COMMENT_TAG_LEN: usize = 48;
+
+/// v0.40 TN1 — WORK bound on the RAW array, NOT a product limit. Deliberately
+/// a different number from [`MAX_COMMENT_TAGS`] so the two can never be read
+/// as one.
+///
+/// The tag cap alone bounds the OUTPUT, not the WORK: it is checked only
+/// after the normalise loop, so it says nothing about how long that loop
+/// runs. Both write edges (`PATCH …/meta`, `POST …/comments`) take a `Json`
+/// body under axum's default 2 MB limit, and a 2 MB tags array is ~250k
+/// entries — minutes of CPU on a tokio worker, from a request any local
+/// caller can send unauthenticated over loopback. Rejecting over this bound
+/// BEFORE the loop is what makes that 400 cheap; the `HashSet` dedupe is the
+/// other half of the same fix, so the surviving per-entry work is a hash
+/// insert instead of a scan of everything seen so far.
+///
+/// The head-room over the real limit (4x) is for what a human actually types
+/// into a chip row — pre-slug phrasing, case variants, the same tag twice —
+/// all of which normalises down and stays well inside [`MAX_COMMENT_TAGS`].
+/// Anything that survives normalisation is still held to the real limit;
+/// this constant only says how much input may be OFFERED for normalisation.
+pub const MAX_RAW_COMMENT_TAGS: usize = 4 * MAX_COMMENT_TAGS;
+
+/// The ONE normaliser for comment tags, shared by the `PATCH …/meta` route
+/// and `BatchOp::SetMeta` so the two write paths cannot diverge.
+///
+/// Slugifies through [`crate::parser::slugify_tag`] (the only slugifier in
+/// the repo), drops slugs that come out empty — the same rule `PATCH
+/// …/meta` applies to artifact tags — dedupes AFTER slugifying (so
+/// `"Fleet Doc"` and `"fleet-doc"` are one tag, not two facet hits) and
+/// sorts, so the same tag SET always serialises to the same bytes and a
+/// no-op re-tag cannot churn the file's ETag.
+///
+/// Over-limit is an error, never a silent truncation: dropping a tag the
+/// operator asked for would make the stored document disagree with the
+/// response that claims to be its "effective values".
+pub fn normalize_comment_tags(raw: &[String]) -> Result<Vec<String>> {
+    if raw.len() > MAX_RAW_COMMENT_TAGS {
+        return Err(Error::BadRequest(format!(
+            "{} raw comment tag entries; at most {MAX_RAW_COMMENT_TAGS} reach the \
+             normaliser (a work bound — the {MAX_COMMENT_TAGS}-tag limit applies \
+             to the normalised set)",
+            raw.len()
+        )));
+    }
+    // `seen` is a `HashSet`, not a `Vec::contains` scan: this dedupe runs over
+    // caller-supplied input, so the linear scan made the whole function
+    // quadratic in the body size. `MAX_RAW_COMMENT_TAGS` is what keeps the
+    // loop short; the hash insert is what keeps each pass O(1).
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(raw.len());
+    for t in raw {
+        let s = crate::parser::slugify_tag(t);
+        if s.is_empty() {
+            continue;
+        }
+        if s.len() > MAX_COMMENT_TAG_LEN {
+            return Err(Error::BadRequest(format!(
+                "comment tag {s:?} is {} chars; max {MAX_COMMENT_TAG_LEN}",
+                s.len()
+            )));
+        }
+        if seen.insert(s.clone()) {
+            out.push(s);
+        }
+    }
+    if out.len() > MAX_COMMENT_TAGS {
+        return Err(Error::BadRequest(format!(
+            "{} comment tags; max {MAX_COMMENT_TAGS}",
+            out.len()
+        )));
+    }
+    out.sort();
+    Ok(out)
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -750,11 +926,42 @@ impl ReviewFile {
         }
     }
 
-    pub fn open_count(&self) -> usize {
+    /// The comments a reader of `v` may see, in document order. THE single
+    /// selection point: every list/render surface in the workspace selects
+    /// through this or through [`Comment::is_private`] — never by hand-
+    /// rolling `!c.private` beside a status check, which is how the two
+    /// axes silently drift apart.
+    pub fn visible(&self, v: Visibility) -> Vec<&Comment> {
+        self.comments.iter().filter(|c| v.includes(c)).collect()
+    }
+
+    /// Open comments an agent may see. The ONE iterator behind
+    /// [`ReviewFile::open_count`], [`ReviewFile::visible_open_count`] and
+    /// the Claude-prompt builder, so "public and open" cannot be spelled
+    /// three slightly different ways.
+    fn open_visible_comments(&self) -> impl Iterator<Item = &Comment> {
         self.comments
             .iter()
-            .filter(|c| c.status == CommentStatus::Open)
-            .count()
+            .filter(|c| c.is_open() && !c.is_private())
+    }
+
+    /// How many OPEN comments a reader may see. `Visibility::Public` is
+    /// what every count an agent can observe uses — including the
+    /// `comments.updated` SSE payload — so a private note does not even
+    /// register as a change in the fleet's open work.
+    pub fn visible_open_count(&self) -> usize {
+        self.open_visible_comments().count()
+    }
+
+    /// How many open comments this file has, for any reader. Signature
+    /// unchanged since v0.2; the MEANING is public-only as of v0.40 TN2
+    /// (changed in place, deliberately with no `open_count_public()`
+    /// sibling — fail-closed: a call site nobody updates undercounts,
+    /// which is a cosmetic lie, instead of leaking the existence of a
+    /// note). The operator's exact figure comes from the review file
+    /// itself, not from a count.
+    pub fn open_count(&self) -> usize {
+        self.visible_open_count()
     }
 
     // --- R4 — typed mutations -------------------------------------------
@@ -786,6 +993,8 @@ impl ReviewFile {
             choices: spec.choices,
             attachments: spec.attachments,
             user: spec.user,
+            tags: spec.tags,
+            private: spec.private,
         });
         self.comments.last().expect("just pushed")
     }
@@ -829,9 +1038,33 @@ impl ReviewFile {
     /// Flip every comment NOT already at `status` to `status`; returns the
     /// count flipped. Backs `resolve-all` / `unresolve-all` (one mutation,
     /// one save, one SSE).
+    ///
+    /// v0.40 TN2 — PRIVATE notes are skipped in the flip AND in the count,
+    /// and there is deliberately no parameter to widen that: the rule is
+    /// fail-closed, so no caller can opt in from the outside. Two reasons,
+    /// and the second is the one that bites:
+    ///   1. The count. `flipped` is answered to the agent in the same JSON
+    ///      object as the public-only `open_count`, so counting a note
+    ///      yields `flipped: 1, open_count: 0` — an existence disclosure
+    ///      needing no arithmetic at all. Skipping keeps the two numbers in
+    ///      agreement by construction rather than by a second filter.
+    ///   2. The side effect. Flipping a note the agent cannot see was
+    ///      harmless only while `flipped` and the visible set were the same
+    ///      set; with notes they differ, and a local agent could quietly
+    ///      resolve the operator's private reminders.
+    ///
+    /// A file whose only open comments are notes therefore reports
+    /// `flipped: 0`, which both callers turn into a no-op — no rewrite, no
+    /// `comments.updated` emit, and `BatchOp::ResolveAll` counts the op as
+    /// unmutated. Flipping notes deliberately stays a DIFFERENT operation:
+    /// if it is ever wanted, it gets its own explicit method (the same
+    /// public/all pair `visible` uses), never a flag on this one.
     pub fn set_all_status(&mut self, status: CommentStatus) -> usize {
         let mut flipped = 0;
         for c in &mut self.comments {
+            if c.is_private() {
+                continue;
+            }
             if c.status != status {
                 c.status = status;
                 flipped += 1;
@@ -895,6 +1128,55 @@ impl ReviewFile {
         let c = self.comment_mut(comment_id)?;
         let changed = c.anchor != anchor;
         c.anchor = anchor;
+        Ok(changed)
+    }
+
+    /// v0.40 TN1/TN2 — set a comment's tags and/or private flag.
+    ///
+    /// `None` on a field means "don't touch it", which is why the request
+    /// shape carries `Option<bool>` while the stored field is a plain
+    /// `bool`: absent must be distinguishable from an explicit
+    /// un-privating, and the three states (don't touch / public / private)
+    /// are not a two-valued enum.
+    ///
+    /// `tags` is normalised through [`normalize_comment_tags`] HERE
+    /// rather than at the edges, so the `PATCH …/meta` route and
+    /// `BatchOp::SetMeta` cannot store two different shapes for the same
+    /// input. Over-limit / neither-field-set are `Err(BadRequest)` (400);
+    /// a missing id is `Err(NotFound)` (404).
+    ///
+    /// Returns `Ok(false)` when neither field actually moved (G8 — the
+    /// route then skips both the `save_atomic` and the `comments.updated`
+    /// emit, so re-clicking a tag doesn't rewrite the file or re-notify
+    /// every open tab). Does NOT stamp `edited_at`, for the same reason
+    /// [`ReviewFile::set_comment_anchor`] doesn't: that badge means "the
+    /// human changed what I wrote", and tagging a comment is not that.
+    pub fn set_comment_meta(
+        &mut self,
+        comment_id: &str,
+        tags: Option<&[String]>,
+        private: Option<bool>,
+    ) -> Result<bool> {
+        if tags.is_none() && private.is_none() {
+            return Err(Error::BadRequest(
+                "comment meta patch must set at least one of: tags, private".into(),
+            ));
+        }
+        let normalized = tags.map(normalize_comment_tags).transpose()?;
+        let c = self.comment_mut(comment_id)?;
+        let mut changed = false;
+        if let Some(next) = normalized {
+            if c.tags != next {
+                c.tags = next;
+                changed = true;
+            }
+        }
+        if let Some(next) = private {
+            if c.private != next {
+                c.private = next;
+                changed = true;
+            }
+        }
         Ok(changed)
     }
 
@@ -1014,6 +1296,10 @@ impl ReviewFile {
     /// Every attachment id referenced by any comment OR reply. Feeds the
     /// GC reference check — an `adopted` blob whose id is NOT in this set
     /// is an orphan (its owning comment/reply was deleted) and reapable.
+    ///
+    /// v0.40 TN2 — deliberately UNFILTERED. A private note's attachment
+    /// is still referenced; dropping it here would let the GC reap the
+    /// operator's blob. GC is a storage decision, not a read surface.
     pub fn referenced_attachment_ids(&self) -> std::collections::HashSet<String> {
         let mut ids = std::collections::HashSet::new();
         for c in &self.comments {
@@ -1082,6 +1368,10 @@ pub enum BatchOp {
         file: Option<String>,
         #[serde(rename = "fileLabel", default)]
         file_label: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        private: bool,
     },
     AddReply {
         comment_id: String,
@@ -1102,6 +1392,19 @@ pub enum BatchOp {
     SetAnchor {
         comment_id: String,
         anchor: Anchor,
+    },
+    /// v0.40 TN1/TN2 — set a comment's tags and/or private flag
+    /// (`{"op":"set_meta","comment_id":"c_…","tags":["a"],"private":true}`).
+    /// Present so the field is reachable from the batch path too: a
+    /// capability that only the HTTP route can reach is dead everywhere
+    /// else. Tags are normalised by
+    /// [`ReviewFile::set_comment_meta`], the same call the route makes.
+    SetMeta {
+        comment_id: String,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
+        #[serde(default)]
+        private: Option<bool>,
     },
     Resolve {
         comment_id: String,
@@ -1144,6 +1447,8 @@ impl BatchOp {
                 choices,
                 file,
                 file_label,
+                tags,
+                private,
             } => {
                 let spec = NewComment {
                     file: file.clone().unwrap_or_else(|| default_file.to_string()),
@@ -1154,6 +1459,11 @@ impl BatchOp {
                     choices: choices.clone(),
                     attachments: Vec::new(),
                     user: None,
+                    // Same normaliser the `add_comment` route runs, so a
+                    // tag set written through the batch path is
+                    // byte-identical to one written through HTTP.
+                    tags: normalize_comment_tags(tags)?,
+                    private: *private,
                 };
                 let id = f.add_comment(spec).id.clone();
                 report.created_comment_ids.push(id);
@@ -1186,6 +1496,13 @@ impl BatchOp {
             }
             BatchOp::SetAnchor { comment_id, anchor } => {
                 report.mutated |= f.set_comment_anchor(comment_id, anchor.clone())?;
+            }
+            BatchOp::SetMeta {
+                comment_id,
+                tags,
+                private,
+            } => {
+                report.mutated |= f.set_comment_meta(comment_id, tags.as_deref(), *private)?;
             }
             BatchOp::Resolve { comment_id } => {
                 report.mutated |= f.set_comment_status(comment_id, CommentStatus::Resolved)?;
@@ -1254,6 +1571,16 @@ pub struct NewComment {
     /// v0.34 X1 — attribution username (lowercase). `None` leaves the
     /// field unset on the stored comment.
     pub user: Option<String>,
+    /// v0.40 TN1 — comment tags, already normalised by
+    /// [`normalize_comment_tags`] at the write edge. `Vec::new()` means
+    /// "no tags" (the key is then skipped on disk). No `Default`: like
+    /// every other field here, an omitted spec field is a bug, and this
+    /// one is deliberately a compile-time tripwire so a caller can't
+    /// forget to think about tags on a new comment.
+    pub tags: Vec<String>,
+    /// v0.40 TN2 — create this comment as a private note. `false` is the
+    /// ordinary public comment.
+    pub private: bool,
 }
 
 /// Fresh comment id: `c_` + 12 hex chars (6 random bytes). Collisions only
@@ -1480,11 +1807,24 @@ impl ExportFormat {
 /// Render a review file in the chosen format. Lifts the v0.2-era
 /// `kb-cli build_claude_prompt` body so kb-cli AND the v0.5 server-
 /// side `POST /api/kb/{kb}/review/{id}/export` both call one impl.
+///
+/// Every arm is public-only, with NO opt-in parameter — the absence of
+/// the parameter IS the guarantee, so there is no flag a future caller
+/// can pass to an agent-reachable renderer. (`export --embed` is the
+/// documented lossless path, and `kb backup` copies `.review/` verbatim,
+/// so no operator data is lost by this filter.)
 pub fn export(file: &ReviewFile, kb: &str, format: ExportFormat) -> Result<String> {
     Ok(match format {
         ExportFormat::Claude => build_claude_prompt(file, kb),
         ExportFormat::Markdown => build_markdown_summary(file, kb),
-        ExportFormat::Json => serde_json::to_string_pretty(file)?,
+        // v0.40 TN2 — `export --format json` is agent-reachable
+        // (`kb comments export --format json`), so it is public-only per
+        // the visibility rule. One clone, this arm only.
+        ExportFormat::Json => {
+            let mut public = file.clone();
+            public.comments.retain(|c| !c.is_private());
+            serde_json::to_string_pretty(&public)?
+        }
     })
 }
 
@@ -1502,11 +1842,10 @@ fn build_claude_prompt(file: &ReviewFile, kb: &str) -> String {
         "The kb-comments/1 file lives at `<kb-state>/kb/{kb}/.review/{}.json`.\n\n",
         file.artifact.id
     ));
-    let opens: Vec<&Comment> = file
-        .comments
-        .iter()
-        .filter(|c| matches!(c.status, CommentStatus::Open))
-        .collect();
+    // v0.40 TN2 — `open_visible_comments` is the same iterator
+    // `open_count` uses, so the prompt can never show a private note and
+    // the count can never disagree with it.
+    let opens: Vec<&Comment> = file.open_visible_comments().collect();
     if opens.is_empty() {
         out.push_str("(no open comments)\n");
         return out;
@@ -1535,7 +1874,10 @@ fn build_claude_prompt(file: &ReviewFile, kb: &str) -> String {
 
 /// Plain Markdown rendering (no Claude prompt scaffolding). Includes
 /// resolved comments too with a marker, so a human reviewer sees the
-/// full conversation history.
+/// full conversation history. v0.40 TN2 — public-only, like the Claude
+/// arm: the markdown summary is what `kb comments export` hands an agent
+/// and what a human reads in the same place, so a note is simply not
+/// rendered rather than rendered with a marker.
 fn build_markdown_summary(file: &ReviewFile, kb: &str) -> String {
     let mut out = String::new();
     let title = if file.artifact.title.is_empty() {
@@ -1548,11 +1890,15 @@ fn build_markdown_summary(file: &ReviewFile, kb: &str) -> String {
         "kb: `{kb}` · artifact: `{}`\n\n",
         file.artifact.id
     ));
-    if file.comments.is_empty() {
+    // The early-out tests the VISIBLE set: a file whose only comment is a
+    // private note must read "(no comments)", not print a heading and
+    // then nothing under it.
+    let visible = file.visible(Visibility::Public);
+    if visible.is_empty() {
         out.push_str("(no comments)\n");
         return out;
     }
-    for c in &file.comments {
+    for c in visible {
         let marker = match c.status {
             CommentStatus::Open => "○",
             CommentStatus::Resolved => "●",
@@ -1600,6 +1946,17 @@ fn author_str(a: &Author) -> &'static str {
 // `#redline-state`, but carries kb's own `kb-comments/1` envelope verbatim,
 // so `import` round-trips ids, statuses, replies, and timestamps exactly
 // (unlike replaying as fresh `add` ops, which would reassign ids).
+//
+// v0.40 TN2 — DELIBERATELY UNFILTERED. This pair is a LOSSLESS
+// MOVE/RESTORE TRANSPORT, not a render: the embedded block is the whole
+// sidecar envelope, and `POST …/import` restores from it. A
+// `private`-filtering "consistency sweep" here would silently destroy
+// the operator's notes on every export/import cycle — a far worse failure
+// than the leak it prevents, and one that needs the operator to hand an
+// HTML bundle to an agent to trigger. `kb backup` is the other verbatim
+// path (it copies `.review/` as-is) and the anchor-stale sidecar is a
+// third (ids and a score only, never a body). Renderers filter; transports
+// do not. Do not add a filter here.
 
 /// `id` of the inert `<script type="application/json">` block that
 /// [`embed_into_html`] writes and [`extract_from_html`] reads.
@@ -1612,6 +1969,7 @@ pub const EMBED_SCRIPT_ID: &str = "kb-review-state";
 /// before `</head>` (else `</body>`, else appended). `</` inside the JSON
 /// is escaped to `<\/` so a comment body containing `</script>` can't close
 /// the block early; [`extract_from_html`] reverses it.
+/// v0.40 TN2 — carries private notes verbatim; see the module note above.
 pub fn embed_into_html(html: &str, file: &ReviewFile) -> Result<String> {
     let stripped = strip_embedded_state(html);
     let json = serde_json::to_string(file)?;
@@ -1630,6 +1988,7 @@ pub fn embed_into_html(html: &str, file: &ReviewFile) -> Result<String> {
 /// Parse the embedded `#kb-review-state` block back into a [`ReviewFile`].
 /// `Ok(None)` when no block is present (a plain artifact); `Err` when the
 /// block is present but malformed or carries an unsupported schema.
+/// v0.40 TN2 — restores private notes verbatim; see the module note above.
 pub fn extract_from_html(html: &str) -> Result<Option<ReviewFile>> {
     use scraper::{Html, Selector};
     let doc = Html::parse_document(html);
@@ -1708,6 +2067,8 @@ mod tests {
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: vec![],
+            private: false,
         });
         f
     }
@@ -1843,6 +2204,190 @@ mod tests {
         assert!(
             !raw.contains("\"user\": null"),
             "absent user must be omitted, not null"
+        );
+    }
+
+    // --- v0.40 TN1/TN2 — tags + private notes ---------------------------
+
+    /// The one test that guards the additive-on-disk contract. A legacy
+    /// sidecar — written before `tags`/`private` existed, hand-checked
+    /// against the shape `save_atomic` produces — must come back out
+    /// BYTE-IDENTICAL after a load + save with no mutation. A missing
+    /// `skip_serializing_if` injects `"tags": []` / `"private": false`
+    /// into every comment of every review file in the fleet, which is an
+    /// ETag/byte-diff storm rather than a subtle bug.
+    #[test]
+    fn legacy_sidecar_round_trips_byte_identically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("legacy.json");
+        let legacy = r#"{
+  "schema": "kb-comments/1",
+  "artifact": {
+    "id": "abc123def456",
+    "title": "Borrow Checker",
+    "kb": "smoke",
+    "tags": [],
+    "pages": []
+  },
+  "generatedAt": "2026-05-12T10:00:00Z",
+  "comments": [
+    {
+      "id": "c_1",
+      "status": "open",
+      "file": "abc123def456",
+      "fileLabel": "main",
+      "anchor": {
+        "kind": "section",
+        "id": "intro",
+        "tag": "h2",
+        "snippet": "Borrow Checker is a static analysis…"
+      },
+      "author": "you",
+      "body": "what about Pin<&mut Self>?",
+      "createdAt": "2026-05-12T10:05:00Z",
+      "editedAt": null,
+      "replies": [],
+      "choices": [],
+      "attachments": []
+    },
+    {
+      "id": "c_2",
+      "status": "resolved",
+      "file": "abc123def456",
+      "fileLabel": "main",
+      "anchor": {
+        "kind": "file"
+      },
+      "author": "claude",
+      "body": "answered already",
+      "createdAt": "2026-05-12T11:00:00Z",
+      "editedAt": null,
+      "replies": [],
+      "choices": [],
+      "attachments": [],
+      "user": "nik"
+    }
+  ]
+}"#;
+        // No trailing newline: `save_atomic` writes `to_vec_pretty`, which
+        // emits none, so a legacy literal that ends in one would fail this
+        // assertion on a byte that says nothing about key injection.
+        std::fs::write(&path, legacy).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        let file = load(&path).unwrap().expect("legacy sidecar must load");
+        assert_eq!(file.comments.len(), 2);
+        assert!(file.comments[0].tags.is_empty());
+        assert!(!file.comments[0].private);
+        save_atomic(&path, &file, None).unwrap();
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "an unmutated legacy sidecar must re-save byte-identically"
+        );
+    }
+
+    #[test]
+    fn tags_and_private_round_trip_and_stay_absent_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("review.json");
+        let mut file = fixture_file();
+        file.comments[0].tags = vec!["fleet-doc".into(), "wording".into()];
+        file.comments[0].private = true;
+        save_atomic(&path, &file, None).unwrap();
+
+        let loaded = load(&path).unwrap().unwrap();
+        assert_eq!(loaded.comments[0].tags, ["fleet-doc", "wording"]);
+        assert!(loaded.comments[0].is_private());
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"tags\""));
+        assert!(raw.contains("\"private\": true"));
+
+        // The other direction: a comment with no tags and no private flag
+        // must serialise with NEITHER key present — absence is the
+        // representation, and the SPA reads `c.tags ?? []`.
+        //
+        // Scoped to the COMMENT object on purpose. A whole-document
+        // `contains("\"tags\"")` would trip on `artifact.tags`, which is a
+        // different field with a different owner and legitimately present.
+        let plain = export(&fixture_file(), "smoke", ExportFormat::Json).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        let comment = &doc["comments"][0];
+        assert!(comment.get("tags").is_none(), "got: {comment}");
+        assert!(comment.get("private").is_none(), "got: {comment}");
+    }
+
+    #[test]
+    fn normalize_comment_tags_slugifies_dedupes_and_sorts() {
+        let raw: Vec<String> = ["Fleet Doc", "fleet-doc", "  ", "TODO: rewrite"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            normalize_comment_tags(&raw).unwrap(),
+            vec!["fleet-doc".to_string(), "todo-rewrite".to_string()]
+        );
+        // Slugs that come out empty are dropped silently (the artifact-tag
+        // rule), and an all-empty input CLEARS the tags rather than erroring.
+        assert_eq!(
+            normalize_comment_tags(&["!!".to_string(), "real".to_string()]).unwrap(),
+            vec!["real".to_string()]
+        );
+        assert!(normalize_comment_tags(&["!!".to_string()])
+            .unwrap()
+            .is_empty());
+        // Order-independent: the same set always produces the same bytes.
+        let a = normalize_comment_tags(&["b".to_string(), "a".to_string()]).unwrap();
+        let b = normalize_comment_tags(&["a".to_string(), "b".to_string()]).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn normalize_comment_tags_rejects_over_limit() {
+        let nine: Vec<String> = (0..9).map(|i| format!("t{i}")).collect();
+        let err = normalize_comment_tags(&nine).unwrap_err();
+        assert!(
+            matches!(err, Error::BadRequest(_)),
+            "9 tags must be rejected, never silently truncated, got {err:?}"
+        );
+        // Exactly at the limit is fine.
+        assert!(normalize_comment_tags(&nine[..8]).is_ok());
+        let long = "x".repeat(MAX_COMMENT_TAG_LEN + 1);
+        assert!(matches!(
+            normalize_comment_tags(&[long]).unwrap_err(),
+            Error::BadRequest(_)
+        ));
+        assert!(normalize_comment_tags(&["x".repeat(MAX_COMMENT_TAG_LEN)]).is_ok());
+
+        // v0.40 TN1 — the RAW work bound, which is NOT the tag limit. The tag
+        // cap is checked after the loop, so on its own it bounds the OUTPUT
+        // and not the WORK: both write edges take a `Json` body under axum's
+        // 2 MB default limit, and a dedupe scan over that is minutes of CPU
+        // on a worker, from an unauthenticated loopback POST. This bound is
+        // what makes the 400 cheap, and it counts RAW entries — so the input
+        // that must still be ACCEPTED is one full past the raw bound that
+        // collapses to a single tag.
+        let collapsed: Vec<String> = (0..MAX_RAW_COMMENT_TAGS)
+            .map(|_| "fleet doc".to_string())
+            .collect();
+        assert_eq!(
+            normalize_comment_tags(&collapsed).unwrap(),
+            vec!["fleet-doc".to_string()],
+            "{MAX_RAW_COMMENT_TAGS} raw entries that normalise to one tag is still one tag"
+        );
+
+        // One entry over the raw bound is rejected — and rejected by the
+        // BOUND rather than by normalisation: the first entry is an
+        // over-long slug, so a bound checked after the loop would report the
+        // per-tag length error instead. The message is the only observable
+        // difference between the two, which is why it is asserted.
+        let mut over: Vec<String> = vec!["x".repeat(MAX_COMMENT_TAG_LEN + 1)];
+        over.extend((0..MAX_RAW_COMMENT_TAGS).map(|i| format!("t{i}")));
+        let err = normalize_comment_tags(&over).unwrap_err();
+        assert!(
+            matches!(&err, Error::BadRequest(m) if m.contains("raw comment tag entries")),
+            "an over-bound body must be refused by the work bound, got {err:?}"
         );
     }
 
@@ -2084,7 +2629,7 @@ mod tests {
     }
 
     #[test]
-    fn open_count_excludes_resolved() {
+    fn open_count_excludes_resolved_and_private() {
         let kb = fixture_kb();
         let mut f = ReviewFile::empty_skeleton(&kb, "id1", "T");
         f.comments.push(Comment {
@@ -2101,6 +2646,8 @@ mod tests {
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: vec![],
+            private: false,
         });
         f.comments.push(Comment {
             id: "b".into(),
@@ -2116,8 +2663,43 @@ mod tests {
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: vec![],
+            private: false,
         });
         assert_eq!(f.open_count(), 1);
+
+        // v0.40 TN2 — an OPEN private note must not move the count the
+        // agent reads (and the `comments.updated` payload carries): the
+        // count would otherwise prove the note exists.
+        f.comments.push(Comment {
+            id: "c_note".into(),
+            status: CommentStatus::Open,
+            file: "id1".into(),
+            file_label: "main".into(),
+            anchor: Anchor::File,
+            author: Author::You,
+            body: "secret".into(),
+            created_at: Utc::now(),
+            edited_at: None,
+            replies: vec![],
+            choices: vec![],
+            attachments: vec![],
+            user: None,
+            tags: vec!["wording".into()],
+            private: true,
+        });
+        assert_eq!(
+            f.open_count(),
+            1,
+            "a private note must not change the agent-visible open count"
+        );
+        assert_eq!(f.visible_open_count(), 1, "Public is the counted view");
+        assert_eq!(
+            f.visible(Visibility::All).len(),
+            3,
+            "the operator's opt-in read still sees everything"
+        );
+        assert_eq!(f.visible(Visibility::Public).len(), 2);
     }
 
     // --- R4 typed mutations ---------------------------------------------
@@ -2132,6 +2714,8 @@ mod tests {
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: vec![],
+            private: false,
         }
     }
 
@@ -2199,13 +2783,30 @@ mod tests {
         let c_resolved = f.add_comment(spec("c")).id.clone();
         f.set_comment_status(&c_resolved, CommentStatus::Resolved)
             .unwrap();
-        // 2 open + 1 resolved; resolve-all flips the 2 open only.
+        // v0.40 TN2 — a fourth comment, open and PRIVATE.
+        let mut note = spec("a private note");
+        note.private = true;
+        let c_note = f.add_comment(note).id.clone();
+        // 2 open + 1 resolved + 1 open note; resolve-all flips the 2 open
+        // PUBLIC ones only. Both halves of that matter, and the count is the
+        // sharper one: the route answers `flipped` in the same JSON object
+        // as the public-only `open_count`, so a counted note is a bare
+        // existence disclosure (`flipped: 1, open_count: 0`) on a route any
+        // agent can call. The flip itself would resolve a note the agent is
+        // not allowed to know exists.
         assert_eq!(f.set_all_status(CommentStatus::Resolved), 2);
         assert_eq!(f.open_count(), 0);
-        // Already all resolved → 0 flipped (idempotent).
+        assert_eq!(
+            f.comments.iter().find(|c| c.id == c_note).unwrap().status,
+            CommentStatus::Open,
+            "resolve-all must leave a private note's status alone"
+        );
+        // Already all resolved (the note is never "all") → 0 flipped.
         assert_eq!(f.set_all_status(CommentStatus::Resolved), 0);
-        // unresolve-all flips all 3 back.
+        // unresolve-all flips the 3 public ones back — 3, not 4: the note is
+        // already Open, and it is not in the public open set either.
         assert_eq!(f.set_all_status(CommentStatus::Open), 3);
+        assert_eq!(f.open_count(), 3);
     }
 
     #[test]
@@ -2254,6 +2855,50 @@ mod tests {
             f.set_comment_anchor("c_x", Anchor::File),
             Err(Error::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn set_comment_meta_is_a_noop_when_nothing_changes() {
+        let mut f = fixture_file();
+        assert!(f.comments[0].edited_at.is_none());
+
+        // A patch that sets NEITHER field is a caller bug, not a no-op —
+        // answering 200 here would silently swallow a malformed request.
+        assert!(matches!(
+            f.set_comment_meta("c_1", None, None),
+            Err(Error::BadRequest(_))
+        ));
+
+        let raw = vec!["Fleet Doc".to_string(), "a".to_string()];
+        assert!(f.set_comment_meta("c_1", Some(&raw), Some(true)).unwrap());
+        assert_eq!(f.comments[0].tags, ["a", "fleet-doc"]);
+        assert!(f.comments[0].private);
+        // Tagging is not a content edit — the badge stays off (same rule
+        // as set_comment_anchor).
+        assert!(f.comments[0].edited_at.is_none());
+
+        // G8: the same effective values (here in different spelling) move
+        // nothing, so the route can skip both the save and the SSE.
+        let same = vec!["FLEET DOC".to_string(), "A".to_string()];
+        assert!(!f.set_comment_meta("c_1", Some(&same), Some(true)).unwrap());
+        // …and neither does a patch that only repeats the private flag.
+        assert!(!f.set_comment_meta("c_1", None, Some(true)).unwrap());
+        // …but clearing the tags is a real change.
+        assert!(f.set_comment_meta("c_1", Some(&[]), None).unwrap());
+        assert!(f.comments[0].tags.is_empty());
+        assert!(f.comments[0].private, "an absent field must not be touched");
+
+        assert!(matches!(
+            f.set_comment_meta("c_nope", None, Some(false)),
+            Err(Error::NotFound(_))
+        ));
+        // Over-limit input is rejected BEFORE the comment is touched.
+        let nine: Vec<String> = (0..9).map(|i| format!("t{i}")).collect();
+        assert!(matches!(
+            f.set_comment_meta("c_1", Some(&nine), None),
+            Err(Error::BadRequest(_))
+        ));
+        assert!(f.comments[0].tags.is_empty());
     }
 
     #[test]
@@ -2986,6 +3631,8 @@ mod tests {
                 choices: vec![],
                 file: None,
                 file_label: None,
+                tags: vec![],
+                private: false,
             },
             BatchOp::AddReply {
                 comment_id: "c_does_not_exist".into(),
@@ -3014,12 +3661,16 @@ mod tests {
             choices: vec![],
             file: None,
             file_label: None,
+            tags: vec![],
+            private: false,
         }];
         let rep = f.apply_ops(&ops, "the-artifact").unwrap();
         assert_eq!(rep.created_comment_ids.len(), 1);
         assert_eq!(f.comments[0].file, "the-artifact");
         assert_eq!(f.comments[0].file_label, "main");
     }
+
+    // --- v0.40 TN1/TN2 — meta through the batch path --------------------
 
     #[test]
     fn apply_ops_noop_batch_reports_unmutated() {
@@ -3033,6 +3684,101 @@ mod tests {
         let rep = f.apply_ops(&ops, "abc123def456").unwrap();
         assert_eq!(rep.applied, 1);
         assert!(!rep.mutated, "no-op batch must report mutated=false (G8)");
+
+        // Same rule for a meta patch that lands on the values already
+        // stored — otherwise every tag click rewrites the file and
+        // re-notifies every open tab.
+        f.set_comment_meta("c_1", Some(&["wording".to_string()]), Some(true))
+            .unwrap();
+        let rep = f
+            .apply_ops(
+                &[BatchOp::SetMeta {
+                    comment_id: "c_1".into(),
+                    tags: Some(vec!["WORDING".to_string()]),
+                    private: Some(true),
+                }],
+                "abc123def456",
+            )
+            .unwrap();
+        assert!(
+            !rep.mutated,
+            "no-op set_meta must report mutated=false (G8)"
+        );
+        assert_eq!(f.comments[0].tags, ["wording"]);
+    }
+
+    #[test]
+    fn batch_op_add_comment_carries_tags_and_private() {
+        let mut f = fixture_file();
+        let ops = vec![BatchOp::AddComment {
+            anchor: Anchor::File,
+            author: Author::You,
+            body: "a note".into(),
+            choices: vec![],
+            file: None,
+            file_label: None,
+            tags: vec!["Wording".into(), "wording".into()],
+            private: true,
+        }];
+        f.apply_ops(&ops, "abc123def456").unwrap();
+        let added = f.comments.last().unwrap();
+        assert!(added.is_private());
+        // Normalised by the SAME helper the route calls, so the batch and
+        // HTTP write paths cannot store two shapes for one input.
+        assert_eq!(added.tags, ["wording"]);
+        // …and the note stays out of the agent-facing read paths.
+        assert_eq!(f.open_count(), 1);
+        assert_eq!(f.visible(Visibility::All).len(), 2);
+    }
+
+    #[test]
+    fn batch_op_set_meta_deserialises_tagged_wire_shape() {
+        let json = r#"[{"op":"set_meta","comment_id":"c_1","tags":["A","a"]}]"#;
+        let ops: Vec<BatchOp> = serde_json::from_str(json).unwrap();
+        let BatchOp::SetMeta {
+            comment_id,
+            tags,
+            private,
+        } = &ops[0]
+        else {
+            panic!("expected a set_meta op, got {:?}", ops[0]);
+        };
+        assert_eq!(comment_id, "c_1");
+        assert!(private.is_none(), "an absent private key means don't touch");
+        assert_eq!(tags.as_deref().unwrap().len(), 2, "raw input, pre-slugify");
+
+        let mut f = fixture_file();
+        assert!(f.apply_ops(&ops, "abc123def456").unwrap().mutated);
+        assert_eq!(f.comments[0].tags, ["a"]);
+    }
+
+    #[test]
+    fn batch_op_set_meta_rejects_over_limit_and_missing_comments() {
+        let mut f = fixture_file();
+        let nine: Vec<String> = (0..9).map(|i| format!("t{i}")).collect();
+        let err = f
+            .apply_ops(
+                &[BatchOp::SetMeta {
+                    comment_id: "c_1".into(),
+                    tags: Some(nine),
+                    private: None,
+                }],
+                "abc123def456",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "got {err:?}");
+        assert!(matches!(
+            f.apply_ops(
+                &[BatchOp::SetMeta {
+                    comment_id: "c_nope".into(),
+                    tags: None,
+                    private: Some(true),
+                }],
+                "abc123def456",
+            )
+            .unwrap_err(),
+            Error::NotFound(_)
+        ));
     }
 
     #[test]
@@ -3100,6 +3846,30 @@ mod tests {
         ));
     }
 
+    /// v0.40 TN2 — the transport is LOSSLESS on purpose. Filtering a
+    /// private note out of `#kb-review-state` would delete operator data
+    /// on every export → import move, which is worse than any leak this
+    /// filter guards; `kb backup` copies `.review/` verbatim for the same
+    /// reason.
+    #[test]
+    fn embed_extract_round_trips_private_comments() {
+        let mut f = fixture_file();
+        let mut note = f.comments[0].clone();
+        note.id = "c_note".into();
+        note.body = "do not ship this wording".into();
+        note.tags = vec!["wording".into()];
+        note.private = true;
+        f.comments.push(note);
+
+        let html = "<html><head></head><body></body></html>";
+        let embedded = embed_into_html(html, &f).unwrap();
+        let back = extract_from_html(&embedded).unwrap().unwrap();
+        assert_eq!(back.comments.len(), 2);
+        assert!(back.comments[1].is_private());
+        assert_eq!(back.comments[1].body, "do not ship this wording");
+        assert_eq!(back.comments[1].tags, ["wording"]);
+    }
+
     // --- v0.5 P3 — review::export ---------------------------------------
 
     #[test]
@@ -3159,11 +3929,83 @@ mod tests {
             choices: vec![],
             attachments: vec![],
             user: None,
+            tags: vec![],
+            private: false,
         });
         let body = export(&file, "smoke", ExportFormat::Markdown).unwrap();
         // Resolved marker + open marker both appear.
         assert!(body.contains("● section:intro"), "got: {body}");
         assert!(body.contains("○ file"));
         assert!(body.contains("second comment"));
+    }
+
+    /// A review file with one public and one private OPEN comment — the
+    /// exact shape every leak test below needs. The note is tagged too, so
+    /// a renderer that echoed the whole comment would leak its tags as
+    /// well as its body.
+    fn file_with_one_public_and_one_note() -> ReviewFile {
+        let mut f = fixture_file();
+        let mut note = f.comments[0].clone();
+        note.id = "c_note".into();
+        note.body = "do not ship this wording".into();
+        note.tags = vec!["wording".into()];
+        note.private = true;
+        f.comments.push(note);
+        f
+    }
+
+    #[test]
+    fn export_claude_format_omits_private_comments() {
+        // The LLM's actual read path (`kb comments export --format claude`
+        // and `POST …/export?format=claude`). No visibility parameter
+        // exists on this function, so the filter is the only thing
+        // standing between a note and the model.
+        let body = export(
+            &file_with_one_public_and_one_note(),
+            "smoke",
+            ExportFormat::Claude,
+        )
+        .unwrap();
+        assert!(body.contains("what about Pin"), "got: {body}");
+        assert!(
+            !body.contains("do not ship this wording"),
+            "private note leaked into the claude prompt: {body}"
+        );
+    }
+
+    #[test]
+    fn export_markdown_format_omits_private_comments() {
+        let body = export(
+            &file_with_one_public_and_one_note(),
+            "smoke",
+            ExportFormat::Markdown,
+        )
+        .unwrap();
+        assert!(body.contains("what about Pin"), "got: {body}");
+        assert!(!body.contains("do not ship this wording"), "got: {body}");
+    }
+
+    #[test]
+    fn export_markdown_of_a_note_only_file_reads_as_empty() {
+        // The early-out must test the VISIBLE set, not `comments.is_empty()`.
+        let mut f = fixture_file();
+        f.comments[0].private = true;
+        let body = export(&f, "smoke", ExportFormat::Markdown).unwrap();
+        assert!(body.contains("(no comments)"), "got: {body}");
+        assert!(!body.contains("what about Pin"), "got: {body}");
+    }
+
+    #[test]
+    fn export_json_format_omits_private_comments() {
+        let body = export(
+            &file_with_one_public_and_one_note(),
+            "smoke",
+            ExportFormat::Json,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let comments = parsed["comments"].as_array().unwrap();
+        assert_eq!(comments.len(), 1, "got: {body}");
+        assert_eq!(comments[0]["id"].as_str(), Some("c_1"));
     }
 }

@@ -171,6 +171,11 @@ pub(crate) async fn compute_items(
     // like the inbox: a missing dir or malformed file contributes nothing.
     // The per-comment rows collapse to per-artifact (count, oldest-open),
     // exactly the golden-pinned scoring inputs.
+    // LEAK GUARD — private notes are excluded upstream, by the collector's
+    // public-only projection. This route takes no visibility parameter and
+    // must not grow one: `open_comments` is a scored agent-facing signal
+    // (it feeds "you left N open comments here"), so a note's existence
+    // would both leak and re-rank the artifact it points at.
     let review_dir = state.paths.kb_review_dir(kb_name);
     let open_rows = super::inbox::collect_open(kb_name.as_str(), ctx, &review_dir).await;
     let open_comments = aggregate_open(&open_rows);

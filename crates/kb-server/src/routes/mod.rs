@@ -180,6 +180,7 @@ pub mod reindex;
 pub mod relocate;
 pub mod resurface;
 pub mod review;
+pub mod review_notes;
 pub mod saved_queries;
 pub mod schema;
 pub mod search;
