@@ -150,7 +150,7 @@ pub fn bind_locals(lang_id: &str, source: &[u8]) -> Result<Vec<Binding>> {
     let mut matches = cursor.matches(&query, tree.root_node(), source);
 
     while let Some(m) = matches.next() {
-        for cap in m.captures {
+        for cap in m.captures() {
             let cname = capture_names[cap.index as usize];
             let node = cap.node;
             if cname == "local.scope" || cname == "local.scope.isolated" {

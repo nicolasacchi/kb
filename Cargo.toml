@@ -210,12 +210,12 @@ gix = { version = "0.87", default-features = false, features = ["blame", "revisi
 # they were a blob" entry point.
 sha1 = "0.11.0"
 
-# tree-sitter 0.26.x core + the Wave-1 grammar set. Grammar crates pin
+# tree-sitter 0.27.x core + the Wave-1 grammar set. Grammar crates pin
 # against the ABI-stable `tree-sitter-language` crate rather than
 # `tree-sitter` itself, so each version below resolves independently —
 # no arrow/lance-style unification hazard (invariant #1 is NOT in play
 # here).
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
 tree-sitter-javascript = "0.25"

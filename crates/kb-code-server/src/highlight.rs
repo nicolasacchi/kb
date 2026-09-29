@@ -322,7 +322,7 @@ pub fn extract_highlights_host_only(lang_id: &str, source: &[u8]) -> Result<Vec<
     // exactly the order the sweep below needs — no separate sort.
     let mut by_range: BTreeMap<(usize, usize), HighlightClass> = BTreeMap::new();
     while let Some((m, capture_index)) = captures.next() {
-        let cap = m.captures[*capture_index];
+        let cap = m.captures()[*capture_index];
         let cname = capture_names[cap.index as usize];
         // V72-H2b: the FULL capture name, not its top-level word —
         // `map_class` owns the two-level lookup so there is exactly one
