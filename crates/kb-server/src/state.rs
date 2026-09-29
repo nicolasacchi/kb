@@ -846,6 +846,18 @@ pub struct OriginConfig {
     /// security layer evaluates the same trusted set. The artifact
     /// serve handler reads it for the outbound-scrub loopback check.
     pub trusted_proxies: Arc<Vec<IpAddr>>,
+    /// v0.6/SEC-02 — resolved `[server] hostnames` (lower-cased, port
+    /// stripped, empties dropped) for the `/api` Host guard. Empty =
+    /// "unconfigured", which restricts the guard to loopback peers —
+    /// see `kb_server::middleware::host_guard`.
+    pub hostnames: Arc<Vec<String>>,
+    /// The host LITERAL of `[server] addr` (`"192.168.1.5:4000"` →
+    /// `"192.168.1.5"`), or `None` for a wildcard bind. Always
+    /// admitted by the Host guard so `addr = "<lan-ip>:4000"` keeps
+    /// working with no config; a wildcard (`0.0.0.0`, `::`) is
+    /// deliberately NOT admitted, since a wildcard name is not a
+    /// hostname anyone can be reached on.
+    pub addr_host: Option<String>,
 }
 
 impl Default for OriginConfig {
@@ -854,6 +866,36 @@ impl Default for OriginConfig {
             artifact_host_suffix: kb_core::iframe::DEFAULT_HOST_SUFFIX.to_string(),
             parent_origin: "http://localhost:4000".to_string(),
             trusted_proxies: Arc::new(Vec::new()),
+            // No allowlist and no addr literal: the guard then admits only
+            // loopback Host labels on a loopback peer, which is the correct
+            // default posture (a wildcard bind has no host to match).
+            hostnames: Arc::new(Vec::new()),
+            addr_host: None,
+        }
+    }
+}
+
+impl OriginConfig {
+    /// Resolve the whole `[server]` origin surface at boot, so the two
+    /// `serve_*` entry points and any future one cannot disagree about
+    /// normalisation. `hostnames` is lower-cased, port-stripped and
+    /// emptied-out here — ONE place, so a `Host` value and a config
+    /// entry are always compared in the same shape.
+    pub fn from_server_section(
+        server: &kb_core::config::ServerSection,
+        trusted_proxies: Arc<Vec<IpAddr>>,
+    ) -> Self {
+        let hostnames = server
+            .hostnames
+            .iter()
+            .filter_map(|h| crate::middleware::normalize_host_label(h))
+            .collect();
+        Self {
+            artifact_host_suffix: server.artifact_host_suffix.clone(),
+            parent_origin: server.parent_origin.clone(),
+            trusted_proxies,
+            hostnames: Arc::new(hostnames),
+            addr_host: crate::middleware::addr_host_literal(&server.addr),
         }
     }
 }

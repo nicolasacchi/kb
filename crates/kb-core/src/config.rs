@@ -803,6 +803,27 @@ pub struct ServerSection {
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
 
+    /// Extra `Host` labels this daemon answers on, for the
+    /// `/api` Host guard (`kb_server::middleware::host_guard`, the
+    /// DNS-rebinding defence). Loopback labels (`localhost`,
+    /// `127.0.0.1`, `[::1]`, `::1`) and the host literal of `addr`
+    /// are ALWAYS admitted with no configuration; this list is how an
+    /// operator adds the names a LAN/proxy deployment is actually
+    /// reached on (`my-laptop`, `kb.example.com`).
+    ///
+    /// Empty (the default) is a real, documented mode, not a
+    /// placeholder: `Host` is then enforced for LOOPBACK peers only
+    /// (which is the rebinding victim, so the actual attack is still
+    /// closed by default), and a non-loopback peer — i.e. one behind
+    /// a reverse proxy that is already the authentication gate — is
+    /// left alone so upgrading cannot take a deployed daemon down. The
+    /// moment this list is non-empty the check applies to EVERY peer.
+    /// A trailing `:port` is stripped when the list is resolved; do NOT
+    /// list `*.artifacts.<suffix>` hosts here — that unbounded set is
+    /// served by the SPA fallback, which is deliberately unguarded.
+    #[serde(default)]
+    pub hostnames: Vec<String>,
+
     /// Y-track — comment attachment limits. `None` (the default) keeps the
     /// built-in defaults (10 MiB/file, 20/comment, 24 h staged-GC grace).
     /// Configured via kb.toml `[server.attachments]`. See docs/self-host.md.
@@ -976,6 +997,7 @@ impl Default for ServerSection {
             artifact_host_suffix: Self::default_artifact_host_suffix(),
             parent_origin: Self::default_parent_origin(),
             trusted_proxies: Vec::new(),
+            hostnames: Vec::new(),
             attachments: None,
             capture: None,
             metrics: false,
@@ -1765,6 +1787,28 @@ impl KbConfig {
                 issues.push(ValidationIssue::hard(
                     format!("/server/trusted_proxies/{i}"),
                     format!("`{p}` is not a valid IP address"),
+                ));
+            }
+        }
+
+        // [server] hostnames must be bare host labels. A scheme, a
+        // path, or an embedded space means the operator wrote an
+        // ORIGIN or a URL, which this key never accepts — such an
+        // entry would silently never match a `Host:` header, so the
+        // guard it was written to enable would be off with no error
+        // anywhere. Hard, like trusted_proxies above, for the same
+        // reason: a bad entry must not pass boot review. A trailing
+        // `:port` IS accepted and stripped at resolve time.
+        for (i, h) in self.server.hostnames.iter().enumerate() {
+            let t = h.trim();
+            let bad = t.is_empty()
+                || t.contains("://")
+                || t.contains('/')
+                || t.chars().any(char::is_whitespace);
+            if bad {
+                issues.push(ValidationIssue::hard(
+                    format!("/server/hostnames/{i}"),
+                    format!("`{h}` is not a bare host label (no scheme, no path, no spaces; e.g. kb.example.com)"),
                 ));
             }
         }
