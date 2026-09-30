@@ -1236,27 +1236,82 @@ fn backup_schedule_period(backup: &kb_core::config::BackupSection) -> Option<Dur
     Some(Duration::from_secs(hours.saturating_mul(3_600)))
 }
 
+/// Result of one kb on one schedule tick.
 enum ScheduledBackup {
     Skipped,
-    Written(std::path::PathBuf),
+    /// The tarball is on disk and complete. `remote` carries the GC-B4
+    /// off-host copy outcome so the caller never reports "backup done"
+    /// for a tarball that is still only on this box:
+    /// * `None` — `[backup] remote_cmd`/`remote_dest` are not both set,
+    ///   so nothing was attempted (the default, opt-in feature).
+    /// * `Some(Ok)` — the copy ran and exited 0.
+    /// * `Some(Failed{..})` — the copy was attempted and did NOT land.
+    Written {
+        path: std::path::PathBuf,
+        remote: Option<kb_core::storage::backup::RemoteCopyOutcome>,
+    },
 }
 
-/// One kb on a schedule tick. Skips when the sqlite index has no writes
-/// newer than that kb's newest export tarball. The writer is in-process
-/// (`tar` + `VACUUM INTO`) — this must not exec the `kb` binary, and it
-/// does not take a maintenance lock.
-async fn backup_one_kb(paths: &kb_core::paths::KbPaths, kb: &KbName) -> Result<ScheduledBackup> {
-    if kb_core::storage::backup::should_skip_scheduled_backup(
-        &paths.kb_sqlite(kb),
-        &paths.exports,
-        kb.as_str(),
-    ) {
+/// Short bus/log token for the off-host copy outcome. `"failed"` must
+/// never be rendered as a success to a subscriber that reads only the
+/// payload (the TUI EVENTS tab does).
+fn remote_status(remote: Option<&kb_core::storage::backup::RemoteCopyOutcome>) -> &'static str {
+    match remote {
+        None => "unset",
+        Some(kb_core::storage::backup::RemoteCopyOutcome::Ok) => "ok",
+        Some(kb_core::storage::backup::RemoteCopyOutcome::Failed { .. }) => "failed",
+    }
+}
+
+/// One kb on a schedule tick. Skips when none of the sources the tarball
+/// packs has changed since that kb's newest export tarball. The writer is
+/// in-process (`tar` + `VACUUM INTO`) — this must not exec the `kb` binary,
+/// and it does not take a maintenance lock.
+///
+/// WHY the GC-B4 off-host copy runs HERE, and not only in the `kb backup`
+/// CLI verb: with `[backup] schedule_hours` + `remote_cmd` + `remote_dest`
+/// all set, `kb config validate` is clean and `kb doctor` reports
+/// `backup-age: PASS` (it reads only `<state>/exports/`), yet nothing ever
+/// left the host — a daily local tarball sitting beside the live state it
+/// protects, sharing every SPOF with it (disk failure, host loss, one
+/// `rm -rf` of the state dir). docs/self-host.md:667 "Backups must leave
+/// the box" was simply untrue for the scheduled path. The copy is spawned
+/// on the blocking pool because `run_remote_copy` is a blocking
+/// `Command::output()` and must never stall a runtime worker.
+async fn backup_one_kb(
+    paths: &kb_core::paths::KbPaths,
+    kb: &KbName,
+    backup: &kb_core::config::BackupSection,
+) -> Result<ScheduledBackup> {
+    if kb_core::storage::backup::should_skip_scheduled_backup(paths, kb) {
         return Ok(ScheduledBackup::Skipped);
     }
     let path = kb_core::storage::backup::write_kb_export(paths, kb)
         .await
         .with_context(|| format!("export tarball for {kb}"))?;
-    Ok(ScheduledBackup::Written(path))
+    // Only when fully configured — an unconfigured daemon must not pay a
+    // blocking-pool spawn per kb per tick for a guaranteed no-op.
+    let remote = if backup.is_configured() {
+        let cfg = backup.clone();
+        let tarball = path.clone();
+        match tokio::task::spawn_blocking(move || {
+            kb_core::storage::backup::run_remote_copy(&cfg, &tarball)
+        })
+        .await
+        {
+            Ok(outcome) => outcome,
+            // A panicked or cancelled copy task is a copy that did not
+            // land, NOT a failed backup: the tarball is complete on its
+            // own. Report it as the failure it is instead of turning it
+            // into an `Err` and implying the backup was lost.
+            Err(e) => Some(kb_core::storage::backup::RemoteCopyOutcome::Failed {
+                message: format!("off-host copy task did not complete: {e}"),
+            }),
+        }
+    } else {
+        None
+    };
+    Ok(ScheduledBackup::Written { path, remote })
 }
 
 /// Boot-then-period export task. `None` when `[backup] schedule_hours` is
@@ -1270,6 +1325,9 @@ fn spawn_backup_schedule(
 ) -> Option<tokio::task::JoinHandle<()>> {
     use tokio::time::{interval, MissedTickBehavior};
     let period = backup_schedule_period(backup)?;
+    // The spawned future is 'static, so it must OWN the `[backup]` section
+    // it copies off-host with, not borrow the caller's config.
+    let backup = backup.clone();
     let mut shutdown = handles.shutdown.subscribe();
     tracing::info!(
         schedule_hours = ?backup.schedule_hours,
@@ -1290,24 +1348,57 @@ fn spawn_backup_schedule(
                 if *shutdown.borrow() {
                     return;
                 }
-                match backup_one_kb(&handles.paths, kb_name).await {
+                match backup_one_kb(&handles.paths, kb_name, &backup).await {
                     Ok(ScheduledBackup::Skipped) => {
                         tracing::debug!(
                             kb = %kb_name,
-                            "backup schedule: index unchanged since newest tarball, skipped"
+                            "backup schedule: no packed source changed since the newest tarball, skipped"
                         );
                     }
-                    Ok(ScheduledBackup::Written(path)) => {
-                        tracing::info!(
-                            kb = %kb_name,
-                            path = %path.display(),
-                            "backup schedule: wrote export tarball"
-                        );
+                    Ok(ScheduledBackup::Written { path, remote }) => {
+                        let status = remote_status(remote.as_ref());
+                        // Log level tracks the OFF-HOST outcome, not the
+                        // local write: a tarball whose upload failed is the
+                        // one case an operator must not read as a completed
+                        // backup, and `tracing::error!` is what surfaces in
+                        // the daemon log tail / journal.
+                        let copy_error =
+                            if let Some(kb_core::storage::backup::RemoteCopyOutcome::Failed {
+                                message,
+                            }) = &remote
+                            {
+                                Some(message.as_str())
+                            } else {
+                                None
+                            };
+                        if let Some(message) = copy_error {
+                            tracing::error!(
+                                kb = %kb_name,
+                                path = %path.display(),
+                                dest = %backup.remote_dest.as_deref().unwrap_or(""),
+                                error = %message,
+                                "backup schedule: wrote the local tarball but the off-host copy \
+                                 FAILED — this backup has NOT left the box"
+                            );
+                        } else {
+                            tracing::info!(
+                                kb = %kb_name,
+                                path = %path.display(),
+                                remote = status,
+                                "backup schedule: wrote export tarball"
+                            );
+                        }
                         handles.bus.emit(
                             "maintenance.backup.written",
                             serde_json::json!({
                                 "kb": kb_name.as_str(),
                                 "path": path.display().to_string(),
+                                // Not part of the historical payload, and
+                                // load-bearing: a subscriber reading "backup
+                                // written" without it cannot tell a
+                                // local-only write from a copy that actually
+                                // reached the remote target.
+                                "remote": status,
                             }),
                         );
                     }
@@ -3030,9 +3121,12 @@ mod tests {
             .set_modified(recent)
             .unwrap();
 
-        match backup_one_kb(&paths, &kb).await.unwrap() {
+        match backup_one_kb(&paths, &kb, &backup_section(Some(24)))
+            .await
+            .unwrap()
+        {
             ScheduledBackup::Skipped => {}
-            ScheduledBackup::Written(path) => {
+            ScheduledBackup::Written { path, .. } => {
                 panic!("unchanged index must be skipped, wrote {}", path.display())
             }
         }
@@ -3055,8 +3149,11 @@ mod tests {
             .unwrap()
             .set_modified(recent + Duration::from_secs(60))
             .unwrap();
-        match backup_one_kb(&paths, &kb).await.unwrap() {
-            ScheduledBackup::Written(path) => {
+        match backup_one_kb(&paths, &kb, &backup_section(Some(24)))
+            .await
+            .unwrap()
+        {
+            ScheduledBackup::Written { path, remote } => {
                 assert!(path.is_file(), "written path missing: {}", path.display());
                 assert!(
                     path.file_name()
@@ -3065,8 +3162,89 @@ mod tests {
                     "export must land in the scheduled name, got {}",
                     path.display()
                 );
+                assert_eq!(
+                    remote, None,
+                    "an unconfigured [backup] attempts no off-host copy"
+                );
             }
             ScheduledBackup::Skipped => panic!("an index write since the tarball must export"),
         }
+    }
+
+    /// O2 — the scheduler runs the GC-B4 off-host copy the `kb backup` CLI
+    /// verb has always run. Before this, `[backup] schedule_hours` +
+    /// `remote_cmd` + `remote_dest` produced a clean `kb config validate`,
+    /// a `backup-age: PASS` doctor line, and a daily tarball that never
+    /// left the host — the exact SPOF docs/self-host.md:667 forbids.
+    #[tokio::test]
+    async fn scheduled_backup_copies_off_host_and_surfaces_a_failed_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "sched");
+        paths.ensure_dirs().unwrap();
+        let kb = KbName::new("notes").unwrap();
+        std::fs::create_dir_all(paths.kb_state(&kb)).unwrap();
+        {
+            let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&kb)).unwrap();
+            db.history_record_search("hello", 1_700_000_000, "operator")
+                .unwrap();
+        }
+
+        let off_host = tmp.path().join("off-host");
+        std::fs::create_dir(&off_host).unwrap();
+        let ok_cfg = kb_core::config::BackupSection {
+            remote_cmd: Some(vec!["cp".into(), "{src}".into(), "{dest}".into()]),
+            remote_dest: Some(off_host.join("kb.tar.gz").to_string_lossy().into_owned()),
+            schedule_hours: Some(24),
+        };
+        let ScheduledBackup::Written { path, remote } =
+            backup_one_kb(&paths, &kb, &ok_cfg).await.unwrap()
+        else {
+            panic!("no tarball was packed")
+        };
+        assert_eq!(
+            remote,
+            Some(kb_core::storage::backup::RemoteCopyOutcome::Ok),
+            "a configured [backup] must actually copy off-host"
+        );
+        assert!(path.is_file(), "the local tarball must survive the copy");
+        assert!(
+            off_host.join("kb.tar.gz").is_file(),
+            "the remote target never received the tarball"
+        );
+
+        // A fresh write, or the tick would skip on the tarball just made.
+        std::fs::File::options()
+            .write(true)
+            .open(paths.kb_sqlite(&kb))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(60))
+            .unwrap();
+
+        // A uploader that cannot run must be reported as a failure of the
+        // COPY, not swallowed into a "backup written" success — and must
+        // not turn the completed local tarball into an Err.
+        let broken = kb_core::config::BackupSection {
+            remote_cmd: Some(vec!["/no/such/uploader-binary-xyz".into(), "{src}".into()]),
+            remote_dest: Some("remote:bucket/path".into()),
+            schedule_hours: Some(24),
+        };
+        let ScheduledBackup::Written { path, remote } =
+            backup_one_kb(&paths, &kb, &broken).await.unwrap()
+        else {
+            panic!("no tarball was packed")
+        };
+        assert!(path.is_file(), "a failed copy must not delete the tarball");
+        assert!(
+            matches!(
+                &remote,
+                Some(kb_core::storage::backup::RemoteCopyOutcome::Failed { .. })
+            ),
+            "a failed off-host copy must not be reported as success, got {remote:?}"
+        );
+        assert_eq!(
+            remote_status(remote.as_ref()),
+            "failed",
+            "the bus payload token must not read as a success"
+        );
     }
 }

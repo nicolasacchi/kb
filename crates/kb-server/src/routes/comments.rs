@@ -33,6 +33,16 @@
 //! `keep` and `keep_memory` refuse a note with 409, because a proposal and
 //! a memory artifact are both agent-readable and promoting a note is the
 //! worst promotion in the system.
+//! The single-comment mutations — `resolve`, `unresolve`, `set_anchor`,
+//! `add_reply` — refuse a note with the same 409 `keep` uses. The batch
+//! path already skipped notes in `resolve-all`/`unresolve-all`; these are
+//! its single-row twins and were the gap, because a note id is NOT secret
+//! (`/api/anchors/stale` answers it fleet-wide, and the indexer walks every
+//! open comment unfiltered), so "the caller cannot read the note" was never
+//! a barrier. The guard lives in `kb_core::review::reject_private_note` so
+//! both the HTTP routes and `BatchOp::{Resolve,Unresolve,SetAnchor,
+//! AddReply}` get it from one place. `PATCH …/meta` is deliberately NOT
+//! guarded: un-privating is how the operator re-opens a note to edit it.
 //!
 //! `keep` copies one open or resolved comment into the proposal queue
 //! (`source: "comment"`). It does not approve, does not ingest a memory,
@@ -1778,6 +1788,19 @@ pub async fn set_comment_meta(
     // transient storage error into a permanent, silent leak. A surviving row
     // over-counts, which is the leaking direction, so the error is logged at
     // `warn` (loudly, with the artifact + comment id) rather than swallowed.
+    //
+    // v0.40 TN2 — deliberately NO `gc_manifest` here, unlike
+    // `delete_comment`. The flip does not orphan anything: the note still
+    // references its own attachments, so `gc_plan` keeps every one of them
+    // and a GC call would be a no-op. What the flip DOES have to stop is the
+    // BLOB being reachable, and that is enforced where reachability is
+    // decided — `attachments::serve` refuses a blob whose owning comment is
+    // private, so the URL published in the comment body, in `?cm=on`, in
+    // `kb comments export` and in any share bundle stops resolving. Making
+    // the blob unreferenced instead would mean deleting the operator's own
+    // screenshot on a REVERSIBLE toggle (un-privating would not bring it
+    // back, and the note body would keep an `attachment:<aid>` ref to a
+    // file that is gone) — data loss traded for a gate that now exists.
     if became_note.load(std::sync::atomic::Ordering::Relaxed) {
         if let Some(ctx) = state.kbs.get(&kb_name) {
             if let Err(e) = ctx

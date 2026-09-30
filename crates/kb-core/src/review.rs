@@ -1010,6 +1010,7 @@ impl ReviewFile {
         choices: Vec<Choice>,
         user: Option<String>,
     ) -> Result<&Reply> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         c.replies.push(Reply {
             id: new_reply_id(),
@@ -1024,11 +1025,58 @@ impl ReviewFile {
         Ok(c.replies.last().expect("just pushed"))
     }
 
+    /// v0.40 TN2 — the ONE fail-closed guard every single-comment mutation
+    /// runs before it touches a row: `set_comment_status`,
+    /// `set_comment_anchor` and `add_reply` all refuse a PRIVATE note.
+    ///
+    /// Why it has to live HERE and not in the HTTP routes. `set_all_status`
+    /// skips notes (and documents why), but a single-comment route reaches
+    /// the same rows without passing through it — and a note id is not a
+    /// secret: `/api/anchors/stale` answers `{kb, artifact_id, comment_id}`
+    /// fleet-wide and the indexer walks every open comment with no private
+    /// filter, so any caller can name a note id without ever having seen the
+    /// note. Resolving it returned 200 and the operator's private reminder
+    /// silently left their open-note list.
+    ///
+    /// Same rationale as `set_all_status`, restated for the single path:
+    /// the side effect is the leak. A local agent could quietly resolve,
+    /// re-anchor or reply onto a row it must never see, and — because
+    /// `set_all_status` deliberately leaves `flipped`/`open_count` in
+    /// agreement with the PUBLIC set — the response would still look like a
+    /// perfectly ordinary no-op. Note ids are enumerable, so "the agent
+    /// can't read the note" was never a barrier here.
+    ///
+    /// Deliberately NOT owner-gated (unlike `set_comment_meta`, which is):
+    /// on loopback with no credentials every request resolves to the
+    /// operator identity, so an owner check would be waved through by the
+    /// exact local agent this is meant to stop. The escape hatch is the
+    /// same one `keep` offers — un-private the note first (`PATCH …/meta`
+    /// with `private: false`), mutate it, re-privatise — which is a
+    /// deliberate act on a row the operator can already see.
+    ///
+    /// `Error::Conflict` → 409, the status the other private-note refusal
+    /// in this feature (`keep`) already uses; no new status is invented.
+    /// A missing id still falls through to `comment_mut`'s canonical
+    /// `NotFound` (404) rather than being reported as "it's a note".
+    fn reject_private_note(&self, comment_id: &str) -> Result<()> {
+        if self
+            .comments
+            .iter()
+            .any(|c| c.id == comment_id && c.is_private())
+        {
+            return Err(Error::Conflict(format!(
+                "comment {comment_id} is a private note; un-private it before changing it"
+            )));
+        }
+        Ok(())
+    }
+
     /// Set one comment's status (resolve/unresolve). `Err(NotFound)` when
     /// the comment is absent. Returns `true` iff the status actually changed
     /// (G8 — lets the route skip a no-op save + `comments.updated` emit when
     /// resolving an already-resolved comment).
     pub fn set_comment_status(&mut self, comment_id: &str, status: CommentStatus) -> Result<bool> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         let changed = c.status != status;
         c.status = status;
@@ -1125,6 +1173,7 @@ impl ReviewFile {
     /// (that badge is for body edits); the indexer re-evaluates staleness
     /// against the new anchor on the next reindex.
     pub fn set_comment_anchor(&mut self, comment_id: &str, anchor: Anchor) -> Result<bool> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         let changed = c.anchor != anchor;
         c.anchor = anchor;
@@ -2855,6 +2904,97 @@ mod tests {
             f.set_comment_anchor("c_x", Anchor::File),
             Err(Error::NotFound(_))
         ));
+    }
+
+    // --- v0.40 TN2: single-comment mutations refuse a private note -------
+
+    /// The batch path (`set_all_status`) already skipped notes; these are
+    /// the single-comment twins, and they are reachable with nothing but an
+    /// id from `/api/anchors/stale`. A resolve that silently succeeded
+    /// removed the operator's reminder from their open-note list — the same
+    /// side effect `set_all_status` documents refusing to cause.
+    #[test]
+    fn single_comment_mutations_refuse_a_private_note() {
+        let mut f = fixture_file();
+        let pub_cid = f.add_comment(spec("public row")).id.clone();
+        let note_cid = {
+            let mut s = spec("operator's private reminder");
+            s.private = true;
+            let id = f.add_comment(s).id.clone();
+            // Sanity: the note really is private and OPEN, so a refusal
+            // below cannot be explained by it being already resolved.
+            assert!(f.comments.iter().any(|c| c.id == id && c.is_private()));
+            id
+        };
+
+        assert!(matches!(
+            f.set_comment_status(&note_cid, CommentStatus::Resolved),
+            Err(Error::Conflict(_))
+        ));
+        // Re-pointing at a DIFFERENT anchor is what a refusal has to stop;
+        // `spec()` rows are created on `Anchor::File`.
+        let reanchor = Anchor::Section {
+            id: "overview".into(),
+            tag: Some("h2".into()),
+            snippet: None,
+        };
+        assert!(matches!(
+            f.set_comment_anchor(&note_cid, reanchor),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            f.add_reply(&note_cid, Author::Claude, "on it".into(), vec![], None),
+            Err(Error::Conflict(_))
+        ));
+
+        // Nothing moved, on ANY of the three paths.
+        let note = f.comments.iter().find(|c| c.id == note_cid).unwrap();
+        assert_eq!(note.status, CommentStatus::Open);
+        assert!(note.replies.is_empty());
+        assert!(matches!(note.anchor, Anchor::File));
+
+        // The public sibling is untouched by the guard — a note must not
+        // cost the ordinary comment its resolve.
+        assert!(f
+            .set_comment_status(&pub_cid, CommentStatus::Resolved)
+            .unwrap());
+    }
+
+    /// The refusal must be a 409 on a note that EXISTS, and must not
+    /// become a disclosure for one that doesn't: a missing id keeps the
+    /// canonical 404 from `comment_mut`.
+    #[test]
+    fn private_note_refusal_does_not_disclose_a_missing_comment() {
+        let mut f = fixture_file();
+        assert!(matches!(
+            f.set_comment_status("c_x", CommentStatus::Resolved),
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            f.set_comment_anchor("c_x", Anchor::File),
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            f.add_reply("c_x", Author::Claude, "x".into(), vec![], None),
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    /// The escape hatch `keep` already documents: `set_comment_meta` is
+    /// deliberately NOT guarded, so un-privating a note (and re-privatising
+    /// it afterwards) still works. Without this the note would be frozen.
+    #[test]
+    fn un_privating_re_opens_the_guarded_mutations() {
+        let mut f = fixture_file();
+        f.comments[0].private = true;
+        assert!(matches!(
+            f.set_comment_status("c_1", CommentStatus::Resolved),
+            Err(Error::Conflict(_))
+        ));
+        assert!(f.set_comment_meta("c_1", None, Some(false)).unwrap());
+        assert!(f
+            .set_comment_status("c_1", CommentStatus::Resolved)
+            .unwrap());
     }
 
     #[test]

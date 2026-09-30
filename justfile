@@ -9,8 +9,8 @@ prio := "nice -n 20 ionice -c 3"
 # ORT embedder surface, then the two kb generated-artifact drift guards
 # (TS wire bindings + the API route table). Not the GitHub ci.yml matrix —
 # the body names the lanes this skips. `just ci-all` runs every lane.
-ci: ci-workspace ci-embedder types-check api-docs-check
-    @echo "did not run: code-lint, code-test, code-spa, code-e2e, e2e, web-unit, supply-chain, code-drift, scripts/check-invariants.sh — just ci-all"
+ci: ci-workspace ci-embedder types-check api-docs-check doc-anchors toolchain-pin-check
+    @echo "did not run: code-lint, code-test, code-spa, code-e2e, e2e, web-unit, supply-chain, code-drift, scripts/check-invariants.sh, doc-anchors-strict — just ci-all"
 
 # Every lane .github/workflows/ci.yml runs, as the local recipe that
 # already mirrors it (job → recipe):
@@ -25,15 +25,105 @@ ci: ci-workspace ci-embedder types-check api-docs-check
 #   code-spa → ci-code-spa
 #   code-e2e → ci-code-e2e
 #   web-unit → test-spa
-#   supply-chain → deny
+#   supply-chain → deny, plus its three compile-free steps
+#     (NOTICE drift → licenses-set-check, doc anchors → doc-anchors,
+#      toolchain pins → toolchain-pin-check)
 # Not mirrored (no recipe, so not run here): web-unit's `npm audit
 # --omit=dev`, and e2e's Firefox install + annotator size guard.
-ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check ci-e2e ci-embedder ci-code ci-code-spa ci-code-e2e test-spa deny
+ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check ci-e2e ci-embedder ci-code ci-code-spa ci-code-e2e test-spa deny licenses-set-check doc-anchors toolchain-pin-check
 
 # Invariant-to-test coverage table (GC-C2). A step of ci.yml's
 # workspace-lint job, not of `just ci`. Always exits 0 — a signal, not a gate.
 ci-invariants:
     scripts/check-invariants.sh
+
+# Doc `file.rs:LINE` anchor gate (O11) — a step of ci.yml's supply-chain job,
+# which is the one lane in ci.yml that compiles nothing, so the gate costs a
+# file walk and an awk pass (~3 s measured) instead of a lane of its own.
+# `scripts/check-doc-anchors.sh` fails when a cited path matches no file, or
+# when the cited line (or a range's end) is past that file's last line.
+#
+# It runs with `--no-ambiguous` and that flag is load-bearing, not cosmetic.
+# Measured on this tree: DANGLING/PAST-EOF/MALFORMED is 0 and AMBIGUOUS is 45
+# of 87 (35 in configuration.md, 8 in authoring-artifacts.md, 1 each in
+# invariant-test-map.md and kb-code.md), because a bare `config.rs:1414` is IN
+# RANGE for at least one of the five `config.rs` — so a bounds check alone
+# ships green on exactly the citations the adversarial pass found ~30 of
+# wrong. An unverifiable number is the defect, so the bare basenames are
+# reported in full and counted; they do not fail the run yet, because 45
+# pre-existing anchors cannot be rewritten in the same commit that adds the
+# gate without landing every PR red and teaching everyone to skip the step.
+# Run it bare (`just doc-anchors-strict`) to see that debt as a failure.
+doc-anchors:
+    scripts/check-doc-anchors.sh --no-ambiguous
+
+# The same gate with AMBIGUOUS promoted to fatal. Not in `just ci`: it is red
+# on the current tree by 45 anchors (the O11 debt above), and a recipe the
+# fast gate always runs must be green. This is the local command to run after
+# fixing anchors, and the target to drop `--no-ambiguous` from when the debt
+# is zero.
+doc-anchors-strict:
+    scripts/check-doc-anchors.sh
+
+# rust-toolchain.toml is the single source of the toolchain version, and CI's
+# 14 `uses: dtolnay/rust-toolchain@X.Y.Z` lines are hardcoded literals that do
+# NOT read it (O8). dtolnay's action resolves the REF, never the file, so the
+# two can diverge silently — and rustup's precedence puts the directory
+# override (rust-toolchain.toml) ABOVE `rustup default`, so bumping the toml
+# changes what `cargo` resolves to inside the path-filtered `code-*` jobs
+# anyway, while the action keeps installing the old literal.
+#
+# So this recipe asserts equality instead: every hardcoded pin in
+# .github/workflows/ must equal the `channel` in rust-toolchain.toml. A bump
+# that misses a job now fails loudly instead of leaving a job compiling with a
+# toolchain its own comment claims it is pinned to. Same shape as
+# licenses-set-check: a cheap, compile-free assertion over committed text.
+toolchain-pin-check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cd "{{justfile_directory()}}"
+    channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' rust-toolchain.toml | head -1)"
+    if [ -z "$channel" ]; then
+      echo "FAIL: no channel = \"…\" found in rust-toolchain.toml — cannot assert the CI pins." >&2
+      exit 1
+    fi
+    # Refuse to compare against a moving channel. `channel = "stable"` makes
+    # every literal below a lie, and an assertion that cannot be evaluated
+    # must fail loudly rather than pass vacuously.
+    if ! printf '%s' "$channel" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "FAIL: rust-toolchain.toml channel is \"$channel\", not an exact X.Y.Z." >&2
+      echo "      A floating channel cannot be asserted against a literal pin." >&2
+      exit 1
+    fi
+    # The ref is what dtolnay/rust-toolchain actually resolves, so `@master`
+    # and `@stable` must not slip through as if they were pins.
+    bad=0
+    total=0
+    while IFS=$'\t' read -r file line ref; do
+      total=$((total + 1))
+      if [ "$ref" != "$channel" ]; then
+        echo "MISMATCH  $file:$line  dtolnay/rust-toolchain@$ref != rust-toolchain.toml channel $channel" >&2
+        bad=$((bad + 1))
+      fi
+    done < <(grep -rnoE '^[[:space:]]*(- )?uses:[[:space:]]*dtolnay/rust-toolchain@[^[:space:]]+' \
+               .github/workflows/ \
+             | sed -E 's/^([^:]*):([0-9]+):.*dtolnay\/rust-toolchain@/\1\t\2\t/')
+    if [ "$total" -eq 0 ]; then
+      echo "FAIL: found 0 dtolnay/rust-toolchain pins in .github/workflows/." >&2
+      echo "      Either the grep is wrong or every job lost its toolchain;" >&2
+      echo "      either way this assertion has nothing to compare." >&2
+      exit 1
+    fi
+    if [ "$bad" -gt 0 ]; then
+      echo "FAIL: $bad of $total CI toolchain pin(s) disagree with rust-toolchain.toml (channel $channel)." >&2
+      echo "      The action reads its REF, never the file, so a mismatch means" >&2
+      echo "      that job builds with a different rustc than the repo pins and" >&2
+      echo "      than its own comment claims. Bump every pin, or revert the toml." >&2
+      exit 1
+    fi
+    # Printed only on the passing path. An "all match" line above the
+    # mismatch report is a lie the reader has to scroll back to un-believe.
+    echo "toolchain-pin gate: $total pin(s) across .github/workflows/, all == rust-toolchain.toml channel $channel"
 
 # Supply-chain gate — local mirror of the CI `supply-chain` job. Needs
 # cargo-deny on PATH: `cargo install --locked cargo-deny`. Split so a license
