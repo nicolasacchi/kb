@@ -1302,7 +1302,16 @@ pub async fn apply_batch(
     for op in &payload.ops {
         let row_user: Option<Option<&str>> = match op {
             review::BatchOp::EditComment { comment_id, .. }
-            | review::BatchOp::DeleteComment { comment_id } => file
+            | review::BatchOp::DeleteComment { comment_id }
+            // `SetMeta` mutates the comment's OWN row, exactly like
+            // EditComment, and carries the same disclosure: `private: false`
+            // hands the whole thread back to every agent-facing surface —
+            // which is why `set_comment_meta` (the PATCH twin) is gated by
+            // `forbid_if_not_owner` for it. Without this arm `SetMeta` fell
+            // through `_ => None`, `row_user` was None, the owner check never
+            // ran, and a non-owner could un-private someone else's note via
+            // POST …/apply while the byte-identical PATCH returned 403.
+            | review::BatchOp::SetMeta { comment_id, .. } => file
                 .comments
                 .iter()
                 .find(|c| &c.id == comment_id)

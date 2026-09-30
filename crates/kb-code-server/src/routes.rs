@@ -6320,6 +6320,14 @@ pub async fn pr_checks_route(
     ))
 }
 
+// The wire body for `GET /api/prs/{n}/reviews`. This — not
+// `github::PrReviewsOut`, the client-side value `list_reviews` assembles —
+// is what the SPA receives, so this is what the ts-rs generator must own.
+// Exporting the inner one generated a `PrReviewsOut.ts` missing `schema`
+// and `unavailable_reason`, which disagreed with the hand-written copy of
+// the same name in web-code/src/api/types.ts while `gen-ts-code-check`
+// stayed green (it diffs only the generated dir).
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Serialize)]
 pub struct PrReviewsResponse {
     pub schema: &'static str,
