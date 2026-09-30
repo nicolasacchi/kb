@@ -10,7 +10,7 @@ prio := "nice -n 20 ionice -c 3"
 # (TS wire bindings + the API route table). Not the GitHub ci.yml matrix —
 # the body names the lanes this skips. `just ci-all` runs every lane.
 ci: ci-workspace ci-embedder types-check api-docs-check doc-anchors toolchain-pin-check
-    @echo "did not run: code-lint, code-test, code-spa, code-e2e, e2e, web-unit, supply-chain, code-drift, scripts/check-invariants.sh, doc-anchors-strict — just ci-all"
+    @echo "did not run: code-lint, code-test, code-spa, code-e2e, e2e, web-unit, supply-chain, code-drift, scripts/check-invariants.sh — just ci-all"
 
 # Every lane .github/workflows/ci.yml runs, as the local recipe that
 # already mirrors it (job → recipe):
@@ -43,26 +43,21 @@ ci-invariants:
 # `scripts/check-doc-anchors.sh` fails when a cited path matches no file, or
 # when the cited line (or a range's end) is past that file's last line.
 #
-# It runs with `--no-ambiguous` and that flag is load-bearing, not cosmetic.
-# Measured on this tree: DANGLING/PAST-EOF/MALFORMED is 0 and AMBIGUOUS is 45
-# of 87 (35 in configuration.md, 8 in authoring-artifacts.md, 1 each in
-# invariant-test-map.md and kb-code.md), because a bare `config.rs:1414` is IN
-# RANGE for at least one of the five `config.rs` — so a bounds check alone
-# ships green on exactly the citations the adversarial pass found ~30 of
-# wrong. An unverifiable number is the defect, so the bare basenames are
-# reported in full and counted; they do not fail the run yet, because 45
-# pre-existing anchors cannot be rewritten in the same commit that adds the
-# gate without landing every PR red and teaching everyone to skip the step.
-# Run it bare (`just doc-anchors-strict`) to see that debt as a failure.
+# AMBIGUOUS is FATAL, and is the reason this gate is worth having: a bare
+# `config.rs:1414` is IN RANGE for at least one of the repo's five
+# `config.rs`, so a bounds check alone ships green on exactly the citations
+# an adversarial pass found ~30 of wrong. An unverifiable number is the
+# defect.
+#
+# It ran with `--no-ambiguous` from 2026-09-30 until the debt was cleared
+# the same day: 45 ambiguous anchors (35 configuration.md, 8
+# authoring-artifacts.md, 1 each invariant-test-map.md and kb-code.md), all
+# disambiguated AND re-pointed by reading the cited construct. The flag is
+# gone, so a new bare basename fails the build instead of being counted.
+# The other five regressions this surfaced — anchors that named the right
+# file but the WRONG line, which no gate can see — are recorded in
+# docs/research/kb-adversarial-review-2026-09-30.md.
 doc-anchors:
-    scripts/check-doc-anchors.sh --no-ambiguous
-
-# The same gate with AMBIGUOUS promoted to fatal. Not in `just ci`: it is red
-# on the current tree by 45 anchors (the O11 debt above), and a recipe the
-# fast gate always runs must be green. This is the local command to run after
-# fixing anchors, and the target to drop `--no-ambiguous` from when the debt
-# is zero.
-doc-anchors-strict:
     scripts/check-doc-anchors.sh
 
 # rust-toolchain.toml is the single source of the toolchain version, and CI's

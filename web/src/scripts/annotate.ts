@@ -106,6 +106,39 @@ declare global {
   }
 }
 
+// Everything below lives INSIDE this IIFE, deliberately. The daemon
+// injects this bundle into the ARTIFACT's document as a CLASSIC
+// `<script defer>` (see kb-core's `iframe::inject_annotator`), so every
+// top-level `function` / `var` declaration lands on that document's
+// global scope — where it collides with a binding the artifact itself
+// already declared, and the WHOLE script dies on a SyntaxError before a
+// single listener is attached.
+//
+// Measured, not theoretical. The `vite 6.4.3 → 8.3.1` bump (#175) moved
+// the build to rolldown + oxc, whose mangler renames top-level names to
+// one or two letters: `post()` became `function d`. kitchen-sink.html
+// declares its own top-level `const d` (corpus/canon/kitchen-sink.html,
+// the dialog demo), so `function d` + `const d` is "Identifier 'd' has
+// already been declared" — and the annotator then paints NO markers, NO
+// highlight bands, NO in-page icons and posts NO `cm:selection`, which is
+// exactly what the Playwright comments specs reported (and why the whole
+// thing stayed green for a day: the e2e job's `npx playwright test | tee`
+// had no `set -o pipefail` until d4f3063d). Vite 6's longer names merely
+// happened to miss, so this was always latent — a property of where the
+// bundle is injected, not of the artifact it is injected into.
+//
+// WHY an IIFE here rather than `output.format: "iife"` on this entry in
+// vite.config.ts: both make the bundle's names function-scoped, and this
+// one keeps the fix inside the file that owns the property — "installs
+// into somebody else's document and must leave its global scope alone" —
+// so it survives the next minifier swap without a second edit. The body
+// keeps its existing indentation on purpose: the semantic change is these
+// three lines, and re-indenting 750 more would bury it in review.
+// (`export {}` stays at the bottom so this is still a module — the
+// `declare global` above is only legal in one.)
+(function () {
+"use strict";
+
 // Hand-minified (no whitespace/comments) — this string ships verbatim into
 // the bundle and counts against the 10 KiB annotate.js CI budget the same
 // as any other byte; the pretty-printed form cost ~1KiB here for zero
@@ -862,5 +895,7 @@ function flashNodes(id: string) {
     setTimeout(() => node.classList.remove("kb-annot-flash"), 1500);
   });
 }
+
+})();
 
 export {};
