@@ -253,8 +253,8 @@ pub async fn serve_with_paths(
 
     // SEC-02 — the ONE place the DNS-rebinding `Host` guard fails open:
     // a NON-loopback peer with no `[server] hostnames` configured. The
-    // rebinding victim is a loopback peer and is refused unconditionally
-    // (see `middleware::host_guard`), so this is not that hole; this is
+    // rebinding victim is a loopback peer and is refused by
+    // `middleware::host_guard`, so this is not that hole; this is
     // the "token-less public bind behind a proxy that IS the auth gate"
     // shape, where a public name resolving to the host's own IP is still
     // a genuine rebinding vector. Warn on BOTH triggers — the non-loopback

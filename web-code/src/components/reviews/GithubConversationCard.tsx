@@ -28,8 +28,14 @@ export type ConversationState =
 /// both are present, since reviewer state is the more load-bearing half);
 /// both landed with zero content ⇒ `"empty"`; otherwise `"ready"`.
 export function combineConversationState(
-  reviews: { isLoading: boolean; data: { reviewers: ReviewerStateOut[]; unavailable_reason?: string } | undefined },
-  comments: { isLoading: boolean; data: { comments: PrCommentOut[]; unavailable_reason?: string } | undefined },
+  // `unavailable_reason` is `string | null` on the wire: Rust's
+  // `Option<String>` with `skip_serializing_if` still serialises an absent
+  // value as absent, and the generated binding says `| null`. This used to be
+  // hand-written as `?: string` and only type-checked because the OLD
+  // `PrReviewsOut` was a hand-mirrored type; the collision between the
+  // generated and hand-written `PrReviewsOut` is what let the two drift.
+  reviews: { isLoading: boolean; data: { reviewers: ReviewerStateOut[]; unavailable_reason?: string | null } | undefined },
+  comments: { isLoading: boolean; data: { comments: PrCommentOut[]; unavailable_reason?: string | null } | undefined },
 ): ConversationState {
   if (reviews.isLoading || comments.isLoading) return { kind: "loading" };
   const reason = reviews.data?.unavailable_reason ?? comments.data?.unavailable_reason;

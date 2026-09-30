@@ -390,8 +390,18 @@ pub struct ReviewerStateOut {
     pub submitted_at: Option<String>,
 }
 
-/// PRR addendum-2 §A — `GET /api/prs/{n}/reviews`'s response body.
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+/// The client-side value `list_reviews` assembles. NOT the wire body: the
+/// route wraps this in `PrReviewsResponse`, which adds `schema` and
+/// `unavailable_reason` (routes.rs). It used to carry the
+/// `ts(export)` attribute, which generated a `PrReviewsOut.ts` describing
+/// only the three fields below — so the generated type and the hand-written
+/// `web-code/src/api/types.ts` copy of the same NAME disagreed (the latter
+/// carried `schema` + `unavailable_reason`, and made `review_decision`
+/// optional where the generated one had it required). `gen-ts-code-check`
+/// diffs only the generated dir, so it stayed green while the real client
+/// type was wrong. The export now lives on `PrReviewsResponse`, which is
+/// what actually crosses the wire; the file keeps this name so the
+/// hand-written copy can be deleted and re-exported from `generated/`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PrReviewsOut {
     /// One row per reviewer who has SUBMITTED at least one review, folded
