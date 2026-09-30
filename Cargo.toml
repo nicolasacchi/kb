@@ -49,7 +49,7 @@ mime = "0.3"
 # remote connection — every `connect()` call passes a local path. Drop
 # `remote` once an upstream release fixes the gate.
 lancedb = { version = "=0.38.0", default-features = false, features = ["remote"] }
-lance-index = "=11.0.0"
+lance-index = "=12.0.0"
 # V76-R4c: kb-core's orphan-index GC drives `Dataset::load_indices` via
 # `lance::index::DatasetIndexExt` (the trait moved from `lance_index` to
 # `lance::index` in lance 11). Direct exact pin inside the same lockstep
