@@ -965,10 +965,21 @@ fn wants_raw(uri: &Uri) -> bool {
 /// note browser (`/review-notes`, operator route) is where notes are
 /// read.
 ///
-/// `etag` stays the disk-revision token from `etag_for(&path)`: it must
-/// describe the file on disk, not the filtered body, or an
-/// `If-None-Match` 304 would be computed over bytes the client never
-/// received.
+/// O1 (adversarial review 2026-09-30) — `etag` is the REPRESENTATION
+/// token from `routes::review::body_etag`, hashed over the FILTERED
+/// document that is inlined below, not `review::etag_for(&path)` over the
+/// unfiltered sidecar. The old token made this payload an unauthenticated
+/// existence oracle for private notes: this handler is deliberately OUTSIDE
+/// the /api nest, so anyone who can resolve `<id>.artifacts.localhost` got
+/// a token that moved on every private-note create and edit — dating the
+/// note to the write, over a body that never changed and never contained
+/// it. Same rule as the `retain` in `strip_private_comments`: what the
+/// reader may not see must not be observable, and "the ETag moved" is
+/// observable.
+///
+/// The disk-revision token still exists where it is needed — `If-Match` on
+/// a write (`kb_core::review::save_atomic`) — and `body_etag`'s domain
+/// prefix keeps the two hash spaces disjoint.
 fn build_comments_payload(
     state: &Arc<KbHandles>,
     ctx: &crate::state::KbContext,
@@ -976,18 +987,48 @@ fn build_comments_payload(
 ) -> kb_core::Result<serde_json::Value> {
     let kb_name: KbName = ctx.kb_name.clone();
     let path = state.paths.kb_review_file(&kb_name, artifact_id);
-    let etag = review::etag_for(&path)?;
-    let file = review::load(&path)?
-        .unwrap_or_else(|| ReviewFile::empty_skeleton(&kb_name, artifact_id, ""));
+    comments_payload(&kb_name, artifact_id, review::load(&path)?)
+}
+
+/// The `?cm=on` payload, split out of [`build_comments_payload`] so the
+/// leak guard AND the etag derivation are unit-testable without standing
+/// up `KbHandles`/`KbContext`. `loaded` is `None` when no review file
+/// exists, in which case `etag` is `null` — the same wire shape as before,
+/// and for the same reason `routes::review::review_response` sends no
+/// ETag over the skeleton: its `generated_at` is `Utc::now()`, so hashing
+/// it would produce a different token on every render of an artifact with
+/// no comments (most of them) and the field would mean nothing.
+fn comments_payload(
+    kb_name: &KbName,
+    artifact_id: &str,
+    loaded: Option<ReviewFile>,
+) -> kb_core::Result<serde_json::Value> {
+    let (file, etag) = match loaded {
+        Some(file) => {
+            let file = serde_json::to_value(strip_private_comments(file))?;
+            // Hash the `Value`, not the `ReviewFile`: this is the exact
+            // serialization that lands in the payload below, so the token
+            // is a validator for the bytes inlined rather than for some
+            // nearby-but-differently-ordered encoding of them. Costs one
+            // extra pass over a few KB on a path that already re-reads and
+            // rewrites the whole HTML document.
+            let etag = super::review::body_etag(&serde_json::to_vec(&file)?);
+            (file, Some(etag))
+        }
+        None => (
+            serde_json::to_value(ReviewFile::empty_skeleton(kb_name, artifact_id, ""))?,
+            None,
+        ),
+    };
     Ok(serde_json::json!({
         "v": 1,
         "etag": etag,
-        "file": strip_private_comments(file),
+        "file": file,
     }))
 }
 
 /// Drop private notes from a loaded review file, in place. Split out of
-/// [`build_comments_payload`] so the leak guard is unit-testable without
+/// [`comments_payload`] so the leak guard is unit-testable without
 /// standing up `KbHandles`/`KbContext`: the whole safety argument of row #6
 /// is this one `retain`, and the artifact-subdomain serve path is
 /// UNAUTHENTICATED — a note inlined there is world-readable.
@@ -1266,6 +1307,61 @@ mod tests {
             !rendered.contains("PRIVATE NOTE BODY"),
             "a private note reached the unauthenticated annotator payload: {rendered}"
         );
+    }
+
+    /// O1 — the `?cm=on` payload is inlined into a body served by the
+    /// UNAUTHENTICATED artifact-subdomain handler, so its `etag` is a
+    /// validator for the FILTERED document and nothing else. While it was
+    /// the disk-revision token, every private note's create and edit moved
+    /// a value that anyone able to resolve `<id>.artifacts.localhost`
+    /// could read — an existence oracle for notes, with no credential and
+    /// no content, dating each one to the write.
+    #[test]
+    fn annotator_payload_etag_ignores_private_notes() {
+        let kb_name = KbName::new("smoke").expect("valid kb name");
+        let id = "aaaaaaaaaaaa";
+        let add = |file: &mut ReviewFile, body: &str, private: bool| {
+            file.add_comment(kb_core::review::NewComment {
+                file: id.to_string(),
+                file_label: "main".to_string(),
+                anchor: kb_core::review::Anchor::File,
+                author: kb_core::review::Author::Claude,
+                body: body.to_string(),
+                choices: Vec::new(),
+                attachments: Vec::new(),
+                user: None,
+                tags: Vec::new(),
+                private,
+            });
+        };
+        let etag = |file: Option<ReviewFile>| -> Option<String> {
+            comments_payload(&kb_name, id, file).expect("payload serialises")["etag"]
+                .as_str()
+                .map(str::to_string)
+        };
+
+        let mut file = ReviewFile::empty_skeleton(&kb_name, id, "t");
+        add(&mut file, "public body", false);
+        let e0 = etag(Some(file.clone())).expect("a sidecar-backed payload has an etag");
+
+        add(&mut file, "PRIVATE NOTE BODY", true);
+        assert_eq!(
+            Some(e0.clone()),
+            etag(Some(file.clone())),
+            "O1: a private note moved the unauthenticated payload's etag"
+        );
+
+        file.comments[0].body = "edited".into();
+        assert_ne!(
+            Some(e0),
+            etag(Some(file)),
+            "a public comment's edit must still move it"
+        );
+
+        // No review file on disk: the skeleton is injected, and the field
+        // stays null exactly as before (its `generated_at` is `Utc::now()`,
+        // so a token over it would change on every page render).
+        assert!(etag(None).is_none());
     }
 
     #[test]

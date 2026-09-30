@@ -5,13 +5,16 @@
 //! with the canonical empty kb-comments/1 skeleton when none exists yet
 //! (no-comments is a state, not an error; consumers used to synthesize
 //! the same skeleton from a 404 and stay tolerant of older daemons).
-//! Always sets an `ETag` header derived from `kb_core::review::etag_for`.
+//! The `ETag` here is a REPRESENTATION token — sha256 over the bytes this
+//! response actually returns, computed AFTER the visibility filter. It was
+//! `kb_core::review::etag_for(path)`, a disk-revision token over the
+//! UNFILTERED sidecar; see `review_response` for why that was an existence
+//! oracle and which token took its place on the write path.
 //!
 //! v0.40 TN2 — **GET takes `?visibility=public|all`, default `public`.**
 //! This is one of only two reads (with `list_reviews`) that can surface a
 //! private note, and it does so without a parameter being an error of
-//! omission: absent means public. The `ETag` is a disk-revision token and
-//! is deliberately NOT recomputed from the filtered body — see `with_etag`.
+//! omission: absent means public.
 //!
 //! The whole-document write POST was retired in R8: every mutation now
 //! goes through the fine-grained endpoints in `routes::comments` (add /
@@ -30,7 +33,9 @@ use axum::{
     Json,
 };
 use kb_core::review::{self, ExportFormat, ReviewFile, Visibility};
+use kb_core::types::KbName;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use super::is_safe_id;
@@ -91,14 +96,15 @@ pub async fn get(
         },
     };
     let path = state.paths.kb_review_file(&kb_name, &id);
+    // D7 (W1.D) — an artifact with no comments yet is an ordinary state,
+    // not an error: 200 + the canonical empty kb-comments/1 skeleton (the
+    // same shape routes/artifact.rs injects and every consumer already
+    // synthesized locally on the old 404). `Ok(None)` carries that case
+    // through to `review_response`, which — like the `etag_for` on a
+    // missing file it replaces — sends NO ETag for it, so conditional
+    // reloads stay correct.
     match review::load(&path) {
-        Ok(Some(file)) => with_etag(filter_visibility(file, visibility), &path),
-        // D7 (W1.D) — an artifact with no comments yet is an ordinary state,
-        // not an error: 200 + the canonical empty kb-comments/1 skeleton
-        // (the same shape routes/artifact.rs injects and every consumer
-        // already synthesized locally on the old 404). `etag_for` on a
-        // missing file yields no ETag, so conditional reloads stay correct.
-        Ok(None) => with_etag(ReviewFile::empty_skeleton(&kb_name, &id, ""), &path),
+        Ok(loaded) => review_response(&kb_name, &id, loaded, visibility),
         Err(e) => error_to_problem_json(&e),
     }
 }
@@ -114,18 +120,86 @@ fn filter_visibility(mut file: ReviewFile, v: Visibility) -> ReviewFile {
     file
 }
 
-/// v0.40 TN2 — the ETag is `etag_for(path)`, a DISK-REVISION token
-/// (mtime + size + bytes), and it stays exactly that. It is deliberately
-/// NOT a hash of the body we serialise: `?visibility=public` and
-/// `?visibility=all` return different bytes for the same file, so a body
-/// hash would 304 a filtered read against a full read the client never
-/// received (and vice versa). The token describes the file on disk; the
-/// client's own cache key must carry the visibility it asked for.
-fn with_etag(file: ReviewFile, path: &std::path::Path) -> Response<Body> {
-    let etag = review::etag_for(path).ok().flatten();
-    let mut resp = Json(file).into_response();
-    if let Some(e) = etag {
-        if let Ok(v) = HeaderValue::from_str(&e) {
+/// O1 (adversarial review 2026-09-30) — the `ETag` is a REPRESENTATION
+/// token: sha256 over the exact bytes this response returns, taken AFTER
+/// `filter_visibility` has dropped the notes this reader may not see. It
+/// was `review::etag_for(path)`, a DISK-REVISION token over the unfiltered
+/// sidecar, and that made the header an existence oracle for private
+/// notes: creating or editing one moved the token over a BYTE-IDENTICAL
+/// public body, so a conditional GET dated the note — forever, to the
+/// microsecond — without ever reading it, and the same token was inlined
+/// into the UNAUTHENTICATED artifact-subdomain `?cm=on` payload (see
+/// `routes::artifact::build_comments_payload`). It is the same "a count is
+/// a leak too" rule the feature already applies to `open_count` /
+/// `total_count`: what a reader cannot see must not be observable at all.
+/// It is also one read cheaper per GET: `etag_for` does its own
+/// `std::fs::read` of the sidecar, so the old handler parsed the file and
+/// then hashed a second full copy of it.
+///
+/// A PUBLIC comment's create/edit still moves the token, because the bytes
+/// the reader received really did change — that is the whole job of an
+/// ETag, and the token stays a pure function of the body, so a repeat read
+/// of an unchanged review reproduces it exactly (no per-request churn).
+/// `?visibility=public` and `?visibility=all` now get DIFFERENT tokens for
+/// the same file, which is correct rather than a bug: they are different
+/// representations at different URLs, and a representation's validator
+/// must describe that representation. The old comment here argued the
+/// opposite — that one disk token for both visibilities was required — but
+/// it inverted the property it was protecting. A body token can only 304
+/// a client holding those exact bytes, which is precisely the guarantee
+/// `If-None-Match` is supposed to give; a disk token 304s a client that
+/// may be holding a filtered body it never compared against.
+///
+/// The disk-revision token is NOT lost: it is what `If-Match` on a write
+/// must compare against (`kb_core::review::save_atomic`), because there
+/// the question is "did anyone touch this file on disk since I read it",
+/// including a write whose visible body did not change. `body_etag`'s
+/// domain prefix keeps the two in separate hash domains so one can never
+/// be mistaken for the other at that comparison.
+///
+/// So do not read the split as "the ETag no longer guards writes". It never
+/// did: `If-Match` reaches `save_atomic` only from in-process callers — the
+/// whole-document POST that carried the header was retired in R8 and every
+/// mutation now runs under the per-kb `review_lock` — so no HTTP route
+/// hands a client the disk token to echo back, and none reads one. The GET
+/// `ETag` is a representation validator, full stop; the disk token is the
+/// write path's, and the two are deliberately not interchangeable.
+///
+/// `loaded` is `None` when there is no sidecar: the skeleton stands in for
+/// the body but gets NO ETag. That is not only a leak guard — the
+/// skeleton's `generated_at` is `Utc::now()`, so hashing it would mint a
+/// fresh token on every single read of an artifact with no comments yet,
+/// which is most artifacts. The pre-O1 code got this for free (a missing
+/// file has no `etag_for`); keep it.
+fn review_response(
+    kb_name: &KbName,
+    id: &str,
+    loaded: Option<ReviewFile>,
+    visibility: Visibility,
+) -> Response<Body> {
+    let (file, is_disk_backed) = match loaded {
+        Some(f) => (f, true),
+        None => (ReviewFile::empty_skeleton(kb_name, id, ""), false),
+    };
+    let bytes = match serde_json::to_vec(&filter_visibility(file, visibility)) {
+        Ok(b) => b,
+        Err(e) => return error_to_problem_json(&kb_core::Error::from(e)),
+    };
+    // Hashed before `bytes` moves into the body, and only when a sidecar
+    // exists — the skeleton case would be pure waste (see the
+    // `generated_at` note above) as well as a lie.
+    let etag = is_disk_backed.then(|| body_etag(&bytes));
+    let mut resp = Response::new(Body::from(bytes));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    if let Some(etag) = etag {
+        // Cannot fail in practice — `body_etag` emits 32 hex digits inside
+        // a pair of quotes, all of them valid header-value bytes — and an
+        // unreachable 500 branch would be worse than the silent skip this
+        // keeps (which is what the pre-O1 code did too).
+        if let Ok(v) = HeaderValue::from_str(&etag) {
             resp.headers_mut().insert(header::ETAG, v);
         }
     }
@@ -133,6 +207,25 @@ fn with_etag(file: ReviewFile, path: &std::path::Path) -> Response<Body> {
     resp.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
+}
+
+/// Domain prefix for [`body_etag`], hashed in before the body so a
+/// representation token can never collide with a `review::etag_for`
+/// disk-revision token. `save_atomic` compares `If-Match` as an opaque
+/// string against the disk token; without the split, the two live in one
+/// 128-bit space and a future caller that fed a GET's ETag to a write
+/// would be relying on nothing.
+const ETAG_DOMAIN: &[u8] = b"kb-comments/1 public-representation\0";
+
+/// sha256 over the response bytes, truncated to 16 bytes and hex-quoted —
+/// the same shape `review::etag_for` emits, so any client parsing an
+/// entity-tag keeps working. See [`review_response`] for why the public
+/// read hashes the body and the write path does not.
+pub(super) fn body_etag(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(ETAG_DOMAIN);
+    h.update(bytes);
+    format!("\"{}\"", hex::encode(&h.finalize()[..16]))
 }
 
 // --- v0.5 P3 — server-side review export ---------------------------------
@@ -227,4 +320,171 @@ fn export_too_large(len: usize) -> Response<Body> {
         HeaderValue::from_static("application/problem+json"),
     );
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kb_core::review::{Anchor, Author, NewComment};
+
+    const ID: &str = "aaaaaaaaaaaa";
+
+    fn kb() -> KbName {
+        KbName::new("smoke").expect("valid kb name")
+    }
+
+    fn with_comment(file: &mut ReviewFile, body: &str, private: bool) {
+        file.add_comment(NewComment {
+            file: ID.to_string(),
+            file_label: "main".to_string(),
+            anchor: Anchor::File,
+            author: Author::Claude,
+            body: body.to_string(),
+            choices: Vec::new(),
+            attachments: Vec::new(),
+            user: None,
+            tags: Vec::new(),
+            private,
+        });
+    }
+
+    /// Drive the real handler body and hand back what a public reader
+    /// actually observes: the `ETag` header and the response bytes.
+    async fn read_as(
+        kb_name: &KbName,
+        path: &std::path::Path,
+        v: Visibility,
+    ) -> (Option<String>, Vec<u8>) {
+        let resp = review_response(kb_name, ID, review::load(path).unwrap(), v);
+        let etag = resp
+            .headers()
+            .get(header::ETAG)
+            .map(|h| h.to_str().expect("ascii etag").to_string());
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("in-memory body")
+            .to_vec();
+        (etag, body)
+    }
+
+    /// O1 — the ETag is a validator for the bytes the reader got, so a
+    /// private note must be invisible to it. The sidecar really does change
+    /// (asserted: otherwise this test would pass on a broken filter) — what
+    /// must not move is the public token, over a byte-identical body.
+    #[tokio::test]
+    async fn private_note_does_not_move_the_public_etag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(format!("{ID}.json"));
+        let mut file = ReviewFile::empty_skeleton(&kb(), ID, "t");
+        with_comment(&mut file, "public body", false);
+        let disk_before = review::save_atomic(&path, &file, None).unwrap();
+
+        let (e0, body0) = read_as(&kb(), &path, Visibility::Public).await;
+        let e0 = e0.expect("a sidecar-backed read carries an ETag");
+        // Re-reading an unchanged review must reproduce the token exactly: a
+        // token that moved per request would be no validator at all.
+        assert_eq!(
+            Some(e0.clone()),
+            read_as(&kb(), &path, Visibility::Public).await.0,
+            "the public ETag must be a pure function of the body"
+        );
+
+        with_comment(&mut file, "PRIVATE NOTE BODY", true);
+        let disk_after = review::save_atomic(&path, &file, None).unwrap();
+        assert_ne!(
+            disk_before, disk_after,
+            "sanity: the sidecar really was rewritten — otherwise this test \\
+             proves nothing about the filter"
+        );
+
+        let (e1, body1) = read_as(&kb(), &path, Visibility::Public).await;
+        assert_eq!(
+            Some(e0.clone()),
+            e1,
+            "O1: a private note moved the public ETag"
+        );
+        assert_eq!(body0, body1, "the public body must be byte-identical too");
+        assert!(
+            !String::from_utf8_lossy(&body1).contains("PRIVATE NOTE BODY"),
+            "sanity: the private note really is filtered out of this body"
+        );
+
+        // The token is hashed AFTER the filter, so the reader who IS
+        // allowed to see the note gets a different one for the same file.
+        let e_all = read_as(&kb(), &path, Visibility::All).await.0;
+        assert_ne!(
+            Some(e0),
+            e_all,
+            "?visibility=all must not share the public read's validator"
+        );
+    }
+
+    /// The other half of the contract: a PUBLIC comment's edit has to move
+    /// the token, or the fix above would have "solved" the leak by making
+    /// the ETag useless.
+    #[tokio::test]
+    async fn public_edit_moves_the_public_etag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(format!("{ID}.json"));
+        let mut file = ReviewFile::empty_skeleton(&kb(), ID, "t");
+        with_comment(&mut file, "public body", false);
+        review::save_atomic(&path, &file, None).unwrap();
+        let e0 = read_as(&kb(), &path, Visibility::Public).await.0;
+
+        let mut edited = review::load(&path).unwrap().unwrap();
+        edited.comments[0].body = "edited".into();
+        review::save_atomic(&path, &edited, None).unwrap();
+
+        assert_ne!(
+            e0,
+            read_as(&kb(), &path, Visibility::Public).await.0,
+            "a public comment's edit must move the public ETag"
+        );
+    }
+
+    /// The disk-revision token is what `If-Match` compares, and it must
+    /// still see a write whose PUBLIC body did not change — that is the
+    /// one case where "did anyone touch the file" and "did the reader's
+    /// bytes change" are different questions with different answers.
+    #[test]
+    fn if_match_disk_token_still_sees_an_invisible_concurrent_edit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(format!("{ID}.json"));
+        let mut file = ReviewFile::empty_skeleton(&kb(), ID, "t");
+        with_comment(&mut file, "public body", false);
+        let mine = review::save_atomic(&path, &file, None).unwrap();
+
+        // A concurrent writer adds a note this reader must never learn of.
+        let mut theirs = review::load(&path).unwrap().unwrap();
+        with_comment(&mut theirs, "their private note", true);
+        review::save_atomic(&path, &theirs, None).unwrap();
+
+        let err = review::save_atomic(&path, &file, Some(&mine))
+            .expect_err("If-Match must reject a write that raced a disk edit");
+        assert!(
+            matches!(err, kb_core::Error::PreconditionFailed(_)),
+            "expected 412, got {err:?}"
+        );
+
+        // And the fresh disk token round-trips, so this is a rejection and
+        // not a permanent lockout.
+        let fresh = review::etag_for(&path).unwrap().expect("file exists");
+        review::save_atomic(&path, &file, Some(&fresh)).expect("fresh If-Match succeeds");
+    }
+
+    /// No sidecar ⇒ no ETag. The skeleton stamps `generated_at: Utc::now()`,
+    /// so hashing it would mint a fresh token on every read of an artifact
+    /// with no comments yet — the majority of artifacts — and a validator
+    /// that changes per request is worse than none.
+    #[tokio::test]
+    async fn absent_review_sends_no_etag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(format!("{ID}.json"));
+        let resp = review_response(&kb(), ID, review::load(&path).unwrap(), Visibility::Public);
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.headers().get(header::ETAG).is_none(),
+            "the synthesized skeleton must not carry a validator"
+        );
+    }
 }
