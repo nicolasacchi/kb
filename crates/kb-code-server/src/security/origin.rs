@@ -234,31 +234,13 @@ impl HostPolicy {
 /// A hostname (no scheme, possibly with a port, possibly bracketed IPv6)
 /// split into its host label and optional port. `None` for an unparseable
 /// value.
-fn split_host_port(value: &str) -> Option<(String, Option<&str>)> {
-    let v = value.trim();
-    if v.is_empty() {
-        return None;
-    }
-    if let Some(rest) = v.strip_prefix('[') {
-        // `[::1]` / `[::1]:4747` — keep the brackets in the host label so
-        // it compares equal to the `[::1]` spelling operators write.
-        let (inner, tail) = rest.split_once(']')?;
-        let port = tail.strip_prefix(':');
-        return Some((format!("[{}]", inner.to_ascii_lowercase()), port));
-    }
-    match v.rsplit_once(':') {
-        // An unbracketed value with MORE than one colon is a bare IPv6
-        // literal (`::1`), not host:port.
-        Some((host, port)) if !host.contains(':') => Some((host.to_ascii_lowercase(), Some(port))),
-        _ => Some((v.to_ascii_lowercase(), None)),
-    }
-}
-
-/// The always-allowed loopback host labels, in every spelling a client can
-/// send one.
-fn is_loopback_host_label(host: &str) -> bool {
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
-}
+/// Delegated to kb-server, not copied. Both daemons now enforce a `Host`
+/// allowlist, and a second copy of the parser is how the two drift into
+/// disagreeing about what `[::1]:4747` or a bare `::1` means — which would
+/// make the allowlist a per-daemon decision rather than a property of the
+/// deployment. `request_is_loopback` is shared for the same reason
+/// (invariant #4); this extends that to the host parsing.
+use kb_server::middleware::{is_loopback_host_label, split_host_port};
 
 /// `Host:` admission — see the module doc. `None` (header absent) passes:
 /// HTTP/1.0 and some in-process clients send no Host, and refusing them
