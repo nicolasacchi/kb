@@ -67,10 +67,16 @@ permissions:
 #
 # A family is also never SHARED between a path-filtered writer and an
 # unfiltered reader. A filtered job skips its cache step entirely, so after a
-# rustc bump (which the kb-code filter deliberately does not match) an
-# unfiltered restore-only sibling would run cold forever, waiting for a write
-# that never comes. `code` and `code-e2e-fast` are written by filtered jobs,
-# but every member of those two families is behind the SAME filter: they go
+# rustc bump an unfiltered restore-only sibling could run cold forever,
+# waiting for a write that never comes. The five kb-code filters below DO
+# match `rust-toolchain.toml` (they must: it decides the rustc those jobs
+# compile with, and rustup's directory override outranks `rustup default`),
+# so a bump moves the filtered and unfiltered lanes together and that
+# deadlock cannot open — this paragraph used to claim the filter deliberately
+# did NOT match it, which was a stale note from before the filter grew the
+# entry, and it is corrected here rather than left to mislead the next reader
+# of a cache-cold incident. `code` and `code-e2e-fast` are written by filtered
+# jobs, but every member of those two families is behind the SAME filter:
 # stale together, on runs where nothing in them executes anyway, and the next
 # kb-code change runs cold once and re-writes them. That is why kb-code did
 # not simply move into `workspace`/`e2e-fast` as their writer.
@@ -142,10 +148,21 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # Pin to rust-toolchain.toml's version (1.96.0). `@stable` would
-        # drift past the pinned version on every new release; local
-        # builds (rustup auto-switch) and CI could disagree about
-        # clippy lints. Deep-review LOW: rust-toolchain alignment.
+        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
+        # the REF it is handed; it never opens the file, so this literal and
+        # the toml's `channel` are two INDEPENDENT pins that can drift apart
+        # silently. The comment here used to claim the pin came from the
+        # toml, and it did not (deep-review O8) — so the claim is replaced,
+        # not repeated. The toml is not inert, though: rustup's precedence
+        # puts the DIRECTORY override above `rustup default`, so bumping it
+        # changes what `cargo` resolves to in every job, path-filtered ones
+        # included, while this action goes on installing the old literal. The
+        # literal therefore still has to be RIGHT — it is what pre-installs
+        # the toolchain and its rustfmt/clippy components, so a wrong one
+        # compiles this job with a rustc the repo does not pin — and
+        # `just toolchain-pin-check` (a supply-chain step; it compiles
+        # nothing) fails the build the moment the two disagree. `@stable`
+        # would be worse than either: it drifts on every release.
         uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt, clippy
@@ -236,10 +253,21 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # Pin to rust-toolchain.toml's version (1.96.0). `@stable` would
-        # drift past the pinned version on every new release; local
-        # builds (rustup auto-switch) and CI could disagree about
-        # clippy lints. Deep-review LOW: rust-toolchain alignment.
+        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
+        # the REF it is handed; it never opens the file, so this literal and
+        # the toml's `channel` are two INDEPENDENT pins that can drift apart
+        # silently. The comment here used to claim the pin came from the
+        # toml, and it did not (deep-review O8) — so the claim is replaced,
+        # not repeated. The toml is not inert, though: rustup's precedence
+        # puts the DIRECTORY override above `rustup default`, so bumping it
+        # changes what `cargo` resolves to in every job, path-filtered ones
+        # included, while this action goes on installing the old literal. The
+        # literal therefore still has to be RIGHT — it is what pre-installs
+        # the toolchain and its rustfmt/clippy components, so a wrong one
+        # compiles this job with a rustc the repo does not pin — and
+        # `just toolchain-pin-check` (a supply-chain step; it compiles
+        # nothing) fails the build the moment the two disagree. `@stable`
+        # would be worse than either: it drifts on every release.
         uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Cache cargo + target
@@ -340,10 +368,21 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # Pin to rust-toolchain.toml's version (1.96.0). `@stable` would
-        # drift past the pinned version on every new release; local
-        # builds (rustup auto-switch) and CI could disagree about
-        # clippy lints. Deep-review LOW: rust-toolchain alignment.
+        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
+        # the REF it is handed; it never opens the file, so this literal and
+        # the toml's `channel` are two INDEPENDENT pins that can drift apart
+        # silently. The comment here used to claim the pin came from the
+        # toml, and it did not (deep-review O8) — so the claim is replaced,
+        # not repeated. The toml is not inert, though: rustup's precedence
+        # puts the DIRECTORY override above `rustup default`, so bumping it
+        # changes what `cargo` resolves to in every job, path-filtered ones
+        # included, while this action goes on installing the old literal. The
+        # literal therefore still has to be RIGHT — it is what pre-installs
+        # the toolchain and its rustfmt/clippy components, so a wrong one
+        # compiles this job with a rustc the repo does not pin — and
+        # `just toolchain-pin-check` (a supply-chain step; it compiles
+        # nothing) fails the build the moment the two disagree. `@stable`
+        # would be worse than either: it drifts on every release.
         uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Cache cargo + target
@@ -706,10 +745,21 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # Pin to rust-toolchain.toml's version (1.96.0). `@stable` would
-        # drift past the pinned version on every new release; local
-        # builds (rustup auto-switch) and CI could disagree about
-        # clippy lints. Deep-review LOW: rust-toolchain alignment.
+        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
+        # the REF it is handed; it never opens the file, so this literal and
+        # the toml's `channel` are two INDEPENDENT pins that can drift apart
+        # silently. The comment here used to claim the pin came from the
+        # toml, and it did not (deep-review O8) — so the claim is replaced,
+        # not repeated. The toml is not inert, though: rustup's precedence
+        # puts the DIRECTORY override above `rustup default`, so bumping it
+        # changes what `cargo` resolves to in every job, path-filtered ones
+        # included, while this action goes on installing the old literal. The
+        # literal therefore still has to be RIGHT — it is what pre-installs
+        # the toolchain and its rustfmt/clippy components, so a wrong one
+        # compiles this job with a rustc the repo does not pin — and
+        # `just toolchain-pin-check` (a supply-chain step; it compiles
+        # nothing) fails the build the moment the two disagree. `@stable`
+        # would be worse than either: it drifts on every release.
         uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Cache cargo + target
@@ -774,8 +824,10 @@ jobs:
     #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
     #     the very test that exists to catch it.
     #   rust-toolchain.toml — it decides which rustc the skipped jobs would
-    #     have compiled with, and dtolnay/rust-toolchain@1.96.0 is a
-    #     hardcoded literal that does not read it.
+    #     have compiled with (rustup's directory override outranks
+    #     `rustup default`), and the `dtolnay/rust-toolchain@X.Y.Z` pins are
+    #     hardcoded literals that do not read it — `toolchain-pin-check`
+    #     (supply-chain) is what keeps the two from drifting apart.
     #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
     #     PR's only diff is this file, it used to be able to neuter every
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
@@ -891,8 +943,9 @@ jobs:
     #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
     #     the very test that exists to catch it.
     #   rust-toolchain.toml — it decides which rustc the skipped jobs would
-    #     have compiled with, and dtolnay/rust-toolchain@1.96.0 is a
-    #     hardcoded literal that does not read it.
+    #     have compiled with, and the `dtolnay/rust-toolchain@X.Y.Z` pins are
+    #     hardcoded literals that do not read it — `toolchain-pin-check`
+    #     (supply-chain) is what keeps the two from drifting apart.
     #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
     #     PR's only diff is this file, it used to be able to neuter every
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
@@ -955,10 +1008,21 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.changes.outputs.run == 'true'
-        # Pin to rust-toolchain.toml's version (1.96.0). `@stable` would
-        # drift past the pinned version on every new release; local
-        # builds (rustup auto-switch) and CI could disagree about
-        # clippy lints. Deep-review LOW: rust-toolchain alignment.
+        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
+        # the REF it is handed; it never opens the file, so this literal and
+        # the toml's `channel` are two INDEPENDENT pins that can drift apart
+        # silently. The comment here used to claim the pin came from the
+        # toml, and it did not (deep-review O8) — so the claim is replaced,
+        # not repeated. The toml is not inert, though: rustup's precedence
+        # puts the DIRECTORY override above `rustup default`, so bumping it
+        # changes what `cargo` resolves to in every job, path-filtered ones
+        # included, while this action goes on installing the old literal. The
+        # literal therefore still has to be RIGHT — it is what pre-installs
+        # the toolchain and its rustfmt/clippy components, so a wrong one
+        # compiles this job with a rustc the repo does not pin — and
+        # `just toolchain-pin-check` (a supply-chain step; it compiles
+        # nothing) fails the build the moment the two disagree. `@stable`
+        # would be worse than either: it drifts on every release.
         uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Cache cargo + target
@@ -1016,8 +1080,9 @@ jobs:
     #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
     #     the very test that exists to catch it.
     #   rust-toolchain.toml — it decides which rustc the skipped jobs would
-    #     have compiled with, and dtolnay/rust-toolchain@1.96.0 is a
-    #     hardcoded literal that does not read it.
+    #     have compiled with, and the `dtolnay/rust-toolchain@X.Y.Z` pins are
+    #     hardcoded literals that do not read it — `toolchain-pin-check`
+    #     (supply-chain) is what keeps the two from drifting apart.
     #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
     #     PR's only diff is this file, it used to be able to neuter every
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
@@ -1266,6 +1331,16 @@ jobs:
     # taiki-e/install-action. Splitting advisories from licenses+bans+sources keeps an
     # advisory-DB hiccup from masking a real license regression. Mirrors the
     # local `just deny` recipe; config is deny.toml (cargo-deny v2 schema).
+    #
+    # This job is also the home of the OTHER compile-free gates — the NOTICE
+    # drift check, the doc line-anchor gate (O11) and the CI toolchain-pin
+    # assertion (O8). That is not scope creep into a license job: it is the
+    # one lane in this file that is explicitly "no compile happens here", so
+    # a text assertion added there costs seconds and a text assertion added
+    # anywhere else costs a compile. The job's `name:` still reads
+    # "cargo-deny — licenses + advisories" because that string is a required
+    # check in branch protection and renaming it would silently drop the
+    # protection rule; the steps below it are the authority on what runs.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       # Install the prebuilt cargo-deny binary directly
@@ -1340,6 +1415,58 @@ jobs:
         # verdict.
         if: ${{ !cancelled() }}
         run: just licenses-set-check
+
+      # WHY THE NEXT TWO STEPS LIVE IN THIS JOB
+      # ---------------------------------------
+      # Both are assertions over COMMITTED TEXT — the docs' `file.rs:LINE`
+      # citations, and the toolchain literals in these workflows. Neither
+      # needs a compiler, and this is the only job in ci.yml whose header
+      # states outright that no compile happens here, so adding them cannot
+      # lengthen a compile lane. They are also UNFILTERED, which is the
+      # property that matters most for the first one: the bugs they catch are
+      # docs-only and workflow-only diffs, exactly the shape the five
+      # path-filtered `code-*` jobs skip, so a gate parked behind that filter
+      # would never see the PR that broke it.
+      #
+      # They run LAST, with `!cancelled()`, for the same reason the NOTICE
+      # step does: a cargo-deny failure is an independent signal and must not
+      # swallow two more verdicts.
+      - name: Doc line-anchor drift (just doc-anchors)
+        # O11: nothing in the repo ever checked a `file.rs:LINE` citation, and
+        # an adversarial pass found ~30 of docs/configuration.md's
+        # `[review.store]` anchors pointing at the wrong line — after an
+        # earlier repair round that "fixed" 12 and broke 1, which is the
+        # recurrence this gate ends. A hand-repair fixes the instance.
+        #
+        # Measured on the tree this step shipped with, over docs/*.md: 87
+        # anchors, of which 0 DANGLING, 0 PAST-EOF and 45 AMBIGUOUS — 35 of
+        # the 45 in configuration.md, 8 in authoring-artifacts.md, 1 each in
+        # invariant-test-map.md and kb-code.md. AMBIGUOUS is the class that
+        # carries the finding: a bare `config.rs:1414` matches five files in
+        # this tree, so it is in range for at least one of them and a pure
+        # bounds check can never flag it. The number is unverifiable, which
+        # is the defect.
+        #
+        # `--no-ambiguous` reports those 45 without failing: 45 pre-existing
+        # anchors cannot be rewritten in the same commit that adds the gate,
+        # and a step that is red from birth is a step everyone learns to skip.
+        # Drop the flag once they name one file each and the class goes fatal.
+        if: ${{ !cancelled() }}
+        run: just doc-anchors
+
+      - name: CI toolchain pins == rust-toolchain.toml (just toolchain-pin-check)
+        # O8: all 14 `uses: dtolnay/rust-toolchain@X.Y.Z` lines are hardcoded
+        # literals; the action resolves the REF and never opens
+        # rust-toolchain.toml, so the two pins could drift apart silently.
+        # It matters more than a duplicate constant because rustup's directory
+        # override outranks `rustup default`: bumping the toml changes what
+        # `cargo` resolves to in the path-filtered `code-*` jobs anyway, while
+        # this action goes on installing the old literal and attaching
+        # rustfmt/clippy to the wrong toolchain. This step is the assertion
+        # that keeps the two equal. It scans release.yml and
+        # bench-nightly.yml too, so a bump cannot miss one of them.
+        if: ${{ !cancelled() }}
+        run: just toolchain-pin-check
   # CI-ONLY (branch rs/gates-binary, never merged): build the kb-code daemon +
   # CLI for the review-store acceptance gates, which run against private data
   # off-CI. The operator's rule is "compile only on CI", so the gates consume
