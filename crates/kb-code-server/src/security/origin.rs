@@ -182,7 +182,17 @@ impl HostPolicy {
                 .server
                 .hostnames
                 .iter()
-                .map(|h| h.trim().to_ascii_lowercase())
+                // Strip the port, exactly as kb-server does
+                // (`normalize_host_label`) and as `HostPolicy::new` below
+                // does. Without it an entry spelled `"kbc.example.com:443"`
+                // — the shape docs/configuration.md:41 explicitly blesses —
+                // never matches a request label, and because the list is
+                // then non-empty the gate is ON for every peer: a silent
+                // 403 on every /api call, with no boot warning (the
+                // empty-list warning does not fire) and a 403 body telling
+                // the operator to add the entry they already added. That is
+                // this module's own forbidden outcome (see :47-49).
+                .filter_map(|h| normalize_host_label(h))
                 .filter(|h| !h.is_empty())
                 .collect(),
             doclens_origins: config.doclens.normalized_origins(),
@@ -199,7 +209,18 @@ impl HostPolicy {
         Self {
             hostnames: hostnames
                 .iter()
-                .map(|h| h.trim().to_ascii_lowercase())
+                // Strip the port, exactly as kb-server does
+                // (`normalize_host_label`). Without this an entry spelled
+                // `"kbc.example.com:443"` — which docs/configuration.md
+                // explicitly blesses for the SIBLING daemon — can never match
+                // a request label, and because the list is then non-empty the
+                // gate is ON for every peer, so the operator gets a silent
+                // 403 on every /api call with no warning anywhere: the
+                // empty-list warning does not fire, and the boot is clean.
+                // That is this module's own forbidden outcome (see :47-49)
+                // and it is worse than the upgrade-brick it defends against,
+                // because nothing says why.
+                .filter_map(|h| normalize_host_label(h))
                 .filter(|h| !h.is_empty())
                 .collect(),
             doclens_origins,
@@ -240,7 +261,7 @@ impl HostPolicy {
 /// make the allowlist a per-daemon decision rather than a property of the
 /// deployment. `request_is_loopback` is shared for the same reason
 /// (invariant #4); this extends that to the host parsing.
-use kb_server::middleware::{is_loopback_host_label, split_host_port};
+use kb_server::middleware::{is_loopback_host_label, normalize_host_label, split_host_port};
 
 /// `Host:` admission — see the module doc. `None` (header absent) passes:
 /// HTTP/1.0 and some in-process clients send no Host, and refusing them

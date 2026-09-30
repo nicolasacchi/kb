@@ -224,9 +224,12 @@ fn forbidden(urn: &'static str, detail: String) -> Response<Body> {
 //
 // `host_gate_applies` enforces `Host` for a loopback peer ALWAYS (no
 // configuration required — the rebinding victim is by definition a
-// loopback peer, and no config state distinguishes a rebound request
-// from a legitimate one except the Host value itself) and for a
-// non-loopback peer only once `[server] hostnames` is non-empty. A
+// loopback peer) and for a non-loopback peer only once `[server] hostnames`
+// is non-empty. "Loopback peer" here means the RAW TCP peer
+// (`peer_is_trusted`), deliberately NOT `request_is_loopback`: that one
+// resolves through `X-Forwarded-For`, and a rebound page can set that
+// header, so using it would let the page talk its way out of the gate.
+// A
 // non-loopback peer is by construction arriving through a reverse proxy
 // that is already the authentication gate, and refusing its `Host`
 // before the operator has had a chance to write `hostnames` would take
@@ -332,8 +335,21 @@ pub async fn host_guard(
     req: Request<Body>,
     next: Next,
 ) -> Response<Body> {
-    // invariant #4: reuse the loopback determination, never re-derive.
-    let peer_is_loopback = request_is_loopback(&req, &origin_cfg.trusted_proxies);
+    // NOT `request_is_loopback`. That resolves through `X-Forwarded-For`
+    // when the peer is a trusted hop — right for the AUTH decision (a real
+    // proxy on the box may say who it forwards for), but fatal here:
+    // `X-Forwarded-For` is not a forbidden request header, so a rebound page
+    // sets it itself. One `X-Forwarded-For: 203.0.113.9` made
+    // `request_is_loopback` false, which — with `hostnames` empty — made
+    // `host_gate_applies` false and switched this guard off, reopening the
+    // hole on the `KB_ALLOW_NO_AUTH=1` deployment. The gate must be decided
+    // by something no header can move: the raw TCP peer.
+    let peer_is_loopback = peer_is_trusted(
+        req.extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip()),
+        &origin_cfg.trusted_proxies,
+    );
     if !host_gate_applies(peer_is_loopback, !origin_cfg.hostnames.is_empty()) {
         return next.run(req).await;
     }
@@ -1944,6 +1960,48 @@ mod tests {
             // The operator can diagnose it from the response alone.
             assert!(body.contains("[server] hostnames"), "{body}");
         }
+    }
+
+    /// A forged `X-Forwarded-For` must not switch the guard OFF.
+    ///
+    /// The guard and `auth_bearer` both derive "is this a loopback peer"
+    /// from `request_is_loopback`, which consults `X-Forwarded-For` when the
+    /// peer is trusted. That is correct for the AUTH decision — a real proxy
+    /// on the box is trusted to say who it forwards for — but it means a
+    /// rebound page can set the header itself: `X-Forwarded-For` is not in
+    /// the Fetch spec's forbidden-header list, so
+    /// `fetch('/api/kbs', {headers:{'X-Forwarded-For':'203.0.113.9'}})`
+    /// arrives looking like a non-loopback client. With `hostnames` empty
+    /// that makes `host_gate_applies(false, false)` false, the guard is
+    /// skipped, and the pre-fix vulnerability returns on exactly the
+    /// `KB_ALLOW_NO_AUTH=1` deployment the carve-out already leaves open.
+    ///
+    /// So the gate must read the RAW TCP peer, which no header can move.
+    #[tokio::test]
+    async fn a_forged_x_forwarded_for_does_not_disable_the_guard() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+        let cfg = Arc::new(with_hostnames(&[], "127.0.0.1:4000"));
+        let mut req = guarded_request(
+            "127.0.0.1",
+            Method::GET,
+            "/kbs",
+            Some("attacker.example:4000"),
+            Some("http://attacker.example:4000"),
+        );
+        // The whole attack: the page names a client that is not loopback.
+        req.headers_mut()
+            .insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
+        let resp = guarded_api(cfg).oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "a forged XFF must not switch the Host guard off"
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8(body.to_vec())
+            .unwrap()
+            .contains(ERR_HOST_REFUSED));
     }
 
     /// The non-regression that matters more than the hole: the default

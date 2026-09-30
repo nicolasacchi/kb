@@ -3890,16 +3890,15 @@ export interface ReviewerStateOut {
 }
 
 /// `GET /api/prs/{number}/reviews` body (`pr-reviews/1`, addendum-2 §A).
-export interface PrReviewsOut {
-  schema: string;
-  reviewers: ReviewerStateOut[];
-  requested_reviewers: string[];
-  /// Locally-computed `reviewDecision` approximation — never
-  /// `"REVIEW_REQUIRED"` (see the Rust struct's own doc: this REST-only
-  /// client can't see branch-protection rules).
-  review_decision?: string | null;
-  unavailable_reason?: string;
-}
+///
+/// Re-exported from the generator rather than hand-mirrored. The copy that
+/// used to live here carried `schema` and `unavailable_reason` while the
+/// generator's `PrReviewsOut.ts` did not — because the export was attached
+/// to `github::PrReviewsOut` (the client-side value) instead of
+/// `routes::PrReviewsResponse` (the wire body). Same NAME, two shapes, and
+/// `gen-ts-code-check` could not see it because it only diffs
+/// `web-code/src/api/generated/`. The export now sits on the wire type.
+export type { PrReviewsResponse as PrReviewsOut } from "./generated/PrReviewsResponse";
 
 // ── PRR-U3 ── review findings — diff-overlay aliases -----------------------
 //
