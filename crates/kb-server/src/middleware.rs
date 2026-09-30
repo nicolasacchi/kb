@@ -220,7 +220,7 @@ fn forbidden(urn: &'static str, detail: String) -> Response<Body> {
 // fallback is likewise unguarded on purpose — it serves public static
 // bytes only, no corpus, and gating it buys nothing.
 //
-// ## The ONE place this fails open, and why that is the right trade
+// ## The two places this fails open, and why that is the right trade
 //
 // `host_gate_applies` enforces `Host` for a loopback peer ALWAYS (no
 // configuration required — the rebinding victim is by definition a
@@ -236,11 +236,30 @@ fn forbidden(urn: &'static str, detail: String) -> Response<Body> {
 // a deployed daemon down on upgrade: a hardening unit that bricks the
 // deployment it hardens is not a hardening unit. The boot warning in
 // `serve_with_paths` names the key instead of silently doing nothing.
+//
+// The second is a request that carries NO NAME: no `Host` header and no
+// request-URI authority, which is an HTTP/1.0 client or an in-process
+// caller. That is refused by nothing, because there is nothing to
+// enforce — and refusing it would break every `tower::oneshot` client
+// in this repo's own suite, which is a cost with no security benefit
+// (a browser always sends the name, so the rebinding victim is always
+// checked). The name is looked up in `effective_host_name`, which
+// consults the URI authority as well as `Host`: HTTP/2 makes `Host`
+// OPTIONAL when `:authority` is present (RFC 9113 §8.3.1), so a proxy
+// with an HTTP/2 upstream reaches `/api` with no `Host` header at all,
+// and reading only the header left such a deploy with no `Host`
+// enforcement even with `hostnames` configured.
 
 /// A hostname (no scheme, possibly with a port, possibly bracketed IPv6)
 /// split into its host label and optional port. `None` for an empty or
 /// unparseable value. The label is lower-cased and, for IPv6, KEEPS its
 /// brackets so it compares equal to the `[::1]` spelling operators write.
+///
+/// The label is also CANONICALISED by the private
+/// `canonical_host_label` below: one trailing root dot is dropped, so
+/// the absolute form an operator actually types
+/// (`http://localhost.:4000`) is compared as the name it is. See that
+/// function for why a trailing dot must not be a 403.
 ///
 /// `pub` (SEC-02): `kb-code-server`'s `security::origin` imports this
 /// rather than keeping a second copy — a parser that mishandles
@@ -259,15 +278,110 @@ pub fn split_host_port(value: &str) -> Option<(String, Option<&str>)> {
     match v.rsplit_once(':') {
         // An unbracketed value with MORE than one colon is a bare IPv6
         // literal (`::1`), not host:port.
-        Some((host, port)) if !host.contains(':') => Some((host.to_ascii_lowercase(), Some(port))),
-        _ => Some((v.to_ascii_lowercase(), None)),
+        Some((host, port)) if !host.contains(':') => {
+            Some((canonical_host_label(host)?, Some(port)))
+        }
+        _ => Some((canonical_host_label(v)?, None)),
     }
+}
+
+/// Lower-case a raw `Host`/`hostnames` label and drop ONE trailing root
+/// dot. `None` when nothing is left, which the callers turn into a
+/// REFUSAL (an unparseable name is refused; that is the pre-existing
+/// rule and this must not become a way in).
+///
+/// WHY the dot goes, and why only on the non-bracketed path: a trailing
+/// dot is the DNS root label (RFC 6761 §6.3 "localhost."), so
+/// `localhost.` and `localhost` are the SAME name and a browser sends
+/// whichever the operator typed. Before SEC-02 there was no `Host`
+/// check at all, so `kb` at `http://localhost.:4000` worked; the guard
+/// turned that same-box browse into a 403 on every `/api` call, while
+/// the SPA shell still loaded (the top-level fallback is deliberately
+/// unguarded) — the failure mode is a page that renders and then fails
+/// every fetch, with no boot warning to explain it, because the bind IS
+/// loopback and `KB_ALLOW_NO_AUTH` is unset. Canonicalising in the
+/// PARSER (not in `host_allowed`) means a config entry written as
+/// `"kbc.example.com."` normalises identically to the request label,
+/// so the two can never mean different things.
+///
+/// Dropping the dot cannot widen the allowlist in any way that matters:
+/// it maps `attacker.example.` → `attacker.example`, which is still
+/// refused, and no rebound name becomes a loopback name by gaining a
+/// dot. The bracketed IPv6 branch above is left alone because a dot
+/// after `]` is not a root label, it is malformed input.
+fn canonical_host_label(raw: &str) -> Option<String> {
+    let lower = raw.to_ascii_lowercase();
+    let name = lower.strip_suffix('.').unwrap_or(&lower);
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// The always-allowed loopback host labels, in every spelling a client
 /// can send one.
+///
+/// The rule is "does the name denote a loopback address on this box",
+/// asked of `std`'s own definition rather than a hand-written list,
+/// which is what admits the spellings a 4-element `matches!` missed:
+///
+///   * **`127.0.0.0/8`, not just `127.0.0.1`** — Linux, macOS, the BSDs
+///     and Windows all route the whole /8 to `lo`, and `Ipv4Addr::
+///     is_loopback` says so. `127.0.0.2` is a loopback peer and used to
+///     work, so the guard 403'd a same-box browse of it. It is NOT a
+///     rebinding widening: a rebound page's `Host` is the ATTACKER's
+///     name, never a loopback literal (the attacker has to win the DNS
+///     answer, and `127.0.0.2` answers from `/etc/hosts` on the
+///     victim's own box). Nothing that a browser can be tricked into
+///     sending is added — one more loopback literal, with the same
+///     trust level, is the same key this list always had.
+///   * **`[::1]` / `::1`** — unchanged; `::1` is the only IPv6 loopback
+///     address, so asking std adds nothing and takes nothing away.
+///   * **`0.0.0.0` and `[::]` stay refused.** A wildcard is not a name
+///     anyone can be reached on, and `is_loopback` is false for an
+///     unspecified address, so the `addr_host_literal` rule (which
+///     returns `None` for a wildcard bind) is mirrored here rather than
+///     re-decided. Admitting them would hand a rebound `Host: 0.0.0.0`
+///     a pass.
+///   * **`localhost` only — NOT `*.localhost`.** Browsers force
+///     `foo.localhost` to loopback (RFC 6761 §6.3) and glibc ≥ 2.35 /
+///     systemd-resolved do the same, but that is a resolver
+///     convention, not a DNS fact: on a box without it — musl, an older
+///     libc, or a `search` domain — `foo.localhost` falls through to
+///     the search domain and can be a public name the attacker owns.
+///     A name whose resolution is resolver-dependent is exactly what
+///     this allowlist must not admit, so the fix for an operator who
+///     WANTS that name is the documented one: add it to
+///     `[server] hostnames`. It also keeps the artifact-iframe host
+///     (`<id>.artifacts.localhost`) refused at `/api` — see the
+///     section comment on where this guard is layered.
+///   * `localhost.` and other trailing-dot forms are handled by
+///     `canonical_host_label` (below), not here.
+///
+/// NOTE this predicate is deliberately NOT the rule behind
+/// [`is_loopback_web_origin`] (CORS) or the `Origin == Host` arm of
+/// `origin_allowed`. CORS is a grant to a browser page, not a check on
+/// a name the daemon was reached on, and it stays `localhost` /
+/// `127.0.0.1` only. Do not "fix the inconsistency" by widening that
+/// one from here.
+///
+/// `pub` (SEC-02): shared with `kb-code-server`'s `security::origin` —
+/// see the note on [`split_host_port`].
 pub fn is_loopback_host_label(host: &str) -> bool {
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+    if host == "localhost" {
+        return true;
+    }
+    // IPv6 labels arrive bracketed (`[::1]`); `split_host_port` keeps the
+    // brackets so it compares equal to the spelling operators write, and
+    // `IpAddr::from_str` needs the bare form.
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    match bare.parse::<IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => false,
+    }
 }
 
 /// Normalise a configured `[server] hostnames` entry to the same shape
@@ -305,10 +419,17 @@ pub fn addr_host_literal(addr: &str) -> Option<String> {
     Some(label)
 }
 
-/// `Host:` admission. `None` (header absent) PASSES: HTTP/1.0 and
-/// some in-process clients send no `Host`, and those callers were never
-/// a rebinding vector (a browser always sends one). An unparseable
-/// `Host` is refused.
+/// `Host:` admission for ONE name. The name has already been split and
+/// canonicalised by [`split_host_port`], so this compares like with
+/// like: `localhost.`, `LOCALHOST:4000` and `127.0.0.2` are all
+/// admitted (see [`is_loopback_host_label`] for why each of those is
+/// loopback, and why `0.0.0.0` / `[::]` are not). An unparseable name
+/// is refused.
+///
+/// `None` means "this request carries no name at all" and PASSES. The
+/// name is looked up by [`effective_host_name`], which is where the
+/// `:authority` fallback and the reasoning for the nameless case
+/// live — change one and you must change the other.
 pub fn host_allowed(host: Option<&str>, cfg: &OriginConfig) -> bool {
     let Some(host) = host else {
         return true;
@@ -321,6 +442,47 @@ pub fn host_allowed(host: Option<&str>, cfg: &OriginConfig) -> bool {
         || cfg.addr_host.as_deref() == Some(label.as_str())
 }
 
+/// The name a request was made to, or `None` if it carries none at all.
+/// `Host` header first, then the request URI's AUTHORITY.
+///
+/// WHY the authority fallback exists, and why the old comment was
+/// wrong: it claimed "HTTP/2 requests carry `:authority`, which hyper
+/// folds into `Host` for us". hyper does not guarantee that. RFC 9113
+/// §8.3.1 makes a `Host` header OPTIONAL when `:authority` is present,
+/// and real proxies take the option — an HTTP/2 upstream (Traefik's
+/// h2 backend, Caddy, nginx proxying to an h2 origin) reaches `/api`
+/// with the name in `:authority` and NO `Host` header. This function's
+/// predecessor read only the header, so `host_allowed(None)` decided
+/// the request and `None` meant PASS: an operator who set
+/// `hostnames = ["kb.example.com"]` on exactly that deploy got no `Host`
+/// enforcement at all, with no error anywhere to say so. That is the
+/// hole this closes. `Uri::authority` is where hyper reconstructs
+/// `:scheme`/`:authority` into the request, and it is also populated
+/// for an HTTP/1.1 proxy in absolute-form, so one lookup covers both.
+///
+/// Do NOT overstate what this buys. Browsers do not speak h2c, so the
+/// rebinding page is unaffected either way: it arrives as HTTP/1.1 or
+/// TLS h2 and always sends the attacker's chosen name, which
+/// [`host_allowed`] checks. This is about PROXIES honouring a list the
+/// operator configured.
+///
+/// A `Host` header that is present but not readable as text (invalid
+/// UTF-8) reports as the EMPTY name, i.e. unparseable, i.e. REFUSED —
+/// never as absent. The predecessor's `and_then(to_str().ok())`
+/// collapsed "cannot read the name" into "no name", so a header the
+/// client fully controls was itself a way past the guard.
+///
+/// `pub` (SEC-02): `kb-code-server`'s `security::origin::
+/// origin_host_guard` should import this rather than re-deriving where
+/// the name lives — that sibling reads `Host` only and carries the same
+/// hole.
+pub fn effective_host_name<'a>(req: &'a Request<Body>) -> Option<&'a str> {
+    match req.headers().get(header::HOST) {
+        Some(v) => Some(v.to_str().unwrap_or("")),
+        None => req.uri().authority().map(|a| a.as_str()),
+    }
+}
+
 /// When the `Host` check applies. Pure, so the fail-open boundary can
 /// be unit-tested as a table without a socket — same decomposition as
 /// [`request_is_admitted`].
@@ -329,7 +491,9 @@ pub fn host_gate_applies(peer_is_loopback: bool, hostnames_configured: bool) -> 
 }
 
 /// SEC-02 — the `Host` guard. See the section comment above for the
-/// threat, the layering, and the single deliberate fail-open.
+/// threat, the layering, and the two deliberate fail-opens (a
+/// non-loopback peer before `hostnames` is configured, and a request
+/// that carries no name at all).
 pub async fn host_guard(
     State(origin_cfg): State<Arc<OriginConfig>>,
     req: Request<Body>,
@@ -353,10 +517,13 @@ pub async fn host_guard(
     if !host_gate_applies(peer_is_loopback, !origin_cfg.hostnames.is_empty()) {
         return next.run(req).await;
     }
-    let host = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok());
+    // The name is wherever HTTP put it: `Host`, or — for an HTTP/2
+    // upstream, or an HTTP/1.1 proxy in absolute-form — the request
+    // URI's authority. Reading only the header is what let a
+    // proxied deploy configured with `hostnames = ["kb.example.com"]`
+    // run with NO Host enforcement at all: `None` meant pass. See
+    // `effective_host_name`.
+    let host = effective_host_name(&req);
     if !host_allowed(host, &origin_cfg) {
         return forbidden(
             ERR_HOST_REFUSED,
@@ -366,6 +533,17 @@ pub async fn host_guard(
             ),
         );
     }
+    // NO NAME AT ALL, and it still passes — a deliberate decision, not
+    // an oversight. Getting here means no `Host` header AND no URI
+    // authority, which is an HTTP/1.0 client (RFC 9112 made `Host`
+    // mandatory in 1.1) or an in-process `tower::oneshot` caller
+    // (`Request::builder().uri("/api/kbs")`). It is not a rebinding
+    // vector: rebinding needs a BROWSER, a browser always sends the
+    // page's name, and that name is checked above — "no name" is not a
+    // way to present a name that is not on the list, only a way to
+    // present none. Refusing it would 403 every in-process client in
+    // this repo's own suite for no security gain, and an HTTP/1.0
+    // caller has no name to check, so there is nothing to enforce.
     next.run(req).await
 }
 
@@ -2049,8 +2227,15 @@ mod tests {
         }
     }
 
-    /// A request with no `Host` at all (HTTP/1.0, some in-process
-    /// clients) is not a rebinding vector and must not change admission.
+    /// A request with no name AT ALL — no `Host` header and no URI
+    /// authority, which is an HTTP/1.0 client or an in-process
+    /// `tower::oneshot` caller — is admitted, and that is deliberate: see
+    /// the reasoning in `host_guard`. "No name" is not a way to present a
+    /// name that is not on the list.
+    ///
+    /// The sibling case, where the name IS present but in the request
+    /// URI's authority (HTTP/2 `:authority`, RFC 9113 §8.3.1) and the
+    /// guard must still enforce, is `tests/host_guard.rs`.
     #[tokio::test]
     async fn a_request_without_a_host_header_is_admitted() {
         use tower::ServiceExt;

@@ -19,6 +19,15 @@
 //! `adopt_staged`, `gc_manifest`, and `attachment_limits` are `pub(crate)`
 //! so the create-time adoption in `routes::comments` (add_comment /
 //! add_reply / delete_comment) reuses them under its own review_lock guard.
+//!
+//! v0.40 TN2 — the serve route enforces COMMENT visibility: a blob whose
+//! owning comment is a private note is refused (404). The manifest records
+//! an `aid`'s metadata but not its owner, so `private_owner_of` walks the
+//! review file's `Attachment` rows. That check is the un-publish: the
+//! 🔒 toggle on `PATCH …/meta` cannot retract a URL that was already in a
+//! comment body, an export bundle, a share bundle or a browser cache —
+//! `Cache-Control: immutable` guarantees it — so reachability has to be
+//! decided per request instead.
 
 use crate::middleware::error_to_problem_json;
 use crate::routes::comments::{check_subid, emit_updated, validate};
@@ -372,11 +381,51 @@ pub async fn stage(
 
 // --- serve -----------------------------------------------------------------
 
+/// v0.40 TN2 — the owning row of `aid` (a comment attachment or a reply
+/// attachment) and whether that row is a PRIVATE note. `None` when no live
+/// comment/reply references the aid — a STAGED, not-yet-adopted upload,
+/// which has no owner yet and so is nobody's private note.
+///
+/// Walks replies as well as top-level comments because the review file
+/// carries no reverse index: the only place an `aid`'s owner is recorded is
+/// the `Attachment` row itself, so this walk IS the lookup. It is O(rows)
+/// per blob fetch against a file that is already parsed for the manifest
+/// lookup below, and the review file is a per-artifact sidecar of a few
+/// hundred rows at worst — cheaper than the `stat` + `read` it guards.
+fn private_owner_of(review: &ReviewFile, aid: &str) -> Option<bool> {
+    for c in &review.comments {
+        if c.attachments.iter().any(|a| a.id == aid) {
+            return Some(c.is_private());
+        }
+        if c.replies
+            .iter()
+            .any(|r| r.attachments.iter().any(|a| a.id == aid))
+        {
+            return Some(c.is_private());
+        }
+    }
+    None
+}
+
 /// `GET …/review/{id}/attachments/{aid}` — serve a blob. The XSS guard
 /// (root invariant #18): `Content-Type` is the daemon's stored magic-byte
 /// sniff (never the client's), `X-Content-Type-Options: nosniff` is ALWAYS
 /// set, and only raster images are served inline — every other type is
 /// forced to download. Long, immutable cache (the `aid` is random).
+///
+/// v0.40 TN2 — a blob whose owning comment has been flipped to a private
+/// note is NOT served. Without this check the blob stayed fetchable forever
+/// at the URL it was already published under: a screenshot attached to a
+/// public comment appears in the comment body, in `?cm=on`, in `kb comments
+/// export` and in any `kb share --with-comments` static site, and
+/// `Cache-Control: public, max-age=31536000, immutable` (set below) means
+/// the operator's own click on the 🔒 toggle could never retract it. The
+/// serve-side check is the half that matters: it also covers blobs that
+/// were public and never re-gced, and a published export or a warm browser
+/// cache is not reachable by any GC at all.
+///
+/// Refusal is 404, NOT 403: a 403 would confirm to someone who must not
+/// learn it that the blob exists.
 pub async fn serve(
     State(state): State<Arc<KbHandles>>,
     Path((kb, id, aid)): Path<(String, String, String)>,
@@ -387,6 +436,37 @@ pub async fn serve(
     };
     if let Err(resp) = check_subid(&aid, "attachment id") {
         return resp;
+    }
+
+    // v0.40 TN2 — refuse a blob owned by a private note. Read UNDER the
+    // per-kb review_lock (the lock the review file is mutated under), so a
+    // fetch racing the 🔒 toggle cannot read the pre-flip file and serve
+    // the blob one last time. A STAGED (not yet adopted) upload has no
+    // owning comment, so `None` serves exactly as before — otherwise the
+    // compose-time preview would break.
+    //
+    // UNCONDITIONAL, and deliberately NOT owner-gated the way
+    // `PATCH …/meta` is: on loopback with no credentials every request
+    // resolves to the operator identity, so an owner check would be waved
+    // through by the exact local agent a note exists to hide from — the
+    // argument `set_all_status` and `reject_private_note` make. The stated
+    // cost, so it reads as a decision rather than an oversight: the
+    // operator no longer sees an image inline inside their OWN private
+    // note, because this route cannot tell the operator's browser from an
+    // agent's fetch of the same URL. Un-privating restores them.
+    let review_path = state.paths.kb_review_file(&kb_name, &id);
+    let lock = state.review_lock_for(&kb_name);
+    let guard = lock.lock().await;
+    let private_owner = match review::load(&review_path) {
+        Ok(Some(f)) => private_owner_of(&f, &aid),
+        Ok(None) => None,
+        Err(e) => return error_to_problem_json(&e),
+    };
+    drop(guard);
+    if private_owner == Some(true) {
+        return error_to_problem_json(&kb_core::Error::NotFound(format!(
+            "attachment {aid} not found"
+        )));
     }
 
     let manifest = attachments::load_manifest(&state.paths.kb_attachment_manifest(&kb_name, &id));
@@ -667,4 +747,109 @@ async fn detach(
 
     emit_updated(&state, &kb_name, &id, &review);
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::private_owner_of;
+    use kb_core::review::{Anchor, Attachment, Author, Comment, CommentStatus, Reply, ReviewFile};
+    use kb_core::types::KbName;
+
+    fn att(aid: &str) -> Attachment {
+        Attachment {
+            id: aid.to_string(),
+            filename: "shot.png".into(),
+            content_type: "image/png".into(),
+            size: 3,
+            created_at: chrono::Utc::now(),
+            author: Author::You,
+            user: None,
+        }
+    }
+
+    fn row(id: &str, private: bool, atts: Vec<Attachment>, replies: Vec<Reply>) -> Comment {
+        Comment {
+            id: id.into(),
+            status: CommentStatus::Open,
+            file: "abc123def456".into(),
+            file_label: "main".into(),
+            anchor: Anchor::File,
+            author: Author::You,
+            body: "b".into(),
+            created_at: chrono::Utc::now(),
+            edited_at: None,
+            replies,
+            choices: vec![],
+            attachments: atts,
+            user: None,
+            tags: vec![],
+            private,
+        }
+    }
+
+    fn reply_with(aid: &str) -> Reply {
+        Reply {
+            id: "r_1".into(),
+            author: Author::Claude,
+            body: "r".into(),
+            created_at: chrono::Utc::now(),
+            edited_at: None,
+            choices: vec![],
+            attachments: vec![att(aid)],
+            user: None,
+        }
+    }
+
+    fn file() -> ReviewFile {
+        let kb = KbName::new("smoke").unwrap();
+        let mut f = ReviewFile::empty_skeleton(&kb, "abc123def456", "T");
+        f.comments = vec![
+            // public root, with a reply attachment
+            row(
+                "c_pub",
+                false,
+                vec![att("a_root")],
+                vec![reply_with("a_reply")],
+            ),
+            // the note: same shapes, private
+            row(
+                "c_note",
+                true,
+                vec![att("a_note")],
+                vec![reply_with("a_note_reply")],
+            ),
+        ];
+        f
+    }
+
+    /// v0.40 TN2 — the serve gate's decision table. A blob on a note (at
+    /// root OR on one of its replies) must read `Some(true)` so `serve`
+    /// 404s it; a blob on a public comment must read `Some(false)` so it
+    /// still serves. `None` is reserved for a STAGED upload with no owner,
+    /// and mislabelling that case as private would break the compose-time
+    /// preview.
+    #[test]
+    fn private_owner_of_distinguishes_note_blobs_from_public_and_staged() {
+        let f = file();
+        assert_eq!(private_owner_of(&f, "a_note"), Some(true));
+        assert_eq!(private_owner_of(&f, "a_note_reply"), Some(true));
+        assert_eq!(private_owner_of(&f, "a_root"), Some(false));
+        assert_eq!(private_owner_of(&f, "a_reply"), Some(false));
+        assert_eq!(private_owner_of(&f, "a_staged_never_adopted"), None);
+    }
+
+    /// The gate must follow the CURRENT visibility bit, not the bit at
+    /// adoption time: flipping a comment private has to change the answer
+    /// for a blob that was public when it was adopted — that transition is
+    /// the whole O6 disclosure.
+    #[test]
+    fn private_owner_of_follows_the_private_flag_not_the_adoption_time() {
+        let mut f = file();
+        assert_eq!(private_owner_of(&f, "a_root"), Some(false));
+        f.comments[0].private = true;
+        assert_eq!(private_owner_of(&f, "a_root"), Some(true));
+        // …and back, so the toggle is reversible.
+        f.comments[0].private = false;
+        assert_eq!(private_owner_of(&f, "a_root"), Some(false));
+    }
 }

@@ -107,22 +107,135 @@ impl Drop for RemoveOnDrop {
     }
 }
 
+/// Ceiling on directory entries one skip decision may stat, shared
+/// across every packed tree of one kb.
+///
+/// The walk is stat-only (no re-tar, no hashing — the tarball can be
+/// gigabytes), once per `[backup] schedule_hours` tick. A store that
+/// blows the ceiling is a store whose lance dataset is enormous; paying
+/// one extra tarball there is cheaper than guessing.
+const CHANGE_PROBE_ENTRY_BUDGET: usize = 20_000;
+
+/// What a change probe could establish about one packed tree.
+enum TreeProbe {
+    /// The tree is not packed for this kb (absent) — nothing to watch.
+    Absent,
+    /// Newest mtime found anywhere under the tree.
+    Newest(SystemTime),
+    /// The walk could not be completed, so "unchanged" is UNPROVEN.
+    Unknown,
+}
+
 /// `true` when a scheduled export of `kb` should not write a tarball.
 ///
-/// Skip when `index_db` is missing (nothing to snapshot), or when the
-/// newest `<exports>/<kb>-YYYYMMDD-HHMMSS.tar.gz` — by mtime, not by
-/// name — is at least as new as the index and its `-wal` sidecar. A
-/// missing exports dir or no matching tarball is not a skip: the first
-/// tick must write one. Unreadable index metadata is not a skip either
-/// (rewrite rather than drop a possible write). `-shm` is ignored: a
-/// reader can touch it without a commit.
-pub fn should_skip_scheduled_backup(index_db: &Path, exports: &Path, kb: &str) -> bool {
+/// Skip when the index is missing (nothing to snapshot), or when
+/// NOTHING [`write_kb_export`] packs is newer than the newest
+/// `<exports>/<kb>-YYYYMMDD-HHMMSS.tar.gz` — by mtime, not by name.
+/// The watched set is exactly the packed set: `index.db` and its `-wal`
+/// sidecar, `lance/`, `.review/`, and the daemon-wide `slates/`.
+///
+/// WHY the trees count and not just the db (2026-09-30, adversarial
+/// review O4): three of the four families this function used to ignore
+/// are written with ZERO sqlite traffic. `slates/` appends JSONL
+/// directly (`slates.rs`), and a comment/tag/anchor edit rewrites a
+/// `.review/<id>.json` sidecar. An old predicate that stat'd only
+/// `index.db` therefore called a day of pure comment + slate activity
+/// "unchanged" and skipped the export — so the one artifact that
+/// records the operator's review work was the one that could not be
+/// restored after a disk failure, while `kb doctor` still reported
+/// `backup-age: PASS` off the untouched `<state>/exports/` directory.
+///
+/// A missing exports dir or no matching tarball is not a skip: the first
+/// tick must write one. Unreadable metadata is never a skip either, and
+/// neither is an unfinished or over-budget probe (see
+/// [`probe_tree_mtime`]) — every "I could not tell" falls through to
+/// writing. `-shm` is ignored: a reader can touch it without a commit.
+pub fn should_skip_scheduled_backup(paths: &KbPaths, kb: &KbName) -> bool {
+    skip_within_budget(paths, kb, CHANGE_PROBE_ENTRY_BUDGET)
+}
+
+/// [`should_skip_scheduled_backup`] with the stat budget as a parameter,
+/// so the "a probe that cannot finish must write" rule is testable
+/// without inventing a 20 000-entry fixture tree.
+fn skip_within_budget(paths: &KbPaths, kb: &KbName, budget: usize) -> bool {
+    let index_db = paths.kb_sqlite(kb);
     if !index_db.is_file() {
         return true;
     }
-    match newest_scheduled_tarball_mtime(exports, kb) {
-        Some(since) => !index_written_since(index_db, since),
-        None => false,
+    let Some(since) = newest_scheduled_tarball_mtime(&paths.exports, kb.as_str()) else {
+        return false;
+    };
+    match index_write_mtime(&index_db) {
+        Some(mtime) if mtime > since => return false,
+        None => return false,
+        Some(_) => {}
+    }
+    let mut budget = budget;
+    for tree in [
+        paths.kb_lance(kb),
+        paths.kb_review_dir(kb),
+        paths.state.join("slates"),
+    ] {
+        match probe_tree_mtime(&tree, &mut budget) {
+            TreeProbe::Newest(mtime) if mtime > since => return false,
+            TreeProbe::Unknown => return false,
+            TreeProbe::Absent | TreeProbe::Newest(_) => {}
+        }
+    }
+    true
+}
+
+/// Newest mtime anywhere under `root`, charging every visited entry to
+/// the shared `budget`.
+///
+/// Directory mtimes count too, and that is not redundant: a sidecar
+/// replaced by the atomic temp-file-and-rename write bumps only the
+/// DIRECTORY when the replacement keeps an older stamp, and a DELETED
+/// sidecar leaves no file behind at all. Watching files alone would let
+/// both look unchanged and skip the export.
+///
+/// [`TreeProbe::Unknown`] on a walk error or an exhausted budget, which
+/// the caller must read as CHANGED. That direction is the whole point:
+/// a budget-triggered "unchanged" would re-open the very data-loss hole
+/// this probe exists to close, while an extra tarball costs only disk the
+/// operator prunes like any other export.
+fn probe_tree_mtime(root: &Path, budget: &mut usize) -> TreeProbe {
+    // A missing root is the common case (no lance dataset, no slates on
+    // this daemon) and must not be conflated with a walk that failed.
+    match std::fs::symlink_metadata(root) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return TreeProbe::Absent,
+        Err(_) => return TreeProbe::Unknown,
+    }
+    let mut newest = None;
+    for entry in walkdir::WalkDir::new(root) {
+        if *budget == 0 {
+            return TreeProbe::Unknown;
+        }
+        *budget -= 1;
+        // `walkdir::DirEntry::metadata` always calls `symlink_metadata`
+        // unless the walk follows links (this one does not), so a
+        // dangling link inside a packed tree costs one lstat instead of
+        // hanging the tick. Anything that still fails to stat is an "I
+        // could not tell" → Unknown, never silently absent: a file whose
+        // mtime we cannot read is a file whose change we cannot rule out.
+        let Ok(entry) = entry else {
+            return TreeProbe::Unknown;
+        };
+        let Ok(md) = entry.metadata() else {
+            return TreeProbe::Unknown;
+        };
+        let Ok(mtime) = md.modified() else {
+            return TreeProbe::Unknown;
+        };
+        newest = Some(match newest {
+            Some(prev) if prev >= mtime => prev,
+            _ => mtime,
+        });
+    }
+    match newest {
+        Some(mtime) => TreeProbe::Newest(mtime),
+        None => TreeProbe::Unknown,
     }
 }
 
@@ -253,13 +366,6 @@ fn is_scheduled_tarball_name(name: &str, kb: &str) -> bool {
         && b[8] == b'-'
         && b[..8].iter().all(u8::is_ascii_digit)
         && b[9..].iter().all(u8::is_ascii_digit)
-}
-
-fn index_written_since(index_db: &Path, since: SystemTime) -> bool {
-    match index_write_mtime(index_db) {
-        Some(mtime) => mtime > since,
-        None => true,
-    }
 }
 
 fn index_write_mtime(index_db: &Path) -> Option<SystemTime> {
@@ -464,77 +570,216 @@ mod tests {
         SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)
     }
 
+    /// A laid-out `KbPaths` with one kb whose index, every packed tree,
+    /// and (optionally) one scheduled tarball carry known mtimes.
+    struct SkipFixture {
+        _tmp: tempfile::TempDir,
+        paths: KbPaths,
+        kb: KbName,
+    }
+
+    impl SkipFixture {
+        /// `tar_mtime` is the newest scheduled tarball's stamp; pass
+        /// `None` for "no tarball yet". Every source starts `older` than
+        /// that stamp, so a fixture built with one skips.
+        fn new(tar_mtime: Option<u64>) -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let paths = KbPaths::rooted_at(tmp.path(), "daemon");
+            let kb = KbName::new("notes").unwrap();
+            std::fs::create_dir_all(paths.kb_state(&kb)).unwrap();
+            std::fs::create_dir_all(&paths.exports).unwrap();
+            std::fs::write(paths.kb_sqlite(&kb), b"db").unwrap();
+            let older = epoch_plus(1_700_000_000);
+            set_mtime(&paths.kb_sqlite(&kb), older);
+            if let Some(secs) = tar_mtime {
+                let tar = paths.exports.join("notes-20260101-000000.tar.gz");
+                std::fs::write(&tar, b"tar").unwrap();
+                set_mtime(&tar, epoch_plus(secs));
+            }
+            Self {
+                _tmp: tmp,
+                paths,
+                kb,
+            }
+        }
+
+        fn skip(&self) -> bool {
+            should_skip_scheduled_backup(&self.paths, &self.kb)
+        }
+
+        /// Touch `path` to a stamp newer than the fixture's tarball, and
+        /// touch its parent directory too — that is what the real atomic
+        /// sidecar write does.
+        fn touch_newer(&self, path: &Path) {
+            let newer = epoch_plus(1_700_003_600);
+            set_mtime(path, newer);
+            if let Some(parent) = path.parent() {
+                set_mtime_dir(parent, newer);
+            }
+        }
+
+        fn write_packed(&self, rel: &[&str], bytes: &[u8]) -> PathBuf {
+            let path = rel
+                .iter()
+                .fold(self.paths.state.clone(), |acc, seg| acc.join(seg));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            self.touch_newer(&path);
+            path
+        }
+    }
+
+    fn set_mtime_dir(path: &Path, when: SystemTime) {
+        // Directory mtimes are what a rename-replace or an unlink bumps.
+        let f = std::fs::File::open(path).unwrap();
+        f.set_modified(when).unwrap();
+    }
+
     #[test]
     fn scheduled_backup_skips_only_when_index_is_not_newer_than_its_tarball() {
-        let tmp = tempfile::tempdir().unwrap();
-        let exports = tmp.path().join("exports");
-        std::fs::create_dir(&exports).unwrap();
-        let index = tmp.path().join("index.db");
-        std::fs::write(&index, b"db").unwrap();
-        let older = epoch_plus(1_700_000_000);
-        let newer = epoch_plus(1_700_003_600);
-        set_mtime(&index, older);
+        let f = SkipFixture::new(None);
+        assert!(!f.skip(), "index with no tarball must be written");
 
-        assert!(
-            should_skip_scheduled_backup(&tmp.path().join("missing.db"), &exports, "notes"),
-            "no index → nothing to snapshot"
-        );
-        assert!(
-            !should_skip_scheduled_backup(&index, &exports, "notes"),
-            "index with no tarball must be written"
-        );
+        // No index → nothing to snapshot (the one direction that skips
+        // without any tarball existing).
+        std::fs::remove_file(f.paths.kb_sqlite(&f.kb)).unwrap();
+        assert!(f.skip(), "no index → nothing to snapshot");
 
+        let f = SkipFixture::new(Some(1_700_003_600));
         // A sibling kb, a manual --out name, and a staging dir are not this kb's tarball.
-        std::fs::write(exports.join("notes-extra-20260102-000000.tar.gz"), b"other").unwrap();
-        std::fs::write(exports.join("notes-manual.tar.gz"), b"manual").unwrap();
-        std::fs::create_dir(exports.join(".staging-notes-1-20260101-000000")).unwrap();
+        std::fs::write(
+            f.paths.exports.join("notes-extra-20260102-000000.tar.gz"),
+            b"other",
+        )
+        .unwrap();
+        std::fs::write(f.paths.exports.join("notes-manual.tar.gz"), b"manual").unwrap();
+        std::fs::create_dir(f.paths.exports.join(".staging-notes-1-20260101-000000")).unwrap();
         assert!(
-            !should_skip_scheduled_backup(&index, &exports, "notes"),
+            f.skip(),
             "unrelated exports must not count as notes' newest tarball"
         );
 
-        let by_name = exports.join("notes-20260102-000000.tar.gz");
-        let by_mtime = exports.join("notes-20260101-000000.tar.gz");
+        // Newest by mtime, not by name, and an equal stamp is not a write.
+        let by_name = f.paths.exports.join("notes-20260102-000000.tar.gz");
         std::fs::write(&by_name, b"older-bytes").unwrap();
-        std::fs::write(&by_mtime, b"newer-bytes").unwrap();
-        set_mtime(&by_name, older);
-        set_mtime(&by_mtime, newer);
-        set_mtime(&index, older);
+        set_mtime(&by_name, epoch_plus(1_700_003_000));
         assert!(
-            should_skip_scheduled_backup(&index, &exports, "notes"),
-            "newest tarball is by mtime, and the index is not newer"
+            f.skip(),
+            "the newest tarball is by mtime and the index is not newer"
         );
 
-        set_mtime(&index, newer);
-        assert!(
-            should_skip_scheduled_backup(&index, &exports, "notes"),
-            "equal mtime is not a write since the tarball"
-        );
+        set_mtime(&f.paths.kb_sqlite(&f.kb), epoch_plus(1_700_003_600));
+        assert!(f.skip(), "equal mtime is not a write since the tarball");
 
-        set_mtime(&index, epoch_plus(1_700_003_601));
+        set_mtime(&f.paths.kb_sqlite(&f.kb), epoch_plus(1_700_003_601));
         assert!(
-            !should_skip_scheduled_backup(&index, &exports, "notes"),
+            !f.skip(),
             "an index write after the newest tarball must not be skipped"
         );
     }
 
     #[test]
     fn scheduled_backup_treats_wal_mtime_as_an_index_write() {
-        let tmp = tempfile::tempdir().unwrap();
-        let exports = tmp.path().join("exports");
-        std::fs::create_dir(&exports).unwrap();
-        let index = tmp.path().join("index.db");
-        let wal = tmp.path().join("index.db-wal");
-        std::fs::write(&index, b"db").unwrap();
+        let f = SkipFixture::new(Some(1_700_003_600));
+        let wal = {
+            let mut os = f.paths.kb_sqlite(&f.kb).into_os_string();
+            os.push("-wal");
+            PathBuf::from(os)
+        };
         std::fs::write(&wal, b"wal").unwrap();
-        let tar = exports.join("notes-20260102-000000.tar.gz");
-        std::fs::write(&tar, b"tar").unwrap();
-        set_mtime(&index, epoch_plus(1_700_000_000));
-        set_mtime(&tar, epoch_plus(1_700_000_010));
-        set_mtime(&wal, epoch_plus(1_700_000_020));
+        set_mtime(&wal, epoch_plus(1_700_003_700));
         assert!(
-            !should_skip_scheduled_backup(&index, &exports, "notes"),
+            !f.skip(),
             "a WAL newer than the tarball is a write the main db mtime can miss"
+        );
+    }
+
+    /// O4 — the three families `write_kb_export` packs that are NOT the
+    /// sqlite index. None of them writes to sqlite: `slates/` appends
+    /// JSONL, a comment/tag/anchor edit rewrites `.review/<id>.json`, and
+    /// a lance commit lands in the dataset directory. A predicate that
+    /// stat'd only `index.db` skipped every one of them, so the review
+    /// ledger and the cross-agent slate were the artifacts most likely
+    /// to be missing from the only backup that existed.
+    #[test]
+    fn scheduled_backup_watches_review_slates_and_lance_not_just_the_index() {
+        for (label, rel) in [
+            ("review sidecar", vec!["notes", ".review", "c_abc.json"]),
+            ("slate ledger", vec!["slates", "proj", "ledger.jsonl"]),
+            ("lance commit", vec!["notes", "lance", "chunks", "0.lance"]),
+        ] {
+            let f = SkipFixture::new(Some(1_700_003_600));
+            assert!(f.skip(), "{label}: an untouched kb must still skip");
+            let path = f.write_packed(&rel, b"{}");
+            assert!(
+                !f.skip(),
+                "{label}: a write newer than the tarball must not be skipped"
+            );
+            // A rename-replace can leave the DIRECTORY as the only fresh
+            // mtime: an importer restoring sidecars from a tarball, or
+            // any tool that preserves stamps, hands the replacement an
+            // older one. Watching files alone would call that unchanged.
+            set_mtime(&path, epoch_plus(1_700_000_000));
+            assert!(
+                !f.skip(),
+                "{label}: a packed tree whose only fresh mtime is its \
+                 directory must still count as changed"
+            );
+        }
+    }
+
+    /// The probe must never report "unchanged" for something it could not
+    /// finish looking at: an exhausted budget is `Unknown`, and an
+    /// unpacked tree is `Absent` — neither may read as "unchanged".
+    #[test]
+    fn an_unfinished_change_probe_writes_instead_of_skipping() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("a.json"), b"{}").unwrap();
+
+        let mut budget = 0;
+        assert!(
+            matches!(probe_tree_mtime(&tree, &mut budget), TreeProbe::Unknown),
+            "an exhausted budget must not look like an unchanged tree"
+        );
+
+        let mut budget = CHANGE_PROBE_ENTRY_BUDGET;
+        assert!(
+            matches!(probe_tree_mtime(&tree, &mut budget), TreeProbe::Newest(_)),
+            "a walk that completes must report its newest mtime"
+        );
+        assert!(
+            matches!(
+                probe_tree_mtime(&tmp.path().join("absent"), &mut budget),
+                TreeProbe::Absent
+            ),
+            "an unpacked tree is absent, not unknown"
+        );
+    }
+
+    /// The composition that matters: a probe that cannot finish must make
+    /// the PREDICATE write, not skip. Without this, "unknown" would
+    /// silently mean "unchanged" again.
+    #[test]
+    fn an_unfinished_probe_on_a_packed_tree_forces_the_export() {
+        let f = SkipFixture::new(Some(1_700_003_600));
+        // Five aged sidecars: the walk cannot finish inside a budget of
+        // two entries, and nothing in it is newer than the tarball.
+        for i in 0..5 {
+            let p = f.paths.kb_review_dir(&f.kb).join(format!("c_{i}.json"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"{}").unwrap();
+            set_mtime(&p, epoch_plus(1_700_000_000));
+        }
+        set_mtime_dir(&f.paths.kb_review_dir(&f.kb), epoch_plus(1_700_000_000));
+        assert!(
+            skip_within_budget(&f.paths, &f.kb, 8),
+            "a probe that finishes inside the budget skips an unchanged tree"
+        );
+        assert!(
+            !skip_within_budget(&f.paths, &f.kb, 2),
+            "a probe that runs out of budget must force the export"
         );
     }
 
@@ -609,9 +854,36 @@ mod tests {
         if wal.exists() {
             set_mtime(&wal, ancient);
         }
+        // Age every OTHER family this writer packed too: the skipper
+        // watches them (O4), so leaving them at "now" would — correctly —
+        // read as "changed since the tarball we just wrote".
+        for tree in [paths.kb_review_dir(&kb), paths.state.join("slates")] {
+            for ent in walkdir::WalkDir::new(&tree)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if ent.file_type().is_dir() {
+                    set_mtime_dir(ent.path(), ancient);
+                } else {
+                    set_mtime(ent.path(), ancient);
+                }
+            }
+        }
         assert!(
-            should_skip_scheduled_backup(&paths.kb_sqlite(&kb), &paths.exports, "notes"),
-            "an index older than the tarball this writer just produced must be skipped"
+            should_skip_scheduled_backup(&paths, &kb),
+            "a kb whose every packed source predates the tarball this writer \
+             just produced must be skipped"
+        );
+
+        // …and the next pure comment edit (zero sqlite writes) must unskip it.
+        std::fs::write(
+            paths.kb_review_dir(&kb).join("c_abc.json"),
+            b"{\"edited\":true}",
+        )
+        .unwrap();
+        assert!(
+            !should_skip_scheduled_backup(&paths, &kb),
+            "a sidecar edited after the newest tarball must not be skipped"
         );
     }
 }

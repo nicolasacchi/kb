@@ -3923,9 +3923,20 @@ impl Db {
     /// Remove a session row by its artifact id. Returns the number of
     /// `sessions` rows deleted (0 or 1). Also drops the session's
     /// `session_files` edges (V0017) — they share the V0008 lifecycle and
-    /// vanish with their parent. Called by the indexer when the underlying
-    /// memory-session file is unlinked. All six DELETEs run in one
-    /// transaction so a mid-cascade failure never leaves orphan child rows.
+    /// vanish with their parent. All six DELETEs run in one transaction so a
+    /// mid-cascade failure never leaves orphan child rows.
+    ///
+    /// NOT the production unlink path (corrected, O3): the doc used to claim
+    /// "Called by the indexer when the underlying memory-session file is
+    /// unlinked", and that was false — `StorageHandle::sessions_delete`
+    /// (actor.rs) has no caller anywhere in the tree, and the real path runs
+    /// `cascade.rs` → [`Self::cascade_delete_doc`], whose table set is
+    /// [`CASCADE_STEPS`]. That gap is how `memory_recalls` leaked on every
+    /// delete: THIS function deleted its rows correctly and nothing called it.
+    /// The invariant is now enforced where the real path lives — this doc no
+    /// longer claims a guarantee only this dead code provided, and
+    /// `every_artifact_id_keyed_table_is_in_a_lifecycle_registry` fails if a
+    /// future table is added to `sessions_delete` but not to `CASCADE_STEPS`.
     pub fn sessions_delete(&mut self, artifact_id: &str) -> Result<usize> {
         let tx = self.conn.transaction()?;
         tx.execute(
@@ -6131,6 +6142,25 @@ impl Db {
             params![old_id, new_id],
         )?;
 
+        // O3 `memory_recalls`: the recall ledger is DERIVED from this
+        // capture's transcript at index time, so relocate never re-derives
+        // it (same #27/F3 reason as `memory_commits` above). Its
+        // `artifact_id` carries no uniqueness (the table's only index is on
+        // `memory_id`/`session_id`; the PK is the recall FACT, not the
+        // capture), so a plain UPDATE can't collide — identical shape to
+        // `artifact_snapshots`. Without this rekey the `sessions` row moves
+        // and the ledger doesn't: every capture-row read scopes through
+        // `newest_capture_pred`, which compares the two artifact_ids, finds
+        // no match, and hides the session's entire recall history
+        // permanently — the counts behind the memory census and the FSRS
+        // stability term silently go to zero. Live-serve rows
+        // (`artifact_id LIKE 'served-%'`) don't match `?1` and are
+        // correctly left alone.
+        tx.execute(
+            "UPDATE memory_recalls SET artifact_id = ?2 WHERE artifact_id = ?1",
+            params![old_id, new_id],
+        )?;
+
         // sessions children first (convention FK on artifact_id_session), then
         // sessions PK itself.
         for table in ["session_decisions", "session_commits", "session_research"] {
@@ -6344,13 +6374,21 @@ impl Db {
     ) -> Result<SweepOutcome> {
         let tx = self.conn.transaction()?;
         let mut out = SweepOutcome::default();
-        for (table, col) in SWEEP_TABLES {
+        for (table, col, extra_pred) in SWEEP_TABLES {
             // DISTINCT ids present in this table. `IS NOT NULL` is load-bearing
             // for `history` (its `artifact_id` is NULL on search rows, which
-            // are not tied to any artifact and must NEVER be swept).
-            let mut stmt = tx.prepare_cached(&format!(
-                "SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL"
-            ))?;
+            // are not tied to any artifact and must NEVER be swept). The
+            // registry's optional predicate (`memory_recalls`: skip live-serve
+            // rows, which name no artifact) rides along in both the scan and
+            // the DELETE below, so eligibility is decided identically in both
+            // — a scan-only filter would let an ineligible row be counted as
+            // swept when a chunked id collided with it.
+            let elig = match extra_pred {
+                Some(p) => format!("{col} IS NOT NULL AND {p}"),
+                None => format!("{col} IS NOT NULL"),
+            };
+            let mut stmt =
+                tx.prepare_cached(&format!("SELECT DISTINCT {col} FROM {table} WHERE {elig}"))?;
             let present: Vec<String> = stmt
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -6367,7 +6405,7 @@ impl Db {
             let mut removed = 0usize;
             for chunk in orphans.chunks(500) {
                 let placeholders = vec!["?"; chunk.len()].join(",");
-                let sql = format!("DELETE FROM {table} WHERE {col} IN ({placeholders})");
+                let sql = format!("DELETE FROM {table} WHERE {col} IN ({placeholders}) AND {elig}");
                 removed += tx.execute(&sql, rusqlite::params_from_iter(chunk.iter()))?;
             }
             out.total_rows += removed;
@@ -6480,6 +6518,31 @@ const CASCADE_STEPS: &[CascadeStep] = &[
         shape: DeleteShape::ByArtifactId,
         keep_user_data_prunes: true,
     },
+    // O3 — `memory_recalls` is the capture's RECALL LEDGER: one row per
+    // memory hit `kb-recall` injected into that capture's transcript,
+    // derived at index time (never authored), so `KeepUserData` drops it
+    // exactly like `memory_commits`/`code_refs` above. Its `artifact_id` is
+    // the CAPTURE's own `sessions.artifact_id` (V0035's migration header),
+    // so deleting a capture retires precisely the ledger rows that capture
+    // wrote — including for a stale, superseded capture, whose rows are
+    // invisible to reads but still occupy the table.
+    //
+    // WHY this had to be registered (the omission was silent): every read
+    // of a capture row scopes through `newest_capture_pred`, which matches
+    // `memory_recalls.artifact_id` against the session's CURRENT capture
+    // id. So once `cascade_relocate_doc` rekeyed `sessions` without
+    // rekeying this table, the session's entire recall ledger went
+    // unreachable — from `/api/sessions/{sid}/recalls`, from
+    // `/api/memory/recalled-by`, and from the counts feeding the memory
+    // census and the FSRS stability term — while relocate never re-indexes,
+    // so nothing regenerated it. Live-serve rows (`artifact_id LIKE
+    // 'served-%'`) are untouched by this step: that prefix can never equal
+    // a capture id (`sessions_delete`'s own doc relies on the same fact).
+    CascadeStep {
+        table: "memory_recalls",
+        shape: DeleteShape::ByArtifactId,
+        keep_user_data_prunes: true,
+    },
     CascadeStep {
         table: "sessions",
         shape: DeleteShape::ByArtifactId,
@@ -6525,25 +6588,54 @@ const CASCADE_STEPS: &[CascadeStep] = &[
     },
 ];
 
-/// `(table, orphan-key column)` for the reconcile orphan sweep — the exact set
-/// the pre-v0.24 `process_delete` leaked. [`Db::sweep_orphans`] iterates this;
-/// [`sweep_cleanup_tables`] projects it for the golden test. Adding a table =
-/// one entry here, which forces the golden test's literal to be updated.
-const SWEEP_TABLES: &[(&str, &str)] = &[
-    ("edges", "src_artifact"),
-    ("corkboard", "artifact_id"),
-    ("pinned_memories", "artifact_id"),
-    ("reading_sections", "artifact_id"),
-    ("history", "artifact_id"),
+/// `(table, orphan-key column, extra predicate)` for the reconcile orphan
+/// sweep — the exact set the pre-v0.24 `process_delete` leaked.
+/// [`Db::sweep_orphans`] iterates this; [`sweep_cleanup_tables`] projects it
+/// for the golden test. Adding a table = one entry here, which forces the
+/// golden test's literal to be updated.
+///
+/// The third element is an ANDed SQL predicate restricting which rows are
+/// even ELIGIBLE to be swept. It exists for `memory_recalls`, whose key
+/// column holds two kinds of value: without it the `served-%` live-serve
+/// rows — which name no capture at all and are aged out by
+/// `memory_recalls_prune_served` under the history window, never by artifact
+/// lifecycle — would classify as orphans on the very first reconcile and the
+/// sweep would delete the entire live serve ledger. `None` = every non-NULL
+/// row is eligible (the historical behaviour of every other entry).
+const SWEEP_TABLES: &[(&str, &str, Option<&str>)] = &[
+    ("edges", "src_artifact", None),
+    ("corkboard", "artifact_id", None),
+    ("pinned_memories", "artifact_id", None),
+    ("reading_sections", "artifact_id", None),
+    ("history", "artifact_id", None),
     // DCB W1.A — derived rows; an orphan here is a leak, never a tombstone.
-    ("code_refs", "artifact_id"),
-    ("code_refs_docs", "artifact_id"),
+    ("code_refs", "artifact_id", None),
+    ("code_refs_docs", "artifact_id", None),
     // CT-F1 — same class: derived from a capture that no longer exists.
     // Swept on `artifact_id` ONLY. `memory_id` is deliberately NOT a sweep
     // key: it names a memory in (usually) a DIFFERENT kb, so this kb's
     // `keep` set — every live lance id HERE — would classify every single
     // row as an orphan and wipe the table on the first reconcile.
-    ("memory_commits", "artifact_id"),
+    ("memory_commits", "artifact_id", None),
+    // O3 — the capture's recall ledger, `artifact_id` = the CAPTURE's own
+    // `sessions.artifact_id` (V0035): same class as `memory_commits` above,
+    // so an orphan is a leak and IS reclaimed. Swept on `artifact_id` ONLY,
+    // for the same cross-kb reason.
+    //
+    // The predicate is load-bearing, not decoration. `artifact_id` here is
+    // OVERLOADED: capture rows hold a real artifact id, while live-serve
+    // rows (`memory_recalls_append`, V0042) hold
+    // `served-{session_id}-{ts}-{pos}` and are tied to NO artifact — `keep`
+    // (every live lance id in THIS corpus) can never contain them, so an
+    // unfiltered sweep would wipe the whole live serve ledger on the first
+    // reconcile. Their lifecycle is `memory_recalls_prune_served` (the
+    // history window), the same fact `sessions_delete`'s doc relies on when
+    // it says the served prefix can never equal a capture id.
+    (
+        "memory_recalls",
+        "artifact_id",
+        Some("artifact_id NOT LIKE 'served-%'"),
+    ),
     // `list_entries` deliberately absent — see the note in `CASCADE_STEPS`:
     // an entry pointing at a deleted artifact is an intentional tombstone,
     // not a leak, so the orphan sweep must never reclaim it.
@@ -6563,7 +6655,7 @@ pub fn cascade_cleanup_tables(mode: crate::cascade::CascadeMode) -> Vec<&'static
 /// R2 — the exact list of sqlite tables the reconcile orphan sweep prunes.
 /// Projected from [`SWEEP_TABLES`] (the sweep's own driver).
 pub fn sweep_cleanup_tables() -> Vec<&'static str> {
-    SWEEP_TABLES.iter().map(|(t, _)| *t).collect()
+    SWEEP_TABLES.iter().map(|(t, _, _)| *t).collect()
 }
 
 // --- Row types ---------------------------------------------------------------
@@ -13936,6 +14028,20 @@ mod tests {
             }],
         )
         .unwrap();
+        // The capture's recall ledger (O3) — keyed on this capture's own
+        // `artifact_id`, so it must die with the capture in both modes.
+        db.memory_recalls_replace(
+            id,
+            &[memory_recall_row(
+                "notes",
+                "aaaaaaaaaaaa",
+                "sid-1",
+                "t-1",
+                Some(100),
+                id,
+            )],
+        )
+        .unwrap();
         let visit = db.history_record_open(id, 100, None, "operator").unwrap();
         db.reading_upsert_sections(visit.id, id, &[dwell("s1", 0, 10, 1_000, 1)], 100)
             .unwrap();
@@ -13973,6 +14079,7 @@ mod tests {
             + count_where(db, "session_decisions", "artifact_id_session", id)
             + count_where(db, "session_commits", "artifact_id_session", id)
             + count_where(db, "session_research", "artifact_id_session", id)
+            + count_where(db, "memory_recalls", "artifact_id", id)
             + count_where(db, "reading_sections", "artifact_id", id)
             + count_where(db, "history", "artifact_id", id)
     }
@@ -14046,6 +14153,12 @@ mod tests {
                 // CT-F1 — deliberate addition (same invariant #2 lifecycle
                 // pin): derived from the capture's own commit trailers.
                 "memory_commits",
+                // O3 — deliberate addition (same invariant #2 lifecycle pin):
+                // the capture's recall ledger, derived at index time from the
+                // transcript's MemoryInjection items, so KeepUserData drops it
+                // too. Its absence is what let a relocate silently strand a
+                // session's whole ledger behind a dead artifact id.
+                "memory_recalls",
                 "sessions",
                 "session_files",
                 "session_decisions",
@@ -14068,6 +14181,7 @@ mod tests {
                 "code_refs",
                 "code_refs_docs",
                 "memory_commits",
+                "memory_recalls",
                 "sessions",
                 "session_files",
                 "session_decisions",
@@ -14089,6 +14203,10 @@ mod tests {
                 // CT-F1 — same class (derived rows), swept on the CAPTURE's
                 // artifact_id only; `memory_id` is never a sweep key.
                 "memory_commits",
+                // O3 — same class (derived from a capture that may be gone),
+                // swept on the CAPTURE's artifact_id only, and the `served-%`
+                // live-serve rows are excluded by the registry's predicate.
+                "memory_recalls",
             ]
         );
     }
@@ -14971,5 +15089,244 @@ mod tests {
         let out = db.sweep_orphans(&keep).unwrap();
         assert_eq!(out.total_rows, 0);
         assert_eq!(count_where(&db, "corkboard", "artifact_id", id), 1);
+    }
+
+    /// O3 — invariant #2's rule, ENFORCED rather than documented. Every live
+    /// table carrying an `artifact_id`/`artifact_id_session` column must be
+    /// registered in `CASCADE_STEPS` (Full) or `SWEEP_TABLES`; the only
+    /// exemptions are the two named below, each for a stated reason.
+    ///
+    /// Why this test exists: `memory_recalls` was absent from all three
+    /// registries, and the omission was completely silent — every reader
+    /// scoped through `newest_capture_pred`, so a relocate made a session's
+    /// entire recall ledger unreadable (and a delete leaked the rows) with no
+    /// error anywhere. A doc comment cannot catch the NEXT table; this can,
+    /// because it reads the live schema and fails on any unregistered
+    /// `artifact_id` column the moment a migration adds one.
+    #[test]
+    fn every_artifact_id_keyed_table_is_in_a_lifecycle_registry() {
+        use crate::cascade::CascadeMode;
+        use std::collections::HashSet;
+        // (table, why it is legitimately exempt from the cascade)
+        let exempt: &[(&str, &str)] = &[
+            // A reading-list entry survives its artifact as a tombstone,
+            // rendered at read time from the missing lance doc.
+            (
+                "list_entries",
+                "tombstone, pruned only by explicit user action",
+            ),
+            // A frame is a HISTORICAL whole-corpus layout; its points are
+            // pruned with the frame (`atlas_frames_prune`), never by a
+            // single doc's deletion.
+            (
+                "atlas_snapshot_points",
+                "whole-corpus frame, pruned by frame retention",
+            ),
+        ];
+        let db = db();
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT m.name FROM sqlite_master m \
+                 JOIN pragma_table_info(m.name) p \
+                 WHERE m.type = 'table' AND p.name IN ('artifact_id', 'artifact_id_session')",
+            )
+            .unwrap();
+        let keyed: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            keyed.len() >= 18,
+            "schema probe found only {} artifact-id-keyed tables — the probe itself is broken",
+            keyed.len()
+        );
+        let cascaded: HashSet<&str> = cascade_cleanup_tables(CascadeMode::Full)
+            .into_iter()
+            .collect();
+        let swept: HashSet<&str> = sweep_cleanup_tables().into_iter().collect();
+        for table in keyed {
+            if exempt.iter().any(|(t, _)| *t == table) {
+                continue;
+            }
+            assert!(
+                cascaded.contains(table.as_str()) || swept.contains(table.as_str()),
+                "invariant #2: `{table}` carries an artifact_id but is in NEITHER \
+                 CASCADE_STEPS nor SWEEP_TABLES — a delete would leak it and a \
+                 relocate would strand it under a dead id forever",
+            );
+        }
+    }
+
+    /// O3 — a relocate rekeys the recall ledger, so the session's recalls stay
+    /// readable. This is the exact failure the omission caused: `sessions`
+    /// moved to the new id, `memory_recalls` did not, and
+    /// `newest_capture_pred` (which matches the two ids) hid every row. Read
+    /// through the PUBLIC read path so the predicate is exercised, not just
+    /// the raw table.
+    #[test]
+    fn memory_recalls_rekey_on_relocate_and_stay_readable() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("oldid0000001", "sid-a", 1000))
+            .unwrap();
+        db.memory_recalls_replace(
+            "oldid0000001",
+            &[
+                memory_recall_row(
+                    "notes",
+                    "aaaaaaaaaaaa",
+                    "sid-a",
+                    "t-1",
+                    Some(100),
+                    "oldid0000001",
+                ),
+                memory_recall_row(
+                    "notes",
+                    "bbbbbbbbbbbb",
+                    "sid-a",
+                    "t-2",
+                    Some(200),
+                    "oldid0000001",
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(db.memory_recalls_for_session("sid-a").unwrap().len(), 2);
+
+        let mid = db
+            .moves_insert_intent("oldid0000001", "newid0000001", "old.html", "new.html", 1000)
+            .unwrap();
+        db.cascade_relocate_doc(
+            "oldid0000001",
+            "newid0000001",
+            "old.html",
+            "new.html",
+            mid,
+            1001,
+        )
+        .unwrap();
+
+        assert_eq!(
+            count_where(&db, "memory_recalls", "artifact_id", "oldid0000001"),
+            0,
+            "relocate never re-indexes (#27/F3) — a stranded row is gone forever",
+        );
+        assert_eq!(
+            count_where(&db, "memory_recalls", "artifact_id", "newid0000001"),
+            2
+        );
+        let rows = db.memory_recalls_for_session("sid-a").unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "the ledger must survive a relocate: `newest_capture_pred` compares \
+             memory_recalls.artifact_id against sessions.artifact_id",
+        );
+        // And the census-shaped aggregate reads the same rekeyed rows.
+        let counts = db
+            .memory_recalls_counts_for_ids(Some("notes"), &["aaaaaaaaaaaa".to_string()])
+            .unwrap();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].count, 1);
+    }
+
+    /// O3 — the cascade drops the ledger in BOTH modes (derived rows, like
+    /// `memory_commits`), for a STALE capture too: those rows are invisible to
+    /// reads but still occupy the table, and relocate never re-derives them.
+    #[test]
+    fn cascade_delete_removes_memory_recalls() {
+        for mode in [
+            crate::cascade::CascadeMode::Full,
+            crate::cascade::CascadeMode::KeepUserData,
+        ] {
+            let mut db = db();
+            for (cap, sid) in [("oldid0000001", "sid-a"), ("newid0000001", "sid-a")] {
+                db.sessions_upsert(&session_row(cap, sid, 1000)).unwrap();
+                db.memory_recalls_replace(
+                    cap,
+                    &[memory_recall_row(
+                        "notes",
+                        "aaaaaaaaaaaa",
+                        sid,
+                        "t-1",
+                        Some(100),
+                        cap,
+                    )],
+                )
+                .unwrap();
+            }
+            db.cascade_delete_doc("oldid0000001", mode).unwrap();
+            assert_eq!(
+                count_where(&db, "memory_recalls", "artifact_id", "oldid0000001"),
+                0,
+                "{mode:?}"
+            );
+            assert_eq!(
+                count_where(&db, "memory_recalls", "artifact_id", "newid0000001"),
+                1,
+                "a sibling capture's ledger is untouched — {mode:?}",
+            );
+        }
+    }
+
+    /// O3 — the sweep reclaims an orphaned CAPTURE ledger but must never touch
+    /// the live-serve rows: their `artifact_id` is `served-…`, tied to no
+    /// artifact, so it can never appear in `keep` and an unfiltered entry
+    /// would classify the entire serve ledger as orphans on the first
+    /// reconcile. Their lifecycle is `memory_recalls_prune_served`.
+    #[test]
+    fn sweep_reclaims_orphan_capture_recalls_but_spares_live_serves() {
+        let mut db = db();
+        let live = "cccccccccccc";
+        let orphan = "dddddddddddd";
+        for cap in [live, orphan] {
+            db.sessions_upsert(&session_row(cap, &format!("sid-{cap}"), 1000))
+                .unwrap();
+            db.memory_recalls_replace(
+                cap,
+                &[memory_recall_row(
+                    "notes",
+                    "aaaaaaaaaaaa",
+                    &format!("sid-{cap}"),
+                    "t-1",
+                    Some(100),
+                    cap,
+                )],
+            )
+            .unwrap();
+        }
+        db.memory_recalls_append(
+            "sid-cccccccccc",
+            &[ServedRecallRow {
+                memory_kb: "notes".into(),
+                memory_id: "eeeeeeeeeeee".into(),
+                pos: 1,
+                title: "t".into(),
+                injected_chars: 10,
+                served_at: 100,
+            }],
+        )
+        .unwrap();
+
+        let out = db
+            .sweep_orphans(&std::collections::HashSet::from([live.to_string()]))
+            .unwrap();
+        assert!(
+            out.total_rows >= 1,
+            "the orphaned capture ledger is reclaimed"
+        );
+        assert_eq!(count_where(&db, "memory_recalls", "artifact_id", orphan), 0);
+        assert_eq!(count_where(&db, "memory_recalls", "artifact_id", live), 1);
+        assert_eq!(
+            count_where(
+                &db,
+                "memory_recalls",
+                "artifact_id",
+                "served-sid-cccccccccc-100-1"
+            ),
+            1,
+            "a live serve names no artifact — the sweep must never reclaim it",
+        );
     }
 }
