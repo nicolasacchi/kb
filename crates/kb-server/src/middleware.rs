@@ -476,7 +476,7 @@ pub fn host_allowed(host: Option<&str>, cfg: &OriginConfig) -> bool {
 /// origin_host_guard` should import this rather than re-deriving where
 /// the name lives — that sibling reads `Host` only and carries the same
 /// hole.
-pub fn effective_host_name<'a>(req: &'a Request<Body>) -> Option<&'a str> {
+pub fn effective_host_name(req: &Request<Body>) -> Option<&str> {
     match req.headers().get(header::HOST) {
         Some(v) => Some(v.to_str().unwrap_or("")),
         None => req.uri().authority().map(|a| a.as_str()),

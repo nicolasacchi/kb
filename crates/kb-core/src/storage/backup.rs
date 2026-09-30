@@ -611,17 +611,38 @@ mod tests {
         /// touch its parent directory too — that is what the real atomic
         /// sidecar write does.
         fn touch_newer(&self, path: &Path) {
-            let newer = epoch_plus(1_700_003_600);
+            // STRICTLY newer than the fixture's tarball stamp. The probe
+            // compares `mtime > since`, so stamping the file at the SAME
+            // second the tarball carries is indistinguishable from unchanged
+            // and the test failed for a clock reason, not a predicate one.
+            let newer = epoch_plus(1_700_003_601);
             set_mtime(path, newer);
             if let Some(parent) = path.parent() {
                 set_mtime_dir(parent, newer);
             }
         }
 
+        /// Write a file the PACKER would pack, at the path the PROBE walks.
+        ///
+        /// `KbPaths` resolves a kb's trees as `<state>/<kb>/{.review,lance}`
+        /// (paths.rs:111-130) and the slates ledger as `<state>/slates`, so
+        /// the segments are routed through the same helpers rather than
+        /// hand-joined — a hand-join put `notes/.review/...` at the wrong
+        /// depth, the probe never saw the write, and the test failed for a
+        /// fixture reason instead of a predicate one.
         fn write_packed(&self, rel: &[&str], bytes: &[u8]) -> PathBuf {
-            let path = rel
-                .iter()
-                .fold(self.paths.state.clone(), |acc, seg| acc.join(seg));
+            let path = match rel {
+                [".review", rest @ ..] => rest
+                    .iter()
+                    .fold(self.paths.kb_review_dir(&self.kb), |a, s| a.join(s)),
+                ["lance", rest @ ..] => rest
+                    .iter()
+                    .fold(self.paths.kb_lance(&self.kb), |a, s| a.join(s)),
+                ["slates", rest @ ..] => rest
+                    .iter()
+                    .fold(self.paths.state.join("slates"), |a, s| a.join(s)),
+                other => panic!("write_packed: unmapped path {other:?}"),
+            };
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, bytes).unwrap();
             self.touch_newer(&path);
@@ -704,9 +725,9 @@ mod tests {
     #[test]
     fn scheduled_backup_watches_review_slates_and_lance_not_just_the_index() {
         for (label, rel) in [
-            ("review sidecar", vec!["notes", ".review", "c_abc.json"]),
+            ("review sidecar", vec![".review", "c_abc.json"]),
             ("slate ledger", vec!["slates", "proj", "ledger.jsonl"]),
-            ("lance commit", vec!["notes", "lance", "chunks", "0.lance"]),
+            ("lance commit", vec!["lance", "chunks", "0.lance"]),
         ] {
             let f = SkipFixture::new(Some(1_700_003_600));
             assert!(f.skip(), "{label}: an untouched kb must still skip");
