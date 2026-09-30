@@ -638,6 +638,37 @@
   border-left: 1px solid var(--border);
   box-shadow: var(--shadow);
 }
+
+/* WHY the StatusPill must yield to an OPEN drawer: `.pill-container`
+ * (app.css) is `position: fixed; bottom/right; z-index: var(--z-hint)` =
+ * 50, so it sits ON TOP of this drawer (`--z-drawer` = 41) — and the
+ * drawer's own action row (`.slate-composer__acts`, right-aligned) lands
+ * in the same bottom-right corner the pill occupies. Measured at
+ * 1280x720 with the composer open: pill rect (1177,679,87x25) FULLY
+ * CONTAINS the Post button's rect (1208,677,56x29), and
+ * `elementFromPoint` at the button's centre returns `span.pill__text`.
+ * Every composer submit was therefore unclickable by a real user — the
+ * three spa-slates specs that click `.slate-composer__go` all died on
+ * "pill__text … intercepts pointer events", on both CI attempts.
+ *
+ * The composer is a task surface the user opened on purpose and its
+ * buttons are the only way to submit; the pill is ambient status. Same
+ * shape as the existing `.app:has(.detail--with-panel) .pill-container`
+ * shift in app.css: the drawer wins its corner.
+
+ * DESKTOP ONLY (min-width: 861px = the same breakpoint mobile.css uses to
+ * turn this drawer into a full-width bottom sheet). Measured at 390x780
+ * the sheet's action row and the pill do NOT overlap (the pill is already
+ * lifted above the tab bar there), so shifting it again would only push
+ * the status badge off a 390px screen for nothing. Gated on
+ * `:not([hidden])` so a CLOSED drawer — in the DOM but `display:none` —
+ * does not displace the pill. */
+@media (min-width: 861px) {
+  .app:has(.slate-composer:not([hidden])) .pill-container,
+  .app:has(.slate-hist:not([hidden])) .pill-container {
+    right: calc(min(440px, 92vw) + var(--pad-3) * 2);
+  }
+}
 .slate-composer[hidden],
 .slate-hist[hidden] {
   display: none;

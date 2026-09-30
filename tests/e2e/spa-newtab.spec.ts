@@ -53,7 +53,18 @@ test.describe("open in a new tab (inside kb)", () => {
       context.waitForEvent("page"),
       opt.click({ modifiers: ["ControlOrMeta"] }),
     ]);
-    await newPage.waitForLoadState();
+    // WHY wait for the URL and not the load state: `waitForEvent("page")`
+    // resolves as soon as the TAB exists, and a brand-new tab's initial
+    // document is `about:blank` — which is ALREADY `load`ed. Measured over
+    // 5 ctrl+clicks against a plain static server: `newPage.url()` is
+    // `"about:blank"` both immediately after `waitForEvent("page")` AND
+    // after `await waitForLoadState()`. So that await is a no-op here and
+    // the `toHaveURL` below is really "assert the tab's address in the
+    // same tick the tab was created" — which is why CI saw
+    // `Received string: ""` on a loaded runner and passed on retry.
+    // `waitForURL` is the primitive that actually waits for the navigation
+    // to commit; the `toHaveURL` after it stays as the real assertion.
+    await newPage.waitForURL(/\/a\/canon\/[^/]+\.html(\?|$)/);
     await expect(newPage).toHaveURL(/\/a\/canon\/[^/]+\.html(\?|$)/);
     // The modified click must NOT close the palette in the original tab.
     await expect(dialog).toBeVisible();
@@ -83,7 +94,9 @@ test.describe("open in a new tab (inside kb)", () => {
       context.waitForEvent("page"),
       row.click({ modifiers: ["ControlOrMeta"] }),
     ]);
-    await newPage.waitForLoadState();
+    await newPage.waitForURL(
+      artifactUrlRe("canon", pm[1].source_relative),
+    );
     await expect(newPage).toHaveURL(
       artifactUrlRe("canon", pm[1].source_relative),
     );
@@ -113,7 +126,7 @@ test.describe("open in a new tab (inside kb)", () => {
         modifiers: ["ControlOrMeta"],
       }),
     ]);
-    await newPage.waitForLoadState();
+    await newPage.waitForURL(/\/a\/canon\/[^/]+/);
     await expect(newPage).toHaveURL(/\/a\/canon\/[^/]+/);
   });
 
