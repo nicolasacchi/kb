@@ -56,7 +56,34 @@ which are separate dependency names, so a weekly run would still open exactly th
 PR the block exists to prevent. Its "much larger piece of work" justification was
 also overstated: the break surface is two `JSX.Element` sites.
 
-## Open — needs a decision
+## Status as of 2026-09-30
+
+**All eleven are FIXED and merged** (PR #187, `fix: the eleven open findings from the
+adversarial review`; follow-up `eb7646df` for three defects CI found in it). 13 of 14 CI
+jobs green. The one failure, `e2e`, is PRE-EXISTING ON MAIN — proven by a control run
+(`gh workflow run ci.yml --ref main`, run 36741375544) in which `e2e` was the only failing
+job, with none of these changes present.
+
+Two agents **overruled parts of the brief on evidence**, and were right:
+
+- O9 as written said to admit `*.localhost`. It does not: that name's loopback-ness is a
+  RESOLVER CONVENTION, not a DNS fact (musl, an older libc, or a `search` domain can
+  resolve it to a public name the attacker owns), and an allowlist must not admit a name
+  whose loopback-ness depends on who resolved it. The project's only `*.localhost` is the
+  artifact-iframe host, which must stay refused.
+- O6's first half (`gc_manifest` on the public->private transition) is a provable no-op:
+  the note still references its own aids, so `gc_plan` keeps every one. Implementing it
+  would delete the operator's own screenshot on a REVERSIBLE toggle. The serve-side check
+  was done instead, which is the half that also covers blobs never re-gced.
+
+Two more defects were found only because the new tests were run at all, and BOTH were in
+the tests, not the fixes: the O4 fixture hand-joined paths onto `state` while `KbPaths`
+resolves `<state>/<kb>/{.review,lance}`, and its `touch_newer` stamped the file at the
+tarball's own second against a `mtime > since` comparison. The predicate was correct the
+whole time — its own test was lying. That is the same failure class as the XFF bypass and
+the port-strip bug: something asserted, and the assertion was not evidence.
+
+## Originally open — needs a decision (all since fixed)
 
 **O1 HIGH — the ETag is an existence oracle for private notes.** `etag_for` hashes the
 UNFILTERED sidecar (`kb-core/src/review.rs:1701`), and the same token is inlined into
