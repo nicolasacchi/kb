@@ -2778,7 +2778,8 @@ plain text.
 `highlight_snippet` builds a fresh `tree_sitter::Parser` and runs a full
 parse per item — up to 64 per batch. Both handlers now run that inside
 `tokio::task::spawn_blocking` (`highlight.rs:798-835`), the same discipline
-`routes::diff_route` uses for its `git diff` subprocess (`routes.rs:2116`).
+`routes::diff_route` uses for its `git diff` subprocess
+(`crates/kb-code-server/src/routes.rs:2246-2248`).
 This is invisible in the contract: response bodies, status codes, the
 `no-store` header and every cap refusal are unchanged, because the caps are
 checked inside the hop rather than in front of it. The one new outcome is a

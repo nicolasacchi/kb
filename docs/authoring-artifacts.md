@@ -22,17 +22,17 @@ Every artifact needs:
 
 - A `<title>` tag — primary BM25 field. Falls back to first `<h1>`,
   then first `<p>`, but explicit `<title>` is always better
-  (`parser.rs:183-185`).
+  (`crates/kb-core/src/parser.rs:345-347`).
 - A `<body>` containing the substance. Text under `<script>`,
   `<style>`, `<template>`, `<noscript>` is **invisible to indexing
-  and embedding** — don't hide content there (`parser.rs:498`).
+  and embedding** — don't hide content there (`crates/kb-core/src/parser.rs:1051`).
 - A real heading hierarchy (`<h1>` … `<h6>`). The parser collects
   these into a separate BM25 field `headings` and they're the basis
-  for kb-comments Chapter-scope anchors (`parser.rs:159, 429-449`).
+  for kb-comments Chapter-scope anchors (`crates/kb-core/src/parser.rs:158, 959-978`).
 
 The embedder (bge-small, 384-dim) sees the `body` field only — not
 title, not headings, not the prompt. Make sure substantive text
-lives in body, not just in a fancy heading (`indexer.rs:290`).
+lives in body, not just in a fancy heading (`crates/kb-core/src/indexer.rs:2546-2553`).
 
 ## `<template id="kb-prompt">` — the model prompt
 
@@ -40,9 +40,9 @@ If the artifact was generated from a prompt, embed that prompt as
 the `inner_html` of a `<template id="kb-prompt">` element. The
 parser extracts and stores it; BM25 indexes it; the outbound scrub
 strips it on non-loopback serves so it never leaks to public URLs
-(`parser.rs:215-223`, `kb-server/src/scrub.rs`).
+(`crates/kb-core/src/parser.rs:500-517`, `kb-server/src/scrub.rs`).
 
-- Hard cap: **8 KB** (`PROMPT_MAX_BYTES`, `parser.rs:26`).
+- Hard cap: **8 KB** (`PROMPT_MAX_BYTES`, `crates/kb-core/src/parser.rs:26`).
 - Format: HTML or plain text, your choice. Not JSON.
 - Don't put prompts anywhere else — only `<template id="kb-prompt">`
   is scrubbed.
@@ -56,10 +56,10 @@ kb-code-rev, is recognized separately by the code-reference extraction pass —
 see **Code references** below):
 
 - `<meta name="kb-category" content="notes">` — single string,
-  stored as-is (`parser.rs:196-200`).
+  stored as-is (`crates/kb-core/src/parser.rs:357-361`).
 - `<meta name="kb-tags" content="rust, atlas, design">` — comma-
   separated; each is slugified (lowercase, alphanumeric + dash)
-  (`parser.rs:202-213`). If absent, the indexer derives tags from
+  (`crates/kb-core/src/parser.rs:363-374`). If absent, the indexer derives tags from
   path segments instead — better to be explicit.
 
 Both are also editable after the fact from the SPA: the detail-view
@@ -427,9 +427,9 @@ What is **safe**:
   uses title; the artifact page sees the `<h1>`.
 - **Code blocks**: `<pre><code class="language-…">…</code></pre>`.
   Outer `<pre>` count drives the gallery glyph strip; inner `<code>`
-  text is preserved for BM25 (`parser.rs:160, 250`).
+  text is preserved for BM25 (`crates/kb-core/src/parser.rs:159, 548`).
 - **Long-form**: ≥1500 body words trips the `longread` flag
-  (`parser.rs:252`) and shows the corresponding gallery glyph. Don't
+  (`crates/kb-core/src/parser.rs:549-550`) and shows the corresponding gallery glyph. Don't
   pad short artifacts to hit it.
 - **Multi-page**: link sibling pages with relative URLs
   (`<a href="part-2.html">`). The probe handles cross-page
