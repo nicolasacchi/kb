@@ -92,7 +92,7 @@ ammonia = "4"
 # Markdown rendering (first-class .md artifacts). default-features off drops
 # comrak's `cli` feature (clap/binary bloat); `syntect` powers server-side
 # syntax-highlighted code blocks (static inline styles, no client JS).
-comrak = { version = "0.52", default-features = false, features = ["syntect"] }
+comrak = { version = "0.55", default-features = false, features = ["syntect"] }
 
 # Archive (folder download → .zip; deflate backend reuses flate2, already
 # in the graph). default-features off to skip bzip2/zstd/aes codecs we
