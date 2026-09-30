@@ -54,19 +54,36 @@ updates:
       # ships, check its react peer before letting it through.
       - dependency-name: "react-router"
         versions: ["8.x"]
-      # React 19 itself is deferred the same way, and for the same reason.
-      # Dependabot splits one coupled move into separate PRs per package, and
-      # neither half installs: #110 (react + @types/react) died on
-      # "@types/react-dom@18.3.7 peer @types/react@^18", #106 (react-dom +
-      # @types/react-dom) on the mirror image. They also conflict with each
-      # other (4 hunks across package.json and the lock), so neither can be
-      # merged first. And @types/react 19 removes the global `JSX` namespace
-      # that RecipeResultViews.tsx:23 and TimelinePanel.tsx:54 still use, so
-      # `tsc -b` fails before vite does. Moving all four packages together
-      # plus that namespace fix is the migration; it is not a dependency bump.
+      # The React 19 move is deferred, and the set is COUPLED: all four of
+      # these must land together or none can install. Dependabot splits one
+      # move into a PR per package name, and each half fails on its own —
+      # #110 (react + @types/react) died on "@types/react-dom@18.3.7 peer
+      # @types/react@^18", #106 (react-dom + @types/react-dom) on the mirror
+      # image — and they conflict with each other (4 hunks across package.json
+      # and the lock), so neither can go first. `dependency-name` matches the
+      # EXACT manifest name, so "react" does not cover "@types/react": without
+      # all four entries here, a weekly run still opens a 19.x @types PR that
+      # reproduces exactly this ERESOLVE.
+      #
+      # `ignore.versions` is a semver RANGE matched against the TARGET
+      # version, so "19.x" is >=19 <20 and does not leak into a 20.x. Nothing
+      # here suppresses 7.x react-router, or any 18.x of these four, so the
+      # minor/patch stream that actually works keeps landing.
+      #
+      # For the record, the deferral is a JUDGEMENT, not a blocker: the break
+      # surface is small (the global `JSX` namespace at RecipeResultViews.tsx:23
+      # and TimelinePanel.tsx:54 is the only hard compile break — `React.JSX.Element`
+      # fixes it; `act` from react-dom/test-utils is deprecated, not removed, and
+      # there are no useRef()/ReactDOM.render/defaultProps sites to migrate). It
+      # is worth doing deliberately rather than as four dependabot PRs, not
+      # because it is large.
       - dependency-name: "react"
         versions: ["19.x"]
       - dependency-name: "react-dom"
+        versions: ["19.x"]
+      - dependency-name: "@types/react"
+        versions: ["19.x"]
+      - dependency-name: "@types/react-dom"
         versions: ["19.x"]
 
   - package-ecosystem: npm

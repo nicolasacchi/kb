@@ -393,7 +393,7 @@ jobs:
           if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -573,11 +573,21 @@ jobs:
 
       - name: Run Playwright tests
         # V72-C3 — capture to a file (in addition to the live `list` output)
-        # so the next step can grep it; pipefail (the default shell for this
-        # workflow, confirmed by GH Actions' own step log) keeps this step's
-        # exit status the playwright one, not tee's.
+        # so the next step can grep it.
+        #
+        # `set -o pipefail` is REQUIRED here and was missing. This workflow
+        # sets no `defaults.run.shell` and no per-step `shell:`, so the step
+        # runs under Actions' unspecified Linux default, `bash -e {0}` —
+        # which has NO pipefail. In that shell a pipeline's status is the
+        # LAST command's, so `... | tee` reported tee's 0 and every failing
+        # spec still exited the step green. Measured:
+        #   bash -e            -c 'sh -c "exit 7" | tee /dev/null'  -> 0
+        #   bash -eo pipefail  -c 'sh -c "exit 7" | tee /dev/null'  -> 7
+        # A comment here previously asserted the opposite ("pipefail, the
+        # default shell for this workflow, confirmed by GH Actions' own step
+        # log"), which is not true of the unspecified default.
         working-directory: tests/e2e
-        run: npx playwright test 2>&1 | tee playwright-output.log
+        run: set -o pipefail; npx playwright test 2>&1 | tee playwright-output.log
 
       - name: Flaky spec summary
         # V72-C3 — the CI-only retry (playwright.config.ts: `retries: 1`,
@@ -758,6 +768,19 @@ jobs:
     #     web/src/components/icons.tsx and asserts the shared glyph SVG
     #     bodies are byte-identical, so a web/-only PR would otherwise skip
     #     the only job that catches icon divergence.
+    #   scripts/review-store/ — code-test executes
+    #     scripts/review-store/review_snapshot.py and asserts it against
+    #     scripts/review-store/fixtures/golden-review-snapshot.json
+    #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
+    #     the very test that exists to catch it.
+    #   rust-toolchain.toml — it decides which rustc the skipped jobs would
+    #     have compiled with, and dtolnay/rust-toolchain@1.96.0 is a
+    #     hardcoded literal that does not read it.
+    #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
+    #     PR's only diff is this file, it used to be able to neuter every
+    #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
+    #     all five report success: the gate and its own off-switch were the
+    #     same unprotected file.
     runs-on: ubuntu-latest
     # SPLIT out of the old `code` job (2026-09-06), which ran clippy, the
     # test sweep and the SPA build serially for 31.1 min cold. clippy is
@@ -785,7 +808,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -862,6 +885,19 @@ jobs:
     #     web/src/components/icons.tsx and asserts the shared glyph SVG
     #     bodies are byte-identical, so a web/-only PR would otherwise skip
     #     the only job that catches icon divergence.
+    #   scripts/review-store/ — code-test executes
+    #     scripts/review-store/review_snapshot.py and asserts it against
+    #     scripts/review-store/fixtures/golden-review-snapshot.json
+    #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
+    #     the very test that exists to catch it.
+    #   rust-toolchain.toml — it decides which rustc the skipped jobs would
+    #     have compiled with, and dtolnay/rust-toolchain@1.96.0 is a
+    #     hardcoded literal that does not read it.
+    #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
+    #     PR's only diff is this file, it used to be able to neuter every
+    #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
+    #     all five report success: the gate and its own off-switch were the
+    #     same unprotected file.
     runs-on: ubuntu-latest
     # 26.5 min cold (19.8 of it compiling, 5.7 running) once clippy and the
     # SPA moved to their own jobs. The old single `code` job was widened
@@ -899,7 +935,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -974,6 +1010,19 @@ jobs:
     #     web/src/components/icons.tsx and asserts the shared glyph SVG
     #     bodies are byte-identical, so a web/-only PR would otherwise skip
     #     the only job that catches icon divergence.
+    #   scripts/review-store/ — code-test executes
+    #     scripts/review-store/review_snapshot.py and asserts it against
+    #     scripts/review-store/fixtures/golden-review-snapshot.json
+    #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
+    #     the very test that exists to catch it.
+    #   rust-toolchain.toml — it decides which rustc the skipped jobs would
+    #     have compiled with, and dtolnay/rust-toolchain@1.96.0 is a
+    #     hardcoded literal that does not read it.
+    #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
+    #     PR's only diff is this file, it used to be able to neuter every
+    #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
+    #     all five report success: the gate and its own off-switch were the
+    #     same unprotected file.
     runs-on: ubuntu-latest
     # SPLIT out of the old `code` job (2026-09-06). `just ci-code-spa` is
     # node-only — npm ci + vite build + the kbc-theme/1 contrast oracle +
@@ -1001,7 +1050,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1083,7 +1132,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|Cargo\.toml$|Cargo\.lock$|justfile$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
