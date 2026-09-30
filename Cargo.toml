@@ -55,7 +55,7 @@ lance-index = "=11.0.0"
 # `lance::index` in lance 11). Direct exact pin inside the same lockstep
 # set — one lance family, one arrow family.
 lance = "=11.0.0"
-arrow = "=58.4.0"
+arrow = "=60.0.0"
 arrow-array = "=58.4.0"
 arrow-schema = "=58.4.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
