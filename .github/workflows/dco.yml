@@ -66,8 +66,22 @@ jobs:
               echo "::error::commit ${sha} has no Signed-off-by trailer"
               missing=1
             elif [ "$signoff" != "$author" ]; then
-              echo "::error::commit ${sha} is signed off by '${signoff}' but authored by '${author}'"
-              missing=1
+              # Dependabot is a legitimate signer whose two addresses differ by
+              # design: it AUTHORS as `<n>+dependabot[bot]@users.noreply.github.com`
+              # and SIGNS as `support@github.com`, the verified address GitHub
+              # requires of it. A literal equality test failed EVERY
+              # dependabot PR — measured on #180: "commit 3ea72685 is signed
+              # off by 'dependabot[bot] <support@github.com>' but authored by
+              # 'dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>'".
+              # Both halves are still the SAME GitHub account, which is what
+              # the identity check is for, so recognise exactly that pair and
+              # nothing looser: a human whose sign-off names another person is
+              # still rejected.
+              if ! { [ "$author" = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>" ] && \
+                     [ "$signoff" = "dependabot[bot] <support@github.com>" ]; }; then
+                echo "::error::commit ${sha} is signed off by '${signoff}' but authored by '${author}'"
+                missing=1
+              fi
             fi
           done
           if [ "$missing" -ne 0 ]; then
