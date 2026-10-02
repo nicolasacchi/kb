@@ -546,6 +546,11 @@ kb import claude-history [--dir PATH] [--into DIR] [--dry-run]
                                     transcript's own JSONL sessionId; deduped +
                                     idempotent (re-run imports 0). Filesystem-only
                                     (the watcher indexes); --dry-run reports plan.
+                                    Every stored lane (transcript + sidecar
+                                    text) gets the same secrets-only scrub as
+                                    a live capture; the summary and --json
+                                    carry secrets_redacted (under --dry-run,
+                                    what WOULD be redacted).
 kb remember <text> [--title T] [--summary S]
    [--kb NAME | --scope global|project] [--category C]
    [--tags T,T] [--salience 0..1] [--decay slow|fast]

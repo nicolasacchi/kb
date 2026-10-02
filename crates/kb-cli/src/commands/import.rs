@@ -74,6 +74,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use kb_core::session_scrub::{scrub_transcript, ScrubOptions};
 use kb_core::sessions::{SubagentDigest, MEMORY_SESSION_CATEGORY};
 use kb_core::timeparse::parse_iso_utc;
 
@@ -117,6 +118,9 @@ struct Item {
     /// Why it was skipped (present only for skips).
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    /// Secrets the `secrets_only` scrub redacted (main transcript + every
+    /// sidecar-text lane) -- or, under `--dry-run`, WOULD redact. `0` for skips.
+    secrets_redacted: u32,
 }
 
 /// The machine summary emitted by `--json`.
@@ -130,6 +134,10 @@ struct Summary {
     /// (broken out from `skipped_other` so a `--json` consumer can tell a
     /// monster transcript apart from an unreadable/empty/id-less one).
     skipped_oversized: usize,
+    /// Total secrets redacted across every imported capture (matches
+    /// `CaptureSummary::secrets_redacted`); under `--dry-run`, the count that
+    /// WOULD be redacted.
+    secrets_redacted: u32,
     total: usize,
     dry_run: bool,
     dir: String,
@@ -241,6 +249,13 @@ pub fn run(
         summary.total,
         summary.into,
     );
+    if summary.secrets_redacted > 0 {
+        println!(
+            "{} {} secret(s) across the imported transcripts",
+            if dry_run { "would redact" } else { "redacted" },
+            summary.secrets_redacted
+        );
+    }
     Ok(())
 }
 
@@ -295,6 +310,7 @@ fn import(
     let mut skipped_duplicate = 0usize;
     let mut skipped_other = 0usize;
     let mut skipped_oversized = 0usize;
+    let mut secrets_redacted_total = 0u32;
 
     for path in &transcripts {
         // Stop examining once we've imported enough. Duplicates/skips don't
@@ -334,6 +350,7 @@ fn import(
                     source: path.display().to_string(),
                     written: None,
                     reason: Some("oversized"),
+                    secrets_redacted: 0,
                 });
                 continue;
             }
@@ -349,6 +366,7 @@ fn import(
                     source: path.display().to_string(),
                     written: None,
                     reason: Some("unreadable"),
+                    secrets_redacted: 0,
                 });
                 continue;
             }
@@ -366,6 +384,7 @@ fn import(
                 source: path.display().to_string(),
                 written: None,
                 reason: Some("empty"),
+                secrets_redacted: 0,
             });
             continue;
         }
@@ -383,6 +402,7 @@ fn import(
                 source: path.display().to_string(),
                 written: None,
                 reason: Some("no sessionId"),
+                secrets_redacted: 0,
             });
             continue;
         };
@@ -395,6 +415,7 @@ fn import(
                 source: path.display().to_string(),
                 written: None,
                 reason: Some("already-captured"),
+                secrets_redacted: 0,
             });
             continue;
         }
@@ -408,25 +429,30 @@ fn import(
         let filename = format!("session-{ts}-{sid}.html");
         let out_path = into.join(&filename);
 
+        // W0.6 — walk the transcript's OWN sidecar dir (RAW canonical id,
+        // Claude Code's own on-disk convention: `<project-dir>/<session-
+        // id>/subagents/` — `path`'s parent IS the project dir, since
+        // transcripts live directly under it). Filesystem-only, no live
+        // cwd needed (unlike commit resolution above), so a backfill's
+        // digest + sidecar-text tail blocks match what a live capture of
+        // the same session would have written. Walked under `--dry-run`
+        // too: the redaction preview must cover the sidecar lanes.
+        let sidecar_dir = path.parent().map(|d| d.join(&canonical).join("subagents"));
+        let (subagents, mut sidecar_texts) = sidecar_dir
+            .as_deref()
+            .map(collect_sidecars)
+            .unwrap_or_default();
+        // W5/R10 — workflow journals + TaskOutput snapshots (same caps,
+        // same list — see `collect_extra_sidecar_sources`).
+        if let Some(d) = sidecar_dir.as_deref() {
+            sidecar_texts.extend(collect_extra_sidecar_sources(d, &raw));
+        }
+        // The same W5.2 secrets-only floor a live `kb sessions capture`
+        // applies: scrub every stored lane BEFORE the envelope is built.
+        let (scrubbed_raw, sidecar_texts, redacted) = scrub_capture_lanes(&raw, sidecar_texts);
+        secrets_redacted_total += redacted;
         if !dry_run {
-            // W0.6 — walk the transcript's OWN sidecar dir (RAW canonical id,
-            // Claude Code's own on-disk convention: `<project-dir>/<session-
-            // id>/subagents/` — `path`'s parent IS the project dir, since
-            // transcripts live directly under it). Filesystem-only, no live
-            // cwd needed (unlike commit resolution above), so a backfill's
-            // digest + sidecar-text tail blocks match what a live capture of
-            // the same session would have written.
-            let sidecar_dir = path.parent().map(|d| d.join(&canonical).join("subagents"));
-            let (subagents, mut sidecar_texts) = sidecar_dir
-                .as_deref()
-                .map(collect_sidecars)
-                .unwrap_or_default();
-            // W5/R10 — workflow journals + TaskOutput snapshots (same caps,
-            // same list — see `collect_extra_sidecar_sources`).
-            if let Some(d) = sidecar_dir.as_deref() {
-                sidecar_texts.extend(collect_extra_sidecar_sources(d, &raw));
-            }
-            let html = wrap_envelope(&ts, &sid, &raw, &[], &subagents, &sidecar_texts);
+            let html = wrap_envelope(&ts, &sid, &scrubbed_raw, &[], &subagents, &sidecar_texts);
             std::fs::write(&out_path, html)
                 .with_context(|| format!("write capture {}", out_path.display()))?;
         }
@@ -439,6 +465,7 @@ fn import(
             source: path.display().to_string(),
             written: Some(filename),
             reason: None,
+            secrets_redacted: redacted,
         });
     }
 
@@ -447,12 +474,38 @@ fn import(
         skipped_duplicate,
         skipped_other,
         skipped_oversized,
+        secrets_redacted: secrets_redacted_total,
         total: items.len(),
         dry_run,
         dir: dir.display().to_string(),
         into: into.display().to_string(),
         items,
     })
+}
+
+/// W5.2 secrets-only floor, shared by every writer of a capture envelope
+/// (`kb sessions capture`, `kb import claude-history`, `--refresh-subagents`):
+/// scrub the main transcript and every sidecar-text lane on the RAW bytes,
+/// before html-escaping and before any truncation budget, so a secret
+/// straddling a cap boundary can never survive as a fragment. Returns the
+/// redacted main text, the redacted sidecar list and the total redaction
+/// count. Never touches `sessionId` (no secrets rule matches it).
+pub(crate) fn scrub_capture_lanes(
+    raw: &str,
+    sidecar_texts: Vec<(String, String)>,
+) -> (String, Vec<(String, String)>, u32) {
+    let opts = ScrubOptions::secrets_only();
+    let (raw, report) = scrub_transcript(raw, &opts);
+    let mut total = report.total;
+    let sidecars = sidecar_texts
+        .into_iter()
+        .map(|(id, text)| {
+            let (redacted, r) = scrub_transcript(&text, &opts);
+            total += r.total;
+            (id, redacted)
+        })
+        .collect();
+    (raw, sidecars, total)
 }
 
 /// Resolve `--into`: the flag wins; else `$KB_SESSIONS_DIR` (exactly how the
@@ -855,6 +908,9 @@ fn refresh_subagents_backfill(
         // `NoChange` mean "the pair is byte-identical to what's on disk" —
         // a session where only one of the two blocks actually changed still
         // counts as `Updated`.
+        // The sidecar-text lane is rewritten from raw files here, so it needs
+        // the same secrets floor as a fresh capture.
+        let (_, sidecar_texts, _) = scrub_capture_lanes("", sidecar_texts);
         let with_subagents = kb_core::sessions::replace_subagents_block(&html, &agents);
         let sidecar_text_block = kb_core::sessions::render_sidecar_text_block(&sidecar_texts);
         let rewritten =
@@ -2375,5 +2431,122 @@ mod tests {
         assert_eq!(summary.updated, 1, "dry-run still COUNTS what would update");
         let html = std::fs::read_to_string(only_html(&into)).unwrap();
         assert_eq!(html, base, "dry-run must not write");
+    }
+
+    // --- v044-F7 -- secrets floor on the backfill lane -----------------
+    // Canaries copied from `kb_core::session_scrub`'s own fixture set.
+    const AWS_CANARY: &str = "AKIAIOSFODNN7EXAMPLE";
+    const GH_CANARY: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+
+    fn secret_transcript(sid: &str) -> String {
+        format!(
+            "{{\"sessionId\":\"{sid}\",\"type\":\"user\",\"timestamp\":\"2026-03-01T09:00:00.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"my key is {AWS_CANARY}\"}},\"promptSource\":\"typed\"}}\n"
+        )
+    }
+
+    fn write_agent_sidecar(projects: &Path, sid: &str) {
+        let agent = format!(
+            "{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"token {GH_CANARY}\"}}]}}}}\n"
+        );
+        write(
+            &projects.join("proj-a").join(sid).join("subagents"),
+            "agent-a1.jsonl",
+            &agent,
+        );
+    }
+
+    #[test]
+    fn import_redacts_secrets_in_main_and_sidecar_lanes_and_keeps_session_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let into = tmp.path().join("sessions");
+        let sid = "550e8400-e29b-41d4-a716-446655440001";
+        write(
+            &projects.join("proj-a"),
+            &format!("{sid}.jsonl"),
+            &secret_transcript(sid),
+        );
+        write_agent_sidecar(&projects, sid);
+
+        let summary = import(&projects, &into, false, None, false).unwrap();
+        assert_eq!(summary.imported, 1);
+        assert!(
+            summary.secrets_redacted >= 2,
+            "{}",
+            summary.secrets_redacted
+        );
+        assert_eq!(summary.items[0].secrets_redacted, summary.secrets_redacted);
+
+        let out = only_html(&into);
+        let html = std::fs::read_to_string(&out).unwrap();
+        assert!(!html.contains(AWS_CANARY), "main-lane secret persisted");
+        assert!(!html.contains(GH_CANARY), "sidecar-lane secret persisted");
+
+        let recovered = kb_core::sessions::recover_jsonl_from_capture(&html).unwrap();
+        assert!(recovered.contains("[redacted:aws-access-key-id]"));
+        assert_eq!(
+            first_session_id(&recovered).as_deref(),
+            Some(sid),
+            "sessionId must survive the scrub"
+        );
+        let texts = kb_core::sessions::extract_sidecar_text_block(&html);
+        assert!(texts
+            .iter()
+            .any(|(_, t)| t.contains("[redacted:github-token]")));
+    }
+
+    #[test]
+    fn import_dry_run_reports_would_redact_and_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().join("projects");
+        let into = tmp.path().join("sessions");
+        let sid = "550e8400-e29b-41d4-a716-446655440002";
+        write(
+            &projects.join("proj-a"),
+            &format!("{sid}.jsonl"),
+            &secret_transcript(sid),
+        );
+        write_agent_sidecar(&projects, sid);
+
+        let summary = import(&projects, &into, true, None, false).unwrap();
+        assert_eq!(summary.imported, 1);
+        assert!(
+            summary.secrets_redacted >= 2,
+            "dry-run must preview sidecar + main"
+        );
+        assert!(
+            !into.exists() || count_html(&into) == 0,
+            "dry-run must not write"
+        );
+    }
+
+    #[test]
+    fn refresh_subagents_redacts_sidecar_secrets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let into = tmp.path().join("sessions");
+        let roots = tmp.path().join("projects");
+        let sid = "sess-refresh-secret";
+        let base = wrap_envelope(
+            "20260301T090000Z",
+            &sanitize_sid(sid),
+            &fixture_jsonl(sid),
+            &[],
+            &[],
+            &[],
+        );
+        write(
+            &into,
+            &format!("session-20260301T090000Z-{sid}.html"),
+            &base,
+        );
+        write_agent_sidecar(&roots, sid);
+
+        refresh_subagents_backfill(&into, &roots, false, None).unwrap();
+        let html = std::fs::read_to_string(only_html(&into)).unwrap();
+        assert!(
+            !html.contains(GH_CANARY),
+            "refresh re-introduced a raw secret"
+        );
+        assert!(html.contains("[redacted:github-token]"));
     }
 }
