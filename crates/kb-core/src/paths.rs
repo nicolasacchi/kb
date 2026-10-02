@@ -291,6 +291,90 @@ impl KbPaths {
         self.state.join("kb-daemon.pid")
     }
 
+    /// The classified list of everything the daemon keeps under `<state>/`
+    /// for `kb` (v0.44 B1, the persistent-state registry).
+    ///
+    /// ONE source for every consumer that must agree on "what is state":
+    /// the tarball writer ([`crate::storage::backup::write_kb_export`]),
+    /// the scheduled-backup skip probe, and `kb restore`'s extraction
+    /// order all iterate this list instead of keeping their own. Before it
+    /// existed the writers and the probe each hand-listed four families,
+    /// and `.attachments/` and `.proposals/` were in none of them.
+    ///
+    /// A new sidecar belongs here the day it is written. The completeness
+    /// test in `storage::backup` writes through the real path helpers and
+    /// fails on any entry under a kb's state dir this list does not
+    /// classify.
+    pub fn state_members(&self, kb: &KbName) -> Vec<StateMember> {
+        use Snapshot::{Copy, CopyValidated, VacuumInto};
+        use StateClass::{Persistent, Regenerable};
+        use StateScope::{Daemon, PerKb};
+        let member = |name, path, scope, class| StateMember {
+            name,
+            path,
+            scope,
+            class,
+        };
+        vec![
+            member(
+                "index.db",
+                self.kb_sqlite(kb),
+                PerKb,
+                Persistent(VacuumInto),
+            ),
+            member("lance", self.kb_lance(kb), PerKb, Persistent(CopyValidated)),
+            member(".review", self.kb_review_dir(kb), PerKb, Persistent(Copy)),
+            member(
+                ".attachments",
+                self.kb_state(kb).join(".attachments"),
+                PerKb,
+                Persistent(Copy),
+            ),
+            member(
+                ".proposals",
+                self.kb_proposals_dir(kb),
+                PerKb,
+                Persistent(Copy),
+            ),
+            member(
+                "slates",
+                self.state.join("slates"),
+                Daemon,
+                Persistent(Copy),
+            ),
+            member(
+                "saved-queries.json",
+                self.saved_queries_file(),
+                Daemon,
+                Persistent(Copy),
+            ),
+            member(
+                "memory-policy.json",
+                self.memory_policy_file(),
+                Daemon,
+                Persistent(Copy),
+            ),
+            member(
+                "tombstone-era.json",
+                self.tombstone_era_file(),
+                Daemon,
+                Persistent(Copy),
+            ),
+            member(
+                "query-embed-cache.json",
+                self.embed_cache_file(),
+                Daemon,
+                Regenerable,
+            ),
+            member(
+                "kb-daemon.pid",
+                self.daemon_pid_file(),
+                Daemon,
+                StateClass::Runtime,
+            ),
+        ]
+    }
+
     /// Create every directory listed (state, log, runs, quarantine, exports,
     /// config, cache). Idempotent. Called by the daemon at startup.
     pub fn ensure_dirs(&self) -> Result<()> {
@@ -407,6 +491,55 @@ pub fn doc_folder(absolute_path: &str, source_root: &Path) -> String {
     match doc_rel_path(absolute_path, source_root).rsplit_once('/') {
         Some((parent, _)) => parent.to_string(),
         None => String::new(),
+    }
+}
+
+/// Whose state a [`StateMember`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateScope {
+    /// Lives under `<state>/<kb>/` and is replaced by a per-kb restore.
+    PerKb,
+    /// Lives directly under `<state>/` and keys on the daemon (or a
+    /// project), not a kb. A per-kb restore must never overwrite it.
+    Daemon,
+}
+
+/// How a persistent member is captured into a backup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Snapshot {
+    /// Transactionally consistent sqlite copy (`VACUUM INTO`).
+    VacuumInto,
+    /// Directory copy, then reopened to validate (lance).
+    CopyValidated,
+    /// Plain copy. Every writer of these is atomic-rename or append-only.
+    Copy,
+}
+
+/// What losing a [`StateMember`] costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateClass {
+    /// Operator data that cannot be rebuilt. Must be backed up.
+    Persistent(Snapshot),
+    /// Rebuilt by the daemon on demand. Deliberately not backed up.
+    Regenerable,
+    /// Process bookkeeping. Deliberately not backed up.
+    Runtime,
+}
+
+/// One entry of [`KbPaths::state_members`].
+#[derive(Debug, Clone)]
+pub struct StateMember {
+    /// Entry name relative to its scope's root (`<state>/<kb>/` for
+    /// [`StateScope::PerKb`], `<state>/` for [`StateScope::Daemon`]).
+    pub name: &'static str,
+    pub path: PathBuf,
+    pub scope: StateScope,
+    pub class: StateClass,
+}
+
+impl StateMember {
+    pub fn is_persistent(&self) -> bool {
+        matches!(self.class, StateClass::Persistent(_))
     }
 }
 
