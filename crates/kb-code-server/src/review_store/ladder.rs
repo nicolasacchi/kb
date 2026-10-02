@@ -203,14 +203,19 @@ pub enum LadderOutcome {
     },
 }
 
-/// A remote the ladder REFUSED as unsafe, carried out of
-/// [`LadderOutcome::Resolved`] so a refusal alongside a good remote is
-/// reported instead of dropped. Carries no part of the URL.
+// A remote the ladder REFUSED as unsafe, carried out of
+// [`LadderOutcome::Resolved`] so a refusal alongside a good remote is
+// reported instead of dropped. Carries no part of the URL.
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreRefusedRemote")
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RefusedRemote {
-    /// The `remote.<name>` it came from.
+    // The `remote.<name>` it came from.
     pub name: String,
-    /// [`NoStoreKey::reason`] — operator words, never the URL.
+    // [`NoStoreKey::reason`] — operator words, never the URL.
     pub reason: &'static str,
 }
 

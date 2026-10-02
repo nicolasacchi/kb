@@ -25,6 +25,15 @@ import type { SummaryOut as LanesSummaryOut } from "./generated/SummaryOut";
 // RS-U11 — the review base model's additive envelope fields (README §12).
 import type { ReviewBaseOut } from "./generated/ReviewBaseOut";
 import type { BaseWarningOut } from "./generated/BaseWarningOut";
+import type { PrOut } from "./generated/PrOut";
+import type { ReviewerStateOut } from "./generated/ReviewerStateOut";
+import type { PrCommentOut } from "./generated/PrCommentOut";
+import type { CheckRunOut } from "./generated/CheckRunOut";
+import type { PrDetailOut } from "./generated/PrDetailOut";
+import type { ProseSpan } from "./generated/ProseSpan";
+import type { ProseRef } from "./generated/ProseRef";
+import type { FieldRefs } from "./generated/FieldRefs";
+import type { RefResolution } from "./generated/RefResolution";
 
 export type {
   HighlightClass,
@@ -42,7 +51,20 @@ export type {
   LanesSummaryOut,
   ReviewBaseOut,
   BaseWarningOut,
+  // v0.44 I3 — hand copies deleted (field-for-field identical, or a strict
+  // subset of the wire: the old PrCommentOut lacked id/original_line/side/
+  // diff_hunk/html_url). scripts/check-ts-shadows.sh keeps them gone.
+  PrOut,
+  ReviewerStateOut,
+  PrCommentOut,
+  CheckRunOut,
+  PrDetailOut,
+  ProseSpan,
+  ProseRef,
+  FieldRefs,
+  RefResolution,
 };
+export type ProseRefResolution = RefResolution;
 export type PrMetaUnavailableReason = PrMetaUnavailable;
 
 export interface HeadInfo {
@@ -1683,17 +1705,6 @@ export interface RepoStateResponse {
   dirty: boolean;
 }
 
-/// `github::PrOut`.
-export interface PrOut {
-  number: number;
-  title: string;
-  author: string;
-  head_ref: string;
-  base_ref: string;
-  updated_at: string;
-  draft: boolean;
-}
-
 /// `routes::PrsResponse` — `GET /api/prs`'s body (`prs/1`).
 export interface PrsResponse {
   schema: string;
@@ -1703,17 +1714,6 @@ export interface PrsResponse {
   /// unreachable, a bad response) — `prs` is then always empty and the HTTP
   /// status is still 200, never a 5xx (`github.rs`'s module doc).
   unavailable_reason?: string;
-}
-
-/// `github::PrCommentOut` — `path`'s presence distinguishes an inline review
-/// comment from a general issue/discussion comment.
-export interface PrCommentOut {
-  author: string;
-  body: string;
-  path?: string;
-  line?: number;
-  created_at: string;
-  in_reply_to?: number;
 }
 
 /// `routes::PrCommentsResponse` — `GET /api/prs/{number}/comments`'s body
@@ -2051,72 +2051,20 @@ export interface ReviewAnnotationsOut {
   groups: ReviewAnnotationGroup[];
 }
 
-// --- RS-U11 — the review store + fetch-credential cards (kbc-store/1,
-// kbc-credentials/1; `review_store/routes.rs`, no `ts-export` derive on
-// these — the routes build `serde_json::json!` bodies, so these are
-// hand-written mirrors, same convention as the rest of this file). ------
-
-/// `GET /api/repos/{name}/store`'s `store` row, when a store has been
-/// registered for the repo at all (`null` before that — RS-U3, §5.2).
-export interface ReviewStoreRow {
-  id: number;
-  uuid: string;
-  store_key: string;
-  git_dir: string;
-  base_url: string | null;
-  base_url_source: string | null;
-  forge_kind: string | null;
-  forge_host: string | null;
-  forge_slug: string | null;
-  /// `"verified"` (GitHub, D8) | `"unverified"` (every other forge).
-  forge_verified: string;
-  cred_kind: string;
-  /// `"absent"` | `"seeding"` | `"ready"` | `"broken"`.
-  state: string;
-  state_code: string | null;
-  state_json: unknown;
-  created_at: number;
-}
-
-export interface ReviewStoreMember {
-  repo_id: number;
-  /// `null` when this member repo id isn't (or is no longer) a
-  /// configured `[[repos]]` entry.
-  name: string | null;
-  remote: string;
-}
-
-/// How THIS repo's own registration into its store went (in-memory only
-/// — a refusal has no DB row to live in, README §5.1's base-URL ladder).
-export type ReviewStoreRegistration =
-  | { outcome: "member"; store_id: number; store_key: string; source: string; joined_existing: boolean }
-  | { outcome: "refused"; code: string; reason: string; candidates: string[] }
-  | { outcome: "error"; code: string; detail: string };
-
-export interface ReviewStoreDoctorFinding {
-  level: "error" | "warn" | "info";
-  code: string;
-  message: string;
-}
-
-export interface ReviewStoreDisk {
-  packs: number;
-  pack_bytes: number;
-  loose_objects: number;
-  total_bytes: number;
-}
-
-/// `GET /api/repos/{name}/store` body (`kbc-store/1`).
-export interface ReviewStoreCard {
-  schema: string;
-  repo: string;
-  store: ReviewStoreRow | null;
-  members: ReviewStoreMember[];
-  registration: ReviewStoreRegistration | null;
-  runtime: { seeding: boolean; locked_elsewhere: boolean };
-  disk: ReviewStoreDisk | null;
-  doctor: ReviewStoreDoctorFinding[];
-}
+// --- RS-U11 — the review store card (kbc-store/1) -------------------------
+//
+// A9.f1 (v0.44): generated from the daemon's own `review_store/routes.rs`
+// types (`just gen-ts-code`, drift-gated by `code-drift`) — the hand-written
+// mirrors that used to live here had already dropped `runtime.git_fallbacks`.
+// Re-exported under the names the SPA already uses.
+export type { ReviewStoreCard } from "./generated/ReviewStoreCard";
+export type { ReviewStoreRow } from "./generated/ReviewStoreRow";
+export type { ReviewStoreMember } from "./generated/ReviewStoreMember";
+export type { ReviewStoreRegistration } from "./generated/ReviewStoreRegistration";
+export type { ReviewStoreDoctorFinding } from "./generated/ReviewStoreDoctorFinding";
+export type { ReviewStoreDisk } from "./generated/ReviewStoreDisk";
+export type { ReviewStoreRuntime } from "./generated/ReviewStoreRuntime";
+export type { GitFallbacks } from "./generated/GitFallbacks";
 
 /// `[[review.repos]] credential` pin (`review_store/cred.rs`'s
 /// `CredentialPin`).
@@ -2256,9 +2204,10 @@ export interface ReviewCommentGroup {
   path: string;
   /** V80-M0 — per-read caption: `path` is one `files_changed(base_sha,
    * tip_sha)` touched at the target patchset. `false` for the path-less
-   * "general" group (`path === ""`). Never a filter — every group's
-   * `comments` is still listed either way. */
-  in_diff: boolean;
+   * "general" group (`path === ""`). `null` = unknown (the diff could not
+   * be computed; A7-4 — a caption failure never fails the read). Never a
+   * filter — every group's `comments` is still listed either way. */
+  in_diff: boolean | null;
   comments: ReviewComment[];
 }
 
@@ -3585,35 +3534,6 @@ export interface FindingResolution {
 /// kbc-prose/1 (V76-B3) — one extracted (and optionally resolved) prose
 /// reference. Spans are UTF-16 code units into the field text. Additive:
 /// an older daemon omits the whole `*_refs` object.
-export interface ProseSpan {
-  start: number;
-  end: number;
-}
-export interface ProseRefResolution {
-  state: string;
-  path?: string;
-  ref?: string;
-  line?: number;
-  ent?: string;
-  caption?: string;
-}
-export interface ProseRef {
-  kind: string;
-  span: ProseSpan;
-  text: string;
-  path?: string;
-  line_start?: number;
-  line_end?: number;
-  lines?: string;
-  container?: string;
-  member?: string;
-  slug?: string;
-  resolution?: ProseRefResolution;
-}
-export interface FieldRefs {
-  refs: ProseRef[];
-  truncated: boolean;
-}
 
 /// The ONE finding wire shape (`review_findings::finding_json`) — shared,
 /// byte-identical, by `GET .../findings`'s list rows, `POST .../findings`
@@ -3698,7 +3618,9 @@ export interface ReviewFinding {
 export interface FindingTouchedIn {
   ps: number;
   hunks: number;
-  overlap: "exact" | "adjacent";
+  /** `rebased` (A7-5): the later patchset sits on a different base, so the
+   * hunk may be upstream movement rather than an author edit. */
+  overlap: "exact" | "adjacent" | "rebased";
 }
 
 /// `GET /api/reviews/{id}/findings?ps=&disposition=&include_superseded=`
@@ -3837,23 +3759,6 @@ export type ReviewDetailPr = ReviewDetail & ReviewPrBinding;
 /// `github::PrDetailOut` — `GET /api/prs/{number}`'s `pr` field. A SEPARATE
 /// shape from the existing `PrOut` (list row) above — see that Rust struct's
 /// own doc for why (fields only the single-PR endpoint populates).
-export interface PrDetailOut {
-  number: number;
-  title: string;
-  author: string;
-  head_sha: string;
-  head_ref: string;
-  base_ref: string;
-  updated_at: string;
-  draft: boolean;
-  state: string;
-  merged: boolean;
-  labels: string[];
-  merge_state_status: string | null;
-  /// V70-A3X — the PR's description body (raw markdown), `null` when
-  /// GitHub reports an empty description.
-  body: string | null;
-}
 
 /// `GET /api/prs/{number}` body (`pr-detail/1`) — `pr: null` on any
 /// GitHub-side failure, honestly named via `unavailable_reason` (200, never
@@ -3864,29 +3769,12 @@ export interface PrDetailResponseOut {
   unavailable_reason?: string;
 }
 
-/// `github::CheckRunOut` — one normalized GitHub Checks API run.
-export interface CheckRunOut {
-  name: string;
-  /// `"pass"` | `"fail"` | `"warn"` | `"pending"` — `normalize_check_status`.
-  status: string;
-  note?: string;
-  duration?: number;
-}
-
 /// `GET /api/prs/{number}/checks` body (`pr-checks/1`).
 export interface PrChecksOut {
   schema: string;
   checks: CheckRunOut[];
   truncated: boolean;
   unavailable_reason?: string;
-}
-
-/// `github::ReviewerStateOut` — one reviewer's latest submitted state.
-export interface ReviewerStateOut {
-  reviewer: string;
-  /// `APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING`.
-  state: string;
-  submitted_at: string | null;
 }
 
 /// `GET /api/prs/{number}/reviews` body (`pr-reviews/1`, addendum-2 §A).

@@ -95,3 +95,58 @@ export function parseLastGcApply(stateJson: unknown): ReviewStoreLastGcApply | n
     reason: typeof g.reason === "string" ? g.reason : "",
   };
 }
+
+// ── failure-class + GC-reason hints (A9.f4 / N5) ─────────────────────────────
+// ONE slug-to-hint table for `FailureClass` (`review_store/classify.rs`,
+// the stable `urn:kb:errors:<slug>` names, also persisted as the store
+// `state_code`) so the Home store card says what to DO instead of printing a
+// bare slug. The same table, in prose, is docs/kb-code.md's failure-class
+// section — keep them in step.
+export const FAILURE_CLASS_HINTS: Record<string, string> = {
+  vanished: "the requested ref is gone from the remote",
+  offline: "the network was unreachable — retry later",
+  timeout: "the call hit its deadline — retry later",
+  "credential-rejected": "the remote refused the credential kb-code sent",
+  "credential-wrong-repo": "the deploy key belongs to a different repository",
+  "repo-not-found": "the remote says the repository does not exist (no credential was sent)",
+  "auth-no-access": "the token cannot see this repository",
+  "host-key-unknown": "ssh has no pinned host key for the host",
+  "host-key-mismatch": "the ssh host key CHANGED — never auto-repaired; verify it by hand",
+  "auth-required": "the remote wants credentials and none were supplied",
+  tls: "TLS / certificate failure talking to the remote",
+  "disk-full": "no space left while writing objects or refs",
+  shallow: "a shallow-repository constraint refused the operation",
+  "protocol-refused": "git refused the transport (GIT_ALLOW_PROTOCOL)",
+  "url-rejected": "the URL failed the store's allowlist",
+  "credential-account-mismatch": "the gh account answering is not the pinned one",
+  "credential-unavailable": "a credential source exists but cannot be read now (locked keyring, gh timeout)",
+  "no-credentials": "no credential rung applies",
+  "spawn-failed": "the git subprocess could not be started (binary missing?)",
+  "dubious-ownership": "git's safe.directory check refused the store dir — it is owned by another uid than the daemon",
+  failed: "an unclassified git failure — see the daemon log",
+};
+
+/// The hint for a persisted failure slug, or the slug itself when it names
+/// no known class (never invented prose for an unknown code).
+export function failureClassHint(slug: string | null | undefined): string | null {
+  if (!slug) return null;
+  return FAILURE_CLASS_HINTS[slug] ?? slug;
+}
+
+/// A recorded GC outcome the operator must NOT read as a plain dry run:
+/// `maint.rs::apply_gc_candidates` writes a REFUSED `store gc --yes` into the
+/// `last_gc_dry_run` slot with the refusal as `reasons[0]`.
+export const GC_REFUSAL_HINTS: Record<string, string> = {
+  "restore-guard": "refused: the restore guard is armed — a restored store may not expire objects",
+  "restore-suspected": "refused: the database looks restored from a backup (review high-water mismatch)",
+  "backup-failed": "refused: the pre-GC backup bundle could not be written",
+};
+
+/// `null` for an ordinary dry run / nothing-to-do; the refusal text otherwise.
+export function gcRefusal(reasons: readonly string[]): string | null {
+  for (const r of reasons) {
+    const hint = GC_REFUSAL_HINTS[r];
+    if (hint) return hint;
+  }
+  return null;
+}

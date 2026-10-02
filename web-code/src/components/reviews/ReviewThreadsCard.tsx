@@ -209,7 +209,9 @@ export default function ReviewThreadsCard({
     const general: typeof groups = [];
     for (const g of groups) {
       if (g.path === "") general.push(g);
-      else if (g.inDiff) inDiff.push(g);
+      // A7-4 — `null` (caption unavailable) is not a positive claim of
+      // being in the diff; it lands with the outside group.
+      else if (g.inDiff === true) inDiff.push(g);
       else outsideDiff.push(g);
     }
     return { inDiff, outsideDiff, general };
@@ -325,7 +327,10 @@ export default function ReviewThreadsCard({
                   open in reader
                 </Link>
               )}
-              <PromoteToFinding repo={repo} reviewId={reviewId} thread={c} />
+              {/* A9-4 — a thread that already backs a finding (an imported one
+                  reaches here; manual ones took the FindingRow branch) cannot be adopted
+                  again: `review_findings.annotation_id` is UNIQUE. */}
+              {!linkedFinding && <PromoteToFinding repo={repo} reviewId={reviewId} thread={c} />}
             </div>
           );
         })}

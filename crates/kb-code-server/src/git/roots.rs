@@ -232,7 +232,13 @@ pub struct GitFallbackStats {
     odb_miss: AtomicU64,
 }
 
-/// A read-only snapshot of [`GitFallbackStats`].
+// A read-only snapshot of [`GitFallbackStats`]. (Plain comments, not docs:
+// the type is ts-exported and its generated binding must stay stable.)
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "GitFallbacks")
+)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct GitFallbackSnapshot {
     pub unresolved: u64,
