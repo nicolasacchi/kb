@@ -39,7 +39,7 @@ export function SuggestionDiffPanel({
     () => suggestionHighlightItems(original, replacement, path),
     [original, replacement, path],
   );
-  const { byId } = useHighlight(items);
+  const { byId, unpaintableIds } = useHighlight(items);
   const oldResult = byId.get("old");
   const newResult = byId.get("new");
   const composed = useMemo(
@@ -47,12 +47,20 @@ export function SuggestionDiffPanel({
     [original, replacement, oldResult, newResult],
   );
   const none = items.some((it) => byId.get(it.id)?.tier === "none");
-  const pending = items.some((it) => !byId.has(it.id));
+  const pending = items.some((it) => !byId.has(it.id) && !unpaintableIds.has(it.id));
+  const anyUnpainted = items.some((it) => !byId.has(it.id) && unpaintableIds.has(it.id));
+  // A refused/oversize side settles as "plain", never "pending".
+  const rowTier = (side: string, tier: string) => {
+    if (tier !== "pending") return tier;
+    if (side === "old") return unpaintableIds.has("old") ? "plain" : tier;
+    if (side === "new") return unpaintableIds.has("new") ? "plain" : tier;
+    return anyUnpainted && !pending ? "plain" : tier;
+  };
   const panelTier = pending
     ? "pending"
     : none
       ? "none"
-      : (oldResult?.tier ?? newResult?.tier ?? "pending");
+      : (oldResult?.tier ?? newResult?.tier ?? (anyUnpainted ? "plain" : "pending"));
 
   return (
     <div
@@ -71,7 +79,7 @@ export function SuggestionDiffPanel({
             className={`kbc-sugdiff__line kbc-sugdiff__line--${row.side}`}
             data-kbc-sugdiff-line={row.side}
             data-kbc-sugdiff-trailing={row.trailing ? "1" : "0"}
-            data-kbc-hl-tier={row.tier}
+            data-kbc-hl-tier={rowTier(row.side, row.tier)}
           >
             <span className="kbc-sugdiff__gutter" aria-hidden>
               {row.side === "new" ? "+" : row.side === "old" ? "−" : " "}
