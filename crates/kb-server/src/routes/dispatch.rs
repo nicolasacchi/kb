@@ -47,7 +47,7 @@ pub async fn fallback(
         artifact::serve(State(state), connect_info, headers, uri).await
     } else if uri.path().starts_with("/a/")
         && crate::middleware::host_refused_for_peer(
-            headers.get(header::HOST).map(|v| v.to_str().unwrap_or("")),
+            crate::middleware::effective_host_name_of(&headers, &uri),
             Some(connect_info.0.ip()),
             &state.origin,
         )

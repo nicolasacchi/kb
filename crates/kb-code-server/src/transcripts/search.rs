@@ -53,7 +53,7 @@ pub async fn loopback_only(
     req: Request<Body>,
     next: Next,
 ) -> Response {
-    if kb_server::middleware::request_is_loopback(&req, &auth.trusted_proxies) {
+    if kb_server::middleware::request_is_loopback(&req, &auth.trusted_proxies.load()) {
         next.run(req).await
     } else {
         StatusCode::NOT_FOUND.into_response()

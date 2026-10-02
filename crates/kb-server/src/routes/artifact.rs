@@ -34,11 +34,13 @@ const ANNOTATE_PATH: &str = "/_kb/annotate.js";
 const RUNTIME_PATH: &str = "/_kb/runtime.js";
 
 /// Default-dev `parent_origin` (`http://localhost:4000`). Treated as
-/// the "not configured for production" sentinel — the postMessage
-/// targetOrigin stays `'*'` and no `frame-ancestors` CSP is sent so
-/// the common dev flows (SPA at 127.0.0.1, vite at :4738 proxying)
-/// keep working. Self-hosters set `[server] parent_origin` to a real
-/// origin to opt into the lockdown.
+/// the "not configured for production" sentinel - the configured
+/// targetOrigin stays `'*'` (the injected scripts then refine it to the
+/// parent's real origin at runtime where the browser reports it) and the
+/// `frame-ancestors` CSP is the loopback-wildcard [`DEV_FRAME_ANCESTORS`],
+/// so the common dev flows (SPA at 127.0.0.1, vite at :4738 proxying)
+/// keep working while the open web cannot frame an artifact. Self-hosters
+/// set `[server] parent_origin` to a real origin for the exact lockdown.
 fn postmessage_target(origin_cfg: &crate::state::OriginConfig) -> &str {
     let p = origin_cfg.parent_origin.as_str();
     if p.is_empty() || p == kb_core::config::ServerSection::DEFAULT_PARENT_ORIGIN {
@@ -63,16 +65,23 @@ fn spa_origin_lit(origin_cfg: &crate::state::OriginConfig) -> &str {
     }
 }
 
-/// `Content-Security-Policy: frame-ancestors` value for artifact
-/// subdomain responses. Returns `None` (header omitted) for the
-/// default-dev `parent_origin` — see `postmessage_target` rationale.
-/// When set: `frame-ancestors <parent_origin>;` so only the SPA the
-/// daemon was configured for can iframe artifacts; hostile embedders
-/// on other origins are refused by the browser.
+/// Dev-default `frame-ancestors`: any port on a loopback host name. The dev
+/// SPA may be the daemon itself, a vite server on another port, or reached as
+/// `localhost` or `127.0.0.1`, so the port is a wildcard - but a page on the
+/// open web can no longer frame `<id>.artifacts.localhost:4000/?cm=on`
+/// (A1.f7). `[::1]` is omitted: browsers do not agree on IPv6 literals in
+/// CSP host-sources.
+const DEV_FRAME_ANCESTORS: &str = "frame-ancestors http://localhost:* http://127.0.0.1:*;";
+
+/// `Content-Security-Policy: frame-ancestors` value for artifact subdomain
+/// responses. ALWAYS set: a configured `parent_origin` yields
+/// `frame-ancestors <parent_origin>;` (only that SPA can iframe artifacts);
+/// the default-dev `parent_origin` yields [`DEV_FRAME_ANCESTORS`] rather than
+/// no header, so the unconfigured posture is not "anyone may frame this".
 fn artifact_csp_header(origin_cfg: &crate::state::OriginConfig) -> Option<HeaderValue> {
     let target = postmessage_target(origin_cfg);
     if target == "*" {
-        return None;
+        return Some(HeaderValue::from_static(DEV_FRAME_ANCESTORS));
     }
     HeaderValue::from_str(&format!("frame-ancestors {target};")).ok()
 }
@@ -80,8 +89,7 @@ fn artifact_csp_header(origin_cfg: &crate::state::OriginConfig) -> Option<Header
 /// Attach the `Content-Security-Policy: frame-ancestors` header (if any)
 /// to an artifact-subdomain response — kept as a one-liner so every
 /// return path in `serve` and `trampoline_response` is uniformly
-/// hardened. A `None` from `artifact_csp_header` (default-dev) leaves
-/// the response unmodified.
+/// hardened.
 fn with_artifact_csp(
     mut resp: Response<Body>,
     origin_cfg: &crate::state::OriginConfig,
@@ -104,10 +112,15 @@ fn probe_js(target_origin: &str) -> String {
         r#"// kb iframe probe — runs inside artifact subdomain
 (function() {{
   const TARGET = {target_lit};
+  // Dev default (`TARGET === '*'`): the immediate parent's origin is known in
+  // Chromium/Safari via ancestorOrigins - post to it, never to '*'. Firefox
+  // has no ancestorOrigins, so it alone keeps '*' (frame-ancestors still
+  // limits who can be the parent).
+  const SEND = (TARGET === '*' && location.ancestorOrigins && location.ancestorOrigins.length) ? location.ancestorOrigins[0] : TARGET;
   const origin = window.location.origin;
   function report(check, ok, detail) {{
     try {{
-      window.parent.postMessage({{ kind: 'kb-probe', origin, check, ok, detail }}, TARGET);
+      window.parent.postMessage({{ kind: 'kb-probe', origin, check, ok, detail }}, SEND);
     }} catch (e) {{}}
   }}
   // 1. localStorage write
@@ -135,7 +148,7 @@ fn probe_js(target_origin: &str) -> String {
         kind: 'pm:page',
         label: path.replace(/^\//, ''),
         src: path
-      }}, TARGET);
+      }}, SEND);
     }}
   }} catch (e) {{}}
 }})();
@@ -167,6 +180,11 @@ fn runtime_js(target_origin: &str) -> String {
         r#"// kb iframe runtime — scroll capture + resume + TOC mini-spy (P3)
 (function() {{
   const TARGET = {target_lit};
+  // Dev default (`TARGET === '*'`): the immediate parent's origin is known in
+  // Chromium/Safari via ancestorOrigins - post to it, never to '*'. Firefox
+  // has no ancestorOrigins, so it alone keeps '*' (frame-ancestors still
+  // limits who can be the parent).
+  const SEND = (TARGET === '*' && location.ancestorOrigins && location.ancestorOrigins.length) ? location.ancestorOrigins[0] : TARGET;
   let timer = null;
   function snapshot() {{
     const y = window.scrollY || document.documentElement.scrollTop || 0;
@@ -175,7 +193,7 @@ fn runtime_js(target_origin: &str) -> String {
       (document.body && document.body.scrollHeight) || 0
     );
     try {{
-      window.parent.postMessage({{ kind: 'kb:scroll', y: y, max: max }}, TARGET);
+      window.parent.postMessage({{ kind: 'kb:scroll', y: y, max: max }}, SEND);
     }} catch (e) {{}}
   }}
   // v0.12 P3 — emit a TOC of the artifact's headings + an active-
@@ -204,7 +222,7 @@ fn runtime_js(target_origin: &str) -> String {
     toc = out;
     buildMeta();
     try {{
-      window.parent.postMessage({{ kind: 'kb:toc', toc: out }}, TARGET);
+      window.parent.postMessage({{ kind: 'kb:toc', toc: out }}, SEND);
     }} catch (e) {{}}
   }}
   function activeSectionId() {{
@@ -224,7 +242,7 @@ fn runtime_js(target_origin: &str) -> String {
       lastActive = id;
       onSectionChange(id);
       try {{
-        window.parent.postMessage({{ kind: 'kb:section', id: id }}, TARGET);
+        window.parent.postMessage({{ kind: 'kb:section', id: id }}, SEND);
       }} catch (e) {{}}
     }}
   }}
@@ -324,7 +342,7 @@ fn runtime_js(target_origin: &str) -> String {
       window.parent.postMessage({{
         kind: 'kb:reading', sections: sections,
         active_ms: Math.round(rActiveMs), last_section: rCur
-      }}, TARGET);
+      }}, SEND);
     }} catch (e) {{}}
   }}
   ['mousemove', 'keydown', 'pointerdown', 'wheel', 'touchstart'].forEach(function(t) {{
@@ -425,7 +443,7 @@ fn runtime_js(target_origin: &str) -> String {
     if (!hoverA) return;
     hoverA = null;
     try {{
-      window.parent.postMessage({{ kind: 'kb:link-clear' }}, TARGET);
+      window.parent.postMessage({{ kind: 'kb:link-clear' }}, SEND);
     }} catch (e) {{}}
   }}
   document.addEventListener('mouseover', function(e) {{
@@ -443,7 +461,7 @@ fn runtime_js(target_origin: &str) -> String {
         href: url.href,
         rect: {{ x: r.left, y: r.top, w: r.width, h: r.height }},
         text: text
-      }}, TARGET);
+      }}, SEND);
     }} catch (err) {{}}
   }});
   document.addEventListener('mouseout', function(e) {{
@@ -519,7 +537,7 @@ fn runtime_js(target_origin: &str) -> String {
       e.preventDefault();
       snapshot();                                      // true leave-point
       try {{
-        window.parent.postMessage({{ kind: 'kb:link-open', href: url.href }}, TARGET);
+        window.parent.postMessage({{ kind: 'kb:link-open', href: url.href }}, SEND);
       }} catch (err) {{}}
       return;
     }}
@@ -735,7 +753,7 @@ pub async fn serve(
             crate::scrub::looks_non_loopback(
                 Some(peer.ip()),
                 &headers,
-                &state.origin.trusted_proxies,
+                &state.origin.trusted_proxies.load(),
             ),
         ) {
             (Some(cache), true) => {
@@ -1103,6 +1121,14 @@ fn trampoline_body(
     // origin's quotes/backslashes can't break out of the script.
     let target_json =
         serde_json::to_string(postmessage_target(origin_cfg)).unwrap_or_else(|_| "\"*\"".into());
+    // Dev default: post to the immediate parent's real origin when the
+    // browser reports it (`ancestorOrigins`), '*' only as the fallback.
+    let send_expr = if postmessage_target(origin_cfg) == "*" {
+        "(location.ancestorOrigins&&location.ancestorOrigins.length?location.ancestorOrigins[0]:\"*\")"
+            .to_string()
+    } else {
+        target_json.clone()
+    };
     // SPA origin for the top-level branch (empty in dev → derive from
     // location). Shared with the per-page bounce in `serve`.
     let spa_json =
@@ -1124,7 +1150,7 @@ fn trampoline_body(
              var M={{kind:\"open-artifact\",kb:KB,id:{id_json},path:REL}};\
              var SEC=(location.hash||'').slice(1);\
              if(SEC)M.sec=SEC;\
-             parent.postMessage(M,{target_json});\
+             parent.postMessage(M,{send_expr});\
            }}\
          }})();</script>"
     )
@@ -1410,17 +1436,55 @@ mod tests {
     fn default_dev_parent_origin_keeps_postmessage_permissive() {
         let cfg = origin_with_parent(kb_core::config::ServerSection::DEFAULT_PARENT_ORIGIN);
         assert_eq!(postmessage_target(&cfg), "*");
-        assert!(artifact_csp_header(&cfg).is_none());
+        // A1.f7: dev still frames only from loopback, never "anyone".
+        assert_eq!(
+            artifact_csp_header(&cfg).unwrap().to_str().unwrap(),
+            DEV_FRAME_ANCESTORS
+        );
         // Probe script falls back to TARGET = "*" when default-dev.
         let js = probe_js(postmessage_target(&cfg));
         assert!(js.contains("const TARGET = \"*\""));
+    }
+
+    /// A1.f7: in the dev default no injected script posts to a bare `'*'`
+    /// when the browser can name the parent, and the framing policy is
+    /// never absent. Fails on the previous `, TARGET)` posts / missing CSP.
+    #[test]
+    fn dev_default_never_posts_to_star_when_the_parent_is_known() {
+        let js = runtime_js("*");
+        assert!(js.contains("location.ancestorOrigins[0]"));
+        assert!(
+            !js.contains("}, TARGET);"),
+            "a postMessage still uses the raw configured target"
+        );
+        assert!(js.contains("}, SEND);"));
+        let probe = probe_js("*");
+        assert!(probe.contains("}, SEND);") && !probe.contains("}, TARGET);"));
+        let cfg = origin_with_parent(kb_core::config::ServerSection::DEFAULT_PARENT_ORIGIN);
+        let kb = KbName::new("canon").unwrap();
+        let tramp = trampoline_body(&kb, "abc123abc123", "a/b.html", &cfg);
+        assert!(tramp.contains("location.ancestorOrigins"));
+        assert!(!tramp.contains("parent.postMessage(M,\"*\")"));
+        let csp = artifact_csp_header(&cfg).unwrap();
+        let csp = csp.to_str().unwrap();
+        assert!(csp.starts_with("frame-ancestors "));
+        assert!(!csp.contains(" * ") && !csp.contains("https:"), "{csp}");
+    }
+
+    /// A configured parent keeps the exact, ancestor-free form.
+    #[test]
+    fn configured_parent_trampoline_posts_to_the_exact_origin_only() {
+        let cfg = origin_with_parent("https://kb.example.com");
+        let kb = KbName::new("canon").unwrap();
+        let tramp = trampoline_body(&kb, "abc123abc123", "a/b.html", &cfg);
+        assert!(!tramp.contains("ancestorOrigins"));
     }
 
     #[test]
     fn empty_parent_origin_also_permissive() {
         let cfg = origin_with_parent("");
         assert_eq!(postmessage_target(&cfg), "*");
-        assert!(artifact_csp_header(&cfg).is_none());
+        assert!(artifact_csp_header(&cfg).is_some());
     }
 
     #[test]
