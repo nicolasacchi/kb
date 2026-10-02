@@ -465,7 +465,10 @@ kb resume [--kb NAME] [--json]      (v0.24 D6: paused is now enforced at
                                     the ingest gate — stale by design)
 kb backup <kb> [--out PATH]         consistent tar.gz snapshot of a kb's state
                                     (sqlite via VACUUM INTO + validated lance +
-                                    .review); → <state>/exports/<kb>-<ts>.tar.gz
+                                    .review + .attachments + .proposals);
+                                    → <state>/exports/<kb>-<ts>.tar.gz
+kb backup --all                     one tarball per kb (loopback daemon only);
+                                    {dest} becomes remote_dest/<tarball name>
 kb restore <tarball> --kb NAME [--force]
                                     extract a backup into the kb's state dir;
                                     stop the daemon first; --force replaces a
