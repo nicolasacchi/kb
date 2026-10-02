@@ -962,9 +962,7 @@ export function entityUrl(repo: string, ent: string, opts: EntityUrlOpts = {}): 
 export function parseEntParam(v: string | null): string | null {
   if (v === null) return null;
   const t = v.trim();
-  // A9-1 — review ids are daemon-minted positive integers; `7.5`, `1e3`
-  // and `0x10` all survive `Number()` as finite and must not become a marker.
-  return /^[0-9]+$/.test(t) && Number.isSafeInteger(Number(t)) && Number(t) > 0 ? t : null;
+  return t === "" ? null : t;
 }
 
 /// True for a reader file/tree URL (`/r/:repo/...`) that is not a `~`
@@ -1011,5 +1009,7 @@ export function appendReviewParam(url: string, id: string | undefined): string {
 export function parseReviewIdParam(v: string | null): string | null {
   if (v === null) return null;
   const t = v.trim();
-  return t === "" ? null : t;
+  // A9-1 — review ids are daemon-minted positive integers; `7.5`, `1e3`
+  // and `0x10` all survive `Number()` as finite and must not become a marker.
+  return /^[0-9]+$/.test(t) && Number.isSafeInteger(Number(t)) && Number(t) > 0 ? t : null;
 }
