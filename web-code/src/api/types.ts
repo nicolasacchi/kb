@@ -25,6 +25,15 @@ import type { SummaryOut as LanesSummaryOut } from "./generated/SummaryOut";
 // RS-U11 — the review base model's additive envelope fields (README §12).
 import type { ReviewBaseOut } from "./generated/ReviewBaseOut";
 import type { BaseWarningOut } from "./generated/BaseWarningOut";
+import type { PrOut } from "./generated/PrOut";
+import type { ReviewerStateOut } from "./generated/ReviewerStateOut";
+import type { PrCommentOut } from "./generated/PrCommentOut";
+import type { CheckRunOut } from "./generated/CheckRunOut";
+import type { PrDetailOut } from "./generated/PrDetailOut";
+import type { ProseSpan } from "./generated/ProseSpan";
+import type { ProseRef } from "./generated/ProseRef";
+import type { FieldRefs } from "./generated/FieldRefs";
+import type { RefResolution } from "./generated/RefResolution";
 
 export type {
   HighlightClass,
@@ -42,7 +51,20 @@ export type {
   LanesSummaryOut,
   ReviewBaseOut,
   BaseWarningOut,
+  // v0.44 I3 — hand copies deleted (field-for-field identical, or a strict
+  // subset of the wire: the old PrCommentOut lacked id/original_line/side/
+  // diff_hunk/html_url). scripts/check-ts-shadows.sh keeps them gone.
+  PrOut,
+  ReviewerStateOut,
+  PrCommentOut,
+  CheckRunOut,
+  PrDetailOut,
+  ProseSpan,
+  ProseRef,
+  FieldRefs,
+  RefResolution,
 };
+export type ProseRefResolution = RefResolution;
 export type PrMetaUnavailableReason = PrMetaUnavailable;
 
 export interface HeadInfo {
@@ -1683,17 +1705,6 @@ export interface RepoStateResponse {
   dirty: boolean;
 }
 
-/// `github::PrOut`.
-export interface PrOut {
-  number: number;
-  title: string;
-  author: string;
-  head_ref: string;
-  base_ref: string;
-  updated_at: string;
-  draft: boolean;
-}
-
 /// `routes::PrsResponse` — `GET /api/prs`'s body (`prs/1`).
 export interface PrsResponse {
   schema: string;
@@ -1703,17 +1714,6 @@ export interface PrsResponse {
   /// unreachable, a bad response) — `prs` is then always empty and the HTTP
   /// status is still 200, never a 5xx (`github.rs`'s module doc).
   unavailable_reason?: string;
-}
-
-/// `github::PrCommentOut` — `path`'s presence distinguishes an inline review
-/// comment from a general issue/discussion comment.
-export interface PrCommentOut {
-  author: string;
-  body: string;
-  path?: string;
-  line?: number;
-  created_at: string;
-  in_reply_to?: number;
 }
 
 /// `routes::PrCommentsResponse` — `GET /api/prs/{number}/comments`'s body
@@ -3534,35 +3534,6 @@ export interface FindingResolution {
 /// kbc-prose/1 (V76-B3) — one extracted (and optionally resolved) prose
 /// reference. Spans are UTF-16 code units into the field text. Additive:
 /// an older daemon omits the whole `*_refs` object.
-export interface ProseSpan {
-  start: number;
-  end: number;
-}
-export interface ProseRefResolution {
-  state: string;
-  path?: string;
-  ref?: string;
-  line?: number;
-  ent?: string;
-  caption?: string;
-}
-export interface ProseRef {
-  kind: string;
-  span: ProseSpan;
-  text: string;
-  path?: string;
-  line_start?: number;
-  line_end?: number;
-  lines?: string;
-  container?: string;
-  member?: string;
-  slug?: string;
-  resolution?: ProseRefResolution;
-}
-export interface FieldRefs {
-  refs: ProseRef[];
-  truncated: boolean;
-}
 
 /// The ONE finding wire shape (`review_findings::finding_json`) — shared,
 /// byte-identical, by `GET .../findings`'s list rows, `POST .../findings`
@@ -3788,23 +3759,6 @@ export type ReviewDetailPr = ReviewDetail & ReviewPrBinding;
 /// `github::PrDetailOut` — `GET /api/prs/{number}`'s `pr` field. A SEPARATE
 /// shape from the existing `PrOut` (list row) above — see that Rust struct's
 /// own doc for why (fields only the single-PR endpoint populates).
-export interface PrDetailOut {
-  number: number;
-  title: string;
-  author: string;
-  head_sha: string;
-  head_ref: string;
-  base_ref: string;
-  updated_at: string;
-  draft: boolean;
-  state: string;
-  merged: boolean;
-  labels: string[];
-  merge_state_status: string | null;
-  /// V70-A3X — the PR's description body (raw markdown), `null` when
-  /// GitHub reports an empty description.
-  body: string | null;
-}
 
 /// `GET /api/prs/{number}` body (`pr-detail/1`) — `pr: null` on any
 /// GitHub-side failure, honestly named via `unavailable_reason` (200, never
@@ -3815,29 +3769,12 @@ export interface PrDetailResponseOut {
   unavailable_reason?: string;
 }
 
-/// `github::CheckRunOut` — one normalized GitHub Checks API run.
-export interface CheckRunOut {
-  name: string;
-  /// `"pass"` | `"fail"` | `"warn"` | `"pending"` — `normalize_check_status`.
-  status: string;
-  note?: string;
-  duration?: number;
-}
-
 /// `GET /api/prs/{number}/checks` body (`pr-checks/1`).
 export interface PrChecksOut {
   schema: string;
   checks: CheckRunOut[];
   truncated: boolean;
   unavailable_reason?: string;
-}
-
-/// `github::ReviewerStateOut` — one reviewer's latest submitted state.
-export interface ReviewerStateOut {
-  reviewer: string;
-  /// `APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED | PENDING`.
-  state: string;
-  submitted_at: string | null;
 }
 
 /// `GET /api/prs/{number}/reviews` body (`pr-reviews/1`, addendum-2 §A).

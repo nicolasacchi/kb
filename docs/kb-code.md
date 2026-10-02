@@ -314,6 +314,16 @@ verification of the review's kb artifact hint (set via kb's own `PATCH
 /api/reviews/{id}` step, not this CLI); invariant #2's kb-code→kb-only call
 direction stays unchanged.
 
+`review report ID --emit-artifact --kb NAME` writes the HTML into the
+directory the CLI's OWN `kb.toml` names as `[kb.NAME].path` (confined to it:
+`..`, absolute and symlinked `capture_dir` escapes are refused, each pinned by
+a test) and derives the hint id from the SOURCE-RELATIVE path alone
+(`ArtifactId::from_path`, kb invariant #27), so a daemon that mounts the same
+corpus at a different absolute path (a container) still assigns the same id.
+What it cannot check is that the CLI's `kb.toml` and the daemon watch the SAME
+directory: if they differ, the file lands where nothing indexes it and the
+hint points at no artifact. Use the daemon host's `kb.toml`.
+
 **Inbox, timeline, analytics, impact.** `kb-code review inbox {--repo
 R|--all-repos} [--state open|closed|all] [--limit N]` (`GET
 /api/reviews/inbox`, bearer) is a cross-repo attention queue, `score =

@@ -753,3 +753,56 @@ async fn a_finding_backed_annotation_cannot_be_unbound_or_rebound() {
         "the finding's thread must stay in review A: {comments}"
     );
 }
+
+/// A7.f2 — a batch REBIND (A -> B) names both reviews on its one SSE frame
+/// (`review_ids`), and still carries a `review_id` so the SPA bridge
+/// refreshes the comments. Before the fix the mixed batch dropped
+/// `review_id` entirely and neither Room invalidated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn batch_rebind_sse_names_both_reviews() {
+    let repo_tmp = feature_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir, ReviewSection::default()).await;
+    let client = reqwest::Client::new();
+
+    let review_a = create_review(&client, &base, "r", "feature", "main").await;
+    let review_b = create_review(&client, &base, "r", "feature", "main").await;
+    let created = create_plain_annotation(&client, &base, "r", "a.rs", 1, "batch mover").await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let (status, body) = bind(&client, &base, &id, review_a, None, None).await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+
+    let sse_resp = client
+        .get(format!("{base}/api/events"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = sse_resp.bytes_stream();
+    let _ = collect_sse(&mut stream, std::time::Duration::from_millis(300)).await;
+
+    let resp = client
+        .post(format!("{base}/api/annotations/batch"))
+        .json(&serde_json::json!({
+            "repo": "r",
+            "ops": [{ "op": "bind_review", "id": id, "review_id": review_b }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    let buf = collect_sse(&mut stream, std::time::Duration::from_secs(10)).await;
+    assert!(
+        buf.contains("\"batch\":true"),
+        "expected the batch frame: {buf}"
+    );
+    assert!(
+        buf.contains("\"review_id\":"),
+        "the frame must carry a review_id: {buf}"
+    );
+    assert!(
+        buf.contains(&format!("\"review_ids\":[{review_b},{review_a}]"))
+            || buf.contains(&format!("\"review_ids\":[{review_a},{review_b}]")),
+        "both reviews must be named: {buf}"
+    );
+}
