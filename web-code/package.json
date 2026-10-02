@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "description": "kb-code SPA \u2014 the read-first reader (repo picker + file tree + CM6 read-only viewer + outline rail + diff view) (W4.1/W4.2)",
+  "engines": {
+    "node": "^22.22.2 || >=24.15.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

@@ -95,6 +95,25 @@ updates:
       web-code-e2e-minor-patch:
         update-types: ["minor", "patch"]
 
+  # The Dockerfile base images (rust, node, debian) are pinned by digest, so
+  # nothing moves them except a human; without this entry they rot silently
+  # against Debian and Rust security releases. Dependabot bumps the tag and
+  # the digest together. The `rust` image is ignored below: the compiler is
+  # pinned in rust-toolchain.toml and `just toolchain-pin-check` asserts the
+  # Dockerfile's rust:X.Y builder tag matches it, so that bump is manual.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docker-minor-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Same reason as dtolnay/rust-toolchain below: the compiler is pinned
+      # deliberately in rust-toolchain.toml; do not let Dependabot move it.
+      - dependency-name: "rust"
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -113,7 +132,9 @@ updates:
       # static.rust-lang.org for a Rust that does not exist.
       #
       # The toolchain is pinned deliberately and in ONE place —
-      # rust-toolchain.toml (1.96.0) — with the action's ref kept in step by
-      # hand so local `rustup` auto-switch and CI can never disagree about
-      # which clippy is authoritative. Bump both together, manually.
+      # rust-toolchain.toml (1.96.0). CI reads it through the composite
+      # action .github/actions/setup-rust, which hands it to this action as
+      # the `toolchain` input; the action itself is pinned to a commit SHA of
+      # its master branch, so there is no version-named ref left for
+      # Dependabot to mistake for an action release. Keep the ignore anyway.
       - dependency-name: "dtolnay/rust-toolchain"

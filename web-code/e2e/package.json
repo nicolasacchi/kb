@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "description": "Playwright smoke for the kb-code Search-Everywhere box (omnibox + /search page) against a real kb-code-server daemon.",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
