@@ -126,6 +126,55 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// THE `state_json` writer: set ONLY the named top-level keys (a JSON
+    /// `null` value REMOVES the key), in one
+    /// SQL statement (`json_set` over the row's CURRENT `state_json`, read
+    /// by sqlite itself inside the same statement), so a concurrent
+    /// writer's other keys — `last_gc_apply`, `default_branch`,
+    /// `last_backup` — survive. A whole-object write derived from an
+    /// earlier read of the row loses them; every writer goes through here
+    /// instead. `state` is changed only when `Some` (the seeding
+    /// transitions); a maintenance pass passes `None` and so can never
+    /// resurrect a stale lifecycle state either. Keys must be plain
+    /// `[A-Za-z0-9_]` identifiers (they are interpolated into the JSON
+    /// path); anything else is refused. Returns `false` when `id` does
+    /// not exist.
+    pub fn update_review_store_state_json(
+        &self,
+        id: i64,
+        sets: &[(&str, serde_json::Value)],
+        state: Option<&str>,
+    ) -> Result<bool> {
+        let mut expr = String::from(
+            "CASE WHEN json_valid(state_json) AND json_type(state_json) = 'object' \
+             THEN state_json ELSE '{}' END",
+        );
+        let mut args: Vec<rusqlite::types::Value> = vec![id.into()];
+        for (k, v) in sets {
+            if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(
+                    rusqlite::Error::InvalidParameterName(format!("state_json key `{k}`")).into(),
+                );
+            }
+            if v.is_null() {
+                expr = format!("json_remove({expr}, '$.{k}')");
+            } else {
+                args.push(v.to_string().into());
+                expr = format!("json_set({expr}, '$.{k}', json(?{}))", args.len());
+            }
+        }
+        let mut sql = format!("UPDATE review_stores SET state_json = {expr}");
+        if let Some(st) = state {
+            args.push(st.to_string().into());
+            sql.push_str(&format!(", state = ?{}", args.len()));
+        }
+        sql.push_str(" WHERE id = ?1");
+        let n = self
+            .lock()
+            .execute(&sql, rusqlite::params_from_iter(args.iter()))?;
+        Ok(n > 0)
+    }
+
     /// Record what the forge-detection step (README §5.1) found. `forge_kind`/
     /// `forge_host`/`forge_slug` are route-validated, never CHECK-constrained
     /// (see the migration header); `forge_verified` IS CHECK-constrained

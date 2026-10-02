@@ -523,7 +523,8 @@ impl StoreGit {
     /// `git_home` becomes `HOME`/`XDG_CONFIG_HOME` for every scrubbed call;
     /// it is created (0700) if missing. The only file kb keeps there is
     /// its own `gitconfig` (`safe.directory` entries); nothing else
-    /// belongs there.
+    /// belongs there. An existing gitconfig is ADOPTED, never truncated
+    /// (several spawners share one `git_home`).
     pub fn new(git_home: impl Into<PathBuf>) -> std::io::Result<Self> {
         Self::with_env_fn(git_home, |k| std::env::var_os(k))
     }
@@ -559,7 +560,17 @@ impl StoreGit {
             base_fetch_timeout: BASE_FETCH_TIMEOUT,
             ambient_override: None,
         };
-        sg.write_global_config(&BTreeSet::new())?;
+        // The gitconfig is SHARED by every `StoreGit` built on this
+        // `git_home` (the daemon's, `kb-code backup`'s, the boot bundle
+        // pass's). A constructor must therefore never truncate it: adopt
+        // whatever entries are already on disk, and create the file only
+        // when it does not exist yet.
+        let existing = sg.read_global_config_dirs();
+        let missing = !sg.global_config.exists();
+        *sg.safe_dirs.lock().unwrap_or_else(|p| p.into_inner()) = existing.clone();
+        if missing {
+            sg.write_global_config(&existing)?;
+        }
         Ok(sg)
     }
 
@@ -613,10 +624,42 @@ impl StoreGit {
                 )
             })?;
         let mut dirs = self.safe_dirs.lock().unwrap_or_else(|p| p.into_inner());
-        if dirs.insert(s.to_string()) {
+        // Trust the DISK, not only the in-memory set: another spawner on
+        // the same `git_home` may have rewritten the file since we last did.
+        let on_disk = self.read_global_config_dirs();
+        let had_in_memory = !dirs.insert(s.to_string());
+        let had_on_disk = on_disk.contains(s);
+        dirs.extend(on_disk);
+        if !(had_in_memory && had_on_disk) {
             self.write_global_config(&dirs)?;
         }
         Ok(())
+    }
+
+    /// The `safe.directory` entries currently in the gitconfig on disk
+    /// (empty when the file is absent or unreadable). Inverse of the
+    /// escaping [`Self::write_global_config`] applies.
+    fn read_global_config_dirs(&self) -> BTreeSet<String> {
+        let Ok(text) = std::fs::read_to_string(&self.global_config) else {
+            return BTreeSet::new();
+        };
+        text.lines()
+            .filter_map(|l| {
+                let v = l.trim().strip_prefix("directory")?.trim_start();
+                let v = v.strip_prefix('=')?.trim();
+                let v = v.strip_prefix('"')?.strip_suffix('"')?;
+                let mut out = String::new();
+                let mut it = v.chars();
+                while let Some(c) = it.next() {
+                    if c == '\\' {
+                        out.push(it.next()?);
+                    } else {
+                        out.push(c);
+                    }
+                }
+                Some(out)
+            })
+            .collect()
     }
 
     fn write_global_config(&self, dirs: &BTreeSet<String>) -> std::io::Result<()> {
