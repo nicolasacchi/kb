@@ -148,10 +148,15 @@ recurrence.
   pre-migration bodies matched, and a 51-input differential harness showed 0
   divergences. The commit message's "LanguageRef gaining a lifetime" claim is **wrong**
   (it already existed in 0.26.11); the other 0.27 breaks do not affect the crate.
-- **kb-server Host guard, post-fix**: no documented deployment is bricked — the
-  Dockerfile healthcheck is outside the /api nest, the mDNS LAN recipe is non-loopback
-  (gate off by default + warning fires), and the reference Traefik/Authelia deploy is
-  likewise.
+- **kb-server Host guard, post-fix** *(CORRECTED 2026-10-02 - the original paragraph
+  here was wrong)*: the Dockerfile healthcheck is outside the /api nest and the mDNS LAN
+  recipe is non-loopback (gate off by default + warning fires), but the claim that the
+  reference Traefik/Authelia deploy is "likewise" unchecked was FALSE for any deploy that
+  lists its proxy in `trusted_proxies`: the gate is decided on the raw TCP peer
+  (loopback OR a listed proxy), so a listed proxy WAS Host-checked against an empty
+  allowlist and every `/api` call 403'd. Fixed in v0.44 (S1): the `parent_origin` host is
+  always admitted, the `Host` guard also covers `/metrics`, and kb-code shares the same
+  gate function.
 - **Architecture invariants**: a full 35-invariant audit found zero violations,
   including the comment-tags feature's hard parts.
 - **comment-tags read side**: every renderer, lister, indexer, counter and export is
