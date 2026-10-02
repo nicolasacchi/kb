@@ -2648,6 +2648,49 @@ async fn import_refusal_does_not_disclose_a_private_note() {
 }
 
 #[tokio::test]
+async fn import_without_the_note_preserves_private_notes_with_and_without_force() {
+    // v0.44 P1 (A2-3): the unforced import over a notes-only sidecar used to
+    // REPLACE it, so a public-only `export --embed` payload (zero comments)
+    // silently destroyed the operator's notes. The write is now a merge.
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "importmergenotes";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    let (note_id, _) = add_comment_at(&client, addr, base, "keep this note", true).await;
+    let empty = serde_json::json!({
+        "schema": "kb-comments/1",
+        "artifact": {"id": art, "title": "T", "kb": "smoke", "tags": [], "pages": []},
+        "generatedAt": "2026-05-14T10:00:00Z",
+        "comments": [],
+    });
+    for query in ["", "?force=true"] {
+        let resp = client
+            .post(url(addr, &format!("{base}/import{query}")))
+            .header("Origin", ORIGIN)
+            .json(&empty)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "import{query} must not refuse");
+        let ok: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(ok["imported"], 0, "count stays public-only: {ok}");
+        let all: serde_json::Value = client
+            .get(url(addr, &format!("{base}?visibility=all")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let rows = all["comments"].as_array().expect("comments array");
+        assert_eq!(rows.len(), 1, "import{query} destroyed the note: {all}");
+        assert_eq!(rows[0]["id"], note_id.as_str());
+        assert_eq!(rows[0]["body"], "keep this note");
+        assert_eq!(rows[0]["private"], true);
+    }
+}
+
+#[tokio::test]
 async fn patch_comment_meta_normalises_and_reports_effective_values() {
     use futures::StreamExt;
     let (_tmp, addr, paths) = boot_with_paths().await;

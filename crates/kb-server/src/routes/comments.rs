@@ -1480,9 +1480,10 @@ pub struct ImportQuery {
 
 /// `POST …/review/{id}/import?force=` — write a whole `kb-comments/1`
 /// document to the sidecar, preserving ids / statuses / replies / timestamps
-/// (the inverse of `kb comments export --embed`). Refuses to overwrite an
-/// existing non-empty review unless `force=true`, so it can't clobber live
-/// state — this is a restore/move operation, deliberately distinct from the
+/// (the inverse of `kb comments export --embed`). Refuses to overwrite
+/// existing PUBLIC comments unless `force=true`; private notes already in the
+/// sidecar are always carried over (merge, never replace), so it can't
+/// clobber live state — this is a restore/move operation, deliberately distinct from the
 /// R8-retired interactive whole-doc POST (which was dropped for concurrent-
 /// edit races, not for restore). The body's `artifact` ref is re-pinned to
 /// the import target so an artifact's comments can move to a new id/kb.
@@ -1490,6 +1491,7 @@ pub async fn import(
     State(state): State<Arc<KbHandles>>,
     Path((kb, id)): Path<(String, String)>,
     Query(q): Query<ImportQuery>,
+    Extension(identity): Extension<Identity>,
     Json(mut incoming): Json<ReviewFile>,
 ) -> Response<Body> {
     let kb_name = match validate(&state, &kb, &id) {
@@ -1511,27 +1513,54 @@ pub async fn import(
     let guard = lock.lock().await;
     match review::load(&path) {
         // v0.40 TN2 (KB-TN-LEAK-002) — the refusal keys off the PUBLIC count,
-        // not `!comments.is_empty()`. Both halves had to move together: with
-        // the private-inclusive guard, a sidecar holding ONLY notes still
-        // answers 400 where an empty one answers 200, and the status code
-        // alone is a per-artifact existence oracle — worse than the count
-        // alone, since the message cannot even be read without arithmetic.
-        // A notes-only sidecar must NOT refuse: the refusal is itself proof
-        // that a hidden comment exists, and an operator restoring a backup
-        // over their own notes is a legitimate case this now allows.
+        // not `!comments.is_empty()`, so a notes-only sidecar answers the
+        // same as an empty one (a 400 would prove a hidden note exists).
         //
-        // The WRITE stays lossless either way — private notes in the payload
-        // are saved verbatim (see the success body below). Only the decision
-        // and the number are public-only.
-        Ok(Some(existing)) if !q.force => {
-            let n = public_count(&existing);
-            if n > 0 {
-                return error_to_problem_json(&kb_core::Error::BadRequest(format!(
-                    "{kb_name}/{id} already has {n} comment(s); pass force=true to overwrite"
-                )));
+        // v0.44 P1 (A2-3) — that made the unforced write a REPLACE, so an
+        // import whose payload lacked the notes (any public-only
+        // `export --embed`) silently destroyed them. The write is now a
+        // MERGE: every private note in the existing sidecar whose id the
+        // payload does not carry is appended back, with or without `force`
+        // (force overwrites PUBLIC comments only). The response is identical
+        // to the empty-sidecar case, so no oracle returns.
+        //
+        // v0.44 P1 (A2-10) — the third owner-gated path beside PATCH …/meta
+        // and batch set_meta: a payload row that reuses the id of an existing
+        // note owned by someone else and changes what that note says or
+        // whether it is private is refused 403 (not-owner), exactly as the
+        // PATCH twin would.
+        Ok(Some(existing)) => {
+            if !q.force {
+                let n = public_count(&existing);
+                if n > 0 {
+                    return error_to_problem_json(&kb_core::Error::BadRequest(format!(
+                        "{kb_name}/{id} already has {n} comment(s); pass force=true to overwrite"
+                    )));
+                }
             }
+            let operator = state.operator_user().to_string();
+            for old in existing.comments.iter().filter(|c| c.is_private()) {
+                if let Some(new) = incoming.comments.iter().find(|c| c.id == old.id) {
+                    let changed =
+                        new.body != old.body || new.private != old.private || new.tags != old.tags;
+                    if changed {
+                        if let Some(resp) =
+                            forbid_if_not_owner(&identity, old.user.as_deref(), &operator)
+                        {
+                            return resp;
+                        }
+                    }
+                }
+            }
+            let carried: Vec<_> = existing
+                .comments
+                .iter()
+                .filter(|c| c.is_private() && !incoming.comments.iter().any(|n| n.id == c.id))
+                .cloned()
+                .collect();
+            incoming.comments.extend(carried);
         }
-        Ok(_) => {}
+        Ok(None) => {}
         Err(e) => return error_to_problem_json(&e),
     }
     if let Err(e) = review::save_atomic(&path, &incoming, None) {
