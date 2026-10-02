@@ -2256,9 +2256,10 @@ export interface ReviewCommentGroup {
   path: string;
   /** V80-M0 — per-read caption: `path` is one `files_changed(base_sha,
    * tip_sha)` touched at the target patchset. `false` for the path-less
-   * "general" group (`path === ""`). Never a filter — every group's
-   * `comments` is still listed either way. */
-  in_diff: boolean;
+   * "general" group (`path === ""`). `null` = unknown (the diff could not
+   * be computed; A7-4 — a caption failure never fails the read). Never a
+   * filter — every group's `comments` is still listed either way. */
+  in_diff: boolean | null;
   comments: ReviewComment[];
 }
 
@@ -3698,7 +3699,9 @@ export interface ReviewFinding {
 export interface FindingTouchedIn {
   ps: number;
   hunks: number;
-  overlap: "exact" | "adjacent";
+  /** `rebased` (A7-5): the later patchset sits on a different base, so the
+   * hunk may be upstream movement rather than an author edit. */
+  overlap: "exact" | "adjacent" | "rebased";
 }
 
 /// `GET /api/reviews/{id}/findings?ps=&disposition=&include_superseded=`

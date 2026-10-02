@@ -209,7 +209,9 @@ export default function ReviewThreadsCard({
     const general: typeof groups = [];
     for (const g of groups) {
       if (g.path === "") general.push(g);
-      else if (g.inDiff) inDiff.push(g);
+      // A7-4 — `null` (caption unavailable) is not a positive claim of
+      // being in the diff; it lands with the outside group.
+      else if (g.inDiff === true) inDiff.push(g);
       else outsideDiff.push(g);
     }
     return { inDiff, outsideDiff, general };

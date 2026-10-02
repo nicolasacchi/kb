@@ -56,9 +56,11 @@ export default function ReviewFileThreadsPanel({
     : !path
       ? null
       : group
-        ? group.in_diff
-          ? "This file is in the review's diff."
-          : `Not in the diff — comments here anchor to ps ${ps ?? "?"}'s tip.`
+        ? group.in_diff === null
+          ? "Whether this file is in the review's diff is unknown right now."
+          : group.in_diff
+            ? "This file is in the review's diff."
+            : `Not in the diff — comments here anchor to ps ${ps ?? "?"}'s tip.`
         : "No comments yet on this file — comment here to start one.";
 
   return (
