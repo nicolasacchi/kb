@@ -109,6 +109,13 @@ ever answered:
 kb slate done <ask-seq> "no longer relevant — asker's session ended"
 ```
 
+**Exempt: distill asks.** An ask whose text starts `Distill session ` (ref
+`session:<sid>`) is posted by the Stop hook AS the session it is about, so
+`author_ended` is true for it the moment that session ends — which is exactly
+when it is meant to be replayed to a FUTURE session. Never close one as
+"asker's session ended". It is closed only by `/kb-distill` (its Step 9) once
+the session has actually been distilled, or by an operator who decides not to.
+
 Never `done` an ask that already HAS an accepted answer (check
 `answers` on the Projected — a `done` on an already-done target 400s
 `already-done`) or one whose asker is still live; only the specific

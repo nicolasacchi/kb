@@ -11,6 +11,7 @@ mod atlas;
 mod doctor;
 mod doctor_hooks;
 mod fleet;
+mod hook_shell;
 mod json_output;
 mod lookup;
 mod pull;

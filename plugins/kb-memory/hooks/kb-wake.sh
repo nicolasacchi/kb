@@ -88,10 +88,24 @@ extra=()
 # recall gate. Selection is unchanged (`kb recall '' --limit 10`).
 recall_args=()
 [ -n "$cwd" ] && recall_args+=(--cwd "$cwd")
-index="$(kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
+# Deadline: hooks.json gives this hook 15s and everything (protocol, pending
+# block, slate digest) is emitted at the END, so one hung call must not eat
+# the whole budget. recall 5s + slate 4s = 9s worst case; a recall timeout
+# degrades to protocol-only output (index stays empty), never to no output.
+# `timeout` is guarded: without coreutils the call runs unwrapped.
+run_to() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+index="$(run_to 5 kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
   | jq -r '(.hits // [])
       | map("- \(.title)  [\(.kb)]"
-          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160]) else "" end)
+          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160] | gsub("[\r\n]+"; " ")) else "" end)
           + "\n<!--kb-recall/1 kb=\(.kb) id=\(.id)-->")
       | if length == 0 then empty
         else "Relevant memories from kb (recall — these persist across sessions):\n" + join("\n")
@@ -159,7 +173,7 @@ fi
 
 slate_text=""
 if [ -n "$slate_sid" ]; then
-  slate_json="$(timeout 4 kb slate open --hybrid --budget 2000 \
+  slate_json="$(run_to 4 kb slate open --hybrid --budget 2000 \
     --session-id "$slate_sid" --cwd "$cwd" "${extra[@]}" --json 2>/dev/null)" || slate_json=""
   if [ -n "$slate_json" ]; then
     slate_text="$(printf '%s' "$slate_json" | jq -r '.text // empty' 2>/dev/null)" || slate_text=""

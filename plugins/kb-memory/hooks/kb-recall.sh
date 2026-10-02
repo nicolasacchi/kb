@@ -97,6 +97,28 @@ extra=()
 #   * an empty corpus ("no prior context")             -> recall
 # Turns 2..n never enter this branch at all, so the recall block below is
 # byte-identical to its pre-CT-D1 behaviour on every one of them.
+# Shared deadline. hooks.json gives this hook 15s (30s on codex), and the
+# calls below run in sequence, so per-call caps alone ADD UP: 6 + 6 + 4 =
+# 16s > 15s. Every call is capped at min(its own cap, what is left of
+# KB_HOOK_BUDGET_SECS, default 13), and a call with nothing left is skipped
+# (a miss, never a kill). `timeout` is guarded: without coreutils the call
+# runs unwrapped, as before.
+hook_t0="$(date +%s 2>/dev/null)" || hook_t0=0
+hook_budget="${KB_HOOK_BUDGET_SECS:-13}"
+run_to() {
+  local cap="$1" now left
+  shift
+  now="$(date +%s 2>/dev/null)" || now="$hook_t0"
+  left=$((hook_budget - (now - hook_t0)))
+  [ "$left" -gt 0 ] || return 124
+  [ "$left" -lt "$cap" ] && cap="$left"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$cap" "$@"
+  else
+    "$@"
+  fi
+}
+
 first_turn=0
 if [ -n "$sid" ]; then
   marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
@@ -108,7 +130,7 @@ fi
 
 # GET /api/turn composes this block on the daemon, but `kb turn` is not a
 # CLI verb yet. This hook still calls `kb context` and `kb recall` until
-# `kb turn` is wired. The `timeout 6` wrappers stay.
+# `kb turn` is wired. The `run_to` deadline wrappers stay.
 scent_line=""
 if [ "$first_turn" = "1" ]; then
   # ONE call. The whole point of the acceptance criterion: the hook does not
@@ -124,7 +146,7 @@ if [ "$first_turn" = "1" ]; then
   # Same rule as the slate lanes below: never block the prompt. 6s is
   # under the harness budget (15s Claude / 30s codex) and above the warm
   # path. A timeout is a miss, not an error the user should see.
-  scent="$(timeout 6 kb context "$prompt" "${extra[@]}" "${ctx_args[@]}" --json 2>/dev/null \
+  scent="$(run_to 6 kb context "$prompt" "${extra[@]}" "${ctx_args[@]}" --json 2>/dev/null \
     | jq -r '.scent // empty' 2>/dev/null)" || scent=""
   # "no prior context" is the route's honest empty-corpus answer — injecting
   # it would be a nag, so it is treated as no scent at all.
@@ -147,12 +169,12 @@ recall_args=()
 # appends &session=). Empty KB_RECALL_SESSION means no session= — a stale
 # marker must not be sent. Not clap --session: Recall has no such flag,
 # and an unknown flag would exit this hook and drop the injection.
-# timeout 6 stays; only the session argument is added.
+# KB_RECALL_SESSION alone carries the session (read by `kb recall`).
+# A recall that times out or fails is a MISS for the recall block only: the
+# turn-1 scent above is already computed (its once-per-session marker is
+# spent) and the slate lane below still runs, so neither is thrown away.
 recall_prefix=(env "KB_RECALL_SESSION=${sid}")
-if [ -n "$sid" ]; then
-  recall_prefix+=("session=${sid}")
-fi
-hits="$(timeout 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || exit 0
+hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
 
 # CT-A3 — alongside the human-readable line, append ONE machine-readable
 # marker per hit (`<!--kb-recall/1 kb=<kb-name> id=<hex12>[ pos=<n>]-->`),
@@ -210,7 +232,7 @@ block="$(printf '%s' "$hits" | jq -r --arg layout "$layout" '
               then " [⚠ \(.drift_open) drift-flagged citation(s)]" else "" end);
   def summary_line($cap):
     (if $cap > 0 and (.summary // "") != ""
-     then "\n    ↳ " + (.summary[0:$cap]) else "" end);
+     then "\n    ↳ " + (.summary[0:$cap] | gsub("[\r\n]+"; " ")) else "" end);
   # v1 — frozen. Every byte here is pinned by the pre-MR1 fixture
   # (tests/fixtures/recall-layout-v1.txt); never "tidy" it.
   def v1line:
@@ -235,7 +257,7 @@ block="$(printf '%s' "$hits" | jq -r --arg layout "$layout" '
   | if length == 0 then empty
     else "Relevant memories from kb (recall — these persist across sessions):\n" + join("\n")
     end
-' 2>/dev/null)" || exit 0
+' 2>/dev/null)" || block=""
 
 # CT-D1 (orchestrator ruling, 2026-08-22) — the turn-1 scent is ADDITIVE,
 # never a replacement. R0/R3 governs EPISODIC material (transcripts stay
@@ -280,10 +302,10 @@ if [ -n "$slate_sid" ]; then
   cursor=""
   [ -f "$cursor_file" ] && cursor="$(cat "$cursor_file" 2>/dev/null)"
   if [ -n "$cursor" ]; then
-    slate_json="$(timeout 2 kb slate delta --since "$cursor" \
+    slate_json="$(run_to 2 kb slate delta --since "$cursor" \
       --session-id "$slate_sid" --cwd "$cwd" "${extra[@]}" --budget 1500 --json 2>/dev/null)" || slate_json=""
   else
-    slate_json="$(timeout 4 kb slate open --hybrid --budget 2000 \
+    slate_json="$(run_to 4 kb slate open --hybrid --budget 2000 \
       --session-id "$slate_sid" --cwd "$cwd" "${extra[@]}" --json 2>/dev/null)" || slate_json=""
   fi
   if [ -n "$slate_json" ]; then
