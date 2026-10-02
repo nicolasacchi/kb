@@ -3113,18 +3113,26 @@ mod tests {
         ));
     }
 
-    /// The escape hatch `keep` already documents: `set_comment_meta` is
-    /// deliberately NOT guarded, so un-privating a note (and re-privatising
-    /// it afterwards) still works. Without this the note would be frozen.
+    /// The escape hatch is EXPLICIT OPERATOR INTENT (v0.44 P2): without it
+    /// even `set_comment_meta` refuses to make a note public (an agent that
+    /// found a note id must not be able to publish it); with it, un-privating
+    /// works and re-opens the guarded mutations, so a note is never frozen.
     #[test]
-    fn un_privating_re_opens_the_guarded_mutations() {
+    fn un_privating_needs_operator_intent_and_then_re_opens_the_guarded_mutations() {
         let mut f = fixture_file();
         f.comments[0].private = true;
         assert!(matches!(
             f.set_comment_status("c_1", CommentStatus::Resolved),
             Err(Error::Conflict(_))
         ));
+        assert!(matches!(
+            f.set_comment_meta("c_1", None, Some(false)),
+            Err(Error::Conflict(_))
+        ));
+        assert!(f.comments[0].private, "the refused flip must not land");
+        f.set_operator_intent(true);
         assert!(f.set_comment_meta("c_1", None, Some(false)).unwrap());
+        f.set_operator_intent(false);
         assert!(f
             .set_comment_status("c_1", CommentStatus::Resolved)
             .unwrap());
