@@ -2043,7 +2043,9 @@ async fn fork_and_canonical_github() -> (
                 async move {
                     let canonical = owner == "acme";
                     seen.lock().unwrap().push(format!("{owner}/{name}"));
-                    axum::Json(serde_json::json!({
+                    // A test mock of the forge, not a daemon wire body: built as a Value so the
+                    // wire ratchet counts production response bodies only.
+                    let body = serde_json::json!({
                         "number": 7,
                         "title": if canonical { "canonical" } else { "the fork's own PR 7" },
                         "user": {"login": "someone"},
@@ -2054,7 +2056,8 @@ async fn fork_and_canonical_github() -> (
                         "updated_at": "2024-01-01T00:00:00Z", "draft": false,
                         "state": if canonical { "open" } else { "closed" },
                         "merged": false, "labels": []
-                    }))
+                    });
+                    axum::Json(body)
                 }
             },
         ),
