@@ -221,6 +221,13 @@ pub async fn list(
         Err(e) => return error_to_problem_json(&e),
     };
     let want_kb = q.kb.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    // v0.44 P2 (A2.f7) — an unknown `?kb=` is a 404, like `/reviews`: an
+    // empty 200 reads as "this kb has no notes" and hides a typo.
+    if let Some(w) = want_kb {
+        if !state.kbs.keys().any(|k| k.as_str() == w) {
+            return error_to_problem_json(&kb_core::Error::NotFound(format!("kb {w}")));
+        }
+    }
     let needle =
         q.q.as_deref()
             .map(str::trim)

@@ -20,6 +20,7 @@
 import { notifyManager, QueryClient } from "@tanstack/react-query";
 import { ApiError } from "./client";
 import { sse } from "./sse";
+import { onReviewMutation } from "./reviewIntent";
 
 // Flush cache notifications SYNCHRONOUSLY instead of the default
 // microtask deferral. An optimistic setQueryData inside a click handler
@@ -455,7 +456,7 @@ export function startSseInvalidationBridge(): () => void {
   // fan-out per window through the same burst gate the docs churn uses.
   const inboxGate = makeBurstGate(() => invalidate(["inbox"]));
   // Low-rate, targeted events: direct invalidation.
-  on("comments.updated", (p) => {
+  const commentsUpdated = (p: Record<string, unknown>) => {
     const kb = kbOf(p);
     const id = typeof p.artifact_id === "string" ? p.artifact_id : undefined;
     // The open document's own review data stays immediate (the reader is
@@ -469,7 +470,12 @@ export function startSseInvalidationBridge(): () => void {
     // subscription of its own — see the key contract above. Direct, not
     // burst-gated: tagging a comment is a one-click-per-human-action rate.
     invalidate(["review-notes"]);
-  });
+  };
+  on("comments.updated", commentsUpdated);
+  // v0.44 P2 — a note-only write emits no daemon event, so the SPA's own
+  // review mutations announce themselves (this tab directly, the operator's
+  // other tabs over a BroadcastChannel) and land in the SAME handler.
+  offs.push(onReviewMutation((t) => commentsUpdated({ kb: t.kb, artifact_id: t.artifact_id })));
   for (const t of ["note.created", "note.updated", "note.deleted"]) {
     on(t, () => invalidate(["notes"]));
   }

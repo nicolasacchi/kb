@@ -973,7 +973,7 @@ fn wants_raw(uri: &Uri) -> bool {
 /// the /api nest, so anyone who can resolve `<id>.artifacts.localhost` got
 /// a token that moved on every private-note create and edit — dating the
 /// note to the write, over a body that never changed and never contained
-/// it. Same rule as the `retain` in `strip_private_comments`: what the
+/// it. Same rule as `ReviewFile::into_public_view`: what the
 /// reader may not see must not be observable, and "the ETag moved" is
 /// observable.
 ///
@@ -1005,18 +1005,28 @@ fn comments_payload(
 ) -> kb_core::Result<serde_json::Value> {
     let (file, etag) = match loaded {
         Some(file) => {
-            let file = serde_json::to_value(strip_private_comments(file))?;
+            // v0.44 P2 (A2-5) — a sidecar with nothing PUBLIC in it (a
+            // notes-only one) collapses to the exact skeleton an absent
+            // sidecar gets, and carries no etag either; otherwise the first
+            // private note flipped `etag` from null to a string and made the
+            // artifact title appear, on an unauthenticated endpoint.
+            let (view, blank) = file.into_public_view();
+            let file = serde_json::to_value(view)?;
             // Hash the `Value`, not the `ReviewFile`: this is the exact
             // serialization that lands in the payload below, so the token
             // is a validator for the bytes inlined rather than for some
             // nearby-but-differently-ordered encoding of them. Costs one
             // extra pass over a few KB on a path that already re-reads and
             // rewrites the whole HTML document.
-            let etag = super::review::body_etag(&serde_json::to_vec(&file)?);
-            (file, Some(etag))
+            let etag = if blank {
+                None
+            } else {
+                Some(super::review::body_etag(&serde_json::to_vec(&file)?))
+            };
+            (file, etag)
         }
         None => (
-            serde_json::to_value(ReviewFile::empty_skeleton(kb_name, artifact_id, ""))?,
+            serde_json::to_value(ReviewFile::public_skeleton(kb_name, artifact_id))?,
             None,
         ),
     };
@@ -1025,16 +1035,6 @@ fn comments_payload(
         "etag": etag,
         "file": file,
     }))
-}
-
-/// Drop private notes from a loaded review file, in place. Split out of
-/// [`comments_payload`] so the leak guard is unit-testable without
-/// standing up `KbHandles`/`KbContext`: the whole safety argument of row #6
-/// is this one `retain`, and the artifact-subdomain serve path is
-/// UNAUTHENTICATED — a note inlined there is world-readable.
-fn strip_private_comments(mut file: ReviewFile) -> ReviewFile {
-    file.comments.retain(|c| !c.is_private());
-    file
 }
 
 /// Helper retained for future code that may need a typed PathBuf result.
@@ -1300,7 +1300,7 @@ mod tests {
             });
         }
 
-        let payload = serde_json::json!({ "file": strip_private_comments(file) });
+        let payload = serde_json::json!({ "file": file.into_public_view().0 });
         let rendered = payload.to_string();
         assert!(rendered.contains("public body"), "{rendered}");
         assert!(
@@ -1362,6 +1362,48 @@ mod tests {
         // stays null exactly as before (its `generated_at` is `Utc::now()`,
         // so a token over it would change on every page render).
         assert!(etag(None).is_none());
+    }
+
+    /// v0.44 P2 (A2-5): the first private note on an artifact with no public
+    /// comment must not change a single byte of the unauthenticated payload.
+    /// Before the fix the absent case sent `etag: null`, title "" and a
+    /// fresh `generatedAt` while the notes-only sidecar sent a string etag,
+    /// the real title and a fixed timestamp — a poller could date the note.
+    #[test]
+    fn first_private_note_leaves_the_unauthenticated_payload_unchanged() {
+        let kb_name = KbName::new("smoke").expect("valid kb name");
+        let id = "aaaaaaaaaaaa";
+        let absent = comments_payload(&kb_name, id, None).expect("payload serialises");
+
+        let mut file = ReviewFile::empty_skeleton(&kb_name, id, "A Real Title");
+        file.add_comment(kb_core::review::NewComment {
+            file: id.to_string(),
+            file_label: "main".to_string(),
+            anchor: kb_core::review::Anchor::File,
+            author: kb_core::review::Author::You,
+            body: "PRIVATE NOTE BODY".to_string(),
+            choices: Vec::new(),
+            attachments: Vec::new(),
+            user: Some("alice".to_string()),
+            tags: Vec::new(),
+            private: true,
+        });
+        let notes_only = comments_payload(&kb_name, id, Some(file)).expect("payload serialises");
+        assert_eq!(
+            absent.to_string(),
+            notes_only.to_string(),
+            "a notes-only sidecar must render exactly like no sidecar"
+        );
+        assert!(notes_only["etag"].is_null());
+        // And the absent payload is deterministic, so the equality above is
+        // not a coincidence of two `Utc::now()` calls in the same second.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert_eq!(
+            absent.to_string(),
+            comments_payload(&kb_name, id, None)
+                .expect("payload serialises")
+                .to_string()
+        );
     }
 
     #[test]

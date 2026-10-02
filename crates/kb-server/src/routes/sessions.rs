@@ -3082,10 +3082,12 @@ pub async fn session_comments(
                     continue;
                 };
                 // LEAK GUARD (agent-facing bodies) — a `history` row is
-                // written when a comment is RAISED, so a note raised while
-                // public keeps its row forever (the ledger is an event log,
-                // never rewritten). Drop the whole row here, not just its
-                // body: the title row is itself an existence leak.
+                // written when a comment is RAISED. The public→private flip
+                // deletes that row (`history_forget_comment`, called from
+                // `set_comment_meta` and `apply_batch`), so a row can survive
+                // only if that delete failed (logged at warn); this filter is
+                // the backstop for that case. Drop the whole row here, not
+                // just its body: the title row is itself an existence leak.
                 if c.is_private() {
                     continue;
                 }
