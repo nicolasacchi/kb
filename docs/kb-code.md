@@ -1200,12 +1200,14 @@ does not depend on the sentinel at all; and a corrupt, unreadable or
 unwritable sentinel reads as FLAGGED (for the process lifetime), never as
 unflagged. While the guard is flagged, scheduled GC is dry-run-only —
 and **`kb-code store gc --repo R --yes` is the ONLY acknowledgement
-path**: it applies and clears the flag, and it is per-store, so
+path**: it applies and acknowledges that store, and it is per-store, so
 acknowledging repo R's suspicion never clears it for repo S. The flag
 itself is not cleared by an acknowledgement (it stays on record), but a
 store CREATED after the incident is admitted at creation — it cannot hold
 restore-damaged state — so only the stores that existed at the incident
-ever need a `--yes`. (`gc --yes` acknowledges; it does not "clear the flag".)
+ever need a `--yes`. (`gc --yes` acknowledges; it does not "clear the flag". Cruft expiry in the monthly pass follows the same per-store block, so an acknowledged or admitted store resumes expiring.)
+
+Note: a monthly pass that may expire cruft holds the store's ops lock for the whole repack, so review create/snapshot/capture on that store wait for it. That happens at most about once per cooldown period; weekly repacks do not hold the lock.
 
 **Restoring a store from a bundle** has no verb yet (nothing calls
 `restore_guard::flag_manual`); the manual procedure is:

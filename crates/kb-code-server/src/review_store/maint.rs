@@ -1602,24 +1602,28 @@ fn cruft_allow_expire(sj: &serde_json::Value, now: i64) -> bool {
     now.saturating_sub(newest) >= CRUFT_EXPIRE_COOLDOWN_SECS
 }
 
-/// May a monthly pass expire cruft now? The cooldown ([`cruft_allow_expire`])
-/// AND an unflagged restore guard: while the guard is flagged the volume may
-/// have been rolled back behind the git store, and nothing is pruned on the
-/// strength of a `last_gc_apply` that a restore could have rewound.
+/// May a monthly pass expire cruft on store `uuid` now? The cooldown
+/// ([`cruft_allow_expire`]) AND the restore guard not blocking THIS store:
+/// while it blocks, the volume may have been rolled back behind the git
+/// store, and nothing is pruned on the strength of a `last_gc_apply` that
+/// a restore could have rewound. The check is per store
+/// (`RestoreGuardState::blocks`), so `store gc --yes` and creation-time
+/// admission lift it for that store, exactly as they lift the GC block.
 fn expiry_permitted(
     sj: &serde_json::Value,
     guard: &restore_guard::RestoreGuardState,
+    uuid: &str,
     now: i64,
 ) -> bool {
-    !guard.flagged && cruft_allow_expire(sj, now)
+    !guard.blocks(uuid) && cruft_allow_expire(sj, now)
 }
 
 /// Run every cadence in `tasks` against ONE store: daily's git-housekeeping
 /// task plus, separately and under the ops lock, the ref invariant check
 /// and a store-wide GC DRY RUN (see the module doc's "Cadence choices");
-/// weekly/monthly repack (NOT under the ops lock — Should-fix review
-/// finding: a long repack must not hold the same lock a capture or a real
-/// `gc --yes` apply needs). Persists `last_maint` (plus a per-cadence retry
+/// weekly/monthly repack (weekly NOT under the ops lock; the monthly
+/// repack DOES hold it, but only when cruft expiry is permitted, about once
+/// per cooldown period — see the monthly block). Persists `last_maint` (plus a per-cadence retry
 /// backoff after a failure) and `last_gc_dry_run` into `state_json`. Takes
 /// the ops lock ITSELF, only around the GC/invariant section — callers
 /// must NOT also hold it (not reentrant).
@@ -1657,8 +1661,9 @@ pub fn run_pass_for_store(
 
         // GC/invariant section: ops lock held for exactly this, Should-fix
         // review finding ("hold the ops lock only around the GC/ref
-        // section, not the long repacks" — weekly/monthly below run
-        // UNLOCKED). A dry run never mutates refs on its own, but
+        // section, not the long repacks" — the weekly repack below runs
+        // UNLOCKED; the monthly one holds the ops lock only when expiry is
+        // permitted). A dry run never mutates refs on its own, but
         // `invariant_check` CAN (recreating a missing ps ref), and reading
         // a consistent snapshot alongside a possible recreate wants the
         // same lock a real apply would take.
@@ -1737,7 +1742,9 @@ pub fn run_pass_for_store(
         // pass started from can be minutes old, and a `store gc --yes`
         // that landed since (or lands now) must either be visible here or
         // wait for the repack. Without expiry the repack cannot orphan-
-        // prune anything, so the ops lock is only taken when it is needed.
+        // prune anything, so the ops lock is only HELD across the repack
+        // when expiry is permitted. While held (about once per cooldown
+        // period) review create/snapshot/capture on this store also wait.
         let ops = rs.ops_lock(row.id);
         let ops_guard = ops.blocking_lock();
         let fresh_sj = store
@@ -1749,7 +1756,7 @@ pub fn run_pass_for_store(
         let guard = restore_guard::read(&rs.settings().restore_guard_path);
         let allow_expire = fresh_sj
             .as_ref()
-            .is_some_and(|sj| expiry_permitted(sj, &guard, now));
+            .is_some_and(|sj| expiry_permitted(sj, &guard, &row.uuid, now));
         let _ops_guard = allow_expire.then_some(ops_guard);
         match run_monthly(git, dir, allow_expire) {
             Ok(()) => {

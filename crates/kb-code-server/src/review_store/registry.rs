@@ -755,8 +755,9 @@ impl ReviewStores {
     /// The per-store MAINTENANCE mutex: serialises the weekly/monthly
     /// repacks (the scheduler vs `store maintain --task weekly|monthly`) on
     /// one store. Always taken BEFORE [`Self::ops_lock`], never while
-    /// holding it, and unrelated to captures — which only need the ops
-    /// lock and so are not blocked by a long repack.
+    /// holding it. A weekly repack does not touch the ops lock, so captures
+    /// proceed; a monthly repack that may expire cruft holds the ops lock
+    /// for its duration, and captures/seeds/syncs on that store wait.
     pub fn maint_lock(&self, store_id: i64) -> Arc<tokio::sync::Mutex<()>> {
         self.maint_locks.lock().entry(store_id).or_default().clone()
     }

@@ -1440,12 +1440,16 @@ fn a_monthly_pass_cannot_expire_cruft_while_the_restore_guard_is_flagged() {
     let sj = serde_json::json!({ "last_gc_apply": { "at": 1 } });
     let now = 1 + 10 * CRUFT_EXPIRE_COOLDOWN_SECS;
     let clear = restore_guard::RestoreGuardState::default();
-    assert!(expiry_permitted(&sj, &clear, now));
-    let flagged = restore_guard::RestoreGuardState {
+    assert!(expiry_permitted(&sj, &clear, "u1", now));
+    let mut flagged = restore_guard::RestoreGuardState {
         flagged: true,
         ..Default::default()
     };
-    assert!(!expiry_permitted(&sj, &flagged, now));
+    assert!(!expiry_permitted(&sj, &flagged, "u1", now));
+    // Per store: an acknowledged (or admitted) store is lifted, another is not.
+    flagged.acknowledged_stores.insert("u1".to_string());
+    assert!(expiry_permitted(&sj, &flagged, "u1", now));
+    assert!(!expiry_permitted(&sj, &flagged, "u2", now));
 }
 
 /// A5.f9: a store created after the incident starts unblocked.
