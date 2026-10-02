@@ -20,7 +20,7 @@ import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import type { FileResponse } from "../api/types";
+import type { FileResponse, HighlightBatchOut } from "../api/types";
 import type { DiffHighlights } from "../lib/diffHighlight";
 import {
   baseSideEnabled,
@@ -29,6 +29,7 @@ import {
   useDiffHighlights,
   type UseDiffHighlightsOpts,
 } from "./useDiffHighlights";
+import { highlightCacheKey } from "./useHighlight";
 
 const REPO = "r";
 const PATH = "p.ts";
@@ -66,7 +67,7 @@ function fileResponse(ref: string | null, content: string, highlights: FileRespo
 function renderHook(args: {
   shas: { oldSha?: string; newSha?: string };
   opts?: UseDiffHighlightsOpts;
-  seed?: ReadonlyArray<readonly [readonly unknown[], FileResponse]>;
+  seed?: ReadonlyArray<readonly [readonly unknown[], unknown]>;
 }): { result: DiffHighlights | null; batchKeys: string[] } {
   const client = new QueryClient();
   for (const [key, data] of args.seed ?? []) client.setQueryData(key, data);
@@ -186,6 +187,70 @@ describe("useDiffHighlights — one oversize side must not strip the other", () 
       ],
     });
     expect(batchKeys).toHaveLength(2);
+  });
+});
+
+describe("useDiffHighlights — the snippet fallback's painted branch", () => {
+  it("maps wire spans (UTF-8 byte columns) onto a multi-byte line", () => {
+    // Stored spans are absent (`highlights: null`) so the fallback runs; the
+    // batch response is seeded under the exact key the hook builds. `à` is
+    // 2 bytes / 1 UTF-16 unit, so a byte-vs-unit mixup shows as end 2.
+    const text = "const x = 1;\nà = 2;\n";
+    const batch: HighlightBatchOut = {
+      schema: "highlight-batch/1",
+      items: [
+        {
+          id: highlightCacheKey("ts", text, PATH),
+          schema: "highlight/1",
+          lang: "ts",
+          tier: "full",
+          spans: [{ line: 2, start: 0, end: 2, role: "keyword" }],
+          honesty: { tier: "full", engine: "t", derived_from: "t" },
+        },
+      ],
+    };
+    const { result } = renderHook({
+      shas: { newSha: "bbb" },
+      opts: { hasRemoves: false, hasAdds: true },
+      seed: [
+        [fileKey("bbb"), fileResponse("bbb", text, null)],
+        [["highlight", [highlightCacheKey("ts", text, PATH)]], batch],
+      ],
+    });
+    const line2 = result?.newLineSpans.get(2);
+    expect(line2).toHaveLength(1);
+    expect(line2?.[0].start).toBe(0);
+    expect(line2?.[0].end).toBe(1);
+    expect(result?.newLines?.[1]).toBe("à = 2;");
+  });
+
+  it("maps wire spans past an astral character (4 UTF-8 bytes, 2 UTF-16 units)", () => {
+    const text = "const x = 1;\n😀x = 2;\n";
+    const batch: HighlightBatchOut = {
+      schema: "highlight-batch/1",
+      items: [
+        {
+          id: highlightCacheKey("ts", text, PATH),
+          schema: "highlight/1",
+          lang: "ts",
+          tier: "full",
+          // `x` sits at byte 4..5 of line 2 → UTF-16 columns 2..3.
+          spans: [{ line: 2, start: 4, end: 5, role: "keyword" }],
+          honesty: { tier: "full", engine: "t", derived_from: "t" },
+        },
+      ],
+    };
+    const { result } = renderHook({
+      shas: { newSha: "bbb" },
+      opts: { hasRemoves: false, hasAdds: true },
+      seed: [
+        [fileKey("bbb"), fileResponse("bbb", text, null)],
+        [["highlight", [highlightCacheKey("ts", text, PATH)]], batch],
+      ],
+    });
+    const line2 = result?.newLineSpans.get(2);
+    expect(line2?.[0].start).toBe(2);
+    expect(line2?.[0].end).toBe(3);
   });
 });
 

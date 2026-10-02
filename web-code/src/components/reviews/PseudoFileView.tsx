@@ -60,7 +60,7 @@ function PseudoBuffer({
   setComposeLine: (n: number | null) => void;
 }) {
   const items = useMemo(() => [{ id: "p", lang: null, text: content, path }], [content, path]);
-  const { byId } = useHighlight(items);
+  const { byId, unpaintableIds } = useHighlight(items);
   const painted = useMemo(() => {
     const r = byId.get("p");
     if (!r || r.tier === "none" || r.spans.length === 0) return null;
@@ -68,7 +68,11 @@ function PseudoBuffer({
   }, [byId, content]);
   const lines = content.split("\n");
   return (
-    <div className="kbc-pseudo__buffer" data-kbc-pseudo-buffer role="textbox" aria-readonly="true">
+    <div
+      className="kbc-pseudo__buffer"
+      data-kbc-pseudo-buffer
+      data-kbc-hl-tier={byId.get("p")?.tier ?? (unpaintableIds.has("p") ? "plain" : "pending")}
+      role="textbox" aria-readonly="true">
       {lines.map((text, i) => {
         const line = i + 1;
         const threads = comments ? threadsAt(comments, path, "new", line) : [];

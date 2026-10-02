@@ -46,15 +46,21 @@ function gitSha(): string {
 //                                              imported by the SPA)
 //
 // The annotator must stay tiny (CI fails the build if `dist/annotate.js`
-// exceeds 10 KiB — see the bundle-size guard in .github/workflows/ci.yml).
+// exceeds 12 KiB — see the bundle-size guard in .github/workflows/ci.yml).
 // Vanilla DOM only — never import React or any other SPA code.
+//
+// There is NO `output.format: "iife"` for the annotate entry: it is emitted
+// by the same build as `main`/`sketch`, as a classic script, and stays
+// collision-safe only because `src/scripts/annotate.ts` wraps its own body
+// in an IIFE. The guard is tests/e2e/annotator-bundle-isolation.spec.ts
+// (e2e job only) — keep the source IIFE.
 export default defineConfig({
   plugins: [react()],
   base: "/",
   // CodeMirror 6 breaks subtly if two copies of @codemirror/state (or
   // @lezer/common) load — extensions/tags from one instance are unrecognised
   // by the other. Force a single copy. (The editor module is in the `main`
-  // chunk only; never imported from `annotate.ts`, whose 10 KiB CI guard would
+  // chunk only; never imported from `annotate.ts`, whose 12 KiB CI guard would
   // otherwise trip.)
   resolve: {
     dedupe: ["@codemirror/state", "@lezer/common"],
@@ -64,7 +70,7 @@ export default defineConfig({
   },
   // SW2 — the kb-sse SharedWorker (src/workers/sse.worker.ts) imports
   // sse/core.ts; ES format keeps that worker bundle a module if Rollup
-  // ever splits a chunk out of it. The worker is its own Rollup pass, so
+  // ever splits a chunk out of it. The worker is its own bundler pass, so
   // the annotate entryFileNames special-case below never sees it.
   worker: {
     format: "es",
@@ -100,8 +106,15 @@ export default defineConfig({
         // (CodeMirror, the markdown stack) loads once and is cached across
         // deploys, and the route-lazy chunks above don't each re-bundle it.
         // Runs only over the `main` entry's graph; the `annotate` entry and
-        // the SharedWorker are separate Rollup passes that import none of this,
-        // so the ≤10 KiB annotate.js CI guard is unaffected.
+        // the SharedWorker import none of this (the annotate entry shares the
+        // `rollupOptions.input` map with main/sketch, not a separate pass —
+        // it stays chunk-free because it imports nothing), so the 12 KiB
+        // annotate.js CI guard is unaffected.
+        // NOTE: the function form of `manualChunks` is a deprecated path in
+        // Vite 8 / rolldown (the replacement is `output.codeSplitting`
+        // groups). Not migrated here: it cannot be verified without a build,
+        // and the mermaid-stays-out-of-main property below must be re-checked
+        // against dist/ when it is.
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
           // SL4 — mermaid is deliberately NOT given a manualChunks bucket.

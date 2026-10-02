@@ -14,9 +14,8 @@
 // (`ref: undefined`, the same `["file", …, null]` entry `useFile` already
 // keeps for the reader's own read) instead of disabling the side and
 // leaving every ADDED line plain. The V76-C1 fallback additionally clamps
-// each side to the per-snippet ceiling `highlight/batch` enforces: an
-// oversize side is dropped rather than sent, because one refused item
-// 400s the WHOLE batch and would strip the other side's legitimate paint.
+// each side to the per-snippet ceiling `highlight/batch` enforces — inside
+// `useHighlight` now, which drops an oversize item rather than sending it.
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -30,26 +29,18 @@ import {
   type DiffHighlights,
   type LineSpan,
 } from "../lib/diffHighlight";
-import { utf8LengthOf } from "../lib/decorations";
 import type { ParsedDiff } from "../lib/diff";
 import { loadDiffSyntaxHighlight } from "../lib/prefs";
 import { wireSpansToLineMap } from "../lib/paintSpans";
-import { useHighlight, type HighlightItem } from "./useHighlight";
+import { HIGHLIGHT_SNIPPET_MAX_BYTES, useHighlight, type HighlightItem } from "./useHighlight";
 
 /// Same 1.5 MiB ceiling the brief named; `FileResponse.size` is bytes.
 export const DIFF_HIGHLIGHT_MAX_BYTES = 1.5 * 1024 * 1024;
 
-/// Per-SNIPPET ceiling `POST /api/highlight/batch` enforces: one item's
-/// `text` may not exceed this many UTF-8 bytes, and a violation refuses the
-/// WHOLE batch with a 400 (`MAX_SNIPPET_BYTES`,
-/// crates/kb-code-server/src/highlight.rs:424, enforced :751-759). It is
-/// well under this hook's own `DIFF_HIGHLIGHT_MAX_BYTES`, which only bounds
-/// what is worth READING — a side between the two would enqueue an item the
-/// server rejects, and the batch's 400 would strip the OTHER side's paint
-/// with it. (Two in-cap sides total ≤ 512 KiB, so the batch TOTAL cap of
-/// 1 MiB — `highlight.rs:428`, enforced :761-765 — is unreachable once
-/// each side is clamped.)
-export const HIGHLIGHT_SNIPPET_MAX_BYTES = 256 * 1024;
+/// Re-exported: the per-snippet ceiling now lives in `useHighlight`, which
+/// drops an oversize item itself (so one refused item cannot 400 the batch
+/// and strip a sibling's paint).
+export { HIGHLIGHT_SNIPPET_MAX_BYTES };
 
 export interface UseDiffHighlightsOpts {
   /// Base (`oldSha`) is fetched ONLY when the parsed diff has remove
@@ -67,7 +58,8 @@ export interface UseDiffHighlightsOpts {
 
 /// Tip-side fetch gate. The tip ref is `newSha`, and it is ABSENT whenever
 /// the diff is rendered without a `to` — which per `GET /api/diff`'s
-/// contract (`crates/kb-code-server/src/routes.rs:2086-2090`) is exactly
+/// contract (the `DiffParams::to` doc and `diff_route` in
+/// `crates/kb-code-server/src/routes.rs`) is exactly
 /// the working tree, i.e. the new side's real content, not "nothing to
 /// read". So the gate asks for that working tree rather than dropping the
 /// side and painting every ADDED line plain.
@@ -189,14 +181,8 @@ export function useDiffHighlights(
           : parsed
             ? reconstructSide(parsed, "new")
             : null;
-      // An oversize side is DROPPED, not sent: the server refuses the whole
-      // batch, and the OTHER side has a legitimate paint to lose. UTF-8
-      // BYTES, never `.length` — the server measures `item.text.len()`, so
-      // a non-ASCII side under-counts on a UTF-16 length. The cap is handed
-      // to `utf8LengthOf` so a side long enough to be over it is settled by
-      // one comparison instead of encoding a 1.5 MiB copy of itself to
-      // learn a number.
-      if (text && utf8LengthOf(text, HIGHLIGHT_SNIPPET_MAX_BYTES) <= HIGHLIGHT_SNIPPET_MAX_BYTES) {
+      // An oversize side is dropped inside `useHighlight`, not here.
+      if (text) {
         items.push({
           id: "new",
           lang: tip.data?.lang ?? null,
@@ -215,7 +201,7 @@ export function useDiffHighlights(
           : parsed
             ? reconstructSide(parsed, "old")
             : null;
-      if (text && utf8LengthOf(text, HIGHLIGHT_SNIPPET_MAX_BYTES) <= HIGHLIGHT_SNIPPET_MAX_BYTES) {
+      if (text) {
         items.push({
           id: "old",
           lang: base.data?.lang ?? null,
