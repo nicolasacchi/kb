@@ -285,11 +285,18 @@ the note index (`?bodies=false` — the id lookup never pulls note text into
 the process), since the public review read cannot see one at all.
 
 The other two transports are deliberately **lossless**: `kb comments export
---embed` bakes the whole `kb-comments/1` document, notes included, into the
-HTML copy, and `kb comments import` reads it back verbatim. Filtering notes
-out of either would destroy your own data on every export → import move, so
-don't "fix" them — and note that moving a bundle through an agent is how that
-loss would get triggered.
+--embed -o FILE` bakes the whole `kb-comments` document, notes included, into
+the HTML copy (and says on stderr how many notes it carries), and `kb comments
+import` reads it back verbatim. Filtering notes out of either would destroy
+your own data on every export → import move, so don't "fix" them — and note
+that moving a bundle through an agent is how that loss would get triggered.
+Without `-o` (stdout) the embed is public-only, because stdout is where an
+agent's transcript captures output; the CLI says so on stderr. `import` only
+adds: it never removes a note, even with `--force`.
+
+An agent holding a note id cannot resolve, reply to, edit, delete or publish
+the note: those need the operator's explicit intent (the SPA sends it; no CLI
+verb does), so resolve a note from the comments panel, not from the shell.
 
 ## Review-pass verdicts (`kb comments verdict`)
 

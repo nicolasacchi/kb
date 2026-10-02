@@ -833,6 +833,22 @@ async fn download_attachment(
     Ok(resp.bytes().await?.to_vec())
 }
 
+/// The review-JSON URL `export --embed` reads. `include_notes` adds the
+/// operator's `?visibility=all` opt-in (see `export_embed`).
+fn embed_review_url(daemon: Option<&str>, kb: &str, id: &str, include_notes: bool) -> String {
+    let base = format!(
+        "{}/api/kb/{}/review/{}",
+        base_url(daemon),
+        encode_path_segment(kb),
+        encode_path_segment(id),
+    );
+    if include_notes {
+        format!("{base}?visibility=all")
+    } else {
+        base
+    }
+}
+
 /// `export --embed` mode: fetch the artifact HTML + its review JSON, splice
 /// an inert `kb-review-state` block into the HTML, and write the standalone
 /// copy to `--out` (or stdout). The single file then carries its comments
@@ -863,12 +879,16 @@ async fn export_embed(
     }
     let html = resp.text().await?;
     // Review JSON → ReviewFile.
-    let rev_url = format!(
-        "{}/api/kb/{}/review/{}",
-        base_url(daemon),
-        encode_path_segment(kb),
-        encode_path_segment(id),
-    );
+    //
+    // v0.44 P2 (A2-4) — `--embed` is the documented LOSSLESS transport (the
+    // docs say notes travel, and `import` carries them back), so when the
+    // copy goes to a FILE (`-o`) it asks for every comment with the
+    // operator's `?visibility=all` read. To stdout it does not: stdout is
+    // exactly where an agent's transcript captures output, and a note
+    // printed there is a note disclosed. That path stays public-only and
+    // says so on stderr instead of dropping notes silently.
+    let include_notes = out.is_some();
+    let rev_url = embed_review_url(daemon, kb, id, include_notes);
     let resp = client
         .get(&rev_url)
         .send()
@@ -889,12 +909,24 @@ async fn export_embed(
     match out {
         Some(p) => {
             std::fs::write(p, embedded.as_bytes()).with_context(|| format!("writing {p}"))?;
+            let notes = review.comments.iter().filter(|c| c.is_private()).count();
             eprintln!(
                 "✓ wrote {p} with {} embedded comment(s)",
                 review.comments.len()
             );
+            if notes > 0 {
+                eprintln!(
+                    "! {notes} of them are PRIVATE notes: the file carries them verbatim \
+                     (that is what makes the export → import move lossless) — keep it \
+                     where you would keep the notes themselves"
+                );
+            }
         }
         None => {
+            eprintln!(
+                "note: embedding to stdout carries public comments only; private notes are \
+                 never written to stdout — use -o FILE for the lossless copy"
+            );
             print!("{embedded}");
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
@@ -1584,9 +1616,11 @@ pub async fn keep(
 /// --path …]`
 /// — label a comment (or a private note) so like things group together.
 ///
-/// `/meta` is a FULL REPLACE, not a delta, so this reads the comment's
-/// current tags, unions the new ones, and PATCHes the whole set; PATCHing
-/// only the new tags would silently wipe the rest. The daemon
+/// Sends the DELTA form (`{"add_tags":[…]}`) and lets the daemon union it
+/// into the comment's CURRENT tags under the review lock. The verb used to
+/// read the set, merge client-side and PATCH the whole thing back, which
+/// silently erased any tag another writer (the SPA, a second `tag`) added
+/// between the read and the write (v0.44 P2, A4-10). The daemon
 /// slug-normalises (`Fleet Doc` → `fleet-doc`), dedupes and sorts, caps at
 /// 8 tags × 48 chars, and returns the effective values — which is what gets
 /// printed, so the shell sees exactly what was stored.
@@ -1606,9 +1640,15 @@ pub async fn tag(
 ) -> Result<()> {
     let (kb, id) =
         resolve_comment_target(kb, artifact_id, path_input, comment_id, daemon, bearer).await?;
-    let current = fetch_comment_tags(&kb, &id, comment_id, daemon, bearer).await?;
-    let next = merge_tags(&current, tags);
-    let out = patch_comment_tags(&kb, &id, comment_id, &next, daemon, bearer).await?;
+    let out = patch_comment_tags(
+        &kb,
+        &id,
+        comment_id,
+        &tag_delta_body("add_tags", tags),
+        daemon,
+        bearer,
+    )
+    .await?;
     report_meta(&out, "tagged", comment_id, &kb, &id);
     Ok(())
 }
@@ -1617,13 +1657,13 @@ pub async fn tag(
 /// --path …]`
 /// — drop label(s) and leave the rest of the set alone.
 ///
-/// Because `/meta` replaces the whole set, the current tags are read first
-/// and only the named ones are removed; that read-modify-write is the whole
-/// reason this verb can't be a bare PATCH. Names are compared in SLUG form
-/// (stored tags are slugs, and `untag c_x "Fleet Doc"` has to hit the
-/// stored `fleet-doc`) using the repo's single `slugify_tag`. A name that
-/// slugifies to nothing is an error, not a silent no-op — a removal that
-/// never happened must not read as one that did.
+/// Sends `{"remove_tags":[…]}`; the daemon subtracts them (slug-matched on
+/// both sides — stored tags are slugs, and `untag c_x "Fleet Doc"` has to hit
+/// the stored `fleet-doc`) from the CURRENT set under the review lock, so
+/// there is no client-side read-modify-write to race. A name that slugifies
+/// to nothing is an error here, not a silent no-op — a removal that never
+/// happened must not read as one that did. Removing a tag the comment does
+/// not carry is the identity (`changed:false`), never a clear.
 #[allow(clippy::too_many_arguments)]
 pub async fn untag(
     kb: Option<&str>,
@@ -1641,50 +1681,29 @@ pub async fn untag(
     }
     let (kb, id) =
         resolve_comment_target(kb, artifact_id, path_input, comment_id, daemon, bearer).await?;
-    let current = fetch_comment_tags(&kb, &id, comment_id, daemon, bearer).await?;
-    let next = remove_tags(&current, tags);
-    let out = patch_comment_tags(&kb, &id, comment_id, &next, daemon, bearer).await?;
+    let out = patch_comment_tags(
+        &kb,
+        &id,
+        comment_id,
+        &tag_delta_body("remove_tags", tags),
+        daemon,
+        bearer,
+    )
+    .await?;
     report_meta(&out, "untagged", comment_id, &kb, &id);
     Ok(())
 }
 
-/// The comment's current tag set, for `/meta`'s full-replace PATCH. The
-/// public review file answers first (one request, and the common case); the
-/// note index is the fallback, because a private note is not in that view
-/// at all — `GET /review/{id}` is public-only. Comment ids are unique, so
-/// the order only decides cost, never the answer. The fallback asks for
-/// `bodies=false`: a tag set is a tag set, so the note index is read as
-/// metadata and the note's own words are never fetched into this process.
-///
-/// A comment in neither is an ERROR, not an empty set: treating an unknown
-/// id as "no tags" would let a mistyped id wipe some other comment's labels
-/// on the very next PATCH.
-async fn fetch_comment_tags(
-    kb: &str,
-    artifact_id: &str,
-    comment_id: &str,
-    daemon: Option<&str>,
-    bearer: Option<&str>,
-) -> Result<Vec<String>> {
-    let review = fetch_review_value(daemon, kb, artifact_id, bearer).await?;
-    for c in review["comments"].as_array().into_iter().flatten() {
-        if c["id"].as_str() == Some(comment_id) {
-            return Ok(string_array(&c["tags"]));
-        }
-    }
-    let body = fetch_review_notes(daemon, bearer, Some(kb), &[], None, "all", false).await?;
-    for n in body["notes"].as_array().into_iter().flatten() {
-        if n["comment_id"].as_str() == Some(comment_id) {
-            return Ok(string_array(&n["tags"]));
-        }
-    }
-    anyhow::bail!(
-        "no comment {comment_id} on {kb}/{artifact_id} — wrong id, or a private note \
-         past the daemon's note-index cap (pass --kb/--path to narrow)"
-    )
+/// The `/meta` PATCH body for a tag DELTA: `{"<key>": [..tags..]}` with
+/// `key` = `add_tags` | `remove_tags`. Never `tags` — that is the daemon's
+/// full-replace form, which is exactly what this verb must not send.
+fn tag_delta_body(key: &str, tags: &[String]) -> Value {
+    let mut m = serde_json::Map::new();
+    m.insert(key.to_string(), json!(tags));
+    Value::Object(m)
 }
 
-/// PATCH `.../comments/{cid}/meta` with the FULL new tag set. Returns the
+/// PATCH `.../comments/{cid}/meta` with a tag-DELTA body. Returns the
 /// daemon's response, whose `tags` are the effective (normalised) values
 /// and whose `changed` is false for a no-op — the daemon then skips the
 /// save and the `comments.updated` event, so there is nothing to wait for.
@@ -1692,7 +1711,7 @@ async fn patch_comment_tags(
     kb: &str,
     artifact_id: &str,
     comment_id: &str,
-    tags: &[String],
+    body: &Value,
     daemon: Option<&str>,
     bearer: Option<&str>,
 ) -> Result<Value> {
@@ -1704,42 +1723,7 @@ async fn patch_comment_tags(
         encode_path_segment(comment_id),
     );
     let client = client_with_timeout_and_bearer(5, bearer)?;
-    send_json(
-        client.patch(&url).json(&json!({ "tags": tags })),
-        "set comment tags",
-    )
-    .await
-}
-
-/// `current` ∪ `add`, order-preserving, exact duplicates dropped. The daemon
-/// re-normalises (slug/dedupe/sort) what it stores, so this only keeps the
-/// request readable; the printed list is the daemon's effective value, never
-/// this one.
-fn merge_tags(current: &[String], add: &[String]) -> Vec<String> {
-    let mut out = current.to_vec();
-    for t in add {
-        if !out.contains(t) {
-            out.push(t.clone());
-        }
-    }
-    out
-}
-
-/// `current` minus every tag named in `remove`, matched in SLUG form on
-/// both sides — stored tags are already slugs, and a shell user types
-/// `Fleet Doc`. Slugging goes through the repo's one `slugify_tag` (the same
-/// call the `/meta` route makes), never a second implementation.
-fn remove_tags(current: &[String], remove: &[String]) -> Vec<String> {
-    let named: Vec<String> = remove
-        .iter()
-        .map(|t| kb_core::parser::slugify_tag(t))
-        .filter(|s| !s.is_empty())
-        .collect();
-    current
-        .iter()
-        .filter(|t| !named.contains(t))
-        .cloned()
-        .collect()
+    send_json(client.patch(&url).json(body), "set comment tags").await
 }
 
 /// One confirmation line built from the daemon's `/meta` response: the
@@ -2287,6 +2271,21 @@ mod tests {
     /// absent (never `?q=` / `?kb=`), while `status` is always explicit.
     /// `bodies` follows the same rule inverted — the route defaults it to
     /// `true`, so only `false` is ever spelled.
+    /// v0.44 P2 (A2-4): the documented lossless `export --embed` must ask the
+    /// daemon for the notes when it writes a file (and only then). Dropping
+    /// the query string brings the silent public-only export back.
+    #[test]
+    fn embed_export_asks_for_notes_only_when_writing_a_file() {
+        assert!(
+            embed_review_url(Some("http://127.0.0.1:1"), "kb", "abc", true)
+                .ends_with("/api/kb/kb/review/abc?visibility=all")
+        );
+        assert!(
+            embed_review_url(Some("http://127.0.0.1:1"), "kb", "abc", false)
+                .ends_with("/api/kb/kb/review/abc")
+        );
+    }
+
     #[test]
     fn review_notes_query_sends_every_filter_and_omits_the_absent() {
         let full = review_notes_query(
@@ -2321,55 +2320,17 @@ mod tests {
         );
     }
 
-    /// `untag`'s read-modify-write is the whole verb: a `/meta` PATCH
-    /// replaces the set, so anything the filter drops here is gone from the
-    /// comment forever. Names are matched in the daemon's slug form, since
-    /// that is what is stored.
+    /// v0.44 P2 (A4-10): `tag` / `untag` send a DELTA, never the full-replace
+    /// `tags` key. Sending `tags` (read-modify-write) is the lost-update bug:
+    /// a concurrent add between the read and the PATCH was silently erased.
     #[test]
-    fn remove_tags_drops_only_the_named_ones() {
-        let current = vec![
-            "fleet-doc".to_string(),
-            "wording".to_string(),
-            "todo".to_string(),
-        ];
-        assert_eq!(
-            remove_tags(&current, &["wording".to_string()]),
-            vec!["fleet-doc".to_string(), "todo".to_string()]
-        );
-        // A human types the label; the sidecar holds its slug.
-        assert_eq!(
-            remove_tags(&current, &["Fleet Doc".to_string()]),
-            vec!["wording".to_string(), "todo".to_string()]
-        );
-        // Removing EVERY tag empties the set.
-        assert!(remove_tags(
-            &current,
-            &[
-                "fleet-doc".to_string(),
-                "wording".to_string(),
-                "todo".to_string()
-            ]
-        )
-        .is_empty());
-        // Removing an ABSENT tag is the identity, not a clear: a name that
-        // matches nothing must leave the set untouched (the daemon then
-        // answers `changed:false`). Clearing on a typo is the failure mode
-        // this guard exists to prevent.
-        assert_eq!(
-            remove_tags(&current, &["a".to_string(), "b".to_string()]),
-            current
-        );
-        assert_eq!(remove_tags(&current, &["nope".to_string()]), current);
-    }
-
-    #[test]
-    fn merge_tags_unions_onto_the_existing_set() {
-        let current = vec!["wording".to_string()];
-        assert_eq!(
-            merge_tags(&current, &["wording".to_string(), "fleet-doc".to_string()]),
-            vec!["wording".to_string(), "fleet-doc".to_string()]
-        );
-        assert_eq!(merge_tags(&[], &["a".to_string()]), vec!["a".to_string()]);
+    fn tag_and_untag_send_a_delta_never_the_full_replace_key() {
+        let add = tag_delta_body("add_tags", &["wording".to_string()]);
+        assert_eq!(add, json!({"add_tags": ["wording"]}));
+        assert!(add.get("tags").is_none());
+        let rm = tag_delta_body("remove_tags", &["Fleet Doc".to_string()]);
+        assert_eq!(rm, json!({"remove_tags": ["Fleet Doc"]}));
+        assert!(rm.get("tags").is_none());
     }
 
     #[test]

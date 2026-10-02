@@ -3064,21 +3064,29 @@ async fn finish_indexed_doc(
                             .unwrap_or_else(|e| e.into_inner())
                             .insert(key, meta);
                         anchor_state_changed = true;
-                        bus.emit(
-                            "comment.anchor_stale",
-                            json!({
-                                "kb": kb_name.as_str(),
-                                "artifact_id": artifact_id.as_str(),
-                                "comment_id": comment.id,
-                                "anchor_kind": kind,
-                                "fuzzy_score": 0.0,
-                                // Track U — carry the source-relative path
-                                // so the SPA's stale-anchors dashboard can
-                                // build the `/a/<kb>/<path>` deep-link from
-                                // a live event (not just the cold load).
-                                "source_relative": rel_path.as_str(),
-                            }),
-                        );
+                        // v0.44 P2 (A2-6) — a PRIVATE note's staleness is
+                        // recorded in the sidecar (operator-readable, a
+                        // sanctioned non-filter) but NEVER published on the
+                        // live bus: `kb push` hands every frame to an agent
+                        // as "comment c_… on artifact …", which would give
+                        // it the note's id and the moment it went stale.
+                        if !comment.is_private() {
+                            bus.emit(
+                                "comment.anchor_stale",
+                                json!({
+                                    "kb": kb_name.as_str(),
+                                    "artifact_id": artifact_id.as_str(),
+                                    "comment_id": comment.id,
+                                    "anchor_kind": kind,
+                                    "fuzzy_score": 0.0,
+                                    // Track U — carry the source-relative path
+                                    // so the SPA's stale-anchors dashboard can
+                                    // build the `/a/<kb>/<path>` deep-link from
+                                    // a live event (not just the cold load).
+                                    "source_relative": rel_path.as_str(),
+                                }),
+                            );
+                        }
                     }
                     (crate::review::Resolution::Stale, true) => {
                         // Already flagged stale on a prior reindex; no
@@ -3098,15 +3106,18 @@ async fn finish_indexed_doc(
                             crate::review::Resolution::Fuzzy(_, s) => Some(*s),
                             _ => None,
                         };
-                        bus.emit(
-                            "comment.anchor_resolved",
-                            json!({
-                                "kb": kb_name.as_str(),
-                                "artifact_id": artifact_id.as_str(),
-                                "comment_id": comment.id,
-                                "score": score,
-                            }),
-                        );
+                        // v0.44 P2 (A2-6) — same rule as `anchor_stale` above.
+                        if !comment.is_private() {
+                            bus.emit(
+                                "comment.anchor_resolved",
+                                json!({
+                                    "kb": kb_name.as_str(),
+                                    "artifact_id": artifact_id.as_str(),
+                                    "comment_id": comment.id,
+                                    "score": score,
+                                }),
+                            );
+                        }
                     }
                     _ => {}
                 }
@@ -7260,6 +7271,114 @@ done
         );
         // Storage should also have ingested the new doc.
         assert!(storage.count_rows().await.unwrap() >= 1);
+    }
+
+    /// v0.44 P2 (A2-6): a stale anchor on a PRIVATE note must not appear on
+    /// the live bus (`kb push` forwards it to an agent), while the same
+    /// staleness on a public comment in the SAME file still fires — so the
+    /// test cannot pass because the indexer never got that far — and the
+    /// note is still recorded in the operator-readable sidecar.
+    #[tokio::test]
+    async fn private_note_anchor_stale_is_not_published_but_is_recorded() {
+        use crate::review::{Anchor, Author, Comment, CommentStatus, ReviewFile};
+        use chrono::Utc;
+        let (bus, storage, kb, slug, tmp) = setup().await;
+        let quarantine = tmp.path().join("quarantine");
+        let review_dir = tmp.path().join(".review");
+        std::fs::create_dir_all(&review_dir).unwrap();
+        let html_path = tmp.path().join("notes.html");
+        std::fs::write(
+            &html_path,
+            "<html><body><section id=\"new-id\"><h2>Rewritten</h2></section></body></html>",
+        )
+        .unwrap();
+        let id = crate::ids::ArtifactId::from_path("notes.html");
+        let mk = |cid: &str, private: bool| Comment {
+            id: cid.into(),
+            status: CommentStatus::Open,
+            file: id.as_str().to_string(),
+            file_label: "main".into(),
+            anchor: Anchor::Section {
+                id: "vanishing-id".into(),
+                tag: Some("section".into()),
+                snippet: None,
+            },
+            author: Author::You,
+            body: "stale".into(),
+            created_at: Utc::now(),
+            edited_at: None,
+            replies: vec![],
+            choices: vec![],
+            attachments: vec![],
+            user: None,
+            tags: Vec::new(),
+            private,
+        };
+        let mut review = ReviewFile::empty_skeleton(&kb, id.as_str(), "notes");
+        review.comments.push(mk("c_note", true));
+        review.comments.push(mk("c_public", false));
+        let review_path = review_dir.join(format!("{}.json", id.as_str()));
+        crate::review::save_atomic(&review_path, &review, None).unwrap();
+
+        let indexer_rx = bus.subscribe();
+        let (bus2, storage2, kb2, slug2, q2) = (
+            bus.clone(),
+            storage.clone(),
+            kb.clone(),
+            slug.clone(),
+            quarantine.clone(),
+        );
+        let review_for_indexer = Some(review_dir.clone());
+        let _indexer = tokio::spawn(async move {
+            run(
+                kb2,
+                slug2,
+                storage2,
+                bus2,
+                q2,
+                indexer_rx,
+                None,
+                review_for_indexer,
+                crate::iframe::DEFAULT_HOST_SUFFIX.to_string(),
+                crate::vcs::VersionsMode::Off,
+                0,
+                Vec::new(),
+            )
+            .await
+        });
+        let mut rx = bus.subscribe();
+        bus.emit(
+            "watch.create",
+            json!({"kb": kb.as_str(), "path": html_path.to_string_lossy()}),
+        );
+        let mut stale_ids: Vec<String> = Vec::new();
+        let _ = timeout(Duration::from_secs(5), async {
+            loop {
+                match rx.recv().await {
+                    Ok(env) if env.type_ == "comment.anchor_stale" => {
+                        stale_ids.push(env.payload["comment_id"].as_str().unwrap().to_string());
+                        // The public comment fired: the pass has reached the
+                        // anchor loop for this file. Give the (absent) note
+                        // frame a beat to show up, then stop.
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        while let Ok(env) = rx.try_recv() {
+                            if env.type_ == "comment.anchor_stale" {
+                                stale_ids
+                                    .push(env.payload["comment_id"].as_str().unwrap().to_string());
+                            }
+                        }
+                        return;
+                    }
+                    _ => continue,
+                }
+            }
+        })
+        .await;
+        assert_eq!(
+            stale_ids,
+            vec!["c_public".to_string()],
+            "got: {stale_ids:?}"
+        );
     }
 
     #[tokio::test]

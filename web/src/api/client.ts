@@ -15,6 +15,10 @@ import type { IdentityResponse as Identity } from "./generated/IdentityResponse"
 import type { KbSummary } from "./generated/KbSummary";
 import type { Hit as SearchHit } from "./generated/Hit";
 import type { SearchResponse } from "./generated/SearchResponse";
+import {
+  announceReviewMutation,
+  withOperatorIntent,
+} from "./reviewIntent";
 import type { Choice } from "./generated/Choice";
 import type { Attachment } from "./generated/Attachment";
 import type { Reply } from "./generated/Reply";
@@ -1914,12 +1918,16 @@ async function mutate<T>(
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  // v0.44 P2 — review paths carry the operator-intent marker (see
+  // reviewIntent.ts) and announce the write to this and other tabs.
+  withOperatorIntent(path, headers);
   const r = await fetch(`${currentDaemonBase()}${path}`, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) await throwApiError(r);
+  announceReviewMutation(path);
   return (await r.json()) as T;
 }
 
@@ -2138,9 +2146,11 @@ async function uploadFiles<T>(path: string, files: File[]): Promise<T> {
   for (const f of files) form.append("file", f, f.name);
   const r = await fetch(`${currentDaemonBase()}${path}`, {
     method: "POST",
+    headers: withOperatorIntent(path, {}),
     body: form,
   });
   if (!r.ok) await throwApiError(r);
+  announceReviewMutation(path);
   return (await r.json()) as T;
 }
 

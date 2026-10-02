@@ -16,6 +16,7 @@
 // `/notes` (SPA) = kb note artifacts. Different entities, both kebab-cased
 // with "notes" in the name — don't let the two drift together.
 
+import { announceReviewMutation, withOperatorIntent } from "./reviewIntent";
 import { currentDaemonBase } from "./base";
 // Wire types are the generated ts-rs bindings (routes/review_notes.rs is the
 // source of truth; `just types` regenerates).
@@ -65,6 +66,11 @@ export type CommentMetaResult = {
   changed: boolean;
   tags: string[];
   private: boolean;
+  /// v0.44 P2 (A2.f4) — present when this comment is now a note but was
+  /// earlier kept as a memory (`keep_memory`): the memory is a separate
+  /// artifact that stays recalled into agent prompts. Never a visibility
+  /// switch — the daemon only reports it.
+  kept_as_memory?: { id: string };
 };
 
 type Problem = { title: string; detail?: string };
@@ -97,12 +103,16 @@ async function mutateJson<T>(
     "X-Requested-By": "kb-spa",
   };
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  withOperatorIntent(path, headers);
   const r = await fetch(`${currentDaemonBase()}${path}`, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) throw await problem(r);
+  // A tag / private edit on a note emits no daemon event any more (it would
+  // be printed to an agent), so tell this tab and the others directly.
+  announceReviewMutation(path);
   return (await r.json()) as T;
 }
 

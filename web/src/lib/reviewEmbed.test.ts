@@ -73,4 +73,16 @@ describe("embedReviewIntoHtml / extractReviewFromHtml", () => {
       `"generatedAt":"2026-05-12T10:00:00Z","comments":[]}</script></head><body></body></html>`;
     expect(() => extractReviewFromHtml(bad)).toThrow(/schema/);
   });
+
+  it("accepts the /2 stamp the daemon writes on a sidecar holding a private note", () => {
+    const f = { ...fixture(), schema: "kb-comments/2" } as unknown as ReviewFile;
+    const html = embedReviewIntoHtml("<html><head></head><body></body></html>", f);
+    expect(extractReviewFromHtml(html)?.schema).toBe("kb-comments/2");
+  });
+
+  it("still rejects an unknown schema", () => {
+    const f = { ...fixture(), schema: "kb-comments/3" } as unknown as ReviewFile;
+    const html = embedReviewIntoHtml("<html><head></head><body></body></html>", f);
+    expect(() => extractReviewFromHtml(html)).toThrow(/unsupported/);
+  });
 });

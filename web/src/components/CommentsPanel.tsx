@@ -459,9 +459,9 @@ export default function CommentsPanel({
   // coming back is the irreversible-feeling direction (the whole thread
   // becomes agent-readable again), so it confirms first and says exactly
   // what is about to be exposed. No local optimistic flag: the row renders
-  // from the cached review file, which the `comments.updated` the daemon
-  // emits on a real change refreshes — the same path every other mutation
-  // in this panel takes (invariant #23).
+  // from the cached review file, which the mutation's own announcement
+  // (api/reviewIntent.ts — the daemon emits no `comments.updated` for a
+  // note-only change any more) refreshes through the same bridge handler.
   async function setPrivate(commentId: string, next: boolean) {
     if (!next) {
       const ok = await confirm({
@@ -472,7 +472,16 @@ export default function CommentsPanel({
       if (!ok) return;
     }
     try {
-      await patchCommentMeta(kb, artifactId, commentId, { private: next });
+      const r = await patchCommentMeta(kb, artifactId, commentId, {
+        private: next,
+      });
+      // A comment that was kept as a memory leaves that memory behind: it is
+      // its own artifact and keeps being recalled into agent prompts.
+      if (next && r.kept_as_memory) {
+        toast.info(
+          `Now a private note — but it was kept as memory ${r.kept_as_memory.id}, which agents still recall. Forget the memory separately if that is not what you want.`,
+        );
+      }
     } catch {
       toast.err(
         next
