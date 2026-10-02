@@ -58,6 +58,14 @@ concurrency:
   # image is worth building once the current build is done.
   cancel-in-progress: false
 
+# `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
+# implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
+# tee's exit status and a failing `cmd` goes green (the e2e vacuous pass,
+# d4f3063d). Setting it once here covers every `run:` step in this file.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-image:
     # One leg per image. `label` is what shows up in the check name, `target`
@@ -102,7 +110,7 @@ jobs:
     #                         (workspace-lint/workspace-test/drift/code-drift/
     #                         embedder-lint/embedder-test/code-lint/
     #                         code-test/code-spa/e2e/code-e2e/web-unit/
-    #                         supply-chain/gates-binary) feeds ci.yml's own
+    #                         supply-chain/ci-gate) feeds ci.yml's own
     #                         conclusion and none of them runs with
     #                         continue-on-error, so `success` means the whole
     #                         sweep was green. The tag published here is what

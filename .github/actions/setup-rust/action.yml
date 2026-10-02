@@ -1,0 +1,37 @@
+# Installs the Rust toolchain named by rust-toolchain.toml — the SINGLE source
+# of the toolchain version. Every workflow job calls this instead of a
+# hardcoded `dtolnay/rust-toolchain@X.Y.Z` literal, so a bump is one edit to
+# rust-toolchain.toml and no job can drift (O8 / v044-C1). The caller MUST
+# have run actions/checkout first (this reads the file from the workspace).
+#
+# dtolnay/rust-toolchain is pinned to a commit SHA of its `master` branch and
+# is handed the version through its `toolchain` input; its per-version
+# branches (`1.96.0`, ...) are never referenced, so Dependabot's habit of
+# reading them as semver (see dependabot.yml) cannot re-pin the compiler.
+# `just toolchain-pin-check` asserts nothing else in .github/ calls the action
+# directly.
+name: setup-rust
+description: Install the Rust toolchain pinned in rust-toolchain.toml
+inputs:
+  components:
+    description: Extra rustup components (comma separated)
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Read channel from rust-toolchain.toml
+      id: channel
+      shell: bash
+      run: |
+        channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' rust-toolchain.toml | head -1)"
+        if ! printf '%s' "$channel" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "rust-toolchain.toml channel is '$channel', not an exact X.Y.Z" >&2
+          exit 1
+        fi
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+      with:
+        toolchain: ${{ steps.channel.outputs.channel }}
+        components: ${{ inputs.components }}
