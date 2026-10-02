@@ -13,8 +13,10 @@
 //! and needs the allowlist stated over `[server] hostnames` + the doc-lens
 //! CORS origins. So this is the equivalent, not a copy: same shape, same
 //! "absent Origin passes" rule, same `Origin == Host` same-origin arm —
-//! kb-code's own inputs. `kb_server::middleware::request_is_loopback` IS
-//! reused verbatim (invariant #4 says never re-derive that predicate).
+//! kb-code's own inputs. The Host GATE decision (`host_gate_applies_to_request`,
+//! raw TCP peer, never `X-Forwarded-For`) and the name lookup
+//! (`effective_host_name`) are kb-server's own functions, shared so the two
+//! daemons cannot drift.
 //!
 //! # The admission table
 //!
@@ -25,20 +27,22 @@
 //!
 //! ## Host ([`host_allowed`])
 //!
-//! Allowed: `localhost`, `127.0.0.1`, `[::1]`, `::1` (ANY port, and an
-//! absent `Host` — HTTP/2 requests carry `:authority`, which hyper folds
-//! into `Host` for us, but an in-process test client may send neither),
-//! plus every entry in `[server] hostnames`.
+//! Allowed: loopback labels (`localhost`, `127.0.0.0/8`, `[::1]`, `::1`; ANY
+//! port), plus every entry in `[server] hostnames`. The name is read by
+//! kb-server's `effective_host_name`: the `Host` header, else the request-URI
+//! authority (HTTP/2 makes `Host` optional). A request with NO name at all
+//! (HTTP/1.0, in-process test client) passes; a `Host` that is present but
+//! unreadable is refused.
 //!
-//! Enforced when the peer is loopback, OR when `[server] hostnames` is
-//! non-empty. That carve-out is deliberate and is the ONLY place this
+//! Enforced when the raw TCP peer is loopback, OR when `[server] hostnames`
+//! is non-empty (a forged `X-Forwarded-For` cannot move that). That carve-out is deliberate and is the ONLY place this
 //! module fails open:
 //!
 //! * The rebinding attack is a LOOPBACK-peer attack. The victim's browser
 //!   resolves `attacker.com` to `127.0.0.1`, connects from the box, and
 //!   the daemon's loopback bypass hands it operator authority with no
-//!   credential. `Host: attacker.com` is refused here, unconditionally,
-//!   with no config needed. That is SEC-02's actual hole and it is closed
+//!   credential. `Host: attacker.com` is refused here, unconditionally
+//!   (even with a forged `X-Forwarded-For`), with no config needed. That is SEC-02's actual hole and it is closed
 //!   by default.
 //! * A non-loopback peer is, by construction, arriving through a reverse
 //!   proxy (prod `kbc.example.com`: Traefik → Authelia → an injected bearer)
@@ -277,6 +281,16 @@ pub fn host_allowed(host: Option<&str>, policy: &HostPolicy) -> bool {
 }
 
 /// `Origin:` admission — see the module doc.
+///
+/// DECISION (v0.44 A1.f6): the Origin arm deliberately INHERITS the O9
+/// widening of [`is_loopback_host_label`] (the whole `127.0.0.0/8`, a
+/// trailing root dot), because it must agree with [`host_allowed`] on what a
+/// loopback NAME is: a page whose `Host` is admitted as loopback sends the
+/// same label as its `Origin`. kb-server's own `origin_allowlist` keeps the
+/// narrower `localhost`/`127.0.0.1` CORS predicate on purpose (CORS is a
+/// grant to a page, not a check on a name) - the two differ by design, and
+/// widening neither is a security change: a rebound page's origin is the
+/// attacker's name, never a loopback literal.
 pub fn origin_allowed(origin: &str, host: Option<&str>, policy: &HostPolicy) -> bool {
     let normalized = origin.trim().to_ascii_lowercase();
     // An explicitly configured doc-lens origin, matched whole (scheme
@@ -313,18 +327,22 @@ pub async fn origin_host_guard(
     next: Next,
 ) -> Response<Body> {
     let policy = &state.host_policy;
-    let host = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-    let peer_is_loopback =
-        kb_server::middleware::request_is_loopback(&req, &state.auth.trusted_proxies);
+    // The name is wherever HTTP put it (`Host`, else the URI authority; an
+    // unreadable `Host` is the EMPTY name, i.e. refused, never "absent") and
+    // the gate is decided on the RAW TCP peer — both via kb-server's shared
+    // helpers, so the two daemons cannot drift. NOT `request_is_loopback`: it
+    // resolves through `X-Forwarded-For`, which a rebound page sets itself,
+    // so one forged header used to switch this check off (F1, kb-code half).
+    let host = kb_server::middleware::effective_host_name(&req).map(|s| s.to_string());
+    let gate_applies = kb_server::middleware::host_gate_applies_to_request(
+        &req,
+        &state.auth.trusted_proxies,
+        policy.hostnames_configured(),
+    );
 
     // Host: enforced for a loopback peer always (the rebinding case), and
     // for every peer once `[server] hostnames` is configured.
-    if (peer_is_loopback || policy.hostnames_configured()) && !host_allowed(host.as_deref(), policy)
-    {
+    if gate_applies && !host_allowed(host.as_deref(), policy) {
         return refuse(
             ERR_ORIGIN_REFUSED,
             "Host refused",

@@ -211,30 +211,42 @@ fn forbidden(urn: &'static str, detail: String) -> Response<Body> {
 //
 // ## Where it is layered, and where it deliberately is NOT
 //
-// OUTERMOST on the `/api` nest (last `.layer()` in `build_router`, and
-// a `route_layer` on `/capture`) — so it decides BEFORE `auth_bearer`
-// and before the loopback bypass can hand out authority. Not on the
-// top-level router: the artifact iframe is reached on
-// `<id>.artifacts.localhost`, which is neither a loopback label nor a
-// listable entry, so a top-level layer would break annotations. The SPA
-// fallback is likewise unguarded on purpose — it serves public static
-// bytes only, no corpus, and gating it buys nothing.
+// OUTERMOST on the `/api` nest (last `.layer()` in `build_router`), a
+// `route_layer` on `/capture`, and a `route_layer` on `GET /metrics` —
+// so it decides BEFORE `auth_bearer` and before the loopback bypass can
+// hand out authority. Not on the top-level router: the artifact iframe
+// is reached on `<id>.artifacts.localhost`, which is neither a loopback
+// label nor a listable entry, so a top-level layer would break
+// annotations. (`host_guard` itself refuses an artifact Host
+// unconditionally, so even an untrusted peer cannot drive `/api` from an
+// artifact origin.)
+//
+// The SPA fallback is NOT fully static: `/a/{kb}/{rel}` permalink shells
+// splice the artifact's title + summary into OpenGraph meta and 301 moved
+// paths. The dispatcher therefore serves the PLAIN shell (no lookup, no
+// redirect) when `host_refused_for_peer` says the guard would refuse the
+// request's Host, so a rebound page cannot use it as a corpus-metadata
+// oracle. `route_inventory_*` in `tests/host_guard_router.rs` pins which
+// top-level routes carry the guard.
 //
 // ## The two places this fails open, and why that is the right trade
 //
-// `host_gate_applies` enforces `Host` for a loopback peer ALWAYS (no
-// configuration required — the rebinding victim is by definition a
-// loopback peer) and for a non-loopback peer only once `[server] hostnames`
-// is non-empty. "Loopback peer" here means the RAW TCP peer
-// (`peer_is_trusted`), deliberately NOT `request_is_loopback`: that one
-// resolves through `X-Forwarded-For`, and a rebound page can set that
+// `host_gate_applies` enforces `Host` for a TRUSTED-HOP peer ALWAYS (no
+// configuration required) and for any other peer only once `[server]
+// hostnames` is non-empty. "Trusted-hop peer" is decided on the RAW TCP
+// peer (`peer_is_trusted`: loopback OR a listed `[server]
+// trusted_proxies` entry), deliberately NOT `request_is_loopback`: that
+// one resolves through `X-Forwarded-For`, and a rebound page can set that
 // header, so using it would let the page talk its way out of the gate.
-// A
-// non-loopback peer is by construction arriving through a reverse proxy
-// that is already the authentication gate, and refusing its `Host`
-// before the operator has had a chance to write `hostnames` would take
-// a deployed daemon down on upgrade: a hardening unit that bricks the
-// deployment it hardens is not a hardening unit. The boot warning in
+// A listed reverse proxy therefore IS Host-checked even with `hostnames`
+// empty; what keeps the documented proxy deploys working is that the
+// host of `[server] parent_origin` is ALWAYS admitted (`host_allowed`),
+// since the operator has already declared it and a rebound page cannot
+// present it. A peer that is neither loopback nor listed (an unlisted
+// proxy, a LAN client) is not Host-checked until `hostnames` is set: it
+// arrives through a proxy that is already the authentication gate, and
+// refusing it before the operator wrote `hostnames` would take a
+// deployed daemon down on upgrade. The boot warning in
 // `serve_with_paths` names the key instead of silently doing nothing.
 //
 // The second is a request that carries NO NAME: no `Host` header and no
@@ -440,6 +452,39 @@ pub fn host_allowed(host: Option<&str>, cfg: &OriginConfig) -> bool {
     is_loopback_host_label(&label)
         || cfg.hostnames.contains(&label)
         || cfg.addr_host.as_deref() == Some(label.as_str())
+        || parent_origin_host(&cfg.parent_origin).as_deref() == Some(label.as_str())
+}
+
+/// The host label of a configured `[server] parent_origin`
+/// (`https://kb.example.com:8443` -> `kb.example.com`), canonicalised
+/// the same way a request `Host` is. `None` when the value is not an
+/// `http(s)` origin with a parseable host.
+///
+/// WHY `host_allowed` admits it unconditionally: the operator has
+/// already DECLARED this name as the one the SPA is served on (it is
+/// the `Origin` `origin_allowed` trusts), and an attacker cannot make
+/// a rebound page present it - the browser sends the attacker's own
+/// name. Without this rule every reverse-proxy deploy that lists its
+/// proxy in `trusted_proxies` (the proxy is then a trusted hop, so the
+/// gate applies) was 403'd on every `/api` call unless the operator
+/// ALSO repeated the same name in `hostnames`.
+pub fn parent_origin_host(parent_origin: &str) -> Option<String> {
+    let rest = parent_origin
+        .trim()
+        .strip_prefix("http://")
+        .or_else(|| parent_origin.trim().strip_prefix("https://"))?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    split_host_port(authority).map(|(label, _port)| label)
+}
+
+/// True when `host` is a name under `suffix` (`x.artifacts.example.com`
+/// under `.artifacts.example.com`) - an artifact iframe origin.
+fn is_artifact_host(host: &str, suffix: &str) -> bool {
+    let Some((label, _port)) = split_host_port(host) else {
+        return false;
+    };
+    let suffix = suffix.to_ascii_lowercase();
+    !suffix.is_empty() && label.len() > suffix.len() && label.ends_with(&suffix)
 }
 
 /// The name a request was made to, or `None` if it carries none at all.
@@ -485,9 +530,48 @@ pub fn effective_host_name(req: &Request<Body>) -> Option<&str> {
 
 /// When the `Host` check applies. Pure, so the fail-open boundary can
 /// be unit-tested as a table without a socket — same decomposition as
-/// [`request_is_admitted`].
-pub fn host_gate_applies(peer_is_loopback: bool, hostnames_configured: bool) -> bool {
-    peer_is_loopback || hostnames_configured
+/// [`request_is_admitted`]. `peer_is_trusted_hop` is the RAW-peer
+/// classification from [`peer_is_trusted`] (loopback OR a listed
+/// `trusted_proxies` entry), never anything an `X-Forwarded-For` can move.
+pub fn host_gate_applies(peer_is_trusted_hop: bool, hostnames_configured: bool) -> bool {
+    peer_is_trusted_hop || hostnames_configured
+}
+
+/// The ONE gate decision both daemons share (kb-server's [`host_guard`]
+/// and `kb-code-server`'s `origin_host_guard`): does the `Host` check
+/// apply to this request? Classifies the RAW TCP peer — never
+/// `X-Forwarded-For`, which a rebound page sets itself — and a missing
+/// `ConnectInfo` fails closed for trust ([`peer_is_trusted`]). Sharing
+/// it makes the F1 class of drift (one daemon deciding the gate from a
+/// header) structurally impossible instead of enforced by comments.
+pub fn host_gate_applies_to_request(
+    req: &Request<Body>,
+    trusted_proxies: &[IpAddr],
+    hostnames_configured: bool,
+) -> bool {
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    host_gate_applies_to_peer(peer, trusted_proxies, hostnames_configured)
+}
+
+/// [`host_gate_applies_to_request`] for a caller that already holds the
+/// raw peer address (the SPA/artifact dispatcher extracts `ConnectInfo`).
+pub fn host_gate_applies_to_peer(
+    peer: Option<IpAddr>,
+    trusted_proxies: &[IpAddr],
+    hostnames_configured: bool,
+) -> bool {
+    host_gate_applies(peer_is_trusted(peer, trusted_proxies), hostnames_configured)
+}
+
+/// True when `Host` (a raw header value) would be refused by the guard
+/// for a request from `peer`. Used by the SPA fallback to decide whether
+/// the permalink shell may consult the corpus (OG meta, moved-path 301).
+pub fn host_refused_for_peer(host: Option<&str>, peer: Option<IpAddr>, cfg: &OriginConfig) -> bool {
+    host_gate_applies_to_peer(peer, &cfg.trusted_proxies, !cfg.hostnames.is_empty())
+        && !host_allowed(host, cfg)
 }
 
 /// SEC-02 — the `Host` guard. See the section comment above for the
@@ -499,22 +583,32 @@ pub async fn host_guard(
     req: Request<Body>,
     next: Next,
 ) -> Response<Body> {
-    // NOT `request_is_loopback`. That resolves through `X-Forwarded-For`
-    // when the peer is a trusted hop — right for the AUTH decision (a real
-    // proxy on the box may say who it forwards for), but fatal here:
-    // `X-Forwarded-For` is not a forbidden request header, so a rebound page
-    // sets it itself. One `X-Forwarded-For: 203.0.113.9` made
-    // `request_is_loopback` false, which — with `hostnames` empty — made
-    // `host_gate_applies` false and switched this guard off, reopening the
-    // hole on the `KB_ALLOW_NO_AUTH=1` deployment. The gate must be decided
-    // by something no header can move: the raw TCP peer.
-    let peer_is_loopback = peer_is_trusted(
-        req.extensions()
-            .get::<axum::extract::ConnectInfo<SocketAddr>>()
-            .map(|c| c.0.ip()),
+    // An ARTIFACT-IFRAME Host never reaches `/api`, whatever the gate
+    // says. The reference deploy attaches the bearer-injecting edge
+    // middleware to the artifacts router too, so with the gate off (an
+    // untrusted proxy peer, empty `hostnames`) a sandboxed artifact's own
+    // script could otherwise drive the whole API same-origin. No
+    // legitimate `/api`, `/capture` or `/metrics` caller uses an artifact
+    // name (the iframe scripts never fetch these routes).
+    if let Some(h) = effective_host_name(&req) {
+        if is_artifact_host(h, &origin_cfg.artifact_host_suffix) {
+            return forbidden(
+                ERR_HOST_REFUSED,
+                format!("Host {h:?} is an artifact origin and may not call this route."),
+            );
+        }
+    }
+    // NOT `request_is_loopback` (it resolves through `X-Forwarded-For`,
+    // which a rebound page sets itself, and one forged header would
+    // switch this guard off). The gate is decided by the RAW TCP peer:
+    // loopback OR a listed `trusted_proxies` hop. A trusted proxy is
+    // therefore Host-checked too — the parent_origin host is always
+    // admitted by `host_allowed`, other names via `hostnames`.
+    if !host_gate_applies_to_request(
+        &req,
         &origin_cfg.trusted_proxies,
-    );
-    if !host_gate_applies(peer_is_loopback, !origin_cfg.hostnames.is_empty()) {
+        !origin_cfg.hostnames.is_empty(),
+    ) {
         return next.run(req).await;
     }
     // The name is wherever HTTP put it: `Host`, or — for an HTTP/2
@@ -2335,5 +2429,147 @@ mod tests {
                 .unwrap();
             assert_eq!(resp.status(), expected, "{host}");
         }
+    }
+    /// `OriginConfig` resolved the way boot resolves it, from a real
+    /// `[server]` section: `parent_origin`, `trusted_proxies` and `hostnames`
+    /// exactly as an operator writes them.
+    fn from_section(parent: &str, proxies: &[&str], hostnames: &[&str]) -> Arc<OriginConfig> {
+        let server = kb_core::config::ServerSection {
+            parent_origin: parent.to_string(),
+            hostnames: hostnames.iter().map(|h| h.to_string()).collect(),
+            ..Default::default()
+        };
+        let trusted = Arc::new(proxies.iter().map(|p| ip(p)).collect::<Vec<_>>());
+        Arc::new(OriginConfig::from_server_section(&server, trusted))
+    }
+
+    async fn status_for(
+        cfg: &Arc<OriginConfig>,
+        peer: &str,
+        host: &str,
+        xff: Option<&str>,
+    ) -> StatusCode {
+        use tower::ServiceExt;
+        let mut req = guarded_request(peer, Method::GET, "/kbs", Some(host), None);
+        if let Some(x) = xff {
+            req.headers_mut()
+                .insert("x-forwarded-for", x.parse().unwrap());
+        }
+        guarded_api(cfg.clone())
+            .oneshot(req)
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// A1-1 / A15-1 (BLOCKER). The documented reverse-proxy deploy: the
+    /// proxy is LISTED in `trusted_proxies`, `hostnames` is empty, the
+    /// browser's name is `parent_origin`'s host. The gate applies to the
+    /// trusted hop, so the parent_origin host MUST be admitted or every
+    /// `/api` call 403s. Fails without `parent_origin_host` in `host_allowed`.
+    #[tokio::test]
+    async fn a_listed_proxy_forwarding_the_parent_origin_host_is_admitted() {
+        let cfg = from_section("https://kb.example.com", &["172.17.0.1"], &[]);
+        assert_eq!(
+            status_for(&cfg, "172.17.0.1", "kb.example.com", None).await,
+            StatusCode::OK,
+            "trusted proxy + parent_origin host, no hostnames"
+        );
+        // the gate really IS on for that hop: an unlisted name is refused
+        assert_eq!(
+            status_for(&cfg, "172.17.0.1", "attacker.example", None).await,
+            StatusCode::FORBIDDEN
+        );
+        // port and case on the forwarded Host do not matter
+        assert_eq!(
+            status_for(&cfg, "172.17.0.1", "KB.Example.com:443", None).await,
+            StatusCode::OK
+        );
+    }
+
+    /// The same-host proxy shape (quickstart): loopback bind, a proxy on
+    /// 127.0.0.1 passing Host through.
+    #[tokio::test]
+    async fn a_same_host_proxy_forwarding_the_parent_origin_host_is_admitted() {
+        let cfg = from_section("https://kb.example.com", &[], &[]);
+        assert_eq!(
+            status_for(&cfg, "127.0.0.1", "kb.example.com", None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status_for(&cfg, "127.0.0.1", "attacker.example", None).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// F1 is still closed with a trusted hop in play: a forged
+    /// `X-Forwarded-For` cannot talk a listed proxy peer out of the gate.
+    #[tokio::test]
+    async fn a_forged_xff_does_not_open_the_gate_for_a_listed_proxy_peer() {
+        let cfg = from_section("https://kb.example.com", &["172.17.0.1"], &[]);
+        assert_eq!(
+            status_for(&cfg, "172.17.0.1", "attacker.example", Some("203.0.113.9")).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// A1-3. With the gate OFF (untrusted non-loopback peer, empty
+    /// hostnames) an artifact-iframe Host used to reach `/api` unchecked.
+    /// Fails without the unconditional artifact-host refusal.
+    #[tokio::test]
+    async fn an_artifact_host_never_reaches_api_even_with_the_gate_off() {
+        let cfg = from_section("https://kb.example.com", &[], &[]);
+        let cfg = Arc::new(OriginConfig {
+            artifact_host_suffix: ".artifacts.example.com".to_string(),
+            ..(*cfg).clone()
+        });
+        for host in [
+            "abc123.artifacts.example.com",
+            "kb--0123456789ab.artifacts.example.com:443",
+            "ABC.Artifacts.Example.Com.",
+        ] {
+            assert_eq!(
+                status_for(&cfg, "203.0.113.5", host, None).await,
+                StatusCode::FORBIDDEN,
+                "{host}"
+            );
+        }
+        // an ordinary unlisted name from the same untrusted peer is still
+        // the documented fail-open (the proxy is the auth gate)
+        assert_eq!(
+            status_for(&cfg, "203.0.113.5", "kb.example.com", None).await,
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn parent_origin_host_parses_the_origin_forms() {
+        for (raw, want) in [
+            ("https://kb.example.com", Some("kb.example.com")),
+            ("https://KB.example.com:8443/", Some("kb.example.com")),
+            ("http://localhost:4000", Some("localhost")),
+            ("http://[::1]:4000", Some("[::1]")),
+            ("kb.example.com", None),
+            ("", None),
+        ] {
+            assert_eq!(parent_origin_host(raw).as_deref(), want, "{raw}");
+        }
+    }
+
+    /// A1-5. The SPA fallback's permalink shell reads the corpus, so a
+    /// refused Host must be told apart from an admitted one.
+    #[test]
+    fn host_refused_for_peer_follows_the_guard_decision() {
+        let cfg = from_section("https://kb.example.com", &["172.17.0.1"], &[]);
+        let lo = Some(ip("127.0.0.1"));
+        let proxy = Some(ip("172.17.0.1"));
+        let lan = Some(ip("203.0.113.5"));
+        assert!(host_refused_for_peer(Some("attacker.example"), lo, &cfg));
+        assert!(host_refused_for_peer(Some("attacker.example"), proxy, &cfg));
+        assert!(!host_refused_for_peer(Some("kb.example.com"), proxy, &cfg));
+        assert!(!host_refused_for_peer(Some("attacker.example"), lan, &cfg));
+        assert!(!host_refused_for_peer(Some("localhost:4000"), lo, &cfg));
+        // no ConnectInfo fails closed for trust, so the gate is off
+        assert!(!host_refused_for_peer(Some("attacker.example"), None, &cfg));
     }
 }

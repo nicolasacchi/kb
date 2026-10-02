@@ -116,7 +116,20 @@ addr                 = "172.17.0.1:4000"           # reachable from the proxy
 artifact_host_suffix = ".artifacts.example.com"    # production wildcard
 parent_origin        = "https://kb.example.com"    # parent SPA origin
 trusted_proxies      = ["172.17.0.1"]              # see below — v0.7.1
+# hostnames          = ["kb"]                      # EXTRA Host names only - see below
 ```
+
+**`Host` guard and `hostnames`.** `/api`, `/capture` and `/metrics` check the
+request's `Host` against an allowlist (the DNS-rebinding defence). The check
+is decided on the raw TCP peer: loopback and every `trusted_proxies` entry are
+ALWAYS checked, and the host of `parent_origin` (`kb.example.com` above) is
+always admitted - so the config above works with no `hostnames`. Add
+`hostnames` only for other names that reach the daemon through that proxy or
+over loopback (a LAN name, or the compose service name `kb` that a sibling
+`kb-code` uses to federate through a trusted hop). Your proxy must pass the
+browser's `Host` through (Traefik `passHostHeader: true`, nginx
+`proxy_set_header Host $host`). `<id>.artifacts.example.com` hosts are refused
+on these routes unconditionally; do not list them.
 
 Defaults preserve the old behavior (`.artifacts.localhost` /
 `http://localhost:4000`, empty `trusted_proxies`), so local dev + tests
@@ -503,7 +516,12 @@ token. The cleanest single-operator workflow:
    `customRequestHeaders` **replaces** any header the browser sent —
    chain it after your edge auth (e.g. `basic-auth-global`) so the
    browser challenge runs first and the bearer injection happens
-   second. Attach both to the kb-parent + kb-artifacts routers:
+   second. Attach both to the **kb-parent** router. Attach them to
+   kb-artifacts only if you need the artifact origin to authenticate
+   to `/api`: it does not (the daemon refuses artifact `Host`s on
+   `/api`, `/capture` and `/metrics`), and injecting the operator bearer
+   there hands every artifact script that bearer's reach if that
+   refusal is ever bypassed:
 
    ```yaml
    routers:
