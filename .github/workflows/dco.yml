@@ -1,7 +1,8 @@
 # Enforces the Developer Certificate of Origin sign-off (see CLA.md /
 # CONTRIBUTING.md): every commit in a PR must carry a `Signed-off-by:`
 # trailer. Implemented as an inline git check rather than a third-party
-# action — no external action to pin/trust, and the only inputs are the
+# action — the one action it uses (checkout) is SHA-pinned like every other
+# workflow's, and the only inputs are the
 # PR's base/head commit SHAs (passed via env, never interpolated into the
 # shell), so there is no injection surface.
 name: DCO
@@ -13,12 +14,20 @@ on:
 permissions:
   contents: read
 
+# `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
+# implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
+# tee's exit status and a failing `cmd` goes green (the e2e vacuous pass,
+# d4f3063d). Setting it once here covers every `run:` step in this file.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   dco-check:
     name: Check DCO sign-off
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           # Full history so every commit in the PR range is reachable.
           fetch-depth: 0
@@ -26,66 +35,71 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/dco-check.sh
+
+  # Regression test for the vacuous-pass class (A12.f4). Every earlier fix to
+  # the check above was verified by a hand-measured shell snippet; this job
+  # makes those measurements permanent: it builds a scratch repo and asserts
+  # that scripts/dco-check.sh REJECTS an unresolvable range, an empty range, a
+  # missing sign-off and a sign-off naming someone else, and ACCEPTS a
+  # matching one. If the script ever starts passing having checked nothing,
+  # this job goes red on the PR that did it.
+  dco-selftest:
+    name: DCO check self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Run scripts/dco-check.sh against scratch repos
         run: |
           set -euo pipefail
+          check="$PWD/scripts/dco-check.sh"
+          work="$(mktemp -d)"
+          cd "$work"
+          git init -q .
+          git config user.name "Test Author"
+          git config user.email "author@example.invalid"
+          git commit -q --allow-empty -m "base"
+          base="$(git rev-parse HEAD)"
 
-          # Resolve the range ONCE, and refuse to continue if it cannot be
-          # resolved. A `for sha in $(git rev-list …)` word-list is NOT covered
-          # by `set -e`, so an unresolvable range (a shallow/partial fetch, a
-          # GC'd or force-pushed-away base, a fork PR whose base is not in the
-          # fetched history) silently yielded ZERO commits and the job printed
-          # "All commits carry a DCO sign-off." with exit 0 — a required check
-          # that passes having verified nothing. Measured in a scratch repo:
-          #   BASE=deadbeef..HEAD -> exit 0, zero commits checked.
-          if ! range="$(git rev-list "${BASE_SHA}..${HEAD_SHA}" 2>&1)"; then
-            echo "::error::cannot resolve ${BASE_SHA}..${HEAD_SHA}: ${range}"
-            echo "The DCO check refuses to pass having checked nothing." >&2
-            exit 1
-          fi
-          count="$(printf '%s\n' "$range" | grep -c . || true)"
-          if [ "$count" -eq 0 ]; then
-            echo "::error::${BASE_SHA}..${HEAD_SHA} contains no commits"
-            echo "A PR always has at least one; an empty range means the base moved under us." >&2
-            exit 1
-          fi
-          echo "Checking DCO sign-off on ${count} commit(s)."
-
-          missing=0
-          for sha in $range; do
-            # Use git's TRAILER parser, not grep over the raw body. `%B` is the
-            # whole message, so a commit whose message pastes a `git log`
-            # excerpt satisfied the old regex with a body line and no trailer
-            # at all. And DCO 1.1 is an identity-attached certification, so the
-            # value must be the commit's own author: the old check passed
-            # `--author="Real <real@x>"` with a `Signed-off-by: Someone Else`.
-            # `git log --format='%(trailers:…)'`, not `git show -s --format=`:
-            # the trailers atom is only expanded by `git log`.
-            signoff="$(git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" | head -1)"
-            author="$(git show -s --format='%an <%ae>' "$sha")"
-            if [ -z "$signoff" ]; then
-              echo "::error::commit ${sha} has no Signed-off-by trailer"
-              missing=1
-            elif [ "$signoff" != "$author" ]; then
-              # Dependabot is a legitimate signer whose two addresses differ by
-              # design: it AUTHORS as `<n>+dependabot[bot]@users.noreply.github.com`
-              # and SIGNS as `support@github.com`, the verified address GitHub
-              # requires of it. A literal equality test failed EVERY
-              # dependabot PR — measured on #180: "commit 3ea72685 is signed
-              # off by 'dependabot[bot] <support@github.com>' but authored by
-              # 'dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>'".
-              # Both halves are still the SAME GitHub account, which is what
-              # the identity check is for, so recognise exactly that pair and
-              # nothing looser: a human whose sign-off names another person is
-              # still rejected.
-              if ! { [ "$author" = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>" ] && \
-                     [ "$signoff" = "dependabot[bot] <support@github.com>" ]; }; then
-                echo "::error::commit ${sha} is signed off by '${signoff}' but authored by '${author}'"
-                missing=1
-              fi
+          expect() {  # expect <pass|fail> <label> <base> <head>
+            local want="$1" label="$2" b="$3" h="$4" rc=0
+            BASE_SHA="$b" HEAD_SHA="$h" "$check" >/tmp/dco-out 2>&1 || rc=$?
+            if [ "$want" = pass ] && [ "$rc" -ne 0 ]; then
+              echo "SELFTEST FAIL: '$label' should pass, exited $rc"; cat /tmp/dco-out; exit 1
             fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "Every commit must carry its own Signed-off-by (git commit -s). See CONTRIBUTING.md / CLA.md." >&2
-            exit 1
-          fi
-          echo "All ${count} commit(s) carry a matching DCO sign-off."
+            if [ "$want" = fail ] && [ "$rc" -eq 0 ]; then
+              echo "SELFTEST FAIL: '$label' should be rejected but passed (vacuous pass?)"; cat /tmp/dco-out; exit 1
+            fi
+            echo "ok: $label ($want, exit $rc)"
+          }
+
+          # 1. matching sign-off -> accepted
+          git commit -q --allow-empty -s -m "good commit"
+          good="$(git rev-parse HEAD)"
+          expect pass "matching sign-off" "$base" "$good"
+
+          # 2. unresolvable base -> must FAIL, not pass with zero commits
+          expect fail "unresolvable base sha" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" "$good"
+
+          # 3. empty range -> must FAIL
+          expect fail "empty range" "$good" "$good"
+
+          # 4. no sign-off -> rejected
+          git commit -q --allow-empty -m "unsigned commit"
+          unsigned="$(git rev-parse HEAD)"
+          expect fail "missing sign-off" "$good" "$unsigned"
+
+          # 5. sign-off naming someone else -> rejected
+          git commit -q --allow-empty -m "forged
+
+          Signed-off-by: Someone Else <else@example.invalid>"
+          forged="$(git rev-parse HEAD)"
+          expect fail "sign-off by another person" "$unsigned" "$forged"
+
+          # 6. sign-off text only in the body, not a trailer -> rejected
+          git commit -q --allow-empty -m "pasted
+
+          here is a log excerpt: Signed-off-by: Test Author <author@example.invalid> and more text
+          still body"
+          pasted="$(git rev-parse HEAD)"
+          expect fail "sign-off text outside the trailer block" "$forged" "$pasted"

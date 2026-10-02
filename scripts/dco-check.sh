@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# DCO sign-off check over BASE_SHA..HEAD_SHA (env). Extracted from
+# .github/workflows/dco.yml so the workflow's self-test job can run the SAME
+# code against scratch repos (v044-C1, A12.f4). Exit 0 only when every commit in
+# the range carries a Signed-off-by equal to its author.
+set -euo pipefail
+
+# Resolve the range ONCE, and refuse to continue if it cannot be
+# resolved. A `for sha in $(git rev-list …)` word-list is NOT covered
+# by `set -e`, so an unresolvable range (a shallow/partial fetch, a
+# GC'd or force-pushed-away base, a fork PR whose base is not in the
+# fetched history) silently yielded ZERO commits and the job printed
+# "All commits carry a DCO sign-off." with exit 0 — a required check
+# that passes having verified nothing. Measured in a scratch repo:
+#   BASE=deadbeef..HEAD -> exit 0, zero commits checked.
+if ! range="$(git rev-list "${BASE_SHA}..${HEAD_SHA}" 2>&1)"; then
+  echo "::error::cannot resolve ${BASE_SHA}..${HEAD_SHA}: ${range}"
+  echo "The DCO check refuses to pass having checked nothing." >&2
+  exit 1
+fi
+count="$(printf '%s\n' "$range" | grep -c . || true)"
+if [ "$count" -eq 0 ]; then
+  echo "::error::${BASE_SHA}..${HEAD_SHA} contains no commits"
+  echo "A PR always has at least one; an empty range means the base moved under us." >&2
+  exit 1
+fi
+echo "Checking DCO sign-off on ${count} commit(s)."
+
+missing=0
+for sha in $range; do
+  # Use git's TRAILER parser, not grep over the raw body. `%B` is the
+  # whole message, so a commit whose message pastes a `git log`
+  # excerpt satisfied the old regex with a body line and no trailer
+  # at all. And DCO 1.1 is an identity-attached certification, so the
+  # value must be the commit's own author: the old check passed
+  # `--author="Real <real@x>"` with a `Signed-off-by: Someone Else`.
+  # `git log --format='%(trailers:…)'`, not `git show -s --format=`:
+  # the trailers atom is only expanded by `git log`.
+  signoff="$(git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" | head -1)"
+  author="$(git show -s --format='%an <%ae>' "$sha")"
+  if [ -z "$signoff" ]; then
+    echo "::error::commit ${sha} has no Signed-off-by trailer"
+    missing=1
+  elif [ "$signoff" != "$author" ]; then
+    # Dependabot is a legitimate signer whose two addresses differ by
+    # design: it AUTHORS as `<n>+dependabot[bot]@users.noreply.github.com`
+    # and SIGNS as `support@github.com`, the verified address GitHub
+    # requires of it. A literal equality test failed EVERY
+    # dependabot PR — measured on #180: "commit 3ea72685 is signed
+    # off by 'dependabot[bot] <support@github.com>' but authored by
+    # 'dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>'".
+    # Both halves are still the SAME GitHub account, which is what
+    # the identity check is for, so recognise exactly that pair and
+    # nothing looser: a human whose sign-off names another person is
+    # still rejected.
+    if ! { [ "$author" = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>" ] && \
+           [ "$signoff" = "dependabot[bot] <support@github.com>" ]; }; then
+      echo "::error::commit ${sha} is signed off by '${signoff}' but authored by '${author}'"
+      missing=1
+    fi
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  echo "Every commit must carry its own Signed-off-by (git commit -s). See CONTRIBUTING.md / CLA.md." >&2
+  exit 1
+fi
+echo "All ${count} commit(s) carry a matching DCO sign-off."
