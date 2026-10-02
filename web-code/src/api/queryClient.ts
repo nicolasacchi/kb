@@ -372,6 +372,8 @@ export interface SsePayload {
   new?: string;
   /// V4.C1/C4 — present on review-scoped annotation events.
   review_id?: number;
+  /// A7.f2 — a batch touching SEVERAL reviews (a rebind names old + new).
+  review_ids?: number[];
   batch?: boolean;
   /// V4.C2 — `review.changed` reason (`verdict` | `patchset` | `meta` | `deleted`).
   reason?: string;

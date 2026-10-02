@@ -447,7 +447,7 @@ impl From<StoreError> for ApiError {
             // V80-M5 — a finding-adoption insert losing a race for the same
             // `annotation_id` is a client error (409), the same class as
             // the two constraint collisions above, never an opaque 500.
-            StoreError::AnnotationAlreadyFinding(_) => {
+            StoreError::AnnotationAlreadyFinding(_) | StoreError::AnnotationIsFinding(_) => {
                 ApiError::new(StatusCode::CONFLICT, e.to_string())
             }
             // V4.C2 — batch unknown-id path. 400 (not 404) so a batch
@@ -3839,6 +3839,14 @@ pub async fn bind_annotation_review(
                     "a reply has no review scope of its own — bind its parent (see parent_id)",
                 ));
             }
+            if store.annotation_backs_finding(&id_bg)? {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "annotation {id_bg:?} backs a finding — its review scope is the finding's (urn:kb:errors:annotation-is-finding)"
+                    ),
+                ));
+            }
             let repo = find_repo_by_id(&state_bg, row.repo_id)?;
             let repo_name = repo.name.clone();
             let scope = resolve_review_bind_scope(
@@ -3905,6 +3913,14 @@ pub async fn unbind_annotation_review(
             if row.parent_id.is_some() {
                 return Err(ApiError::bad_request(
                     "a reply has no review scope of its own — unbind its parent (see parent_id)",
+                ));
+            }
+            if store.annotation_backs_finding(&id_bg)? {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "annotation {id_bg:?} backs a finding — its review scope is the finding's (urn:kb:errors:annotation-is-finding)"
+                    ),
                 ));
             }
             let repo = find_repo_by_id(&state_bg, row.repo_id)?;
@@ -4240,6 +4256,7 @@ fn emit_annotation_batch_changed(
     repo: &str,
     paths: &[String],
     review_id: Option<i64>,
+    review_ids: &[i64],
 ) {
     let mut body = serde_json::json!({
         "repo": repo,
@@ -4249,14 +4266,22 @@ fn emit_annotation_batch_changed(
     if let Some(id) = review_id {
         body["review_id"] = serde_json::json!(id);
     }
+    // A7.f2 — a batch that touches SEVERAL reviews (a rebind names both the
+    // old and the new one) lists them all; `review_id` stays the first so
+    // the SPA bridge, which keys on its presence, invalidates the comments.
+    if review_ids.len() > 1 {
+        body["review_ids"] = serde_json::json!(review_ids);
+    }
     bus.emit("annotation.changed", body);
 }
 
-/// Collect unique sorted paths + the shared review_id (present only
-/// when every review-scoped op names the same review).
+/// Collect unique sorted paths + the review ids the batch touched
+/// (`review_id` = the first, absent for a batch with no review-scoped op;
+/// `review_ids` = all of them, in first-seen order).
 struct BatchEmitScope {
     paths: Vec<String>,
     review_id: Option<i64>,
+    review_ids: Vec<i64>,
 }
 
 fn batch_emit_scope(
@@ -4272,12 +4297,15 @@ fn batch_emit_scope(
             seen.push(rid);
         }
     }
-    // Present iff every review-scoped op names the same review
-    // (plain ops do not veto; zero review-scoped ops → omit).
-    let review_id = if seen.len() == 1 { Some(seen[0]) } else { None };
+    // Previously `review_id` was dropped whenever two DIFFERENT reviews
+    // were named, so a batch rebind (old + new) emitted no review scope at
+    // all and neither Room's comments refreshed. Now the first is always
+    // carried and `review_ids` lists every one.
+    let review_id = seen.first().copied();
     BatchEmitScope {
         paths: uniq,
         review_id,
+        review_ids: seen,
     }
 }
 
@@ -4535,6 +4563,10 @@ pub async fn batch_annotations(
                         // `AddComment`'s own `built.row.review_id` above —
                         // the Room that needs to know about this change is
                         // the one the comment now belongs to.
+                        // A rebind ALSO changes the review it leaves (A7.f2).
+                        if row.review_id.is_some() && row.review_id != Some(scope.review_id) {
+                            review_ids.push(row.review_id);
+                        }
                         paths.push(row.path);
                         review_ids.push(Some(scope.review_id));
                         prepared.push(store::PreparedAnnotationOp::BindReview {
@@ -4572,7 +4604,13 @@ pub async fn batch_annotations(
     // (c)+(d) one SSE iff anything changed.
     if report.changed {
         let scope = batch_emit_scope(paths, review_ids);
-        emit_annotation_batch_changed(&state.bus, &repo_label, &scope.paths, scope.review_id);
+        emit_annotation_batch_changed(
+            &state.bus,
+            &repo_label,
+            &scope.paths,
+            scope.review_id,
+            &scope.review_ids,
+        );
     }
 
     Ok((

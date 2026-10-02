@@ -353,10 +353,29 @@ pub async fn review_comments(
             // (`crate::reviews::files_changed`, the same fn `review_
             // distill`'s own `files_out` and every diff-listing route
             // already shares — never a second `git diff` shell-out).
-            let changed_paths =
-                changed_path_set(&repo_root, &target_ps.base_sha, &target_ps.tip_sha)?;
-            let groups_out =
-                build_comment_groups(store, &repo_root, &target_ps, rows, &ctx, &changed_paths)?;
+            //
+            // A7-4 — the caption is cosmetic: a git failure here (unreadable
+            // or missing base/tip object) degrades every group's `in_diff`
+            // to `null` (= unknown) and logs, it NEVER fails the read.
+            let changed_paths = match changed_path_set(
+                &repo_root,
+                &target_ps.base_sha,
+                &target_ps.tip_sha,
+            ) {
+                Ok(set) => Some(set),
+                Err(e) => {
+                    tracing::warn!(review_id = id, error = %e, "in_diff caption unavailable; degrading to null");
+                    None
+                }
+            };
+            let groups_out = build_comment_groups(
+                store,
+                &repo_root,
+                &target_ps,
+                rows,
+                &ctx,
+                changed_paths.as_ref(),
+            )?;
             Ok((target_ps, groups_out))
         })
         .await?;
@@ -387,7 +406,7 @@ pub async fn review_comments(
 /// and reply carries: the repo for path/symbol resolution, the review for
 /// `f-<slug>` mentions.
 ///
-/// `changed_paths` (V80-M0) is `target_ps`'s own diff file set
+/// `changed_paths` (V80-M0; `None` ⇒ the diff failed, `in_diff: null`) is `target_ps`'s own diff file set
 /// (`crate::reviews::changed_path_set`/`changed_path_set_from` — each
 /// caller computes it exactly once, never a second `git diff` per
 /// request) — each group's `in_diff` is a per-READ caption computed from
@@ -399,7 +418,7 @@ pub(crate) fn build_comment_groups(
     target_ps: &ReviewPatchsetRow,
     rows: Vec<AnnotationRow>,
     ctx: &crate::prose_refs::RefCtx,
-    changed_paths: &std::collections::HashSet<String>,
+    changed_paths: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
     let mut replies: HashMap<String, Vec<AnnotationRow>> = HashMap::new();
     let mut parents: Vec<AnnotationRow> = Vec::new();
@@ -477,10 +496,26 @@ pub(crate) fn build_comment_groups(
             // "general question" kind) has no file to be "in" the diff
             // AT ALL; every other group is in_diff iff its path is one
             // `changed_paths` names (either endpoint of a rename).
-            let in_diff = !path.is_empty() && changed_paths.contains(&path);
+            // A7-4 — `None` (the diff could not be computed) ⇒ `null`, the
+            // honest "unknown"; the general group is `false` regardless.
+            let in_diff = in_diff_caption(&path, changed_paths);
             serde_json::json!({ "path": path, "in_diff": in_diff, "comments": comments })
         })
         .collect())
+}
+
+/// A7-4 — the per-group `in_diff` caption: the path-less general group is
+/// always `false`; otherwise membership in the diff's file set, or `None`
+/// (wire `null`, "unknown") when the diff could not be computed.
+fn in_diff_caption(
+    path: &str,
+    changed_paths: Option<&std::collections::HashSet<String>>,
+) -> Option<bool> {
+    if path.is_empty() {
+        Some(false)
+    } else {
+        changed_paths.map(|set| set.contains(path))
+    }
 }
 
 fn reply_json(
@@ -500,4 +535,19 @@ fn reply_json(
         "updated_at": row.updated_at,
         "resolved": row.resolved,
     }))
+}
+
+#[cfg(test)]
+mod in_diff_caption_tests {
+    use super::in_diff_caption;
+    use std::collections::HashSet;
+
+    #[test]
+    fn caption_is_unknown_not_false_when_the_diff_is_unavailable() {
+        let set: HashSet<String> = ["a.rs".to_string()].into_iter().collect();
+        assert_eq!(in_diff_caption("a.rs", Some(&set)), Some(true));
+        assert_eq!(in_diff_caption("b.rs", Some(&set)), Some(false));
+        assert_eq!(in_diff_caption("a.rs", None), None);
+        assert_eq!(in_diff_caption("", None), Some(false));
+    }
 }

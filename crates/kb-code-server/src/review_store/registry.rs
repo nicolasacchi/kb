@@ -90,8 +90,13 @@ pub struct RepoRef {
     pub root: PathBuf,
 }
 
-/// How a repo's registration went (kept in memory; a refusal has no DB
-/// row to live in).
+// How a repo's registration went (kept in memory; a refusal has no DB
+// row to live in).
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreRegistration")
+)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "outcome", rename_all = "kebab-case")]
 pub enum Registration {
@@ -100,21 +105,21 @@ pub enum Registration {
         store_key: String,
         source: String,
         joined_existing: bool,
-        /// Remotes REFUSED as unsafe while another remote still decided
-        /// the store's project — the ladder's `remote-url-refused`, on
-        /// the same code the all-refused case refuses with. A good remote
-        /// keys the store regardless (refusing here would strand a
-        /// working clone over a second remote's typo), so these are the
-        /// only trace that remote is there at all: reported, never
-        /// dropped, and never reclassified into the store's key.
-        ///
-        /// Recomputed on EVERY registration, not only the one that
-        /// minted the store: a repo already registered whose clone later
-        /// grows a hostile remote reports it here, on every boot
-        /// thereafter, exactly as the first registration did (via
-        /// [`ladder::refused_remotes`]). Best effort — a member whose
-        /// remotes cannot be read reports an empty list rather than
-        /// refusing a membership that stands.
+        // Remotes REFUSED as unsafe while another remote still decided
+        // the store's project — the ladder's `remote-url-refused`, on
+        // the same code the all-refused case refuses with. A good remote
+        // keys the store regardless (refusing here would strand a
+        // working clone over a second remote's typo), so these are the
+        // only trace that remote is there at all: reported, never
+        // dropped, and never reclassified into the store's key.
+        //
+        // Recomputed on EVERY registration, not only the one that
+        // minted the store: a repo already registered whose clone later
+        // grows a hostile remote reports it here, on every boot
+        // thereafter, exactly as the first registration did (via
+        // [`ladder::refused_remotes`]). Best effort — a member whose
+        // remotes cannot be read reports an empty list rather than
+        // refusing a membership that stands.
         refused_remotes: Vec<RefusedRemote>,
     },
     Refused {

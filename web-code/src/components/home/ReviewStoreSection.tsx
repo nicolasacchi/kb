@@ -24,11 +24,21 @@
 // (kind, account, reason, flags — never a path, never a secret). So the
 // store section's failure is the gate speaking, and the credential
 // section's `fetch.amber` is a fact that a remote operator CAN be shown.
+import { useRepos } from "../../hooks/useRepos";
 import { useReviewCredentials, useReviewStoreCard } from "../../hooks/useReviewStore";
 import { formatBytes, relativeTime } from "../../lib/format";
-import { parseLastGcApply, parseLastGcDryRun, parseLastMaint } from "../../lib/reviewStore";
+import { failureClassHint, gcRefusal, parseLastGcApply, parseLastGcDryRun, parseLastMaint } from "../../lib/reviewStore";
 import MetaLine from "../MetaLine";
 import { isLoopbackRefusal, LOOPBACK_HINT } from "../reviews/ReviewHeader";
+
+function lastGcRefusedLine(refused: string | null, dry: { at: number } | null) {
+  if (!refused || !dry) return null;
+  return (
+    <p className="kbc-home-card__error" data-kbc-home-store-gc-refused>
+      last `store gc --yes` {refused} · {relativeTime(dry.at)}
+    </p>
+  );
+}
 
 export function ReviewStoreSection({ repo }: { repo: string }) {
   const storeQ = useReviewStoreCard(repo);
@@ -36,6 +46,12 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
   const lastMaint = parseLastMaint(stateJson);
   const lastGcDryRun = parseLastGcDryRun(stateJson);
   const lastGcApply = parseLastGcApply(stateJson);
+  // N6 — config warnings / "store disabled" are about the whole daemon and
+  // ride EVERY repo's card; show them on the FIRST repo's card only.
+  const repos = useRepos();
+  const showDaemonFindings = repos.data?.repos[0]?.name === repo;
+  const gcRefused = lastGcDryRun ? gcRefusal(lastGcDryRun.reasons) : null;
+  const stateHint = failureClassHint(storeQ.data?.store?.state_code);
 
   return (
     <section className="kbc-home-card__section" data-kbc-home-store>
@@ -75,12 +91,19 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
               VERBATIM, never re-derived: registration/credential/forge-verification/objects-missing
               notes. The maintenance/GC summary below is a SEPARATE block — RS-U9 never turned those
               facts into a doctor finding, so they're parsed from `state_json` instead. */}
-          {storeQ.data.doctor.length > 0 && (
+          {storeQ.data.store?.state_code && storeQ.data.store.state !== "ready" && (
+            <p className="kbc-home-card__muted" data-kbc-home-store-state-hint>
+              {storeQ.data.store.state_code}: {stateHint}
+            </p>
+          )}
+          {storeQ.data.doctor.some((f) => showDaemonFindings || f.scope !== "daemon") && (
             <ul className="kbc-home-card__doctor" data-kbc-home-store-doctor>
               {/* `code` is NOT unique — `store_card` can push several
                   `"config"`-coded findings (one per `[review.store]`
                   warning) — so this keys on position, not `f.code`. */}
-              {storeQ.data.doctor.map((f, i) => (
+              {storeQ.data.doctor
+                .filter((f) => showDaemonFindings || f.scope !== "daemon")
+                .map((f, i) => (
                 <li
                   key={i}
                   className={`kbc-home-card__doctor-row kbc-home-card__doctor-row--${f.level}`}
@@ -114,7 +137,8 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
               )}
               {lastGcApply && (
                 <p className="kbc-home-card__muted" data-kbc-home-store-gc-apply>
-                  last GC apply: {lastGcApply.candidates} removed · {relativeTime(lastGcApply.at)}
+                  last GC apply: {lastGcApply.candidates} candidate{lastGcApply.candidates === 1 ? "" : "s"} applied ·{" "}
+                  {relativeTime(lastGcApply.at)}
                 </p>
               )}
               {lastGcDryRun && (
@@ -123,6 +147,14 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
                   {relativeTime(lastGcDryRun.at)}
                   {lastGcDryRun.partial ? " · partial — some members unresolved" : ""}
                 </p>
+              )}
+              {lastGcRefusedLine(gcRefused, lastGcDryRun)}
+              {lastGcDryRun && lastGcDryRun.member_problems.length > 0 && (
+                <ul className="kbc-home-card__muted" data-kbc-home-store-gc-members>
+                  {lastGcDryRun.member_problems.map((m, i) => (
+                    <li key={i}>{m}</li>
+                  ))}
+                </ul>
               )}
             </div>
           )}

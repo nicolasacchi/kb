@@ -172,10 +172,17 @@ impl Store {
         let n = self.lock().execute(
             "UPDATE annotations SET
                 review_id = ?2, ps_number = ?3, side = ?4, updated_at = ?5
-             WHERE id = ?1",
+             WHERE id = ?1 OR parent_id = ?1",
             params![id, review_id, ps_number, side, updated_at],
         )?;
         Ok(n > 0)
+    }
+
+    /// A7-2 — true iff a finding uses this annotation as its thread (the
+    /// bind/unbind routes refuse such rows with 409).
+    pub fn annotation_backs_finding(&self, id: &str) -> Result<bool> {
+        let conn = self.lock();
+        annotation_backs_finding_on(&conn, id)
     }
 
     /// Hard-delete one annotation AND cascade to its replies (D-server —
@@ -595,6 +602,9 @@ impl Store {
                     let Some(cur) = get_annotation_on(&tx, id)? else {
                         return Err(StoreError::NotFound(format!("annotation {id}")));
                     };
+                    if annotation_backs_finding_on(&tx, id)? {
+                        return Err(StoreError::AnnotationIsFinding(id.clone()));
+                    }
                     let same = cur.review_id == Some(*review_id)
                         && cur.ps_number == Some(*ps_number)
                         && cur.side.as_deref() == Some(side.as_str());
@@ -612,6 +622,9 @@ impl Store {
                     let Some(cur) = get_annotation_on(&tx, id)? else {
                         return Err(StoreError::NotFound(format!("annotation {id}")));
                     };
+                    if annotation_backs_finding_on(&tx, id)? {
+                        return Err(StoreError::AnnotationIsFinding(id.clone()));
+                    }
                     if cur.review_id.is_some() {
                         update_annotation_review_scope_on(&tx, id, None, now)?;
                         report.changed = true;

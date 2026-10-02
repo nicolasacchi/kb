@@ -314,6 +314,16 @@ verification of the review's kb artifact hint (set via kb's own `PATCH
 /api/reviews/{id}` step, not this CLI); invariant #2's kb-code→kb-only call
 direction stays unchanged.
 
+`review report ID --emit-artifact --kb NAME` writes the HTML into the
+directory the CLI's OWN `kb.toml` names as `[kb.NAME].path` (confined to it:
+`..`, absolute and symlinked `capture_dir` escapes are refused, each pinned by
+a test) and derives the hint id from the SOURCE-RELATIVE path alone
+(`ArtifactId::from_path`, kb invariant #27), so a daemon that mounts the same
+corpus at a different absolute path (a container) still assigns the same id.
+What it cannot check is that the CLI's `kb.toml` and the daemon watch the SAME
+directory: if they differ, the file lands where nothing indexes it and the
+hint points at no artifact. Use the daemon host's `kb.toml`.
+
 **Inbox, timeline, analytics, impact.** `kb-code review inbox {--repo
 R|--all-repos} [--state open|closed|all] [--limit N]` (`GET
 /api/reviews/inbox`, bearer) is a cross-repo attention queue, `score =
@@ -852,8 +862,11 @@ The `merge-base <sha>` suffix rides beside the chip for every mode EXCEPT
 chip's hover title, spelled with the same labels the CLI's stderr line
 uses, and an unrecognised slug degrades to dashes-turned-spaces rather
 than a guess. A Retrack button is offered for exactly the `pin` and
-`legacy` variants — an actively tracked base needs no fixing — and it
-COPIES the CLI line rather than calling a route that would 404.
+`legacy` variants — an actively tracked base needs no fixing — and, on a
+loopback session (`GET /api/repos` says so), it calls the shipped
+`POST /api/reviews/{id}/retrack` with a dry-run toggle (default on); the
+route is loopback-only, so any other session keeps the copy-the-CLI-line
+fallback.
 
 `warnings[]` render as one chip per entry, all on the same amber tone,
 because `BaseWarningOut` carries no severity axis on the wire: the short
@@ -1230,6 +1243,44 @@ entries for member clones owned by another uid) is shared by every
 bundle pass. A constructor adopts it and never truncates it, and
 `allow_local_source` checks the file on disk rather than only its in-memory
 set.
+
+### Failure classes
+
+Every store git/credential failure is classified from git's `LC_ALL=C`
+stderr (`review_store/classify.rs`) into one stable slug. The slug is the
+`urn:kb:errors:<slug>` problem type, the persisted `state_code`, and the
+code a `store sync` base-fetch skip carries; renaming one is a wire break.
+The Home store card renders the hint column (`lib/reviewStore.ts`'s
+`FAILURE_CLASS_HINTS` — keep the two in step; a unit test pins that every
+slug has a hint).
+
+| slug | meaning | class |
+|---|---|---|
+| `vanished` | the requested ref is gone from the remote | |
+| `offline` | DNS / connection refused / unreachable | transient |
+| `timeout` | the per-call deadline fired | transient |
+| `credential-rejected` | the credential kb-code sent was refused | auth |
+| `credential-wrong-repo` | a deploy key answered "not found" (key for another repo) | auth |
+| `repo-not-found` | the remote says the repo does not exist (no credential sent) | |
+| `auth-no-access` | a token was sent and the forge still says "not found" | auth |
+| `host-key-unknown` | ssh has no pinned host key | |
+| `host-key-mismatch` | the ssh host key CHANGED — never auto-repaired | |
+| `auth-required` | the remote wants credentials, none supplied | auth |
+| `tls` | TLS / certificate failure | |
+| `disk-full` | ENOSPC while writing objects or refs | |
+| `shallow` | a shallow-repository constraint refused the operation | |
+| `protocol-refused` | git refused the transport (`GIT_ALLOW_PROTOCOL`) | |
+| `url-rejected` | the URL failed the store allowlist | |
+| `credential-account-mismatch` | the answering gh account is not the pinned one | auth |
+| `credential-unavailable` | a credential source exists but cannot be read now | auth |
+| `no-credentials` | no credential rung applies | auth |
+| `spawn-failed` | the git subprocess could not start | |
+| `dubious-ownership` | git's `safe.directory` check refused the store dir (owned by another uid than the daemon) | |
+| `failed` | anything else | |
+
+Config warnings and "store disabled" are daemon-scoped: every repo's card
+carries them, tagged `scope: "daemon"` on the wire, and the Home dashboard
+shows them once (on the first repo's card).
 
 ### The store CLI
 
@@ -1673,10 +1724,11 @@ Both of the other recurrence reads ship as verbs, not route-only reads:
 /api/reviews/analytics`).
 
 The SPA's Retrack affordance reflects the same boundary: `BaseChip`'s
-button COPIES the `kb-code review retrack <id> --dry-run` line rather
-than calling a route that would 404 — the same "copy the exact line an
-agent would run" posture `lib/reviewDoc.ts`'s `composeCommandLine`
-documents for the loopback-only authoring path.
+button calls `POST /api/reviews/{id}/retrack` on a loopback session and
+otherwise COPIES the `kb-code review retrack <id> --dry-run` line — the
+same "copy the exact line an agent would run" posture
+`lib/reviewDoc.ts`'s `composeCommandLine` documents for the loopback-only
+authoring path.
 
 ## One Inbox
 

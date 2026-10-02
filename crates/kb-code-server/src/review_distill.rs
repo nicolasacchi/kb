@@ -153,7 +153,7 @@ fn compose_distill(
                 ps_number: Some(latest_ps.ps_number),
             }
         },
-        &changed_paths,
+        Some(&changed_paths),
     )?;
 
     // Flat suggestion list with the FULL applied-audit trail
