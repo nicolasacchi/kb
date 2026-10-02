@@ -241,11 +241,17 @@ public-bind guard but must NEVER tighten `KB_ALLOW_NO_AUTH=1`: adding a registry
 to an Authelia-gated deploy must not 401 browser users who carry only
 `Remote-User` (unit-pinned).
 
-**The one identity-gated pair.** Comment/reply **body edit + delete** are
-owner-only — 403 `urn:kb:errors:not-owner`, with a row whose `user` is absent
-(pre-v0.34 file) owned by the configured operator. Enforced on the direct
-routes AND inside the batch `apply` path (gating each owner-gated op before
-`apply_ops`, preserving its all-or-nothing semantics); the SPA mirrors it via
+**The identity-gated verbs.** Comment/reply **body edit + delete** and the
+comment **meta** verbs (tags, private flag) are owner-only — 403
+`urn:kb:errors:not-owner` on every path (the PATCH `…/meta` route answers the
+same URN the batch `set_meta` does; one test pins both), with a row whose
+`user` is absent (pre-v0.34 file) owned by the configured operator. Enforced on
+the direct routes AND inside the batch `apply` path (gating each owner-gated op
+before `apply_ops`, preserving its all-or-nothing semantics) through ONE
+exhaustive match, `batch_gate_target` — no wildcard arm, so a new `BatchOp`
+variant does not compile until its policy is declared — and held to its
+single-route twin by the matrix test
+`batch_and_single_route_twins_agree_across_the_privacy_matrix`; the SPA mirrors it via
 the pure `canEditComment(comment, me, operator)`, which takes the operator name
 from `/api/identity` rather than hardcoding a default. Resolve, reply, attach,
 and reanchor stay open to every user — that is the collaboration surface, and
@@ -326,8 +332,17 @@ scrub CAN strip it on non-loopback (opt-in per kb via
   `tags: Vec<String>` and `private: bool`, both appended LAST and both
   `skip_serializing_if` (empty vec / false). That pairing — additive at the end
   of the struct, absent when it has nothing to say — is what ships them with NO
-  schema bump: a pre-notes `kb-comments/1` sidecar re-saves BYTE-IDENTICALLY,
-  and absence on disk is indistinguishable from `false`/`[]`. `tags` is
+  schema bump FOR A FILE WITHOUT NOTES: a pre-notes `kb-comments/1` sidecar
+  re-saves BYTE-IDENTICALLY, and absence on disk is indistinguishable from
+  `false`/`[]`. A file that carries at least one private comment is a
+  different matter (v0.44 P2, A15-5): a pre-notes binary parses it, ignores the
+  keys it has never heard of and re-serialises WITHOUT them, so a rollback
+  would publish every note and erase the flag for good. `save_atomic` therefore
+  stamps `kb-comments/2` (`wire_schema_for`, derived from content at save
+  time, never tracked in memory) on any sidecar holding a note; the old
+  binary's `load()` refuses it ("schema not supported") — it fails CLOSED —
+  while this binary reads both stamps (`schema_supported`) and a file whose
+  last note is made public goes back to `/1`. `tags` is
   slug-normalised, deduped and sorted by the ONE `normalize_comment_tags` at
   the write edge (reusing `kb_core::parser::slugify_tag`, never a second
   slugifier), so the same tag SET always serialises to the same bytes and a
@@ -370,6 +385,43 @@ scrub CAN strip it on non-loopback (opt-in per kb via
     — a kb-proposal/1 (and a memory artifact, recalled on every future prompt)
     is agent-readable work by construction, so there is no note-shaped output
     to write.
+  - **MUTATING A NOTE NEEDS EXPLICIT OPERATOR INTENT (v0.44 P2).** A note id
+    is not a secret (`/api/anchors/stale` answers it fleet-wide; the indexer
+    walks every open comment), so an agent can name one without ever having
+    read it. `ReviewFile::reject_private_note` — the ONE guard — is therefore
+    called by EVERY single-row mutation (status, anchor, reply, comment and
+    reply body edit, comment and reply delete, comment and reply attachment
+    adopt/detach) and `set_comment_meta` refuses to make a note public with it
+    too; the batch ops and the routes reach it through those methods. It is
+    deliberately not an owner check (on loopback every caller resolves to the
+    operator, so that would be waved through by the very agent it is meant to
+    stop). The escape hatch mirrors the read side: the request header
+    `X-Kb-Visibility: all` (`routes::comments::OPERATOR_INTENT_HEADER`) sets a
+    transient, never-serialised `operator_intent` flag on the loaded document.
+    The SPA sends it on every review mutation; the CLI and every agent surface
+    never do, so the operator can resolve, reply to, edit and delete their own
+    notes and an agent holding a note id cannot. It is an INTENT marker, not
+    an authorization — kb still has one trust tier and a loopback caller can
+    set any header; the 409 text says what is missing and never tells the
+    caller how to disclose the note. Attachment blobs follow the same split:
+    `GET …/attachments/{aid}` 404s a note's blob unless the read carries
+    `?visibility=all` (an `<img src>` cannot send a header) and is served
+    `Cache-Control: private, no-cache` — never `public`/`immutable`, because
+    visibility is mutable.
+  - **A NOTE-ONLY WRITE IS QUIET (v0.44 P2).** `comments.updated` is emitted
+    only when the PUBLIC representation moved (`public_fingerprint` taken
+    after the load vs after the mutation); `kb push` prints each frame to an
+    agent, so a frame — even with filtered counts — dates the note and proves
+    it exists. `comment.anchor_stale` / `comment.anchor_resolved` skip private
+    comments for the same reason (the stale-anchor SIDECAR stays an
+    operator-readable non-filter). The operator's own tabs refresh through the
+    SPA's mutation-local announcement (`api/reviewIntent.ts`: direct listener +
+    BroadcastChannel) feeding the same handler the daemon event does. The
+    public reads follow the same rule: a sidecar with no public comment and no
+    verdict renders as byte-for-byte the skeleton an absent sidecar gets
+    (`ReviewFile::into_public_view` — empty title, epoch `generatedAt`, no
+    ETag), on `GET /review` and the unauthenticated `?cm=on` payload alike, so
+    the first note is not observable by polling.
   - **A NOTE WRITES NO `history` LEDGER ROW, AND A PUBLIC→PRIVATE FLIP DELETES
     THE ROW IT WROTE.** The ledger carries no visibility bit, and FOUR surfaces
     read it UNFILTERED: `daycard`'s `pivot_activity` comments lane, the history
@@ -392,6 +444,13 @@ scrub CAN strip it on non-loopback (opt-in per kb via
     `review::embed_into_html` / `extract_from_html` and `POST …/import` carry
     notes verbatim, and `kb backup` copies `.review/` verbatim — a move, an
     export/reimport or a restore must not destroy the operator's own text.
+    `kb comments export --embed -o FILE` reads with `?visibility=all` so the
+    file really is lossless (v0.44 P2, A2-4 — it was public-only while the docs
+    promised otherwise); to STDOUT it stays public-only and says so on stderr,
+    because stdout is where an agent's transcript captures output. `import`
+    only ever ADDS or overwrites rows: it never removes a note, even with
+    `--force` (force replaces public comments); the route that deletes a note
+    is `DELETE …/comments/{cid}` with operator intent.
     (2) The anchor-stale sidecar (`.anchors-stale.json`,
     `kb_core::anchors::StaleAnchor`): artifact id + comment id +
     `anchor_kind` + `fuzzy_score`, and NOTHING ELSE — no body, no tags — so it
@@ -400,8 +459,8 @@ scrub CAN strip it on non-loopback (opt-in per kb via
     filter, including the two that look like opt-ins but are not: the
     UNAUTHENTICATED `?cm=on` in-iframe annotator payload (the artifact-subdomain
     serve path is world-readable, so `build_comments_payload` strips — and
-    `annotate.ts`, a hand-written strict subset, never learns a
-    `tags`/`private` field), and the WORLD-READABLE `kb share` static bundle
+    `annotate.ts`, a hand-written strict subset, learns no `tags` field and
+    declares `private` ONLY so `paintAll` can refuse a note that arrives anyway), and the WORLD-READABLE `kb share` static bundle
     (`inject_comments` drops notes AND their attachment blobs before
     `render_comments_section`, which itself renders every comment it is handed
     and applies no visibility filter of its own).
