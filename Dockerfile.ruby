@@ -40,7 +40,7 @@ COPY . .
 RUN cargo build --release -p kb-lip
 
 # --- Runtime: ruby + ruby-lsp + the compiled kb-lip binary --------------
-FROM ruby:3.4-slim-trixie AS runtime
+FROM ruby:4.0-slim-trixie AS runtime
 
 # git: ruby-lsp's "composed bundle" mode (see providers/ruby-lsp.toml's
 # prerequisite comments) shells out to `bundle install`, which needs git for
