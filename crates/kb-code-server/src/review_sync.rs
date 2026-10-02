@@ -67,7 +67,7 @@
 use crate::config::RepoEntry;
 use crate::entities::RouteContract;
 use crate::git::roots::GitCtx;
-use crate::github::{GithubApiError, GithubClient, GithubRepo, PrSyncOut};
+use crate::github::{GithubApiError, PrSyncOut};
 use crate::review_base::capture::pr_of_head;
 use crate::review_base::{warn, warning, BaseWarningOut};
 use crate::review_jobs::JobHandle;
@@ -268,48 +268,19 @@ fn unavailable_code(e: &GithubApiError, had_credentials: bool) -> String {
 /// The GitHub `owner/name` the PR lives under, a client carrying the
 /// request's credential ladder (file/env > the store's `gh-cli` login >
 /// the caller's `gh_token`), and any D12 warning
-/// (`credential-account-mismatch`). With a ready review store the project
-/// is the STORE's `forge_slug` — never the member's `origin`, which may be
-/// a fork (RS-U6); without one it is the member's `origin` (today's
-/// work-tree behaviour, the same answer start-pr's own enrichment uses).
+/// (`credential-account-mismatch`). A thin alias of
+/// [`reviews::forge_ctx`] — the ONE way to reach GitHub for a repo. With a
+/// ready review store the project is the STORE's `forge_slug` — never the
+/// member's `origin`, which may be a fork (RS-U6); without one it is the
+/// member's `origin`. A store lookup that FAILS (DB error, join error)
+/// fails CLOSED (no repo, a client bound to nothing, a named warning) —
+/// never "no store".
 async fn forge_client(
     state: &SharedState,
     repo: &RepoEntry,
     gh_token: Option<String>,
-) -> (Option<GithubRepo>, GithubClient, Vec<BaseWarningOut>) {
-    let github = state.github.with_cli_token(gh_token);
-    let st = state.clone();
-    let name = repo.name.clone();
-    let store = tokio::task::spawn_blocking(move || {
-        let handle = st.review_stores.handle_for_repo(&st.store, &name).ok()?;
-        let row = st.store.get_review_store(handle.id).ok().flatten();
-        Some((handle, row))
-    })
-    .await
-    .ok()
-    .flatten();
-    match store {
-        Some((handle, row)) => {
-            let gh = row.as_ref().and_then(reviews::store_github_repo);
-            let (github, warnings) = reviews::github_with_gh_cli_warned(
-                state,
-                github,
-                &handle,
-                &repo.name,
-                crate::review_store::GhCli::from_process_env(),
-            )
-            .await;
-            (gh, github, warnings)
-        }
-        None => {
-            let root = repo.path.clone();
-            let gh = tokio::task::spawn_blocking(move || crate::github::github_repo(&root))
-                .await
-                .ok()
-                .and_then(Result::ok);
-            (gh, github, vec![])
-        }
-    }
+) -> reviews::ForgeCtx {
+    reviews::forge_ctx(state, repo, gh_token).await
 }
 
 /// The forge's answer for PR `pr` (+ credential warnings) — never an
@@ -320,9 +291,21 @@ async fn forge_pr(
     pr: u32,
     gh_token: Option<String>,
 ) -> (ForgeOut, Vec<BaseWarningOut>) {
-    let (gh, client, warnings) = forge_client(state, repo, gh_token).await;
+    let ctx = forge_client(state, repo, gh_token).await;
+    let reviews::ForgeCtx {
+        repo: gh,
+        client,
+        warnings,
+        closed,
+        ..
+    } = ctx;
     let Some(gh) = gh else {
-        return (ForgeOut::unavailable("not-github"), warnings);
+        let reason = if closed.is_some() {
+            "store-unavailable"
+        } else {
+            "not-github"
+        };
+        return (ForgeOut::unavailable(reason), warnings);
     };
     let had = client.has_credentials();
     let forge = match client
@@ -847,7 +830,7 @@ async fn count_files(
     let ps = latest?;
     let ctx = GitCtx::resolve_entry(&state.store, repo).await;
     let (b, t) = (ps.base_sha.clone(), ps.tip_sha.clone());
-    tokio::task::spawn_blocking(move || reviews::files_changed(&ctx, &b, &t))
+    crate::review_jobs::spawn_blocking_tracked(move || reviews::files_changed(&ctx, &b, &t))
         .await
         .ok()
         .and_then(Result::ok)
@@ -895,7 +878,23 @@ pub(crate) async fn sync_open(
         .transpose()
         .map_err(ApiError::bad_request)?;
     crate::review_jobs::set_stage(&job, "list");
-    let (gh, client, list_warnings) = forge_client(state, &repo, gh_token.clone()).await;
+    let reviews::ForgeCtx {
+        repo: gh,
+        client,
+        warnings: list_warnings,
+        closed,
+        ..
+    } = forge_client(state, &repo, gh_token.clone()).await;
+    if let Some(detail) = closed {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "the review store lookup for {} failed ({detail}); `review sync --open` will not list PRs off the member's origin or an ambient token",
+                repo.name
+            ),
+        )
+        .with_problem_type(URN_FORGE_UNAVAILABLE));
+    }
     let Some(gh) = gh else {
         return Err(ApiError::new(
             StatusCode::BAD_GATEWAY,

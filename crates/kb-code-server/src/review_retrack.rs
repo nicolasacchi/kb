@@ -119,18 +119,35 @@ fn current_base_state(
     }
 }
 
+/// The PR target recorded in the review's own PR snapshot
+/// (`pr_meta_json.base_ref`). A failed read is `None`, which only ever makes
+/// the caller MORE conservative (an unknown target refuses an apply).
+fn stored_pr_target(store: &Store, review: &ReviewRow) -> Option<String> {
+    store
+        .get_review_pr_binding(review.id)
+        .ok()
+        .flatten()
+        .and_then(|b| b.pr_meta_json)
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("base_ref")
+                .and_then(|b| b.as_str())
+                .map(str::to_string)
+        })
+}
+
 /// One retrack outcome — the shared shape both the single and the bulk
 /// route render into JSON.
-struct RetrackOutcome {
-    id: i64,
-    repo: String,
-    minted: bool,
-    ps_number: Option<i64>,
-    kind: Option<String>,
-    class: RetrackClass,
-    base: ReviewBaseOut,
-    warnings: Vec<BaseWarningOut>,
-    verdict_scope_changed: bool,
+pub(crate) struct RetrackOutcome {
+    pub(crate) id: i64,
+    pub(crate) repo: String,
+    pub(crate) minted: bool,
+    pub(crate) ps_number: Option<i64>,
+    pub(crate) kind: Option<String>,
+    pub(crate) class: RetrackClass,
+    pub(crate) base: ReviewBaseOut,
+    pub(crate) warnings: Vec<BaseWarningOut>,
+    pub(crate) verdict_scope_changed: bool,
 }
 
 fn outcome_json(o: &RetrackOutcome, dry_run: bool) -> serde_json::Value {
@@ -157,7 +174,7 @@ fn outcome_json(o: &RetrackOutcome, dry_run: bool) -> serde_json::Value {
 /// run classifies against FRESH data) but calls no capture/persist path
 /// at all.
 #[allow(clippy::too_many_arguments)]
-fn retrack_sync(
+pub(crate) fn retrack_sync(
     ctx: &StoreCtx<'_>,
     review: &ReviewRow,
     base_input: Option<&str>,
@@ -171,16 +188,46 @@ fn retrack_sync(
     let auto_requested = base_input == Some("auto");
 
     let classified = ctx.classify(base_input, is_pr)?;
+    // A6-4 — the PR's target comes from the fresh forge read, else from the
+    // target the review's own PR snapshot recorded (`pr_meta_json.base_ref`,
+    // refreshed by every sweep/sync), BEFORE the chain falls to a
+    // default-branch guess. A degraded forge API must not turn a
+    // develop-targeting PR into a main-targeting one.
+    let stored_target = if is_pr {
+        stored_pr_target(ctx.store, review)
+    } else {
+        None
+    };
+    let chain_forge = forge_base_ref.or(stored_target.as_deref());
+    let explicit = classified.policy.is_some();
     let (mut policy, mut warnings) = match classified.policy.clone() {
         Some(p) => (p, classified.warnings.clone()),
-        None => ctx.resolve_chain(is_pr, &review.head_ref, None, forge_base_ref, classified)?,
+        None => ctx.resolve_chain(is_pr, &review.head_ref, None, chain_forge, classified)?,
     };
+    // A PR target that NO rung could name although the forge API WAS
+    // consulted and could not answer (`api_warnings` non-empty: a failed
+    // read, or a D12 gh-login warning) AND no stored snapshot names it
+    // landed on the assumed default branch. That is a guess, not a decision:
+    // it is never persisted as `set_by=user`, never classed `stale-pin`, and
+    // an apply is refused. (A store with no forge API at all — a local or
+    // non-GitHub forge — has no warnings and keeps the documented
+    // default-branch assumption, README §6.)
+    let target_guessed = is_pr
+        && !explicit
+        && !api_warnings.is_empty()
+        && policy.source == crate::review_base::BaseSource::DefaultAssumed;
     // README §12: every retrack result is a deliberate USER decision
     // UNLESS the caller literally asked for `auto` — in which case the
     // chain's own `SetBy::Auto` policies are left alone so the review
     // keeps following retargets.
-    if !auto_requested {
+    if !auto_requested && !target_guessed {
         policy.set_by = SetBy::User;
+    }
+    if target_guessed && !auto_requested && !dry_run {
+        return Err(BaseError::undetermined(format!(
+            "the PR's target branch could not be read from the forge or from the review's stored PR snapshot (assumed {:?}); retrack refuses to record that guess — pass --base <branch> or retry when the forge API answers",
+            policy.branch.as_deref().unwrap_or("?")
+        )));
     }
 
     let pr_number = pr_of_head(&review.head_ref);
@@ -237,7 +284,12 @@ fn retrack_sync(
             }
             _ => None,
         };
-        let class = classify_retrack(old_mode, would_mint, is_ancestor);
+        let class = if target_guessed {
+            // Never `stale-pin`: the target is a guess.
+            RetrackClass::Unknown
+        } else {
+            classify_retrack(old_mode, would_mint, is_ancestor)
+        };
         let set_by_str = policy.set_by.as_str().to_string();
         let status = BaseStatus {
             state: Some(if would_mint {

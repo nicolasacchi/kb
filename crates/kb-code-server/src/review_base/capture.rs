@@ -188,6 +188,12 @@ pub fn capture_at(
     })
 }
 
+/// The message of a review-row write that did not land (the DB, not the
+/// forge, is what failed — a retry is safe, the capture is idempotent).
+fn write_failed(what: &str, detail: &str) -> String {
+    format!("{what} could not be recorded on the review ({detail}); the capture is not reported as done")
+}
+
 fn capture_error(e: ReviewGitError) -> BaseError {
     match e {
         ReviewGitError::NoMergeBase(a, b) => BaseError::new(
@@ -648,10 +654,23 @@ impl<'a> StoreCtx<'a> {
                     .ok()
                     .flatten()
                     .ok_or_else(|| "store-missing".to_string())?;
-                let res = self
-                    .rs
-                    .resolve_credential(self.store, &row, &self.member.name)
-                    .map_err(|e| e.class().slug().to_string())?;
+                // D12 "one credential per store": settings come from the
+                // store's agreed member, never from whoever is acting, and
+                // a disagreement between members refuses here exactly as
+                // `store sync` does — otherwise the recorded account (and
+                // the identity the API slot binds to) flips with whichever
+                // member fetched last.
+                let res =
+                    self.rs
+                        .resolve_store_credential(self.store, &row)
+                        .map_err(|e| match &e {
+                            crate::review_store::cred::CredError::Refused(m)
+                                if m.starts_with("credential-settings-conflict") =>
+                            {
+                                "credential-settings-conflict".to_string()
+                            }
+                            _ => e.class().slug().to_string(),
+                        })?;
                 git.configure_remote(dir, &RemoteName::base(), &url)
                     .map_err(|e| e.slug().to_string())?;
                 let kind = res.credential.kind().slug();
@@ -1378,15 +1397,23 @@ impl<'a> StoreCtx<'a> {
     /// Persist a policy + status on review `id` (the whole policy: mode,
     /// branch, member, set_by). Callers that did NOT change the policy must
     /// write only the status (`Store::set_review_base_status`).
-    pub fn persist_policy(&self, id: i64, policy: &BasePolicy, status: &BaseStatus) {
-        let _ = self.store.set_review_base(
-            id,
-            policy.mode.as_str(),
-            policy.branch.as_deref(),
-            policy.member,
-            policy.set_by.as_str(),
-            Some(&status.to_json()),
-        );
+    pub fn persist_policy(
+        &self,
+        id: i64,
+        policy: &BasePolicy,
+        status: &BaseStatus,
+    ) -> Result<(), String> {
+        self.store
+            .set_review_base(
+                id,
+                policy.mode.as_str(),
+                policy.branch.as_deref(),
+                policy.member,
+                policy.set_by.as_str(),
+                Some(&status.to_json()),
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// Re-capture an existing review in the store — snapshot, start-pr
@@ -1592,7 +1619,15 @@ impl<'a> StoreCtx<'a> {
         }
         warnings.extend(fetch.warnings());
         if let Some(sha) = &fetch.pr_head {
-            let _ = self.store.set_review_pr_head_sha(review.id, sha);
+            self.store
+                .set_review_pr_head_sha(review.id, sha)
+                .map_err(|e| {
+                    BaseError::new(
+                        500,
+                        URN_CAPTURE_FAILED,
+                        write_failed("the PR head sha", &e.to_string()),
+                    )
+                })?;
         }
         if class.upgraded
             && rc.policy_override.is_none()
@@ -1606,18 +1641,27 @@ impl<'a> StoreCtx<'a> {
         if vanished_branch.is_some() && retargeted {
             status.code = Some("base-vanished".into());
         }
-        if rc
+        // D12: EVERY gh failure class on a bound store is a warning, so the
+        // stored status carries the first one's own code (as `prepare_new`
+        // does), not just the account mismatch. A failed PR-target read
+        // (`forge-base-unread`) is not a credential fault and stays a
+        // warning only.
+        if let Some(w) = rc
             .api_warnings
             .iter()
-            .any(|w| w.code == warn::CREDENTIAL_ACCOUNT_MISMATCH)
+            .find(|w| w.code != reviews::FORGE_BASE_UNREAD)
         {
-            status.code = Some(warn::CREDENTIAL_ACCOUNT_MISMATCH.into());
+            status.code = Some(w.code.clone());
         }
         let status_json = status.to_json();
         let display = effective
             .policy()
             .map(|p| p.display_base_ref(mapped.first().map(String::as_str)));
         let id = review.id;
+        // The under-lock writes cannot return from the closure; the first
+        // failure is parked here and surfaced AFTER the capture, so a 200
+        // never carries a `base` block the DB does not hold.
+        let write_err: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
         let outcome = self.capture_with(
             review,
             &effective,
@@ -1631,17 +1675,32 @@ impl<'a> StoreCtx<'a> {
                 let unchanged = policy_key(now_row.as_ref()) == started_from;
                 match (persist && unchanged, effective.policy()) {
                     (true, Some(p)) => {
-                        self.persist_policy(id, p, &status);
+                        if let Err(e) = self.persist_policy(id, p, &status) {
+                            write_err
+                                .borrow_mut()
+                                .get_or_insert(write_failed("the base policy", &e));
+                        }
                         if let Some(d) = &display {
-                            let _ = self.store.set_review_base_ref(id, d);
+                            if let Err(e) = self.store.set_review_base_ref(id, d) {
+                                write_err
+                                    .borrow_mut()
+                                    .get_or_insert(write_failed("the base ref", &e.to_string()));
+                            }
                         }
                     }
                     _ => {
-                        let _ = self.store.set_review_base_status(id, &status_json);
+                        if let Err(e) = self.store.set_review_base_status(id, &status_json) {
+                            write_err
+                                .borrow_mut()
+                                .get_or_insert(write_failed("the base status", &e.to_string()));
+                        }
                     }
                 }
             },
         )?;
+        if let Some(msg) = write_err.into_inner() {
+            return Err(BaseError::new(500, URN_CAPTURE_FAILED, msg));
+        }
         Ok(Recaptured {
             outcome,
             effective,
