@@ -26,6 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOKS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RECALL="$HOOKS_DIR/kb-recall.sh"
 WAKE="$HOOKS_DIR/kb-wake.sh"
+WAKE_KIMI="$HOOKS_DIR/kb-wake-kimi.sh"
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/kb-hook-deadline-test.XXXXXX")"
 cleanup() { rm -rf "$TMPROOT"; }
@@ -113,6 +114,20 @@ for h in recall wake; do
   esac
   if printf '%s\n' "$block" | grep -q '^$'; then bad "$h: blank line inside the injected hit"; else ok "$h: no blank line inside the injected hit"; fi
 done
+
+# --- 6. kimi wake twin: same cap + same flatten ----------------------------
+t0="$(now)"
+out="$(printf '%s' '{"session_id":"dl-kimi-1","cwd":"/tmp"}' | RECALL_HANG=1 "$WAKE_KIMI")"
+el=$(( $(now) - t0 ))
+if [ "$el" -le 9 ]; then ok "kimi wake returns within its cap with recall hung (${el}s)"; else bad "kimi wake took ${el}s with recall hung"; fi
+if [ -n "$out" ]; then ok "kimi wake still emits the protocol when recall times out"; else bad "kimi wake emitted nothing when recall timed out"; fi
+out="$(printf '%s' '{"session_id":"dl-kimi-2","cwd":"/tmp"}' | RECALL_JSON="$json" "$WAKE_KIMI")"
+block="$(printf '%s\n' "$out" | sed -n '/^Relevant memories from kb/,/kb-recall\/1/p')"
+case "$block" in
+  *"↳ Fix: use X"*) ok "kimi wake: summary newlines flattened to one line" ;;
+  *) bad "kimi wake: summary not flattened (got: $block)" ;;
+esac
+if printf '%s\n' "$block" | grep -q '^$'; then bad "kimi wake: blank line inside the injected hit"; else ok "kimi wake: no blank line inside the injected hit"; fi
 
 # --- 5. default budget below the hooks.json timeouts -----------------------
 budget="$(grep -o 'KB_HOOK_BUDGET_SECS:-[0-9]*' "$RECALL" | head -n 1 | grep -o '[0-9]*$')"

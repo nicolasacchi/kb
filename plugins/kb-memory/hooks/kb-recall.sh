@@ -143,9 +143,10 @@ if [ "$first_turn" = "1" ]; then
   ctx_args=()
   [ -n "$cwd" ] && ctx_args+=(--cwd "$cwd")
   [ -n "$sid" ] && ctx_args+=(--session "$sid")
-  # Same rule as the slate lanes below: never block the prompt. 6s is
-  # under the harness budget (15s Claude / 30s codex) and above the warm
-  # path. A timeout is a miss, not an error the user should see.
+  # Never block the prompt: each call is capped at 6s AND clipped to what is
+  # left of the shared KB_HOOK_BUDGET_SECS deadline (run_to above), so the
+  # lanes together stay under the harness budget. A timeout is a miss, not
+  # an error the user should see.
   scent="$(run_to 6 kb context "$prompt" "${extra[@]}" "${ctx_args[@]}" --json 2>/dev/null \
     | jq -r '.scent // empty' 2>/dev/null)" || scent=""
   # "no prior context" is the route's honest empty-corpus answer — injecting
@@ -285,8 +286,8 @@ fi
 # and reads the slate through this lane alone (design §12). The cursor is
 # client-side only (rules matrix "Cursor"): the CLI's open/delta and this
 # hook write the same head_seq. Session id ladder mirrors kb-wake.sh's
-# (payload -> env -> marker). Never blocks the prompt: `timeout 2` (delta) /
-# `timeout 4` (seed) cap the added wall time, and any failure — kb missing,
+# (payload -> env -> marker). Never blocks the prompt: `run_to 2` (delta) /
+# `run_to 4` (seed) cap the added wall time (clipped to the shared deadline), and any failure — kb missing,
 # non-zero exit, malformed JSON, no git repo — is silent and leaves the
 # output byte-identical to today.
 slate_sid="$sid"
