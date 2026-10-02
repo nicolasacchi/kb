@@ -60,3 +60,6 @@ crates/kb-core/bindings/
 plugins/kb-memory/bench/probe-filler.txt
 plugins/kb-memory/bench/run/
 plugins/kb-memory/bench/run-reduced/
+
+# gate-driver build log (scripts/review-store/run_gates.py writes it under --out; never commit it)
+/BUILD-LOG.md

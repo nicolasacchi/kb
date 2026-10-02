@@ -3008,13 +3008,13 @@ mod tests {
             [kb.memory-1000f]
             path = "/tmp/m"
             memory_scope = "project"
-            project_slugs = ["morning", "1000farmacie-iac"]
+            project_slugs = ["morning", "acme-iac"]
         "#;
         let c = KbConfig::from_toml_str(aliased).unwrap();
         let kb = c.kb.get(&KbName::new("memory-1000f").unwrap()).unwrap();
         assert_eq!(
             kb.project_slugs,
-            vec!["morning".to_string(), "1000farmacie-iac".to_string()]
+            vec!["morning".to_string(), "acme-iac".to_string()]
         );
     }
 

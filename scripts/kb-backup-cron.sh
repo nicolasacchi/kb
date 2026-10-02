@@ -5,7 +5,7 @@
 # Does not start a daemon. Exits with `kb backup --all`'s status.
 #
 # Crontab:
-#   0 3 * * * /home/nik/project/kb/scripts/kb-backup-cron.sh
+#   0 3 * * * /path/to/kb/scripts/kb-backup-cron.sh
 #
 set -euo pipefail
 exec kb backup --all
