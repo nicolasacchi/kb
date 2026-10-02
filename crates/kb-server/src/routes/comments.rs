@@ -1574,7 +1574,8 @@ pub async fn import(
             "ok": true,
             // v0.40 TN2 — public-only, on the same rule as every other
             // agent-visible count. The IMPORT ITSELF is lossless: private
-            // notes in the payload are written verbatim, because this route
+            // notes in the payload are written verbatim (and existing notes
+            // the payload lacks are carried over, see the merge above), because this route
             // is a restore/move transport and silently dropping operator
             // data is a worse failure than the leak it would prevent.
             "imported": public_count(&incoming),

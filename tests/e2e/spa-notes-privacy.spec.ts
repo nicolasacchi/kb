@@ -96,6 +96,8 @@ test.describe("private notes stay on the operator side (v0.44 P1)", () => {
     await page.goto(`${BASE}/review-notes`);
     const links = page.locator("a[href*='comment=']");
     const n = await links.count();
+    // Not vacuous: the first test created a note, so its cite link exists.
+    expect(n).toBeGreaterThan(0);
     for (let i = 0; i < n; i++) {
       const href = (await links.nth(i).getAttribute("href")) ?? "";
       expect(decodeURIComponent(href)).not.toContain(NOTE);
