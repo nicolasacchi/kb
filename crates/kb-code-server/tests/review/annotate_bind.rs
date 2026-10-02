@@ -581,3 +581,175 @@ async fn batch_bind_and_unbind_review_ops() {
         .unwrap();
     assert!(view["review_id"].is_null());
 }
+
+// --- v0.44 K4 (A7-1 / A7-2) ----------------------------------------------
+
+async fn reply_to(client: &reqwest::Client, base: &str, parent_id: &str, body: &str) -> String {
+    let resp = client
+        .post(format!("{base}/api/annotations"))
+        .json(&serde_json::json!({
+            "repo": "r", "path": "a.rs", "body": body, "parent_id": parent_id,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    v["id"].as_str().unwrap().to_string()
+}
+
+/// `(parent comments, total replies)` of `a.rs`'s group in a review's
+/// comments, `(0, 0)` when the review lists nothing for it.
+async fn thread_shape(client: &reqwest::Client, base: &str, review_id: i64) -> (usize, usize) {
+    let resp = client
+        .get(format!("{base}/api/reviews/{review_id}/comments"))
+        .query(&[("all", "true")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let listed: serde_json::Value = resp.json().await.unwrap();
+    let Some(group) = listed["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["path"] == "a.rs")
+    else {
+        return (0, 0);
+    };
+    let comments = group["comments"].as_array().unwrap();
+    let replies = comments
+        .iter()
+        .map(|c| c["replies"].as_array().unwrap().len())
+        .sum();
+    (comments.len(), replies)
+}
+
+/// A7-1 — bind / rebind / unbind of a parent that ALREADY has replies moves
+/// the whole thread. Without the `OR parent_id = ?1` cascade the replies
+/// keep their old scope: the new Room shows the parent with `replies: []`
+/// and the old Room is left with orphaned replies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bind_rebind_unbind_move_the_replies_with_their_parent() {
+    let repo_tmp = feature_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir, ReviewSection::default()).await;
+    let client = reqwest::Client::new();
+
+    let review_a = create_review(&client, &base, "r", "feature", "main").await;
+    let review_b = create_review(&client, &base, "r", "feature", "main").await;
+    let parent = create_plain_annotation(&client, &base, "r", "a.rs", 1, "thread root").await;
+    let id = parent["id"].as_str().unwrap().to_string();
+    reply_to(&client, &base, &id, "first reply").await;
+    reply_to(&client, &base, &id, "second reply").await;
+
+    let (status, body) = bind(&client, &base, &id, review_a, None, None).await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert_eq!(thread_shape(&client, &base, review_a).await, (1, 2));
+
+    let (status, body) = bind(&client, &base, &id, review_b, None, None).await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert_eq!(thread_shape(&client, &base, review_b).await, (1, 2));
+    assert_eq!(
+        thread_shape(&client, &base, review_a).await,
+        (0, 0),
+        "the old Room must not keep orphaned replies"
+    );
+
+    let (status, body) = unbind(&client, &base, &id).await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert_eq!(thread_shape(&client, &base, review_b).await, (0, 0));
+
+    // A reply posted after the unbind+rebind inherits the NEW scope, so the
+    // thread is whole in the Room it now lives in.
+    let (status, body) = bind(&client, &base, &id, review_a, None, None).await;
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    reply_to(&client, &base, &id, "third reply").await;
+    assert_eq!(thread_shape(&client, &base, review_a).await, (1, 3));
+}
+
+/// A7-2 — an annotation that backs a finding cannot be unbound or rebound
+/// (single routes AND the batch ops): the finding's thread would detach
+/// from its review.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_finding_backed_annotation_cannot_be_unbound_or_rebound() {
+    let repo_tmp = feature_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir, ReviewSection::default()).await;
+    let client = reqwest::Client::new();
+
+    let review_a = create_review(&client, &base, "r", "feature", "main").await;
+    let review_b = create_review(&client, &base, "r", "feature", "main").await;
+    let resp = client
+        .post(format!("{base}/api/reviews/{review_a}/findings/import"))
+        .json(&serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [{
+                "slug": "f-bound",
+                "severity": "concern",
+                "category": "Style",
+                "location": { "path": "a.rs", "kind": "single", "lines": [1] },
+                "title": "a finding",
+                "rationale": "because",
+            }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let listed: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{review_a}/findings"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ann_id = listed["findings"][0]["annotation_id"]
+        .as_str()
+        .expect("finding carries its annotation_id")
+        .to_string();
+
+    let (status, body) = unbind(&client, &base, &ann_id).await;
+    assert_eq!(status, reqwest::StatusCode::CONFLICT, "{body}");
+    let (status, body) = bind(&client, &base, &ann_id, review_b, None, None).await;
+    assert_eq!(status, reqwest::StatusCode::CONFLICT, "{body}");
+
+    for op in [
+        serde_json::json!({ "op": "unbind_review", "id": ann_id }),
+        serde_json::json!({ "op": "bind_review", "id": ann_id, "review_id": review_b }),
+    ] {
+        let resp = client
+            .post(format!("{base}/api/annotations/batch"))
+            .json(&serde_json::json!({ "repo": "r", "ops": [op] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::CONFLICT);
+    }
+
+    // Still bound to review A, thread intact.
+    let resp = client
+        .get(format!("{base}/api/reviews/{review_a}/comments"))
+        .send()
+        .await
+        .unwrap();
+    let comments: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        comments["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["comments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == ann_id)),
+        "the finding's thread must stay in review A: {comments}"
+    );
+}

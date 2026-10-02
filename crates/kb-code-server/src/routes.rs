@@ -447,7 +447,7 @@ impl From<StoreError> for ApiError {
             // V80-M5 — a finding-adoption insert losing a race for the same
             // `annotation_id` is a client error (409), the same class as
             // the two constraint collisions above, never an opaque 500.
-            StoreError::AnnotationAlreadyFinding(_) => {
+            StoreError::AnnotationAlreadyFinding(_) | StoreError::AnnotationIsFinding(_) => {
                 ApiError::new(StatusCode::CONFLICT, e.to_string())
             }
             // V4.C2 — batch unknown-id path. 400 (not 404) so a batch
@@ -3839,6 +3839,14 @@ pub async fn bind_annotation_review(
                     "a reply has no review scope of its own — bind its parent (see parent_id)",
                 ));
             }
+            if store.annotation_backs_finding(&id_bg)? {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "annotation {id_bg:?} backs a finding — its review scope is the finding's (urn:kb:errors:annotation-is-finding)"
+                    ),
+                ));
+            }
             let repo = find_repo_by_id(&state_bg, row.repo_id)?;
             let repo_name = repo.name.clone();
             let scope = resolve_review_bind_scope(
@@ -3905,6 +3913,14 @@ pub async fn unbind_annotation_review(
             if row.parent_id.is_some() {
                 return Err(ApiError::bad_request(
                     "a reply has no review scope of its own — unbind its parent (see parent_id)",
+                ));
+            }
+            if store.annotation_backs_finding(&id_bg)? {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "annotation {id_bg:?} backs a finding — its review scope is the finding's (urn:kb:errors:annotation-is-finding)"
+                    ),
                 ));
             }
             let repo = find_repo_by_id(&state_bg, row.repo_id)?;
