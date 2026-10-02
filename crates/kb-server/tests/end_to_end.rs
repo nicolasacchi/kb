@@ -2648,6 +2648,144 @@ async fn import_refusal_does_not_disclose_a_private_note() {
 }
 
 #[tokio::test]
+async fn import_without_the_note_preserves_private_notes_with_and_without_force() {
+    // v0.44 P1 (A2-3): the unforced import over a notes-only sidecar used to
+    // REPLACE it, so a public-only `export --embed` payload (zero comments)
+    // silently destroyed the operator's notes. The write is now a merge.
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "importmergenotes";
+    let base = &format!("/api/kb/smoke/review/{art}");
+    let (note_id, _) = add_comment_at(&client, addr, base, "keep this note", true).await;
+    let empty = serde_json::json!({
+        "schema": "kb-comments/1",
+        "artifact": {"id": art, "title": "T", "kb": "smoke", "tags": [], "pages": []},
+        "generatedAt": "2026-05-14T10:00:00Z",
+        "comments": [],
+    });
+    for query in ["", "?force=true"] {
+        let resp = client
+            .post(url(addr, &format!("{base}/import{query}")))
+            .header("Origin", ORIGIN)
+            .json(&empty)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "import{query} must not refuse");
+        let ok: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(ok["imported"], 0, "count stays public-only: {ok}");
+        let all: serde_json::Value = client
+            .get(url(addr, &format!("{base}?visibility=all")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let rows = all["comments"].as_array().expect("comments array");
+        assert_eq!(rows.len(), 1, "import{query} destroyed the note: {all}");
+        assert_eq!(rows[0]["id"], note_id.as_str());
+        assert_eq!(rows[0]["body"], "keep this note");
+        assert_eq!(rows[0]["private"], true);
+    }
+}
+
+/// v0.44 P1 (A2-10): import is the third owner-gated path beside PATCH
+/// `…/meta` and batch `set_meta`. A payload row that reuses another user's
+/// private-note id and changes what it says (or un-privates it) is refused
+/// 403 not-owner and the note is untouched; the owner may re-import it.
+#[tokio::test]
+async fn import_reusing_another_users_note_id_is_owner_gated() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "importownergate1";
+    let base = format!("/api/kb/smoke/review/{art}");
+    let resp = client
+        .post(url(addr, &format!("{base}/comments")))
+        .header("Remote-User", "alice")
+        .json(&serde_json::json!({
+            "body": "alice's note",
+            "author": "you",
+            "anchor": {"kind": "file"},
+            "private": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let row: serde_json::Value = resp.json().await.unwrap();
+    let nid = row["id"].as_str().unwrap().to_string();
+
+    let payload = |row: &serde_json::Value| {
+        serde_json::json!({
+            "schema": "kb-comments/1",
+            "artifact": {"id": art, "title": "T", "kb": "smoke", "tags": [], "pages": []},
+            "generatedAt": "2026-05-14T10:00:00Z",
+            "comments": [row],
+        })
+    };
+    let read_note = || async {
+        let all: serde_json::Value = client
+            .get(url(addr, &format!("{base}?visibility=all")))
+            .header("Remote-User", "alice")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        all["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == nid.as_str())
+            .cloned()
+            .expect("note must survive")
+    };
+
+    // bob rewrites the body → 403 not-owner, note unchanged.
+    let mut hijack = row.clone();
+    hijack["body"] = "bob was here".into();
+    let resp = client
+        .post(url(addr, &format!("{base}/import?force=true")))
+        .header("Remote-User", "bob")
+        .json(&payload(&hijack))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403, "non-owner body change via import");
+    let prob: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(prob["type"].as_str(), Some("urn:kb:errors:not-owner"));
+    assert_eq!(read_note().await["body"], "alice's note");
+
+    // bob un-privates it → 403 too, still private.
+    let mut leak = row.clone();
+    leak["private"] = false.into();
+    let resp = client
+        .post(url(addr, &format!("{base}/import?force=true")))
+        .header("Remote-User", "bob")
+        .json(&payload(&leak))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403, "non-owner un-private via import");
+    assert_eq!(read_note().await["private"], true);
+
+    // alice (the owner) re-imports an edited row → 200 and applied.
+    let mut mine = row.clone();
+    mine["body"] = "alice rewrote".into();
+    let resp = client
+        .post(url(addr, &format!("{base}/import?force=true")))
+        .header("Remote-User", "alice")
+        .json(&payload(&mine))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "owner re-import");
+    assert_eq!(read_note().await["body"], "alice rewrote");
+}
+
+#[tokio::test]
 async fn patch_comment_meta_normalises_and_reports_effective_values() {
     use futures::StreamExt;
     let (_tmp, addr, paths) = boot_with_paths().await;
