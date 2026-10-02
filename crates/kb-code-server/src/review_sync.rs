@@ -1093,7 +1093,7 @@ pub async fn sync_route(
     let is_loopback = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
     );
     body.gh_token =
         match crate::github::admit_cli_github_token(is_loopback, body.gh_token.as_deref()) {
@@ -1194,7 +1194,7 @@ pub async fn review_status_route(
         && !kb_server::middleware::is_loopback_origin(
             Some(peer.ip()),
             &headers,
-            &state.auth.trusted_proxies,
+            &state.auth.trusted_proxies.load(),
         )
     {
         return Err(ApiError::new(

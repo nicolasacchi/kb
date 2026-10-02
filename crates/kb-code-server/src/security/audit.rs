@@ -189,7 +189,8 @@ pub async fn audit_mutations(
     let method = req.method().to_string();
     let repo = repo_from_query(req.uri().query());
     let target = target_from_query(req.uri().query());
-    let loopback = kb_server::middleware::request_is_loopback(&req, &state.auth.trusted_proxies);
+    let loopback =
+        kb_server::middleware::request_is_loopback(&req, &state.auth.trusted_proxies.load());
     let admission = if loopback {
         "loopback"
     } else if state.review.remote_mutations && is_review_gate_path(&route) {

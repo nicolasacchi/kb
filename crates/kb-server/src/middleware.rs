@@ -579,7 +579,7 @@ pub fn host_gate_applies_to_peer(
 /// for a request from `peer`. Used by the SPA fallback to decide whether
 /// the permalink shell may consult the corpus (OG meta, moved-path 301).
 pub fn host_refused_for_peer(host: Option<&str>, peer: Option<IpAddr>, cfg: &OriginConfig) -> bool {
-    host_gate_applies_to_peer(peer, &cfg.trusted_proxies, !cfg.hostnames.is_empty())
+    host_gate_applies_to_peer(peer, &cfg.trusted_proxies.load(), !cfg.hostnames.is_empty())
         && !host_allowed(host, cfg)
 }
 

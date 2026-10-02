@@ -206,7 +206,8 @@ impl ProxyResolver {
             tick.tick().await; // boot already resolved
             loop {
                 tokio::select! {
-                    _ = shutdown.wait_for(|&d| d) => break,
+                    // The watch `Ref` guard is !Send; drop it inside the arm future.
+                    _ = async { let _ = shutdown.wait_for(|&d| d).await; } => break,
                     _ = tick.tick() => self.refresh().await,
                 }
             }

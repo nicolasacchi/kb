@@ -172,7 +172,7 @@ pub async fn identity(
     let review_mutations_admitted = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
     ) || state.review.remote_mutations;
     // Every configured repo was `upsert_repo`'d in `bind_and_spawn`, so
     // `id` is always `Some` in practice; `unwrap_or_default()` (zero
@@ -1037,7 +1037,7 @@ pub async fn repos(
     let is_loopback = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
     );
     let state_bg = state.clone();
     let list: Vec<RepoListEntry> = state
@@ -1956,7 +1956,7 @@ pub async fn search_unified(
     let is_loopback = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
     );
     let body = crate::search::unified::run(
         &state,
