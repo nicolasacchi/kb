@@ -296,7 +296,6 @@ function NoteRow({ row }: { row: ReviewNoteRow }) {
         title: row.artifact_title || row.artifact_id,
         anchor: row.anchor,
         commentId: row.comment_id,
-        body: row.body,
       })
     : null;
 

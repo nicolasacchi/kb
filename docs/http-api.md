@@ -1979,7 +1979,11 @@ Exactly four things can surface one:
    leak it would prevent, and one that needs the operator to hand an HTML
    bundle to an agent to trigger. `kb backup` copies `.review/` verbatim for
    the same reason. Neither transport is agent-reachable by default: `--embed`
-   is an operator verb, and an import overwrites nothing without `force=true`.
+   is an operator verb, and an import overwrites no PUBLIC comment without `force=true`.
+   An import is a merge for notes: private notes already in the sidecar that
+   the payload does not carry are kept (with or without `force`), and a
+   payload row that rewrites or un-privates another user's note is refused
+   403. Notes can therefore never be removed by import.
 
 Two consequences of the same rule, both deliberate. `keep` and `keep_memory`
 refuse a note with a **409** before writing any file, because both produce

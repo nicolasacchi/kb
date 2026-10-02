@@ -970,7 +970,7 @@ pub async fn apply(
 /// [--force]` — read the `kb-review-state` block embedded by
 /// `export --embed` and POST it to `/review/{id}/import`, restoring the
 /// comments (ids/statuses/replies preserved). Refuses to overwrite existing
-/// non-empty comments unless `--force`.
+/// public comments unless `--force`; existing private notes are always kept.
 #[allow(clippy::too_many_arguments)]
 pub async fn import(
     kb: Option<&str>,
