@@ -5603,7 +5603,7 @@ pub async fn pr_status_route(
     // A6-2 / D12 — the ONE forge context ([`forge_ctx`]): the store's
     // project and account when a store is ready, the member's `origin` only
     // without one, and a closed answer when the store lookup failed.
-    let forge = forge_ctx(&state, &repo, None).await;
+    let forge = forge_ctx(&state, repo, None).await;
     let gh_repo_result = forge.repo_or_reason();
     let github = forge.client;
 
