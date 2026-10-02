@@ -40,6 +40,7 @@ import {
 import { currentDaemonBase } from "../api/base";
 import { embedReviewIntoHtml, extractReviewFromHtml } from "../lib/reviewEmbed";
 import { buildCiteMarkdown } from "../lib/quote";
+import { publicView } from "../lib/publicView";
 import { stableAnchorKey, useDraft } from "../lib/drafts";
 import { useIdentity } from "../hooks/useArtifactHost";
 import { useIsMobile } from "../hooks/useIsMobile";
@@ -1431,8 +1432,8 @@ function CommentRow({
 
 // --- export modal ----------------------------------------------------------
 
-function ExportModal({
-  file,
+export function ExportModal({
+  file: operatorFile,
   kb,
   onClose,
 }: {
@@ -1440,6 +1441,10 @@ function ExportModal({
   kb: string;
   onClose: () => void;
 }) {
+  // Every export leaves the operator's panel (it is pasted into an agent, or
+  // handed to someone), so it is built from the public projection only: a
+  // private note must never be listed as a task for Claude.
+  const file = useMemo(() => publicView(operatorFile), [operatorFile]);
   const ref = useRef<HTMLDialogElement | null>(null);
   // Open via .show() on first render so DOM nodes mount.
   if (ref.current && !ref.current.open) {
@@ -1573,7 +1578,8 @@ function downloadBlob(filename: string, body: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-function buildClaudePrompt(file: ReviewFile, kb: string): string {
+export function buildClaudePrompt(operatorFile: ReviewFile, kb: string): string {
+  const file = publicView(operatorFile); // belt and braces: the builder is a boundary too
   const lines: string[] = [];
   lines.push(`# Review: ${file.artifact.title || file.artifact.id}`);
   lines.push("");
@@ -1599,7 +1605,8 @@ function buildClaudePrompt(file: ReviewFile, kb: string): string {
   return lines.join("\n");
 }
 
-function buildMarkdown(file: ReviewFile): string {
+export function buildMarkdown(operatorFile: ReviewFile): string {
+  const file = publicView(operatorFile);
   const lines: string[] = [];
   lines.push(`# ${file.artifact.title || file.artifact.id}`);
   lines.push("");
