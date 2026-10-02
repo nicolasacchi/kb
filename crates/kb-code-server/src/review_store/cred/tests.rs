@@ -103,7 +103,14 @@ fn gh_url() -> RemoteUrl {
 fn hung_gh() -> (tempfile::TempDir, GhCli) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("gh");
-    std::fs::write(&p, "#!/bin/sh\nsleep 60\n").unwrap();
+    // `wait_executable` execs the script once with `--kbrs-warmup` and WAITS
+    // for it: that warm-up must return at once, or this test stalls 60 s
+    // before the deadline under test even starts.
+    std::fs::write(
+        &p,
+        "#!/bin/sh\n[ \"$1\" = \"--kbrs-warmup\" ] && exit 0\nsleep 60\n",
+    )
+    .unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     wait_executable(&p);

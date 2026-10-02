@@ -35,10 +35,19 @@
 //! resolve at the same type — see that module's own doc for the full
 //! contract (including why a `null` golden leaf is presence-only, and why
 //! a brand-new key can never fail the check). The fixtures below are
-//! chosen so every field that CAN be non-null in ordinary use IS non-null
+//! chosen to make most fields that CAN be non-null in ordinary use non-null
 //! here (a bound PR, a set verdict, an authored report, a populated
 //! `pr_meta` with labels/checks/body) — a golden pinned entirely on
 //! `null`s would only prove key PRESENCE, not type, for those fields.
+//!
+//! **Pinned presence-only (the committed golden leaf is `null`, or an empty
+//! array with no element shape), so a retype of these is NOT caught:**
+//! review `title`, `session_id`, `artifact_hint_id`, `artifact_hint_kb`
+//! (no fixture sets them), `pr_meta_unavailable_reason`, `unavailable_reason`,
+//! the async job's `error`/`error_type`, `review_files[].old_path` (no
+//! fixture file is renamed) and `review_files[].hunks_viewed` (no hunk is
+//! marked viewed, so the element shape is unpinned). Pinning them needs
+//! fixtures that set them plus re-minted goldens.
 //!
 //! # Regenerating (this crate builds with NO local cargo — see
 //! `BUILDER-RULES.md`; every golden here was minted on GitHub CI)

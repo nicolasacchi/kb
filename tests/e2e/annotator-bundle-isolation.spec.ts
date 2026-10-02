@@ -113,6 +113,32 @@ test.describe("annotator bundle isolation", () => {
     expect(out.markerId).toBe("c-bundle-isolation");
   });
 
+  test("is a single self-contained IIFE, so lexical (let/const/class) names are scoped too", async () => {
+    // The window-property diff above cannot see top-level `let`/`const`/
+    // `class` bindings (they live in the global declarative record, not on
+    // `window`), and those are exactly the kind that collided. So pin the
+    // SHAPE of the shipped bundle: after any leading comments and a
+    // directive prologue, the whole file must be ONE immediately-invoked
+    // function expression. Anything emitted outside it (a hoisted
+    // `const g=()=>…`) would sit before the opening bracket or after the
+    // closing call, and fails one of these two checks.
+    let text = readFileSync(BUNDLE, "utf8").trim();
+    for (;;) {
+      const before = text;
+      text = text
+        .replace(/^\/\*[\s\S]*?\*\/\s*/, "")
+        .replace(/^\/\/[^\n]*\n\s*/, "")
+        .replace(/^(["'])use strict\1;?\s*/, "");
+      if (text === before) break;
+    }
+    expect(text, "must open with a parenthesised or `!`-prefixed function").toMatch(
+      /^[(!]\s*(?:async\s*)?(?:function\b|\(\s*\)\s*=>)/,
+    );
+    expect(text, "must end with the IIFE's own call and nothing after it").toMatch(
+      /(?:\)\s*\(\s*\)|\}\s*\(\s*\))\s*;?\s*(?:\/\/[^\n]*)?$/,
+    );
+  });
+
   test("still installs on an artifact that already owns the short names", async ({
     page,
   }) => {
