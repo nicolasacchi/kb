@@ -69,59 +69,6 @@ ignore = [
     { id = "RUSTSEC-2023-0071", reason = "no fix exists; rsa via opendal reqsign (cloud signing), compiled in but never invoked (no cloud URIs, no RSA keys handled). Review by 2026-12-31" },
 ]
 
-[licenses] version = 2). Requires
-# cargo-deny >= 0.16 (the EmbarkStudios/cargo-deny-action default is current).
-# The v1 `unlicensed`/`copyleft`/`allow-osi-fsf-free`/severity-threshold fields
-# are GONE in v2 — do not reintroduce them.
-#
-# The [licenses].allow list is derived from the ACTUAL dependency graph (790
-# crates as of Cargo.lock @ 2026-06): every distinct SPDX identifier that
-# appears, after decomposing OR/AND/WITH/slash expressions, is listed. The
-# graph contains ZERO GPL/AGPL/SSPL/proprietary (the only LGPL is OR-satisfied
-# via MIT in r-efi), so this gate passes today. Re-run `just licenses-graph`
-# after a big dep bump and add any new SPDX id here BEFORE it lands, or this
-# job fails the PR.
-
-[graph]
-# Evaluate the full graph including all features. The `local-embedder` /
-# fastembed+ORT path adds NO new license ids (ort/ort-sys are MIT OR Apache-2.0),
-# but enable it so the supply-chain gate covers the embedder's deps too.
-all-features = true
-
-[advisories]
-version = 2
-# RustSec advisory DB gate. With version = 2 the default behaviour is:
-#   vulnerability  -> deny      (any unpatched RUSTSEC vuln fails CI)
-#   unmaintained   -> warn (workspace scope)  — see `unmaintained` below
-#   yanked         -> warn   (overridden to DENY below — see `yanked =`)
-#   notice/unsound -> warn
-# `ignore` is an AUDITED EXCEPTION LIST, not an empty-means-clean signal: it
-# currently holds three entries (below), each with an owner, a review-by date
-# and a re-check trigger. Adding one needs the same three things. An advisory
-# that fires is never silenced without a written reason that names why kb's
-# code cannot reach it.
-unmaintained = "workspace"
-# Override the v2 default (warn): a yanked crate in Cargo.lock fails CI. A yank
-# usually signals a withdrawn/compromised release, so it should block. cargo-deny
-# reports 0 yanked crates today (verified), so this only catches NEW yanks.
-yanked = "deny"
-ignore = [
-    # quick-xml 0.39.4 is pinned by object_store 0.13 (`quick-xml ^0.39`),
-    # which datafusion 54 (= the ratified lockstep set) requires; the fixed
-    # 0.41 line needs object_store 0.14 / datafusion 55 — a future lockstep
-    # unit. The vulnerable XML parsing only runs on object_store's cloud
-    # (S3/GCS/azure) response paths; kb's build is local-only
-    # (`lancedb default-features = false`), so no kb code path parses
-    # untrusted XML through it.
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39 capped by object_store 0.13 (datafusion 54 lockstep); cloud-only XML path, not in kb's local-only build" },
-    { id = "RUSTSEC-2026-0195", reason = "same as RUSTSEC-2026-0194 (quick-xml 0.39 via object_store 0.13; cloud-only path)" },
-    # rsa Marvin timing sidechannel: "no safe upgrade is available". rsa
-    # enters via opendal's reqsign cloud-signing stack (lance-io aws/azure/
-    # gcs features) — compiled only in the all-features deny graph, never in
-    # kb's local-only build; no kb key material is ever handled by it.
-    { id = "RUSTSEC-2023-0071", reason = "no fix exists; rsa via opendal reqsign (cloud signing), unreachable in kb's local-only build" },
-]
-
 [licenses]
 version = 2
 # `confidence-threshold` governs the text-matcher for license-FILE-only crates;
