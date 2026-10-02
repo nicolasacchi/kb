@@ -901,7 +901,7 @@ fn the_pre_apply_bundle_covers_a_de_registered_members_work_refs_when_no_kbc_ref
         "the apply deleted exactly the de-registered member's mirror ref"
     );
 
-    let bundle = bundle_path(&e.rs.settings().backups_dir, &e.row.uuid, 500);
+    let bundle = preapply_bundle_path(&e.rs.settings().backups_dir, &e.row.uuid, 500);
     assert!(
         bundle.is_file(),
         "the pre-apply bundle was skipped as no-refs: {bundle:?}"
@@ -1286,4 +1286,231 @@ fn e_write_blob(dir: &Path, i: u8) -> String {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+fn state_json_of(e: &Env, id: i64) -> serde_json::Value {
+    let row = e.store.get_review_store(id).unwrap().unwrap();
+    serde_json::from_str(row.state_json.as_deref().unwrap_or("{}")).unwrap()
+}
+
+/// A5-2: the pass writes only its own keys. A `last_gc_apply` that lands
+/// AFTER the pass took its row snapshot (a concurrent `store gc --yes`)
+/// must survive the pass's final write.
+#[test]
+fn a_pass_never_writes_back_its_entry_snapshot_over_a_concurrent_gc_record() {
+    let e = env();
+    let row = ready_row(&e);
+    // The snapshot the scheduler lists, BEFORE the concurrent apply.
+    let stale_snapshot = e.store.get_review_store(row.id).unwrap().unwrap();
+    assert!(state_json_of(&e, row.id).get("last_gc_apply").is_none());
+    e.store
+        .update_review_store_state_json(
+            row.id,
+            &[(
+                "last_gc_apply",
+                serde_json::json!({ "at": 777, "candidates": 3 }),
+            )],
+            None,
+        )
+        .unwrap();
+    let report = run_pass_for_store(&e.rs, &e.store, &stale_snapshot, &[MaintTask::Daily], 900);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let sj = state_json_of(&e, row.id);
+    assert_eq!(
+        sj["last_gc_apply"]["at"], 777,
+        "the concurrent apply's record was clobbered: {sj}"
+    );
+    assert!(sj.get("last_maint").is_some(), "the pass's own key: {sj}");
+}
+
+/// The same twin on the backup path: `last_backup` is set with `json_set`,
+/// every other key survives.
+#[test]
+fn a_backup_pass_keeps_every_other_state_json_key() {
+    let e = env();
+    review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    e.store
+        .update_review_store_state_json(
+            row.id,
+            &[("last_gc_apply", serde_json::json!({ "at": 55 }))],
+            None,
+        )
+        .unwrap();
+    let conn = rusqlite::Connection::open(e.fx.home.join("index.db")).unwrap();
+    let r = backup_all_ready_stores(&conn, e.rs.git().unwrap(), &e.fx.home, 1000);
+    assert!(r.stores[0].written.is_some(), "{r:?}");
+    let sj = state_json_of(&e, row.id);
+    assert_eq!(sj["last_gc_apply"]["at"], 55, "{sj}");
+    assert_eq!(sj["last_backup"]["at"], 1000, "{sj}");
+}
+
+#[test]
+fn update_state_json_sets_only_named_keys_removes_nulls_and_refuses_odd_keys() {
+    let e = env();
+    let row = ready_row(&e);
+    e.store
+        .update_review_store_state_json(
+            row.id,
+            &[
+                ("keep_me", serde_json::json!({ "n": 1 })),
+                ("drop_me", serde_json::json!("x")),
+            ],
+            None,
+        )
+        .unwrap();
+    e.store
+        .update_review_store_state_json(
+            row.id,
+            &[("drop_me", serde_json::Value::Null), ("added", 2.into())],
+            None,
+        )
+        .unwrap();
+    let sj = state_json_of(&e, row.id);
+    assert_eq!(sj["keep_me"]["n"], 1);
+    assert!(sj.get("drop_me").is_none(), "{sj}");
+    assert_eq!(sj["added"], 2);
+    assert_eq!(
+        e.store.get_review_store(row.id).unwrap().unwrap().state,
+        "ready",
+        "state untouched when None"
+    );
+    assert!(e
+        .store
+        .update_review_store_state_json(row.id, &[("a'b", 1.into())], None)
+        .is_err());
+}
+
+/// The apply starts the cooldown clock durably BEFORE deleting anything.
+#[test]
+fn a_real_apply_records_the_cooldown_mark_and_the_cruft_gate_honours_it() {
+    let e = env();
+    let r1 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    e.store.delete_review(r1).unwrap();
+    let report = run_gc_now(&e.rs, &e.store, &row, true, true, 4_000_000).unwrap();
+    assert!(report.applied, "{report:?}");
+    let sj = state_json_of(&e, row.id);
+    assert_eq!(sj[GC_APPLY_STARTED_KEY], 4_000_000, "{sj}");
+    assert_eq!(sj["last_gc_apply"]["at"], 4_000_000, "{sj}");
+
+    // A recorded apply whose own record is OLD but whose mark is fresh
+    // (the record write failed) still holds the cooldown.
+    let lost_record = serde_json::json!({
+        "last_gc_apply": { "at": 1000 },
+        GC_APPLY_STARTED_KEY: 1_000_000,
+    });
+    assert!(!cruft_allow_expire(
+        &lost_record,
+        1_000_000 + CRUFT_EXPIRE_COOLDOWN_SECS - 1
+    ));
+    assert!(cruft_allow_expire(
+        &lost_record,
+        1_000_000 + CRUFT_EXPIRE_COOLDOWN_SECS
+    ));
+}
+
+/// Fail CLOSED: when the mark cannot be written the apply is refused and
+/// no ref is deleted.
+#[test]
+fn an_apply_whose_cooldown_mark_cannot_be_written_deletes_nothing() {
+    let e = env();
+    let r1 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    let dir = Path::new(&row.git_dir);
+    e.store.delete_review(r1).unwrap();
+    let conn = rusqlite::Connection::open(e.fx.home.join("index.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER no_state_writes BEFORE UPDATE ON review_stores \
+         BEGIN SELECT RAISE(ABORT, 'disk full (simulated)'); END;",
+    )
+    .unwrap();
+    let err = run_gc_now(&e.rs, &e.store, &row, true, true, 5).unwrap_err();
+    assert!(err.contains("refusing"), "{err}");
+    assert!(
+        store_refs(dir).contains(&seed::patchset_ref(r1, 1)),
+        "a ref was deleted although the mark could not be recorded"
+    );
+}
+
+/// A5.f14: a flagged restore guard forbids cruft expiry outright, whatever
+/// the recorded apply age says.
+#[test]
+fn a_monthly_pass_cannot_expire_cruft_while_the_restore_guard_is_flagged() {
+    let sj = serde_json::json!({ "last_gc_apply": { "at": 1 } });
+    let now = 1 + 10 * CRUFT_EXPIRE_COOLDOWN_SECS;
+    let clear = restore_guard::RestoreGuardState::default();
+    assert!(expiry_permitted(&sj, &clear, "u1", now));
+    let mut flagged = restore_guard::RestoreGuardState {
+        flagged: true,
+        ..Default::default()
+    };
+    assert!(!expiry_permitted(&sj, &flagged, "u1", now));
+    // Per store: an acknowledged (or admitted) store is lifted, another is not.
+    flagged.acknowledged_stores.insert("u1".to_string());
+    assert!(expiry_permitted(&sj, &flagged, "u1", now));
+    assert!(!expiry_permitted(&sj, &flagged, "u2", now));
+}
+
+/// A5.f9: a store created after the incident starts unblocked.
+#[test]
+fn a_store_born_after_a_restore_incident_is_admitted_past_the_guard() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    restore_guard::flag_manual(&p, "test", 10).unwrap();
+    assert!(restore_guard::read(&p).blocks("old"));
+    restore_guard::admit_new_store(&p, "new");
+    let s = restore_guard::read(&p);
+    assert!(s.flagged, "the incident itself stays on record");
+    assert!(!s.blocks("new"));
+    assert!(s.blocks("old"), "pre-existing stores stay blocked");
+    // Unflagged: a no-op that does not even create the file.
+    let q = restore_guard::path_for(&tmp.path().join("other"));
+    restore_guard::admit_new_store(&q, "new");
+    assert!(!q.exists());
+}
+
+/// A5.f7: pre-apply bundles have their own namespace and retention.
+#[test]
+fn routine_bundle_rotation_never_removes_a_pre_apply_bundle() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let uuid = "11111111-1111-4111-8111-111111111111";
+    let pre = preapply_bundle_path(dir, uuid, 100);
+    std::fs::write(&pre, b"x").unwrap();
+    for ts in [1000, 2000, 3000, 4000, 5000] {
+        std::fs::write(bundle_path(dir, uuid, ts), b"x").unwrap();
+    }
+    prune_bundles(dir, uuid, BUNDLES_KEPT).unwrap();
+    assert!(pre.is_file(), "routine prune removed the pre-apply bundle");
+
+    // Same-second applies get distinct names.
+    let a = fresh_preapply_bundle_path(dir, uuid, 100);
+    assert_ne!(a, pre);
+    std::fs::write(&a, b"x").unwrap();
+    assert_ne!(fresh_preapply_bundle_path(dir, uuid, 100), a);
+
+    // Retention: count AND the cooldown window both protect.
+    for ts in [200, 300, 400, 500, 600, 700] {
+        std::fs::write(preapply_bundle_path(dir, uuid, ts), b"x").unwrap();
+    }
+    let now = 700 + CRUFT_EXPIRE_COOLDOWN_SECS - 1;
+    // The three oldest (100, 100-1, 200) are beyond the newest five and
+    // at least a full cooldown old, so they go; nothing else may.
+    let removed = prune_preapply_bundles(dir, uuid, 5, now, CRUFT_EXPIRE_COOLDOWN_SECS).unwrap();
+    assert_eq!(removed.len(), 3, "{removed:?}");
+    let young = prune_preapply_bundles(dir, uuid, 0, 700, CRUFT_EXPIRE_COOLDOWN_SECS).unwrap();
+    assert!(
+        young.is_empty(),
+        "everything is inside the cooldown: {young:?}"
+    );
+}
+
+#[test]
+fn the_maintenance_lock_is_one_mutex_per_store() {
+    let e = env();
+    let a = e.rs.maint_lock(1);
+    assert!(std::sync::Arc::ptr_eq(&a, &e.rs.maint_lock(1)));
+    assert!(!std::sync::Arc::ptr_eq(&a, &e.rs.maint_lock(2)));
+    assert!(!std::sync::Arc::ptr_eq(&a, &e.rs.ops_lock(1)));
 }

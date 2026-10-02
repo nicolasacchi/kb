@@ -161,6 +161,14 @@ pub const STALE_TMP_PACK_AGE: Duration = Duration::from_secs(3600);
 /// "The last 3 are kept.").
 pub const BUNDLES_KEPT: usize = 3;
 
+/// Pre-apply (GC) bundles live in their OWN file namespace
+/// (`store-<uuid>-preapply-<ts>[-<n>].bundle`) with their OWN retention, so
+/// routine `kb-code backup` / boot bundles can never rotate the only
+/// backup of an apply out from under the cruft cooldown. The newest
+/// [`PREAPPLY_BUNDLES_KEPT`] are kept AND every one younger than the
+/// cooldown, whichever is more.
+pub const PREAPPLY_BUNDLES_KEPT: usize = 5;
+
 // ── cadence scheduling (pure) ──────────────────────────────────────────
 
 pub const DAY_SECS: i64 = 24 * 3600;
@@ -518,6 +526,24 @@ pub mod restore_guard {
         Ok(state)
     }
 
+    /// A store CREATED after the incident cannot hold restore-damaged state
+    /// (its row and directory did not exist when the volume was rolled
+    /// back), so it is admitted at creation: its uuid joins
+    /// `acknowledged_stores` of the CURRENT incident and nothing else
+    /// changes (`flagged` and `cleared_at` are untouched). Without this
+    /// every store created after one restore would start blocked and need
+    /// a manual `gc --yes`. A no-op when nothing is flagged; best-effort
+    /// (a failure leaves the store blocked, the safe direction).
+    pub fn admit_new_store(guard_path: &Path, store_uuid: &str) {
+        let mut state = read(guard_path);
+        if !state.flagged || !state.acknowledged_stores.insert(store_uuid.to_string()) {
+            return;
+        }
+        if let Err(e) = write(guard_path, &state) {
+            tracing::warn!(error = %e, store = store_uuid, "kb-code: could not admit a new store past the restore guard");
+        }
+    }
+
     /// The operator's explicit `kb-code store gc --repo R --yes`
     /// acknowledgement for STORE `store_uuid` only (review finding,
     /// Should-fix — this never clears `flagged` globally, and never
@@ -584,6 +610,12 @@ pub fn run_weekly(git: &StoreGit, git_dir: &Path) -> Result<(), StoreGitError> {
 /// work-ref mirror prune orphans objects without moving it (see
 /// [`run_monthly`]'s "Recorded scope of that premise").
 pub const CRUFT_EXPIRE_COOLDOWN_SECS: i64 = 14 * DAY_SECS;
+
+/// `state_json` key written (durably, BEFORE the first ref is deleted) by
+/// a real GC apply: the cooldown clock starts here, so a failed or racing
+/// write of `last_gc_apply` can never leave the monthly cruft expiry
+/// judging from a stale or absent record.
+pub const GC_APPLY_STARTED_KEY: &str = "gc_apply_started_at";
 
 /// Monthly: `repack --cruft -d --cruft-expiration=<…>` plus
 /// `reflog expire --expire=14.days --all` (README §5.4,
@@ -907,8 +939,8 @@ fn apply_gc_candidates(
     // bundle stays a point-in-time snapshot of the SAME classification
     // `report` came from, with no second scan that could disagree with
     // it. It is bounded by the candidate count, itself bounded by the
-    // store's ref count (the same bound the `refs/kbc/*` argv already
-    // relies on — see [`write_bundle`]'s ARG_MAX note).
+    // store's ref count (the ref list goes over stdin, so there is no
+    // argv bound to hit — see [`write_bundle`]).
     let cover: Vec<(String, String)> = candidates
         .iter()
         .map(|c| (c.old_oid.clone(), c.refname.clone()))
@@ -916,11 +948,17 @@ fn apply_gc_candidates(
     match write_bundle_covering(
         git,
         git_dir,
-        &bundle_path(backups_dir, store_uuid, now),
+        &fresh_preapply_bundle_path(backups_dir, store_uuid, now),
         &cover,
     ) {
         Ok(BundleOutcome::Written) => {
-            if let Err(e) = prune_bundles(backups_dir, store_uuid, BUNDLES_KEPT) {
+            if let Err(e) = prune_preapply_bundles(
+                backups_dir,
+                store_uuid,
+                PREAPPLY_BUNDLES_KEPT,
+                now,
+                CRUFT_EXPIRE_COOLDOWN_SECS,
+            ) {
                 tracing::warn!(error = %e, store = store_uuid, "kb-code: bundle prune before gc apply failed (non-fatal)");
             }
         }
@@ -1033,6 +1071,77 @@ pub fn bundle_path(backups_dir: &Path, uuid: &str, ts: i64) -> PathBuf {
     backups_dir.join(format!("store-{uuid}-{ts}.bundle"))
 }
 
+/// `<backups>/store-<uuid>-preapply-<ts>.bundle` — the GC pre-apply bundle's
+/// own namespace (see [`PREAPPLY_BUNDLES_KEPT`]). The routine
+/// [`prune_bundles`] cannot match it (`preapply-<ts>` is not an integer).
+pub fn preapply_bundle_path(backups_dir: &Path, uuid: &str, ts: i64) -> PathBuf {
+    backups_dir.join(format!("store-{uuid}-preapply-{ts}.bundle"))
+}
+
+/// [`preapply_bundle_path`], suffixed `-<n>` until the name is free: two
+/// applies inside one second must not overwrite each other's backup.
+fn fresh_preapply_bundle_path(backups_dir: &Path, uuid: &str, ts: i64) -> PathBuf {
+    let base = preapply_bundle_path(backups_dir, uuid, ts);
+    if !base.exists() {
+        return base;
+    }
+    (1u32..)
+        .map(|n| backups_dir.join(format!("store-{uuid}-preapply-{ts}-{n}.bundle")))
+        .find(|p| !p.exists())
+        .unwrap_or(base)
+}
+
+/// Retention for the pre-apply namespace: keep the newest `keep` AND every
+/// bundle younger than `min_age_secs` (the cruft cooldown — the window in
+/// which the bundle is the only way back). Returns the removed paths.
+pub fn prune_preapply_bundles(
+    backups_dir: &Path,
+    uuid: &str,
+    keep: usize,
+    now: i64,
+    min_age_secs: i64,
+) -> std::io::Result<Vec<PathBuf>> {
+    let prefix = format!("store-{uuid}-preapply-");
+    let rd = match std::fs::read_dir(backups_dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
+    let mut found: Vec<(i64, u32, PathBuf)> = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let Some(s) = name.to_str() else { continue };
+        let Some(rest) = s
+            .strip_prefix(&prefix)
+            .and_then(|r| r.strip_suffix(".bundle"))
+        else {
+            continue;
+        };
+        let (ts_str, n_str) = rest.split_once('-').unwrap_or((rest, "0"));
+        let (Ok(ts), Ok(n)) = (ts_str.parse::<i64>(), n_str.parse::<u32>()) else {
+            continue;
+        };
+        found.push((ts, n, entry.path()));
+    }
+    found.sort_by_key(|b| std::cmp::Reverse((b.0, b.1)));
+    let mut removed = Vec::new();
+    for (ts, _, path) in found.into_iter().skip(keep) {
+        if now.saturating_sub(ts) < min_age_secs {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(PathBuf::from(format!("{}.refs", path.display())));
+                removed.push(path);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "kb-code: could not remove a pruned pre-apply bundle");
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// Write ONE bundle: `refs/kbc/*` minus objects reachable from
 /// `refs/remotes/base/*` (README §5.4 / design-internal-store.md §8) —
 /// the routine-backup shape ([`backup_all_ready_stores`], the boot /
@@ -1043,21 +1152,11 @@ pub fn bundle_path(backups_dir: &Path, uuid: &str, ts: i64) -> PathBuf {
 /// (a freshly seeded store with no reviews) — `git bundle create` refuses
 /// an empty ref list, and an empty bundle is not a useful backup anyway.
 ///
-/// **Implementation note, corrected post-review:** the source docs
-/// describe this as `git bundle create <f> --stdin` fed the refs on
-/// stdin. An earlier cut of this function claimed real git has no such
-/// flag — that claim was WRONG: `--stdin` has existed since git 2.31, but
-/// only works when it appears AFTER `<file>` (it is one of the
-/// `<git-rev-list-args>`, not a `bundle create`-level flag like `-q`/
-/// `--progress`/`--version=<n>`) — a positional detail the original CI
-/// failure (`error: unknown option 'stdin'`, from putting it BEFORE
-/// `<file>`) was actually about. This function instead passes every ref
-/// as a POSITIONAL rev-list argument directly (the same grammar `--stdin`
-/// would feed into), which is exactly how `git rev-list`/`git log` take a
-/// ref list too, and sidesteps the ordering subtlety entirely. The
-/// store's own ref-count scale sits comfortably under Linux's ARG_MAX with
-/// `env_clear()`'s already-tiny environment, so there is no practical case
-/// this overflows argv.
+/// **Implementation note:** the ref list is fed to `git bundle create
+/// <file> --stdin` (git >= 2.31; `--stdin` must come AFTER `<file>` — it is
+/// one of the `<git-rev-list-args>`, not a `bundle create`-level flag), one
+/// ref per line, base refs as `^<ref>`. Argv would hit ARG_MAX at roughly
+/// 50k refs; stdin has no such bound.
 pub fn write_bundle(
     git: &StoreGit,
     git_dir: &Path,
@@ -1094,8 +1193,8 @@ pub fn write_bundle(
 /// `cover` is a point-in-time list supplied by the caller (the exact
 /// `(old_oid, refname)` the apply is guarded on), not a re-scan, so it
 /// cannot disagree with the classification that produced the apply. It
-/// is bounded by the store's ref count — the same bound the `refs/kbc/*`
-/// argv already relies on above.
+/// is bounded by the store's ref count; the list is fed over stdin, so
+/// no argv limit applies.
 fn write_bundle_covering(
     git: &StoreGit,
     git_dir: &Path,
@@ -1126,21 +1225,29 @@ fn write_bundle_covering(
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
     }
-    let mut args = GitArgs::new("bundle")
+    // The rev-list arguments travel on STDIN (`--stdin`, git >= 2.31; the
+    // floor is MIN_GIT 2.41): one validated ref name per line, base refs as
+    // `^<ref>`. As argv they would hit ARG_MAX at roughly 50k refs.
+    let args = GitArgs::new("bundle")
         .flag("create")
         .flag("--quiet")
         .end_of_options()
         .abs_path(dest)
-        .map_err(|e| MaintError::Other(e.to_string()))?;
+        .map_err(|e| MaintError::Other(e.to_string()))?
+        .flag("--stdin");
+    let mut revs = String::new();
     for (_, name) in &refs {
         let r = super::url::RefName::parse(name)
             .map_err(|_| MaintError::Other(format!("unparseable bundled ref: {name}")))?;
-        args = args.refname(&r);
+        revs.push_str(r.as_str());
+        revs.push('\n');
     }
     for (_, name) in &base_refs {
         let r = super::url::RefName::parse(name)
             .map_err(|_| MaintError::Other(format!("unparseable base ref: {name}")))?;
-        args = args.exclude_ref(&r);
+        revs.push('^');
+        revs.push_str(r.as_str());
+        revs.push('\n');
     }
     // Should-fix: "nothing to bundle" (every covered ref is already
     // reachable from `refs/remotes/base/*`) is a recorded no-op, not an
@@ -1151,6 +1258,7 @@ fn write_bundle_covering(
     match git.run(
         GitCall::new("bundle-create", args)
             .git_dir(git_dir)
+            .stdin(revs.into_bytes())
             .timeout(MAINT_TIMEOUT),
     ) {
         Ok(_) => {
@@ -1274,9 +1382,9 @@ pub fn backup_all_ready_stores(
     if !review_stores_table_exists(conn) {
         return report;
     }
-    let rows: Vec<(i64, String, String, Option<String>)> = match conn
+    let rows: Vec<(i64, String, String)> = match conn
         .prepare(
-            "SELECT id, uuid, git_dir, state_json FROM review_stores \
+            "SELECT id, uuid, git_dir FROM review_stores \
              WHERE state = 'ready' ORDER BY id",
         )
         .and_then(|mut stmt| {
@@ -1285,7 +1393,6 @@ pub fn backup_all_ready_stores(
                     r.get::<_, i64>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
-                    r.get::<_, Option<String>>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()
@@ -1297,7 +1404,7 @@ pub fn backup_all_ready_stores(
         }
     };
     let dest_dir = backups_dir(state_dir);
-    for (id, uuid, git_dir, state_json) in rows {
+    for (id, uuid, git_dir) in rows {
         let mut outcome = StoreBundleOutcome {
             uuid: uuid.clone(),
             ..Default::default()
@@ -1320,20 +1427,22 @@ pub fn backup_all_ready_stores(
         // Should-fix: record the outcome (never just log-and-drop) so
         // `store show`/doctor can surface a failing boot/backup-cmd bundle
         // pass without needing the daemon's own log.
-        let mut sj: serde_json::Value = state_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .filter(serde_json::Value::is_object)
-            .unwrap_or_else(|| serde_json::json!({}));
-        sj["last_backup"] = serde_json::json!({
+        //
+        // Writes ONLY the `last_backup` key, in one statement against the
+        // row as it is NOW: the bundling above can take minutes, and a
+        // `last_gc_apply` (or `default_branch`) that landed meanwhile must
+        // survive — the entry-time snapshot is never written back.
+        let last_backup = serde_json::json!({
             "at": now,
             "written": outcome.written.is_some(),
             "skipped_reason": outcome.skipped_reason,
             "error": outcome.error,
         });
         if let Err(e) = conn.execute(
-            "UPDATE review_stores SET state_json = ?1 WHERE id = ?2",
-            rusqlite::params![sj.to_string(), id],
+            "UPDATE review_stores SET state_json = json_set(\
+             CASE WHEN json_valid(state_json) AND json_type(state_json) = 'object' \
+             THEN state_json ELSE '{}' END, '$.last_backup', json(?1)) WHERE id = ?2",
+            rusqlite::params![last_backup.to_string(), id],
         ) {
             tracing::warn!(error = %e, store = %uuid, "kb-code: could not record last_backup in state_json");
         }
@@ -1480,15 +1589,41 @@ fn cruft_allow_expire(sj: &serde_json::Value, now: i64) -> bool {
         .get("last_gc_apply")
         .and_then(|v| v.get("at"))
         .and_then(serde_json::Value::as_i64);
-    last_apply_at.is_some_and(|at| now.saturating_sub(at) >= CRUFT_EXPIRE_COOLDOWN_SECS)
+    // The durable PRE-apply mark ([`run_gc_pass`] writes it before the
+    // first ref is deleted and fails closed when it cannot): an apply
+    // whose own `last_gc_apply` record never landed still starts the
+    // cooldown. A present-but-unreadable mark reads as "just now".
+    let started = sj.get(GC_APPLY_STARTED_KEY);
+    let started_at = started.map(|v| v.as_i64().unwrap_or(i64::MAX));
+    let Some(at) = last_apply_at else {
+        return false;
+    };
+    let newest = started_at.map_or(at, |s| s.max(at));
+    now.saturating_sub(newest) >= CRUFT_EXPIRE_COOLDOWN_SECS
+}
+
+/// May a monthly pass expire cruft on store `uuid` now? The cooldown
+/// ([`cruft_allow_expire`]) AND the restore guard not blocking THIS store:
+/// while it blocks, the volume may have been rolled back behind the git
+/// store, and nothing is pruned on the strength of a `last_gc_apply` that
+/// a restore could have rewound. The check is per store
+/// (`RestoreGuardState::blocks`), so `store gc --yes` and creation-time
+/// admission lift it for that store, exactly as they lift the GC block.
+fn expiry_permitted(
+    sj: &serde_json::Value,
+    guard: &restore_guard::RestoreGuardState,
+    uuid: &str,
+    now: i64,
+) -> bool {
+    !guard.blocks(uuid) && cruft_allow_expire(sj, now)
 }
 
 /// Run every cadence in `tasks` against ONE store: daily's git-housekeeping
 /// task plus, separately and under the ops lock, the ref invariant check
 /// and a store-wide GC DRY RUN (see the module doc's "Cadence choices");
-/// weekly/monthly repack (NOT under the ops lock — Should-fix review
-/// finding: a long repack must not hold the same lock a capture or a real
-/// `gc --yes` apply needs). Persists `last_maint` (plus a per-cadence retry
+/// weekly/monthly repack (weekly NOT under the ops lock; the monthly
+/// repack DOES hold it, but only when cruft expiry is permitted, about once
+/// per cooldown period — see the monthly block). Persists `last_maint` (plus a per-cadence retry
 /// backoff after a failure) and `last_gc_dry_run` into `state_json`. Takes
 /// the ops lock ITSELF, only around the GC/invariant section — callers
 /// must NOT also hold it (not reentrant).
@@ -1509,8 +1644,7 @@ pub fn run_pass_for_store(
         return report;
     };
     let dir = Path::new(&row.git_dir);
-    let mut sj = state_json_value(row);
-    let mut last = LastMaint::from_state_json(Some(&sj));
+    let mut last = LastMaint::from_state_json(Some(&state_json_value(row)));
 
     if tasks.contains(&MaintTask::Daily) {
         match run_daily(git, dir) {
@@ -1527,8 +1661,9 @@ pub fn run_pass_for_store(
 
         // GC/invariant section: ops lock held for exactly this, Should-fix
         // review finding ("hold the ops lock only around the GC/ref
-        // section, not the long repacks" — weekly/monthly below run
-        // UNLOCKED). A dry run never mutates refs on its own, but
+        // section, not the long repacks" — the weekly repack below runs
+        // UNLOCKED; the monthly one holds the ops lock only when expiry is
+        // permitted). A dry run never mutates refs on its own, but
         // `invariant_check` CAN (recreating a missing ps ref), and reading
         // a consistent snapshot alongside a possible recreate wants the
         // same lock a real apply would take.
@@ -1583,6 +1718,12 @@ pub fn run_pass_for_store(
             }
         }
     }
+    // One repack at a time per store (`store maintain` vs the scheduler).
+    // Held across weekly AND monthly; never held by anything that also
+    // wants the ops lock for long, and always taken BEFORE the ops lock.
+    let maint_lock = rs.maint_lock(row.id);
+    let _maint_guard = (tasks.contains(&MaintTask::Weekly) || tasks.contains(&MaintTask::Monthly))
+        .then(|| maint_lock.blocking_lock());
     if tasks.contains(&MaintTask::Weekly) {
         match run_weekly(git, dir) {
             Ok(()) => {
@@ -1596,7 +1737,27 @@ pub fn run_pass_for_store(
         }
     }
     if tasks.contains(&MaintTask::Monthly) {
-        let allow_expire = cruft_allow_expire(&sj, now);
+        // The cooldown is judged from a FRESH read of the row, taken under
+        // the ops lock and held until the repack ends: the snapshot this
+        // pass started from can be minutes old, and a `store gc --yes`
+        // that landed since (or lands now) must either be visible here or
+        // wait for the repack. Without expiry the repack cannot orphan-
+        // prune anything, so the ops lock is only HELD across the repack
+        // when expiry is permitted. While held (about once per cooldown
+        // period) review create/snapshot/capture on this store also wait.
+        let ops = rs.ops_lock(row.id);
+        let ops_guard = ops.blocking_lock();
+        let fresh_sj = store
+            .get_review_store(row.id)
+            .ok()
+            .flatten()
+            .map(|f| state_json_value(&f));
+        // A row we cannot re-read is a row we cannot vouch for: no expiry.
+        let guard = restore_guard::read(&rs.settings().restore_guard_path);
+        let allow_expire = fresh_sj
+            .as_ref()
+            .is_some_and(|sj| expiry_permitted(sj, &guard, &row.uuid, now));
+        let _ops_guard = allow_expire.then_some(ops_guard);
         match run_monthly(git, dir, allow_expire) {
             Ok(()) => {
                 report.tasks_run.push("monthly");
@@ -1609,26 +1770,25 @@ pub fn run_pass_for_store(
         }
     }
 
-    sj["last_maint"] = serde_json::to_value(last).unwrap_or_default();
+    // Only this pass's OWN keys are written, via `json_set` on the row as
+    // it is now — never the entry-time snapshot (a pass can run for 30+
+    // minutes per store) and never `state` (a transition during the pass
+    // is not ours to overwrite).
+    let mut sets: Vec<(&str, serde_json::Value)> =
+        vec![("last_maint", serde_json::to_value(last).unwrap_or_default())];
     if let Some(g) = &report.gc {
-        sj["last_gc_dry_run"] = serde_json::json!({
-            "at": now,
-            "candidates": g.candidates,
-            "reasons": [g.reason],
-            "partial": g.partial,
-            "member_problems": g.member_problems,
-        });
+        sets.push((
+            "last_gc_dry_run",
+            serde_json::json!({
+                "at": now,
+                "candidates": g.candidates,
+                "reasons": [g.reason],
+                "partial": g.partial,
+                "member_problems": g.member_problems,
+            }),
+        ));
     }
-    // Should-fix: never write back a STALE `row.state` — re-read once more
-    // (cheap) so a state transition that happened during this whole pass
-    // is not silently overwritten with what the caller saw at entry.
-    let write_state = store
-        .get_review_store(row.id)
-        .ok()
-        .flatten()
-        .map(|f| f.state)
-        .unwrap_or_else(|| row.state.clone());
-    if let Err(e) = store.set_review_store_state(row.id, &write_state, Some(&sj.to_string())) {
+    if let Err(e) = store.update_review_store_state_json(row.id, &sets, None) {
         log_state_write_failure(&row.uuid, "run_pass_for_store", &e);
         report.errors.push(format!("state_json write: {e}"));
     }
@@ -1707,6 +1867,23 @@ pub fn run_gc_pass(
     let (dry_run_report, candidates) =
         gc_pass(store, git, dir, fresh.id, &registered_ids, &problems)?;
 
+    // Start the cruft cooldown clock DURABLY before the first ref goes: a
+    // failure to write it refuses the apply (fail closed) rather than let
+    // an apply happen whose only record might never land. A guard-blocked
+    // or nothing-to-do pass cannot delete anything and writes no mark. A
+    // later refusal inside the apply (high-water, backup-failed) leaves the
+    // mark behind, which only ever LENGTHENS the cooldown.
+    if apply_requested && !guard_blocked && dry_run_report.candidates > 0 {
+        store
+            .update_review_store_state_json(
+                fresh.id,
+                &[(GC_APPLY_STARTED_KEY, serde_json::json!(now))],
+                None,
+            )
+            .map_err(|e| {
+                format!("could not record the GC cooldown mark before applying (refusing): {e}")
+            })?;
+    }
     let final_report = if apply_requested {
         apply_gc_candidates(
             store,
@@ -1733,35 +1910,32 @@ pub fn run_gc_pass(
     // `seed()` failure, boot's interrupted-seeding reset or `open`'s
     // manifest check can flip the row to `absent`/`broken` in that window;
     // writing the entry-time copy back would resurrect a store whose
-    // `git_dir` is gone. Merged into THAT read, so a concurrent writer's
-    // keys survive and only this pass's own keys below are set.
-    let latest = store
-        .get_review_store(fresh.id)
-        .map_err(|e| e.to_string())?;
-    let write_state = latest
-        .as_ref()
-        .map(|f| f.state.clone())
-        .unwrap_or_else(|| fresh.state.clone());
-    let mut sj = match latest.as_ref() {
-        Some(f) => state_json_value(f),
-        None => state_json_value(&fresh),
-    };
-    if final_report.applied {
-        sj["last_gc_apply"] = serde_json::json!({
-            "at": now,
-            "candidates": final_report.candidates,
-            "reason": final_report.reason,
-        });
+    // `git_dir` is gone. So `state` is never written here, and only this
+    // pass's own key is `json_set` into the row as it is NOW — a
+    // concurrent writer's keys survive.
+    let (key, value) = if final_report.applied {
+        (
+            "last_gc_apply",
+            serde_json::json!({
+                "at": now,
+                "candidates": final_report.candidates,
+                "reason": final_report.reason,
+            }),
+        )
     } else {
-        sj["last_gc_dry_run"] = serde_json::json!({
-            "at": now,
-            "candidates": final_report.candidates,
-            "reasons": [final_report.reason],
-            "partial": final_report.partial,
-            "member_problems": final_report.member_problems,
-        });
-    }
-    if let Err(e) = store.set_review_store_state(fresh.id, &write_state, Some(&sj.to_string())) {
+        (
+            "last_gc_dry_run",
+            serde_json::json!({
+                "at": now,
+                "candidates": final_report.candidates,
+                "reasons": [final_report.reason],
+                "partial": final_report.partial,
+                "member_problems": final_report.member_problems,
+            }),
+        )
+    };
+    // `state` is left alone (None) and only this pass's one key is set.
+    if let Err(e) = store.update_review_store_state_json(fresh.id, &[(key, value)], None) {
         log_state_write_failure(&fresh.uuid, "run_gc_pass", &e);
     }
     Ok((final_report, refnames))

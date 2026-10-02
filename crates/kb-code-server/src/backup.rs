@@ -184,6 +184,30 @@ pub fn is_fresh(receipt: &BackupReceipt, db_path: &Path, volume_epoch: Option<u3
             .unwrap_or(false)
 }
 
+/// Slack for filesystem mtime granularity when comparing a database's
+/// mtime with a receipt's `taken_at`.
+const MTIME_SLACK_SECS: i64 = 2;
+
+/// Has the database (or its WAL) been modified after `taken_at`? An
+/// unreadable mtime reads as "yes": the cost of a wrong "yes" is one
+/// redundant snapshot, the cost of a wrong "no" is a stale rollback target.
+pub fn db_written_since(db_path: &Path, taken_at: i64) -> bool {
+    let wal = PathBuf::from(format!("{}-wal", db_path.display()));
+    [db_path.to_path_buf(), wal].iter().any(|p| {
+        match std::fs::metadata(p) {
+            Ok(m) => m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64 > taken_at.saturating_add(MTIME_SLACK_SECS))
+                .unwrap_or(true),
+            // No WAL file is the normal, quiescent case.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => p.as_path() != db_path,
+            Err(_) => true,
+        }
+    })
+}
+
 /// Take a snapshot of `db_path` and write the receipt beside it. Safe to
 /// call while the daemon holds the database open: `VACUUM INTO` runs in a
 /// read transaction.
@@ -520,12 +544,25 @@ pub fn ensure_for_epoch_crossing(
     };
     if let Some(existing) = read_receipt(db_path) {
         if is_fresh(&existing, db_path, volume_epoch) {
-            tracing::info!(
-                backup = %existing.backup_path,
-                epoch = ?volume_epoch,
-                "kb-code: reusing the existing pre-migration snapshot"
-            );
-            return Ok(Some(existing));
+            if db_written_since(db_path, existing.taken_at) {
+                // A `kb-code backup` taken earlier at this epoch, with the
+                // volume written to since: reusing it would make a stale
+                // file the rollback target. Re-take it.
+                tracing::warn!(
+                    backup = %existing.backup_path,
+                    age_secs = chrono::Utc::now().timestamp().saturating_sub(existing.taken_at),
+                    "kb-code: the existing snapshot at this epoch predates later writes to the \
+                     volume; taking a fresh pre-migration snapshot instead of reusing it"
+                );
+            } else {
+                tracing::info!(
+                    backup = %existing.backup_path,
+                    epoch = ?volume_epoch,
+                    "kb-code: reusing the existing pre-migration snapshot (the volume has not \
+                     been written since it was taken)"
+                );
+                return Ok(Some(existing));
+            }
         }
     }
     match take(db_path, volume_epoch) {
@@ -669,6 +706,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(first, second, "the receipt is reused, not re-minted");
+    }
+
+    /// A7-6: a manual `kb-code backup` taken long ago at the same epoch is
+    /// not the "pre-migration" snapshot once the volume has been written
+    /// since — the gate must re-take it instead of logging a reuse.
+    #[test]
+    fn a_receipt_older_than_the_last_write_is_retaken_not_reused() {
+        let dir = tmp();
+        let path = db_with_epoch(dir.path(), Some(BEFORE));
+        let conn = Connection::open(&path).unwrap();
+        let first = ensure_for_epoch_crossing(&conn, &path, REKEY_EPOCH)
+            .unwrap()
+            .unwrap();
+        // Age the receipt two weeks; the db file was written "just now".
+        let mut aged = first.clone();
+        aged.taken_at -= 14 * 24 * 3600;
+        std::fs::write(marker_path(&path), serde_json::to_string(&aged).unwrap()).unwrap();
+        assert!(db_written_since(&path, aged.taken_at));
+        let second = ensure_for_epoch_crossing(&conn, &path, REKEY_EPOCH)
+            .unwrap()
+            .unwrap();
+        assert!(
+            second.taken_at > aged.taken_at + 7 * 24 * 3600,
+            "a fresh snapshot was taken: {second:?} vs {aged:?}"
+        );
+        assert_eq!(read_receipt(&path).unwrap(), second);
     }
 
     #[test]
