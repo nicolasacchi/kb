@@ -313,7 +313,10 @@ scrub CAN strip it on non-loopback (opt-in per kb via
   per-slate `KbHandles::slate_lock_for` for the ledger, which is
   daemon-wide rather than per-kb because a slate keys on a project),
   mutated ONLY through routes and CLI, never hand-edited, never indexed as
-  truth, registered in backup/reset. `.review` keeps its reanchor rule. The
+  truth, registered in backup/reset (v0.44: backup means the ONE
+  `KbPaths::state_members` registry, which the tarball writer, the scheduled
+  skip probe and `kb restore` all iterate; a completeness test fails on any
+  entry under `<state>/` it does not classify). `.review` keeps its reanchor rule. The
   slate ledger is append-only with tombstones; its `seq` is minted under
   the lock and is the revision token; take-lease and age state are derived
   at read time from timestamps plus the #11 live registry, never written by

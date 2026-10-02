@@ -1791,14 +1791,23 @@ async fn doclens_consumer_check(client: &reqwest::Client, base: &str, kbs: &[KbL
 
 // ============================================ k) backup age
 //
-// `<state>/exports/` is where `kb backup` writes `<kb>-<stamp>.tar.gz`.
-// The check reads the newest regular file there — it does not shell out
-// to backup. Fresh = newest mtime younger than 48h. Older = WARN.
-// Missing or empty = FAIL. The fix is always `kb backup --all`.
-// An unresolvable state dir is a SKIP.
+// Evaluated PER KB. A kb is any `<state>/<kb>/` that holds an `index.db`;
+// its backup is the newest `<kb>-YYYYMMDD-HHMMSS.tar.gz` under
+// `<state>/exports/` (the name both the CLI and the daemon schedule write,
+// `kb_core::storage::backup::newest_scheduled_tarball`). A stray file, an
+// `--out` tarball or another kb's export never counts, and a zero-byte
+// file is not a backup. The check does not shell out to backup.
+//
+//   * no tarball, or an empty one      -> FAIL, naming the kb
+//   * newest older than 48h            -> WARN, naming the kb, UNLESS no
+//     packed source changed since it (the same stat probe the scheduler
+//     uses): an idle kb is skipped on purpose and is not stale
+//   * otherwise                        -> PASS
+//
+// The fix is always `kb backup --all`. An unresolvable state dir is a SKIP.
 
-/// `Some(age)` is the newest file's age in seconds (negative = clock
-/// skew, treated as fresh). `None` is a missing or empty exports dir.
+/// `Some(age)` is the newest tarball's age in seconds (negative = clock
+/// skew, treated as fresh). `None` is a kb with no tarball.
 fn classify_backup_age(newest_age_secs: Option<i64>) -> CheckStatus {
     match newest_age_secs {
         Some(age) if age < BACKUP_FRESH_MAX_SECS => CheckStatus::Pass,
@@ -1807,84 +1816,148 @@ fn classify_backup_age(newest_age_secs: Option<i64>) -> CheckStatus {
     }
 }
 
-#[derive(Debug)]
-enum ExportsView {
-    MissingOrEmpty,
-    Unreadable(String),
-    Newest { age_secs: i64, name: String },
+#[derive(Debug, PartialEq, Eq)]
+enum KbExport {
+    /// No `<kb>-<stamp>.tar.gz` at all.
+    None,
+    /// The newest one is zero bytes (a failed write or a truncation).
+    Empty {
+        name: String,
+    },
+    /// Newest tarball exists and nothing it packs has changed since.
+    Idle {
+        age_secs: i64,
+        name: String,
+    },
+    Newest {
+        age_secs: i64,
+        name: String,
+    },
 }
 
-/// Newest regular file in `exports`, by mtime. Directories (including
-/// `.staging-*`) are not files. A missing dir and a dir with no readable
-/// files are both empty.
-fn scan_exports(exports: &Path, now: i64) -> ExportsView {
-    if !exports.exists() {
-        return ExportsView::MissingOrEmpty;
-    }
-    let entries = match std::fs::read_dir(exports) {
-        Ok(entries) => entries,
-        Err(e) => return ExportsView::Unreadable(e.to_string()),
+#[derive(Debug, PartialEq, Eq)]
+struct KbExportRow {
+    kb: String,
+    export: KbExport,
+}
+
+/// One row per kb with state, sorted by name. `Err` is an unreadable
+/// state dir. The first kb carries the daemon-scope members, as in the
+/// schedule and `kb backup --all`.
+fn scan_kb_exports(paths: &kb_core::paths::KbPaths, now: i64) -> Result<Vec<KbExportRow>, String> {
+    let entries = match std::fs::read_dir(&paths.state) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
     };
-    let mut newest: Option<(i64, String)> = None;
-    for entry in entries.flatten() {
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
-        let Some(mtime) = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-        else {
-            continue;
-        };
-        if newest.as_ref().is_none_or(|(prev, _)| mtime > *prev) {
-            newest = Some((mtime, name));
-        }
+    let mut kbs: Vec<kb_core::types::KbName> = entries
+        .flatten()
+        .filter(|e| e.path().join("index.db").is_file())
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| kb_core::types::KbName::new(n).ok())
+        })
+        .collect();
+    kbs.sort();
+    let mut rows = Vec::with_capacity(kbs.len());
+    for (i, kb) in kbs.iter().enumerate() {
+        let export =
+            match kb_core::storage::backup::newest_scheduled_tarball(&paths.exports, kb.as_str()) {
+                None => KbExport::None,
+                Some((path, mtime)) => {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let age_secs = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| now - d.as_secs() as i64)
+                        .unwrap_or(0);
+                    if len == 0 {
+                        KbExport::Empty { name }
+                    } else if kb_core::storage::backup::should_skip_scheduled_backup(
+                        paths,
+                        kb,
+                        i == 0,
+                    ) {
+                        KbExport::Idle { age_secs, name }
+                    } else {
+                        KbExport::Newest { age_secs, name }
+                    }
+                }
+            };
+        rows.push(KbExportRow {
+            kb: kb.as_str().to_string(),
+            export,
+        });
     }
-    match newest {
-        Some((mtime, name)) => ExportsView::Newest {
-            age_secs: now - mtime,
-            name,
-        },
-        None => ExportsView::MissingOrEmpty,
-    }
+    Ok(rows)
 }
 
 const BACKUP_FIX: &str = "kb backup --all";
 
-fn decide_backup_age(view: ExportsView) -> HookCheck {
-    match view {
-        ExportsView::Unreadable(err) => HookCheck::warn(
+fn decide_backup_age(view: Result<Vec<KbExportRow>, String>) -> HookCheck {
+    let rows = match view {
+        Err(err) => {
+            return HookCheck::warn("backup-age", format!("could not read <state>/: {err}"))
+                .with_fix(BACKUP_FIX)
+        }
+        Ok(rows) => rows,
+    };
+    if rows.is_empty() {
+        return HookCheck::skip(
             "backup-age",
-            format!("could not read <state>/exports/: {err}"),
-        )
-        .with_fix(BACKUP_FIX),
-        ExportsView::Newest { age_secs, name } => {
-            let detail = format!(
-                "<state>/exports/ newest file {name} is {} old",
-                fmt_age(age_secs.max(0))
-            );
-            if classify_backup_age(Some(age_secs)) == CheckStatus::Pass {
-                HookCheck::pass("backup-age", detail)
-            } else {
-                HookCheck::warn(
-                    "backup-age",
-                    format!("<state>/exports/ is stale: {detail} (older than 48h)"),
-                )
-                .with_fix(BACKUP_FIX)
+            "no kb state under <state>/ — nothing to back up",
+        );
+    }
+    let mut worst = CheckStatus::Pass;
+    let mut parts = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let (status, part) = match &row.export {
+            KbExport::None => (
+                CheckStatus::Fail,
+                format!("{}: no <state>/exports/{}-<stamp>.tar.gz", row.kb, row.kb),
+            ),
+            KbExport::Empty { name } => (
+                CheckStatus::Fail,
+                format!("{}: newest tarball {name} is empty", row.kb),
+            ),
+            KbExport::Idle { age_secs, name } => (
+                CheckStatus::Pass,
+                format!(
+                    "{}: idle, {name} ({} old) still covers it",
+                    row.kb,
+                    fmt_age((*age_secs).max(0))
+                ),
+            ),
+            KbExport::Newest { age_secs, name } => {
+                let status = classify_backup_age(Some(*age_secs));
+                let what = if status == CheckStatus::Pass {
+                    format!("{name} is {} old", fmt_age((*age_secs).max(0)))
+                } else {
+                    format!(
+                        "STALE, {name} is {} old (older than 48h) and the kb changed since",
+                        fmt_age((*age_secs).max(0))
+                    )
+                };
+                (status, format!("{}: {what}", row.kb))
             }
-        }
-        ExportsView::MissingOrEmpty => {
-            HookCheck::fail("backup-age", "<state>/exports/ is missing or empty")
-                .with_fix(BACKUP_FIX)
-        }
+        };
+        worst = match (worst, status) {
+            (CheckStatus::Fail, _) | (_, CheckStatus::Fail) => CheckStatus::Fail,
+            (CheckStatus::Warn, _) | (_, CheckStatus::Warn) => CheckStatus::Warn,
+            _ => CheckStatus::Pass,
+        };
+        parts.push(part);
+    }
+    let detail = parts.join("; ");
+    match worst {
+        CheckStatus::Pass => HookCheck::pass("backup-age", detail),
+        CheckStatus::Warn => HookCheck::warn("backup-age", detail).with_fix(BACKUP_FIX),
+        _ => HookCheck::fail("backup-age", detail).with_fix(BACKUP_FIX),
     }
 }
 
@@ -1895,7 +1968,7 @@ fn backup_age_check(now: i64) -> HookCheck {
             "could not resolve the state dir — not checking <state>/exports/",
         );
     };
-    decide_backup_age(scan_exports(&paths.exports, now))
+    decide_backup_age(scan_kb_exports(&paths, now))
 }
 
 // ==================================================================== run
@@ -2823,54 +2896,121 @@ mod tests {
         assert_eq!(classify_backup_age(None), CheckStatus::Fail);
     }
 
-    #[test]
-    fn empty_exports_fails_and_names_kb_backup_all() {
-        let c = decide_backup_age(ExportsView::MissingOrEmpty);
-        assert_eq!(c.status, CheckStatus::Fail);
-        assert!(c.detail.contains("<state>/exports/"), "{}", c.detail);
-        assert!(c.detail.contains("missing or empty"), "{}", c.detail);
-        assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
-    }
-
-    #[test]
-    fn stale_exports_warns_and_names_the_dir() {
-        let c = decide_backup_age(ExportsView::Newest {
-            age_secs: BACKUP_FRESH_MAX_SECS,
-            name: "docs-old.tar.gz".into(),
-        });
-        assert_eq!(c.status, CheckStatus::Warn);
-        assert!(c.detail.contains("<state>/exports/"), "{}", c.detail);
-        assert!(c.detail.contains("stale"), "{}", c.detail);
-        assert!(c.detail.contains("docs-old.tar.gz"), "{}", c.detail);
-        assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
-        assert_ne!(c.status, CheckStatus::Fail);
-    }
-
-    #[test]
-    fn scan_exports_uses_the_newest_file_not_only_tarballs() {
-        let tmp = tempfile::tempdir().unwrap();
-        let now = 1_700_000_000;
-        assert!(matches!(
-            scan_exports(&tmp.path().join("missing"), now),
-            ExportsView::MissingOrEmpty
-        ));
-        let empty = tmp.path().join("empty");
-        std::fs::create_dir(&empty).unwrap();
-        assert!(matches!(
-            scan_exports(&empty, now),
-            ExportsView::MissingOrEmpty
-        ));
-        // A staging directory is not a file, so the dir is still empty.
-        std::fs::create_dir(empty.join(".staging-docs-1")).unwrap();
-        assert!(matches!(
-            scan_exports(&empty, now),
-            ExportsView::MissingOrEmpty
-        ));
-        std::fs::write(empty.join("notes.txt"), "not a tarball").unwrap();
-        match scan_exports(&empty, now) {
-            ExportsView::Newest { name, .. } => assert_eq!(name, "notes.txt"),
-            other => panic!("expected the newest file, got {other:?}"),
+    fn row(kb: &str, export: KbExport) -> KbExportRow {
+        KbExportRow {
+            kb: kb.into(),
+            export,
         }
+    }
+
+    /// v0.44 B1 / A4-2(a) — a fresh tarball of ONE kb used to make the
+    /// whole check PASS while another kb had none for months.
+    #[test]
+    fn one_fresh_kb_does_not_hide_a_stale_one() {
+        let c = decide_backup_age(Ok(vec![
+            row(
+                "memory",
+                KbExport::Newest {
+                    age_secs: 60,
+                    name: "memory-x.tar.gz".into(),
+                },
+            ),
+            row(
+                "sessions",
+                KbExport::Newest {
+                    age_secs: BACKUP_FRESH_MAX_SECS,
+                    name: "sessions-old.tar.gz".into(),
+                },
+            ),
+        ]));
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("sessions"), "{}", c.detail);
+        assert!(c.detail.contains("STALE"), "{}", c.detail);
+        assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
+    }
+
+    #[test]
+    fn a_kb_with_no_tarball_fails_and_names_it() {
+        let c = decide_backup_age(Ok(vec![row("docs", KbExport::None)]));
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert!(c.detail.contains("docs"), "{}", c.detail);
+        assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
+    }
+
+    /// A4-2(c) — an idle kb is skipped on purpose; its old tarball is not stale.
+    #[test]
+    fn an_idle_kb_with_an_old_tarball_passes() {
+        let c = decide_backup_age(Ok(vec![row(
+            "archive",
+            KbExport::Idle {
+                age_secs: BACKUP_FRESH_MAX_SECS * 10,
+                name: "archive-x.tar.gz".into(),
+            },
+        )]));
+        assert_eq!(c.status, CheckStatus::Pass, "{}", c.detail);
+        assert!(c.detail.contains("idle"), "{}", c.detail);
+    }
+
+    #[test]
+    fn no_kb_state_is_a_skip_not_a_pass() {
+        assert_eq!(decide_backup_age(Ok(vec![])).status, CheckStatus::Skip);
+    }
+
+    fn set_mtime(path: &Path, secs: u64) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    /// A4-2(b) / A4-1 — only `<kb>-<stamp>.tar.gz` counts: a stray file, a
+    /// sibling kb's export and a truncated (empty) tarball do not.
+    #[test]
+    fn scan_counts_only_this_kbs_nonempty_scheduled_tarball() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "d");
+        let now = 1_800_000_000;
+        for kb in ["docs", "memory", "sessions"] {
+            let dir = paths.state.join(kb);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("index.db"), b"db").unwrap();
+            set_mtime(&dir.join("index.db"), 1_700_000_000);
+        }
+        std::fs::create_dir_all(&paths.exports).unwrap();
+        // docs: a stray file only.
+        std::fs::write(paths.exports.join("notes.txt"), "x").unwrap();
+        // memory: a good, fresh tarball.
+        let good = paths.exports.join("memory-20260101-000000.tar.gz");
+        std::fs::write(&good, b"tar").unwrap();
+        set_mtime(&good, now as u64 - 60);
+        // sessions: a truncated, empty tarball.
+        let empty = paths.exports.join("sessions-20260101-000000.tar.gz");
+        std::fs::write(&empty, b"").unwrap();
+        set_mtime(&empty, now as u64 - 60);
+
+        let rows = scan_kb_exports(&paths, now).unwrap();
+        let by_kb = |k: &str| &rows.iter().find(|r| r.kb == k).unwrap().export;
+        assert_eq!(
+            by_kb("docs"),
+            &KbExport::None,
+            "a stray file is not a backup"
+        );
+        assert!(matches!(
+            by_kb("memory"),
+            KbExport::Idle { .. } | KbExport::Newest { .. }
+        ));
+        assert_eq!(
+            by_kb("sessions"),
+            &KbExport::Empty {
+                name: "sessions-20260101-000000.tar.gz".into()
+            }
+        );
+        let c = decide_backup_age(Ok(rows));
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert!(c.detail.contains("docs"), "{}", c.detail);
+        assert!(c.detail.contains("sessions"), "{}", c.detail);
     }
 
     fn capture(harness: &str, started_at: i64, memories: u64) -> SessionCaptureLite {
