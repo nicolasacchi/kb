@@ -51,6 +51,17 @@ export default function ReviewFileThreadsPanel({
     [findingsQ.data],
   );
 
+  // A9-1 — a failed read is NOT "no comments yet": say it failed.
+  if (q.isError) {
+    return (
+      <div className="kbc-review-rail" data-kbc-review-rail>
+        <div className="kbc-review-rail__caption" role="alert" data-kbc-review-rail-error>
+          Couldn't load this review's comments: {q.error instanceof Error ? q.error.message : String(q.error)}
+        </div>
+      </div>
+    );
+  }
+
   const caption = q.isLoading
     ? "Loading…"
     : !path
