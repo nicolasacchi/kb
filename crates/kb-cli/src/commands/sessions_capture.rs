@@ -64,12 +64,12 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use kb_core::session_scrub::{scrub_transcript, ScrubOptions};
 use kb_core::sessions::{CapturedCommit, SubagentDigest};
 use kb_core::vcs::resolve_commit;
 
 use super::import::{
-    collect_extra_sidecar_sources, collect_sidecars, expand_tilde, sanitize_sid, wrap_envelope,
+    collect_extra_sidecar_sources, collect_sidecars, expand_tilde, sanitize_sid,
+    scrub_capture_lanes, wrap_envelope,
 };
 
 /// The env var kb-capture.sh resolves its target from — mirrored exactly so
@@ -320,17 +320,7 @@ async fn capture(
     // Metadata already extracted above (session id, cwd, resolved commits)
     // came from the UNSCRUBBED `raw` on purpose; only what's about to be
     // EMBEDDED is redacted from here on.
-    let scrub_opts = ScrubOptions::secrets_only();
-    let (raw, main_scrub_report) = scrub_transcript(&raw, &scrub_opts);
-    let mut secrets_redacted = main_scrub_report.total;
-    let sidecar_texts: Vec<(String, String)> = sidecar_texts
-        .into_iter()
-        .map(|(id, text)| {
-            let (redacted, report) = scrub_transcript(&text, &scrub_opts);
-            secrets_redacted += report.total;
-            (id, redacted)
-        })
-        .collect();
+    let (raw, sidecar_texts, secrets_redacted) = scrub_capture_lanes(&raw, sidecar_texts);
 
     let html = wrap_envelope(
         &capture_ts,
