@@ -75,6 +75,13 @@ pub const MAX_TOUCHED_IN_PATCHSETS: usize = 20;
 
 pub const OVERLAP_EXACT: &str = "exact";
 pub const OVERLAP_ADJACENT: &str = "adjacent";
+/// A7-5 — the later patchset sits on a DIFFERENT base than the finding's
+/// own patchset, so the own-tip -> later-tip diff mixes the author's edits
+/// with upstream movement. A hunk over the finding's lines is then NOT
+/// evidence the author acted: such a pair is reported as `rebased`, never
+/// `exact`/`adjacent`. (The rebase-aware per-patchset delta is future
+/// work; this is the honest minimum.)
+pub const OVERLAP_REBASED: &str = "rebased";
 
 /// A later hunk within this many lines of a finding's own range counts as
 /// `adjacent` rather than a miss — the same "near enough to be evidence,
@@ -111,6 +118,36 @@ type RenameCache = HashMap<(String, String), Vec<FileChange>>;
 /// `(from_sha, from_path, to_sha, to_path) -> parsed hunks`, computed at
 /// most once per distinct quad.
 type HunkCache = HashMap<(String, String, String, String), Vec<DiffHunk>>;
+
+// A7.f8 — a process-wide memo for the two git reads above, keyed on
+// IMMUTABLE shas (a commit sha names one tree forever, in any repo), so a
+// findings list read no longer re-runs up to 20 `git diff`s per distinct
+// (own tip, later tip) pair on every request. Only SUCCESSFUL reads are
+// remembered: a read that failed (object not fetched yet, store not ready)
+// degrades to "no evidence" for this call and is retried on the next one.
+// Bounded: past `GLOBAL_MEMO_CAP` entries the map is cleared (a memo, not a
+// store). No guard is held across a git call.
+const GLOBAL_MEMO_CAP: usize = 512;
+
+static GLOBAL_RENAMES: std::sync::LazyLock<std::sync::Mutex<RenameCache>> =
+    std::sync::LazyLock::new(Default::default);
+static GLOBAL_HUNKS: std::sync::LazyLock<std::sync::Mutex<HunkCache>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn memo_get<K: std::hash::Hash + Eq, V: Clone>(
+    m: &std::sync::Mutex<HashMap<K, V>>,
+    k: &K,
+) -> Option<V> {
+    m.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned()
+}
+
+fn memo_put<K: std::hash::Hash + Eq, V>(m: &std::sync::Mutex<HashMap<K, V>>, k: K, v: V) {
+    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+    if g.len() >= GLOBAL_MEMO_CAP {
+        g.clear();
+    }
+    g.insert(k, v);
+}
 
 fn line_bounds(lines: &[i64]) -> Option<(u32, u32)> {
     let mut lo: Option<i64> = None;
@@ -185,10 +222,21 @@ fn resolve_path(
 ) -> Option<String> {
     let key = (from_sha.to_string(), to_sha.to_string());
     if !cache.contains_key(&key) {
-        let range = format!("{from_sha}..{to_sha}");
-        let files = ctx
-            .read_with_fallback(|root| history::diff_files(root, "diff", &["-M", &range]))
-            .unwrap_or_default();
+        let files = match memo_get(&GLOBAL_RENAMES, &key) {
+            Some(f) => f,
+            None => {
+                let range = format!("{from_sha}..{to_sha}");
+                match ctx
+                    .read_with_fallback(|root| history::diff_files(root, "diff", &["-M", &range]))
+                {
+                    Ok(f) => {
+                        memo_put(&GLOBAL_RENAMES, key.clone(), f.clone());
+                        f
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
+        };
         cache.insert(key.clone(), files);
     }
     let files = cache.get(&key)?;
@@ -225,18 +273,25 @@ fn parsed_hunks(
     if let Some(hunks) = cache.get(&key) {
         return hunks.clone();
     }
-    let text = if from_path == to_path {
+    if let Some(hunks) = memo_get(&GLOBAL_HUNKS, &key) {
+        cache.insert(key, hunks.clone());
+        return hunks;
+    }
+    let read = if from_path == to_path {
         let from = Revspec::trusted(from_sha.to_string());
         let to = Revspec::trusted(to_sha.to_string());
         ctx.read_with_fallback(|root| diff::diff_file(root.git_path(), &from, Some(&to), from_path))
-            .unwrap_or_default()
+            .ok()
     } else {
         ctx.read_with_fallback(|root| {
             diff::diff_blob_pair(root.git_path(), from_sha, from_path, to_sha, to_path)
         })
-        .unwrap_or_default()
+        .ok()
     };
-    let hunks = review_hunks::parse_unified_diff(&text).hunks;
+    let hunks = review_hunks::parse_unified_diff(read.as_deref().unwrap_or_default()).hunks;
+    if read.is_some() {
+        memo_put(&GLOBAL_HUNKS, key.clone(), hunks.clone());
+    }
     cache.insert(key, hunks.clone());
     hunks
 }
@@ -295,6 +350,13 @@ pub fn compute_touched_in(
                 }
             }
             if let Some(o) = overlap {
+                // A7-5 — a different base_sha means the tip-to-tip diff
+                // includes base movement; downgrade to `rebased`.
+                let o = if ps.base_sha != own_row.base_sha {
+                    OVERLAP_REBASED
+                } else {
+                    o
+                };
                 entries.push(TouchedInEntry {
                     ps: ps.ps_number,
                     hunks: qualifying,
@@ -442,6 +504,42 @@ mod tests {
         assert_eq!(result.entries[0].ps, 2);
         assert_eq!(result.entries[0].overlap, OVERLAP_EXACT);
         assert_eq!(result.entries[0].hunks, 1);
+    }
+
+    /// A7-5 — a later patchset on a DIFFERENT base: the tip-to-tip hunk over
+    /// the finding's line may be pure upstream movement, so it must read
+    /// `rebased`, never `exact`. Fails without the base_sha comparison.
+    #[test]
+    fn a_pair_with_a_moved_base_is_rebased_never_exact() {
+        let tmp = init_repo();
+        let dir = tmp.path();
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
+        git(dir, &["add", "a.txt"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        let ps1_tip = git_out(dir, &["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3-upstream\nl4\nl5\n").unwrap();
+        git(dir, &["commit", "-aq", "-m", "c2"]);
+        let ps2_tip = git_out(dir, &["rev-parse", "HEAD"]);
+
+        let moved_base = "f".repeat(40);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &ps1_tip, &ps1_tip),
+            ps_row(2, 1, 2, &moved_base, &ps2_tip),
+        ];
+        let queries = vec![TouchedInQuery {
+            finding_id: 9,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines: vec![3],
+        }];
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
+        let result = out.get(&9).expect("finding present");
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].overlap, OVERLAP_REBASED);
     }
 
     #[test]
@@ -640,6 +738,78 @@ mod tests {
         let result = out.get(&1).expect("finding present");
         assert!(result.capped, "22 later patchsets must trip the cap");
         assert!(result.entries.len() <= MAX_TOUCHED_IN_PATCHSETS);
+    }
+
+    /// A7.f8 — the second read of the same (own tip, later tip) pair is
+    /// served from the process-wide memo: it still answers after the repo's
+    /// object database is gone. Fails without the memo (no git left to ask).
+    #[test]
+    fn a_repeat_read_is_served_from_the_memo_not_git() {
+        let tmp = init_repo();
+        let dir = tmp.path();
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
+        git(dir, &["add", "a.txt"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        let ps1_tip = git_out(dir, &["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3-memo\nl4\nl5\n").unwrap();
+        git(dir, &["commit", "-aq", "-m", "c2"]);
+        let ps2_tip = git_out(dir, &["rev-parse", "HEAD"]);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &ps1_tip, &ps1_tip),
+            ps_row(2, 1, 2, &ps1_tip, &ps2_tip),
+        ];
+        let queries = vec![TouchedInQuery {
+            finding_id: 11,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines: vec![3],
+        }];
+        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir));
+        let first = compute_touched_in(&ctx, &patchsets, &queries);
+        assert_eq!(first[&11].entries.len(), 1);
+
+        std::fs::remove_dir_all(dir.join(".git")).unwrap();
+        let again = compute_touched_in(&ctx, &patchsets, &queries);
+        assert_eq!(again[&11].entries, first[&11].entries);
+    }
+
+    /// A7.f8 — a FAILED read is never remembered: with no repository the
+    /// pair yields no evidence, and once the objects exist the same inputs
+    /// produce the entry (a poisoned memo would keep saying "nothing").
+    #[test]
+    fn a_failed_read_is_not_memoised() {
+        let tmp = init_repo();
+        let dir = tmp.path();
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
+        git(dir, &["add", "a.txt"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        let ps1_tip = git_out(dir, &["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3-late\nl4\nl5\n").unwrap();
+        git(dir, &["commit", "-aq", "-m", "c2"]);
+        let ps2_tip = git_out(dir, &["rev-parse", "HEAD"]);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &ps1_tip, &ps1_tip),
+            ps_row(2, 1, 2, &ps1_tip, &ps2_tip),
+        ];
+        let queries = vec![TouchedInQuery {
+            finding_id: 12,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines: vec![3],
+        }];
+        let empty = tempfile::tempdir().unwrap();
+        let broken =
+            GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(empty.path()));
+        let none = compute_touched_in(&broken, &patchsets, &queries);
+        assert!(none[&12].entries.is_empty());
+
+        let ok = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir));
+        let some = compute_touched_in(&ok, &patchsets, &queries);
+        assert_eq!(
+            some[&12].entries.len(),
+            1,
+            "the failure must not have been cached"
+        );
     }
 
     #[test]

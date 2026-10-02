@@ -8,7 +8,9 @@
 // the comment when the caller (this form) omits them, so the form only
 // asks for what a promotion actually decides: severity, act, blocking, and
 // an editable title.
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ApiError } from "../../api/client";
 import type { ReviewComment } from "../../api/types";
 import { useCreateManualFindingMutation } from "../../hooks/useReviewComments";
 import {
@@ -62,6 +64,7 @@ export default function PromoteToFinding({ repo, reviewId, thread }: PromoteToFi
   const { admitted } = useReviewMutationsAdmitted();
   const noLocation = generalNoLocation(thread);
   const promote = useCreateManualFindingMutation(repo, reviewId);
+  const qc = useQueryClient();
   const disabled = !admitted || noLocation;
   const hint = noLocation
     ? "general comments have no file location — only line/range comments can become findings"
@@ -108,7 +111,16 @@ export default function PromoteToFinding({ repo, reviewId, thread }: PromoteToFi
     } catch (e) {
       // Root CLAUDE.md invariant #32 — a user-action `.catch` must
       // `toast.err`, never swallow.
-      toast.err(`couldn't promote to finding: ${e instanceof Error ? e.message : String(e)}`);
+      // A9-4 — a 409 means the thread already backs a finding (a concurrent
+      // promote, or an import): say so and refresh the findings so the row
+      // re-renders as that finding.
+      if (e instanceof ApiError && e.status === 409) {
+        toast.warn("this thread already backs a finding — refreshing");
+        void qc.invalidateQueries({ queryKey: ["reviews", repo] });
+        setOpen(false);
+      } else {
+        toast.err(`couldn't promote to finding: ${e instanceof Error ? e.message : String(e)}`);
+      }
     } finally {
       setBusy(false);
     }

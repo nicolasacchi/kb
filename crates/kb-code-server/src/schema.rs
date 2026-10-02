@@ -102,7 +102,7 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         "mirror.updated" => json!({"type": kind, "payload": ["repo", "paths"]}),
         "repo.head_moved" => json!({"type": kind, "payload": ["repo", "old", "new"]}),
         "annotation.changed" => {
-            json!({"type": kind, "payload": ["repo", "path?", "paths?", "batch?", "review_id?"]})
+            json!({"type": kind, "payload": ["repo", "path?", "paths?", "batch?", "review_id?", "review_ids?"]})
         }
         "set.changed" => json!({"type": kind, "payload": ["repo"]}),
         "bookmark.changed" => json!({"type": kind, "payload": ["repo"]}),

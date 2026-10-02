@@ -167,7 +167,8 @@ import {
   type PaneLoc,
   type TrailVia,
 } from "../lib/codeUrl";
-import { setCurrentReview, useCurrentReview } from "../lib/currentReview";
+import { setCurrentReview } from "../lib/currentReview";
+import { useValidatedCurrentReview } from "../hooks/useValidatedCurrentReview";
 import { createCursorUrlSync, createPane2CursorUrlSync, type CursorUrlSync } from "../lib/cursorUrlSync";
 import { currentHistoryIndex, historyStepTarget } from "../lib/historyStep";
 import { workspacesUrl } from "../lib/setsUrl";
@@ -515,7 +516,9 @@ export default function Reader() {
   // review" marker (`lib/currentReview.ts` — the daemon has no notion of
   // it). `currentReview` also gates the rail's Review tab below.
   const reviewParam = parseReviewIdParam(searchParams.get("review"));
-  const currentReview = useCurrentReview(repo);
+  // A9-1 — validated against the daemon: a stale/foreign/malformed marker is
+  // cleared (and `?review=` stripped) instead of rendering "no comments yet".
+  const { current: currentReview, reviewId: validatedReviewId } = useValidatedCurrentReview(repo);
   // Precedence (V80-M3 brief): a `?review=` on the URL SETS the session
   // marker on load — a shared link wins over stale session state. Once the
   // marker is set, landing on ANY reader URL for this repo that does not
@@ -4698,8 +4701,8 @@ export default function Reader() {
   // gets it right from the start) and opens the Notes tab, where the
   // composer preselects this SAME review (`AnnotationsPanel`'s own
   // `useCurrentReview` read) — no extra plumbing needed for that half.
-  const reviewIdNum = currentReview ? Number(currentReview.id) : NaN;
-  const reviewPanel = currentReview && Number.isFinite(reviewIdNum) ? (
+  const reviewIdNum = validatedReviewId ?? NaN;
+  const reviewPanel = currentReview && validatedReviewId !== undefined ? (
     <div className="kbc-inspector__hint" data-kbc-current-review-panel>
       <p>
         <Link to={reviewUrl(repo, currentReview.id)} data-kbc-current-review-room-link>

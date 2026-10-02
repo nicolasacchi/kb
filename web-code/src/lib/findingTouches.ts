@@ -19,9 +19,12 @@ export interface TouchedInChip {
   label: string;
   title: string;
   href: string;
+  /** A7-5 — the pair spans a base change; not evidence of an author edit. */
+  rebased: boolean;
 }
 
 function overlapWord(overlap: FindingTouchedIn["overlap"]): string {
+  if (overlap === "rebased") return "rebased";
   return overlap === "exact" ? "exact" : "adjacent";
 }
 
@@ -45,12 +48,16 @@ export function touchedInChips(
   if (ownPs == null) return [];
   return (finding.touched_in ?? []).map((t) => ({
     ps: t.ps,
-    label: `lines changed in ps ${t.ps}`,
-    title: `${overlapWord(t.overlap)} overlap — ${hunkWord(t.hunks)} in ps ${t.ps}'s diff from ps ${ownPs}`,
+    label: t.overlap === "rebased" ? `lines changed in ps ${t.ps} (rebased)` : `lines changed in ps ${t.ps}`,
+    title:
+      t.overlap === "rebased"
+        ? `rebased — ps ${t.ps} sits on a different base than ps ${ownPs}, so this ${hunkWord(t.hunks)} may be upstream movement, not an author edit`
+        : `${overlapWord(t.overlap)} overlap — ${hunkWord(t.hunks)} in ps ${t.ps}'s diff from ps ${ownPs}`,
     href: reviewDiffHref(repo, reviewId, undefined, {
       ps: { from: ownPs, to: t.ps },
       file: finding.location.path,
     }),
+    rebased: t.overlap === "rebased",
   }));
 }
 
@@ -67,6 +74,8 @@ export function findingTouchTimelineRows(
   const rows: TimelineRow[] = [];
   for (const finding of findings) {
     for (const chip of touchedInChips(finding, repo, reviewId)) {
+      // A7-5 — a rebased pair is not evidence the author touched the lines.
+      if (chip.rebased) continue;
       rows.push({
         at: capturedAt.get(chip.ps) ?? 0,
         kind: "finding_touch",

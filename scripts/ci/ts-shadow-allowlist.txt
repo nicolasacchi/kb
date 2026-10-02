@@ -1,0 +1,15 @@
+# Grandfathered hand-written types that share a name with a generated wire type
+# (scripts/check-ts-shadows.sh). A RATCHET: entries may only be deleted, never added;
+# a stale entry (the shadow is gone) fails the gate. Format: app:Name:path
+web:ArtifactRef:web/src/lib/registers.ts
+web:BeliefOut:web/src/api/client.ts
+web:BeliefStatus:web/src/api/client.ts
+web-code:ClaimOut:web-code/src/api/types.ts
+web:CodeRevOut:web/src/api/doclens.ts
+web:CommitRef:web/src/lib/registers.ts
+web:DeskItem:web/src/api/desk.ts
+web:NotesListResponse:web/src/api/notes.ts
+web:ResolvedLink:web/src/lib/artifactLinks.ts
+web:SavedQuery:web/src/hooks/useSavedQueries.ts
+web:SlateCounts:web/src/api/slateTypes.ts
+web:SlateSummary:web/src/api/slateTypes.ts

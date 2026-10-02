@@ -1004,10 +1004,12 @@ export function appendReviewParam(url: string, id: string | undefined): string {
 
 /// Parse a `?review=` value (already URL-decoded, e.g. via
 /// `URLSearchParams.get`). TOTAL: `null` for absent, empty, or
-/// whitespace-only — a blank `review=` names no review, and returning `""`
+/// whitespace-only or not a plain positive integer — a blank `review=` names no review, and returning `""`
 /// would set the current-review marker to a review that doesn't exist.
 export function parseReviewIdParam(v: string | null): string | null {
   if (v === null) return null;
   const t = v.trim();
-  return t === "" ? null : t;
+  // A9-1 — review ids are daemon-minted positive integers; `7.5`, `1e3`
+  // and `0x10` all survive `Number()` as finite and must not become a marker.
+  return /^[0-9]+$/.test(t) && Number.isSafeInteger(Number(t)) && Number(t) > 0 ? t : null;
 }

@@ -28914,6 +28914,37 @@ mod tests {
         );
     }
 
+    /// A7.f3 — a `capture_dir` that is a SYMLINK inside the corpus root but
+    /// points outside it is refused too (not only `..` and absolute escapes),
+    /// and nothing is written through the link.
+    #[cfg(unix)]
+    #[test]
+    fn emit_artifact_refuses_a_capture_dir_symlinked_outside_the_corpus_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("corpus");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, source.join("link")).unwrap();
+        let cfg_path = tmp.path().join("kb.toml");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "[kb.platform]\npath = \"{}\"\ncapture_dir = \"link\"\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+        let report = serde_json::json!({ "summary": "ship the hint" });
+        let err = write_review_report_artifact(&cfg_path, 4, "platform", &report).unwrap_err();
+        assert!(err.to_string().contains("outside"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(&elsewhere).unwrap().count(),
+            0,
+            "nothing may be written through the symlink"
+        );
+    }
+
     /// V70-R — `kb-code review compose ID --from-file FILE`.
     #[test]
     fn review_compose_parses_id_and_from_file() {

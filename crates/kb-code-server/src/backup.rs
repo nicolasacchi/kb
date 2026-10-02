@@ -289,7 +289,12 @@ fn reclaimable_snapshot(dest: &Path) -> u64 {
 /// counts root-reserved blocks this process cannot use).
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 fn available_bytes(path: &Path) -> Result<u64, BackupError> {
-    // glibc `struct statvfs` on 64-bit Linux (`bits/statvfs.h`). The tail
+    // glibc `struct statvfs` on 64-bit Linux (`bits/statvfs.h`). musl's 64-bit
+    // layout is field-for-field the same (11 `unsigned long`s, `f_type`, five
+    // reserved ints = 112 bytes), which the size assert below pins on both
+    // libcs; a platform with a different size fails to COMPILE rather than
+    // read a wrong field (A7.f7: considered `rustix`/`nix`, declined — a new
+    // dependency for one syscall the assert already guards). The tail
     // (`f_type`, spare) is only here so the syscall has a buffer large
     // enough to write; callers read `f_frsize` and `f_bavail` only.
     #[repr(C)]

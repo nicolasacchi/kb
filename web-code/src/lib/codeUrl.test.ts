@@ -1072,4 +1072,10 @@ describe("parseReviewIdParam", () => {
   it("trims surrounding whitespace", () => {
     expect(parseReviewIdParam("  7  ")).toBe("7");
   });
+
+  it("rejects ids that Number() would accept but the daemon never mints (A9-1)", () => {
+    for (const bad of ["7.5", "1e3", "0x10", "-1", "0", "abc", "7x"]) {
+      expect(parseReviewIdParam(bad)).toBeNull();
+    }
+  });
 });
