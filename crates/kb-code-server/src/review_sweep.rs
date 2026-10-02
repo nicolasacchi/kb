@@ -18,9 +18,13 @@
 //! (rate limit, network, bad origin) degrades ONLY that row's
 //! `unavailable_reason` (same shape [`reviews::pr_status_route`] already
 //! established) and never aborts the rest of the batch. Owner/repo is
-//! resolved FRESH per review via `github::github_repo` (never parsed back
+//! resolved FRESH per review (never parsed back
 //! out of the stored `pr_repo_slug`) — same rationale
-//! `pr_status_route`'s own doc gives.
+//! `pr_status_route`'s own doc gives — through [`reviews::forge_ctx`]: a
+//! repo with a ready review store is read as the STORE's project and
+//! account (never the member's `origin`, which may be a fork whose PR #N is
+//! a different PR), and a failed store lookup degrades the row instead of
+//! falling back to `origin` + an ambient token.
 //!
 //! # `checks` — a 4th `warn` bucket beyond the addendum's literal 3
 //!
@@ -110,17 +114,17 @@ pub struct SweepBody {
 /// `review.changed{reason:"pr_refreshed"}` for. Kept separate from the row
 /// itself so `sweep_route` can emit AFTER every row has been computed
 /// (deterministic response ordering first, side effects second).
-struct SweepOutcome {
-    row: serde_json::Value,
-    emit: Option<(i64, String)>,
+pub(crate) struct SweepOutcome {
+    pub(crate) row: serde_json::Value,
+    pub(crate) emit: Option<(i64, String)>,
 }
 
 /// See the module doc's "verdict_stale / unanswered_questions" section —
 /// identical derivation to `review_inbox::list_inbox_route`'s own, just
-/// extracted so `sweep_one` can call it without re-deriving the grouping.
+/// extracted so `sweep_one_with` can call it without re-deriving the grouping.
 ///
 /// 2026-08-31 incident (store.rs module doc): takes `&Store` (not
-/// `&SharedState`, its only prior use) so `sweep_one` wraps the whole
+/// `&SharedState`, its only prior use) so `sweep_one_with` wraps the whole
 /// thing in ONE `run_blocking` closure.
 fn local_only_fields(store: &store::Store, review: &ReviewRow) -> Result<(bool, i64), ApiError> {
     let latest_ps = store.latest_patchset(review.id)?;
@@ -179,11 +183,22 @@ fn checks_summary(checks: &[crate::github::CheckRunOut]) -> serde_json::Value {
 /// that (matches every other route's `?`-through-`ApiError` convention;
 /// unlike a GitHub failure, a local store error is not this review's own
 /// fault to isolate).
-async fn sweep_one(
+/// One review's sweep against an explicit [`reviews::ForgeCtx`] — built ONCE
+/// per repo by [`sweep_route`] (a store-bound ctx runs `gh` once, not once per
+/// review), and the seam the fork/store test drives.
+///
+/// A6-2 / D12: the ctx is the ONE forge context. A ready store reads ITS
+/// project (`forge_slug`) as ITS account; only a store-less repo falls back to
+/// the member's `origin` and the ambient client. A failed store lookup, or a
+/// bound store whose gh login cannot answer, degrades the row to
+/// `unavailable_reason` — nothing is read, persisted or closed off a PR
+/// number that may belong to a fork.
+pub(crate) async fn sweep_one_with(
     state: SharedState,
     review: ReviewRow,
     binding: ReviewPrBinding,
     apply: bool,
+    ctx: reviews::ForgeCtx,
 ) -> Result<SweepOutcome, ApiError> {
     let pr_number = binding
         .pr_number
@@ -195,45 +210,30 @@ async fn sweep_one(
         .run_blocking(move |store| local_only_fields(store, &review_for_local))
         .await?;
 
-    let (repo_root, git_ctx) = {
+    let git_ctx = {
         let (repo_entry, _repo_id) = find_repo(&state, &review.repo)?;
         let repo_entry = repo_entry.clone();
-        let git_ctx = crate::git::roots::GitCtx::resolve_entry(&state.store, &repo_entry).await;
-        (repo_entry.path, git_ctx)
+        crate::git::roots::GitCtx::resolve_entry(&state.store, &repo_entry).await
     };
 
-    let root_for_origin = repo_root.clone();
-    let gh_repo_result =
-        tokio::task::spawn_blocking(move || crate::github::github_repo(&root_for_origin))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("origin lookup task panicked: {e}"),
-                )
-            })?;
-
-    let gh = match gh_repo_result {
+    let gh = match ctx.repo_or_reason() {
         Ok(gh) => gh,
-        Err(e) => {
+        Err(reason) => {
             return Ok(SweepOutcome {
                 row: unavailable_row(
                     &review,
                     pr_number,
                     verdict_stale,
                     unanswered_questions,
-                    &e.to_string(),
+                    &reason,
                 ),
                 emit: None,
             })
         }
     };
+    let github = ctx.client;
 
-    let pull = match state
-        .github
-        .get_pull(&gh.owner, &gh.name, pr_number as u64)
-        .await
-    {
+    let pull = match github.get_pull(&gh.owner, &gh.name, pr_number as u64).await {
         Ok(p) => p,
         Err(e) => {
             return Ok(SweepOutcome {
@@ -256,12 +256,8 @@ async fn sweep_one(
     // row's `unavailable_reason` (that's reserved for "the live call
     // itself failed" — see the module doc).
     let (checks_res, reviews_res) = tokio::join!(
-        state
-            .github
-            .list_checks(&gh.owner, &gh.name, &pull.head_sha),
-        state
-            .github
-            .list_reviews(&gh.owner, &gh.name, pr_number as u64),
+        github.list_checks(&gh.owner, &gh.name, &pull.head_sha),
+        github.list_reviews(&gh.owner, &gh.name, pr_number as u64),
     );
     let checks_list = checks_res.as_ref().ok().cloned().unwrap_or_default();
     let checks_json = checks_res.as_ref().ok().map(|c| checks_summary(c));
@@ -484,10 +480,20 @@ pub async fn sweep_route(
         .await?;
 
     let apply = body.apply;
+    // One forge context per repo (see `sweep_one_with`).
+    let mut ctxs: HashMap<String, reviews::ForgeCtx> = HashMap::new();
+    for (review, _) in &targets {
+        if !ctxs.contains_key(&review.repo) {
+            let entry = find_repo(&state, &review.repo)?.0.clone();
+            let ctx = reviews::forge_ctx(&state, &entry, None).await;
+            ctxs.insert(review.repo.clone(), ctx);
+        }
+    }
     let outcomes: Vec<Result<SweepOutcome, ApiError>> =
         stream::iter(targets.into_iter().map(|(review, binding)| {
             let state = state.clone();
-            async move { sweep_one(state, review, binding, apply).await }
+            let ctx = ctxs[&review.repo].clone();
+            async move { sweep_one_with(state, review, binding, apply, ctx).await }
         }))
         .buffer_unordered(SWEEP_CONCURRENCY)
         .collect()

@@ -74,6 +74,10 @@ pub use cred::{
     SecretToken,
 };
 pub use git::{FetchAuth, GitArgs, GitCall, GitOutput, StoreGit, StoreGitError, NO_PUSH_URL};
+// The bounded, process-group-killed runner, shared with the work-tree
+// fetches (`github::fetch_pr_ref`, `reviews::fetch_remote_base`), which
+// used to run a bare `Command` with no deadline.
+pub(crate) use proc::{run as run_bounded, RunSpec};
 pub use registry::{
     ReviewStores, StoreHandle, StoreRefusal, StoreUnavailable, SEEDING_RETRY_AFTER_SECS,
     URN_STORE_SEEDING,
