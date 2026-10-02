@@ -2,7 +2,14 @@
 // state_json, defensively: every malformed/absent shape degrades to
 // `null`, never a crash or a guessed value.
 import { describe, expect, it } from "vitest";
-import { parseLastGcApply, parseLastGcDryRun, parseLastMaint } from "./reviewStore";
+import {
+  FAILURE_CLASS_HINTS,
+  failureClassHint,
+  gcRefusal,
+  parseLastGcApply,
+  parseLastGcDryRun,
+  parseLastMaint,
+} from "./reviewStore";
 
 describe("parseLastMaint", () => {
   it("reads all three cadences when present", () => {
@@ -92,5 +99,34 @@ describe("parseLastGcApply", () => {
     expect(parseLastGcApply({})).toBeNull();
     expect(parseLastGcApply({ last_gc_apply: { candidates: 5 } })).toBeNull();
     expect(parseLastGcApply(undefined)).toBeNull();
+  });
+});
+
+describe("failure-class hints cover docs/kb-code.md's table", () => {
+  it("has a hint for every slug the classifier can emit", () => {
+    for (const slug of [
+      "vanished", "offline", "timeout", "credential-rejected", "credential-wrong-repo", "repo-not-found",
+      "auth-no-access", "host-key-unknown", "host-key-mismatch", "auth-required", "tls", "disk-full", "shallow",
+      "protocol-refused", "url-rejected", "credential-account-mismatch", "credential-unavailable",
+      "no-credentials", "spawn-failed", "dubious-ownership", "failed",
+    ]) {
+      expect(FAILURE_CLASS_HINTS[slug], slug).toBeTruthy();
+    }
+  });
+});
+
+describe("failure + GC hints (A9-5 / A9.f4)", () => {
+  it("humanises a known failure slug, passes an unknown one through", () => {
+    expect(failureClassHint("dubious-ownership")).toContain("safe.directory");
+    expect(failureClassHint("brand-new-class")).toBe("brand-new-class");
+    expect(failureClassHint(null)).toBeNull();
+  });
+
+  it("reads a refused apply out of the dry-run slot's reasons", () => {
+    expect(gcRefusal(["restore-guard"])).toContain("restore guard");
+    expect(gcRefusal(["backup-failed"])).toContain("backup");
+    expect(gcRefusal(["dry-run"])).toBeNull();
+    expect(gcRefusal(["nothing-to-do"])).toBeNull();
+    expect(gcRefusal([])).toBeNull();
   });
 });

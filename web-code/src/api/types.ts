@@ -2051,72 +2051,20 @@ export interface ReviewAnnotationsOut {
   groups: ReviewAnnotationGroup[];
 }
 
-// --- RS-U11 — the review store + fetch-credential cards (kbc-store/1,
-// kbc-credentials/1; `review_store/routes.rs`, no `ts-export` derive on
-// these — the routes build `serde_json::json!` bodies, so these are
-// hand-written mirrors, same convention as the rest of this file). ------
-
-/// `GET /api/repos/{name}/store`'s `store` row, when a store has been
-/// registered for the repo at all (`null` before that — RS-U3, §5.2).
-export interface ReviewStoreRow {
-  id: number;
-  uuid: string;
-  store_key: string;
-  git_dir: string;
-  base_url: string | null;
-  base_url_source: string | null;
-  forge_kind: string | null;
-  forge_host: string | null;
-  forge_slug: string | null;
-  /// `"verified"` (GitHub, D8) | `"unverified"` (every other forge).
-  forge_verified: string;
-  cred_kind: string;
-  /// `"absent"` | `"seeding"` | `"ready"` | `"broken"`.
-  state: string;
-  state_code: string | null;
-  state_json: unknown;
-  created_at: number;
-}
-
-export interface ReviewStoreMember {
-  repo_id: number;
-  /// `null` when this member repo id isn't (or is no longer) a
-  /// configured `[[repos]]` entry.
-  name: string | null;
-  remote: string;
-}
-
-/// How THIS repo's own registration into its store went (in-memory only
-/// — a refusal has no DB row to live in, README §5.1's base-URL ladder).
-export type ReviewStoreRegistration =
-  | { outcome: "member"; store_id: number; store_key: string; source: string; joined_existing: boolean }
-  | { outcome: "refused"; code: string; reason: string; candidates: string[] }
-  | { outcome: "error"; code: string; detail: string };
-
-export interface ReviewStoreDoctorFinding {
-  level: "error" | "warn" | "info";
-  code: string;
-  message: string;
-}
-
-export interface ReviewStoreDisk {
-  packs: number;
-  pack_bytes: number;
-  loose_objects: number;
-  total_bytes: number;
-}
-
-/// `GET /api/repos/{name}/store` body (`kbc-store/1`).
-export interface ReviewStoreCard {
-  schema: string;
-  repo: string;
-  store: ReviewStoreRow | null;
-  members: ReviewStoreMember[];
-  registration: ReviewStoreRegistration | null;
-  runtime: { seeding: boolean; locked_elsewhere: boolean };
-  disk: ReviewStoreDisk | null;
-  doctor: ReviewStoreDoctorFinding[];
-}
+// --- RS-U11 — the review store card (kbc-store/1) -------------------------
+//
+// A9.f1 (v0.44): generated from the daemon's own `review_store/routes.rs`
+// types (`just gen-ts-code`, drift-gated by `code-drift`) — the hand-written
+// mirrors that used to live here had already dropped `runtime.git_fallbacks`.
+// Re-exported under the names the SPA already uses.
+export type { ReviewStoreCard } from "./generated/ReviewStoreCard";
+export type { ReviewStoreRow } from "./generated/ReviewStoreRow";
+export type { ReviewStoreMember } from "./generated/ReviewStoreMember";
+export type { ReviewStoreRegistration } from "./generated/ReviewStoreRegistration";
+export type { ReviewStoreDoctorFinding } from "./generated/ReviewStoreDoctorFinding";
+export type { ReviewStoreDisk } from "./generated/ReviewStoreDisk";
+export type { ReviewStoreRuntime } from "./generated/ReviewStoreRuntime";
+export type { GitFallbacks } from "./generated/GitFallbacks";
 
 /// `[[review.repos]] credential` pin (`review_store/cred.rs`'s
 /// `CredentialPin`).

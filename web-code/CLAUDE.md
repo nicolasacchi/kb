@@ -558,7 +558,14 @@ selector inline)/unbind actions (`useBindAnnotationReview`/
 `useUnbindAnnotationReview`, `hooks/useAnnotations.ts`) — belt-and-braces
 invalidating `["reviews", repo, "comments"]` themselves alongside the
 `annotation.changed` SSE bridge's own prefix invalidation on either event
-a bind/rebind emits. The rail's Review tab (`components/reviews/
+a bind/rebind emits. What that bridge does NOT reach (v0.44, A9.f6):
+`annotation.changed{review_id}` prefix-invalidates every `["reviews", repo,
+…]` key (comments, findings, impact …) but NOT the repo-less unified-inbox
+query (`["inbox","unified"]`, `useUnifiedInbox`), so a bind/unbind's effect
+on an inbox row's `human_open` lands on that query's 30 s `staleTime`, not
+instantly. A bind/rebind moves the WHOLE thread (replies included) and a
+finding-backed annotation refuses both with 409 (the finding owns its
+scope). The rail's Review tab (`components/reviews/
 ReviewFileThreadsPanel.tsx`) replaces M3's "arrives with M2" stub: the
 current review's threads for the FOCUSED file (`useReviewComments`, the
 SAME query the Room's own cards share), a header caption from the SAME

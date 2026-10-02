@@ -105,6 +105,11 @@ pub enum FailureClass {
     NoCredentials,
     /// The subprocess could not be started at all (binary missing).
     SpawnFailed,
+    /// git's `safe.directory` ownership check refused the repository
+    /// ("detected dubious ownership"): the store/clone dir is owned by a
+    /// different uid than the daemon. An operator-fixable environment
+    /// fact, not an auth, network or "failed" mystery.
+    DubiousOwnership,
     /// Anything else.
     Failed,
 }
@@ -132,6 +137,7 @@ impl FailureClass {
             Self::CredentialUnavailable => "credential-unavailable",
             Self::NoCredentials => "no-credentials",
             Self::SpawnFailed => "spawn-failed",
+            Self::DubiousOwnership => "dubious-ownership",
             Self::Failed => "failed",
         }
     }
@@ -172,6 +178,7 @@ impl FailureClass {
             "credential-unavailable" => Self::CredentialUnavailable,
             "no-credentials" => Self::NoCredentials,
             "spawn-failed" => Self::SpawnFailed,
+            "dubious-ownership" => Self::DubiousOwnership,
             "failed" => Self::Failed,
             _ => return None,
         })
@@ -224,6 +231,9 @@ pub fn classify(stderr: &str, auth: AuthContext) -> FailureClass {
 
     if has("no space left on device") || has("enospc") || has("disk quota exceeded") {
         return FailureClass::DiskFull;
+    }
+    if has("detected dubious ownership") {
+        return FailureClass::DubiousOwnership;
     }
     if has("remote host identification has changed") {
         return FailureClass::HostKeyMismatch;
@@ -423,6 +433,12 @@ mod tests {
             F::Offline,
         ),
         ("fatal: bad object HEAD\n", A::None, F::Failed),
+        // K1 carry-over (A5-1 residual): git's safe.directory refusal.
+        (
+            "fatal: detected dubious ownership in repository at '/srv/state/stores/ab12.git'\nTo add an exception for this directory, call:\n\n\tgit config --global --add safe.directory /srv/state/stores/ab12.git\n",
+            A::None,
+            F::DubiousOwnership,
+        ),
     ];
 
     #[test]
@@ -470,6 +486,7 @@ mod tests {
         F::CredentialUnavailable,
         F::NoCredentials,
         F::SpawnFailed,
+        F::DubiousOwnership,
         F::Failed,
     ];
 

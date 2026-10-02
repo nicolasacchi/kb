@@ -327,7 +327,10 @@ export default function ReviewThreadsCard({
                   open in reader
                 </Link>
               )}
-              <PromoteToFinding repo={repo} reviewId={reviewId} thread={c} />
+              {/* A9-4 — a thread that already backs a finding (an imported one
+                  reaches here; manual ones took the FindingRow branch) cannot be adopted
+                  again: `review_findings.annotation_id` is UNIQUE. */}
+              {!linkedFinding && <PromoteToFinding repo={repo} reviewId={reviewId} thread={c} />}
             </div>
           );
         })}
