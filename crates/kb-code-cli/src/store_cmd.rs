@@ -196,7 +196,7 @@ async fn post(
 }
 
 /// Map a non-2xx daemon answer to `(code, exit)`.
-fn failure(status: reqwest::StatusCode, body: &Value) -> (String, i32) {
+pub(crate) fn failure(status: reqwest::StatusCode, body: &Value) -> (String, i32) {
     let code = body["code"]
         .as_str()
         .map(str::to_string)
@@ -207,13 +207,7 @@ fn failure(status: reqwest::StatusCode, body: &Value) -> (String, i32) {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| format!("http-{}", status.as_u16()));
-    let exit = match status.as_u16() {
-        404 => envelope::EXIT_NOT_FOUND,
-        401 | 403 => envelope::EXIT_REFUSED,
-        409 | 503 => envelope::EXIT_CONFLICT,
-        _ => envelope::EXIT_GENERIC,
-    };
-    (code, exit)
+    (code, envelope::exit_for_status(status.as_u16()))
 }
 
 fn fail(json: bool, status: reqwest::StatusCode, body: &Value) -> ! {

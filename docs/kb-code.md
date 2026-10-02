@@ -1560,12 +1560,14 @@ leading `+` — so an address can never smuggle anything into a URL path.
 values is a usage error naming both.
 
 Not every verb accepts every form, and the parser is not the constraint:
-`diff`/`log`/`cat`/`verify` take the full address; `status` takes `<id>` or
-`pr:<N>` only and refuses a `/ps<n>` with a client-side USAGE error
-(exit 2 — it always answers against the latest patchset); `retrack` takes
-`<id>` or `pr:<N>`, and a `/ps<n>` suffix is parsed and then SILENTLY
-DROPPED; and `find` (`--pr N`) and `sync` (`--repo R --pr N` /
-`--repo R --open`) take NO positional address at all.
+`diff`/`log`/`cat`/`verify` take the full address; `status` and `retrack`
+take `<id>` or `pr:<N>` only and refuse a `/ps<n>` with a client-side USAGE
+error (exit 2, before any request — they act on the whole review, against the
+latest patchset); `find` and `sync` take a PR as `pr:<N>` (positional
+shorthand for `--pr N`; an `<id>` or a `/ps<n>` there is a usage error), and
+`sync` additionally needs `--repo R` (or `--open`). `diff --budget` together
+with `--stat` or `--name-only` is a usage error (those views have no patch to
+cut).
 
 `pr:<N>` resolves through `GET /api/reviews/find`: inferred when exactly
 one repo has a review bound to PR N, else narrowed by `--repo`. Two or
@@ -1587,13 +1589,13 @@ table was NOT adopted; these are envelope.rs's".
 |---|---|---|
 | 0 | ok | |
 | 1 | generic | an unclassified failure — the byte-identical pre-RS-U10a default |
-| 2 | usage | a clap parse error, a malformed `<id>`/`pr:<N>`/`<id>/ps<n>` address, an ambiguous `pr:<N>`, or a daemon 400 |
+| 2 | usage | a clap parse error, a malformed `<id>`/`pr:<N>`/`<id>/ps<n>` address, an ambiguous `pr:<N>`, or a daemon 400 (any verb) |
 | 3 | conflict | HTTP 409, HTTP 503 (including a store still seeding), a `verify` that FAILS, and a `lint` ERROR — the request was fine, the state refuses it |
 | 4 | refused | an UNAMBIGUOUS 401/403 bearer-auth failure, including the secret denylist |
 | 5 | unreachable | the daemon could not be reached at all — connection refused, DNS failure, timeout; never got as far as an HTTP status |
 | 6 | upstream | an upstream the daemon depends on failed: a forge fetch/API call that is offline, unauthenticated or vanished (`store sync`, a `sync` job whose forge leg failed) |
 | 7 | partial | the verb partly succeeded — `sync --open` synced some PRs and failed others, `store sync` fetched some members and not all. The envelope carries `degraded: true` |
-| 8 | not found | EVERY HTTP 404 — the status alone decides it, never the body |
+| 8 | not found | EVERY HTTP 404 — the status alone decides it, never the body (any verb) |
 
 Why 404 is not folded in, and why 8 does not mean "definitely absent": a
 loopback-only route deliberately 404s a non-loopback caller — hiding the
@@ -1610,12 +1612,25 @@ answers off-loopback", **The typed error** above) — so read the body's
 alone. The same reasoning is why 503 shares the conflict slot: it is a
 state refusal, not a category error.
 
+**One mapping for the whole CLI.** `envelope::exit_for_status` is the single
+status-to-exit function (400→2, 401/403→4, 404→8, 409/503→3, else 1); the
+review verbs (`AgentError::from_http`), the store verbs (`store_cmd::failure`)
+and every other verb (`envelope::exit_code_for`) all call it, and a test pins
+that they agree. Verbs built on the `*_raw` helpers (`review compose`, `review
+verdict`, `suggest apply`, `findings add`, `disposition`, `publish`, `checkout`,
+…) carry the status in a typed `StatusError`, so an off-host `review compose`
+(a bodiless 404) exits 8 and a drifted `suggest apply` exits 3 — pinned by
+`tests/exit_contract`. A client-side timeout against a reached daemon exits 5
+with code `timeout` and says the daemon may still be working (it is not
+"daemon down"); `review snapshot`/`start`/single `retrack` wait up to
+three base-fetch budgets, `retrack --all` up to six hours.
+
 ### The verbs
 
 | verb | what it does |
 |---|---|
 | `review find --pr N [--repo R]` | every review bound to PR N, across every configured repo unless `--repo` narrows it |
-| `review diff <REF> [--ps N] [--stat\|--name-only\|--patch] [--path P] [--budget TOKENS]` | the patchset's change set against its OWN base. `--stat`/`--name-only`/`--patch` are three separate views, not one combined invocation; `--budget` cuts the PATCH text and implies `--patch` only when neither `--stat` nor `--name-only` is given (alongside either, it is silently inert) |
+| `review diff <REF> [--ps N] [--stat\|--name-only\|--patch] [--path P] [--budget TOKENS]` | the patchset's change set against its OWN base. `--stat`/`--name-only`/`--patch` are three separate views, not one combined invocation; `--budget` cuts the PATCH text and implies `--patch`; with `--stat` or `--name-only` it is a usage error |
 | `review log <REF> [--ps N]` | the patchset's commits |
 | `review cat <REF> <PATH> [--ps N] [--side old\|new]` | one file at the patchset's base (`old`) or tip (`new`); secret-denylisted paths are refused |
 | `review verify <REF> [--ps N] [--min-findings N]` | the post-compose gate: the document is present and lints clean, the findings count, every anchor resolves, the verdict sits on the latest patchset. **Exits 3 when any check fails** |
@@ -2007,8 +2022,8 @@ override `KB_CODE_TOKEN_FILE`) — there is no `--token` flag (argv leaks to
 per entry and a top-level `loopback` bool. Every NEW `--json` verb this
 unit adds uses one envelope shape (`{schema, ok, data, warnings, degraded,
 empty_reason}` / `{ok:false, error:{code, message, hint}}`) and one
-documented exit-code table (2 usage, 3 conflict, 4 refused/loopback, 5
-unreachable) — retrofitting the ~150 pre-existing verbs onto it is
+documented exit-code table (2 usage, 3 conflict, 4 refused, 5
+unreachable, 8 not-found — see **Exit codes** for the full list) — retrofitting the ~150 pre-existing verbs onto it is
 explicitly out of scope for this unit.
 
 **Local-daemon hardening (V70-A2) adds no new route** — six guards over the
