@@ -106,7 +106,7 @@ pub const LS_REMOTE_TIMEOUT: Duration = Duration::from_secs(15);
 /// [`super::settings`]).
 ///
 /// Sized for the fleet this store exists for (README §5.2): the
-/// 1000farmacie deployment is FIVE member clones carrying ~3.6 GB of
+/// largest deployment is FIVE member clones carrying ~3.6 GB of
 /// `.git` between them, one of them ~748 MB. The previous 30 s could
 /// not carry that — it is the budget that failed the U13 acceptance
 /// run, where `create` and `snapshot` both died on `store git call

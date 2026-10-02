@@ -32,7 +32,7 @@ Stdlib only (no third-party deps — BUILDER-RULES / README §9).
     BUILD-BRIEF §3 gate 1):
         python3 review_snapshot.py diff before.json after.json
         # exit 0  = identical (modulo the additive-field allowlist)
-        # exit 1  = real differences found (see BUILD-LOG.md — "explained,
+        # exit 1  = real differences found (see the driver's build log — "explained,
         #           or a bug")
         # exit 2  = usage / load error
 
