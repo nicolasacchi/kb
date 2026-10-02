@@ -6,3 +6,5 @@ tests/e2e/package-lock.json
 Cargo.lock
 # Embedded base64 screenshots.
 docs/research/sessions-and-share-feature-tour.html
+# Generated licence texts (third-party copyright holders can share a first name with the operator).
+THIRD-PARTY-LICENSES.md
