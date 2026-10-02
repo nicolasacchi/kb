@@ -163,8 +163,21 @@ specific origin (not `'*'`), and every artifact response carries
 `Content-Security-Policy: frame-ancestors <parent_origin>;` so only
 the configured SPA can iframe artifacts. The default
 `http://localhost:4000` is treated as "not configured for production"
-and keeps the permissive `'*'` so the common dev flows (SPA at
-`127.0.0.1`, vite proxying on `:4738`) work without silent drops.
+and keeps the dev posture so the common dev flows (SPA at
+`127.0.0.1`, vite proxying on `:4738`) work without silent drops. That
+posture is still not "anyone": artifact responses carry
+`frame-ancestors http://localhost:* http://127.0.0.1:*;` (any loopback
+port, so a page on the open web cannot frame
+`<id>.artifacts.localhost:4000/?cm=on`), and the injected scripts post to
+the parent's real origin whenever the browser reports it
+(`location.ancestorOrigins`, Chromium and Safari), falling back to `'*'`
+only where it does not (Firefox) - there the `frame-ancestors` policy is
+what bounds the parent. On a non-loopback bind with the default
+`parent_origin`, a SPA served from the public name is NOT in that list and
+cannot frame artifacts: set `parent_origin`. (The annotator script,
+`annotate.js`, still posts with `'*'` in every mode; the parent validates
+`event.origin`, and in production `frame-ancestors` bounds who the parent
+can be.)
 
 ### trusted_proxies (v0.7.1)
 
@@ -187,7 +200,26 @@ Either way the header is walked **right-to-left**, skipping loopback +
 listed-proxy entries, so the genuine client is whatever the trusted
 proxy appended — a client cannot forge a leftmost
 `X-Forwarded-For: 127.0.0.1` to claim a loopback origin and skip auth.
-Entries that don't parse as an IP are dropped with a warn log at boot.
+Entries that are neither an IP literal nor a DNS name are dropped with a
+warn log at boot.
+
+**DNS names (docker compose).** A proxy container's IP changes whenever it is
+recreated, which silently turned a pinned `172.18.0.x` into a stale entry.
+An entry may therefore be a DNS name, typically the compose service name:
+
+```toml
+[server]
+trusted_proxies = ["traefik"]      # the compose service name of the proxy
+```
+
+Names are resolved at boot (before the first request) and re-resolved every
+30 seconds; the trusted set is swapped atomically and every change is logged
+at `info` as `trusted_proxies set changed old=[..] new=[..]`. A lookup that
+fails or returns nothing keeps the last good addresses and logs a `warn` -
+it never widens the set, and a name that has never resolved trusts nothing.
+IP literals keep their exact-match semantics and can be mixed with names.
+Note that a name trusts every address it resolves to, so only list names you
+control (a service name on a private compose network).
 
 **Verification (v0.7).** The SPA derives the artifact host suffix from
 `window.location` and cross-checks it against the daemon's

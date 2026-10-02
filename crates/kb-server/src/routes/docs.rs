@@ -1496,7 +1496,7 @@ pub async fn artifact_bytes(
             if crate::scrub::looks_non_loopback(
                 Some(peer.ip()),
                 &headers,
-                &state.origin.trusted_proxies,
+                &state.origin.trusted_proxies.load(),
             ) =>
         {
             match std::str::from_utf8(&bytes) {

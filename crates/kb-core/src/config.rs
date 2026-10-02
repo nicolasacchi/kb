@@ -752,6 +752,32 @@ pub struct DaemonSection {
     pub name: Option<String>,
 }
 
+/// Is `s` a syntactically valid DNS name for a `[server] trusted_proxies`
+/// entry? RFC 1123 labels (letters, digits, interior `-`, 1-63 bytes),
+/// at most 253 bytes, and a final label that is not all digits, so an
+/// IP-shaped typo such as `999.999.999.999` is rejected rather than
+/// treated as a hostname.
+pub fn is_valid_proxy_hostname(s: &str) -> bool {
+    let s = s.strip_suffix('.').unwrap_or(s);
+    if s.is_empty() || s.len() > 253 {
+        return false;
+    }
+    let mut last_all_digits = false;
+    for label in s.split('.') {
+        let b = label.as_bytes();
+        if b.is_empty()
+            || b.len() > 63
+            || b[0] == b'-'
+            || b[b.len() - 1] == b'-'
+            || !b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-')
+        {
+            return false;
+        }
+        last_all_digits = b.iter().all(|c| c.is_ascii_digit());
+    }
+    !last_all_digits
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerSection {
     /// Listen address. Default `127.0.0.1:4000` per topic 11.
@@ -797,9 +823,12 @@ pub struct ServerSection {
     /// counts too (e.g. a dockerised proxy reaching the host over a
     /// bridge network). The header is then walked right-to-left, skipping
     /// loopback + listed proxies, so a client cannot spoof the leftmost
-    /// entry to claim a loopback origin. Entries that don't parse as an
-    /// IP address are dropped with a warn log at boot. See
-    /// docs/self-host.md.
+    /// entry to claim a loopback origin. An entry may also be a DNS name
+    /// (e.g. a docker-compose service name such as `"traefik"`): it is
+    /// resolved at boot and re-resolved every 30 s, and a failed lookup
+    /// keeps the last good addresses. IP literals keep exact-match
+    /// semantics. Entries that are neither are dropped with a warn log at
+    /// boot. See docs/self-host.md.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
 
@@ -1783,13 +1812,14 @@ impl KbConfig {
             ));
         }
 
-        // [server] trusted_proxies must each parse as an IP (boot drops
-        // bad entries with a warn; a write API rejects them outright).
+        // [server] trusted_proxies must each be an IP literal or a DNS name
+        // (boot drops bad entries with a warn; a write API rejects them
+        // outright).
         for (i, p) in self.server.trusted_proxies.iter().enumerate() {
-            if p.trim().parse::<std::net::IpAddr>().is_err() {
+            if p.trim().parse::<std::net::IpAddr>().is_err() && !is_valid_proxy_hostname(p.trim()) {
                 issues.push(ValidationIssue::hard(
                     format!("/server/trusted_proxies/{i}"),
-                    format!("`{p}` is not a valid IP address"),
+                    format!("`{p}` is neither an IP address nor a DNS name"),
                 ));
             }
         }
@@ -4082,9 +4112,41 @@ mod tests {
     }
 
     #[test]
+    fn trusted_proxies_accepts_dns_names_and_rejects_garbage() {
+        for ok in ["traefik", "proxy.internal", "a-b.c1", "10.0.0.1", "::1"] {
+            let mut c = KbConfig::default();
+            c.server.trusted_proxies = vec![ok.into()];
+            assert!(
+                !c.validate()
+                    .iter()
+                    .any(|i| i.pointer == "/server/trusted_proxies/0"),
+                "{ok} must validate"
+            );
+        }
+        for bad in [
+            "",
+            "-x",
+            "x-",
+            "a..b",
+            "has space",
+            "999.999.999.999",
+            "http://x",
+        ] {
+            let mut c = KbConfig::default();
+            c.server.trusted_proxies = vec![bad.into()];
+            assert!(
+                c.validate()
+                    .iter()
+                    .any(|i| i.pointer == "/server/trusted_proxies/0" && i.is_hard()),
+                "{bad:?} must be a hard issue"
+            );
+        }
+    }
+
+    #[test]
     fn validate_flags_bad_proxy_and_zero_rate_limit() {
         let mut c = KbConfig::default();
-        c.server.trusted_proxies = vec!["10.0.0.1".into(), "nope".into()];
+        c.server.trusted_proxies = vec!["10.0.0.1".into(), "not a host!".into()];
         c.server.rate_limit = Some(RateLimitSection {
             search: Some(0),
             ..Default::default()

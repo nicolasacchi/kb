@@ -232,11 +232,12 @@ pub async fn serve_with_paths(
 
     // deep-review X2 LOW — the annotator origin gate + the artifact
     // `frame-ancestors` CSP both key off a configured `[server] parent_origin`;
-    // left at the dev default (or empty) the postMessage targetOrigin stays
-    // `'*'` and no CSP is sent (see `routes::artifact::postmessage_target`).
-    // That's fine on a loopback bind, but on a public bind it silently disables
-    // both — any page could iframe an artifact and drive its annotator. Warn so
-    // the misconfig isn't invisible.
+    // left at the dev default (or empty) the configured postMessage target
+    // stays `'*'` and the CSP is the loopback-wildcard dev policy (see
+    // `routes::artifact::postmessage_target`). That fits a loopback bind, but
+    // on a public bind a SPA served from the public name can no longer frame
+    // artifacts, and the annotator origin gate stays off. Warn so the
+    // misconfig isn't invisible.
     {
         let p = config.server.parent_origin.as_str();
         let unconfigured =
@@ -245,8 +246,8 @@ pub async fn serve_with_paths(
             tracing::warn!(
                 addr = %local_addr,
                 "serving on a non-loopback address with no [server] parent_origin set — \
-                 artifact framing is unrestricted and the annotator origin gate is disabled; \
-                 set parent_origin to your SPA's origin to lock both down"
+                 artifact framing is limited to loopback ancestors (the dev default) and the \
+                 annotator origin gate is disabled; set parent_origin to your SPA's origin"
             );
         }
     }
@@ -336,11 +337,16 @@ pub async fn serve_with_paths(
     // v0.7.1 C1 — resolve the trusted-proxy allowlist once and share the
     // Arc across the auth, rate-limit, and outbound-scrub layers so they
     // evaluate the same trusted set.
-    let trusted_proxies = Arc::new(crate::state::parse_trusted_proxies(
-        &config.server.trusted_proxies,
-    ));
-    if !trusted_proxies.is_empty() {
-        tracing::info!(count = trusted_proxies.len(), "loaded trusted_proxies");
+    // Entries may be IP literals or DNS names (a compose service name); names
+    // are resolved here, once, before the first request, and re-resolved by a
+    // background task spawned below.
+    let (trusted_proxies, proxy_resolver) =
+        crate::state::TrustedProxies::boot(&config.server.trusted_proxies).await;
+    if !trusted_proxies.load().is_empty() {
+        tracing::info!(
+            count = trusted_proxies.load().len(),
+            "loaded trusted_proxies"
+        );
     }
     auth.trusted_proxies = trusted_proxies.clone();
     let rate_limits = crate::state::RateLimits::from_section(config.server.rate_limit.as_ref());
@@ -479,6 +485,10 @@ pub async fn serve_with_paths(
     // (1Hz, single Relaxed load) and the SSE bus is broadcast so
     // every connected TUI gets it.
     tasks.push(spawn_metrics_ticker(handles.clone()));
+    // Re-resolve named `trusted_proxies` entries (no task for an IP-only list).
+    if let Some(h) = proxy_resolver.spawn(handles.shutdown.subscribe()) {
+        tasks.push(h);
+    }
     // X1 — daemon-wide reactive event→webhook bridge. Spawns nothing when
     // `[webhooks]` is unset; when set, one subscriber POSTs selected events
     // to the configured URL. Joined in `teardown_tasks` like every task here.
@@ -1630,9 +1640,8 @@ pub async fn serve_on_random_port_with_paths_and_spa(
     auth.operator = config.identity.operator.clone();
     auth.identity_header = config.identity.header.to_ascii_lowercase();
     // v0.7.1 C1 — see `serve_with_paths`; same shared trusted-proxy Arc.
-    let trusted_proxies = Arc::new(crate::state::parse_trusted_proxies(
-        &config.server.trusted_proxies,
-    ));
+    let (trusted_proxies, proxy_resolver) =
+        crate::state::TrustedProxies::boot(&config.server.trusted_proxies).await;
     auth.trusted_proxies = trusted_proxies.clone();
     let rate_limits = crate::state::RateLimits::from_section(config.server.rate_limit.as_ref());
     let origin =
@@ -1715,6 +1724,7 @@ pub async fn serve_on_random_port_with_paths_and_spa(
     // `sse_subscribers` gauge) a production daemon emits. Detached like
     // the serve task below; it exits with the process.
     drop(spawn_metrics_ticker(handles.clone()));
+    drop(proxy_resolver.spawn(handles.shutdown.subscribe()));
     // L2 — run the log-retention sweep in the test fixture too (first tick
     // at boot), so integration tests can pin the boot prune. Detached like
     // the ticker above.

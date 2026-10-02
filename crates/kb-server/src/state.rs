@@ -22,20 +22,196 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 
-/// Parse a kb.toml `[server] trusted_proxies` list into `IpAddr`s,
-/// dropping (with a warn log) any entry that doesn't parse. Shared by
-/// both `serve_*` entrypoints so the auth, rate-limit, and outbound-scrub
-/// layers all see the same trusted set.
-pub fn parse_trusted_proxies(raw: &[String]) -> Vec<IpAddr> {
-    raw.iter()
-        .filter_map(|s| match s.trim().parse::<IpAddr>() {
-            Ok(ip) => Some(ip),
-            Err(e) => {
-                tracing::warn!(entry = %s, error = %e, "ignoring invalid trusted_proxies entry");
-                None
+/// One parsed `[server] trusted_proxies` list: the IP literals (exact-match
+/// semantics, fixed for the life of the process) and the DNS names that
+/// are re-resolved on an interval (a docker-compose service name such as
+/// `traefik` whose container IP drifts on every recreate).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrustedProxySpec {
+    pub literals: Vec<IpAddr>,
+    /// Lower-cased, de-duplicated, in config order.
+    pub names: Vec<String>,
+}
+
+/// Parse a kb.toml `[server] trusted_proxies` list. An entry is an IP
+/// literal, or a syntactically valid DNS name; anything else is dropped with
+/// a warn log. Shared by both `serve_*` entrypoints so the auth, rate-limit,
+/// and outbound-scrub layers all see the same trusted set.
+pub fn parse_trusted_proxy_spec(raw: &[String]) -> TrustedProxySpec {
+    let mut spec = TrustedProxySpec::default();
+    for s in raw {
+        let t = s.trim();
+        if let Ok(ip) = t.parse::<IpAddr>() {
+            spec.literals.push(ip);
+        } else if kb_core::config::is_valid_proxy_hostname(t) {
+            let n = t.to_ascii_lowercase();
+            if !spec.names.contains(&n) {
+                spec.names.push(n);
             }
+        } else {
+            tracing::warn!(entry = %s, "ignoring invalid trusted_proxies entry (neither an IP literal nor a DNS name)");
+        }
+    }
+    spec
+}
+
+/// The IP-literal subset of a `trusted_proxies` list (names are ignored
+/// here; they need a resolver — see [`TrustedProxies::boot`]).
+pub fn parse_trusted_proxies(raw: &[String]) -> Vec<IpAddr> {
+    parse_trusted_proxy_spec(raw).literals
+}
+
+/// How often a named `trusted_proxies` entry is re-resolved.
+pub const PROXY_RESOLVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// Per-lookup bound, so a wedged resolver cannot stall boot or the task.
+const PROXY_RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+pub type ResolveFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<Vec<IpAddr>>> + Send>>;
+pub type ResolveFn = Arc<dyn Fn(String) -> ResolveFuture + Send + Sync>;
+
+/// The real resolver: the OS resolver via `tokio::net::lookup_host`.
+pub fn system_resolver() -> ResolveFn {
+    Arc::new(|name: String| {
+        Box::pin(async move {
+            let addrs = tokio::net::lookup_host((name.as_str(), 0)).await?;
+            Ok(addrs.map(|a| a.ip()).collect())
         })
-        .collect()
+    })
+}
+
+/// The live trusted-proxy set shared by the auth, rate-limit, host-guard and
+/// outbound-scrub layers. Cloning shares the same cell; [`Self::load`] hands
+/// out an immutable snapshot (`Arc<Vec<IpAddr>>`), so no lock is ever held
+/// across an `.await` or a request.
+#[derive(Debug, Clone, Default)]
+pub struct TrustedProxies(Arc<std::sync::RwLock<Arc<Vec<IpAddr>>>>);
+
+impl TrustedProxies {
+    pub fn new(ips: Vec<IpAddr>) -> Self {
+        Self(Arc::new(std::sync::RwLock::new(Arc::new(ips))))
+    }
+
+    /// A snapshot of the current set. Derefs to `&[IpAddr]`.
+    pub fn load(&self) -> Arc<Vec<IpAddr>> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Atomically replace the set.
+    pub fn store(&self, ips: Vec<IpAddr>) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(ips);
+    }
+
+    /// Parse the config list, resolve its names once (awaited, so the set is
+    /// right before the first request), and return the shared set plus the
+    /// refresher that keeps named entries current.
+    pub async fn boot(raw: &[String]) -> (Self, ProxyResolver) {
+        Self::boot_with(raw, system_resolver()).await
+    }
+
+    pub async fn boot_with(raw: &[String], resolve: ResolveFn) -> (Self, ProxyResolver) {
+        let spec = parse_trusted_proxy_spec(raw);
+        let handle = Self::new(spec.literals.clone());
+        let mut resolver = ProxyResolver {
+            spec,
+            last_good: std::collections::BTreeMap::new(),
+            handle: handle.clone(),
+            resolve,
+        };
+        resolver.refresh().await;
+        (handle, resolver)
+    }
+}
+
+/// Keeps the named entries of a `trusted_proxies` list current.
+pub struct ProxyResolver {
+    spec: TrustedProxySpec,
+    /// Last successful, non-empty answer per name. A failed or empty
+    /// lookup keeps this (fail-safe: never widen, never silently narrow
+    /// to nothing on a transient DNS blip).
+    last_good: std::collections::BTreeMap<String, Vec<IpAddr>>,
+    handle: TrustedProxies,
+    resolve: ResolveFn,
+}
+
+impl ProxyResolver {
+    /// Resolve every name once, fold into the last-good map, and swap the
+    /// shared set iff it changed (logged at info as `old -> new`).
+    pub async fn refresh(&mut self) {
+        if self.spec.names.is_empty() {
+            return;
+        }
+        let lookups = self.spec.names.iter().map(|n| {
+            let fut = (self.resolve)(n.clone());
+            let n = n.clone();
+            async move {
+                let r = match tokio::time::timeout(PROXY_RESOLVE_TIMEOUT, fut).await {
+                    Ok(r) => r,
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "lookup timed out",
+                    )),
+                };
+                (n, r)
+            }
+        });
+        let results = futures::future::join_all(lookups).await;
+        self.apply(results);
+    }
+
+    /// Pure fold of lookup results into the shared set (separately testable).
+    pub fn apply(&mut self, results: Vec<(String, std::io::Result<Vec<IpAddr>>)>) {
+        for (name, r) in results {
+            match r {
+                Ok(ips) if !ips.is_empty() => {
+                    self.last_good.insert(name, ips);
+                }
+                Ok(_) => tracing::warn!(
+                    name = %name,
+                    "trusted_proxies name resolved to no addresses; keeping the last good set"
+                ),
+                Err(e) => tracing::warn!(
+                    name = %name, error = %e,
+                    "trusted_proxies name did not resolve; keeping the last good set"
+                ),
+            }
+        }
+        let mut next = self.spec.literals.clone();
+        for name in &self.spec.names {
+            for ip in self.last_good.get(name).into_iter().flatten() {
+                if !next.contains(ip) {
+                    next.push(*ip);
+                }
+            }
+        }
+        let old = self.handle.load();
+        if *old != next {
+            tracing::info!(old = ?old.as_slice(), new = ?next, "trusted_proxies set changed");
+            self.handle.store(next);
+        }
+    }
+
+    /// Spawn the re-resolution task, or `None` when the list has no names
+    /// (an IP-literal-only config pays nothing). Exits on the shutdown watch.
+    pub fn spawn(
+        mut self,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if self.spec.names.is_empty() {
+            return None;
+        }
+        Some(tokio::spawn(async move {
+            let mut tick = tokio::time::interval(PROXY_RESOLVE_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            tick.tick().await; // boot already resolved
+            loop {
+                tokio::select! {
+                    _ = shutdown.wait_for(|&d| d) => break,
+                    _ = tick.tick() => self.refresh().await,
+                }
+            }
+        }))
+    }
 }
 
 /// Per-kb runtime context. Held as a value in `KbHandles::kbs`.
@@ -845,7 +1021,7 @@ pub struct OriginConfig {
     /// (via the `Arc`) with `AuthConfig` + the rate limiters so every
     /// security layer evaluates the same trusted set. The artifact
     /// serve handler reads it for the outbound-scrub loopback check.
-    pub trusted_proxies: Arc<Vec<IpAddr>>,
+    pub trusted_proxies: TrustedProxies,
     /// v0.6/SEC-02 — resolved `[server] hostnames` (lower-cased, port
     /// stripped, empties dropped) for the `/api` Host guard. Empty =
     /// "unconfigured", which restricts the guard to loopback and
@@ -865,7 +1041,7 @@ impl Default for OriginConfig {
         Self {
             artifact_host_suffix: kb_core::iframe::DEFAULT_HOST_SUFFIX.to_string(),
             parent_origin: "http://localhost:4000".to_string(),
-            trusted_proxies: Arc::new(Vec::new()),
+            trusted_proxies: TrustedProxies::default(),
             // No allowlist and no addr literal: the guard then admits only
             // loopback Host labels on a loopback peer, which is the correct
             // default posture (a wildcard bind has no host to match).
@@ -883,7 +1059,7 @@ impl OriginConfig {
     /// entry are always compared in the same shape.
     pub fn from_server_section(
         server: &kb_core::config::ServerSection,
-        trusted_proxies: Arc<Vec<IpAddr>>,
+        trusted_proxies: TrustedProxies,
     ) -> Self {
         let hostnames = server
             .hostnames
@@ -960,7 +1136,7 @@ pub struct AuthConfig {
     /// shared (via the `Arc`) with `OriginConfig` + the rate limiters.
     /// `AuthConfig::load` leaves this empty; `serve_*` populates it from
     /// `[server] trusted_proxies` after the token file is read.
-    pub trusted_proxies: Arc<Vec<IpAddr>>,
+    pub trusted_proxies: TrustedProxies,
     /// Per-user token registry (`<config>/tokens`), loaded via
     /// [`kb_core::identity::parse_tokens_file`].
     pub tokens: Vec<kb_core::identity::TokenEntry>,
@@ -974,7 +1150,7 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             token: None,
-            trusted_proxies: Arc::new(Vec::new()),
+            trusted_proxies: TrustedProxies::default(),
             tokens: Vec::new(),
             operator: kb_core::identity::DEFAULT_OPERATOR.to_string(),
             identity_header: kb_core::identity::DEFAULT_HEADER.to_ascii_lowercase(),
@@ -1595,7 +1771,7 @@ mod tests {
             "127.0.0.1".to_string(),
             "  10.0.0.1  ".to_string(), // surrounding whitespace tolerated
             "::1".to_string(),
-            "not-an-ip".to_string(),       // dropped with a warn
+            "not an ip!".to_string(),      // dropped with a warn
             "999.999.999.999".to_string(), // dropped with a warn
         ]);
         assert_eq!(
@@ -1606,6 +1782,97 @@ mod tests {
                 "::1".parse().unwrap(),
             ]
         );
+    }
+
+    #[test]
+    fn spec_splits_literals_from_dns_names() {
+        let spec = parse_trusted_proxy_spec(&[
+            "10.0.0.1".to_string(),
+            " Traefik ".to_string(),
+            "traefik".to_string(), // duplicate (case-folded) collapses
+            "proxy.internal".to_string(),
+            "999.999.999.999".to_string(), // IP-shaped typo: not a name
+            "has space".to_string(),
+        ]);
+        assert_eq!(spec.literals, vec!["10.0.0.1".parse::<IpAddr>().unwrap()]);
+        assert_eq!(spec.names, vec!["traefik", "proxy.internal"]);
+    }
+
+    fn fixed_resolver(
+        answers: Arc<Mutex<std::collections::HashMap<String, std::io::Result<Vec<IpAddr>>>>>,
+    ) -> ResolveFn {
+        Arc::new(move |name: String| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                match answers.lock().unwrap().get(&name) {
+                    Some(Ok(v)) => Ok(v.clone()),
+                    Some(Err(e)) => Err(std::io::Error::new(e.kind(), e.to_string())),
+                    None => Err(std::io::Error::other("nxdomain")),
+                }
+            })
+        })
+    }
+
+    /// A named entry follows the proxy's IP as it drifts, and a failed
+    /// lookup keeps the last good set instead of widening or emptying it.
+    /// Fails without the resolver (a name would never be trusted at all).
+    #[tokio::test]
+    async fn named_trusted_proxy_follows_drift_and_survives_a_failed_lookup() {
+        let a: IpAddr = "172.18.0.5".parse().unwrap();
+        let b: IpAddr = "172.18.0.9".parse().unwrap();
+        let lit: IpAddr = "10.0.0.1".parse().unwrap();
+        let answers = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        answers
+            .lock()
+            .unwrap()
+            .insert("traefik".to_string(), Ok(vec![a]));
+        let (tp, mut r) = TrustedProxies::boot_with(
+            &["10.0.0.1".to_string(), "traefik".to_string()],
+            fixed_resolver(answers.clone()),
+        )
+        .await;
+        assert_eq!(*tp.load(), vec![lit, a], "boot resolves the name");
+
+        // The container is recreated on a new IP: the set follows.
+        answers
+            .lock()
+            .unwrap()
+            .insert("traefik".to_string(), Ok(vec![b]));
+        r.refresh().await;
+        assert_eq!(*tp.load(), vec![lit, b]);
+        assert!(!tp.load().contains(&a), "the stale IP is no longer trusted");
+
+        // DNS blip: error, then an empty answer. Keep the last good set.
+        answers.lock().unwrap().insert(
+            "traefik".to_string(),
+            Err(std::io::Error::other("servfail")),
+        );
+        r.refresh().await;
+        assert_eq!(*tp.load(), vec![lit, b]);
+        answers
+            .lock()
+            .unwrap()
+            .insert("traefik".to_string(), Ok(vec![]));
+        r.refresh().await;
+        assert_eq!(*tp.load(), vec![lit, b]);
+    }
+
+    /// A name that never resolved contributes nothing (never widens), and
+    /// an IP-literal-only list needs no refresher task.
+    #[tokio::test]
+    async fn unresolved_name_trusts_nothing_and_literal_only_spawns_no_task() {
+        let lit: IpAddr = "10.0.0.1".parse().unwrap();
+        let answers = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let (tp, _r) = TrustedProxies::boot_with(
+            &["10.0.0.1".to_string(), "ghost".to_string()],
+            fixed_resolver(answers.clone()),
+        )
+        .await;
+        assert_eq!(*tp.load(), vec![lit]);
+        let (_tp2, r2) =
+            TrustedProxies::boot_with(&["10.0.0.1".to_string()], fixed_resolver(answers)).await;
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        assert!(r2.spawn(rx).is_none());
     }
 
     #[test]
