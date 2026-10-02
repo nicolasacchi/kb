@@ -45,7 +45,7 @@ export default function HighlightedSnippet({
     () => (text ? [{ id: "s", lang: resolved, text, path }] : []),
     [resolved, text, path],
   );
-  const { byId } = useHighlight(items);
+  const { byId, unpaintableIds } = useHighlight(items);
   const result = byId.get("s");
   const painted = useMemo(() => {
     if (!result || result.tier === "none" || result.spans.length === 0) {
@@ -58,7 +58,7 @@ export default function HighlightedSnippet({
     <pre
       className={className}
       data-kbc-hl-snippet
-      data-kbc-hl-tier={result?.tier ?? "pending"}
+      data-kbc-hl-tier={result?.tier ?? (unpaintableIds.has("s") ? "plain" : "pending")}
       data-kbc-hl-lang={result?.lang ?? resolved ?? undefined}
     >
       <code>
