@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage build: rust:1.96 builder → debian:bookworm-slim runtime.
+# Multi-stage build: rust:1.96-trixie builder → debian:trixie-slim runtime.
 #
 # Outputs a single image with the `kb` binary at /usr/local/bin/kb and the
 # `kb-embedder` sidecar beside it, plus the bge-large-en-v1.5 model so
 # semantic and hybrid search work out of the box. The React SPA is built in a
 # Node stage and baked in at /usr/local/share/kb/web/dist (KB_SPA_DIST), so the
 # daemon serves the full web UI out of the box — no dist mount needed. The CLI
-# runs `kb daemon` by default; other subcommands (search, add, tui) still work
+# runs `kb daemon` by default; other subcommands (search, add, ...) still work
 # via `docker exec`. Track-D bake-off recommendation: bge-large for
 # technical-English corpora; image size ~1.7 GB (was ~400 MB on
 # bge-small) — see docs/research/foundation/14-embedding-bakeoff-2026-05-19.html.
