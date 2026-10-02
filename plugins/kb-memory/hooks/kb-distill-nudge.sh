@@ -27,8 +27,9 @@
 # `kb remember`) made entirely inside a subagent was previously invisible
 # to this script (parent-transcript-only grep). No sidecar dir → the file
 # list is just the parent transcript, byte-identical to the prior behavior.
-# Stop stdout is a systemMessage into a session that is already over, so a
-# hit also appends `claude <sid> <epoch>` to the shared distill-pending
+# Claude's Stop fires at the end of EVERY assistant turn, not only the last,
+# so the systemMessage can land mid-session; the nudge is therefore also
+# appended `claude <sid> <epoch>` to the shared distill-pending
 # ledger ($XDG_CACHE_HOME/kb/distill-pending, same line grok/kimi/omp
 # already write). The next SessionStart's kb-wake.sh surfaces and consumes
 # it. Deduped by session id, same as queue_distill_pending. Best-effort:

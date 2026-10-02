@@ -72,10 +72,23 @@ extra=()
 # `pos=` — match kb-wake.sh; do not invent a display rank.
 recall_args=()
 [ -n "$cwd" ] && recall_args+=(--cwd "$cwd")
-index="$(kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
+# v0.44 H1 (A4-4): kb recall is capped (5s) so a hung daemon degrades to
+# protocol-only output instead of the harness's 15s kill losing every lane;
+# the slate call below is capped at 4s. `timeout` is guarded: without
+# coreutils the call runs unwrapped.
+run_to() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+index="$(run_to 5 kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
   | jq -r '(.hits // [])
       | map("- \(.title)  [\(.kb)]"
-          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160]) else "" end)
+          + (if (.summary // "") != "" then "\n    ↳ " + (.summary[0:160] | gsub("[\r\n]+"; " ")) else "" end)
           + "\n<!--kb-recall/1 kb=\(.kb) id=\(.id)-->")
       | if length == 0 then empty
         else "Relevant memories from kb (recall — these persist across sessions):\n" + join("\n")
@@ -122,7 +135,7 @@ fi
 # needed. Slug derivation is entirely server-side (`--cwd`) — this hook
 # never re-implements it. Any failure is silent and byte-identical to today.
 slate_text=""
-slate_json="$(timeout 4 kb slate open --hybrid --budget 2000 \
+slate_json="$(run_to 4 kb slate open --hybrid --budget 2000 \
   --session-id "$sid" --cwd "$cwd" "${extra[@]}" --json 2>/dev/null)" || slate_json=""
 if [ -n "$slate_json" ]; then
   slate_text="$(printf '%s' "$slate_json" | jq -r '.text // empty' 2>/dev/null)" || slate_text=""

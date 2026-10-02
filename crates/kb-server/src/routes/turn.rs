@@ -132,7 +132,7 @@ pub async fn get(
     // smallest append. A write failure must not 500 the turn or drop
     // degraded[].
     if let Some(session_id) = session.as_deref() {
-        record_served_turn(&state, session_id, &hits).await;
+        record_served_turn(&state, session_id, &hits);
     }
 
     let recalled = recalled_of(&hits);
@@ -371,7 +371,14 @@ fn summary_line(summary: &str, cap: usize) -> String {
     if cap == 0 || summary.is_empty() {
         return String::new();
     }
-    let clipped: String = summary.chars().take(cap).collect();
+    // One line, always: the capture parser (`derive_memory_recalls`) reads
+    // the injected block line by line, so a newline inside a summary would
+    // split one hit into several lines.
+    let clipped: String = summary
+        .chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .take(cap)
+        .collect();
     format!("\n    ↳ {clipped}")
 }
 
@@ -395,8 +402,11 @@ const TURN_SERVED_SESSION_CAP: usize = 128;
 
 /// Record the hits this turn returned. Never fails the response: a bad
 /// id, a missing sessions corpus, or a write error is logged and dropped.
+/// Fire-and-forget (the same `tokio::spawn` `GET /api/memory/recall` uses):
+/// the append queues behind the sessions corpus's write lane, which must
+/// not sit on the turn's request path or outside its deadline.
 /// INSERT only — never `memory_recalls_replace`.
-async fn record_served_turn(state: &KbHandles, session_id: &str, hits: &[RecallResult]) {
+fn record_served_turn(state: &KbHandles, session_id: &str, hits: &[RecallResult]) {
     let Some(session_id) = accept_turn_session(session_id) else {
         return;
     };
@@ -412,16 +422,18 @@ async fn record_served_turn(state: &KbHandles, session_id: &str, hits: &[RecallR
         );
         return;
     };
-    if let Err(e) = storage
-        .memory_recalls_append(session_id.clone(), rows)
-        .await
-    {
-        tracing::debug!(
-            session_id,
-            error = %e,
-            "served recall ledger not written"
-        );
-    }
+    tokio::spawn(async move {
+        if let Err(e) = storage
+            .memory_recalls_append(session_id.clone(), rows)
+            .await
+        {
+            tracing::debug!(
+                session_id,
+                error = %e,
+                "served recall ledger not written"
+            );
+        }
+    });
 }
 
 fn accept_turn_session(raw: &str) -> Option<String> {
@@ -485,4 +497,19 @@ fn sessions_storage(state: &KbHandles) -> Option<kb_core::storage::StorageHandle
             .find(|(name, _)| name.as_str() == "sessions")
     })?;
     Some(ctx.storage.clone())
+}
+
+#[cfg(test)]
+mod summary_line_tests {
+    use super::summary_line;
+
+    /// A memory summary with a blank line in it must still render as ONE
+    /// `↳` line: the capture parser walks the injected block line by line.
+    #[test]
+    fn summary_line_flattens_newlines() {
+        let out = summary_line("Fix:\n\nuse X\r\nnow", 160);
+        assert_eq!(out, "\n    ↳ Fix:  use X  now");
+        assert!(!out[1..].contains('\n'));
+        assert!(!out.contains('\r'));
+    }
 }
