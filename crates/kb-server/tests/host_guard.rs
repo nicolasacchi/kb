@@ -44,7 +44,7 @@ fn cfg(hostnames: &[&str], addr: &str) -> Arc<OriginConfig> {
             hostnames: hostnames.iter().map(|s| s.to_string()).collect(),
             ..ServerSection::default()
         },
-        Arc::new(Vec::new()),
+        kb_server::state::TrustedProxies::default(),
     ))
 }
 

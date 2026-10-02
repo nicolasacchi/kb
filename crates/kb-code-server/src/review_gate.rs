@@ -58,7 +58,7 @@ pub async fn review_mutations_gate(
     req: Request<Body>,
     next: Next,
 ) -> Response {
-    if kb_server::middleware::request_is_loopback(&req, &state.auth.trusted_proxies) {
+    if kb_server::middleware::request_is_loopback(&req, &state.auth.trusted_proxies.load()) {
         return next.run(req).await;
     }
     if state.review.remote_mutations {

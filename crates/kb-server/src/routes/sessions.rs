@@ -4734,7 +4734,11 @@ pub async fn export(
     // client (#4/#11). No git provenance server-side (the daemon box has no
     // user repos).
     let mut scrub = parse_scrub_layers(&q.scrub);
-    if crate::scrub::looks_non_loopback(Some(peer.ip()), &headers, &state.origin.trusted_proxies) {
+    if crate::scrub::looks_non_loopback(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    ) {
         scrub.secrets = true;
     }
     let assembled = kb_core::session_bundle::assemble_bundle(
@@ -5251,7 +5255,11 @@ pub async fn replay(
     // 2) Redaction posture — `?scrub=` plus the forced secrets floor on a
     //    non-loopback client (#4). Copied verbatim from `export`.
     let mut scrub = parse_scrub_layers(&q.scrub);
-    if crate::scrub::looks_non_loopback(Some(peer.ip()), &headers, &state.origin.trusted_proxies) {
+    if crate::scrub::looks_non_loopback(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    ) {
         scrub.secrets = true;
     }
     let tag = scrub_tag(&scrub);
@@ -5805,7 +5813,11 @@ pub async fn view(
     };
 
     let mut scrub = parse_scrub_layers(&q.scrub);
-    if crate::scrub::looks_non_loopback(Some(peer.ip()), &headers, &state.origin.trusted_proxies) {
+    if crate::scrub::looks_non_loopback(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    ) {
         scrub.secrets = true;
     }
     let tag = scrub_tag(&scrub);
@@ -5959,7 +5971,11 @@ pub async fn raw(
     };
 
     let mut scrub = parse_scrub_layers(&q.scrub);
-    if crate::scrub::looks_non_loopback(Some(peer.ip()), &headers, &state.origin.trusted_proxies) {
+    if crate::scrub::looks_non_loopback(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    ) {
         scrub.secrets = true;
         scrub.entropy = true;
     }
@@ -6057,7 +6073,7 @@ pub async fn presence(
     if !crate::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.origin.trusted_proxies,
+        &state.origin.trusted_proxies.load(),
     ) {
         return loopback_only_forbidden();
     }
@@ -6282,7 +6298,7 @@ pub async fn live(
     if !crate::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.origin.trusted_proxies,
+        &state.origin.trusted_proxies.load(),
     ) {
         return loopback_only_forbidden();
     }
@@ -6910,7 +6926,7 @@ pub async fn live_status(
     let loopback = crate::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.origin.trusted_proxies,
+        &state.origin.trusted_proxies.load(),
     );
     let now_unix = chrono::Utc::now().timestamp();
 

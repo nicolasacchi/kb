@@ -1153,7 +1153,8 @@ pub async fn review_timeline_route(
             "this review has no patchset to locate a hunk in",
         )),
         (Some(hunk), Some(_)) => {
-            if !kb_server::middleware::request_is_loopback(&req, &state.auth.trusted_proxies) {
+            if !kb_server::middleware::request_is_loopback(&req, &state.auth.trusted_proxies.load())
+            {
                 sources.push(LaneStatus::not_ok(
                     "turns",
                     LANE_REFUSED,
