@@ -44,7 +44,8 @@
 //!   `seeding` refuses with 503 `urn:kb:errors:store-seeding` +
 //!   `retry_after` ([`StoreRefusal`] renders it).
 //! * [`ReviewStores::fetch_lock`] / [`ReviewStores::ops_lock`].
-//! * [`ReviewStores::resolve_credential`] and
+//! * [`ReviewStores::resolve_store_credential`] (the one outside entry to
+//!   the credential ladder; `resolve_credential` is private) and
 //!   [`ReviewStores::fetch_base`] — the credentialed base fetch.
 //!
 //! Every method that touches git or the DB is SYNCHRONOUS; call it from
@@ -1344,7 +1345,7 @@ impl ReviewStores {
 
     /// Resolve (and persist, D12) the fetch credential for store `row`,
     /// using `repo_name`'s `[[review.repos]]` settings. Blocking (runs gh).
-    pub fn resolve_credential(
+    fn resolve_credential(
         &self,
         store: &Store,
         row: &ReviewStoreRow,
@@ -1370,13 +1371,40 @@ impl ReviewStores {
                 reason.push_str(BROADER_THAN_NEEDED_MARK);
             }
         }
-        let _ = store.set_review_store_credential(
+        // The recorded account IS the D12 binding the API slot reads next,
+        // so a write that does not land is loud, never silent.
+        if let Err(e) = store.set_review_store_credential(
             row.id,
             res.credential.kind().slug(),
             Some(&reason),
             res.credential.account().or(row.cred_account.as_deref()),
-        );
+        ) {
+            tracing::warn!(
+                store = %row.store_key,
+                error = %e,
+                "kb-code: could not record the store's credential binding (D12); the next \
+                 read may not see this account"
+            );
+        }
         Ok(res)
+    }
+
+    /// Resolve (and persist) the fetch credential for store `row` under the
+    /// D12 rule "one credential per store": the settings come from the
+    /// store's [`resolve_settings_member`](Self::resolve_settings_member),
+    /// NEVER from whichever member happens to be acting, and members that
+    /// disagree refuse with `credential-settings-conflict` instead of
+    /// recording a different account depending on who fetched last. The
+    /// only credential resolution reachable from outside this module.
+    pub fn resolve_store_credential(
+        &self,
+        store: &Store,
+        row: &ReviewStoreRow,
+    ) -> Result<Resolution, CredError> {
+        let who = self.resolve_settings_member(store, row).map_err(|detail| {
+            CredError::Refused(format!("credential-settings-conflict: {detail}"))
+        })?;
+        self.resolve_credential(store, row, &who)
     }
 
     /// The member whose `[[review.repos]]` entry drives store-wide
@@ -1744,16 +1772,35 @@ impl ReviewStores {
         }
     }
 
-    fn apply_objects_state(&self, store: &Store, missing: &[i64], ok: &[i64]) {
+    /// Record which reviews' objects are missing/present, FAILING on the
+    /// first write that does not land: a store card that says "no objects
+    /// missing" over a row the DB never updated is the lie `store sync`
+    /// must not tell.
+    fn try_apply_objects_state(
+        &self,
+        store: &Store,
+        missing: &[i64],
+        ok: &[i64],
+    ) -> Result<(), crate::store::StoreError> {
         for id in missing {
-            let _ = store.set_review_objects_state(*id, Some(seed::OBJECTS_MISSING));
+            store.set_review_objects_state(*id, Some(seed::OBJECTS_MISSING))?;
         }
         for id in ok {
             if let Ok(Some(b)) = store.get_review_base(*id) {
                 if b.objects_state.as_deref() == Some(seed::OBJECTS_MISSING) {
-                    let _ = store.set_review_objects_state(*id, None);
+                    store.set_review_objects_state(*id, None)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// The boot/seed-time form of [`Self::try_apply_objects_state`]: those
+    /// passes have no caller to hand an error to, so a failed write is
+    /// logged (loudly) instead of vanishing.
+    fn apply_objects_state(&self, store: &Store, missing: &[i64], ok: &[i64]) {
+        if let Err(e) = self.try_apply_objects_state(store, missing, ok) {
+            tracing::warn!(error = %e, "kb-code: could not record review objects_state");
         }
     }
 
@@ -1839,7 +1886,11 @@ impl ReviewStores {
         .map_err(|e| StoreUnavailable::Error {
             detail: e.to_string(),
         })?;
-        self.apply_objects_state(store, &missing, &ok);
+        let db = |e: crate::store::StoreError| StoreUnavailable::Error {
+            detail: e.to_string(),
+        };
+        self.try_apply_objects_state(store, &missing, &ok)
+            .map_err(db)?;
         // `json_set` of this pass's own keys into the row as it is NOW, never
         // a write derived from the `row` snapshot taken above: the member
         // fetches, base fetch and connectivity verify run for MINUTES, and a
@@ -1857,7 +1908,9 @@ impl ReviewStores {
         if matches!(base, BaseFetch::Fetched { .. }) {
             sets.push(("last_base_fetch", now().into()));
         }
-        let _ = store.update_review_store_state_json(handle.id, &sets, Some("ready"));
+        store
+            .update_review_store_state_json(handle.id, &sets, Some("ready"))
+            .map_err(db)?;
         Ok(SyncReport {
             members,
             member_errors,

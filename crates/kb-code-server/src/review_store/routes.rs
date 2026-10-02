@@ -761,7 +761,7 @@ async fn credential_test_route_inner(
             Ok(Some(r)) => r,
             _ => return Err((StatusCode::CONFLICT, "store-not-registered".into(), None)),
         };
-        let r = match rs.resolve_credential(&st.store, &row, &n) {
+        let r = match rs.resolve_store_credential(&st.store, &row) {
             Ok(r) => r,
             Err(e) => {
                 return Err((
