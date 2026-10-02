@@ -95,6 +95,8 @@ test.describe("private notes stay on the operator side (v0.44 P1)", () => {
   test("review-notes page cite links carry no note text", async ({ page }) => {
     await page.goto(`${BASE}/review-notes`);
     const links = page.locator("a[href*='comment=']");
+    // The page loads asynchronously: wait for a cite link before counting.
+    await expect(links.first()).toBeVisible();
     const n = await links.count();
     // Not vacuous: the first test created a note, so its cite link exists.
     expect(n).toBeGreaterThan(0);
