@@ -1,0 +1,59 @@
+# On-demand build of the kb-code daemon + CLI as a downloadable artifact, for
+# the review-store acceptance gates that are run by hand against data that
+# cannot live in CI. Manual only (`gh workflow run gates-binary.yml --ref
+# <branch>`): it used to be a job inside ci.yml, where it added ~37 minutes
+# to every push and PR, ran uncached with no timeout, and — because
+# build-image.yml publishes only after ci.yml succeeds — could hold the
+# image publish behind an irrelevant artifact build (A12-1, v044-C1).
+# build-image.yml listens to the `ci` workflow only, so this one can never
+# gate a publish.
+name: gates-binary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: gates-binary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates-binary:
+    name: gates-binary (kb-code-server + kb-code artifact)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Free disk space (drop preinstalled SDKs)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Cache cargo + target
+        # Read-only restore of the kb-code family ci.yml's code-test writes;
+        # this workflow never saves (save-if false) so it cannot evict it.
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: code
+          save-if: "false"
+      - name: Install protoc (lancedb transitive dep via kb-core)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+      - name: Build kb-code-server + kb-code (fast profile)
+        run: cargo build --locked --profile fast -p kb-code-server -p kb-code-cli
+      - name: Upload binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kb-code-gates-${{ github.sha }}
+          path: |
+            target/fast/kb-code-server
+            target/fast/kb-code
+          retention-days: 7
