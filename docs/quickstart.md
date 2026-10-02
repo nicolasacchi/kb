@@ -215,7 +215,14 @@ reachable address (`0.0.0.0:PORT` or a LAN IP), do all three of these:**
    artifact_host_suffix = ".artifacts.example.com"    # your wildcard
    parent_origin        = "https://kb.example.com"    # your SPA origin (locks down artifact framing)
    trusted_proxies      = ["172.17.0.1"]              # only if the proxy reaches the daemon off-loopback (e.g. dockerised)
+   # hostnames          = ["kb.internal"]             # only for EXTRA names; parent_origin's host is always admitted
    ```
+
+   The proxy must pass the browser's `Host` header through unchanged
+   (Caddy does by default; Traefik `passHostHeader: true`; nginx
+   `proxy_set_header Host $host`). Requests from loopback and from
+   `trusted_proxies` peers are `Host`-checked, and `parent_origin`'s host
+   passes automatically; any other name needs a `hostnames` entry.
 
 > **Why this matters.** A loopback bind needs no token because the kernel
 > won't route remote traffic to it. A *public* bind with no token is wide

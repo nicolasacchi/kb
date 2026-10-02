@@ -45,6 +45,22 @@ pub async fn fallback(
     // kb resolution happens inside `artifact::serve`.
     if parse_artifact_host_id(host, &state.origin.artifact_host_suffix).is_some() {
         artifact::serve(State(state), connect_info, headers, uri).await
+    } else if uri.path().starts_with("/a/")
+        && crate::middleware::host_refused_for_peer(
+            headers.get(header::HOST).map(|v| v.to_str().unwrap_or("")),
+            Some(connect_info.0.ip()),
+            &state.origin,
+        )
+    {
+        // Only permalink paths (`/a/...`) are rewritten: static assets and
+        // every other SPA path must keep resolving for any Host, or a name
+        // the guard refuses would get index.html in place of the bundle.
+        // The /api Host guard would refuse this name (a rebound page, or a
+        // trusted proxy forwarding an unlisted name). The permalink shell
+        // consults the corpus (OG title/summary, moved-path 301), so a
+        // refused Host gets the PLAIN shell - same bytes for every path, no
+        // lookup, no redirect - not a metadata oracle.
+        spa::serve(State(state), Uri::from_static("/")).await
     } else {
         spa::serve(State(state), uri).await
     }

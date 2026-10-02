@@ -1005,7 +1005,9 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // request operator authority. Deliberately NOT on the top-level
         // router — the artifact iframe is served on
         // `<id>.artifacts.localhost`, which a Host allowlist would
-        // break, and the SPA fallback serves no corpus bytes.
+        // break; the SPA fallback is guarded INSIDE `routes::dispatch::fallback`
+        // (a refused Host gets the plain shell - permalink shells read the
+        // corpus for OG meta).
         .layer(from_fn_with_state(state.origin.clone(), host_guard));
 
     // U2 (v0.25 quick capture) TRAP — the Web Share Target action posts to
@@ -1035,13 +1037,17 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         .nest("/api", api)
         .merge(capture_share)
         // Prometheus text of the counters GET /api/metrics already computes.
-        // Own router + route_layer (like /capture) so auth does not re-wrap
+        // Own router + route_layer (like /capture; guarded by host_guard too,
+        // pinned by tests/host_guard_router.rs) so auth does not re-wrap
         // the /api tree. The `.route("/metrics")` lives in metrics.rs, not
         // here: tests/api_docs.rs prefixes every `.route` in THIS file with
         // `/api` and would clobber the JSON `/api/metrics` row. That
         // extractor needs a `/metrics` skip (same as `/healthz`) before this
         // mount can move inline — that test file is not part of this change.
-        .merge(routes::metrics::prometheus_router(state.auth.clone()))
+        .merge(routes::metrics::prometheus_router(
+            state.auth.clone(),
+            state.origin.clone(),
+        ))
         // `.nest("/api")` matches `/api` but not `/api/`. Without this the
         // trailing-slash prefix falls through to the SPA shell below.
         .merge(routes::dispatch::api_trailing_slash_router())
