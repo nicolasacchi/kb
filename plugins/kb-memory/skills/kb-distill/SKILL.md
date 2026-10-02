@@ -225,3 +225,20 @@ check must run against the floored population a normal turn gets, not the
 oracle's. Report counts:
 written · superseded · NOOPed · skipped(+why) · deferred-to-reflect. State
 explicitly that a re-run over the same input now reports **zero writes**.
+
+## Step 9 — close the session's distill ask
+
+The Stop-hook nudge posts a slate ask `Distill session <sid> (<harness>)?`
+(ref `session:<sid>`) and queues the session in the distill-pending ledger.
+Once a session you were asked to distill has been handled (memories written,
+or every candidate NOOPed/skipped on purpose), answer that ask so it stops
+sitting in every digest's ASK section:
+
+```bash
+kb slate open --all --cwd "$PWD"      # find the ASK line "Distill session <sid> …" and its #seq
+kb slate done <ask-seq> "distilled: <memory ids, or 'nothing durable'>"
+```
+
+No matching open ask (non-Claude harness, daemon without a slate, already
+closed) is not an error — skip this step. Never `done` an ask for a session
+you did not distill in this run.
