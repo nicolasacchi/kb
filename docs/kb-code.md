@@ -1154,7 +1154,18 @@ tick):
 | monthly | `repack --cruft …` + `reflog expire --expire=14.days` |
 
 The monthly cruft pass takes an explicit `allow_expire` the caller
-computes from `state_json.last_gc_apply`. The design's original
+computes from a FRESH read of the row, taken under the ops lock and held
+across the repack (only when expiry is permitted at all): the cooldown is
+`state_json.last_gc_apply.at` and the durable pre-apply mark
+`state_json.gc_apply_started_at` (written BEFORE the first ref is deleted;
+an apply that cannot write it is refused, so a failed record write cannot
+silently void the cooldown), whichever is newer, and expiry is also off
+while the restore guard is flagged. Every `state_json` writer sets only its
+own keys with `json_set` on the row as it is now — none writes back a
+snapshot — so a concurrent `store gc --yes` can never be erased by a
+maintenance pass. Weekly and monthly repacks on one store are serialised
+by a per-store maintenance lock (the scheduler vs `store maintain`). The
+design's original
 reasoning — "objects are not reclaimed until the cruft pass's 2-week
 window" — was wrong and is recorded as such: a packed object keeps its
 PACK's mtime, so an object sitting in an old pack reads as months-old to
@@ -1163,7 +1174,12 @@ PACK's mtime, so an object sitting in an old pack reads as months-old to
 **Backup bundles** land in `<state>/backups/store-<uuid>-<ts>.bundle`,
 on a gated-epoch snapshot, on `kb-code backup`, on a detected restore, or
 immediately before every real apply; the last 3 per store are kept. The
-ROUTINE shape is `refs/kbc/*` minus everything `refs/remotes/base/*`
+pre-apply bundle is NOT part of that rotation: it is written to
+`store-<uuid>-preapply-<ts>[-<n>].bundle` (a same-second apply never
+overwrites an earlier one), keeps the newest 5 AND every bundle younger
+than the 14-day cruft cooldown, and routine backups never remove it. The
+ref list is fed to `git bundle create --stdin`, so a store with tens of
+thousands of refs does not hit `ARG_MAX`. The ROUTINE shape is `refs/kbc/*` minus everything `refs/remotes/base/*`
 reaches (those objects are re-fetchable from the base remote). The
 PRE-APPLY shape is that PLUS every ref the apply is about to delete,
 whatever namespace it lives in — because the candidate set is not
@@ -1184,8 +1200,36 @@ does not depend on the sentinel at all; and a corrupt, unreadable or
 unwritable sentinel reads as FLAGGED (for the process lifetime), never as
 unflagged. While the guard is flagged, scheduled GC is dry-run-only —
 and **`kb-code store gc --repo R --yes` is the ONLY acknowledgement
-path**: it applies and clears the flag, and it is per-store, so
-acknowledging repo R's suspicion never clears it for repo S.
+path**: it applies and acknowledges that store, and it is per-store, so
+acknowledging repo R's suspicion never clears it for repo S. The flag
+itself is not cleared by an acknowledgement (it stays on record), but a
+store CREATED after the incident is admitted at creation — it cannot hold
+restore-damaged state — so only the stores that existed at the incident
+ever need a `--yes`. (`gc --yes` acknowledges; it does not "clear the flag". Cruft expiry in the monthly pass follows the same per-store block, so an acknowledged or admitted store resumes expiring.)
+
+Note: a monthly pass that may expire cruft holds the store's ops lock for the whole repack, so review create/snapshot/capture on that store wait for it. That happens at most about once per cooldown period; weekly repacks do not hold the lock.
+
+**Restoring a store from a bundle** has no verb yet (nothing calls
+`restore_guard::flag_manual`); the manual procedure is:
+
+1. With the daemon running, re-fetch the base into the store so its objects
+   exist: bundles exclude everything reachable from `refs/remotes/base/*`,
+   so they are *thin* — `kb-code store sync --repo R` (online) does it.
+2. Stop the daemon (or do nothing in that store meanwhile).
+3. `git -C <store root>/<uuid>.git bundle verify <bundle>`; if it
+   reports missing prerequisites, step 1 was not enough.
+4. `git -C <store root>/<uuid>.git fetch <bundle> 'refs/kbc/*:refs/kbc/*'`
+   (add `'refs/remotes/*:refs/remotes/*'` to restore a de-registered
+   member's mirror refs). The `.refs` manifest beside each bundle lists every
+   ref and oid it was taken over.
+5. Start the daemon and run `kb-code store doctor --repo R`.
+
+**Store-level gitconfig.** `<state>/git-home/gitconfig` (the `safe.directory`
+entries for member clones owned by another uid) is shared by every
+`StoreGit` built on that directory — the daemon, `kb-code backup`, the boot
+bundle pass. A constructor adopts it and never truncates it, and
+`allow_local_source` checks the file on disk rather than only its in-memory
+set.
 
 ### The store CLI
 
@@ -4685,7 +4729,12 @@ filesystem-level snapshot, and logs a warning naming itself every time.
 
 `kb-code backup [--db PATH] [--json]` takes the same snapshot on demand and
 writes the same receipt, so the gate can be front-run before a deploy
-window. It is a LOCAL FILE operation: no daemon, no route, no new mutation
+window. The gate reuses such a snapshot only while the database (and its
+WAL) has not been written since the receipt's `taken_at`; otherwise it takes
+a fresh one and logs the old one's age — a `kb-code backup` from two weeks
+ago is never the rollback target. So the runbook is: run `kb-code backup`
+as the LAST step before stopping the old daemon for a V0045 deploy, not
+days earlier. It is a LOCAL FILE operation: no daemon, no route, no new mutation
 surface — a backup you can only take through a running daemon is exactly
 the one you cannot take when the daemon refuses to boot.
 
