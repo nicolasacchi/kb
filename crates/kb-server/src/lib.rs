@@ -3380,10 +3380,18 @@ mod tests {
         let memory = quiet_kb(&paths, "memory");
         let off_host = tmp.path().join("off-host");
         std::fs::create_dir(&off_host).unwrap();
-        // `cp src dest` onto a FILE path is exactly `rclone copyto`.
+        // The uploader RECORDS the {dest} argument it was handed ($0), so a
+        // scheduler that passes the bare `remote_dest` to every kb (the old
+        // behaviour) yields two identical lines and fails the assertions.
+        let log = tmp.path().join("dest.log");
         let cfg = kb_core::config::BackupSection {
-            remote_cmd: Some(vec!["cp".into(), "{src}".into(), "{dest}".into()]),
-            remote_dest: Some(off_host.to_string_lossy().into_owned()),
+            remote_cmd: Some(vec![
+                "sh".into(),
+                "-c".into(),
+                format!("echo \"$0\" >> '{}'", log.display()),
+                "{dest}".into(),
+            ]),
+            remote_dest: Some(format!("{}/bucket", off_host.display())),
             schedule_hours: Some(24),
             ..Default::default()
         };
@@ -3398,19 +3406,21 @@ mod tests {
                 remote,
                 Some(kb_core::storage::backup::RemoteCopyOutcome::Ok)
             );
-            local.push(path.file_name().unwrap().to_owned());
+            local.push(path.file_name().unwrap().to_string_lossy().into_owned());
         }
-        let mut remote_names: Vec<_> = std::fs::read_dir(&off_host)
+        let dests: Vec<String> = std::fs::read_to_string(&log)
             .unwrap()
-            .map(|e| e.unwrap().file_name())
+            .lines()
+            .map(str::to_owned)
             .collect();
-        remote_names.sort();
-        local.sort();
-        assert_eq!(
-            remote_names, local,
-            "each kb's tarball must be its own object off-host"
-        );
-        assert_eq!(remote_names.len(), 2);
+        assert_eq!(dests.len(), 2, "one upload per kb, got {dests:?}");
+        assert_ne!(dests[0], dests[1], "two kbs shared one remote object");
+        for name in &local {
+            assert!(
+                dests.contains(&format!("{}/bucket/{name}", off_host.display())),
+                "no upload targeted {name}; dests = {dests:?}"
+            );
+        }
     }
 
     /// v0.44 B1 / A3-4 — a failed upload of a QUIET kb is retried from the

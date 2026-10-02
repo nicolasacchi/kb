@@ -396,7 +396,7 @@ own.
 | `remote_dest` | string | none | Base destination, e.g. `remote:bucket/path` (rclone) or `user@host:/path/` (scp/rsync). See "How `{dest}` is built". |
 | `schedule_hours` | integer | unset | Daemon backup period in hours. Absent or `0` = unset (no scheduled backups). A positive value arms an **in-process** task: it runs once at boot and then every period. It does not run the `kb` CLI. |
 | `remote_timeout_secs` | integer | `7200` | Wall-clock deadline for ONE off-host copy. The uploader runs in its own process group and the whole group is killed at the deadline; the copy is then reported as failed (and retried, see below). `0` means the default. |
-| `keep_exports` | integer | `7` | Scheduled tarballs kept **per kb** under `<state>/exports/`; older ones are deleted after a successful scheduled write. `0` disables pruning. |
+| `keep_exports` | integer | `7` | Scheduled tarballs kept **per kb** under `<state>/exports/`; older ones are deleted after a successful scheduled write. `0` disables pruning. Any `<kb>-YYYYMMDD-HHMMSS.tar.gz` in that directory counts, including ones made by hand with `kb backup`; to keep a tarball long-term, use `kb backup --out <path>` or set `keep_exports = 0`. |
 
 Both `remote_cmd` and `remote_dest` must be set for the copy to run;
 either alone is a no-op and `kb config validate` warns. An empty
