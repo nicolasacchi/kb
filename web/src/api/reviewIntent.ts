@@ -49,6 +49,9 @@ function getChannel(): BroadcastChannel | null {
   if (channel === undefined) {
     channel =
       typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(CHANNEL);
+    // Node's BroadcastChannel (the vitest runtime) holds the event loop open;
+    // browsers have no such method. Never keep a process alive for a listener.
+    (channel as unknown as { unref?: () => void } | null)?.unref?.();
   }
   return channel;
 }
