@@ -428,7 +428,9 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         "quarantine.restored" => json!({"type": kind, "payload": ["kb", "path"]}),
         "daemon.restarting" => json!({"type": kind, "payload": ["addr", "config_path"]}),
         "maintenance.retention.pruned" => json!({"type": kind, "payload": ["kb", "deleted"]}),
-        "maintenance.backup.written" => json!({"type": kind, "payload": ["kb", "path"]}),
+        "maintenance.backup.written" => {
+            json!({"type": kind, "payload": ["kb", "path", "remote"]})
+        }
         "maintenance.logs.pruned" => json!({"type": kind, "payload": ["deleted"]}),
         // Identical payload shape to its recall sibling above — same
         // capture identity, same "count of rows this capture derived".
