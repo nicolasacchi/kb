@@ -1430,6 +1430,20 @@ through to `token_file`/`anonymous`/`inherit` would silently swap the
 identity the store fetches as, which is exactly the failure the binding
 exists to prevent.
 
+The same rule governs the GitHub REST reads a review makes (sweep,
+`pr-status`, `github-threads`, `review status`/`sync`, start-pr and
+retrack's PR-target read): they all go through one helper
+(`reviews::forge_ctx`) that reads the STORE's project and account when the
+repo has a ready store, and the member's `origin` only when it has none. If
+the store lookup itself FAILS (a DB error, a refused store credential), or a
+BOUND store's gh login cannot answer, nothing is read off `origin` or the
+ambient token: the row reports `unavailable_reason` / a
+`forge-store-unavailable` or `credential-binding-unknown` warning, and a
+sweep persists nothing and closes nothing. Retrack never records a
+default-branch guess when the forge could not name the PR's target: it
+falls back to the review's own stored PR target, else classes the row
+`unknown` and refuses the apply.
+
 The `token_file` reader is careful on its own terms: it opens with
 `O_NOFOLLOW|O_CLOEXEC` and fstats the SAME descriptor (no
 stat-then-open race), refuses a symlink, requires a regular file owned

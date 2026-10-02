@@ -46,7 +46,7 @@ use crate::routes::ApiError;
 use crate::state::SharedState;
 use crate::store::{ReviewPatchsetRow, StoreBlocking};
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{header, StatusCode};
+use axum::http::header;
 use axum::response::IntoResponse;
 use axum::Json;
 use kb_core::review::Anchor;
@@ -84,32 +84,38 @@ pub async fn github_threads_route(
 
     // Owner/repo resolved FRESH each call — same rationale as
     // `pr_status_route`'s own doc (never parsed back out of the stored,
-    // possibly-`"unknown"` `pr_repo_slug`). A non-GitHub origin 400s here,
-    // BEFORE any network call — resolved via `From<GithubError> for
-    // ApiError`, same as every other GitHub-overlay route.
-    let root_for_origin = repo.path.clone();
-    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&root_for_origin))
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("origin lookup task panicked: {e}"),
-            )
-        })??;
+    // possibly-`"unknown"` `pr_repo_slug`) — through the ONE forge context
+    // ([`crate::reviews::forge_ctx`]): the store's project and account when
+    // the repo has a ready store, the member's `origin` otherwise. A
+    // non-GitHub origin 400s here, BEFORE any network call; a store lookup
+    // that failed (or a bound store whose gh login cannot answer) degrades
+    // to `unavailable_reason` instead of reading the forge as a different
+    // account.
+    let forge = crate::reviews::forge_ctx(&state, repo, None).await;
+    let refused = forge.refused_reason();
+    let gh_repo = match (&refused, forge.repo.clone()) {
+        (Some(_), _) => None,
+        (None, Some(g)) => Some(g),
+        // Byte-identical to the pre-forge_ctx `From<GithubError>` answer.
+        (None, None) => return Err(ApiError::bad_request("not a github origin")),
+    };
 
     // V70-A3X: `list_pull_comments` now itself enforces `MAX_COMMENTS` and
     // reports honestly whether more existed — no further truncation
     // needed here.
-    let (threads, truncated, unavailable_reason) = match state
-        .github
-        .list_pull_comments(&gh_repo.owner, &gh_repo.name, pr_number as u64)
-        .await
-    {
-        Ok((list, truncated)) => {
-            let threads = build_threads(&git_ctx, &latest_ps, &list);
-            (threads, truncated, None)
-        }
-        Err(e) => (Vec::new(), false, Some(e.to_string())),
+    let (threads, truncated, unavailable_reason) = match gh_repo {
+        None => (Vec::new(), false, refused),
+        Some(gh_repo) => match forge
+            .client
+            .list_pull_comments(&gh_repo.owner, &gh_repo.name, pr_number as u64)
+            .await
+        {
+            Ok((list, truncated)) => {
+                let threads = build_threads(&git_ctx, &latest_ps, &list);
+                (threads, truncated, None)
+            }
+            Err(e) => (Vec::new(), false, Some(e.to_string())),
+        },
     };
 
     Ok((

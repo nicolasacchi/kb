@@ -51,6 +51,14 @@
 //! Neither being available means an unauthenticated read, never another
 //! identity's.
 //!
+//! Every review-side GitHub read reaches this client through ONE helper,
+//! `reviews::forge_ctx`: it picks the project (the store's `forge_slug`,
+//! else the member's `origin`) AND the binding together, and a store lookup
+//! that FAILS (DB error, join error, refused store credential) yields a
+//! closed context — no project, a client bound to nothing — rather than the
+//! `origin` + ambient-token fallback. [`ApiBinding`] has no `Default` for the
+//! same reason: the permissive variant must be named at every site.
+//!
 //! A network failure or a non-2xx response is reported as a
 //! [`GithubApiError`] the ROUTE then folds into a typed
 //! [`PrMetaUnavailable`] (`no-credentials|not-found|forbidden|
@@ -201,17 +209,114 @@ pub fn github_repo(repo_root: &Path) -> Result<GithubRepo> {
 /// can never smuggle a `-`-prefixed flag, a `..`, or any other
 /// revspec/refspec metacharacter into the argv this hands to `git fetch`.
 pub fn fetch_pr_ref(repo_root: &Path, number: u32) -> Result<(String, String)> {
-    let refspec = format!("+refs/pull/{number}/head:refs/kbc/pr/{number}");
-    let out = Command::new("git")
+    fetch_pr_ref_with(repo_root, number, WORK_TREE_FETCH_TIMEOUT)
+}
+
+/// Deadline for a network fetch into a member's own clone (the `start-pr`
+/// fallback and `prs/fetch`). Equal to the review store's default base-fetch
+/// budget so the two paths agree on what "slow but alive" means; the point
+/// is that it EXISTS — a stalled remote used to hold the job (and, behind
+/// it, `repo_guard`) until the 6 h job horizon.
+pub const WORK_TREE_FETCH_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// Why a [`run_git_bounded`] call produced no stdout.
+#[derive(Debug)]
+pub(crate) enum BoundedGitError {
+    Spawn(std::io::Error),
+    Failed {
+        status: i32,
+        stderr: String,
+    },
+    /// The deadline fired and the child's whole process group was killed
+    /// (`review_store::FailureClass::Timeout`).
+    Timeout(Duration),
+}
+
+impl BoundedGitError {
+    /// The class slug a timeout is reported under.
+    pub(crate) fn timeout_message(d: Duration) -> String {
+        format!(
+            "git fetch timed out after {}s ({}); the process group was killed",
+            d.as_secs(),
+            crate::review_store::FailureClass::Timeout.slug()
+        )
+    }
+}
+
+/// Run `git -C <repo_root> <args>` with a hard deadline, in its own process
+/// group (killed whole on expiry), with prompts disabled
+/// (`GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=never`, ssh `BatchMode`
+/// unless the user configured their own ssh command) and stdin closed.
+/// Synchronous — call it under `spawn_blocking`.
+pub(crate) fn run_git_bounded(
+    repo_root: &Path,
+    alternates: Option<(&'static str, &Path)>,
+    args: &[&str],
+    timeout: Duration,
+) -> std::result::Result<Vec<u8>, BoundedGitError> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root);
+    if let Some((k, v)) = alternates {
+        cmd.env(k, v);
+    }
+    cmd.args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("SSH_ASKPASS_REQUIRE", "never");
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() && !ssh_command_configured(repo_root) {
+        cmd.env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ConnectTimeout=10",
+        );
+    }
+    let spec = crate::review_store::RunSpec {
+        timeout,
+        stdout_cap: 1 << 20,
+        stderr_cap: 64 << 10,
+        stdin: None,
+    };
+    let cap = crate::review_store::run_bounded(&mut cmd, &spec).map_err(BoundedGitError::Spawn)?;
+    if cap.timed_out {
+        return Err(BoundedGitError::Timeout(timeout));
+    }
+    match cap.status {
+        Some(st) if st.success() => Ok(cap.stdout),
+        Some(st) => Err(BoundedGitError::Failed {
+            status: st.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&cap.stderr).trim().to_string(),
+        }),
+        None => Err(BoundedGitError::Timeout(timeout)),
+    }
+}
+
+fn ssh_command_configured(repo_root: &Path) -> bool {
+    Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .args(["fetch", "origin", &refspec])
+        .args(["config", "--get", "core.sshCommand"])
         .output()
-        .map_err(GithubError::Spawn)?;
-    if !out.status.success() {
-        return Err(GithubError::FetchFailed(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
+        .map(|o| o.status.success() && !o.stdout.iter().all(u8::is_ascii_whitespace))
+        .unwrap_or(false)
+}
+
+/// [`fetch_pr_ref`] with an explicit deadline (the test seam: a remote that
+/// accepts a connection and then stalls must fail within it).
+pub fn fetch_pr_ref_with(
+    repo_root: &Path,
+    number: u32,
+    timeout: Duration,
+) -> Result<(String, String)> {
+    let refspec = format!("+refs/pull/{number}/head:refs/kbc/pr/{number}");
+    match run_git_bounded(repo_root, None, &["fetch", "origin", &refspec], timeout) {
+        Ok(_) => {}
+        Err(BoundedGitError::Spawn(e)) => return Err(GithubError::Spawn(e)),
+        Err(BoundedGitError::Failed { stderr, .. }) => {
+            return Err(GithubError::FetchFailed(stderr));
+        }
+        Err(BoundedGitError::Timeout(d)) => {
+            return Err(GithubError::FetchFailed(BoundedGitError::timeout_message(
+                d,
+            )));
+        }
     }
 
     let target_ref = format!("refs/kbc/pr/{number}");
@@ -735,11 +840,11 @@ fn token_from_file(cfg: &GithubSection) -> Option<String> {
 /// answer, in order. [`Bound`](Self::Bound) means a review store has pinned
 /// `gh_user` or recorded a `cred_account`; see the module doc.
 ///
-/// Deliberately NO `Default`: `Unbound` is the PERMISSIVE variant (it
-/// re-admits the ambient token rungs), so a derived default would let any
-/// `unwrap_or_default()` / `..Default::default()` quietly pick the open
-/// posture on an error path. Every construction names its variant, and the
-/// fallbacks that choose `Unbound` say why at the call site.
+/// There is deliberately NO `Default`: the permissive variant must never be
+/// what a forgotten value, a `.unwrap_or_default()` or a `#[derive(Default)]`
+/// on a containing struct silently resolves to. Every site names its
+/// binding, and a failure to determine it is [`Bound`](Self::Bound) with a
+/// warning (fail closed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiBinding {
     Unbound,
@@ -835,7 +940,20 @@ pub struct GithubClient {
     /// account. A bound client resolves the store's own rung first and
     /// never the ambient ones — see the module doc.
     api_binding: ApiBinding,
+    /// Test-only override of the `KB_CODE_GITHUB_TOKEN` read, so a test is
+    /// hermetic whatever the runner's environment holds.
+    #[cfg(test)]
+    env_override: Option<Option<String>>,
     client: std::result::Result<reqwest::Client, String>,
+}
+
+/// A clone shares the pooled HTTP client and carries the SAME credential
+/// state (cli token, api credential, D12 binding) — it is a handle, not a
+/// reset.
+impl Clone for GithubClient {
+    fn clone(&self) -> Self {
+        self.with_cli_token(self.cli_token.clone())
+    }
 }
 
 impl std::fmt::Debug for GithubClient {
@@ -868,6 +986,8 @@ impl GithubClient {
             cli_token: None,
             api_cred: None,
             api_binding: ApiBinding::Unbound,
+            #[cfg(test)]
+            env_override: None,
             client,
         }
     }
@@ -881,6 +1001,8 @@ impl GithubClient {
             cli_token: token,
             api_cred: self.api_cred.clone(),
             api_binding: self.api_binding,
+            #[cfg(test)]
+            env_override: self.env_override.clone(),
             client: self.client.clone(),
         }
     }
@@ -899,14 +1021,33 @@ impl GithubClient {
             cli_token: self.cli_token.clone(),
             api_cred: cred,
             api_binding: binding,
+            #[cfg(test)]
+            env_override: self.env_override.clone(),
             client: self.client.clone(),
         }
+    }
+
+    fn env_token(&self) -> Option<String> {
+        #[cfg(test)]
+        if let Some(o) = &self.env_override {
+            return o.clone();
+        }
+        std::env::var(GITHUB_TOKEN_ENV).ok()
+    }
+
+    /// Test-only: pin what `KB_CODE_GITHUB_TOKEN` reads as for this client
+    /// (and every client derived from it), whatever the environment holds.
+    #[cfg(test)]
+    pub(crate) fn with_env_token_for_test(&self, token: Option<&str>) -> Self {
+        let mut c = self.with_cli_token(self.cli_token.clone());
+        c.env_override = Some(token.map(str::to_string));
+        c
     }
 
     /// Is a file or env token configured (the rungs above `gh-cli` for an
     /// UNBOUND store)? Never consulted for a bound one.
     pub fn has_ambient_token(&self) -> bool {
-        let env = std::env::var(GITHUB_TOKEN_ENV).ok();
+        let env = self.env_token();
         resolve_github_token_with(&self.cfg, env.as_deref(), None, None, self.api_binding).is_some()
     }
 
@@ -914,7 +1055,7 @@ impl GithubClient {
     /// cli; bound: the store's gh-cli, then the caller's token — see the
     /// module doc).
     pub fn resolve_token(&self) -> Option<String> {
-        let env = std::env::var(GITHUB_TOKEN_ENV).ok();
+        let env = self.env_token();
         resolve_github_token_with(
             &self.cfg,
             env.as_deref(),
@@ -1700,6 +1841,60 @@ mod tests {
             .output()
             .unwrap();
         assert!(verify.status.success());
+    }
+
+    /// A remote that accepts the TCP connection and then says nothing — the
+    /// shape of a stalled forge. Returns the port and a stop flag.
+    fn stalled_remote() -> (u16, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while !stop2.load(Ordering::SeqCst) {
+                if let Ok((s, _)) = listener.accept() {
+                    held.push(s);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        (port, stop)
+    }
+
+    /// A6.f3 / M3: `fetch_pr_ref` used to run a bare `Command` with no
+    /// deadline, so a stalled remote held the start-pr job (and
+    /// `repo_guard`) for hours. Now it fails within the deadline, names the
+    /// `timeout` class, and kills the git it started.
+    #[test]
+    fn fetch_pr_ref_against_a_stalled_remote_fails_within_the_deadline() {
+        let (port, stop) = stalled_remote();
+        let tmp = init_repo();
+        git(
+            tmp.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                &format!("git://127.0.0.1:{port}/acme/widget.git"),
+            ],
+        );
+        let t0 = std::time::Instant::now();
+        let err = fetch_pr_ref_with(tmp.path(), 7, Duration::from_secs(2)).unwrap_err();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            t0.elapsed() < Duration::from_secs(30),
+            "the deadline did not bound the fetch: {:?}",
+            t0.elapsed()
+        );
+        match err {
+            GithubError::FetchFailed(m) => {
+                assert!(m.contains("timed out") && m.contains("timeout"), "{m}")
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
     }
 
     #[test]
