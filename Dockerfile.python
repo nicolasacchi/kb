@@ -48,7 +48,7 @@ COPY . .
 RUN cargo build --release -p kb-lip
 
 # --- Runtime: node + pyright + the compiled kb-lip ----------------------
-FROM node:22-trixie-slim AS runtime
+FROM node:26-trixie-slim AS runtime
 
 RUN npm install -g pyright \
     && npm cache clean --force
