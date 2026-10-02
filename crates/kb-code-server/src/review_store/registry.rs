@@ -50,6 +50,10 @@
 //! Every method that touches git or the DB is SYNCHRONOUS; call it from
 //! `spawn_blocking`.
 
+// A swallowed `Result` in this module is a security-posture bug (D12 binding
+// reads what these writes record); see `best_effort`.
+#![deny(clippy::let_underscore_must_use)]
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -296,7 +300,24 @@ fn mark_imported(store: &Store, m: &seed::MemberImport) {
         "pruned": m.pruned,
         "conflicts": m.conflicts,
     });
-    let _ = store.set_repo_store_legacy_import(m.repo_id, Some(&li.to_string()));
+    best_effort(
+        "set_repo_store_legacy_import",
+        store.set_repo_store_legacy_import(m.repo_id, Some(&li.to_string())),
+    );
+}
+
+/// A best-effort bookkeeping write whose failure must not fail the caller but
+/// must not be SILENT either (v0.44 P2, fail-closed-by-construction slice).
+/// These were `let _ = …` — including the `cred_account` write that D12's
+/// binding reads on the next request, where a swallowed failure silently left
+/// the store unbound (the ambient token rung re-admitted). Now the failure is
+/// logged at `warn` with the operation name; the module denies
+/// `clippy::let_underscore_must_use`, so a new `let _ =` over a `Result` does
+/// not compile.
+fn best_effort<T, E: std::fmt::Display>(what: &str, r: Result<T, E>) {
+    if let Err(e) = r {
+        tracing::warn!(op = what, error = %e, "review store: best-effort write failed");
+    }
 }
 
 impl std::fmt::Debug for ReviewStores {
@@ -821,14 +842,17 @@ impl ReviewStores {
         if let Err(p) = manifest::check(&dir, &row.uuid, &row.store_key) {
             drop(lock);
             let code = p.code();
-            let _ = store.set_review_store_state(
-                row.id,
-                if matches!(p, ManifestProblem::DirMissing) {
-                    "absent"
-                } else {
-                    "broken"
-                },
-                Some(&serde_json::json!({ "code": code, "detail": p.to_string() }).to_string()),
+            best_effort(
+                "set_review_store_state",
+                store.set_review_store_state(
+                    row.id,
+                    if matches!(p, ManifestProblem::DirMissing) {
+                        "absent"
+                    } else {
+                        "broken"
+                    },
+                    Some(&serde_json::json!({ "code": code, "detail": p.to_string() }).to_string()),
+                ),
             );
             return Err(if matches!(p, ManifestProblem::DirMissing) {
                 StoreUnavailable::Absent
@@ -1033,7 +1057,7 @@ impl ReviewStores {
             Ok(c) => c,
             Err(e) => return err("not-a-repo", format!("{}: {}", repo.name, e.kind())),
         };
-        let _ = git.allow_local_source(&common);
+        best_effort("allow_local_source", git.allow_local_source(&common));
         let remotes = match seed::read_remotes(git, &common) {
             Ok(r) => r,
             Err(e) => return err(e.slug(), e.detail),
@@ -1167,7 +1191,7 @@ impl ReviewStores {
         // Same call the ladder path makes before it reads remotes: a
         // local source that is not on the safe-directory list is
         // unreadable to this daemon user.
-        let _ = git.allow_local_source(&common);
+        best_effort("allow_local_source", git.allow_local_source(&common));
         match seed::read_remotes(git, &common) {
             Ok(remotes) => ladder::refused_remotes(&remotes),
             Err(_) => Vec::new(),
@@ -1228,16 +1252,19 @@ impl ReviewStores {
         let cfg = self.settings.repo(&repo.name);
         let (host, slug) = split_key(key).map_or((None, None), |(h, s)| (Some(h), Some(s)));
         let forge = cfg.forge.detect(host);
-        let _ = store.set_review_store_forge(
-            id,
-            forge.map(|f| f.slug()),
-            host,
-            slug,
-            if forge.is_some_and(|f| f.verified()) {
-                "verified"
-            } else {
-                "unverified"
-            },
+        best_effort(
+            "set_review_store_forge",
+            store.set_review_store_forge(
+                id,
+                forge.map(|f| f.slug()),
+                host,
+                slug,
+                if forge.is_some_and(|f| f.verified()) {
+                    "verified"
+                } else {
+                    "unverified"
+                },
+            ),
         );
         if let Err(e) = store.add_repo_to_store(repo.id, id) {
             return Registration::Error {
@@ -1370,11 +1397,14 @@ impl ReviewStores {
                 reason.push_str(BROADER_THAN_NEEDED_MARK);
             }
         }
-        let _ = store.set_review_store_credential(
-            row.id,
-            res.credential.kind().slug(),
-            Some(&reason),
-            res.credential.account().or(row.cred_account.as_deref()),
+        best_effort(
+            "set_review_store_credential",
+            store.set_review_store_credential(
+                row.id,
+                res.credential.kind().slug(),
+                Some(&reason),
+                res.credential.account().or(row.cred_account.as_deref()),
+            ),
         );
         Ok(res)
     }
@@ -1545,12 +1575,15 @@ impl ReviewStores {
                     })
                 }
                 Err(p) => {
-                    let _ = store.set_review_store_state(
-                        row.id,
-                        "broken",
-                        Some(
-                            &serde_json::json!({"code": p.code(), "detail": p.to_string()})
-                                .to_string(),
+                    best_effort(
+                        "set_review_store_state",
+                        store.set_review_store_state(
+                            row.id,
+                            "broken",
+                            Some(
+                                &serde_json::json!({"code": p.code(), "detail": p.to_string()})
+                                    .to_string(),
+                            ),
                         ),
                     );
                     Err(StoreUnavailable::Broken {
@@ -1579,14 +1612,14 @@ impl ReviewStores {
         let (plan, problems) = match self.plan_for(store, &row) {
             Ok(p) => p,
             Err(d) => {
-                let _ = store.set_review_store_state(
+                best_effort("set_review_store_state", store.set_review_store_state(
                     row.id,
                     "absent",
                     Some(
                         &serde_json::json!({"code": "seed-failed", "stage": "plan", "detail": d})
                             .to_string(),
                     ),
-                );
+                ));
                 return Err(StoreUnavailable::Error { detail: d });
             }
         };
@@ -1732,11 +1765,11 @@ impl ReviewStores {
                 Ok(report)
             }
             Err(e) => {
-                let _ = store.set_review_store_state(
+                best_effort("set_review_store_state", store.set_review_store_state(
                     row.id,
                     "absent",
                     Some(&serde_json::json!({"code": "seed-failed", "stage": e.stage, "class": e.class, "detail": e.detail}).to_string()),
-                );
+                ));
                 Err(StoreUnavailable::Error {
                     detail: e.to_string(),
                 })
@@ -1746,12 +1779,18 @@ impl ReviewStores {
 
     fn apply_objects_state(&self, store: &Store, missing: &[i64], ok: &[i64]) {
         for id in missing {
-            let _ = store.set_review_objects_state(*id, Some(seed::OBJECTS_MISSING));
+            best_effort(
+                "set_review_objects_state",
+                store.set_review_objects_state(*id, Some(seed::OBJECTS_MISSING)),
+            );
         }
         for id in ok {
             if let Ok(Some(b)) = store.get_review_base(*id) {
                 if b.objects_state.as_deref() == Some(seed::OBJECTS_MISSING) {
-                    let _ = store.set_review_objects_state(*id, None);
+                    best_effort(
+                        "set_review_objects_state",
+                        store.set_review_objects_state(*id, None),
+                    );
                 }
             }
         }
@@ -1857,7 +1896,10 @@ impl ReviewStores {
         if matches!(base, BaseFetch::Fetched { .. }) {
             sets.push(("last_base_fetch", now().into()));
         }
-        let _ = store.update_review_store_state_json(handle.id, &sets, Some("ready"));
+        best_effort(
+            "update_review_store_state_json",
+            store.update_review_store_state_json(handle.id, &sets, Some("ready")),
+        );
         Ok(SyncReport {
             members,
             member_errors,

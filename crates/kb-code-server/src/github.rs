@@ -734,9 +734,14 @@ fn token_from_file(cfg: &GithubSection) -> Option<String> {
 /// [`Unbound`](Self::Unbound) is the pre-store posture: the ambient rungs
 /// answer, in order. [`Bound`](Self::Bound) means a review store has pinned
 /// `gh_user` or recorded a `cred_account`; see the module doc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Deliberately NO `Default`: `Unbound` is the PERMISSIVE variant (it
+/// re-admits the ambient token rungs), so a derived default would let any
+/// `unwrap_or_default()` / `..Default::default()` quietly pick the open
+/// posture on an error path. Every construction names its variant, and the
+/// fallbacks that choose `Unbound` say why at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiBinding {
-    #[default]
     Unbound,
     Bound,
 }
