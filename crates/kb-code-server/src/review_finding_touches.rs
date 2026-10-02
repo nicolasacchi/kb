@@ -129,12 +129,10 @@ type HunkCache = HashMap<(String, String, String, String), Vec<DiffHunk>>;
 // store). No guard is held across a git call.
 const GLOBAL_MEMO_CAP: usize = 512;
 
-static GLOBAL_RENAMES: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<(String, String), Vec<FileChange>>>,
-> = std::sync::LazyLock::new(Default::default);
-static GLOBAL_HUNKS: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<(String, String, String, String), Vec<DiffHunk>>>,
-> = std::sync::LazyLock::new(Default::default);
+static GLOBAL_RENAMES: std::sync::LazyLock<std::sync::Mutex<RenameCache>> =
+    std::sync::LazyLock::new(Default::default);
+static GLOBAL_HUNKS: std::sync::LazyLock<std::sync::Mutex<HunkCache>> =
+    std::sync::LazyLock::new(Default::default);
 
 fn memo_get<K: std::hash::Hash + Eq, V: Clone>(
     m: &std::sync::Mutex<HashMap<K, V>>,
