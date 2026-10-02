@@ -26,18 +26,22 @@
 //!   piece of the table that IS universal, because it hooks the shared
 //!   choke point rather than the ~150 individual call sites.
 //!
-//! # The exit-code table's one honest gap
+//! # The exit-code table: one status -> exit function
+//!
+//! [`exit_for_status`] is the ONE status-to-exit mapping. Three producers
+//! feed it: `review_agent::AgentError::from_http`, `store_cmd::failure`, and
+//! [`exit_code_for`] (which reads either a `reqwest::Error` status or a
+//! [`StatusError`] out of the `anyhow` chain). The `*_raw` helpers
+//! (`post_json_raw`, ...) return `(StatusCode, Value)` and drop the
+//! `reqwest::Error`, so the verbs that build their failure through
+//! `annotation_api_error` / `loopback_or_api_error` carry a typed
+//! [`StatusError`] instead; without it those exited 1 for every status.
 //!
 //! Loopback-only routes 404 a non-loopback caller (deliberately —
-//! `router.rs`'s own doc: hiding the route's existence is the point, the
-//! same posture as an ordinary "no such id"). That means a 404 is
-//! STRUCTURALLY ambiguous between "this route doesn't exist for you" and
-//! "this resource doesn't exist" — the daemon does not, and per that
-//! design must not, tell the two apart in the response. So
-//! [`exit_code_for`] does NOT special-case 404 into [`EXIT_REFUSED`]; doing
-//! so would need a signal the daemon deliberately withholds, and guessing
-//! would print a confident-looking but wrong diagnosis. [`EXIT_REFUSED`]
-//! is reserved for the UNAMBIGUOUS case — a 401/403 bearer-auth failure.
+//! `router.rs`'s own doc). A 404 is therefore STRUCTURALLY ambiguous
+//! between "this route is not yours" and "this resource does not exist", and
+//! maps to [`EXIT_NOT_FOUND`] on the status alone. [`EXIT_REFUSED`] is the
+//! unambiguous case: a 401/403.
 
 use serde::Serialize;
 use serde_json::json;
@@ -55,7 +59,8 @@ pub const EXIT_GENERIC: i32 = 1;
 /// this before any code in this module ever runs. RS-U10a's review verbs
 /// (`crate::review_agent`) reuse the slot for the same class of caller
 /// mistake clap cannot see: a malformed `<id>`/`pr:<N>`/`<id>/ps<n>`
-/// address, an ambiguous `pr:<N>`, or a daemon 400.
+/// address, an ambiguous `pr:<N>`, or a daemon 400 (any verb, via
+/// [`exit_for_status`]).
 pub const EXIT_USAGE: i32 = 2;
 /// The daemon's response was well-formed but reports a conflict with
 /// current state (HTTP 409 — a drifted suggestion apply, a dirty-tree
@@ -82,10 +87,10 @@ pub const EXIT_PARTIAL: i32 = 7;
 /// is missing — `docs/kb-code.md`'s exit-code table says the same, and this
 /// constant is what that table is transcribed from.
 ///
-/// Mapped in `review_agent::AgentError::from_http`. Note `exit_code_for` (the
-/// mapper for every NON-review verb) has no 404 arm, so a 404 reaching a
-/// non-review verb exits 1, not 8 — recorded as M9 in
-/// `docs/research/kb-week-review-2026-09-28.md`.
+/// Mapped by [`exit_for_status`], which every mapper shares: 404 -> 8 for the
+/// review verbs (`AgentError::from_http`), the store verbs
+/// (`store_cmd::failure`) and every other verb (`exit_code_for`, via the
+/// `reqwest::Error` status or a [`StatusError`]).
 pub const EXIT_NOT_FOUND: i32 = 8;
 // ── RS-U3 (review store) — end ──
 
@@ -203,38 +208,66 @@ pub fn print_err(code: &str, message: &str, hint: Option<&str>) {
     }
 }
 
+/// THE status-to-exit mapping every mapper shares (`AgentError::from_http`,
+/// `store_cmd::failure`, [`exit_code_for`]): 400 usage, 401/403 refused, 404
+/// not-found, 409/503 conflict, anything else generic.
+pub fn exit_for_status(status: u16) -> i32 {
+    match status {
+        400 => EXIT_USAGE,
+        401 | 403 => EXIT_REFUSED,
+        404 => EXIT_NOT_FOUND,
+        409 | 503 => EXIT_CONFLICT,
+        _ => EXIT_GENERIC,
+    }
+}
+
+/// A non-2xx daemon answer as a typed error. The `*_raw` helpers return
+/// `(StatusCode, Value)` and drop the `reqwest::Error`, so their failure
+/// builders (`annotation_api_error`, `loopback_or_api_error`) wrap this in
+/// the `anyhow` chain for [`exit_code_for`] to downcast. `Display` is the
+/// human message, byte-identical to the pre-typed `anyhow!` text.
+#[derive(Debug)]
+pub struct StatusError {
+    pub status: u16,
+    pub message: String,
+}
+
+impl StatusError {
+    pub fn new(status: u16, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for StatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for StatusError {}
+
 /// Resolve the process exit code for a top-level command failure. Walks
-/// the WHOLE `anyhow` cause chain (not just the top frame) looking for the
-/// underlying `reqwest::Error` — every verb's failure still funnels through
-/// [`crate::get_json`]/[`crate::post_json`]/the `*_raw` siblings, each of
-/// which wraps the original `reqwest::Error` via `.with_context(...)`
-/// (which PRESERVES it as the chain's `source()`, never replaces it), so
-/// this needs no per-verb cooperation to work universally.
+/// the WHOLE `anyhow` cause chain (not just the top frame) looking for a
+/// [`StatusError`] (the `*_raw` helpers' failures) or the underlying
+/// `reqwest::Error` (`get_json`/`post_json` wrap it via `.with_context(...)`,
+/// which PRESERVES it as the chain's `source()`). Statuses map through
+/// [`exit_for_status`].
 pub fn exit_code_for(err: &anyhow::Error) -> i32 {
     for cause in err.chain() {
+        if let Some(se) = cause.downcast_ref::<StatusError>() {
+            return exit_for_status(se.status);
+        }
         if let Some(re) = cause.downcast_ref::<reqwest::Error>() {
             if re.is_connect() || re.is_timeout() || (re.is_request() && re.status().is_none()) {
                 return EXIT_UNREACHABLE;
             }
             if let Some(status) = re.status() {
-                match status.as_u16() {
-                    401 | 403 => return EXIT_REFUSED,
-                    // 404 and 503 must agree with
-                    // `review_agent::AgentError::from_http`, which maps
-                    // 404 -> EXIT_NOT_FOUND and 503 -> EXIT_CONFLICT.
-                    // `docs/kb-code.md`'s exit-code table documents BOTH,
-                    // but this function is the ONLY mapper for non-review
-                    // verbs (review verbs exit through `AgentError::emit`), so
-                    // without these arms a well-formed revspec that does not
-                    // resolve (404 `urn:kb:errors:unknown-ref`, raised at
-                    // kb-code-server routes.rs and deliberately preserved in
-                    // the anyhow chain for exactly this lookup) and a
-                    // store-still-seeding 503 both exited 1 where the table
-                    // says 8 and 3. Recorded as M9 in
-                    // `docs/research/kb-week-review-2026-09-28.md`.
-                    404 => return EXIT_NOT_FOUND,
-                    409 | 503 => return EXIT_CONFLICT,
-                    _ => {}
+                let exit = exit_for_status(status.as_u16());
+                if exit != EXIT_GENERIC {
+                    return exit;
                 }
             }
         }
@@ -270,5 +303,76 @@ mod tests {
     fn non_http_error_defaults_to_generic() {
         let err = anyhow::anyhow!("some unrelated failure");
         assert_eq!(exit_code_for(&err), EXIT_GENERIC);
+    }
+
+    /// A status `reqwest::Error` built the way `error_for_status` builds it,
+    /// from a one-shot local HTTP listener answering `code`.
+    async fn status_error(code: u16) -> reqwest::Error {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = sock.read(&mut buf).await;
+            let resp =
+                format!("HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = sock.write_all(resp.as_bytes()).await;
+        });
+        reqwest::get(format!("http://{addr}/"))
+            .await
+            .unwrap()
+            .error_for_status()
+            .expect_err("non-2xx is an error")
+    }
+
+    const STATUSES: [(u16, i32); 7] = [
+        (400, EXIT_USAGE),
+        (401, EXIT_REFUSED),
+        (403, EXIT_REFUSED),
+        (404, EXIT_NOT_FOUND),
+        (409, EXIT_CONFLICT),
+        (500, EXIT_GENERIC),
+        (503, EXIT_CONFLICT),
+    ];
+
+    #[test]
+    fn exit_for_status_table() {
+        for (status, want) in STATUSES {
+            assert_eq!(exit_for_status(status), want, "status {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn exit_code_for_reads_every_reqwest_status_arm() {
+        for (status, want) in STATUSES {
+            assert_eq!(
+                exit_code_for(&wrap(status_error(status).await)),
+                want,
+                "reqwest status {status}"
+            );
+        }
+    }
+
+    #[test]
+    fn exit_code_for_reads_typed_status_error_from_the_raw_helpers() {
+        for (status, want) in STATUSES {
+            let e = anyhow::Error::new(StatusError::new(status, "x")).context("outer");
+            assert_eq!(exit_code_for(&e), want, "StatusError {status}");
+        }
+    }
+
+    #[test]
+    fn all_three_mappers_agree_on_every_status() {
+        for (status, want) in STATUSES {
+            let from_http =
+                crate::review_agent::AgentError::from_http(status, &serde_json::Value::Null, "x");
+            assert_eq!(from_http.exit, want, "from_http {status}");
+            let (_, store) = crate::store_cmd::failure(
+                reqwest::StatusCode::from_u16(status).unwrap(),
+                &serde_json::Value::Null,
+            );
+            assert_eq!(store, want, "store_cmd::failure {status}");
+        }
     }
 }

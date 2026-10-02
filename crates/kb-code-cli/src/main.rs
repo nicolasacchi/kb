@@ -7855,8 +7855,9 @@ fn capture_client() -> Result<reqwest::Client> {
 /// bare status line.
 ///
 /// `err` is that status error, kept as this error's CAUSE deliberately:
-/// [`envelope::exit_code_for`] reads its table (401/403 → `EXIT_REFUSED`,
-/// 409 → `EXIT_CONFLICT`, 5 unreachable) off the `reqwest::Error` in the
+/// [`envelope::exit_code_for`] reads its table (`envelope::exit_for_status`:
+/// 400 usage, 401/403 refused, 404 not-found, 409/503 conflict; a
+/// connect/timeout is 5 unreachable) off the `reqwest::Error` in the
 /// chain, so dropping it would move every exit code without anything in
 /// this crate noticing. Keeping the error also leaves reqwest's status line
 /// in the `Caused by:` section — the body only ADDS the reason beside it.
@@ -14370,7 +14371,13 @@ fn annotation_api_error(
     body: &serde_json::Value,
 ) -> anyhow::Error {
     let msg = body["error"].as_str().unwrap_or("(no error message)");
-    anyhow::anyhow!("{what} failed ({status}): {msg}")
+    // Typed so `envelope::exit_code_for` can read the status: the `*_raw`
+    // helpers drop the `reqwest::Error`, and an untyped `anyhow!` here made
+    // every 400/403/404/409 exit 1 (v044-X1 A8-1).
+    anyhow::Error::new(envelope::StatusError::new(
+        status.as_u16(),
+        format!("{what} failed ({status}): {msg}"),
+    ))
 }
 
 /// Empty / non-JSON HTTP bodies become `Null` so a loopback-gate 404
@@ -14396,10 +14403,13 @@ fn loopback_or_api_error(
     if status == reqwest::StatusCode::NOT_FOUND
         && body.get("error").and_then(|v| v.as_str()).is_none()
     {
-        return anyhow::anyhow!(
-            "{what} requires loopback — {daemon} answered 404 \
-             (this route is LOOPBACK-ONLY)"
-        );
+        return anyhow::Error::new(envelope::StatusError::new(
+            404,
+            format!(
+                "{what} requires loopback — {daemon} answered 404 \
+                 (this route is LOOPBACK-ONLY)"
+            ),
+        ));
     }
     annotation_api_error(what, status, body)
 }
@@ -14971,7 +14981,10 @@ async fn checkout_cmd(daemon: &str, repo: &str, target: &str, json: bool) -> Res
                 }
             }
         }
-        anyhow::bail!("checkout refused — working tree is dirty");
+        return Err(anyhow::Error::new(envelope::StatusError::new(
+            409,
+            "checkout refused — working tree is dirty",
+        )));
     }
     if !status.is_success() {
         let msg = body["error"].as_str().unwrap_or("checkout failed");
@@ -19983,7 +19996,10 @@ async fn suggest_apply_cmd(daemon: &str, id: &str, resolve: bool, json: bool) ->
         if !json {
             print!("{}", format_apply_drift(&body));
         }
-        anyhow::bail!("suggestion apply conflict on {id}");
+        return Err(anyhow::Error::new(envelope::StatusError::new(
+            409,
+            format!("suggestion apply conflict on {id}"),
+        )));
     }
     if !status.is_success() {
         return Err(loopback_or_api_error(
@@ -26998,6 +27014,41 @@ mod tests {
     }
 
     #[test]
+    fn raw_status_helpers_exit_through_the_documented_table() {
+        // The 70 call sites share these two builders; the status must
+        // survive into `exit_code_for` (v044-X1 A8-1).
+        let empty = serde_json::Value::Null;
+        let msg = serde_json::json!({"error": "boom"});
+        for (status, want) in [
+            (400u16, envelope::EXIT_USAGE),
+            (403, envelope::EXIT_REFUSED),
+            (404, envelope::EXIT_NOT_FOUND),
+            (409, envelope::EXIT_CONFLICT),
+            (500, envelope::EXIT_GENERIC),
+        ] {
+            let sc = reqwest::StatusCode::from_u16(status).unwrap();
+            assert_eq!(
+                envelope::exit_code_for(&annotation_api_error("w", sc, &msg)),
+                want,
+                "annotation_api_error {status}"
+            );
+            assert_eq!(
+                envelope::exit_code_for(&loopback_or_api_error("w", "http://d", sc, &empty)),
+                want,
+                "loopback_or_api_error {status}"
+            );
+        }
+        // `review compose` off-host: empty 404 -> "requires loopback" -> 8.
+        let e = loopback_or_api_error(
+            "review compose",
+            "http://d",
+            reqwest::StatusCode::NOT_FOUND,
+            &empty,
+        );
+        assert_eq!(envelope::exit_code_for(&e), envelope::EXIT_NOT_FOUND);
+    }
+
+    #[test]
     fn loopback_or_api_error_keeps_json_404_as_api_error() {
         let err = loopback_or_api_error(
             "apply suggestion \"ann_x\"",
@@ -27008,6 +27059,60 @@ mod tests {
         let rendered = format!("{err}");
         assert!(rendered.contains("annotation \"ann_x\""));
         assert!(!rendered.contains("requires loopback"));
+    }
+
+    /// v044-X1 A8.f4 — the kb-review-work skill tells agents which `kb-code
+    /// review <verb>` to type; a verb or `--flag` renamed in clap must fail
+    /// here instead of silently leaving the skill lying.
+    #[test]
+    fn review_work_skill_commands_exist_in_clap() {
+        use clap::CommandFactory;
+        let skill = include_str!("../../../plugins/kb-code/skills/kb-review-work/SKILL.md");
+        let cli = Cli::command();
+        let review = cli
+            .get_subcommands()
+            .find(|c| c.get_name() == "review")
+            .expect("`kb-code review` exists");
+        let mut checked = 0usize;
+        for line in skill.lines() {
+            let mut rest = line;
+            while let Some(i) = rest.find("kb-code review ") {
+                rest = &rest[i + "kb-code review ".len()..];
+                let verb: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                    .collect();
+                if verb.is_empty() {
+                    continue;
+                }
+                let sub = review
+                    .get_subcommands()
+                    .find(|c| c.get_name() == verb || c.get_all_aliases().any(|a| a == verb))
+                    .unwrap_or_else(|| {
+                        panic!("SKILL.md names `kb-code review {verb}`: no such verb")
+                    });
+                checked += 1;
+                // Every `--flag` on the SAME inline-code span must exist on the verb.
+                let span_end = rest.find('`').unwrap_or(rest.len());
+                for tok in rest[..span_end].split_whitespace() {
+                    if let Some(flag) = tok.strip_prefix("--") {
+                        let name: String = flag
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                            .collect();
+                        if name.is_empty() {
+                            continue;
+                        }
+                        let known = sub
+                            .get_arguments()
+                            .any(|a| a.get_long() == Some(name.as_str()))
+                            || name == "json";
+                        assert!(known, "SKILL.md: `review {verb}` has no --{name}");
+                    }
+                }
+            }
+        }
+        assert!(checked >= 8, "only {checked} skill commands checked");
     }
 
     #[test]

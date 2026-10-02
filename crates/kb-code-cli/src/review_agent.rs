@@ -50,15 +50,36 @@ use std::time::Duration;
 
 pub const DEFAULT_DAEMON: &str = "http://127.0.0.1:4747";
 
-/// Daemon work (a diff over a large change set on a cold cache) is not
-/// timed out client-side at the old 10 s; this is a backstop only.
+/// Daemon work (a diff over a large change set on a cold cache, a base
+/// fetch of a large clone) is not timed out client-side at the old 10 s; this
+/// is a backstop, DERIVED from the daemon's own budget so it cannot be
+/// shorter than the work it waits for: three base fetches (the first try plus
+/// the vanished-retry path) at the daemon's default
+/// `BASE_FETCH_TIMEOUT_SECS`, plus five minutes of slack. An operator who
+/// raises `[review.store] base_fetch_timeout_secs` past the default still
+/// outlives this; a timeout therefore says "the daemon may still be working",
+/// not "is it running" (see [`timeout_note`]).
 ///
-/// The ONE such number in the CLI. `retrack_cmd` and the capture verbs in
-/// `main.rs` (`review start`, `review snapshot`) share it rather than
-/// each carrying their own copy — three copies of 600 is how the capture
-/// verbs ended up on the 10 s default while the rest of the CLI was
-/// already safe.
-pub const READ_TIMEOUT: Duration = Duration::from_secs(600);
+/// The ONE such number in the CLI. `retrack_cmd` (single form) and the
+/// capture verbs in `main.rs` (`review start`, `review snapshot`) share it.
+pub const READ_TIMEOUT: Duration =
+    Duration::from_secs(3 * kb_code_server::review_store::git::BASE_FETCH_TIMEOUT_SECS + 300);
+
+/// `review retrack --all` runs a dry plus an apply base fetch per candidate
+/// review inside ONE synchronous request (no job, no progress), so no
+/// per-fetch multiple bounds it; this is the backstop for the whole batch.
+pub const BULK_READ_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// What a client-side timeout means for a request the daemon may still be
+/// serving: not "daemon down". Used in place of the "is kb-code-server
+/// running" hint when the failure `is_timeout()`.
+pub fn timeout_note(after: Duration) -> String {
+    format!(
+        "timed out after {}s — the daemon was reached and may still be finishing the work; \
+         check `kb-code review status` before re-running (a second run starts concurrently)",
+        after.as_secs()
+    )
+}
 
 pub const VERIFY_SCHEMA: &str = "kbc-review-verify/1";
 pub const START_SCHEMA: &str = "kbc-review-start/1";
@@ -144,6 +165,34 @@ pub fn merge_ps(from_ref: Option<i64>, flag: Option<i64>) -> Result<Option<i64>,
     }
 }
 
+/// `pr:<N>` positional shorthand for the verbs that take a PR number (`find`,
+/// `sync`). Only a bare `pr:<N>` — an `<id>` or a `/ps<n>` suffix is a usage
+/// error naming the verb (v044-X1 I2).
+pub fn parse_pr_shorthand(raw: &str, verb: &str) -> Result<u32, AgentError> {
+    match parse_review_ref(raw) {
+        Ok(ReviewRef {
+            target: Target::Pr(n),
+            ps: None,
+        }) => Ok(n),
+        _ => Err(AgentError::usage(format!(
+            "review {verb} takes a PR as `pr:<N>` (or --pr <N>); {raw:?} is not one"
+        ))),
+    }
+}
+
+/// A verb that acts on a WHOLE review (`status`, `retrack`) cannot honour a
+/// `/ps<n>` suffix: reject it up front, before any network round trip,
+/// instead of silently dropping it (v044-X1 I2).
+pub fn reject_patchset_address(raw: &str, verb: &str) -> Result<(), AgentError> {
+    match parse_review_ref(raw) {
+        Ok(ReviewRef { ps: Some(_), .. }) => Err(AgentError::usage(format!(
+            "review {verb} acts on the whole review — address it as <id> or pr:<N>, \
+             not a patchset ({raw:?})"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 // --- the typed error -----------------------------------------------------------
 
 /// A verb failure: the typed envelope's fields plus the exit code.
@@ -216,13 +265,7 @@ impl AgentError {
             .as_str()
             .map(str::to_string)
             .unwrap_or_else(|| format!("{what}: HTTP {status}"));
-        let exit = match status {
-            400 => envelope::EXIT_USAGE,
-            401 | 403 => envelope::EXIT_REFUSED,
-            404 => envelope::EXIT_NOT_FOUND,
-            409 | 503 => envelope::EXIT_CONFLICT,
-            _ => envelope::EXIT_GENERIC,
-        };
+        let exit = envelope::exit_for_status(status);
         let mut e = Self::new(&code, message, exit);
         if status == 404 && body.is_null() {
             e.hint =
@@ -464,9 +507,12 @@ pub async fn resolve(
 
 #[derive(Args, Debug)]
 pub struct FindArgs {
+    /// The PR as `pr:<N>` (shorthand for `--pr <N>`).
+    #[arg(value_name = "pr:N", conflicts_with = "pr")]
+    pub target: Option<String>,
     /// The PR number.
-    #[arg(long = "pr")]
-    pub pr: u32,
+    #[arg(long = "pr", required_unless_present = "target")]
+    pub pr: Option<u32>,
     /// Restrict to one configured repo.
     #[arg(long)]
     pub repo: Option<String>,
@@ -495,8 +541,9 @@ pub struct DiffArgs {
     #[arg(long)]
     pub path: Option<String>,
     /// Cut the patch at ~TOKENS (4 bytes each) with a marker line. Implies
-    /// `--patch` unless `--stat`/`--name-only` is given.
-    #[arg(long, value_name = "TOKENS")]
+    /// `--patch`; combining it with `--stat`/`--name-only` is a usage error
+    /// (those modes have no patch to cut).
+    #[arg(long, value_name = "TOKENS", conflicts_with_all = ["stat", "name_only"])]
     pub budget: Option<u64>,
     /// Disambiguates `pr:<N>` when several repos have one.
     #[arg(long)]
@@ -601,8 +648,23 @@ pub fn find_envelope(body: &Value, repo: Option<&str>) -> Value {
     )
 }
 
+impl FindArgs {
+    /// The PR number from `--pr` or the `pr:<N>` positional.
+    pub fn pr_number(&self) -> Result<u32, AgentError> {
+        match (&self.target, self.pr) {
+            (Some(t), _) => parse_pr_shorthand(t, "find"),
+            (None, Some(n)) => Ok(n),
+            (None, None) => Err(AgentError::usage("review find needs pr:<N> or --pr <N>")),
+        }
+    }
+}
+
 pub async fn find_cmd(a: FindArgs) -> anyhow::Result<()> {
-    let (path, q) = review_find_request(a.pr, a.repo.as_deref());
+    let pr = match a.pr_number() {
+        Ok(n) => n,
+        Err(e) => e.emit(a.json),
+    };
+    let (path, q) = review_find_request(pr, a.repo.as_deref());
     let body = match get_ok(&a.daemon, path, &q, "review find").await {
         Ok(b) => b,
         Err(e) => e.emit(a.json),
@@ -613,7 +675,7 @@ pub async fn find_cmd(a: FindArgs) -> anyhow::Result<()> {
     }
     let reviews = body["reviews"].as_array().cloned().unwrap_or_default();
     if reviews.is_empty() {
-        println!("(no review bound to PR #{})", a.pr);
+        println!("(no review bound to PR #{pr})");
         return Ok(());
     }
     for r in &reviews {
@@ -1079,13 +1141,24 @@ async fn verify_run(a: &VerifyArgs) -> Result<bool, AgentError> {
 
 /// `compose --slugify`: give every finding WITHOUT a valid slug the one kb
 /// itself derives from its title (`kb_code_server::review_findings::
-/// slug_from_title` — ASCII `f-…`, non-ASCII-safe), uniquified WITHIN the
-/// batch (`-2`, `-3`, … — deterministic, so re-composing the same file
-/// yields the same slugs and reconciles instead of duplicating). A valid
-/// slug the author wrote is never touched. Accepts every shape compose
-/// takes: a bare findings array, `{"findings": [...]}` (the sidecar), and
-/// the V0 body's `{"findings": {"findings": [...]}}`. Returns
-/// `(index, old, new)` for each rewrite.
+/// slug_from_title` — ASCII `f-…`, non-ASCII-safe). A valid slug the author
+/// wrote is never touched.
+///
+/// Collisions are resolved by CONTENT, not by encounter order: when two
+/// findings share a base slug (or the base is the no-ASCII fallback
+/// `f-finding`, or an author slug already owns it), every slug-less member
+/// gets `<base>-<6 hex>` from the daemon's own finding fingerprint (act,
+/// category, normalised title, path), so reordering the list or inserting a
+/// new finding in front never moves a slug — and so never moves a human's
+/// disposition — onto different text. Two findings with an identical
+/// fingerprint (same title, path, category, act) cannot be told apart by
+/// content and fall back to `-2`, `-3` in list order. Limit: a finding that
+/// was alone under its base slug keeps the plain slug until a same-titled
+/// twin first appears, at which point it is re-slugged to the hashed form.
+/// Accepts every shape compose takes: a bare findings array,
+/// `{"findings": [...]}` (the sidecar), and the V0 body's
+/// `{"findings": {"findings": [...]}}`. Returns `(index, old, new)` for each
+/// rewrite.
 pub fn slugify_findings(payload: &mut Value) -> Vec<(usize, Option<String>, String)> {
     use kb_code_server::review_findings::{is_valid_finding_slug, slug_from_title};
     let list = if payload.is_array() {
@@ -1106,19 +1179,44 @@ pub fn slugify_findings(payload: &mut Value) -> Vec<(usize, Option<String>, Stri
         .filter(|s| is_valid_finding_slug(s))
         .map(str::to_string)
         .collect();
+    let needs_slug = |f: &Value| !f["slug"].as_str().is_some_and(is_valid_finding_slug);
+    // How many slug-less findings want each base.
+    let mut demand: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for f in list.iter().filter(|f| needs_slug(f)) {
+        *demand
+            .entry(slug_from_title(f["title"].as_str().unwrap_or("")))
+            .or_default() += 1;
+    }
     let mut changes = Vec::new();
     for (i, f) in list.iter_mut().enumerate() {
-        let old = f["slug"].as_str().map(str::to_string);
-        if old.as_deref().is_some_and(is_valid_finding_slug) {
+        if !needs_slug(f) {
             continue;
         }
+        let old = f["slug"].as_str().map(str::to_string);
         let title = f["title"].as_str().unwrap_or("");
         let base = slug_from_title(title);
-        let mut slug = base.clone();
-        let mut n = 2;
-        while taken.contains(&slug) {
-            slug = format!("{base}-{n}");
-            n += 1;
+        let contested = demand.get(&base).copied().unwrap_or(0) > 1
+            || taken.contains(&base)
+            || base == "f-finding";
+        let mut slug = if contested {
+            let fp = kb_code_server::review_doc::fingerprint(
+                f["act"].as_str().unwrap_or(""),
+                f["category"].as_str().unwrap_or(""),
+                title,
+                f["location"]["path"].as_str().unwrap_or(""),
+            );
+            format!("{base}-{}", &fp[..6])
+        } else {
+            base.clone()
+        };
+        if taken.contains(&slug) {
+            // Identical fingerprint: only list order can separate them.
+            let root = slug.clone();
+            let mut n = 2;
+            while taken.contains(&slug) {
+                slug = format!("{root}-{n}");
+                n += 1;
+            }
         }
         taken.insert(slug.clone());
         if let Some(obj) = f.as_object_mut() {
@@ -1898,15 +1996,23 @@ mod tests {
             .iter()
             .map(|f| f["slug"].as_str().unwrap())
             .collect();
+        let fp = |title: &str| {
+            format!(
+                "-{}",
+                &kb_code_server::review_doc::fingerprint("", "", title, "")[..6]
+            )
+        };
         assert_eq!(
             slugs,
             vec![
-                "f-perch-rotto",
+                // the duplicated title is contested -> content-hashed, twice
+                // the same (identical fingerprint -> list-order `-2`)
+                format!("f-perch-rotto{}", fp("Perché à rotto")).as_str(),
                 "f-caf-d-j-vu",
                 "f-gr-e-ber-alles",
-                "f-finding",
-                "f-finding-2",
-                "f-perch-rotto-2",
+                format!("f-finding{}", fp("🔥🔥")).as_str(),
+                format!("f-finding{}", fp("数据库 查询")).as_str(),
+                format!("f-perch-rotto{}-2", fp("Perché à rotto")).as_str(),
                 "f-kept",
             ]
         );
@@ -1918,10 +2024,54 @@ mod tests {
                 "{s}"
             );
         }
-        // Deterministic: slugifying the original again yields the same.
-        let mut again = json!([{"title": "Perché à rotto"}, {"title": "Perché à rotto"}]);
-        slugify_findings(&mut again);
-        assert_eq!(again[1]["slug"], "f-perch-rotto-2");
+    }
+
+    #[test]
+    fn slugify_slugs_do_not_move_when_the_list_is_reordered_or_grows() {
+        // v044-X1 A8-4: same-titled findings in different files used to be
+        // `-`/`-2` by encounter order, so reordering swapped their slugs (and
+        // the human dispositions riding them).
+        let mk = |path: &str| json!({"title": "Missing null check", "location": {"path": path}});
+        let slug_of = |list: Vec<Value>, path: &str| -> String {
+            let mut p = json!({ "findings": list });
+            slugify_findings(&mut p);
+            p["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["location"]["path"] == path)
+                .unwrap()["slug"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let ab = vec![mk("a.rs"), mk("b.rs")];
+        let ba = vec![mk("b.rs"), mk("a.rs")];
+        let cab = vec![mk("c.rs"), mk("a.rs"), mk("b.rs")];
+        let (a1, b1) = (slug_of(ab.clone(), "a.rs"), slug_of(ab, "b.rs"));
+        assert_ne!(a1, b1);
+        assert_eq!(a1, slug_of(ba.clone(), "a.rs"));
+        assert_eq!(b1, slug_of(ba, "b.rs"));
+        assert_eq!(a1, slug_of(cab.clone(), "a.rs"));
+        assert_eq!(b1, slug_of(cab, "b.rs"));
+        // Two non-ASCII titles that both collapse to `f-finding`.
+        let n = |t: &str| json!({"title": t});
+        let s1 = slug_of_title(vec![n("数据库 查询"), n("🔥🔥")], "数据库 查询");
+        let s2 = slug_of_title(vec![n("🔥🔥"), n("数据库 查询")], "数据库 查询");
+        assert_eq!(s1, s2);
+    }
+
+    fn slug_of_title(list: Vec<Value>, title: &str) -> String {
+        let mut p = json!(list);
+        slugify_findings(&mut p);
+        p.as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["title"] == title)
+            .unwrap()["slug"]
+            .as_str()
+            .unwrap()
+            .to_string()
     }
 
     #[test]
@@ -1932,5 +2082,73 @@ mod tests {
         assert_eq!(v0["findings"]["findings"][0]["slug"], "f-n-c-d");
         let mut other = json!({"summary": "no findings here"});
         assert!(slugify_findings(&mut other).is_empty());
+    }
+
+    #[test]
+    fn read_timeout_outlives_the_daemons_base_fetch_budget() {
+        // v044-X1 A6-6: the backstop must not be shorter than one daemon
+        // base fetch (it was 600 s against 1800 s).
+        use kb_code_server::review_store::git::BASE_FETCH_TIMEOUT_SECS;
+        assert!(READ_TIMEOUT.as_secs() > 3 * BASE_FETCH_TIMEOUT_SECS);
+        assert!(BULK_READ_TIMEOUT > READ_TIMEOUT);
+        assert!(timeout_note(Duration::from_secs(7)).contains("may still be finishing"));
+    }
+
+    // --- I2: one address grammar, no silently ignored input ---------------------
+
+    #[derive(clap::Parser, Debug)]
+    struct DiffCli {
+        #[command(flatten)]
+        a: DiffArgs,
+    }
+    #[derive(clap::Parser, Debug)]
+    struct FindCli {
+        #[command(flatten)]
+        a: FindArgs,
+    }
+
+    #[test]
+    fn budget_with_stat_or_name_only_is_a_usage_error() {
+        use clap::Parser;
+        for bad in [
+            vec!["diff", "12", "--stat", "--budget", "100"],
+            vec!["diff", "12", "--name-only", "--budget", "100"],
+        ] {
+            let e = DiffCli::try_parse_from(bad.clone()).unwrap_err();
+            assert_eq!(e.exit_code(), 2, "{bad:?}");
+        }
+        let ok = DiffCli::try_parse_from(["diff", "12", "--budget", "100"]).unwrap();
+        assert_eq!(ok.a.mode(), "patch");
+    }
+
+    #[test]
+    fn find_accepts_pr_positional_and_flag_but_not_both_or_neither() {
+        use clap::Parser;
+        let a = FindCli::try_parse_from(["find", "pr:7"]).unwrap().a;
+        assert_eq!(a.pr_number().unwrap(), 7);
+        let a = FindCli::try_parse_from(["find", "--pr", "9"]).unwrap().a;
+        assert_eq!(a.pr_number().unwrap(), 9);
+        assert!(FindCli::try_parse_from(["find"]).is_err());
+        assert!(FindCli::try_parse_from(["find", "pr:7", "--pr", "7"]).is_err());
+        // A review id or a patchset is not a PR shorthand.
+        for bad in ["12", "pr:7/ps2", "pr:0", "x"] {
+            let a = FindCli::try_parse_from(["find", bad]).unwrap().a;
+            assert_eq!(
+                a.pr_number().unwrap_err().exit,
+                envelope::EXIT_USAGE,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn whole_review_verbs_reject_a_patchset_address_before_any_request() {
+        assert!(reject_patchset_address("12", "retrack").is_ok());
+        assert!(reject_patchset_address("pr:7", "status").is_ok());
+        for bad in ["12/ps2", "pr:7/ps1"] {
+            let e = reject_patchset_address(bad, "retrack").unwrap_err();
+            assert_eq!(e.exit, envelope::EXIT_USAGE);
+            assert!(e.message.contains("retrack") && e.message.contains(bad));
+        }
     }
 }
