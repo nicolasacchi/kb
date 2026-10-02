@@ -251,30 +251,44 @@ pub async fn serve_with_paths(
         }
     }
 
-    // SEC-02 — the ONE place the DNS-rebinding `Host` guard fails open:
-    // a NON-loopback peer with no `[server] hostnames` configured. The
-    // rebinding victim is a loopback peer and is refused by
-    // `middleware::host_guard`, so this is not that hole; this is
-    // the "token-less public bind behind a proxy that IS the auth gate"
-    // shape, where a public name resolving to the host's own IP is still
-    // a genuine rebinding vector. Warn on BOTH triggers — the non-loopback
-    // bind AND `KB_ALLOW_NO_AUTH=1` (which admits any non-loopback peer
-    // with no kb-level credential at all, even on a loopback-ish bind).
-    // Refusing to start instead would take a documented deployment down
-    // on upgrade, so the warning is the honest middle.
+    // SEC-02 — where the DNS-rebinding `Host` guard fails open: a peer that
+    // is neither loopback nor listed in `[server] trusted_proxies`, while
+    // `[server] hostnames` is empty. The guard is decided on the RAW TCP peer
+    // (`middleware::host_gate_applies_to_request`): loopback and listed proxy
+    // hops are ALWAYS Host-checked, and the host of `parent_origin` is always
+    // admitted. So the honest statements are (a) any other name arriving
+    // through a listed proxy is refused until it is added to `hostnames`, and
+    // (b) an UNLISTED non-loopback peer is not Host-checked at all. Warn on
+    // the shapes where either matters: a non-loopback bind, a configured
+    // proxy list, or `KB_ALLOW_NO_AUTH=1`. Refusing to start would take a
+    // documented deployment down on upgrade, so the warning is the honest
+    // middle - and it must describe what the code does, not what it once did.
     if !config.server.hostnames.is_empty() {
         tracing::info!(
             count = config.server.hostnames.len(),
             "loaded [server] hostnames — the Host allowlist is now enforced for every peer"
         );
-    } else if !local_addr.ip().is_loopback() || crate::middleware::allow_no_auth() {
+    } else if !local_addr.ip().is_loopback()
+        || !config.server.trusted_proxies.is_empty()
+        || crate::middleware::allow_no_auth()
+    {
         tracing::warn!(
             addr = %local_addr,
             allow_no_auth = crate::middleware::allow_no_auth(),
-            "no [server] hostnames configured — the Host allowlist is enforced on loopback \
-             peers only, so a non-loopback client (e.g. a public name resolving to this host) \
-             is not Host-checked. Set `[server] hostnames = [\"<the name you publish>\"]` for \
-             strict Host checking on every peer."
+            "no [server] hostnames configured — the Host allowlist is enforced on loopback and \
+             trusted_proxies peers only (the parent_origin host is always admitted, so the \
+             name you publish keeps working; any OTHER name reaching this daemon through a \
+             trusted proxy, e.g. a compose service name, is refused with 403), while a \
+             non-loopback peer that is not listed in trusted_proxies is not Host-checked. \
+             Set `[server] hostnames = [\"<each name you publish>\"]` for strict Host \
+             checking on every peer."
+        );
+    }
+    if crate::middleware::parent_origin_host(&config.server.parent_origin).is_none() {
+        tracing::warn!(
+            parent_origin = %config.server.parent_origin,
+            "[server] parent_origin is not an http(s) origin with a host — the Host guard \
+             cannot auto-admit it, so a proxied deploy must list its name in `hostnames`"
         );
     }
 

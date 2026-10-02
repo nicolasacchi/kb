@@ -16,7 +16,7 @@
 //! treat them as indicative, not exact. `GET /metrics` is top-level (not
 //! under `/api`) and carries the same auth via its own `route_layer`.
 
-use crate::middleware::auth_bearer;
+use crate::middleware::{auth_bearer, host_guard};
 use crate::state::{
     AuthConfig, KbHandles, RouteKind, RouteMetrics, SearchStage, LATENCY_BUCKETS_MS,
     LATENCY_BUCKET_COUNT,
@@ -186,13 +186,20 @@ pub async fn prometheus(State(state): State<Arc<KbHandles>>) -> impl IntoRespons
     )
 }
 
-/// Top-level mount. Auth matches `GET /api/metrics` (loopback bypass) without
-/// re-wrapping the `/api` tree. The route string lives here, not in
+/// Top-level mount. Auth AND the SEC-02 `Host` guard match `GET /api/metrics`
+/// (loopback bypass behind the guard, so a DNS-rebound page is refused)
+/// without re-wrapping the `/api` tree. The route string lives here, not in
 /// `router.rs`, so the api-docs extractor does not prefix it onto `/api/metrics`.
-pub fn prometheus_router(auth: Arc<AuthConfig>) -> Router<Arc<KbHandles>> {
+pub fn prometheus_router(
+    auth: Arc<AuthConfig>,
+    origin: Arc<crate::state::OriginConfig>,
+) -> Router<Arc<KbHandles>> {
     Router::new()
         .route("/metrics", route_get(prometheus))
         .route_layer(from_fn_with_state(auth, auth_bearer))
+        // Guard OUTERMOST (last route_layer), same position as `/capture`:
+        // it must decide before `auth_bearer`'s loopback bypass.
+        .route_layer(from_fn_with_state(origin, host_guard))
 }
 
 fn render_prometheus(snap: &MetricsResponse) -> String {

@@ -848,8 +848,8 @@ pub struct OriginConfig {
     pub trusted_proxies: Arc<Vec<IpAddr>>,
     /// v0.6/SEC-02 — resolved `[server] hostnames` (lower-cased, port
     /// stripped, empties dropped) for the `/api` Host guard. Empty =
-    /// "unconfigured", which restricts the guard to loopback peers —
-    /// see `kb_server::middleware::host_guard`.
+    /// "unconfigured", which restricts the guard to loopback and
+    /// `trusted_proxies` peers — see `kb_server::middleware::host_guard`.
     pub hostnames: Arc<Vec<String>>,
     /// The host LITERAL of `[server] addr` (`"192.168.1.5:4000"` →
     /// `"192.168.1.5"`), or `None` for a wildcard bind. Always
@@ -888,7 +888,17 @@ impl OriginConfig {
         let hostnames = server
             .hostnames
             .iter()
-            .filter_map(|h| crate::middleware::normalize_host_label(h))
+            .filter_map(|h| {
+                let label = crate::middleware::normalize_host_label(h);
+                if label.is_none() {
+                    // validate() rejects these; this only fires for a
+                    // config that bypassed it. Never drop silently: a
+                    // dropped entry can empty the list and switch the
+                    // gate off for non-loopback peers.
+                    tracing::warn!(entry = %h, "[server] hostnames entry is unparseable and was dropped");
+                }
+                label
+            })
             .collect();
         Self {
             artifact_host_suffix: server.artifact_host_suffix.clone(),

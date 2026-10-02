@@ -812,15 +812,18 @@ pub struct ServerSection {
     /// reached on (`my-laptop`, `kb.example.com`).
     ///
     /// Empty (the default) is a real, documented mode, not a
-    /// placeholder: `Host` is then enforced for LOOPBACK peers only
-    /// (which is the rebinding victim, so the actual attack is still
-    /// closed by default), and a non-loopback peer — i.e. one behind
-    /// a reverse proxy that is already the authentication gate — is
-    /// left alone so upgrading cannot take a deployed daemon down. The
-    /// moment this list is non-empty the check applies to EVERY peer.
-    /// A trailing `:port` is stripped when the list is resolved; do NOT
-    /// list `*.artifacts.<suffix>` hosts here — that unbounded set is
-    /// served by the SPA fallback, which is deliberately unguarded.
+    /// placeholder: `Host` is then enforced for LOOPBACK peers and for
+    /// peers listed in `trusted_proxies` (decided on the raw TCP peer,
+    /// never `X-Forwarded-For`), and the host of `parent_origin` is always
+    /// admitted — which is what keeps a reverse-proxy deploy working with
+    /// no `hostnames`. A peer that is neither (an unlisted proxy, a LAN
+    /// client) is left alone so upgrading cannot take a deployed daemon
+    /// down; the moment this list is non-empty the check applies to EVERY
+    /// peer. A trailing `:port` is stripped when the list is resolved.
+    /// Entries must be exact lower-case ASCII names (no `*` wildcards, no
+    /// IDN — use punycode); validation rejects ones that could never
+    /// match. Artifact-iframe hosts (`*.artifacts.<suffix>`) are refused
+    /// by the guard unconditionally; do NOT list them.
     #[serde(default)]
     pub hostnames: Vec<String>,
 
@@ -1810,6 +1813,11 @@ impl KbConfig {
                     format!("/server/hostnames/{i}"),
                     format!("`{h}` is not a bare host label (no scheme, no path, no spaces; e.g. kb.example.com)"),
                 ));
+            } else if let Some(why) = hostname_never_matches(t) {
+                issues.push(ValidationIssue::hard(
+                    format!("/server/hostnames/{i}"),
+                    format!("`{h}` can never match a `Host:` header: {why}"),
+                ));
             }
         }
 
@@ -2447,8 +2455,80 @@ impl DaemonEntry {
     }
 }
 
+/// Why a (non-empty, scheme-free, whitespace-free) `[server] hostnames`
+/// entry could never equal a request `Host` label, or `None` when it can.
+/// The Host guard compares exact lower-case ASCII labels (browsers send
+/// IDNs as punycode and never send wildcards), so such an entry used to
+/// pass validation, turn the guard ON for every peer, and 403 the very
+/// name the operator believed they had listed.
+fn hostname_never_matches(entry: &str) -> Option<&'static str> {
+    if entry.contains('*') {
+        return Some("wildcards are not supported; list each name exactly");
+    }
+    if !entry.is_ascii() {
+        return Some("non-ASCII name; browsers send the punycode form (xn--...), list that");
+    }
+    let host = if let Some(rest) = entry.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((inner, _)) => inner,
+            None => return Some("unterminated `[` in IPv6 literal"),
+        }
+    } else {
+        match entry.rsplit_once(':') {
+            Some((h, _port)) if !h.contains(':') => h,
+            _ => entry,
+        }
+    };
+    if host.trim_end_matches('.').is_empty() {
+        return Some("no host name left after stripping the port and trailing dot");
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+
+    fn hostname_issues(entries: &str) -> Vec<ValidationIssue> {
+        KbConfig::from_toml_str(&format!("[server]\nhostnames = [{entries}]\n"))
+            .unwrap()
+            .validate()
+            .into_iter()
+            .filter(|i| i.pointer.starts_with("/server/hostnames"))
+            .collect()
+    }
+
+    /// A1-6: entries that can never equal a browser's `Host` label used to
+    /// pass validation, switch the guard ON for every peer, and 403 the
+    /// name the operator believed they had listed.
+    #[test]
+    fn hostnames_that_can_never_match_are_hard_errors() {
+        for bad in [
+            "\"*.example.com\"",
+            "\"kb.ex\u{e4}mple.com\"",
+            "\"[::1\"",
+            "\".\"",
+            "\":4000\"",
+        ] {
+            let issues = hostname_issues(bad);
+            assert!(
+                issues.iter().any(|i| i.is_hard()),
+                "{bad} must be a hard validation error, got {issues:?}"
+            );
+        }
+        for good in [
+            "\"kb.example.com\"",
+            "\"KB.Example.com:8443\"",
+            "\"kb.example.com.\"",
+            "\"my-laptop\"",
+            "\"[::1]:4000\"",
+            "\"xn--exmple-cua.com\"",
+        ] {
+            assert!(
+                hostname_issues(good).is_empty(),
+                "{good} must validate clean"
+            );
+        }
+    }
     use super::*;
     use pretty_assertions::assert_eq;
 
