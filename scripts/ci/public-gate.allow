@@ -1,0 +1,10 @@
+# Blobs whose bytes can match a leak pattern by accident. One git pathspec per line.
+web/package-lock.json
+web-code/package-lock.json
+web-code/e2e/package-lock.json
+tests/e2e/package-lock.json
+Cargo.lock
+# Embedded base64 screenshots.
+docs/research/sessions-and-share-feature-tour.html
+# Generated licence texts (third-party copyright holders can share a first name with the operator).
+THIRD-PARTY-LICENSES.md
