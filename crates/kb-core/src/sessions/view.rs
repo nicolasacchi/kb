@@ -889,13 +889,15 @@ impl ViewCarry {
                             }
                             break;
                         }
-                        if mid_hit && !line.starts_with("- ") && !line.starts_with('↳') {
-                            if !is_marker(line) {
-                                if let Some(last) = items.last_mut() {
-                                    last.push('\n');
-                                    last.push_str(line);
-                                    continue;
-                                }
+                        if mid_hit
+                            && !line.starts_with("- ")
+                            && !line.starts_with('↳')
+                            && !is_marker(line)
+                        {
+                            if let Some(last) = items.last_mut() {
+                                last.push('\n');
+                                last.push_str(line);
+                                continue;
                             }
                         }
                         if line.starts_with("- ") || is_marker(line) {
