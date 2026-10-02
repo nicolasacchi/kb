@@ -1054,12 +1054,18 @@ PATCH  /api/kb/{kb}/review/{id}/comments/{cid}/anchor         re-point the ancho
 PATCH  /api/kb/{kb}/review/{id}/comments/{cid}/meta           v0.40 TN1/TN2: set
                                             this comment's tags and/or make
                                             it a private NOTE. Body
-                                            {tags?, private?} — each field
-                                            is tri-state: absent = don't
-                                            touch, `tags:[]` clears the
-                                            set, `private:false`
-                                            un-privates. Setting NEITHER
-                                            is a 400, not a silent no-op.
+                                            {tags?, add_tags?,
+                                            remove_tags?, private?} — each
+                                            field is tri-state: absent =
+                                            don't touch, `tags:[]` clears
+                                            the set (full replace),
+                                            `add_tags` / `remove_tags` are
+                                            DELTAS applied server-side to
+                                            the CURRENT set (no client
+                                            read-modify-write to race),
+                                            `private:false` un-privates.
+                                            Setting NONE is a 400, not a
+                                            silent no-op.
                                             Tags are slug-normalised,
                                             deduped and sorted server-side
                                             (same `slugify_tag` the
@@ -1077,11 +1083,17 @@ PATCH  /api/kb/{kb}/review/{id}/comments/{cid}/meta           v0.40 TN1/TN2: set
                                             (G8), so a chip click or lock
                                             toggle can re-fire for free.
                                             Owner-only, same 403 as body
-                                            edit: `private:false` is a
+                                            edit (`urn:kb:errors:not-owner`,
+                                            as on batch `set_meta`):
+                                            `private:false` is a
                                             disclosure — it hands the whole
                                             thread back to every
-                                            agent-facing surface. (See
-                                            "Comment visibility" below.)
+                                            agent-facing surface, so on an
+                                            existing note it also needs the
+                                            operator-intent header. Reports
+                                            `kept_as_memory:{id}` when the
+                                            comment was kept as a memory.
+                                            (See "Comment visibility" below.)
 DELETE /api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}  delete a reply
 POST   /api/kb/{kb}/review/{id}/comments/{cid}/resolve        resolve one
 POST   /api/kb/{kb}/review/{id}/comments/{cid}/unresolve      reopen one
@@ -1100,8 +1112,11 @@ POST   /api/kb/{kb}/review/{id}/import[?force=]               v0.19: write a who
                                             ids/statuses/replies/timestamps. Refuses to
                                             overwrite existing non-empty comments unless
                                             force=true; re-pins the artifact ref.
+                                            Never removes a private note (even with
+                                            force); `imported` counts the PUBLIC
+                                            comments after the merge.
 POST   /api/kb/{kb}/review/{id}/attachments                   stage upload(s) (multipart) → 201 [Attachment+url]
-GET    /api/kb/{kb}/review/{id}/attachments/{aid}             serve a blob (sniffed CT + nosniff; raster inline, else download)
+GET    /api/kb/{kb}/review/{id}/attachments/{aid}[?visibility=all]  serve a blob (sniffed CT + nosniff; raster inline, else download; `Cache-Control: private, no-cache`; 404 for a private note's blob unless `?visibility=all`)
 POST   /api/kb/{kb}/review/{id}/comments/{cid}/attachments            upload + adopt → comment
 POST   /api/kb/{kb}/review/{id}/comments/{cid}/replies/{rid}/attachments  upload + adopt → reply
 DELETE /api/kb/{kb}/review/{id}/comments/{cid}/attachments/{aid}            detach (comment)
@@ -1965,14 +1980,17 @@ Exactly four things can surface one:
    that default *is* the security property, which is why the CLI's
    `kb comments list` (it never sends one) can never surface a note, and why
    an unrecognised value is a 400 rather than a permissive fallback. The GET
-   `ETag` describes the file on disk, not the filtered bytes, so a client
-   caching the review read must key on the visibility it asked for.
+   `ETag` is a validator for the bytes returned (hashed after the filter),
+   so a client caching the review read must key on the visibility it asked
+   for. A sidecar holding only notes answers a public read exactly like an
+   artifact with no sidecar at all (same bytes, no ETag).
 2. `GET /api/review-notes` — the note browser. Private comments only, and no
    `visibility` parameter at all, by design.
 3. The operator's own surfaces: the SPA's `/review-notes` page, and
    `kb comments notes` / `kb comments tags`.
 4. The two **lossless** transports: `embed_into_html`
-   (`kb comments export --embed`, whose embedded `kb-comments/1` block) and
+   (`kb comments export --embed -o FILE`, whose embedded `kb-comments/1` or
+   `/2` block; to stdout the embed is public-only) and
    `POST /api/kb/{kb}/review/{id}/import` (`kb comments import`). Both carry
    notes verbatim and **must not be "fixed"** — filtering them would delete the
    operator's data on every export → import move, a far worse failure than the
@@ -1984,6 +2002,23 @@ Exactly four things can surface one:
    the payload does not carry are kept (with or without `force`), and a
    payload row that rewrites or un-privates another user's note is refused
    403. Notes can therefore never be removed by import.
+
+**Mutating a note needs explicit operator intent.** Resolving, reopening,
+replying to, editing, deleting, attaching to, detaching from, re-anchoring or
+making public an existing note answers **409** unless the request carries
+`X-Kb-Visibility: all` — the write-side twin of `?visibility=all`. The SPA
+sends it on every review mutation; the CLI and every agent surface never do,
+so a caller that merely learned a note id (they are enumerable) cannot destroy
+or publish the note. The header is an intent marker, not an authorization: kb
+has one trust tier. Making a note private, tagging it, and the bulk
+`resolve-all` / `unresolve-all` (which skip notes) need no marker. A note-only
+write also emits **no** `comments.updated` frame and no `comment.anchor_*`
+frame, because a frame is what `kb push` prints to an agent.
+
+A sidecar that holds a note is stamped `"schema": "kb-comments/2"` (a
+public-only sidecar stays `kb-comments/1`, byte-identical to older releases),
+so a binary from before notes existed refuses it instead of silently
+publishing the notes on a rollback.
 
 Two consequences of the same rule, both deliberate. `keep` and `keep_memory`
 refuse a note with a **409** before writing any file, because both produce

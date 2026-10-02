@@ -25,16 +25,22 @@
 //! an `aid`'s metadata but not its owner, so `private_owner_of` walks the
 //! review file's `Attachment` rows. That check is the un-publish: the
 //! 🔒 toggle on `PATCH …/meta` cannot retract a URL that was already in a
-//! comment body, an export bundle, a share bundle or a browser cache —
-//! `Cache-Control: immutable` guarantees it — so reachability has to be
-//! decided per request instead.
+//! comment body or an export bundle (a share bundle carries COPIED blob
+//! bytes at relative paths, which no serve-side check can reach) — so
+//! reachability is decided per request. v0.44 P2: the response is
+//! `Cache-Control: private, no-cache` (it used to be `public, immutable`,
+//! which let any browser or proxy that had seen the blob keep serving it
+//! for a year after the flip), and the operator reads a note's blob with
+//! `?visibility=all`.
 
 use crate::middleware::error_to_problem_json;
-use crate::routes::comments::{check_subid, emit_updated, validate};
+use crate::routes::comments::{
+    check_subid, emit_updated_gated, operator_intent, public_fingerprint, validate,
+};
 use crate::state::KbHandles;
 use axum::{
     body::Body,
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, Response, StatusCode},
     response::IntoResponse,
     Extension, Json,
@@ -407,29 +413,49 @@ fn private_owner_of(review: &ReviewFile, aid: &str) -> Option<bool> {
     None
 }
 
+/// Query for [`serve`]. `visibility=all` is the operator read opt-in.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ServeQuery {
+    pub visibility: Option<String>,
+}
+
 /// `GET …/review/{id}/attachments/{aid}` — serve a blob. The XSS guard
 /// (root invariant #18): `Content-Type` is the daemon's stored magic-byte
 /// sniff (never the client's), `X-Content-Type-Options: nosniff` is ALWAYS
 /// set, and only raster images are served inline — every other type is
-/// forced to download. Long, immutable cache (the `aid` is random).
+/// forced to download. `Cache-Control: private, no-cache` (v0.44 P2: the
+/// visibility of a blob is mutable, so it must be revalidated here).
 ///
 /// v0.40 TN2 — a blob whose owning comment has been flipped to a private
 /// note is NOT served. Without this check the blob stayed fetchable forever
 /// at the URL it was already published under: a screenshot attached to a
 /// public comment appears in the comment body, in `?cm=on`, in `kb comments
 /// export` and in any `kb share --with-comments` static site, and
-/// `Cache-Control: public, max-age=31536000, immutable` (set below) means
-/// the operator's own click on the 🔒 toggle could never retract it. The
-/// serve-side check is the half that matters: it also covers blobs that
-/// were public and never re-gced, and a published export or a warm browser
-/// cache is not reachable by any GC at all.
+/// the old `Cache-Control: public, max-age=31536000, immutable` meant the
+/// operator's own click on the 🔒 toggle could never retract it from a warm
+/// cache (now `private, no-cache`). The serve-side check is the half that
+/// matters: it also covers blobs that were public and never re-gced, and a
+/// published export is not reachable by any GC at all.
 ///
 /// Refusal is 404, NOT 403: a 403 would confirm to someone who must not
 /// learn it that the blob exists.
 pub async fn serve(
     State(state): State<Arc<KbHandles>>,
+    headers: axum::http::HeaderMap,
     Path((kb, id, aid)): Path<(String, String, String)>,
+    Query(q): Query<ServeQuery>,
 ) -> Response<Body> {
+    // v0.44 P2 (A2.f5) — the operator's explicit read opt-in, spelled like
+    // every other read (`?visibility=all`; an `<img src>` cannot carry a
+    // header, so the query form is the one that works). The SPA appends it
+    // to attachment URLs inside the operator's own comment panel; nothing an
+    // agent is handed (comment bodies, exports, `?cm=on`) ever carries it.
+    let operator_read = q
+        .visibility
+        .as_deref()
+        .and_then(review::Visibility::from_query)
+        == Some(review::Visibility::All)
+        || operator_intent(&headers);
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
         Err(resp) => return resp,
@@ -445,25 +471,38 @@ pub async fn serve(
     // owning comment, so `None` serves exactly as before — otherwise the
     // compose-time preview would break.
     //
-    // UNCONDITIONAL, and deliberately NOT owner-gated the way
-    // `PATCH …/meta` is: on loopback with no credentials every request
-    // resolves to the operator identity, so an owner check would be waved
-    // through by the exact local agent a note exists to hide from — the
-    // argument `set_all_status` and `reject_private_note` make. The stated
-    // cost, so it reads as a decision rather than an oversight: the
-    // operator no longer sees an image inline inside their OWN private
-    // note, because this route cannot tell the operator's browser from an
-    // agent's fetch of the same URL. Un-privating restores them.
+    // NOT owner-gated the way `PATCH …/meta` is: on loopback with no
+    // credentials every request resolves to the operator identity, so an
+    // owner check would be waved through by the exact local agent a note
+    // exists to hide from — the argument `set_all_status` and
+    // `reject_private_note` make. The operator's escape hatch is the same
+    // explicit opt-in the review read has (`?visibility=all`, or the
+    // `X-Kb-Visibility: all` intent header), which the SPA appends to the
+    // blob URLs it renders inside its own comments panel; an agent's fetch
+    // of the bare URL still gets the 404. (v0.44 P2, A2.f5 — before this the
+    // operator saw broken images in their own private notes.)
     let review_path = state.paths.kb_review_file(&kb_name, &id);
     let lock = state.review_lock_for(&kb_name);
     let guard = lock.lock().await;
-    let private_owner = match review::load(&review_path) {
-        Ok(Some(f)) => private_owner_of(&f, &aid),
-        Ok(None) => None,
-        Err(e) => return error_to_problem_json(&e),
-    };
+    // The sidecar parse is blocking file I/O: off the async worker, so an
+    // image-heavy page does not stall the runtime while it holds the lock.
+    let loaded = tokio::task::spawn_blocking({
+        let review_path = review_path.clone();
+        move || review::load(&review_path)
+    })
+    .await;
     drop(guard);
-    if private_owner == Some(true) {
+    let private_owner = match loaded {
+        Ok(Ok(Some(f))) => private_owner_of(&f, &aid),
+        Ok(Ok(None)) => None,
+        Ok(Err(e)) => return error_to_problem_json(&e),
+        Err(e) => {
+            return error_to_problem_json(&kb_core::Error::Storage(format!(
+                "review read task failed: {e}"
+            )))
+        }
+    };
+    if private_owner == Some(true) && !operator_read {
         return error_to_problem_json(&kb_core::Error::NotFound(format!(
             "attachment {aid} not found"
         )));
@@ -498,7 +537,13 @@ pub async fn serve(
         // re-sniff a text/pdf blob into something executable.
         .header("x-content-type-options", "nosniff")
         .header(header::CONTENT_DISPOSITION, disposition)
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        // v0.44 P2 (A2-9) — visibility is MUTABLE (the 🔒 toggle), so a year
+        // of `public, immutable` would let every browser or proxy that saw
+        // the blob keep serving it after a flip, and `public` also invites
+        // shared caches to store an authenticated /api response. `private`
+        // keeps it out of shared caches; `no-cache` forces revalidation
+        // through this handler, where the private check runs.
+        .header(header::CACHE_CONTROL, "private, no-cache")
         .body(Body::from(bytes))
         .unwrap_or_else(|_| {
             error_to_problem_json(&kb_core::Error::Storage("response build failed".into()))
@@ -509,22 +554,27 @@ pub async fn serve(
 
 pub async fn upload_to_comment(
     State(state): State<Arc<KbHandles>>,
+    headers: axum::http::HeaderMap,
     Extension(identity): Extension<crate::middleware::Identity>,
     Path((kb, id, cid)): Path<(String, String, String)>,
     multipart: Multipart,
 ) -> Response<Body> {
-    upload_and_adopt(state, identity, kb, id, cid, None, multipart).await
+    let intent = operator_intent(&headers);
+    upload_and_adopt(state, identity, kb, id, cid, None, intent, multipart).await
 }
 
 pub async fn upload_to_reply(
     State(state): State<Arc<KbHandles>>,
+    headers: axum::http::HeaderMap,
     Extension(identity): Extension<crate::middleware::Identity>,
     Path((kb, id, cid, rid)): Path<(String, String, String, String)>,
     multipart: Multipart,
 ) -> Response<Body> {
-    upload_and_adopt(state, identity, kb, id, cid, Some(rid), multipart).await
+    let intent = operator_intent(&headers);
+    upload_and_adopt(state, identity, kb, id, cid, Some(rid), intent, multipart).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_and_adopt(
     state: Arc<KbHandles>,
     identity: crate::middleware::Identity,
@@ -532,6 +582,7 @@ async fn upload_and_adopt(
     id: String,
     cid: String,
     rid: Option<String>,
+    intent: bool,
     mut multipart: Multipart,
 ) -> Response<Body> {
     let kb_name = match validate(&state, &kb, &id) {
@@ -581,6 +632,15 @@ async fn upload_and_adopt(
         }
     };
 
+    review.set_operator_intent(intent);
+    let pre = public_fingerprint(&review);
+    // v0.44 P2 (A2-7) — a private note's attachments are not an agent's to
+    // change: refuse BEFORE any blob is written (the core guard would also
+    // refuse at adopt time, but only after the blob hit the disk).
+    if let Err(e) = review.reject_private_note(&cid) {
+        drop(guard);
+        return error_to_problem_json(&e);
+    }
     // Verify the target exists + cap-check BEFORE any disk write (so a bad
     // cid/rid never leaves an orphan blob).
     let existing = match locate_count(&review, &cid, rid.as_deref()) {
@@ -639,7 +699,7 @@ async fn upload_and_adopt(
     );
     drop(guard);
 
-    emit_updated(&state, &kb_name, &id, &review);
+    emit_updated_gated(&state, &kb_name, &id, &pre, &review, None);
     (StatusCode::CREATED, Json(out)).into_response()
 }
 
@@ -667,16 +727,27 @@ fn locate_count(review: &ReviewFile, cid: &str, rid: Option<&str>) -> kb_core::R
 
 pub async fn detach_comment(
     State(state): State<Arc<KbHandles>>,
+    headers: axum::http::HeaderMap,
     Path((kb, id, cid, aid)): Path<(String, String, String, String)>,
 ) -> Response<Body> {
-    detach(state, kb, id, cid, None, aid).await
+    detach(state, kb, id, cid, None, aid, operator_intent(&headers)).await
 }
 
 pub async fn detach_reply(
     State(state): State<Arc<KbHandles>>,
+    headers: axum::http::HeaderMap,
     Path((kb, id, cid, rid, aid)): Path<(String, String, String, String, String)>,
 ) -> Response<Body> {
-    detach(state, kb, id, cid, Some(rid), aid).await
+    detach(
+        state,
+        kb,
+        id,
+        cid,
+        Some(rid),
+        aid,
+        operator_intent(&headers),
+    )
+    .await
 }
 
 async fn detach(
@@ -686,6 +757,7 @@ async fn detach(
     cid: String,
     rid: Option<String>,
     aid: String,
+    intent: bool,
 ) -> Response<Body> {
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
@@ -721,6 +793,8 @@ async fn detach(
             return error_to_problem_json(&e);
         }
     };
+    review.set_operator_intent(intent);
+    let pre = public_fingerprint(&review);
     let res = match &rid {
         Some(rid) => review.remove_reply_attachment(&cid, rid, &aid),
         None => review.remove_comment_attachment(&cid, &aid),
@@ -745,7 +819,7 @@ async fn detach(
     );
     drop(guard);
 
-    emit_updated(&state, &kb_name, &id, &review);
+    emit_updated_gated(&state, &kb_name, &id, &pre, &review, None);
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 

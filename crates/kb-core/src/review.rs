@@ -44,6 +44,36 @@ use std::path::Path;
 /// shape changes incompatibly so old SPAs can refuse-with-a-message.
 pub const SCHEMA: &str = "kb-comments/1";
 
+/// v0.44 P2 (A15-5) — the schema string written on a sidecar that carries at
+/// least one PRIVATE comment. A binary from before private notes existed
+/// accepts exactly `kb-comments/1`, ignores the `private`/`tags` keys it has
+/// never heard of, and re-serialises WITHOUT them — so a rollback after the
+/// first note was written published every note and, on the next comment,
+/// erased the flag for good. Stamping `/2` on such a file makes that old
+/// binary's `load()` refuse the sidecar ("schema not supported") instead:
+/// it fails CLOSED. A sidecar with no private comment is still written as
+/// `/1`, byte-identical to what every earlier release wrote, so the bump is
+/// invisible until a note exists. The stamp is derived at save time
+/// ([`wire_schema_for`]); nothing in memory tracks it.
+pub const SCHEMA_V2: &str = "kb-comments/2";
+
+/// Does this binary read `schema`? Both stamps ([`SCHEMA`], [`SCHEMA_V2`])
+/// parse the same document shape; they differ only in whether an OLD reader
+/// may open the file.
+pub fn schema_supported(schema: &str) -> bool {
+    schema == SCHEMA || schema == SCHEMA_V2
+}
+
+/// The schema stamp `file` must be written with: `/2` iff any comment is a
+/// private note, else `/1` (see [`SCHEMA_V2`]).
+pub fn wire_schema_for(file: &ReviewFile) -> &'static str {
+    if file.comments.iter().any(|c| c.is_private()) {
+        SCHEMA_V2
+    } else {
+        SCHEMA
+    }
+}
+
 /// Top-level review document. One per `<kb, artifact_id>` pair.
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +98,19 @@ pub struct ReviewFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub verdict: Option<Verdict>,
+    /// v0.44 P2 (A2-7/A2-8) — TRANSIENT operator-intent marker; never
+    /// serialised, never stored. A private note may be mutated (resolve,
+    /// reply, edit, delete, attach/detach, un-private) ONLY on a document
+    /// whose caller set this, mirroring `?visibility=all` on the read side:
+    /// the SPA sends the explicit marker, the CLI and every agent surface do
+    /// not. It is an intent marker and not an authorization (kb has one
+    /// trust tier; a caller on loopback can still send the header) — what it
+    /// buys is that an agent can no longer destroy or disclose a note it
+    /// found by id WITHOUT having been told to, which is the failure the
+    /// guard exists for. Defaults to `false` (fail-closed) on every load.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts-export", ts(skip))]
+    operator_intent: bool,
 }
 
 /// W2.15a — one review-pass verdict. `at`/`by` are stamped by
@@ -906,6 +949,11 @@ pub(crate) fn jaro_winkler(s1: &str, s2: &str) -> f32 {
     jaro + prefix as f32 * 0.1 * (1.0 - jaro)
 }
 
+fn epoch() -> DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now)
+}
+
 impl ReviewFile {
     /// Empty skeleton for an artifact that has no comments yet. The SPA
     /// uses this when GET returns 404 so the annotator script always has
@@ -923,7 +971,59 @@ impl ReviewFile {
             generated_at: Utc::now(),
             comments: Vec::new(),
             verdict: None,
+            operator_intent: false,
         }
+    }
+
+    /// Mark this document as being mutated on behalf of the OPERATOR
+    /// (explicit intent, see the `operator_intent` field). Routes call this
+    /// once after `load`, from the request marker; nothing else does.
+    pub fn set_operator_intent(&mut self, intent: bool) {
+        self.operator_intent = intent;
+    }
+
+    /// The empty document an AGENT-visible read answers for an artifact with
+    /// no visible comments. Deterministic: `generatedAt` is the Unix epoch
+    /// (not `Utc::now()`), so the bytes are identical on every request and
+    /// can be compared against [`ReviewFile::into_public_view`]'s blank case.
+    pub fn public_skeleton(kb: &KbName, artifact_id: &str) -> Self {
+        let mut s = Self::empty_skeleton(kb, artifact_id, "");
+        s.generated_at = epoch();
+        s
+    }
+
+    /// v0.44 P2 (A2-5) — the PUBLIC representation of this sidecar: private
+    /// notes dropped, and — when nothing public is left (no visible comment,
+    /// no verdict) — the whole document replaced by the exact
+    /// [`ReviewFile::public_skeleton`] an artifact with NO sidecar gets.
+    /// Without that collapse a notes-only sidecar differed from "no sidecar"
+    /// in its artifact title, its `generatedAt` and (in the routes) the
+    /// presence of an ETag, so an unauthenticated poller could date the
+    /// first private note. Returns `(view, blank)`; callers send no ETag for
+    /// a blank view, exactly as for an absent sidecar.
+    pub fn into_public_view(mut self) -> (Self, bool) {
+        self.comments.retain(|c| !c.is_private());
+        if self.comments.is_empty() && self.verdict.is_none() {
+            let skel = Self {
+                schema: SCHEMA.to_string(),
+                artifact: ArtifactRef {
+                    id: self.artifact.id,
+                    title: String::new(),
+                    kb: self.artifact.kb,
+                    tags: Vec::new(),
+                    pages: Vec::new(),
+                },
+                generated_at: epoch(),
+                comments: Vec::new(),
+                verdict: None,
+                operator_intent: false,
+            };
+            return (skel, true);
+        }
+        // A `/2` stamp only means "an old reader must refuse this file"; the
+        // public view carries none.
+        self.schema = SCHEMA.to_string();
+        (self, false)
     }
 
     /// The comments a reader of `v` may see, in document order. THE single
@@ -1025,9 +1125,10 @@ impl ReviewFile {
         Ok(c.replies.last().expect("just pushed"))
     }
 
-    /// v0.40 TN2 — the ONE fail-closed guard every single-comment mutation
-    /// runs before it touches a row: `set_comment_status`,
-    /// `set_comment_anchor` and `add_reply` all refuse a PRIVATE note.
+    /// v0.40 TN2 / v0.44 P2 — the ONE fail-closed guard every single-row
+    /// mutation runs before it touches a private note: status, anchor,
+    /// reply, body edit (comment AND reply), delete (comment AND reply) and
+    /// attachment adopt/detach (comment AND reply) all call it.
     ///
     /// Why it has to live HERE and not in the HTTP routes. `set_all_status`
     /// skips notes (and documents why), but a single-comment route reaches
@@ -1035,37 +1136,36 @@ impl ReviewFile {
     /// secret: `/api/anchors/stale` answers `{kb, artifact_id, comment_id}`
     /// fleet-wide and the indexer walks every open comment with no private
     /// filter, so any caller can name a note id without ever having seen the
-    /// note. Resolving it returned 200 and the operator's private reminder
-    /// silently left their open-note list.
+    /// note. Resolving, editing or deleting it would otherwise look like an
+    /// ordinary success — the side effect is the leak (or the loss).
     ///
-    /// Same rationale as `set_all_status`, restated for the single path:
-    /// the side effect is the leak. A local agent could quietly resolve,
-    /// re-anchor or reply onto a row it must never see, and — because
-    /// `set_all_status` deliberately leaves `flipped`/`open_count` in
-    /// agreement with the PUBLIC set — the response would still look like a
-    /// perfectly ordinary no-op. Note ids are enumerable, so "the agent
-    /// can't read the note" was never a barrier here.
-    ///
-    /// Deliberately NOT owner-gated (unlike `set_comment_meta`, which is):
-    /// on loopback with no credentials every request resolves to the
-    /// operator identity, so an owner check would be waved through by the
-    /// exact local agent this is meant to stop. The escape hatch is the
-    /// same one `keep` offers — un-private the note first (`PATCH …/meta`
-    /// with `private: false`), mutate it, re-privatise — which is a
-    /// deliberate act on a row the operator can already see.
+    /// Deliberately NOT owner-gated: on loopback with no credentials every
+    /// request resolves to the operator identity, so an owner check is
+    /// waved through by the exact local agent this is meant to stop.
+    /// Instead the escape hatch is EXPLICIT OPERATOR INTENT
+    /// ([`ReviewFile::set_operator_intent`]) — the mutation-side twin of
+    /// `?visibility=all` on reads. The SPA sends it; the CLI and every
+    /// agent surface never do, so the operator can resolve, reply to, edit
+    /// and delete their own notes while an agent holding a note id cannot.
+    /// (The owner gates on edit/delete/meta still apply on top, for the
+    /// multi-user case.)
     ///
     /// `Error::Conflict` → 409, the status the other private-note refusal
-    /// in this feature (`keep`) already uses; no new status is invented.
-    /// A missing id still falls through to `comment_mut`'s canonical
-    /// `NotFound` (404) rather than being reported as "it's a note".
-    fn reject_private_note(&self, comment_id: &str) -> Result<()> {
+    /// in this feature (`keep`) already uses. The text states what is
+    /// missing and does NOT tell the caller how to disclose the note. A
+    /// missing id still falls through to the canonical `NotFound` (404)
+    /// rather than being reported as "it's a note".
+    pub fn reject_private_note(&self, comment_id: &str) -> Result<()> {
+        if self.operator_intent {
+            return Ok(());
+        }
         if self
             .comments
             .iter()
             .any(|c| c.id == comment_id && c.is_private())
         {
             return Err(Error::Conflict(format!(
-                "comment {comment_id} is a private note; un-private it before changing it"
+                "comment {comment_id} is a private note; changing it needs explicit operator intent"
             )));
         }
         Ok(())
@@ -1158,6 +1258,7 @@ impl ReviewFile {
 
     /// Replace a comment's body and stamp `edited_at = now`.
     pub fn edit_comment_body(&mut self, comment_id: &str, body: String) -> Result<()> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         c.body = body;
         c.edited_at = Some(Utc::now());
@@ -1212,6 +1313,21 @@ impl ReviewFile {
             ));
         }
         let normalized = tags.map(normalize_comment_tags).transpose()?;
+        // Making a note PUBLIC is a disclosure: it needs the same explicit
+        // operator intent as every other note mutation (an agent that found
+        // a note id must not be able to publish it). Tagging a note and
+        // privatising a public comment stay open — neither discloses.
+        if private == Some(false)
+            && !self.operator_intent
+            && self
+                .comments
+                .iter()
+                .any(|c| c.id == comment_id && c.is_private())
+        {
+            return Err(Error::Conflict(format!(
+                "comment {comment_id} is a private note; making it public needs explicit operator intent"
+            )));
+        }
         let c = self.comment_mut(comment_id)?;
         let mut changed = false;
         if let Some(next) = normalized {
@@ -1238,6 +1354,7 @@ impl ReviewFile {
         reply_id: &str,
         body: String,
     ) -> Result<()> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         let r = c
             .replies
@@ -1252,6 +1369,7 @@ impl ReviewFile {
     /// Remove a top-level comment (hard delete — no tombstone) and return
     /// it. `Err(NotFound)` when absent.
     pub fn delete_comment(&mut self, comment_id: &str) -> Result<Comment> {
+        self.reject_private_note(comment_id)?;
         let idx = self
             .comments
             .iter()
@@ -1263,6 +1381,7 @@ impl ReviewFile {
     /// Remove a single reply from a comment thread and return it.
     /// `Err(NotFound)` for both a missing comment and a missing reply.
     pub fn delete_reply(&mut self, comment_id: &str, reply_id: &str) -> Result<Reply> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         let idx = c
             .replies
@@ -1285,6 +1404,7 @@ impl ReviewFile {
         comment_id: &str,
         att: Attachment,
     ) -> Result<&Attachment> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         c.attachments.push(att);
         Ok(c.attachments.last().expect("just pushed"))
@@ -1298,6 +1418,7 @@ impl ReviewFile {
         reply_id: &str,
         att: Attachment,
     ) -> Result<&Attachment> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         let r = c
             .replies
@@ -1311,6 +1432,7 @@ impl ReviewFile {
     /// Detach an attachment from a comment by `aid`; returns the removed
     /// metadata. `Err(NotFound)` for a missing comment or aid.
     pub fn remove_comment_attachment(&mut self, comment_id: &str, aid: &str) -> Result<Attachment> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         let idx = c
             .attachments
@@ -1328,6 +1450,7 @@ impl ReviewFile {
         reply_id: &str,
         aid: &str,
     ) -> Result<Attachment> {
+        self.reject_private_note(comment_id)?;
         let c = self.comment_mut(comment_id)?;
         let r = c
             .replies
@@ -1677,9 +1800,9 @@ pub fn load(path: &Path) -> Result<Option<ReviewFile>> {
         Err(e) => return Err(e.into()),
     };
     let file: ReviewFile = serde_json::from_slice(&bytes)?;
-    if file.schema != SCHEMA {
+    if !schema_supported(&file.schema) {
         return Err(Error::BadRequest(format!(
-            "review schema {:?} not supported (expected {SCHEMA})",
+            "review schema {:?} not supported (expected {SCHEMA} or {SCHEMA_V2})",
             file.schema
         )));
     }
@@ -1696,9 +1819,9 @@ pub fn load(path: &Path) -> Result<Option<ReviewFile>> {
 /// Same-filesystem rename is atomic on POSIX; the parent dir is fsync'd
 /// after rename so the new entry survives a crash.
 pub fn save_atomic(path: &Path, file: &ReviewFile, if_match: Option<&str>) -> Result<String> {
-    if file.schema != SCHEMA {
+    if !schema_supported(&file.schema) {
         return Err(Error::BadRequest(format!(
-            "cannot save review with schema {:?}; expected {SCHEMA}",
+            "cannot save review with schema {:?}; expected {SCHEMA} or {SCHEMA_V2}",
             file.schema
         )));
     }
@@ -1712,7 +1835,17 @@ pub fn save_atomic(path: &Path, file: &ReviewFile, if_match: Option<&str>) -> Re
         }
     }
 
-    let bytes = serde_json::to_vec_pretty(file)?;
+    // A15-5 — the stamp is derived from the content, so a file with a note
+    // is unreadable to a pre-notes binary and a public-only file stays
+    // byte-identical to what every earlier release wrote.
+    let want = wire_schema_for(file);
+    let bytes = if file.schema == want {
+        serde_json::to_vec_pretty(file)?
+    } else {
+        let mut restamped = file.clone();
+        restamped.schema = want.to_string();
+        serde_json::to_vec_pretty(&restamped)?
+    };
     crate::fsx::write_atomic(path, &bytes)?;
     // v0.7.1 C3 — return the ETag via the SAME `etag_for` that GET and
     // the If-Match check above use, so the value the client receives is
@@ -2048,9 +2181,9 @@ pub fn extract_from_html(html: &str) -> Result<Option<ReviewFile>> {
     let raw: String = el.text().collect();
     let unescaped = raw.replace("<\\/", "</");
     let file: ReviewFile = serde_json::from_str(unescaped.trim())?;
-    if file.schema != SCHEMA {
+    if !schema_supported(&file.schema) {
         return Err(Error::BadRequest(format!(
-            "embedded review schema {:?} not supported (expected {SCHEMA})",
+            "embedded review schema {:?} not supported (expected {SCHEMA} or {SCHEMA_V2})",
             file.schema
         )));
     }
@@ -2980,18 +3113,26 @@ mod tests {
         ));
     }
 
-    /// The escape hatch `keep` already documents: `set_comment_meta` is
-    /// deliberately NOT guarded, so un-privating a note (and re-privatising
-    /// it afterwards) still works. Without this the note would be frozen.
+    /// The escape hatch is EXPLICIT OPERATOR INTENT (v0.44 P2): without it
+    /// even `set_comment_meta` refuses to make a note public (an agent that
+    /// found a note id must not be able to publish it); with it, un-privating
+    /// works and re-opens the guarded mutations, so a note is never frozen.
     #[test]
-    fn un_privating_re_opens_the_guarded_mutations() {
+    fn un_privating_needs_operator_intent_and_then_re_opens_the_guarded_mutations() {
         let mut f = fixture_file();
         f.comments[0].private = true;
         assert!(matches!(
             f.set_comment_status("c_1", CommentStatus::Resolved),
             Err(Error::Conflict(_))
         ));
+        assert!(matches!(
+            f.set_comment_meta("c_1", None, Some(false)),
+            Err(Error::Conflict(_))
+        ));
+        assert!(f.comments[0].private, "the refused flip must not land");
+        f.set_operator_intent(true);
         assert!(f.set_comment_meta("c_1", None, Some(false)).unwrap());
+        f.set_operator_intent(false);
         assert!(f
             .set_comment_status("c_1", CommentStatus::Resolved)
             .unwrap());
@@ -4147,5 +4288,210 @@ mod tests {
         let comments = parsed["comments"].as_array().unwrap();
         assert_eq!(comments.len(), 1, "got: {body}");
         assert_eq!(comments[0]["id"].as_str(), Some("c_1"));
+    }
+
+    // --- v0.44 P2 — operator-intent opt-in, schema stamp, public view ------
+
+    fn note_and_reply_file() -> (ReviewFile, String, String) {
+        let mut f = fixture_file();
+        let mut s = spec("operator reminder");
+        s.private = true;
+        let cid = f.add_comment(s).id.clone();
+        // Seed a reply the way the operator would (with intent), then drop
+        // the intent again: every test below starts from an AGENT's view.
+        f.set_operator_intent(true);
+        let rid = f
+            .add_reply(&cid, Author::You, "first".into(), vec![], None)
+            .unwrap()
+            .id
+            .clone();
+        f.set_operator_intent(false);
+        (f, cid, rid)
+    }
+
+    /// A2-7 / A13-3: the guard covers EVERY single-row mutation, not three
+    /// of eight. Deleting the `reject_private_note` call from any one of
+    /// these methods flips its assertion below.
+    #[test]
+    fn every_single_row_mutation_refuses_a_private_note_without_intent() {
+        let (mut f, cid, rid) = note_and_reply_file();
+        let att = || Attachment {
+            id: "a_000000000001".into(),
+            filename: "x.png".into(),
+            content_type: "image/png".into(),
+            size: 1,
+            created_at: Utc::now(),
+            author: Author::You,
+            user: None,
+        };
+        assert!(matches!(
+            f.edit_comment_body(&cid, "x".into()),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            f.edit_reply_body(&cid, &rid, "x".into()),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            f.delete_reply(&cid, &rid),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(f.delete_comment(&cid), Err(Error::Conflict(_))));
+        assert!(matches!(
+            f.add_comment_attachment(&cid, att()),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            f.add_reply_attachment(&cid, &rid, att()),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            f.remove_comment_attachment(&cid, "a_000000000001"),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            f.remove_reply_attachment(&cid, &rid, "a_000000000001"),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            f.set_comment_meta(&cid, None, Some(false)),
+            Err(Error::Conflict(_))
+        ));
+        // Nothing moved.
+        let c = f.comments.iter().find(|c| c.id == cid).unwrap();
+        assert_eq!(c.body, "operator reminder");
+        assert_eq!(c.replies.len(), 1);
+        assert_eq!(c.replies[0].body, "first");
+        assert!(c.is_private());
+        // The refusal text must not coach the caller into disclosing it.
+        let msg = f.delete_comment(&cid).unwrap_err().to_string();
+        assert!(!msg.contains("un-private it"), "got: {msg}");
+    }
+
+    /// A2-8: the operator (explicit intent) can still do all of it.
+    #[test]
+    fn operator_intent_lets_the_operator_mutate_their_own_note() {
+        let (mut f, cid, rid) = note_and_reply_file();
+        f.set_operator_intent(true);
+        assert!(f.set_comment_status(&cid, CommentStatus::Resolved).unwrap());
+        f.add_reply(&cid, Author::You, "again".into(), vec![], None)
+            .unwrap();
+        f.edit_comment_body(&cid, "edited".into()).unwrap();
+        f.edit_reply_body(&cid, &rid, "edited reply".into())
+            .unwrap();
+        f.delete_reply(&cid, &rid).unwrap();
+        assert!(f.set_comment_meta(&cid, None, Some(false)).unwrap());
+        assert!(!f.comments[0].is_private());
+        f.delete_comment(&cid).unwrap();
+        assert!(f.comments.iter().all(|c| c.id != cid));
+    }
+
+    /// Privatising and tagging stay open without intent (neither discloses),
+    /// and a missing id is still a 404 rather than a "it is a note" 409.
+    #[test]
+    fn intent_guard_leaves_non_disclosing_paths_and_404_alone() {
+        let mut f = fixture_file();
+        let cid = f.comments[0].id.clone();
+        assert!(f.set_comment_meta(&cid, None, Some(true)).unwrap());
+        assert!(f
+            .set_comment_meta(&cid, Some(&["a".to_string()]), None)
+            .unwrap());
+        assert!(matches!(
+            f.delete_comment("c_missing"),
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            f.edit_comment_body("c_missing", "x".into()),
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    /// The intent marker is transient: it never reaches the wire or disk.
+    #[test]
+    fn operator_intent_is_never_serialised_or_loaded() {
+        let mut f = fixture_file();
+        f.set_operator_intent(true);
+        let json = serde_json::to_string(&f).unwrap();
+        assert!(!json.contains("operator"), "got: {json}");
+        let mut back: ReviewFile = serde_json::from_str(&json).unwrap();
+        back.comments[0].private = true;
+        let id = back.comments[0].id.clone();
+        assert!(matches!(back.delete_comment(&id), Err(Error::Conflict(_))));
+    }
+
+    /// A15-5: a sidecar with a note is stamped /2 (an old binary's `load`
+    /// refuses it), a public-only sidecar stays byte-identical /1, and both
+    /// read back through THIS binary's `load`.
+    #[test]
+    fn sidecar_with_a_private_note_is_stamped_v2_and_public_only_stays_v1() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("r.json");
+
+        let public_only = fixture_file();
+        save_atomic(&path, &public_only, None).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(raw["schema"].as_str(), Some("kb-comments/1"));
+        // Byte-identical re-save: no key was added for a public file.
+        let first = std::fs::read(&path).unwrap();
+        save_atomic(&path, &load(&path).unwrap().unwrap(), None).unwrap();
+        assert_eq!(first, std::fs::read(&path).unwrap());
+
+        let with_note = file_with_one_public_and_one_note();
+        save_atomic(&path, &with_note, None).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(raw["schema"].as_str(), Some("kb-comments/2"));
+        // This binary still reads it, and the in-memory schema may be /2.
+        let mut back = load(&path).unwrap().unwrap();
+        assert_eq!(back.comments.len(), 2);
+
+        // Flip the note public: the next save goes back to /1.
+        back.set_operator_intent(true);
+        back.set_comment_meta("c_note", None, Some(false)).unwrap();
+        save_atomic(&path, &back, None).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(raw["schema"].as_str(), Some("kb-comments/1"));
+    }
+
+    /// What a pre-notes binary does with the /2 stamp: refuse. Simulated by
+    /// the exact comparison its `load` made (`schema != "kb-comments/1"`).
+    #[test]
+    fn a_pre_notes_reader_would_refuse_the_v2_stamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("r.json");
+        save_atomic(&path, &file_with_one_public_and_one_note(), None).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_ne!(raw["schema"].as_str(), Some("kb-comments/1"));
+        assert!(schema_supported("kb-comments/1") && schema_supported("kb-comments/2"));
+        assert!(!schema_supported("kb-comments/3"));
+    }
+
+    /// A2-5: a notes-only sidecar's public view is byte-identical to the
+    /// skeleton an artifact with NO sidecar gets (title, generatedAt, all).
+    #[test]
+    fn notes_only_public_view_equals_the_no_sidecar_skeleton() {
+        let kb = KbName::new("smoke").unwrap();
+        let mut f = ReviewFile::empty_skeleton(&kb, "abc123def456", "A real title");
+        let mut s = spec("secret");
+        s.private = true;
+        f.add_comment(s);
+        let (view, blank) = f.into_public_view();
+        assert!(blank);
+        let absent = ReviewFile::public_skeleton(&kb, "abc123def456");
+        assert_eq!(
+            serde_json::to_vec(&view).unwrap(),
+            serde_json::to_vec(&absent).unwrap()
+        );
+    }
+
+    #[test]
+    fn public_view_with_a_public_comment_keeps_its_document() {
+        let (view, blank) = file_with_one_public_and_one_note().into_public_view();
+        assert!(!blank);
+        assert_eq!(view.comments.len(), 1);
+        assert_eq!(view.schema, SCHEMA);
     }
 }

@@ -112,12 +112,11 @@ pub async fn get(
 /// v0.40 TN2 — drop the comments this reader may not see, IN PLACE on the
 /// loaded document (no clone; `review::load` already produced an owned
 /// `ReviewFile` that is about to be serialised and dropped).
-fn filter_visibility(mut file: ReviewFile, v: Visibility) -> ReviewFile {
+fn filter_visibility(file: ReviewFile, v: Visibility) -> ReviewFile {
     if v == Visibility::All {
         return file;
     }
-    file.comments.retain(|c| !c.is_private());
-    file
+    file.into_public_view().0
 }
 
 /// O1 (adversarial review 2026-09-30) — the `ETag` is a REPRESENTATION
@@ -179,8 +178,15 @@ fn review_response(
 ) -> Response<Body> {
     let (file, is_disk_backed) = match loaded {
         Some(f) => (f, true),
-        None => (ReviewFile::empty_skeleton(kb_name, id, ""), false),
+        None => (ReviewFile::public_skeleton(kb_name, id), false),
     };
+    // v0.44 P2 (A2-5) — a PUBLIC read of a sidecar with nothing public in it
+    // (notes only) is the very skeleton an absent sidecar gets, ETag
+    // included (none), so the first private note is not observable here.
+    let blank_public = visibility == Visibility::Public
+        && is_disk_backed
+        && file.comments.iter().all(|c| c.is_private())
+        && file.verdict.is_none();
     let bytes = match serde_json::to_vec(&filter_visibility(file, visibility)) {
         Ok(b) => b,
         Err(e) => return error_to_problem_json(&kb_core::Error::from(e)),
@@ -188,7 +194,7 @@ fn review_response(
     // Hashed before `bytes` moves into the body, and only when a sidecar
     // exists — the skeleton case would be pure waste (see the
     // `generated_at` note above) as well as a lie.
-    let etag = is_disk_backed.then(|| body_etag(&bytes));
+    let etag = (is_disk_backed && !blank_public).then(|| body_etag(&bytes));
     let mut resp = Response::new(Body::from(bytes));
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -470,6 +476,27 @@ mod tests {
         // not a permanent lockout.
         let fresh = review::etag_for(&path).unwrap().expect("file exists");
         review::save_atomic(&path, &file, Some(&fresh)).expect("fresh If-Match succeeds");
+    }
+
+    /// v0.44 P2 (A2-5): a notes-only sidecar answers a PUBLIC read with the
+    /// same bytes and the same (absent) ETag as no sidecar at all, and the
+    /// answer is stable across requests.
+    #[tokio::test]
+    async fn notes_only_sidecar_is_indistinguishable_from_absent_on_public_get() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(format!("{ID}.json"));
+        let absent = read_as(&kb(), &path, Visibility::Public).await;
+        assert!(absent.0.is_none());
+
+        let mut file = ReviewFile::empty_skeleton(&kb(), ID, "A Real Title");
+        with_comment(&mut file, "PRIVATE NOTE BODY", true);
+        review::save_atomic(&path, &file, None).unwrap();
+        let notes_only = read_as(&kb(), &path, Visibility::Public).await;
+        assert_eq!(absent, notes_only, "first note changed the public GET");
+
+        // Stable: the bytes do not carry a per-request timestamp.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        assert_eq!(absent, read_as(&kb(), &path, Visibility::Public).await);
     }
 
     /// No sidecar ⇒ no ETag. The skeleton stamps `generated_at: Utc::now()`,
