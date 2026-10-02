@@ -201,9 +201,14 @@ test.describe("diff highlight — interdiff / blame-origin / suggestion surfaces
     await expect(editor.locator("[data-kbc-suggestion-preview] .kbc-diff__line--remove")).toContainText(
       "fn feature_x",
     );
+    // Assert WHAT is painted, not that something is: `fn` is a keyword
+    // token, and line 1's comment span must not have been laid over this
+    // line (an off-by-one base would paint it as `kbc-hl-comment`).
+    const removeRow = editor.locator("[data-kbc-suggestion-preview] .kbc-diff__line--remove");
     await expect(
-      editor.locator("[data-kbc-suggestion-preview] .kbc-diff__line--remove [data-kbc-hl]").first(),
+      removeRow.locator('[data-kbc-hl][class*="kbc-hl-keyword"]').filter({ hasText: /^fn$/ }).first(),
     ).toBeVisible({ timeout: 15_000 });
+    await expect(removeRow.locator('[class*="kbc-hl-comment"]')).toHaveCount(0);
 
     await editor.locator(`[data-kbc-suggestion-save="${threadId}"]`).click();
     await expect(threadRef.locator("[data-kbc-review-thread-suggestion]")).toBeVisible({
@@ -214,7 +219,14 @@ test.describe("diff highlight — interdiff / blame-origin / suggestion surfaces
     const wt = page.locator("[data-kbc-suggestion-apply-preview] [data-kbc-suggestion-wt]");
     await expect(wt).toBeVisible({ timeout: 15_000 });
     await expect(wt).toContainText("fn feature_x");
-    await expect(wt.locator("[data-kbc-hl]").first()).toBeVisible({ timeout: 15_000 });
+    // The apply-confirm slice has NO per-line integrity guard (spans are
+    // bucketed by line number alone), so presence is not enough: a wrong
+    // base would paint line 1's comment span over `fn feature_x`. Pin the
+    // keyword token and the absence of any comment-class span.
+    await expect(
+      wt.locator('[data-kbc-hl][class*="kbc-hl-keyword"]').filter({ hasText: /^fn$/ }).first(),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(wt.locator('[class*="kbc-hl-comment"]')).toHaveCount(0);
     await page.locator(".confirm__cancel").click();
   });
 });

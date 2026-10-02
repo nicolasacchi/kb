@@ -5,7 +5,7 @@
 //   - vanilla DOM only (no React, no SPA imports — kept by Vite's
 //     separate build entry; bundle MUST stay under 12 KiB — CI's
 //     bundle-size guard fails the build otherwise). Comments are free:
-//     esbuild strips every one of them, so the rationale below costs
+//     the minifier strips every one of them, so the rationale below costs
 //     nothing against that budget.
 //   - reads window.__KB_COMMENTS (injected by the daemon's
 //     iframe::inject_annotator before this script runs; defer ordering
@@ -140,7 +140,7 @@ declare global {
 "use strict";
 
 // Hand-minified (no whitespace/comments) — this string ships verbatim into
-// the bundle and counts against the 10 KiB annotate.js CI budget the same
+// the bundle and counts against the 12 KiB annotate.js CI budget the same
 // as any other byte; the pretty-printed form cost ~1KiB here for zero
 // runtime benefit (a <style> tag doesn't care about formatting). Rules,
 // selectors and values are unchanged from the pretty-printed original —
