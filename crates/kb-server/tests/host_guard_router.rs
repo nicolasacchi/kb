@@ -330,35 +330,137 @@ async fn rebound_host_refused_on_prometheus_metrics_through_real_router() {
     );
 }
 
-/// A1.f5 route inventory. Every top-level (outside-the-`/api`-nest) route
-/// that is not on the explicit exempt list must refuse a rebound Host.
-/// A NEW top-level mount that forgets the guard fails here only if it is
-/// added to `GUARDED_TOP_LEVEL` - which is the point: the list is the
-/// reviewable inventory, and the exempt list below is the only place a
-/// route may opt out (liveness + the SPA/artifact fallback, whose
-/// permalink shell is guarded inside the dispatcher instead).
-const GUARDED_TOP_LEVEL: &[(&str, &str)] = &[
-    ("GET", "/api/identity"),
-    ("POST", "/capture"),
-    ("GET", "/metrics"),
-];
-const EXEMPT_TOP_LEVEL: &[&str] = &["/healthz", "/", "/api/"];
+/// A1.f5 / A13.f2 STRUCTURAL route inventory. axum's `Router` exposes no
+/// route table, so the table is read from the one place it is written:
+/// the final expression of `build_router` in `src/router.rs`. Every
+/// `.route(`, `.nest(`, `.merge(` and `.fallback(` mounted at the top level
+/// must be CLASSIFIED below as guarded or exempt - a new mount that is in
+/// neither list fails here with "classify me", it cannot slip in
+/// unguarded. For each guarded mount the test then (a) asserts the source
+/// of that mount really carries `host_guard`, and (b) drives a rebound Host
+/// at it through the real router and requires the guard's 403. For each
+/// exempt mount it requires a POSITIVE answer (not merely "no refusal
+/// URN"), so an exempt route that broke outright cannot pass vacuously.
+fn top_level_mounts() -> Vec<(String, String)> {
+    let src = include_str!("../src/router.rs");
+    let start = src
+        .find("    Router::new()\n        .nest(\"/api\", api)")
+        .expect("build_router's final expression moved - update this walk");
+    let body: String = src[start..]
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut mounts = Vec::new();
+    for (needle, kind) in [
+        (".route(\"", "route"),
+        (".nest(\"", "nest"),
+        (".merge(", "merge"),
+        (".fallback(", "fallback"),
+    ] {
+        let mut from = 0;
+        while let Some(i) = body[from..].find(needle) {
+            let at = from + i + needle.len();
+            let end = body[at..]
+                .find(['"', '(', ')', ',', '\n'])
+                .map(|e| at + e)
+                .unwrap_or(body.len());
+            mounts.push((kind.to_string(), body[at..end].trim().to_string()));
+            from = at;
+        }
+    }
+    mounts
+}
+
+/// The text between two markers of a source file.
+fn between<'a>(src: &'a str, from: &str, to: &str) -> &'a str {
+    let a = src.find(from).unwrap_or_else(|| panic!("`{from}` moved"));
+    let b = src[a..].find(to).map(|b| a + b).unwrap_or(src.len());
+    &src[a..b]
+}
 
 #[tokio::test]
-async fn route_inventory_every_guarded_mount_refuses_a_rebound_host() {
-    let (_tmp, addr) = boot(false).await;
-    for (method, path) in GUARDED_TOP_LEVEL {
-        let (status, resp) = raw(addr, method, path, "attacker.example:4000", None).await;
-        assert_host_refused(status, &resp, &format!("{method} {path}"));
-    }
-    // The exempt set is exempt on purpose: none of them serves corpus
-    // bytes to a refused Host.
-    for path in EXEMPT_TOP_LEVEL {
-        let (status, resp) = raw(addr, "GET", path, "attacker.example:4000", None).await;
-        assert!(
-            !resp.contains(kb_server::middleware::ERR_HOST_REFUSED),
-            "{path} is on the exempt list but returned the guard's refusal (status {status})"
-        );
+async fn route_inventory_every_top_level_mount_is_classified_and_behaves() {
+    let router_src = include_str!("../src/router.rs");
+    let metrics_src = include_str!("../src/routes/metrics.rs");
+    let dist = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dist.path().join("index.html"),
+        "<html><head><title>kb</title></head><body><div id=\"root\"></div></body></html>",
+    )
+    .unwrap();
+    let (_tmp, addr) = boot_with(
+        false,
+        ServerSection::default(),
+        Some(dist.path().to_path_buf()),
+    )
+    .await;
+
+    let mounts = top_level_mounts();
+    assert!(
+        mounts.len() >= 6,
+        "the walk found too little of build_router: {mounts:?}"
+    );
+    for (kind, name) in &mounts {
+        match (kind.as_str(), name.as_str()) {
+            // ---- guarded -------------------------------------------------
+            ("nest", "/api") => {
+                let api = between(
+                    router_src,
+                    "    let api = Router::new()",
+                    "    // U2 (v0.25 quick capture) TRAP",
+                );
+                assert!(
+                    api.trim_end().ends_with("host_guard));"),
+                    "the /api nest must end with the host_guard layer (outermost)"
+                );
+                let (status, resp) =
+                    raw(addr, "GET", "/api/kbs", "attacker.example:4000", None).await;
+                assert_host_refused(status, &resp, "GET /api/kbs");
+            }
+            ("merge", "capture_share") => {
+                let block = between(router_src, "let capture_share", "    Router::new()\n");
+                assert!(block.contains("host_guard"), "capture_share lost its guard");
+                let (status, resp) =
+                    raw(addr, "POST", "/capture", "attacker.example:4000", None).await;
+                assert_host_refused(status, &resp, "POST /capture");
+            }
+            ("merge", "routes::metrics::prometheus_router") => {
+                let block = between(metrics_src, "pub fn prometheus_router", "\n}\n");
+                assert!(block.contains("host_guard"), "/metrics lost its guard");
+                let (status, resp) =
+                    raw(addr, "GET", "/metrics", "attacker.example:4000", None).await;
+                assert_host_refused(status, &resp, "GET /metrics");
+            }
+            // ---- exempt, each with a positive expectation ----------------
+            ("merge", "routes::dispatch::api_trailing_slash_router") => {
+                let (status, resp) = raw(addr, "GET", "/api/", "attacker.example:4000", None).await;
+                assert_eq!(status, 404, "/api/ must be the problem+json 404: {resp}");
+                assert!(
+                    resp.contains(kb_server::routes::dispatch::NO_SUCH_ROUTE),
+                    "/api/ must be the no-such-route problem, not the SPA shell: {resp}"
+                );
+            }
+            ("route", "/healthz") => {
+                let (status, resp) =
+                    raw(addr, "GET", "/healthz", "attacker.example:4000", None).await;
+                assert_eq!(status, 200, "liveness must answer on any Host: {resp}");
+            }
+            ("fallback", "routes::dispatch::fallback") => {
+                // The SPA fallback is guarded INSIDE the dispatcher: a
+                // refused Host gets the plain shell (200, root div), never
+                // the guard's URN and never corpus metadata.
+                let (status, resp) = raw(addr, "GET", "/", "attacker.example:4000", None).await;
+                assert_eq!(status, 200, "the shell must be served: {resp}");
+                assert!(resp.contains("id=\"root\""), "not the SPA shell: {resp}");
+                assert!(!resp.contains(kb_server::middleware::ERR_HOST_REFUSED));
+            }
+            (k, n) => panic!(
+                "top-level mount `.{k}({n})` in build_router is not classified in \
+                 tests/host_guard_router.rs - decide whether it needs host_guard and \
+                 add it to the match above (A1.f5)"
+            ),
+        }
     }
 }
 

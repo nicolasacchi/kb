@@ -636,7 +636,11 @@ pub async fn list(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response<Body> {
-    let loopback = is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let loopback = is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let now_unix = chrono::Utc::now().timestamp();
     let presence = presence_slice(&state, now_unix);
     let paths = state.paths.clone();
@@ -721,7 +725,11 @@ pub async fn get(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let loopback = is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let loopback = is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let loaded = match load_for_read_async(state.paths.clone(), slug.clone(), loopback).await {
         Ok(Some(l)) => l,
         Ok(None) => return not_found(slug.as_str()),
@@ -823,7 +831,11 @@ pub async fn posts(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let loopback = is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let loopback = is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let loaded = match load_for_read_async(state.paths.clone(), slug.clone(), loopback).await {
         Ok(Some(l)) => l,
         Ok(None) => return not_found(slug.as_str()),
@@ -848,7 +860,11 @@ pub async fn post_detail(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let loopback = is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let loopback = is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let loaded = match load_for_read_async(state.paths.clone(), slug.clone(), loopback).await {
         Ok(Some(l)) => l,
         Ok(None) => return not_found(slug.as_str()),
@@ -1005,7 +1021,11 @@ pub async fn delta(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let loopback = is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let loopback = is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let loaded = match load_for_read_async(state.paths.clone(), slug.clone(), loopback).await {
         Ok(Some(l)) => l,
         Ok(None) => return not_found(slug.as_str()),
@@ -1128,7 +1148,11 @@ pub async fn history(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let loopback = is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let loopback = is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let loaded = match load_for_read_async(state.paths.clone(), slug.clone(), loopback).await {
         Ok(Some(l)) => l,
         Ok(None) => return not_found(slug.as_str()),
@@ -1330,7 +1354,11 @@ pub async fn append(
         Ok(s) => s,
         Err(r) => return r,
     };
-    let loopback = is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let loopback = is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let now_unix = chrono::Utc::now().timestamp();
     let presence = presence_slice(&state, now_unix);
 
@@ -1985,7 +2013,11 @@ pub async fn purge(
     Path(slug): Path<String>,
     Query(q): Query<PurgeParams>,
 ) -> Response<Body> {
-    if !is_loopback_origin(Some(peer.ip()), &headers, &state.origin.trusted_proxies) {
+    if !is_loopback_origin(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    ) {
         return slate_problem(&SlateError::new(
             "loopback-only",
             403,

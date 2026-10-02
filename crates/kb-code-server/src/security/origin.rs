@@ -336,7 +336,7 @@ pub async fn origin_host_guard(
     let host = kb_server::middleware::effective_host_name(&req).map(|s| s.to_string());
     let gate_applies = kb_server::middleware::host_gate_applies_to_request(
         &req,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
         policy.hostnames_configured(),
     );
 

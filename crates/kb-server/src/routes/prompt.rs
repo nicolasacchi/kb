@@ -99,7 +99,7 @@ pub async fn get(
         ctx.outbound.as_deref(),
         Some(peer.ip()),
         &headers,
-        &state.origin.trusted_proxies,
+        &state.origin.trusted_proxies.load(),
     ) {
         return Json(PromptResponse {
             id,
@@ -121,8 +121,11 @@ pub async fn get(
     // no-op (the raw prompt text never contains the `<template
     // id="kb-prompt">` wrapper itself), so this reduces to exactly the
     // regex-redaction pass.
-    let non_loopback =
-        crate::scrub::looks_non_loopback(Some(peer.ip()), &headers, &state.origin.trusted_proxies);
+    let non_loopback = crate::scrub::looks_non_loopback(
+        Some(peer.ip()),
+        &headers,
+        &state.origin.trusted_proxies.load(),
+    );
     let prompt = match (&ctx.outbound, prompt) {
         (Some(cache), Some(text)) if non_loopback => Some(crate::scrub::scrub(&text, cache)),
         (_, text) => text,

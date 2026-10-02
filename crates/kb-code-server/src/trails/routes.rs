@@ -170,7 +170,7 @@ pub async fn get_state(
     let loopback = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
     );
     let cfg = state.trails.clone();
     let stored = state

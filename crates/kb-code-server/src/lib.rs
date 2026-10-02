@@ -962,7 +962,7 @@ pub async fn bind_and_spawn(
     }
     let auth = Arc::new(kb_server::state::AuthConfig {
         token,
-        trusted_proxies: Arc::new(Vec::new()),
+        trusted_proxies: kb_server::state::TrustedProxies::default(),
         // kb-users/1 is OUT OF SCOPE for kb-code (recorded, v0.34): no
         // per-user token registry, no identity-header consumption — every
         // kbc request attributes as the operator via the legacy/loopback
