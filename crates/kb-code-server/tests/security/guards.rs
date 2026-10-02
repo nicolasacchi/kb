@@ -224,14 +224,16 @@ async fn a_forged_x_forwarded_for_cannot_switch_the_host_check_off() {
             .unwrap();
         assert_problem(resp, "urn:kb:errors:origin-refused").await;
     }
-    // ...while the honest name with the same header is still admitted.
+    // ...while the honest name with the same header is NOT refused by the
+    // Host guard (auth, which does consult XFF, may still 401 it - that is a
+    // different layer and the correct answer for a non-loopback client).
     let resp = client
         .get(format!("{base}/api/repos"))
         .header("X-Forwarded-For", "203.0.113.9")
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
+    assert_ne!(resp.status(), 403, "honest Host must pass the Host guard");
 }
 
 /// O10, kb-code half. A `Host` header that is present but not valid UTF-8

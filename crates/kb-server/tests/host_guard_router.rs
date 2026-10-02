@@ -73,12 +73,13 @@ fn kb_section(path: std::path::PathBuf) -> KbSection {
 /// port; the returned TempDir must be held alive by the caller for the
 /// daemon's lifetime.
 async fn boot(with_token: bool) -> (tempfile::TempDir, std::net::SocketAddr) {
-    boot_with(with_token, ServerSection::default()).await
+    boot_with(with_token, ServerSection::default(), None).await
 }
 
 async fn boot_with(
     with_token: bool,
     server: ServerSection,
+    spa_dist: Option<std::path::PathBuf>,
 ) -> (tempfile::TempDir, std::net::SocketAddr) {
     let tmp = tempfile::tempdir().unwrap();
     let source = tmp.path().join("corpus");
@@ -107,7 +108,7 @@ async fn boot_with(
         std::fs::create_dir_all(&paths.config).unwrap();
         std::fs::write(paths.token_file(), FIXTURE_TOKEN).unwrap();
     }
-    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths_and_spa(cfg, paths, spa_dist)
         .await
         .expect("serve");
     common::wait_http_up(addr).await;
@@ -363,7 +364,7 @@ async fn route_inventory_every_guarded_mount_refuses_a_rebound_host() {
 
 /// A1-5. The permalink shell reads the corpus (OpenGraph title/summary,
 /// moved-path 301), so it must not be a metadata oracle for a rebound page.
-/// Needs a real SPA shell (`KB_SPA_DIST`), because without one every
+/// Needs a real SPA shell (a fixture dist), because without one every
 /// fallback is `spa-unavailable` and the test would pass vacuously: the
 /// positive control (an ADMITTED Host sees `og:title`) proves the channel
 /// exists in this harness, and the rebound Host must get none of it.
@@ -375,8 +376,12 @@ async fn permalink_shell_is_not_a_metadata_oracle_for_a_rebound_host() {
         "<html><head><title>kb</title></head><body><div id=\"root\"></div></body></html>",
     )
     .unwrap();
-    std::env::set_var("KB_SPA_DIST", dist.path());
-    let (_tmp, addr) = boot(false).await;
+    let (_tmp, addr) = boot_with(
+        false,
+        ServerSection::default(),
+        Some(dist.path().to_path_buf()),
+    )
+    .await;
     let body = |r: &str| r.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
 
     // positive control: wait for the seed doc to be indexed
@@ -430,7 +435,7 @@ async fn parent_origin_host_is_admitted_through_real_router() {
         parent_origin: "https://kb.example.com".to_string(),
         ..ServerSection::default()
     };
-    let (_tmp, addr) = boot_with(false, server).await;
+    let (_tmp, addr) = boot_with(false, server, None).await;
     let (status, resp) = raw(addr, "GET", "/api/identity", "kb.example.com", None).await;
     assert_eq!(
         status, 200,
