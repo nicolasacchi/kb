@@ -8998,7 +8998,10 @@ async fn highlight_cmd(
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("highlight failed");
-        anyhow::bail!("POST {route}: HTTP {status}: {err}");
+        return Err(status_error(
+            status,
+            format!("POST {route}: HTTP {status}: {err}"),
+        ));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
@@ -11904,6 +11907,13 @@ fn recipe_client() -> Result<reqwest::Client> {
 /// surfaces, one server, two qualities of answer. This renders the body.
 /// `get_json` renders it now too, via `daemon_status_error`; the recipe
 /// family keeps its own because it reads the status off `get_json_raw`.
+/// An `anyhow` error that carries the HTTP status so `envelope::exit_code_for`
+/// maps it through the documented exit table (v044-X1 A8-1). Every
+/// `*_raw`-helper failure builder goes through this, never a bare `anyhow!`.
+fn status_error(status: reqwest::StatusCode, msg: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(envelope::StatusError::new(status.as_u16(), msg))
+}
+
 fn recipe_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> anyhow::Error {
     let msg = body["error"]
         .as_str()
@@ -11913,7 +11923,10 @@ fn recipe_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> an
         .as_str()
         .map(|t| format!(" [{t}]"))
         .unwrap_or_default();
-    anyhow::anyhow!("recipe: {msg} (HTTP {}){kind}", status.as_u16())
+    status_error(
+        status,
+        format!("recipe: {msg} (HTTP {}){kind}", status.as_u16()),
+    )
 }
 
 async fn recipe_get(
@@ -13772,7 +13785,7 @@ fn doclens_api_error(
             "\n  pick one:  kb-code doclens repos --kb {kb} --doc {doc}"
         ));
     }
-    anyhow::anyhow!(out)
+    status_error(status, out)
 }
 
 fn doclens_line_cell(r: &serde_json::Value) -> String {
@@ -14239,11 +14252,14 @@ async fn doclens_sync_cmd(daemon: &str, force: bool, json: bool) -> Result<()> {
         // The route is loopback-only, so the most likely non-2xx here is a
         // 404 from the gate rather than a doc-lens `reason` — say so.
         if status == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!(
-                "doclens sync: POST /api/doc-lens/sync answered 404 — that route is \
-                 LOOPBACK-ONLY, so this only works against a daemon on this machine \
-                 (--daemon {daemon})"
-            );
+            return Err(status_error(
+                status,
+                format!(
+                    "doclens sync: POST /api/doc-lens/sync answered 404 — that route is \
+                     LOOPBACK-ONLY, so this only works against a daemon on this machine \
+                     (--daemon {daemon})"
+                ),
+            ));
         }
         return Err(doclens_api_error(status, &body, "-", "-"));
     }
@@ -14988,7 +15004,7 @@ async fn checkout_cmd(daemon: &str, repo: &str, target: &str, json: bool) -> Res
     }
     if !status.is_success() {
         let msg = body["error"].as_str().unwrap_or("checkout failed");
-        anyhow::bail!("checkout failed: {msg}");
+        return Err(status_error(status, format!("checkout failed: {msg}")));
     }
     if !json {
         let ref_ = body["ref"].as_str().unwrap_or(target);
@@ -16329,10 +16345,13 @@ async fn branch_fav_cmd(
     )
     .await?;
     if !status.is_success() {
-        anyhow::bail!(
-            "POST /api/branches/favourites → {status}: {}",
-            body["error"].as_str().unwrap_or("(no message)")
-        );
+        return Err(status_error(
+            status,
+            format!(
+                "POST /api/branches/favourites → {status}: {}",
+                body["error"].as_str().unwrap_or("(no message)")
+            ),
+        ));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
@@ -16370,10 +16389,13 @@ async fn branch_review_cmd(
     }
     let (status, body) = post_json_raw(&client, daemon, "/api/branches/review", &payload).await?;
     if !status.is_success() {
-        anyhow::bail!(
-            "POST /api/branches/review → {status}: {}",
-            body["error"].as_str().unwrap_or("(no message)")
-        );
+        return Err(status_error(
+            status,
+            format!(
+                "POST /api/branches/review → {status}: {}",
+                body["error"].as_str().unwrap_or("(no message)")
+            ),
+        ));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
@@ -18557,9 +18579,12 @@ async fn review_findings_add_cmd(
     }
     if !status.is_success() {
         if status == reqwest::StatusCode::CONFLICT {
-            return Err(anyhow::anyhow!(
-                "review findings add failed (409): {}",
-                body["error"].as_str().unwrap_or("slug already exists")
+            return Err(status_error(
+                status,
+                format!(
+                    "review findings add failed (409): {}",
+                    body["error"].as_str().unwrap_or("slug already exists")
+                ),
             ));
         }
         return Err(loopback_or_api_error(
@@ -21323,7 +21348,7 @@ async fn scip_ingest_core(
         let (status, body) = post_json_raw(&client, daemon, "/api/scip/ingest", &payload).await?;
         if !status.is_success() {
             let msg = body["error"].as_str().unwrap_or("scip ingest failed");
-            anyhow::bail!("scip ingest failed: {msg}");
+            return Err(status_error(status, format!("scip ingest failed: {msg}")));
         }
         docs_received += body["docs_received"].as_u64().unwrap_or(0);
         docs_accepted += body["docs_accepted"].as_u64().unwrap_or(0);
@@ -27036,6 +27061,32 @@ mod tests {
                 envelope::exit_code_for(&loopback_or_api_error("w", "http://d", sc, &empty)),
                 want,
                 "loopback_or_api_error {status}"
+            );
+        }
+        // The recipe and doclens builders (and the status_error helper the
+        // highlight/scip/branches/checkout bails use) obey the same table.
+        let doc_body = serde_json::json!({"error": "x", "reason": "r"});
+        for (status, want) in [
+            (400u16, envelope::EXIT_USAGE),
+            (403, envelope::EXIT_REFUSED),
+            (404, envelope::EXIT_NOT_FOUND),
+            (409, envelope::EXIT_CONFLICT),
+        ] {
+            let sc = reqwest::StatusCode::from_u16(status).unwrap();
+            assert_eq!(
+                envelope::exit_code_for(&recipe_api_error(sc, &msg)),
+                want,
+                "recipe_api_error {status}"
+            );
+            assert_eq!(
+                envelope::exit_code_for(&doclens_api_error(sc, &doc_body, "k", "d")),
+                want,
+                "doclens_api_error {status}"
+            );
+            assert_eq!(
+                envelope::exit_code_for(&status_error(sc, "x")),
+                want,
+                "status_error {status}"
             );
         }
         // `review compose` off-host: empty 404 -> "requires loopback" -> 8.
