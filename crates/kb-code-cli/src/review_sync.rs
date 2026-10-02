@@ -36,11 +36,18 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Args, Debug)]
 pub struct SyncArgs {
+    /// The PR as `pr:<N>` (shorthand for `--pr <N>`).
+    #[arg(value_name = "pr:N", conflicts_with_all = ["pr", "open"])]
+    pub target: Option<String>,
     /// The configured repo (a `[[repos]]` name).
     #[arg(long)]
     pub repo: String,
     /// Sync ONE PR.
-    #[arg(long = "pr", conflicts_with = "open", required_unless_present = "open")]
+    #[arg(
+        long = "pr",
+        conflicts_with = "open",
+        required_unless_present_any = ["open", "target"]
+    )]
     pub pr: Option<u32>,
     /// Sync EVERY open PR of the repo (the morning loop).
     #[arg(long)]
@@ -105,6 +112,14 @@ pub struct StatusArgs {
 }
 
 // --- request builders ----------------------------------------------------------
+
+/// Fold the `pr:<N>` positional into `pr`. Pure.
+pub fn normalize_args(mut a: SyncArgs) -> Result<SyncArgs, AgentError> {
+    if let Some(t) = a.target.take() {
+        a.pr = Some(review_agent::parse_pr_shorthand(&t, "sync")?);
+    }
+    Ok(a)
+}
 
 /// Flag combinations clap cannot express. Pure.
 pub fn check_args(a: &SyncArgs) -> Result<(), AgentError> {
@@ -396,9 +411,28 @@ pub fn is_upstream(status: u16, code: &str, message: &str) -> bool {
 
 fn transport_error(e: &anyhow::Error, daemon: &str) -> AgentError {
     let exit = envelope::exit_code_for(e);
-    AgentError::new("unreachable", format!("{e:#}"), exit)
-        .with_hint(format!("is kb-code-server running at {daemon}?"))
-        .with_next(vec![argv(&["kb-code", "identity", "--daemon", daemon])])
+    let err = AgentError::new(transport_code(exit), format!("{e:#}"), exit);
+    // The "is the daemon running" hint is only true of an unreachable daemon;
+    // a 403/404/409/decode failure reached it (v044-X1 A8-5).
+    if exit == envelope::EXIT_UNREACHABLE {
+        err.with_hint(format!("is kb-code-server running at {daemon}?"))
+            .with_next(vec![argv(&["kb-code", "identity", "--daemon", daemon])])
+    } else {
+        err
+    }
+}
+
+/// The envelope code for a transport-layer failure, derived from its exit so
+/// the two can never disagree.
+fn transport_code(exit: i32) -> &'static str {
+    match exit {
+        envelope::EXIT_UNREACHABLE => "unreachable",
+        envelope::EXIT_USAGE => "bad-request",
+        envelope::EXIT_CONFLICT => "conflict",
+        envelope::EXIT_REFUSED => "refused",
+        envelope::EXIT_NOT_FOUND => "not-found",
+        _ => "http-error",
+    }
 }
 
 fn gh_token() -> Result<String, AgentError> {
@@ -428,6 +462,10 @@ fn gh_token() -> Result<String, AgentError> {
 
 pub async fn sync_cmd(a: SyncArgs) -> anyhow::Result<()> {
     let json = a.json;
+    let a = match normalize_args(a) {
+        Ok(a) => a,
+        Err(e) => e.emit(json),
+    };
     match sync_run(&a).await {
         Ok(0) => Ok(()),
         Ok(code) => std::process::exit(code),
@@ -595,6 +633,7 @@ pub async fn status_cmd(a: StatusArgs) -> anyhow::Result<()> {
 }
 
 async fn status_run(a: &StatusArgs) -> Result<(), AgentError> {
+    review_agent::reject_patchset_address(&a.target, "status")?;
     let res = review_agent::resolve(&a.daemon, &a.target, a.repo.as_deref(), None).await?;
     if res.ps.is_some() {
         return Err(AgentError::usage(
@@ -643,6 +682,38 @@ async fn status_run(a: &StatusArgs) -> Result<(), AgentError> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn sync_takes_pr_positional_shorthand() {
+        let a = SyncCli::try_parse_from(["sync", "pr:7", "--repo", "w"])
+            .unwrap()
+            .a;
+        let a = normalize_args(a).unwrap();
+        assert_eq!(a.pr, Some(7));
+        assert!(a.target.is_none());
+        // positional + --pr / --open are clap conflicts; an <id> is not a PR.
+        assert!(SyncCli::try_parse_from(["sync", "pr:7", "--pr", "7", "--repo", "w"]).is_err());
+        assert!(SyncCli::try_parse_from(["sync", "pr:7", "--open", "--repo", "w"]).is_err());
+        let a = SyncCli::try_parse_from(["sync", "12", "--repo", "w"])
+            .unwrap()
+            .a;
+        assert_eq!(normalize_args(a).unwrap_err().exit, envelope::EXIT_USAGE);
+    }
+
+    #[test]
+    fn transport_error_code_and_hint_follow_the_exit() {
+        // v044-X1 A8-5: a non-unreachable failure must not say "unreachable".
+        let gone = anyhow::Error::new(envelope::StatusError::new(404, "job vanished"));
+        let e = transport_error(&gone, "http://d");
+        assert_eq!(e.exit, envelope::EXIT_NOT_FOUND);
+        assert_eq!(e.code, "not-found");
+        assert!(e.hint.is_none(), "no daemon-down hint for a 404");
+        let generic = transport_error(&anyhow::anyhow!("decode"), "http://d");
+        assert_eq!(generic.exit, envelope::EXIT_GENERIC);
+        assert_eq!(generic.code, "http-error");
+        assert!(generic.hint.is_none());
+        assert_eq!(transport_code(envelope::EXIT_UNREACHABLE), "unreachable");
+    }
 
     #[derive(Parser, Debug)]
     struct SyncCli {
