@@ -49,13 +49,24 @@ pub const STORE_SCHEMA: &str = "kbc-store/1";
 /// `kbc-credentials/1`.
 pub const CREDENTIALS_SCHEMA: &str = "kbc-credentials/1";
 
-/// One doctor finding.
+// One doctor finding. (Plain comments, not docs, on the ts-exported types in
+// this block: the generated binding must stay stable.)
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreDoctorFinding")
+)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DoctorFinding {
-    /// `error` | `warn` | `info`.
+    // `error` | `warn` | `info`.
+    #[cfg_attr(feature = "ts-export", ts(type = "\"error\" | \"warn\" | \"info\""))]
     pub level: &'static str,
     pub code: String,
     pub message: String,
+    // `daemon` — a fact about the whole daemon's configuration (the same on
+    // EVERY repo's card, so a dashboard shows it once) — or `repo`.
+    #[cfg_attr(feature = "ts-export", ts(type = "\"daemon\" | \"repo\""))]
+    pub scope: &'static str,
 }
 
 fn finding(level: &'static str, code: &str, message: impl Into<String>) -> DoctorFinding {
@@ -63,9 +74,23 @@ fn finding(level: &'static str, code: &str, message: impl Into<String>) -> Docto
         level,
         code: code.into(),
         message: message.into(),
+        scope: "repo",
     }
 }
 
+/// A finding that is true of the whole daemon (config), not of this repo.
+fn daemon_finding(level: &'static str, code: &str, message: impl Into<String>) -> DoctorFinding {
+    DoctorFinding {
+        scope: "daemon",
+        ..finding(level, code, message)
+    }
+}
+
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreMember")
+)]
 #[derive(Debug, Serialize)]
 struct MemberView {
     repo_id: i64,
@@ -73,11 +98,16 @@ struct MemberView {
     remote: String,
 }
 
-/// The store row as the card reports it. `git_dir` and `uuid` are the
-/// store's ABSOLUTE on-disk location and its identity, so this view only
-/// ever reaches a LOOPBACK caller — see `store_show_route`. Everything
-/// secret-adjacent is still omitted: `cred_reason`, `cred_account`,
-/// `key_fingerprint` and `key_read_only` never leave the store DB.
+// The store row as the card reports it. `git_dir` and `uuid` are the
+// store's ABSOLUTE on-disk location and its identity, so this view only
+// ever reaches a LOOPBACK caller — see `store_show_route`. Everything
+// secret-adjacent is still omitted: `cred_reason`, `cred_account`,
+// `key_fingerprint` and `key_read_only` never leave the store DB.
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreRow")
+)]
 #[derive(Debug, Serialize)]
 struct StoreRowView {
     id: i64,
@@ -93,6 +123,7 @@ struct StoreRowView {
     cred_kind: String,
     state: String,
     state_code: Option<String>,
+    #[cfg_attr(feature = "ts-export", ts(type = "unknown"))]
     state_json: Option<serde_json::Value>,
     created_at: i64,
 }
@@ -122,15 +153,35 @@ impl From<&ReviewStoreRow> for StoreRowView {
     }
 }
 
-/// `GET /api/repos/{name}/store`'s body.
+// The card's `runtime` block: process-wide seeding/lock facts for THIS store
+// plus the process-wide git-read fallback counters.
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreRuntime")
+)]
+#[derive(Debug, Serialize)]
+pub struct StoreRuntimeOut {
+    seeding: bool,
+    locked_elsewhere: bool,
+    git_fallbacks: crate::git::roots::GitFallbackSnapshot,
+}
+
+// `GET /api/repos/{name}/store`'s body.
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreCard")
+)]
 #[derive(Debug, Serialize)]
 pub struct StoreCard {
+    #[cfg_attr(feature = "ts-export", ts(type = "string"))]
     schema: &'static str,
     repo: String,
     store: Option<StoreRowView>,
     members: Vec<MemberView>,
     registration: Option<Registration>,
-    runtime: serde_json::Value,
+    runtime: StoreRuntimeOut,
     disk: Option<seed::StoreStats>,
     doctor: Vec<DoctorFinding>,
 }
@@ -159,10 +210,10 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     let row = store.store_for_repo_name(name).map_err(|e| e.to_string())?;
     let mut doctor = Vec::new();
     if let Some(d) = &rs.settings().disabled {
-        doctor.push(finding("error", "store-disabled", d.clone()));
+        doctor.push(daemon_finding("error", "store-disabled", d.clone()));
     }
     for w in &rs.settings().warnings {
-        doctor.push(finding("warn", "config", w.clone()));
+        doctor.push(daemon_finding("warn", "config", w.clone()));
     }
     let registration = rs.registration(name);
     if let Some(Registration::Refused { code, reason, .. }) = &registration {
@@ -200,7 +251,8 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     let cfg = rs.settings().repo(name);
     let mut members = Vec::new();
     let mut disk = None;
-    let mut runtime = serde_json::json!({ "seeding": false, "locked_elsewhere": false });
+    let mut runtime_seeding = false;
+    let mut runtime_locked = false;
     match &row {
         None => {
             if registration.is_none() {
@@ -225,7 +277,8 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
             }
             let seeding = rs.is_seeding(r.id) || r.state == "seeding";
             let locked = rs.is_locked_elsewhere(&r.uuid);
-            runtime = serde_json::json!({ "seeding": seeding, "locked_elsewhere": locked });
+            runtime_seeding = seeding;
+            runtime_locked = locked;
             let dir = std::path::Path::new(&r.git_dir);
             if dir.is_dir() {
                 disk = Some(rs.cached_stats(&r.uuid, dir));
@@ -330,12 +383,11 @@ pub fn store_card(rs: &ReviewStores, store: &Store, name: &str) -> Result<StoreC
     // store (`unresolved`: no ready store; `odb_miss`: a ready store lacked
     // the object and the work tree served it). Acceptance gate 3 ("0 user-ODB
     // fallback hits once every store is ready") reads `odb_miss` here.
-    if let Some(obj) = runtime.as_object_mut() {
-        obj.insert(
-            "git_fallbacks".to_string(),
-            serde_json::to_value(store.git_fallback_stats()).unwrap_or_default(),
-        );
-    }
+    let runtime = StoreRuntimeOut {
+        seeding: runtime_seeding,
+        locked_elsewhere: runtime_locked,
+        git_fallbacks: store.git_fallback_stats(),
+    };
     Ok(StoreCard {
         schema: STORE_SCHEMA,
         repo: name.to_string(),
@@ -820,5 +872,37 @@ async fn credential_test_route_inner(
         )
             .into_response(),
         Err(e) => internal(e),
+    }
+}
+
+#[cfg(test)]
+mod card_wire_tests {
+    use super::*;
+
+    /// N6 — config/disabled findings are daemon-scoped (the same on every
+    /// repo's card), per-repo findings are repo-scoped; the wire carries it.
+    #[test]
+    fn findings_are_tagged_with_their_scope_on_the_wire() {
+        let d = serde_json::to_value(daemon_finding("warn", "config", "w")).unwrap();
+        assert_eq!(d["scope"], "daemon");
+        let r = serde_json::to_value(finding("error", "store-broken", "b")).unwrap();
+        assert_eq!(r["scope"], "repo");
+    }
+
+    /// N4 — `runtime` is a typed struct and carries `git_fallbacks`.
+    #[test]
+    fn the_runtime_block_is_typed_and_carries_git_fallbacks() {
+        let rt = StoreRuntimeOut {
+            seeding: false,
+            locked_elsewhere: true,
+            git_fallbacks: crate::git::roots::GitFallbackSnapshot {
+                unresolved: 2,
+                odb_miss: 3,
+            },
+        };
+        let v = serde_json::to_value(rt).unwrap();
+        assert_eq!(v["locked_elsewhere"], true);
+        assert_eq!(v["git_fallbacks"]["unresolved"], 2);
+        assert_eq!(v["git_fallbacks"]["odb_miss"], 3);
     }
 }

@@ -85,11 +85,11 @@ export function useReviewFileBindHint(
   const commentsQ = useReviewComments(repo, reviewId, undefined, true);
   const group = path ? commentsQ.data?.groups.find((g) => g.path === path) : undefined;
   const knownFromComments = group?.in_diff;
-  const filesEnabled = reviewId !== undefined && knownFromComments === undefined;
+  const filesEnabled = reviewId !== undefined && (knownFromComments === undefined || knownFromComments === null);
   const filesQ = useReviewFiles(repo, reviewId, "latest", filesEnabled);
 
   let inDiff: boolean | null = null;
-  if (knownFromComments !== undefined) inDiff = knownFromComments;
+  if (knownFromComments !== undefined && knownFromComments !== null) inDiff = knownFromComments;
   else if (path && filesQ.data) {
     inDiff = filesQ.data.files.some((f) => f.path === path || f.old_path === path);
   }

@@ -80,9 +80,19 @@ describe("touchedInChips", () => {
         ps: { from: 1, to: 2 },
         file: "app/models/order.rb",
       }),
+      rebased: false,
     });
     expect(chips[1].label).toBe("lines changed in ps 5");
     expect(chips[1].title).toBe("adjacent overlap — 2 hunks in ps 5's diff from ps 1");
+  });
+
+  it("marks a rebased entry and keeps it out of the Timeline (A7-5)", () => {
+    const f = finding({ own_ps: 1, touched_in: [touch({ ps: 2, overlap: "rebased", hunks: 1 })] });
+    const [chip] = touchedInChips(f, "acme/repo", 7);
+    expect(chip.rebased).toBe(true);
+    expect(chip.label).toBe("lines changed in ps 2 (rebased)");
+    expect(chip.title).toContain("different base");
+    expect(findingTouchTimelineRows([f], [], "acme/repo", 7)).toEqual([]);
   });
 
   it("never says the word fixed", () => {

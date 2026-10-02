@@ -11,7 +11,11 @@
 // importing that file's private `Glyph`/`chipStyle` — this header isn't
 // otherwise a Room-chip consumer, and the two token tables (base modes,
 // warning codes) live in `lib/reviewBase.ts`, not `lib/reviewRoom.ts`.
-import type { CSSProperties } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useState, type CSSProperties } from "react";
+import { postReviewRetrack } from "../../api/client";
+import { useRepos } from "../../hooks/useRepos";
+import { isLoopbackCaller } from "../../lib/loopback";
 import type { BaseWarningOut, ReviewBaseOut } from "../../api/types";
 import {
   BASE_WARNING_CHIP,
@@ -54,28 +58,73 @@ export interface BaseChipProps {
   base: ReviewBaseOut;
 }
 
-/// RS-U7's own `POST /api/reviews/{id}/retrack` route hasn't shipped on
-/// this build (README §12's CLI table, §13) — this button COPIES the CLI
-/// line rather than calling a route that would 404, the same posture
-/// `lib/reviewDoc.ts`'s `composeCommandLine` documents for D22's
-/// loopback-only authoring.
-///
-/// TODO(RS-U7): once the retrack HTTP route ships, call it directly here
-/// (with a `--dry-run` toggle mirroring the CLI flag) instead of only
-/// copying the line.
+/// A9-3 — wired to the shipped `POST /api/reviews/{id}/retrack`. The route
+/// sits in the LOOPBACK-ONLY family (not the `review_remote` gate), so the
+/// live action is offered only when `GET /api/repos` says this caller is on
+/// loopback (`lib/loopback.ts`); everyone else keeps the copy-the-CLI-line
+/// fallback, with a tooltip that says why. A "dry run" toggle (default ON,
+/// mirroring `--dry-run`) classifies without minting a patchset.
 function RetrackButton({ reviewId, spec }: { reviewId: number; spec: BaseChipSpec }) {
   const line = retrackCommandLine(reviewId);
+  const repos = useRepos();
+  const loopback = isLoopbackCaller(repos.data);
+  const qc = useQueryClient();
+  const [dryRun, setDryRun] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true);
+    try {
+      const out = await postReviewRetrack(reviewId, dryRun);
+      const what = dryRun ? "dry run" : out.minted ? `minted ps ${out.ps_number ?? "?"}` : "nothing to change";
+      toast.ok(`Retrack ${what} — ${out.class}`);
+      if (!dryRun) await qc.invalidateQueries({ queryKey: ["reviews"] });
+    } catch (e) {
+      toast.err(`retrack failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!loopback) {
+    return (
+      <button
+        type="button"
+        className="kbc-room-chip kbc-room-chip--btn"
+        style={chipStyle(spec)}
+        title={`Retrack runs only from the machine hosting kb-code-server — copies the CLI line: ${line}`}
+        onClick={() => copy(line, "retrack command")}
+        data-kbc-review-retrack
+        data-kbc-review-retrack-mode="copy"
+      >
+        <Icon.Copy /> Retrack
+      </button>
+    );
+  }
   return (
-    <button
-      type="button"
-      className="kbc-room-chip kbc-room-chip--btn"
-      style={chipStyle(spec)}
-      title={`Retrack isn't a live action yet (RS-U7) — copies the CLI line: ${line}`}
-      onClick={() => copy(line, "retrack command")}
-      data-kbc-review-retrack
-    >
-      <Icon.Copy /> Retrack
-    </button>
+    <span className="kbc-review__retrack" data-kbc-review-retrack-live>
+      <label title="Classify only — mint no patchset (mirrors --dry-run)">
+        <input
+          type="checkbox"
+          checked={dryRun}
+          onChange={(e) => setDryRun(e.target.checked)}
+          data-kbc-review-retrack-dry
+        />{" "}
+        dry run
+      </label>
+      <button
+        type="button"
+        className="kbc-room-chip kbc-room-chip--btn"
+        style={chipStyle(spec)}
+        disabled={busy}
+        title={dryRun ? "Retrack (dry run): report what would change" : "Retrack: re-resolve the base and mint a base-corrected patchset if it moved"}
+        onClick={() => void run()}
+        data-kbc-review-retrack
+        data-kbc-review-retrack-mode="live"
+      >
+        <Icon.Refresh /> Retrack
+      </button>
+    </span>
   );
 }
 

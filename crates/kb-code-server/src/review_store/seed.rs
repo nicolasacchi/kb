@@ -962,7 +962,12 @@ pub fn sweep_stale_tmp(root: &Path) -> usize {
     n
 }
 
-/// Disk facts for `store show` and the benchmark.
+// Disk facts for `store show` and the benchmark.
+#[cfg_attr(
+    feature = "ts-export",
+    derive(ts_rs::TS),
+    ts(export, rename = "ReviewStoreDisk")
+)]
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StoreStats {
     pub packs: usize,

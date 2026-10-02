@@ -238,6 +238,12 @@ pub enum StoreError {
     /// (409), never a panic.
     #[error("annotation {0:?} is already linked to a finding — a thread backs at most one")]
     AnnotationAlreadyFinding(String),
+    /// A7-2 — a bind/rebind/unbind targeted an annotation that IS a
+    /// finding's thread (`review_findings.annotation_id` points at it).
+    /// The finding's review and patchset live on that row, so moving it
+    /// would detach the thread from the finding. Mapped to `409`.
+    #[error("annotation {0:?} backs a finding — its review scope is the finding's; resolve or delete the finding instead")]
+    AnnotationIsFinding(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -1319,10 +1325,19 @@ fn update_annotation_review_scope_on(
     let n = tx.execute(
         "UPDATE annotations SET
             review_id = ?2, ps_number = ?3, side = ?4, updated_at = ?5
-         WHERE id = ?1",
+         WHERE id = ?1 OR parent_id = ?1",
         params![id, review_id, ps_number, side, updated_at],
     )?;
     Ok(n > 0)
+}
+
+/// A7-2 — does a `review_findings` row use `annotation_id` as its thread?
+fn annotation_backs_finding_on(conn: &rusqlite::Connection, annotation_id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM review_findings WHERE annotation_id = ?1)",
+        params![annotation_id],
+        |r| r.get::<_, bool>(0),
+    )?)
 }
 
 fn delete_annotation_on(tx: &Transaction<'_>, id: &str) -> Result<bool> {

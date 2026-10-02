@@ -1,0 +1,3 @@
+# Ceilings for scripts/check-wire-ratchet.sh. They may only go DOWN.
+hand_exports = 546
+json_sites = 201

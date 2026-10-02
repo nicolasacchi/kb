@@ -51,14 +51,27 @@ export default function ReviewFileThreadsPanel({
     [findingsQ.data],
   );
 
+  // A9-1 — a failed read is NOT "no comments yet": say it failed.
+  if (q.isError) {
+    return (
+      <div className="kbc-review-rail" data-kbc-review-rail>
+        <div className="kbc-review-rail__caption" role="alert" data-kbc-review-rail-error>
+          Couldn't load this review's comments: {q.error instanceof Error ? q.error.message : String(q.error)}
+        </div>
+      </div>
+    );
+  }
+
   const caption = q.isLoading
     ? "Loading…"
     : !path
       ? null
       : group
-        ? group.in_diff
-          ? "This file is in the review's diff."
-          : `Not in the diff — comments here anchor to ps ${ps ?? "?"}'s tip.`
+        ? group.in_diff === null
+          ? "Whether this file is in the review's diff is unknown right now."
+          : group.in_diff
+            ? "This file is in the review's diff."
+            : `Not in the diff — comments here anchor to ps ${ps ?? "?"}'s tip.`
         : "No comments yet on this file — comment here to start one.";
 
   return (
@@ -121,7 +134,10 @@ export default function ReviewFileThreadsPanel({
                 >
                   Open in diff
                 </Link>
-                <PromoteToFinding repo={repo} reviewId={reviewId} thread={t} />
+                {/* A9-4 — a thread that already backs a finding (an imported one
+                    reaches here; manual ones took the FindingRow branch) cannot be adopted
+                    again: `review_findings.annotation_id` is UNIQUE. */}
+                {!linkedFinding && <PromoteToFinding repo={repo} reviewId={reviewId} thread={t} />}
               </li>
             );
           })}

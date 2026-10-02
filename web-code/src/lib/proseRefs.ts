@@ -15,41 +15,15 @@
 // into a second `<a>` (the no-double-linking rule). An `orphan` is never
 // an `<a>` either — dotted underline + caption, never a dead link.
 
+import type { FieldRefs, ProseRef, ProseRefResolution, ProseSpan } from "../api/types";
 import type { MarkdownLiteOptions } from "./markdownLite";
 import { codeUrl, entityUrl, findingUrl, symbolUrl } from "./codeUrl";
 
-export interface ProseSpan {
-  start: number;
-  end: number;
-}
-
-export interface ProseRefResolution {
-  state: string;
-  path?: string;
-  ref?: string;
-  line?: number;
-  ent?: string;
-  caption?: string;
-}
-
-export interface ProseRef {
-  kind: string;
-  span: ProseSpan;
-  text: string;
-  path?: string;
-  line_start?: number;
-  line_end?: number;
-  lines?: string;
-  container?: string;
-  member?: string;
-  slug?: string;
-  resolution?: ProseRefResolution;
-}
-
-export interface FieldRefs {
-  refs: ProseRef[];
-  truncated: boolean;
-}
+// The wire shapes are declared ONCE, in `api/types.ts` (v0.44 I3: this file
+// used to re-declare all four; the shadow gate, scripts/check-ts-shadows.sh,
+// now refuses a second copy). Re-exported so importers of this module keep
+// working unchanged.
+export type { FieldRefs, ProseRef, ProseRefResolution, ProseSpan };
 
 export interface ProseHrefCtx {
   repo: string;

@@ -2751,3 +2751,25 @@ export function fetchReviewStoreCard(repo: string): Promise<ReviewStoreCard> {
 export function fetchReviewCredentials(repo: string): Promise<ReviewCredentialsOut> {
   return getJson<ReviewCredentialsOut>(`/api/repos/${encodeURIComponent(repo)}/credentials`, {});
 }
+
+// --- v0.44 K4 (A9-3) — review retrack ---------------------------------------
+
+/// `POST /api/reviews/{id}/retrack` body result (`kbc-review-retrack/1`,
+/// `review_retrack.rs::outcome_json`). LOOPBACK-ONLY — a non-loopback caller
+/// gets the family's bare 404 (the SPA gates the button on
+/// `GET /api/repos`'s `loopback`, `lib/loopback.ts`).
+export interface ReviewRetrackOut {
+  schema: string;
+  id: number;
+  repo: string;
+  dry_run: boolean;
+  minted: boolean;
+  ps_number: number | null;
+  kind: string | null;
+  class: string;
+  verdict_scope_changed: boolean;
+}
+
+export function postReviewRetrack(id: number, dryRun: boolean): Promise<ReviewRetrackOut> {
+  return sendJson<ReviewRetrackOut>("POST", `/api/reviews/${id}/retrack`, { dry_run: dryRun });
+}

@@ -194,15 +194,11 @@ export function storeUnknownTitle(failure: StoreCardFailure, detail?: string | n
 // ── retrack command line ──────────────────────────────────────────────────
 
 /// The CLI line to copy for `review retrack <id> --dry-run` (README §12,
-/// §13's agent-CLI table). RS-U7's own `POST /api/reviews/{id}/retrack`
-/// route hasn't shipped on this build, so the header offers exactly this
-/// line to copy rather than a button that would 404 — the SAME "copy the
-/// exact line an agent would run" posture `lib/reviewDoc.ts`'s
+/// §13's agent-CLI table). `POST /api/reviews/{id}/retrack` is live but
+/// LOOPBACK-ONLY, so a non-loopback session keeps this copy-the-line
+/// fallback (`BaseChip.tsx`'s `RetrackButton`) — the SAME "copy the exact
+/// line an agent would run" posture `lib/reviewDoc.ts`'s
 /// `composeCommandLine` documents for D22's loopback-only authoring.
-///
-/// TODO(RS-U7): once the retrack HTTP route ships, wire the header's
-/// button to call it directly (with a `--dry-run` toggle mirroring the
-/// CLI flag) instead of only copying this line.
 export function retrackCommandLine(reviewId: number, dryRun = true): string {
   return `kb-code review retrack ${reviewId}${dryRun ? " --dry-run" : ""}`;
 }
