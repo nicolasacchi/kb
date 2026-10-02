@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { Anchor, ReviewFile } from "../api/client";
 import { artifactOrigin } from "../lib/artifactHost";
+import { publicView } from "../lib/publicView";
 
 // AnnotatorBridge — parent-side of the iframe annotator's postMessage
 // protocol. Listens for `cm:compose` / `cm:focus` / `cm:probe` from the
@@ -245,10 +246,12 @@ const AnnotatorBridge = forwardRef<BridgeApi, AnnotatorBridgeProps>(
             commentId,
             on,
           }),
+        // The iframe is the untrusted artifact origin: it only ever gets the
+        // public projection, never the operator's `?visibility=all` file.
         refresh: (next: ReviewFile) =>
           postToIframe(iframeRef.current, expectedOrigin, {
             type: "cm:refresh",
-            file: next,
+            file: publicView(next),
           }),
         querySelection: () =>
           postToIframe(iframeRef.current, expectedOrigin, {
