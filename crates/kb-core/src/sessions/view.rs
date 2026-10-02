@@ -863,16 +863,43 @@ impl ViewCarry {
                     // append a `↳ <summary>` continuation and a
                     // `<!--kb-recall/1 …-->` marker. Fold those into the
                     // PRECEDING hit (joined with `\n`) so `items.len()`
-                    // stays one entry per hit. The hit list never contains
-                    // a blank line — scent, slate, and the wake tail all
-                    // ride after one — so the first empty line ends the
-                    // walk. Filtering empties and continuing counted those
-                    // tails as failed hits.
+                    // stays one entry per hit. A blank line normally ENDS
+                    // the hit list — scent, slate, and the wake tail all
+                    // ride after one, and filtering empties and continuing
+                    // counted those tails as failed hits. The exception is
+                    // a blank line INSIDE a hit (an unnormalised
+                    // multi-paragraph memory summary): that is told apart
+                    // by a `kb-recall/1` marker still AHEAD, since the
+                    // marker closes every hit and no tail carries one. In
+                    // that case the blank is skipped and plain text folds
+                    // into the hit it interrupted.
+                    let rest: Vec<&str> = lines.collect();
+                    let is_marker = |l: &str| {
+                        l.starts_with(RECALL_MARKER_PREFIX) && l.ends_with(RECALL_MARKER_SUFFIX)
+                    };
                     let mut items: Vec<String> = Vec::new();
-                    for line in lines {
+                    let mut mid_hit = false;
+                    for (idx, line) in rest.iter().enumerate() {
                         let line = line.trim();
                         if line.is_empty() {
+                            let marker_ahead = rest[idx + 1..].iter().any(|l| is_marker(l.trim()));
+                            if marker_ahead && !items.is_empty() {
+                                mid_hit = true;
+                                continue;
+                            }
                             break;
+                        }
+                        if mid_hit && !line.starts_with("- ") && !line.starts_with('↳') {
+                            if !is_marker(line) {
+                                if let Some(last) = items.last_mut() {
+                                    last.push('\n');
+                                    last.push_str(line);
+                                    continue;
+                                }
+                            }
+                        }
+                        if line.starts_with("- ") || is_marker(line) {
+                            mid_hit = false;
                         }
                         if let Some(summary) = line.strip_prefix('↳') {
                             if let Some(last) = items.last_mut() {
@@ -3603,6 +3630,37 @@ mod tests {
         assert_eq!(
             derived.rows.iter().map(|r| r.pos).collect::<Vec<_>>(),
             vec![Some(1), Some(2)]
+        );
+    }
+
+    /// A memory summary with a blank line in it (an unnormalised
+    /// multi-paragraph `--summary`) puts a blank line INSIDE hit 1. The walk
+    /// must not stop there: hit 1 keeps its marker and hits 2-3 are still
+    /// counted, while the scent/slate tail after the last marker is still
+    /// not a hit.
+    #[test]
+    fn derive_memory_recalls_survives_a_blank_line_inside_a_hit() {
+        let jsonl = [
+            r#"{"parentUuid":null,"isSidechain":false,"attachment":{"type":"hook_additional_context","content":["Relevant memories from kb (recall — these persist across sessions):\n- alpha fact  [notes]\n    ↳ Fix:\n\nuse X\n<!--kb-recall/1 kb=notes id=aaaaaaaaaaaa pos=1-->\n- beta fact  [notes]\n<!--kb-recall/1 kb=notes id=bbbbbbbbbbbb pos=2-->\n- gamma fact  [notes]\n<!--kb-recall/1 kb=notes id=cccccccccccc pos=3-->\n\nkb has prior context for this task — 4 prior sessions."],"hookName":"UserPromptSubmit","toolUseID":"UserPromptSubmit","hookEvent":"UserPromptSubmit"},"type":"attachment","uuid":"44000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:05.000Z","sessionId":"blank-in-hit-1"}"#,
+            r#"{"isSidechain":false,"type":"user","message":{"role":"user","content":"go"},"uuid":"44000002-0000-4000-8000-000000000002","parentUuid":"44000001-0000-4000-8000-000000000001","timestamp":"2026-09-22T09:00:25.000Z","sessionId":"blank-in-hit-1"}"#,
+        ]
+        .join("\n");
+        let v = session_view(&jsonl, &TailBlocks::default(), &ViewOptions::default());
+        let derived = derive_memory_recalls(&v);
+        assert_eq!(derived.rows.len(), 3, "no hit lost to the inner blank line");
+        assert_eq!(derived.marker_parsed, 3);
+        assert_eq!(derived.failed, 0);
+        assert_eq!(
+            derived
+                .rows
+                .iter()
+                .map(|r| (r.memory_id.as_str(), r.pos))
+                .collect::<Vec<_>>(),
+            vec![
+                ("aaaaaaaaaaaa", Some(1)),
+                ("bbbbbbbbbbbb", Some(2)),
+                ("cccccccccccc", Some(3)),
+            ]
         );
     }
 
