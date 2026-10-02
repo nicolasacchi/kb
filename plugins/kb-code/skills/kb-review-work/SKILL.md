@@ -36,14 +36,11 @@ silently-ignored patchset:
 - `diff`, `log`, `cat`, `verify` take the FULL address, `/ps<n>` included
   (`--ps N` is the equivalent flag; giving both with different values is a
   usage error naming both).
-- `status` takes `<id>` or `pr:<N>` ONLY. A `/ps<n>` address is a USAGE
-  ERROR — status answers about the whole review, against the latest
-  patchset.
-- `retrack` takes `<id>` or `pr:<N>`. A `/ps<n>` suffix parses and is then
-  SILENTLY DROPPED, so never write one.
-- `find` takes NO address at all — the PR number is the `--pr N` flag.
-- `sync` takes NO address either — it is `--repo R --pr N`, or
-  `--repo R --open`.
+- `status` and `retrack` take `<id>` or `pr:<N>` ONLY. A `/ps<n>` address is
+  a USAGE ERROR (exit 2, before any request) — they act on the whole review.
+- `find` and `sync` take a PR as `pr:<N>` (`find pr:7`, `sync pr:7 --repo R`)
+  or the `--pr N` flag; `sync` also takes `--repo R --open`. An `<id>` there
+  is a usage error.
 
 The older verbs (`show`, `comments`, `findings list`, `timeline`,
 `github-threads`, `export-github`, `publish`, `distill`) take a numeric
@@ -67,9 +64,8 @@ The older verbs (`show`, `comments`, `findings list`, `timeline`,
    `review diff <ref> --stat` (per-file counts, the default), or `--path P`
    to narrow it, or `--patch` for unified text — three SEPARATE invocations,
    never one combined line. `--budget N` belongs to the PATCH view: it cuts
-   the diff text and IMPLIES `--patch` only when neither `--stat` nor
-   `--name-only` was given, so alongside either of those it is silently
-   inert. All of it is computed in the store against the patchset's own
+   the diff text and IMPLIES `--patch`; combined with `--stat` or
+   `--name-only` it is a usage error. All of it is computed in the store against the patchset's own
    base, and it works with no `refs/kbc/*` in the clone. For a repo whose
    review store is READY there is no `git -C` path to the PR any more — the
    store owns those refs. Before the store is ready (`absent`, `seeding`,
@@ -116,8 +112,10 @@ The older verbs (`show`, `comments`, `findings list`, `timeline`,
 7. **Author and gate.** `kb-code review compose <id> --doc review.md
    --findings findings.json --slugify` writes the document and the findings in
    one transaction. `--slugify` gives every finding without a valid slug the
-   ASCII `f-<kebab>` slug derived from its title (uniquified within the batch,
-   deterministic) instead of letting the WHOLE batch 400 on `invalid_slug`, and
+   ASCII `f-<kebab>` slug derived from its title (when several findings share
+   a base slug, each gets a `-<6 hex>` suffix from its content fingerprint, so
+   reordering or inserting findings never moves a slug and its disposition onto
+   different text) instead of letting the WHOLE batch 400 on `invalid_slug`, and
    it is UTF-8-safe — every non-ASCII character (a title with `à`) is treated
    as a separator and never sliced, so it cannot panic. Author-written VALID
    slugs are never touched. `compose` is a LOOPBACK-ONLY route (D22): from a
