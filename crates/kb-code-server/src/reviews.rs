@@ -152,6 +152,10 @@ pub enum ReviewGitError {
     Spawn(std::io::Error),
     #[error("git failed (exit {status}): {stderr}")]
     GitFailed { status: i32, stderr: String },
+    /// A network fetch outlived its deadline and its process group was
+    /// killed (`review_store::FailureClass::Timeout`).
+    #[error("git fetch timed out after {secs}s (timeout); the process group was killed")]
+    Timeout { secs: u64 },
     #[error("invalid ref name: {0:?}")]
     BadRef(String),
     #[error("invalid commit sha: {0:?}")]
@@ -191,6 +195,9 @@ impl From<ReviewGitError> for ApiError {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
             }
             ReviewGitError::GitFailed { .. } => ApiError::bad_request(e.to_string()),
+            ReviewGitError::Timeout { .. } => {
+                ApiError::new(StatusCode::GATEWAY_TIMEOUT, e.to_string())
+            }
             ReviewGitError::BadRef(_) | ReviewGitError::BadSha(_) => {
                 ApiError::bad_request(e.to_string())
             }
@@ -1088,13 +1095,36 @@ fn has_origin_remote(repo_root: &dyn GitRoot) -> bool {
 /// on — the PR's own target when the forge named one, else the default
 /// branch — NOT necessarily the default.
 fn fetch_remote_base(repo_root: &dyn GitRoot, branch: &Revspec) -> Result<(), ReviewGitError> {
+    fetch_remote_base_with(repo_root, branch, crate::github::WORK_TREE_FETCH_TIMEOUT)
+}
+
+/// [`fetch_remote_base`] with an explicit deadline: bounded, in its own
+/// process group, prompts off (see [`crate::github::run_git_bounded`]) — the
+/// start-pr fallback used to run a bare `Command` here with no deadline at
+/// all, so a stalled remote held the job (and `repo_guard`) for hours.
+pub(crate) fn fetch_remote_base_with(
+    repo_root: &dyn GitRoot,
+    branch: &Revspec,
+    timeout: std::time::Duration,
+) -> Result<(), ReviewGitError> {
+    use crate::github::{run_git_bounded, BoundedGitError};
     let b = branch.as_str();
     if b.contains(':') {
         return Err(ReviewGitError::BadRef(b.to_string()));
     }
     let refspec = format!("+refs/heads/{b}:refs/remotes/origin/{b}");
-    run_git(repo_root, &["fetch", "origin", &refspec])?;
-    Ok(())
+    run_git_bounded(
+        repo_root.git_path(),
+        crate::git::roots::alternates_env(repo_root),
+        &["fetch", "origin", &refspec],
+        timeout,
+    )
+    .map(|_| ())
+    .map_err(|e| match e {
+        BoundedGitError::Spawn(io) => ReviewGitError::Spawn(io),
+        BoundedGitError::Failed { status, stderr } => ReviewGitError::GitFailed { status, stderr },
+        BoundedGitError::Timeout(d) => ReviewGitError::Timeout { secs: d.as_secs() },
+    })
 }
 
 /// `git rev-list --left-right --count <local>...<remote>` → `(ahead,
@@ -1572,10 +1602,12 @@ pub(crate) async fn admit_store(
 ) -> Result<Option<crate::review_store::StoreHandle>, ApiError> {
     let st = state.clone();
     let name = repo.to_string();
-    tokio::task::spawn_blocking(move || st.review_stores.admit_mutation(&st.store, &name))
-        .await
-        .map_err(join_error)?
-        .map_err(store_refusal_error)
+    crate::review_jobs::spawn_blocking_tracked(move || {
+        st.review_stores.admit_mutation(&st.store, &name)
+    })
+    .await
+    .map_err(join_error)?
+    .map_err(store_refusal_error)
 }
 
 /// RS-U6 review fix — the git root a review WRITE path must use for
@@ -1683,7 +1715,7 @@ where
     F: FnOnce(&StoreCtx<'_>) -> T + Send + 'static,
 {
     let st = state.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::review_jobs::spawn_blocking_tracked(move || {
         let ctx = StoreCtx {
             rs: &st.review_stores,
             store: &st.store,
@@ -1832,13 +1864,31 @@ pub(crate) async fn github_with_gh_cli_warned(
     let has_ambient = github.has_ambient_token();
     let st = state.clone();
     let id = handle.id;
-    let res = tokio::task::spawn_blocking(move || {
-        let recorded = st
-            .store
-            .get_review_store(id)
-            .ok()
-            .flatten()
-            .and_then(|r| r.cred_account);
+    let res = crate::review_jobs::spawn_blocking_tracked(move || {
+        // D12: a failed read of the recorded account is "we cannot tell
+        // whether this store is bound", which must NEVER be answered as
+        // "unbound" (that re-admits the ambient token). Without a pinned
+        // `gh_user` to fall back on it fails closed with a named warning.
+        let (recorded, lookup_err) = match st.store.get_review_store(id) {
+            Ok(r) => (r.and_then(|r| r.cred_account), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        if let Some(e) = lookup_err.as_ref() {
+            if settings.gh_user.is_none() {
+                return (
+                    ApiBinding::Bound,
+                    None,
+                    vec![crate::review_base::warning(
+                        BINDING_UNKNOWN,
+                        format!(
+                            "the store's recorded credential account could not be read ({e}); \
+                             the forge API was NOT read with an ambient token, because the store \
+                             may be bound to an account"
+                        ),
+                    )],
+                );
+            }
+        }
         let bound = settings.gh_user.is_some() || recorded.is_some();
         let binding = if bound {
             ApiBinding::Bound
@@ -1862,9 +1912,22 @@ pub(crate) async fn github_with_gh_cli_warned(
         };
         (binding, cred, warnings)
     })
-    .await
-    .unwrap_or((ApiBinding::Unbound, None, vec![]));
-    (github.with_api_credential(res.1, res.0), res.2)
+    .await;
+    // A panicked or cancelled task is not "unbound" either: fail closed.
+    let (binding, cred, warnings) = res.unwrap_or_else(|e| {
+        (
+            ApiBinding::Bound,
+            None,
+            vec![crate::review_base::warning(
+                BINDING_UNKNOWN,
+                format!(
+                    "the store's credential binding could not be resolved ({e}); the forge \
+                     API was NOT read with an ambient token"
+                ),
+            )],
+        )
+    });
+    (github.with_api_credential(cred, binding), warnings)
 }
 
 /// D12 — the warning a BOUND store's api slot carries when its gh-cli rung
@@ -1896,6 +1959,203 @@ fn bound_gh_warning(
     )
 }
 
+/// D12 — the store's credential binding could not be determined (a failed
+/// DB read or task), so the ambient token is NOT consulted. The code a
+/// caller sees on the envelope's `warnings[]`.
+pub(crate) const BINDING_UNKNOWN: &str = "credential-binding-unknown";
+
+/// D12 — the review store lookup itself failed (DB error, join error, a
+/// refused store credential), which is "we cannot tell whether a store
+/// answers for this repo". Never read as "no store".
+pub(crate) const FORGE_STORE_UNAVAILABLE: &str = "forge-store-unavailable";
+
+/// The ONE way to reach GitHub for a repo (A6.f1): which forge project,
+/// which client (credential ladder + D12 binding), and which warnings.
+///
+/// * a ready review store: the STORE's `forge_slug` (never the member's
+///   `origin`, which may be a fork) and the store's binding via
+///   [`github_with_gh_cli_warned`];
+/// * no store (never registered, disabled, seeding, absent, broken): the
+///   member's `origin` and the unbound ambient client — the pre-store
+///   posture;
+/// * the lookup itself FAILED: no repo and a client bound to nothing —
+///   [`ForgeCtx::closed`] is set and nothing may be read, persisted or
+///   closed off the answer.
+#[derive(Debug, Clone)]
+pub(crate) struct ForgeCtx {
+    pub repo: Option<crate::github::GithubRepo>,
+    pub client: crate::github::GithubClient,
+    pub warnings: Vec<BaseWarningOut>,
+    /// `Some(detail)` when the store lookup failed closed.
+    pub closed: Option<String>,
+    /// Why `repo` is `None` when it is not a closed failure (the origin's
+    /// parse error, or "the store is not a GitHub project").
+    pub repo_err: Option<String>,
+}
+
+impl ForgeCtx {
+    pub(crate) fn failed_closed(client: &crate::github::GithubClient, detail: String) -> Self {
+        let warnings = vec![crate::review_base::warning(
+            FORGE_STORE_UNAVAILABLE,
+            format!(
+                "the review store lookup failed ({detail}); the forge API was NOT read with \
+                 the member's origin or an ambient token"
+            ),
+        )];
+        Self {
+            repo: None,
+            client: client.with_api_credential(None, crate::github::ApiBinding::Bound),
+            warnings,
+            closed: Some(detail),
+            repo_err: None,
+        }
+    }
+
+    /// The project to read, or the reason nothing may be read: a refused
+    /// context ([`Self::refused_reason`]), else the missing-project detail.
+    pub(crate) fn repo_or_reason(&self) -> Result<crate::github::GithubRepo, String> {
+        if let Some(r) = self.refused_reason() {
+            return Err(r);
+        }
+        self.repo.clone().ok_or_else(|| {
+            self.repo_err
+                .clone()
+                .unwrap_or_else(|| "no GitHub project for this repo".to_string())
+        })
+    }
+
+    /// `Some(reason)` when a read must not happen or must not be trusted:
+    /// the lookup failed closed, or a BOUND store's gh rung produced a
+    /// warning and left the client with no credential at all (D12: not
+    /// another account, and not anonymously either).
+    pub(crate) fn refused_reason(&self) -> Option<String> {
+        if let Some(d) = &self.closed {
+            return Some(format!("store-unavailable: {d}"));
+        }
+        if !self.warnings.is_empty() && !self.client.has_credentials() {
+            return Some(format!(
+                "{}: {}",
+                self.warnings[0].code, self.warnings[0].message
+            ));
+        }
+        None
+    }
+}
+
+/// Pure classification of a store lookup. `Ok(None)` means "no store
+/// answers for this repo" (not registered, disabled, seeding, absent,
+/// broken, locked, pending); `Err` is a lookup that FAILED and must fail
+/// closed (a DB error, or a store credential the operator configured that
+/// was refused).
+pub(crate) fn classify_store_lookup(
+    r: Result<crate::review_store::StoreHandle, crate::review_store::StoreUnavailable>,
+) -> Result<Option<crate::review_store::StoreHandle>, String> {
+    use crate::review_store::StoreUnavailable as U;
+    match r {
+        Ok(h) => Ok(Some(h)),
+        Err(U::Error { detail }) => Err(format!("store lookup failed: {detail}")),
+        Err(U::CredentialRefused { class, detail }) => Err(format!(
+            "the store's credential was refused ({class}: {detail})"
+        )),
+        Err(_) => Ok(None),
+    }
+}
+
+/// [`forge_ctx_with_gh`] with the process `gh`.
+pub(crate) async fn forge_ctx(
+    state: &SharedState,
+    repo: &crate::config::RepoEntry,
+    gh_token: Option<String>,
+) -> ForgeCtx {
+    forge_ctx_with_gh(
+        state,
+        repo,
+        gh_token,
+        crate::review_store::GhCli::from_process_env(),
+    )
+    .await
+}
+
+pub(crate) async fn forge_ctx_with_gh(
+    state: &SharedState,
+    repo: &crate::config::RepoEntry,
+    gh_token: Option<String>,
+    gh: crate::review_store::GhCli,
+) -> ForgeCtx {
+    let client = state.github.with_cli_token(gh_token);
+    let st = state.clone();
+    let name = repo.name.clone();
+    type Looked = Result<
+        Option<(
+            crate::review_store::StoreHandle,
+            Option<crate::store::ReviewStoreRow>,
+        )>,
+        String,
+    >;
+    let looked = crate::review_jobs::spawn_blocking_tracked(move || -> Looked {
+        let Some(handle) =
+            classify_store_lookup(st.review_stores.handle_for_repo(&st.store, &name))?
+        else {
+            return Ok(None);
+        };
+        let row = st
+            .store
+            .get_review_store(handle.id)
+            .map_err(|e| format!("store row read failed: {e}"))?;
+        Ok(Some((handle, row)))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("store lookup task failed: {e}")));
+    match looked {
+        Err(detail) => ForgeCtx::failed_closed(&client, detail),
+        Ok(Some((handle, row))) => {
+            forge_ctx_for_store(state, client, &handle, row, &repo.name, gh).await
+        }
+        Ok(None) => {
+            let root = repo.path.clone();
+            match crate::review_jobs::spawn_blocking_tracked(move || {
+                crate::github::github_repo(&root)
+            })
+            .await
+            {
+                Ok(r) => ForgeCtx {
+                    repo_err: r.as_ref().err().map(|e| e.to_string()),
+                    repo: r.ok(),
+                    client,
+                    warnings: vec![],
+                    closed: None,
+                },
+                Err(e) => {
+                    ForgeCtx::failed_closed(&client, format!("origin lookup task failed: {e}"))
+                }
+            }
+        }
+    }
+}
+
+/// The ready-store half of [`forge_ctx_with_gh`]: the project is the
+/// store row's `forge_slug`, the client carries the store's D12 binding.
+pub(crate) async fn forge_ctx_for_store(
+    state: &SharedState,
+    client: crate::github::GithubClient,
+    handle: &crate::review_store::StoreHandle,
+    row: Option<crate::store::ReviewStoreRow>,
+    repo_name: &str,
+    gh: crate::review_store::GhCli,
+) -> ForgeCtx {
+    let repo = row.as_ref().and_then(store_github_repo);
+    let (client, warnings) = github_with_gh_cli_warned(state, client, handle, repo_name, gh).await;
+    ForgeCtx {
+        repo_err: repo
+            .is_none()
+            .then(|| "the review store is not a GitHub project".to_string()),
+        repo,
+        client,
+        warnings,
+        closed: None,
+    }
+}
+
 /// RS-U6 — the forge project (`owner/name`) of a GitHub review store, from
 /// the store row's `forge_slug` — NEVER the member's `origin`, which may be
 /// a fork (asking the fork's API for PR #N reads a different PR).
@@ -1917,20 +2177,26 @@ pub(crate) fn store_github_repo(
 async fn store_row(
     state: &SharedState,
     handle: &crate::review_store::StoreHandle,
-) -> Option<crate::store::ReviewStoreRow> {
+) -> Result<Option<crate::store::ReviewStoreRow>, String> {
     let id = handle.id;
     state
         .store
         .run_blocking(move |store| store.get_review_store(id))
         .await
-        .ok()
-        .flatten()
+        .map_err(|e| format!("store row read failed: {e}"))
 }
+
+/// The forge read of PR `n`'s `base.ref` failed (rate limit, 404, lapsed
+/// login, network). Carried on `warnings[]` so a caller can tell "the PR
+/// has no readable target" from "this store has no forge project" — the
+/// retrack path must NOT mint a default-branch guess off it.
+pub(crate) const FORGE_BASE_UNREAD: &str = "forge-base-unread";
 
 /// RS-U6 — the forge API's `base.ref` for PR `n` of the STORE's project
 /// (the PR target rung, README §6; D15 retarget-follow reads it on every
 /// fetch), plus any D12 warning. `None` when the store is not a GitHub
-/// project or the API cannot answer.
+/// project or the API cannot answer; a failed read carries a
+/// [`FORGE_BASE_UNREAD`] warning naming the error instead of vanishing.
 pub(crate) async fn forge_pr_base_ref(
     state: &SharedState,
     handle: &crate::review_store::StoreHandle,
@@ -1939,20 +2205,36 @@ pub(crate) async fn forge_pr_base_ref(
     github: crate::github::GithubClient,
     gh: crate::review_store::GhCli,
 ) -> (Option<String>, Vec<BaseWarningOut>) {
-    let Some(gh_repo) = store_row(state, handle)
-        .await
-        .as_ref()
-        .and_then(store_github_repo)
-    else {
-        return (None, vec![]);
+    let row = match store_row(state, handle).await {
+        Ok(r) => r,
+        Err(detail) => {
+            let ctx = ForgeCtx::failed_closed(&github, detail);
+            return (None, ctx.warnings);
+        }
     };
-    let (github, warnings) = github_with_gh_cli_warned(state, github, handle, repo_name, gh).await;
-    let base = github
+    let ctx = forge_ctx_for_store(state, github, handle, row, repo_name, gh).await;
+    let ForgeCtx {
+        repo,
+        client,
+        mut warnings,
+        ..
+    } = ctx;
+    let Some(gh_repo) = repo else {
+        return (None, warnings);
+    };
+    match client
         .get_pull(&gh_repo.owner, &gh_repo.name, n as u64)
         .await
-        .ok()
-        .map(|p| p.base_ref);
-    (base, warnings)
+    {
+        Ok(p) => (Some(p.base_ref), warnings),
+        Err(e) => {
+            warnings.push(crate::review_base::warning(
+                FORGE_BASE_UNREAD,
+                format!("the forge API could not read PR #{n}'s target branch ({e})"),
+            ));
+            (None, warnings)
+        }
+    }
 }
 
 /// Where [`delete_review_with_refs`] deletes `refs/kbc/pr/<n>` from, if at
@@ -2195,7 +2477,7 @@ pub fn spawn_auto_capture_worker(
                                 continue;
                             };
                             let store2 = store.clone();
-                            let open = match tokio::task::spawn_blocking(move || {
+                            let open = match crate::review_jobs::spawn_blocking_tracked(move || {
                                 store2.list_open_reviews_for_repo(&repo_name)
                             }).await {
                                 Ok(Ok(rows)) => rows,
@@ -2204,7 +2486,7 @@ pub fn spawn_auto_capture_worker(
                             for review in open {
                                 let root = repo_entry.path.clone();
                                 let head_ref = review.head_ref.clone();
-                                let tip = match tokio::task::spawn_blocking(move || {
+                                let tip = match crate::review_jobs::spawn_blocking_tracked(move || {
                                     resolve_commit_sha(&WorkTreeRoot::user_clone(&root), &parse_user_ref(&head_ref)?)
                                 }).await {
                                     Ok(Ok(s)) => s,
@@ -2212,7 +2494,7 @@ pub fn spawn_auto_capture_worker(
                                 };
                                 let store3 = store.clone();
                                 let rid = review.id;
-                                let latest_tip = tokio::task::spawn_blocking(move || {
+                                let latest_tip = crate::review_jobs::spawn_blocking_tracked(move || {
                                     store3.latest_patchset(rid).ok().flatten().map(|p| p.tip_sha)
                                 })
                                 .await
@@ -2249,7 +2531,7 @@ pub fn spawn_auto_capture_worker(
                         let rs4 = review_stores.clone();
                         let max = max_patchsets;
                         tokio::spawn(async move {
-                            let _ = tokio::task::spawn_blocking(move || {
+                            let _ = crate::review_jobs::spawn_blocking_tracked(move || {
                                 let Some(review) = store4.get_review(id).ok().flatten() else {
                                     return;
                                 };
@@ -2493,7 +2775,7 @@ async fn create_review_value_inner(
     let root = repo.path.clone();
     let head = body.head_ref.clone();
     let base = base_ref.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::review_jobs::spawn_blocking_tracked(move || {
         resolve_commit_sha(&WorkTreeRoot::user_clone(&root), &parse_user_ref(&head)?)?;
         resolve_commit_sha(&WorkTreeRoot::user_clone(&root), &parse_user_ref(&base)?)?;
         Ok::<(), ReviewGitError>(())
@@ -2531,7 +2813,7 @@ async fn create_review_value_inner(
     let root = repo.path.clone();
     let max = state.review.max_patchsets;
     let review2 = review.clone();
-    let out = tokio::task::spawn_blocking(move || {
+    let out = crate::review_jobs::spawn_blocking_tracked(move || {
         capture_patchset_outcome(
             &store,
             &bus,
@@ -2780,7 +3062,7 @@ pub async fn snapshot_review(
         let max = state.review.max_patchsets;
         let review2 = review.clone();
         let force = opts.force;
-        let out = tokio::task::spawn_blocking(move || {
+        let out = crate::review_jobs::spawn_blocking_tracked(move || {
             capture_patchset_outcome(
                 &store,
                 &bus,
@@ -2998,7 +3280,7 @@ pub async fn delete_review(
     // `delete_review_with_refs` — so name the result type and let the
     // `From<ReviewGitError> for ApiError` impl above (reviews.rs:186) do
     // the conversion, exactly as this route reported git failures before.
-    tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
+    crate::review_jobs::spawn_blocking_tracked(move || -> Result<(), ApiError> {
         // RS-U6 review fix — the store, once a mutation is ADMITTED
         // against it (never a user-clone-ONLY write when it is); the work
         // tree otherwise, exactly as before. `admit_mutation` is the ONE
@@ -3217,7 +3499,7 @@ pub async fn gc_reviews(
     let review_stores = state.review_stores.clone();
     let repos = state.repos.clone();
     let max = state.review.max_patchsets;
-    let deleted = tokio::task::spawn_blocking(move || {
+    let deleted = crate::review_jobs::spawn_blocking_tracked(move || {
         gc_patchsets(&store, &review_stores, &repos, body.review_id, max)
     })
     .await
@@ -3438,7 +3720,7 @@ pub async fn get_review(
         let root2 = root.clone();
         let base = ps.base_sha.clone();
         let tip = ps.tip_sha.clone();
-        let count = tokio::task::spawn_blocking(move || {
+        let count = crate::review_jobs::spawn_blocking_tracked(move || {
             root2.read_with_fallback(|r| commit_count(r, &base, &tip))
         })
         .await
@@ -3564,9 +3846,10 @@ pub async fn review_files(
     let root = git_ctx.clone();
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
-    let files = tokio::task::spawn_blocking(move || files_changed(&root, &base, &tip))
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let files =
+        crate::review_jobs::spawn_blocking_tracked(move || files_changed(&root, &base, &tip))
+            .await
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
 
     let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
     // V73-K2a — `hunks_viewed` rides the SAME single `run_blocking` hop as
@@ -3590,7 +3873,7 @@ pub async fn review_files(
         let root = git_ctx.clone();
         let tip = ps.tip_sha.clone();
         let path = f.path.clone();
-        let blob = tokio::task::spawn_blocking(move || {
+        let blob = crate::review_jobs::spawn_blocking_tracked(move || {
             root.read_with_fallback(|r| blob_sha_at(r, &tip, &path))
         })
         .await
@@ -3666,7 +3949,7 @@ pub async fn review_interdiff(
         let r = root.clone();
         let a = from_tip.clone();
         let b = to_tip.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::review_jobs::spawn_blocking_tracked(move || {
             // Interdiff files = name-status+numstat between the two TIPs.
             if !is_full_sha(&a) || !is_full_sha(&b) {
                 return Err(ReviewGitError::BadSha(format!("{a}..{b}")));
@@ -3695,7 +3978,7 @@ pub async fn review_interdiff(
             crate::git::Revspec::trusted(to_ps.tip_sha.clone()),
             false,
         );
-        tokio::task::spawn_blocking(move || {
+        crate::review_jobs::spawn_blocking_tracked(move || {
             r.read_with_fallback(|g| history::range_diff::range_diff(g, &old_range, &new_range))
         })
         .await
@@ -3750,9 +4033,10 @@ pub async fn review_annotations(
     let root = GitCtx::resolve_entry(&state.store, repo).await;
     let base = ps.base_sha.clone();
     let tip = ps.tip_sha.clone();
-    let files = tokio::task::spawn_blocking(move || files_changed(&root, &base, &tip))
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let files =
+        crate::review_jobs::spawn_blocking_tracked(move || files_changed(&root, &base, &tip))
+            .await
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
     let rows = state
         .store
@@ -3843,7 +4127,7 @@ pub async fn review_risk_route(
     let repo_name = review.repo.clone();
     let session_id = review.session_id.clone();
 
-    let out = tokio::task::spawn_blocking(move || {
+    let out = crate::review_jobs::spawn_blocking_tracked(move || {
         review_risk_sync(
             &store,
             repo_id,
@@ -4175,7 +4459,7 @@ async fn reuse_pr_review(
     }
 
     let root_for_fetch = repo.path.clone();
-    let (_target_ref, fetched_sha) = tokio::task::spawn_blocking(move || {
+    let (_target_ref, fetched_sha) = crate::review_jobs::spawn_blocking_tracked(move || {
         crate::github::fetch_pr_ref(&root_for_fetch, pr_number)
     })
     .await
@@ -4201,7 +4485,7 @@ async fn reuse_pr_review(
     let root = repo.path.clone();
     let max = state.review.max_patchsets;
     let review2 = review.clone();
-    let out = tokio::task::spawn_blocking(move || {
+    let out = crate::review_jobs::spawn_blocking_tracked(move || {
         capture_patchset_outcome(
             &store,
             &bus,
@@ -4482,15 +4766,16 @@ pub(crate) async fn create_review_pr_value_known(
     // Resolve owner/repo up front — used for `pr_repo_slug` and to decide
     // whether metadata enrichment is attempted at all (see the section doc).
     let repo_root_for_origin = repo_root.clone();
-    let gh_repo_result =
-        tokio::task::spawn_blocking(move || crate::github::github_repo(&repo_root_for_origin))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("origin lookup task panicked: {e}"),
-                )
-            })?;
+    let gh_repo_result = crate::review_jobs::spawn_blocking_tracked(move || {
+        crate::github::github_repo(&repo_root_for_origin)
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("origin lookup task panicked: {e}"),
+        )
+    })?;
     let (gh_repo, pr_repo_slug) = match gh_repo_result {
         Ok(r) => {
             let slug = format!("{}/{}", r.owner, r.name);
@@ -4517,16 +4802,17 @@ pub(crate) async fn create_review_pr_value_known(
     // repo), so it is mapped to 400 explicitly for THIS route only.
     let number = body.pr_number;
     let root_for_fetch = repo_root.clone();
-    let (target_ref, fetched_sha) =
-        tokio::task::spawn_blocking(move || crate::github::fetch_pr_ref(&root_for_fetch, number))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("fetch task panicked: {e}"),
-                )
-            })?
-            .map_err(|e| ApiError::bad_request(format!("PR fetch failed: {e}")))?;
+    let (target_ref, fetched_sha) = crate::review_jobs::spawn_blocking_tracked(move || {
+        crate::github::fetch_pr_ref(&root_for_fetch, number)
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("fetch task panicked: {e}"),
+        )
+    })?
+    .map_err(|e| ApiError::bad_request(format!("PR fetch failed: {e}")))?;
 
     crate::review_jobs::set_stage(&job, "base");
 
@@ -4555,22 +4841,23 @@ pub(crate) async fn create_review_pr_value_known(
     // 409, and an unusable target is a `pr-target-assumed` WARNING.
     let root_for_base = repo.path.clone();
     let explicit_base = body.base_ref.clone();
-    let (base_ref, base_source, base_warnings) = tokio::task::spawn_blocking(move || {
-        start_pr_base(
-            &WorkTreeRoot::user_clone(&root_for_base),
-            explicit_base.as_deref(),
-            forge_base_ref.as_deref(),
-            pr_head_branch.as_deref(),
-        )
-    })
-    .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let (base_ref, base_source, base_warnings) =
+        crate::review_jobs::spawn_blocking_tracked(move || {
+            start_pr_base(
+                &WorkTreeRoot::user_clone(&root_for_base),
+                explicit_base.as_deref(),
+                forge_base_ref.as_deref(),
+                pr_head_branch.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
 
     // Pre-resolve base so we fail clean before inserting (mirrors
     // `create_review`'s own precedent).
     let root_for_resolve = repo.path.clone();
     let base_for_resolve = base_ref.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::review_jobs::spawn_blocking_tracked(move || {
         resolve_commit_sha(
             &WorkTreeRoot::user_clone(&root_for_resolve),
             &parse_user_ref(&base_for_resolve)?,
@@ -4611,7 +4898,7 @@ pub(crate) async fn create_review_pr_value_known(
     let root = repo.path.clone();
     let max = state.review.max_patchsets;
     let review2 = review.clone();
-    let out = tokio::task::spawn_blocking(move || {
+    let out = crate::review_jobs::spawn_blocking_tracked(move || {
         capture_patchset_outcome(
             &store,
             &bus,
@@ -4673,7 +4960,12 @@ async fn create_review_pr_in_store(
     // RS-U6 — every API call on the store path targets the STORE's forge
     // project (`review_stores.forge_slug`), never the member's `origin`,
     // which may be a fork.
-    let row = store_row(state, &handle).await;
+    let row = store_row(state, &handle).await.map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{e}; the member's origin is not a substitute for the store's project"),
+        )
+    })?;
     let gh_repo = match row.as_ref() {
         Some(r) => store_github_repo(r),
         None => gh_repo,
@@ -5308,16 +5600,12 @@ pub async fn pr_status_route(
 
     // LIVE half — see this route's own doc for why owner/repo is resolved
     // fresh rather than parsed from the stored slug.
-    let root_for_origin = repo.path.clone();
-    let gh_repo_result =
-        tokio::task::spawn_blocking(move || crate::github::github_repo(&root_for_origin))
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("origin lookup task panicked: {e}"),
-                )
-            })?;
+    // A6-2 / D12 — the ONE forge context ([`forge_ctx`]): the store's
+    // project and account when a store is ready, the member's `origin` only
+    // without one, and a closed answer when the store lookup failed.
+    let forge = forge_ctx(&state, repo, None).await;
+    let gh_repo_result = forge.repo_or_reason();
+    let github = forge.client;
 
     let mut pr_head_sha: Option<String> = None;
     let mut commits_behind: Option<i64> = None;
@@ -5325,11 +5613,7 @@ pub async fn pr_status_route(
 
     match gh_repo_result {
         Ok(gh) => {
-            match state
-                .github
-                .get_pull(&gh.owner, &gh.name, pr_number as u64)
-                .await
-            {
+            match github.get_pull(&gh.owner, &gh.name, pr_number as u64).await {
                 Ok(pull) => {
                     pr_head_sha = Some(pull.head_sha.clone());
                     // RS-U4 (S6) — the PR head and the base..head count are
@@ -5337,7 +5621,7 @@ pub async fn pr_status_route(
                     let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
                     let root = git_ctx.clone();
                     let head_sha = pull.head_sha.clone();
-                    let resolved = tokio::task::spawn_blocking(move || {
+                    let resolved = crate::review_jobs::spawn_blocking_tracked(move || {
                         // A GitHub-reported head sha — caller-adjacent
                         // text, so it goes through the same validator.
                         let spec = parse_user_ref(&head_sha)?;
@@ -5348,7 +5632,7 @@ pub async fn pr_status_route(
                     if let Ok(resolved_sha) = resolved {
                         let root2 = git_ctx.clone();
                         let base = latest_local_ps_tip_sha.clone();
-                        let count = tokio::task::spawn_blocking(move || {
+                        let count = crate::review_jobs::spawn_blocking_tracked(move || {
                             root2.read_with_fallback(|r| commit_count(r, &base, &resolved_sha))
                         })
                         .await
@@ -5363,7 +5647,7 @@ pub async fn pr_status_route(
                 Err(e) => unavailable_reason = Some(e.to_string()),
             }
         }
-        Err(e) => unavailable_reason = Some(e.to_string()),
+        Err(e) => unavailable_reason = Some(e),
     }
 
     Ok((
@@ -5591,9 +5875,11 @@ pub async fn list_review_refs(
     let root = repo.path.clone();
     let repo_name = params.repo.clone();
     let st = state.clone();
-    let refs = tokio::task::spawn_blocking(move || review_refs_view(&st, &repo_name, &root))
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let refs = crate::review_jobs::spawn_blocking_tracked(move || {
+        review_refs_view(&st, &repo_name, &root)
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
@@ -5748,10 +6034,11 @@ pub async fn gc_review_refs(
     let root = repo.path.clone();
     let repo_name = params.repo.clone();
     let st = state.clone();
-    let out =
-        tokio::task::spawn_blocking(move || gc_review_refs_inner(&st, &repo_name, &root, dry_run))
-            .await
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let out = crate::review_jobs::spawn_blocking_tracked(move || {
+        gc_review_refs_inner(&st, &repo_name, &root, dry_run)
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let deleted_count = out.candidates.len();
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
@@ -5773,6 +6060,82 @@ pub async fn gc_review_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A6.f3 / M3, the `start-pr` fallback's base fetch: a stalled remote
+    /// is a `Timeout` within the deadline, not a hang.
+    #[test]
+    fn fetch_remote_base_against_a_stalled_remote_times_out_within_the_deadline() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while !stop2.load(Ordering::SeqCst) {
+                if let Ok((s, _)) = listener.accept() {
+                    held.push(s);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                &format!("git://127.0.0.1:{port}/acme/widget.git"),
+            ],
+        ] {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(&args)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        }
+        let root = crate::git::roots::WorkTreeRoot::user_clone(tmp.path());
+        let branch = parse_user_ref("main").unwrap();
+        let t0 = std::time::Instant::now();
+        let err =
+            fetch_remote_base_with(&root, &branch, std::time::Duration::from_secs(2)).unwrap_err();
+        stop.store(true, Ordering::SeqCst);
+        assert!(t0.elapsed() < std::time::Duration::from_secs(30));
+        assert!(
+            matches!(err, ReviewGitError::Timeout { secs: 2 }),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("timeout"), "{err}");
+    }
+
+    /// A6.f1: the files that talk to GitHub on a review's behalf reach it
+    /// ONLY through `forge_ctx` — a bare `state.github` read there skips
+    /// both the store's `forge_slug` and the D12 binding.
+    #[test]
+    fn review_surfaces_reach_github_only_through_forge_ctx() {
+        for (name, src) in [
+            ("review_sweep.rs", include_str!("review_sweep.rs")),
+            ("review_sync.rs", include_str!("review_sync.rs")),
+            (
+                "review_github_threads.rs",
+                include_str!("review_github_threads.rs"),
+            ),
+        ] {
+            let code: String = src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !code.contains("state.github") && !code.contains("github::github_repo("),
+                "{name} reads GitHub outside reviews::forge_ctx"
+            );
+        }
+    }
 
     #[test]
     fn should_auto_capture_requires_all_gates() {

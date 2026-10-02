@@ -50,7 +50,8 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -199,6 +200,59 @@ pub struct ReviewJob {
 pub struct JobTable {
     jobs: HashMap<String, ReviewJob>,
     tasks: HashMap<String, tokio::task::AbortHandle>,
+    /// Outstanding `spawn_blocking` closures per job (see
+    /// [`spawn_blocking_tracked`]). `abort()` cancels the async task but
+    /// can never interrupt a closure already on the blocking pool, so
+    /// "the task finished" is NOT "the work stopped": [`sweep`] keeps an
+    /// entry while this is non-zero.
+    blocking: HashMap<String, Arc<AtomicUsize>>,
+    /// Jobs [`sweep`] itself aborted at the horizon: their watcher must
+    /// not re-settle them (the entry is on its way out, not a result).
+    aborted: HashSet<String>,
+}
+
+tokio::task_local! {
+    /// The in-flight blocking-work counter of the job whose body is
+    /// running on this task (set by [`start_job`]).
+    static CURRENT_BLOCKING: Arc<AtomicUsize>;
+}
+
+/// Held by a `spawn_blocking` closure for exactly as long as the closure
+/// exists (queued or running); drops the job's in-flight count.
+struct BlockingGuard(Arc<AtomicUsize>);
+
+impl BlockingGuard {
+    fn current() -> Option<Self> {
+        CURRENT_BLOCKING
+            .try_with(|c| {
+                c.fetch_add(1, Ordering::SeqCst);
+                BlockingGuard(c.clone())
+            })
+            .ok()
+    }
+}
+
+impl Drop for BlockingGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// `tokio::task::spawn_blocking`, but when called from inside a job body
+/// the closure is COUNTED against that job until it has finished. Outside
+/// a job it is exactly `spawn_blocking`. Every blocking call on the
+/// start-pr / sync paths goes through this, so [`sweep`] can tell "the
+/// task was cancelled" from "the work behind it stopped".
+pub fn spawn_blocking_tracked<F, R>(f: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let guard = BlockingGuard::current();
+    tokio::task::spawn_blocking(move || {
+        let _in_flight = guard;
+        f()
+    })
 }
 
 /// The shared table. `Default` is what `AppState` builds per boot.
@@ -248,7 +302,9 @@ pub fn set_stage(job: &Option<JobHandle>, stage: &'static str) {
 /// an `.await` (a wedged channel, a pending lock) is cancelled
 /// immediately and its entry goes on the next sweep. A body stuck
 /// inside `spawn_blocking` — which no `abort()` can interrupt, and which
-/// only a git deadline it ignores can produce — keeps its entry, and
+/// only a git deadline it ignores can produce — keeps its entry (the
+/// in-flight count [`spawn_blocking_tracked`] maintains per job is what
+/// `sweep` checks; the task being finished proves nothing about it), and
 /// keeps 409ing its `(kind, repo, pr)` key: which is TRUE, because the
 /// work really is still in flight. Its entry goes on the first sweep
 /// after that body returns.
@@ -276,13 +332,31 @@ fn sweep(jobs: &ReviewJobs) {
     for id in expired {
         // A live task behind this entry: cancel it, and keep the entry
         // until the cancellation has actually landed.
-        if let Some(task) = table.tasks.get(&id) {
-            if !task.is_finished() {
+        let live = table.tasks.get(&id).is_some_and(|task| {
+            if task.is_finished() {
+                false
+            } else {
                 task.abort();
-                continue;
+                true
             }
+        });
+        if live {
+            table.aborted.insert(id);
+            continue;
+        }
+        // The task is gone, but a `spawn_blocking` closure it started is
+        // not: `abort()` cannot reach it. The entry stays (and keeps
+        // 409ing its key) until the last such closure has returned.
+        if table
+            .blocking
+            .get(&id)
+            .is_some_and(|c| c.load(Ordering::SeqCst) > 0)
+        {
+            continue;
         }
         table.tasks.remove(&id);
+        table.blocking.remove(&id);
+        table.aborted.remove(&id);
         table.jobs.remove(&id);
     }
 }
@@ -415,9 +489,15 @@ where
         );
     }
 
+    let counter = Arc::new(AtomicUsize::new(0));
+    state
+        .review_jobs
+        .lock()
+        .blocking
+        .insert(job_id.clone(), counter.clone());
     let state2 = state.clone();
     let id2 = job_id.clone();
-    let join = tokio::spawn(async move {
+    let body = async move {
         let handle: JobHandle = (state2.review_jobs.clone(), id2.clone());
         let outcome = run(state2.clone(), handle).await;
         // One lock, dropped before this task ends — never across an await.
@@ -459,7 +539,8 @@ where
                 }
             }
         }
-    });
+    };
+    let join = tokio::spawn(CURRENT_BLOCKING.scope(counter, body));
     // The handle the horizon needs. Registering it AFTER the spawn is
     // the only ordering that is sound: a task that finished (or was
     // swept) before this line cannot have been aborted anyway, and one
@@ -469,6 +550,32 @@ where
         .lock()
         .tasks
         .insert(job_id.clone(), join.abort_handle());
+    // The watcher: `settled` is written only by the body's last lines, so
+    // a body that PANICS (or is cancelled by something other than the
+    // horizon) would otherwise leave the entry `running` for the whole
+    // horizon. Awaiting the JoinHandle is what makes that visible.
+    let watch_state = state.clone();
+    let watch_id = job_id.clone();
+    tokio::spawn(async move {
+        let Err(e) = join.await else { return };
+        let mut table = watch_state.review_jobs.lock();
+        if table.aborted.contains(&watch_id) {
+            // The horizon cancelled it; the entry is being swept.
+            return;
+        }
+        if let Some(j) = table.jobs.get_mut(&watch_id) {
+            if j.settled.is_none() {
+                j.settled = Some(Instant::now());
+                j.status = "failed";
+                j.error_status = Some(500);
+                j.error = Some(if e.is_panic() {
+                    format!("the {} job panicked; no result was recorded", j.kind)
+                } else {
+                    format!("the {} job was cancelled before it finished", j.kind)
+                });
+            }
+        }
+    });
 
     Ok((
         StatusCode::ACCEPTED,
@@ -771,6 +878,155 @@ mod tests {
         // The task handle went with it, so nothing keeps a corpse around
         // after the map has forgotten it.
         assert!(!state.review_jobs.lock().tasks.contains_key(&job_id));
+    }
+
+    async fn job_id_of(resp: Response) -> String {
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 1 << 20)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body["job_id"].as_str().expect("job_id").to_string()
+    }
+
+    /// Poll `cond` for up to ~10 s (real time: these observe other threads).
+    async fn eventually(what: &str, mut cond: impl FnMut() -> bool) {
+        for _ in 0..1000 {
+            if cond() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting for: {what}");
+    }
+
+    /// N1 / A6.f2: `settled` is written only by the body's last lines, so a
+    /// PANICKING body left the entry `running` until the 6 h horizon (and
+    /// every poller read "running" for hours). The watcher awaits the
+    /// JoinHandle and settles it `failed`.
+    #[tokio::test]
+    async fn a_panicking_job_body_settles_failed_instead_of_running_forever() {
+        let (_tmp, state) = booted_state().await;
+        let resp = start_job(
+            state.clone(),
+            "sync",
+            "widget".into(),
+            7,
+            "key-a".into(),
+            move |_state, _handle| async move {
+                if std::hint::black_box(0u8) == 0 {
+                    panic!("boom");
+                }
+                Ok((StatusCode::OK, serde_json::json!({})))
+            },
+        )
+        .await
+        .expect("start_job admits");
+        let job_id = job_id_of(resp).await;
+        eventually("the panicked job to settle", || {
+            state.review_jobs.lock().jobs[&job_id].settled.is_some()
+        })
+        .await;
+        let job = state.review_jobs.lock().jobs[&job_id].clone();
+        assert_eq!(job.status, "failed", "{job:?}");
+        assert_eq!(job.error_status, Some(500));
+        assert!(
+            job.error.as_deref().is_some_and(|e| e.contains("panicked")),
+            "{job:?}"
+        );
+        // A failed job no longer blocks a fresh admission for the same key.
+        let again = start_job(
+            state.clone(),
+            "sync",
+            "widget".into(),
+            7,
+            "key-a".into(),
+            never_settling,
+        )
+        .await
+        .expect("start_job admits");
+        assert_eq!(again.status(), StatusCode::ACCEPTED);
+    }
+
+    /// M5 / A5.f3: `abort()` cancels the ASYNC task but can never interrupt
+    /// a closure already on the blocking pool, so "the task finished" was
+    /// not "the work stopped" — the sweep dropped the entry (and the
+    /// `repo_guard` the work conceptually held) while git was still
+    /// running. This runs a REAL `spawn_blocking` body through the horizon:
+    /// the entry must outlive the cancellation until the closure returns.
+    #[tokio::test]
+    async fn the_horizon_keeps_an_entry_while_its_blocking_work_is_still_running() {
+        use std::sync::atomic::AtomicBool;
+        let (_tmp, state) = booted_state().await;
+        let started = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let (s2, r2) = (started.clone(), release.clone());
+        let resp = start_job(
+            state.clone(),
+            "start-pr",
+            "widget".into(),
+            7,
+            String::new(),
+            move |_state, _handle| async move {
+                let _ = spawn_blocking_tracked(move || {
+                    s2.store(true, Ordering::SeqCst);
+                    while !r2.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                })
+                .await;
+                Ok((StatusCode::OK, serde_json::json!({})))
+            },
+        )
+        .await
+        .expect("start_job admits");
+        let job_id = job_id_of(resp).await;
+        eventually("the blocking body to start", || {
+            started.load(Ordering::SeqCst)
+        })
+        .await;
+        assert_eq!(
+            state.review_jobs.lock().blocking[&job_id].load(Ordering::SeqCst),
+            1
+        );
+
+        // Past the horizon: the sweep cancels the async task ...
+        state
+            .review_jobs
+            .lock()
+            .jobs
+            .get_mut(&job_id)
+            .unwrap()
+            .created = Instant::now() - Duration::from_secs(STUCK_JOB_HORIZON_SECS + 1);
+        sweep(&state.review_jobs);
+        eventually("the cancellation to land", || {
+            state.review_jobs.lock().tasks[&job_id].is_finished()
+        })
+        .await;
+
+        // ... but the blocking closure is still running, so the entry stays
+        // (and keeps 409ing its key) no matter how often the sweep runs.
+        for _ in 0..5 {
+            sweep(&state.review_jobs);
+        }
+        assert!(
+            state.review_jobs.lock().jobs.contains_key(&job_id),
+            "the sweep dropped an entry whose spawn_blocking work was still running"
+        );
+
+        // Once the closure returns, the next sweep drops it, tables and all.
+        release.store(true, Ordering::SeqCst);
+        eventually("the blocking closure to return", || {
+            state.review_jobs.lock().blocking[&job_id].load(Ordering::SeqCst) == 0
+        })
+        .await;
+        sweep(&state.review_jobs);
+        let table = state.review_jobs.lock();
+        assert!(!table.jobs.contains_key(&job_id));
+        assert!(!table.tasks.contains_key(&job_id));
+        assert!(!table.blocking.contains_key(&job_id));
+        assert!(!table.aborted.contains(&job_id));
     }
 
     /// RS-U10b — the CONSUMER of `crate::review_sync::sync_job_key`.

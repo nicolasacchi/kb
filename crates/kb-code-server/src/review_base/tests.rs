@@ -1751,6 +1751,26 @@ async fn route_state_with(
     fx: &Fx,
     github: crate::config::GithubSection,
 ) -> crate::state::SharedState {
+    let state = unregistered_state_with(fx, github).await;
+    let st = state.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Registration::Member { store_id, .. } =
+            st.review_stores.register_repo(&st.store, REPO, None)
+        {
+            let _ = st.review_stores.seed(&st.store, store_id, false);
+        }
+    })
+    .await
+    .unwrap();
+    state
+}
+
+/// [`route_state_with`] without registering the repo with a store (the
+/// caller registers it, e.g. with an explicit forge URL).
+async fn unregistered_state_with(
+    fx: &Fx,
+    github: crate::config::GithubSection,
+) -> crate::state::SharedState {
     let cfg = crate::config::KbCodeConfig {
         repos: vec![RepoEntry {
             name: REPO.into(),
@@ -1773,18 +1793,7 @@ async fn route_state_with(
     let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "kb-code");
     // Leak the tempdir for the test's lifetime (the state outlives this fn).
     std::mem::forget(tmp);
-    let state = crate::build_state_for_test(cfg, paths).await.unwrap();
-    let st = state.clone();
-    tokio::task::spawn_blocking(move || {
-        if let Registration::Member { store_id, .. } =
-            st.review_stores.register_repo(&st.store, REPO, None)
-        {
-            let _ = st.review_stores.seed(&st.store, store_id, false);
-        }
-    })
-    .await
-    .unwrap();
-    state
+    crate::build_state_for_test(cfg, paths).await.unwrap()
 }
 
 const TOKEN_ALICE: &str = "ghp_FAKEaliceAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -1902,10 +1911,11 @@ async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "kb-code");
     let state = crate::build_state_for_test(cfg, paths).await.unwrap();
-    if state.github.has_ambient_token() {
-        eprintln!("skipped: a GitHub token is configured in this environment");
-        return;
-    }
+    // Hermetic (A6.f7): whatever `KB_CODE_GITHUB_TOKEN` holds on the runner,
+    // THIS client reads it as unset — the test used to `return` (pass
+    // vacuously) when an ambient token was present.
+    let ambient_free = state.github.with_env_token_for_test(None);
+    assert!(!ambient_free.has_ambient_token());
     let st = state.clone();
     let row = tokio::task::spawn_blocking(move || {
         let reg = st.review_stores.register_repo(
@@ -1932,7 +1942,7 @@ async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
     let gh = fake_gh(gh_dir.path(), "alice");
     let (client, warnings) = crate::reviews::github_with_gh_cli_warned(
         &state,
-        state.github.with_cli_token(None),
+        ambient_free.with_cli_token(None),
         &handle,
         REPO,
         gh.clone(),
@@ -1948,7 +1958,7 @@ async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
         &handle,
         REPO,
         7,
-        state.github.with_cli_token(None),
+        ambient_free.with_cli_token(None),
         gh,
     )
     .await;
@@ -1984,7 +1994,7 @@ async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
         &handle,
         REPO,
         7,
-        state.github.with_cli_token(None),
+        ambient_free.with_cli_token(None),
         fake_gh(gh_dir2.path(), "mallory"),
     )
     .await;
@@ -1998,4 +2008,373 @@ async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
         seen.iter().skip(1).all(|(_, auth)| auth.is_none()),
         "no token is sent when the account does not match: {seen:?}"
     );
+}
+
+// =====================================================================
+// A6-2 / A6-8 — the ONE forge context (`reviews::forge_ctx`)
+// =====================================================================
+
+fn store_handle_of(row: &crate::store::ReviewStoreRow) -> crate::review_store::StoreHandle {
+    crate::review_store::StoreHandle {
+        id: row.id,
+        uuid: row.uuid.clone(),
+        git_dir: PathBuf::from(&row.git_dir),
+        store_key: row.store_key.clone(),
+        base_url: row.base_url.clone(),
+        forge_kind: row.forge_kind.clone(),
+    }
+}
+
+/// A mock GitHub whose PR #7 is OPEN on `acme/widgets` and CLOSED on any
+/// other project (the fork). Every request's `owner/name` is recorded.
+async fn fork_and_canonical_github() -> (
+    crate::config::GithubSection,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    use axum::extract::Path as AxumPath;
+    use std::sync::{Arc, Mutex};
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen2 = seen.clone();
+    let router = axum::Router::new().route(
+        "/repos/{owner}/{name}/pulls/{n}",
+        axum::routing::get(
+            move |AxumPath((owner, name, _n)): AxumPath<(String, String, u64)>| {
+                let seen = seen2.clone();
+                async move {
+                    let canonical = owner == "acme";
+                    seen.lock().unwrap().push(format!("{owner}/{name}"));
+                    axum::Json(serde_json::json!({
+                        "number": 7,
+                        "title": if canonical { "canonical" } else { "the fork's own PR 7" },
+                        "user": {"login": "someone"},
+                        "head": {"ref": "feature",
+                                 "sha": if canonical { "cccccccccccccccccccccccccccccccccccccccc" }
+                                        else { "ffffffffffffffffffffffffffffffffffffffff" }},
+                        "base": {"ref": "main"},
+                        "updated_at": "2024-01-01T00:00:00Z", "draft": false,
+                        "state": if canonical { "open" } else { "closed" },
+                        "merged": false, "labels": []
+                    }))
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (
+        crate::config::GithubSection {
+            token_file: None,
+            api_base: format!("http://{addr}"),
+        },
+        seen,
+    )
+}
+
+/// A6-2: the sweep on a ready store reads the STORE's project, so a fork
+/// `origin` whose own PR #7 is closed can never overwrite the review's PR
+/// snapshot or close it. A failed store lookup (`ForgeCtx::failed_closed`)
+/// reads NOTHING, persists nothing and closes nothing — even with an
+/// ambient token configured. Before `forge_ctx` the sweep read
+/// `origin`'s `someone/widgets` with the unbound ambient client.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sweep_reads_the_store_project_and_a_fork_pr_can_never_close_the_review() {
+    use crate::store::StoreBlocking;
+    const CANON: &str = "cccccccccccccccccccccccccccccccccccccccc";
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    git(
+        &fx.clone,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/someone/widgets.git",
+        ],
+    );
+    let (github, seen) = fork_and_canonical_github().await;
+    let state = unregistered_state_with(&fx, github).await;
+    let ambient = state.github.with_env_token_for_test(Some("ambient-token"));
+    let st = state.clone();
+    let row = tokio::task::spawn_blocking(move || {
+        let reg = st.review_stores.register_repo(
+            &st.store,
+            REPO,
+            Some("https://github.com/acme/widgets.git"),
+        );
+        assert!(matches!(reg, Registration::Member { .. }), "{reg:?}");
+        st.store.store_for_repo_name(REPO).unwrap().unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(row.forge_slug.as_deref(), Some("acme/widgets"));
+    let handle = store_handle_of(&row);
+
+    let st = state.clone();
+    let id = tokio::task::spawn_blocking(move || {
+        let id = st
+            .store
+            .create_review(REPO, Some("t"), "main", "refs/kbc/pr/7", None, 1)
+            .unwrap();
+        st.store
+            .set_review_pr_binding(id, 7, "acme/widgets", Some("old-head"), None, None)
+            .unwrap();
+        id
+    })
+    .await
+    .unwrap();
+    let load = |state: crate::state::SharedState| async move {
+        state
+            .store
+            .run_blocking(move |s| {
+                (
+                    s.get_review(id).unwrap().unwrap(),
+                    s.get_review_pr_binding(id).unwrap().unwrap(),
+                )
+            })
+            .await
+    };
+
+    // The store path: acme/widgets #7 is open — nothing to close, and the
+    // snapshot is the canonical PR's.
+    let gh_dir = tempfile::tempdir().unwrap();
+    let ctx = crate::reviews::forge_ctx_for_store(
+        &state,
+        ambient.with_cli_token(None),
+        &handle,
+        Some(row.clone()),
+        REPO,
+        fake_gh(gh_dir.path(), "alice"),
+    )
+    .await;
+    assert_eq!(
+        ctx.repo.as_ref().map(|r| format!("{}/{}", r.owner, r.name)),
+        Some("acme/widgets".to_string()),
+        "the store's forge_slug, never the fork origin"
+    );
+    let (review, binding) = load(state.clone()).await;
+    let out = crate::review_sweep::sweep_one_with(state.clone(), review, binding, true, ctx)
+        .await
+        .unwrap();
+    assert_eq!(out.row["pr_state"], "open", "{}", out.row);
+    assert_eq!(out.row["closed"], false, "{}", out.row);
+    assert_eq!(out.row["suggest_close"], false, "{}", out.row);
+    let (review, binding) = load(state.clone()).await;
+    assert_eq!(review.state, "open");
+    assert_eq!(binding.pr_head_sha.as_deref(), Some(CANON));
+    assert!(binding
+        .pr_meta_json
+        .as_deref()
+        .is_some_and(|m| m.contains("canonical") && !m.contains("fork")));
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        ["acme/widgets"],
+        "only the store's project was ever asked"
+    );
+
+    // A lookup that failed closed: no read at all, nothing persisted,
+    // nothing closed — whatever the ambient token could have answered.
+    let before = seen.lock().unwrap().len();
+    let closed_ctx = crate::reviews::ForgeCtx::failed_closed(&ambient, "db unreadable".into());
+    assert!(
+        !closed_ctx.client.has_credentials(),
+        "a fail-closed client is bound to nothing: the ambient token must not answer"
+    );
+    let (review, binding) = load(state.clone()).await;
+    let out = crate::review_sweep::sweep_one_with(state.clone(), review, binding, true, closed_ctx)
+        .await
+        .unwrap();
+    assert!(
+        out.row["unavailable_reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("store-unavailable")),
+        "{}",
+        out.row
+    );
+    assert_eq!(out.row["closed"], false, "{}", out.row);
+    assert_eq!(seen.lock().unwrap().len(), before, "no request was made");
+    let (review, binding) = load(state.clone()).await;
+    assert_eq!(review.state, "open");
+    assert_eq!(binding.pr_head_sha.as_deref(), Some(CANON));
+
+    // The store-less contrast (the documented pre-store posture): `origin`
+    // IS the project, so the fork's closed PR #7 would be what is read.
+    let origin_ctx = crate::reviews::forge_ctx_with_gh(
+        &state,
+        &RepoEntry {
+            name: REPO.into(),
+            path: fx.clone.clone(),
+        },
+        None,
+        fake_gh(gh_dir.path(), "alice"),
+    )
+    .await;
+    // The registered store is not `ready` in this fixture, so there is no
+    // store to answer: origin it is, and that is exactly why the store
+    // path above must not be bypassed once one is ready.
+    assert_eq!(
+        origin_ctx
+            .repo
+            .as_ref()
+            .map(|r| format!("{}/{}", r.owner, r.name)),
+        Some("someone/widgets".to_string())
+    );
+}
+
+/// A6-8: what counts as "no store" vs "the lookup FAILED". A DB error or a
+/// refused store credential must not read as `NotRegistered`.
+#[test]
+fn a_failed_store_lookup_is_never_read_as_no_store() {
+    use crate::review_store::StoreUnavailable as U;
+    let handle = crate::review_store::StoreHandle {
+        id: 1,
+        uuid: "u".into(),
+        git_dir: PathBuf::from("/nonexistent"),
+        store_key: "k".into(),
+        base_url: None,
+        forge_kind: None,
+    };
+    assert!(crate::reviews::classify_store_lookup(Ok(handle))
+        .unwrap()
+        .is_some());
+    for benign in [
+        U::NotRegistered,
+        U::Absent,
+        U::Seeding,
+        U::LockedElsewhere,
+        U::MemberPending,
+        U::Disabled { detail: "x".into() },
+        U::Broken { code: "x".into() },
+    ] {
+        assert!(
+            matches!(crate::reviews::classify_store_lookup(Err(benign)), Ok(None)),
+            "no store answers for this repo"
+        );
+    }
+    for failed in [
+        U::Error {
+            detail: "row decode".into(),
+        },
+        U::CredentialRefused {
+            class: "credential-account-mismatch".into(),
+            detail: "d".into(),
+        },
+    ] {
+        let r = crate::reviews::classify_store_lookup(Err(failed));
+        assert!(r.is_err(), "a failed lookup must fail closed, got {r:?}");
+    }
+}
+
+/// D12 fail-closed: the context built for a failed lookup answers nothing
+/// and names why — and its client is bound, so the ambient token is not a
+/// rung even for a caller who ignores `closed`.
+#[test]
+fn a_fail_closed_forge_ctx_has_no_repo_no_credential_and_a_named_warning() {
+    let cfg = crate::config::GithubSection {
+        token_file: None,
+        api_base: "http://127.0.0.1:1".into(),
+    };
+    let ambient = crate::github::GithubClient::new(&cfg).with_env_token_for_test(Some("ambient"));
+    assert!(ambient.has_credentials());
+    let ctx = crate::reviews::ForgeCtx::failed_closed(&ambient, "boom".into());
+    assert!(ctx.repo.is_none());
+    assert!(!ctx.client.has_credentials());
+    assert!(ctx.refused_reason().unwrap().contains("boom"));
+    assert_eq!(
+        codes(&ctx.warnings),
+        vec![crate::reviews::FORGE_STORE_UNAVAILABLE]
+    );
+    assert!(ctx.repo_or_reason().is_err());
+}
+
+// =====================================================================
+// A6-4 — retrack with an unreadable forge API
+// =====================================================================
+
+/// A6-4: the forge API could not answer (`forge-base-unread` rides
+/// `api_warnings`). Retrack used to resolve the chain with NO caller rung,
+/// land on the default branch, record that guess as `set_by=user` (which
+/// disables D15 retarget-follow for good) and class it `stale-pin` so a
+/// bulk `--yes` applied it. Now the review's own stored PR target is the
+/// fallback rung; with neither, the row is `unknown`, a guess is never
+/// persisted, and an apply is refused with the review untouched.
+#[test]
+fn retrack_with_an_unreadable_forge_follows_the_stored_target_and_refuses_a_guess() {
+    use crate::review_retrack::retrack_sync;
+    let fx = fixture();
+    // gitflow: `develop` is one commit ahead of `main`, and the PR targets it.
+    git(&fx.author, &["checkout", "-q", "-B", "develop", "main"]);
+    commit(&fx.author, "d.txt", "d");
+    git(&fx.author, &["push", "-q", "origin", "develop"]);
+    git(&fx.author, &["checkout", "-q", "main"]);
+    fx.push_pr("develop", &["p1.rs"], "v1");
+    // A legacy review pinned at an old sha (an ancestor of main AND develop).
+    let review = fx.pr_review(&fx.m1.clone(), None);
+    let id = review.id;
+    fx.store
+        .set_review_base(id, "pin", None, None, "legacy", None)
+        .unwrap();
+    recap(&fx, id, fetch());
+    let unread = vec![warning(
+        crate::reviews::FORGE_BASE_UNREAD,
+        "the forge API could not read PR #7's target branch (rate limited)",
+    )];
+    let patchsets = |fx: &Fx| fx.store.list_patchsets(id).unwrap().len();
+    let before_ps = patchsets(&fx);
+    let before_base = fx.store.get_review_base(id).unwrap().unwrap();
+
+    // 1. No API answer and NO stored target: the default branch is a
+    // GUESS. Dry run says `unknown` (never `stale-pin`) and names it ...
+    let review = fx.refetch(id);
+    let dry = fx
+        .with(|c| retrack_sync(c, &review, None, true, None, unread.clone(), true))
+        .unwrap();
+    assert_eq!(dry.class, RetrackClass::Unknown, "{:?}", dry.warnings);
+    assert!(
+        codes(&dry.warnings).contains(&warn::PR_TARGET_ASSUMED),
+        "{:?}",
+        dry.warnings
+    );
+    assert!(
+        codes(&dry.warnings).contains(&crate::reviews::FORGE_BASE_UNREAD),
+        "the forge read failure is surfaced, not .ok()-ed away: {:?}",
+        dry.warnings
+    );
+    // ... and an apply is refused, leaving the review exactly as it was.
+    let err = fx
+        .with(|c| retrack_sync(c, &review, None, true, None, unread.clone(), false))
+        .err()
+        .expect("a guessed target must not be applied");
+    assert_eq!(err.urn, URN_BASE_UNDETERMINED, "{err}");
+    let after = fx.store.get_review_base(id).unwrap().unwrap();
+    assert_eq!(after.base_set_by, before_base.base_set_by);
+    assert_eq!(after.base_mode, before_base.base_mode);
+    assert_eq!(patchsets(&fx), before_ps);
+
+    // 2. The review's own PR snapshot names the target: it is the caller
+    // rung, so the chain follows `develop` (no guess, no assumed warning).
+    fx.store
+        .set_review_pr_meta(id, None, Some(r#"{"base_ref":"develop"}"#), 1)
+        .unwrap();
+    let dry = fx
+        .with(|c| retrack_sync(c, &review, None, true, None, unread.clone(), true))
+        .unwrap();
+    assert!(
+        !codes(&dry.warnings).contains(&warn::PR_TARGET_ASSUMED),
+        "{:?}",
+        dry.warnings
+    );
+    assert_eq!(
+        dry.base.branch.as_deref(),
+        Some("develop"),
+        "{:?}",
+        dry.base
+    );
+    let applied = fx
+        .with(|c| retrack_sync(c, &review, None, true, None, unread, false))
+        .unwrap();
+    assert_eq!(applied.base.branch.as_deref(), Some("develop"));
+    let b = fx.store.get_review_base(id).unwrap().unwrap();
+    assert_eq!(b.base_branch.as_deref(), Some("develop"));
 }
