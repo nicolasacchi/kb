@@ -18,7 +18,7 @@
 //!   pass reads: a boot seed is local-only and cannot resolve a
 //!   credential, so [`crate::review_store::boot::run_boot`] leaves a row
 //!   whose last refusal was a credential class `absent` and reports it,
-//+//!   rather than re-seeding it straight back to `ready` over the same
+//!   rather than re-seeding it straight back to `ready` over the same
 //!   broken credential. A LOCAL pass (`network = false`: a boot seed, an
 //!   offline `store sync`) is the one documented exception and is always
 //!   recorded as such — `base: offline-seed`/`offline` in `state_json`.
@@ -256,6 +256,7 @@ pub struct ReviewStores {
     repos: Vec<RepoRef>,
     fetch_locks: parking_lot::Mutex<HashMap<(i64, String), Lock>>,
     ops_locks: parking_lot::Mutex<HashMap<i64, Lock>>,
+    maint_locks: parking_lot::Mutex<HashMap<i64, Lock>>,
     /// uuid → the lifetime flock (held = opened/seeded by THIS process).
     held: parking_lot::Mutex<HashMap<String, StoreLock>>,
     /// uuids another process holds.
@@ -524,6 +525,7 @@ impl ReviewStores {
             repos,
             fetch_locks: Default::default(),
             ops_locks: Default::default(),
+            maint_locks: Default::default(),
             held: Default::default(),
             locked_elsewhere: Default::default(),
             seeding: Default::default(),
@@ -748,6 +750,16 @@ impl ReviewStores {
     /// Never held across a network fetch.
     pub fn ops_lock(&self, store_id: i64) -> Arc<tokio::sync::Mutex<()>> {
         self.ops_locks.lock().entry(store_id).or_default().clone()
+    }
+
+    /// The per-store MAINTENANCE mutex: serialises the weekly/monthly
+    /// repacks (the scheduler vs `store maintain --task weekly|monthly`) on
+    /// one store. Always taken BEFORE [`Self::ops_lock`], never while
+    /// holding it. A weekly repack does not touch the ops lock, so captures
+    /// proceed; a monthly repack that may expire cruft holds the ops lock
+    /// for its duration, and captures/seeds/syncs on that store wait.
+    pub fn maint_lock(&self, store_id: i64) -> Arc<tokio::sync::Mutex<()>> {
+        self.maint_locks.lock().entry(store_id).or_default().clone()
     }
 
     /// Take the lifetime flock on `uuid`. PRECONDITION: the caller holds
@@ -1188,7 +1200,14 @@ impl ReviewStores {
             Some(source),
             now(),
         ) {
-            Ok(id) => id,
+            Ok(id) => {
+                // Born after any restore incident: not a casualty of it.
+                super::maint::restore_guard::admit_new_store(
+                    &self.settings.restore_guard_path,
+                    uuid,
+                );
+                id
+            }
             // UNIQUE(store_key): another registration minted it first — join.
             Err(_) => match store.get_review_store_by_key(key) {
                 Ok(Some(row)) => row.id,
@@ -1472,17 +1491,17 @@ impl ReviewStores {
                     })?;
                     self.apply_objects_state(store, &missing, &ok);
                     store
-                        .set_review_store_state(
+                        .update_review_store_state_json(
                             row.id,
-                            "ready",
-                            Some(
-                                &serde_json::json!({
-                                    "code": "adopted-existing",
-                                    "at": now(),
-                                    "objects_missing": missing,
-                                })
-                                .to_string(),
-                            ),
+                            &[
+                                ("code", "adopted-existing".into()),
+                                ("at", now().into()),
+                                ("class", serde_json::Value::Null),
+                                ("detail", serde_json::Value::Null),
+                                ("stage", serde_json::Value::Null),
+                                ("objects_missing", serde_json::json!(missing)),
+                            ],
+                            Some("ready"),
                         )
                         .map_err(db)?;
                     // An adopted directory may predate some members; the
@@ -1540,11 +1559,21 @@ impl ReviewStores {
                 }
             };
         }
+        // Key-merge, not a whole-object replace: the keys other writers own
+        // (`last_gc_apply`, `gc_apply_started_at`, `last_backup`,
+        // `last_maint`, `default_branch`) must survive a (re-)seed.
         store
-            .set_review_store_state(
+            .update_review_store_state_json(
                 row.id,
-                "seeding",
-                Some(&serde_json::json!({"code": "seeding", "started_at": now()}).to_string()),
+                &[
+                    ("code", "seeding".into()),
+                    ("started_at", now().into()),
+                    // A previous attempt's failure record must not outlive it.
+                    ("class", serde_json::Value::Null),
+                    ("detail", serde_json::Value::Null),
+                    ("stage", serde_json::Value::Null),
+                ],
+                Some("seeding"),
             )
             .map_err(db)?;
         let (plan, problems) = match self.plan_for(store, &row) {
@@ -1648,20 +1677,25 @@ impl ReviewStores {
                 // import. Put it on the report — the same value goes into
                 // `state_json` just below, so the response and the durable
                 // record are one list, never two — and carry it here by
-                // clone because `sj` below consumes the original.
+                // clone because the `state_json` write below consumes the original.
                 report.member_problems = problems.clone();
-                let sj = serde_json::json!({
-                    "code": "ready",
-                    "seeded_at": now(),
-                    "base": report.base,
-                    "last_base_fetch": matches!(report.base, BaseFetch::Fetched { .. }).then(now),
-                    "last_work_fetch": now(),
-                    "objects_missing": report.objects_missing,
-                    "member_problems": problems,
-                    "elapsed_ms": report.elapsed_ms as u64,
-                });
+                let sets: Vec<(&str, serde_json::Value)> = vec![
+                    ("code", "ready".into()),
+                    ("seeded_at", now().into()),
+                    ("base", serde_json::json!(report.base)),
+                    (
+                        "last_base_fetch",
+                        serde_json::json!(
+                            matches!(report.base, BaseFetch::Fetched { .. }).then(now)
+                        ),
+                    ),
+                    ("last_work_fetch", now().into()),
+                    ("objects_missing", serde_json::json!(report.objects_missing)),
+                    ("member_problems", serde_json::json!(problems)),
+                    ("elapsed_ms", (report.elapsed_ms as u64).into()),
+                ];
                 store
-                    .set_review_store_state(row.id, "ready", Some(&sj.to_string()))
+                    .update_review_store_state_json(row.id, &sets, Some("ready"))
                     .map_err(db)?;
                 // Repos that joined WHILE this seed ran were not in its
                 // plan snapshot: import them now. One that fails to
@@ -1806,32 +1840,24 @@ impl ReviewStores {
             detail: e.to_string(),
         })?;
         self.apply_objects_state(store, &missing, &ok);
-        // Merged into a FRESH read, never the `row` snapshot taken above:
-        // the member fetches, base fetch and connectivity verify above run
-        // for MINUTES, and a `json_set` that lands meanwhile — the forge
-        // probe's `default_branch`, a backup pass's `last_backup` — would
-        // be silently dropped by a write derived from the stale copy. The
-        // read is here, immediately before the write, for that reason.
-        let fresh = store
-            .get_review_store(handle.id)
-            .map_err(|e| StoreUnavailable::Error {
-                detail: e.to_string(),
-            })?
-            .ok_or(StoreUnavailable::NotRegistered)?;
-        let mut sj: serde_json::Value = fresh
-            .state_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .filter(serde_json::Value::is_object)
-            .unwrap_or_else(|| serde_json::json!({}));
-        sj["code"] = "ready".into();
-        sj["base"] = serde_json::to_value(&base).unwrap_or_default();
-        sj["last_work_fetch"] = now().into();
+        // `json_set` of this pass's own keys into the row as it is NOW, never
+        // a write derived from the `row` snapshot taken above: the member
+        // fetches, base fetch and connectivity verify run for MINUTES, and a
+        // key that lands meanwhile — the forge probe's `default_branch`, a
+        // backup pass's `last_backup`, a GC's `last_gc_apply` — must survive.
+        let mut sets: Vec<(&str, serde_json::Value)> = vec![
+            ("code", "ready".into()),
+            ("base", serde_json::to_value(&base).unwrap_or_default()),
+            ("last_work_fetch", now().into()),
+            (
+                "objects_missing",
+                serde_json::to_value(&missing).unwrap_or_default(),
+            ),
+        ];
         if matches!(base, BaseFetch::Fetched { .. }) {
-            sj["last_base_fetch"] = now().into();
+            sets.push(("last_base_fetch", now().into()));
         }
-        sj["objects_missing"] = serde_json::to_value(&missing).unwrap_or_default();
-        let _ = store.set_review_store_state(row.id, "ready", Some(&sj.to_string()));
+        let _ = store.update_review_store_state_json(handle.id, &sets, Some("ready"));
         Ok(SyncReport {
             members,
             member_errors,

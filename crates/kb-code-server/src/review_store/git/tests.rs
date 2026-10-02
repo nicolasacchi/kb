@@ -896,3 +896,45 @@ fn the_base_fetch_deadline_is_the_one_the_spawner_was_built_with() {
         Duration::from_secs(900)
     );
 }
+
+/// A1/A5-1: a second `StoreGit` built on the same `git_home` (the CLI
+/// `kb-code backup`, the boot bundle pass) must ADOPT the daemon's
+/// gitconfig, not truncate it; and `allow_local_source` must consult the
+/// disk, so a file lost behind the daemon's back is repaired on next use.
+#[test]
+fn a_second_spawner_on_the_same_git_home_keeps_the_safe_directory_entries() {
+    let t = tempfile::tempdir().unwrap();
+    let daemon = store_git(t.path());
+    daemon
+        .allow_local_source(Path::new("/srv/acme/widgets"))
+        .unwrap();
+    let cfg = daemon.git_home().join("gitconfig");
+    let before = std::fs::read_to_string(&cfg).unwrap();
+    assert!(before.contains("/srv/acme/widgets"));
+
+    let backup_spawner = store_git(t.path());
+    assert_eq!(
+        std::fs::read_to_string(&cfg).unwrap(),
+        before,
+        "constructing a second StoreGit must not rewrite the shared gitconfig"
+    );
+    // The adopted entry is also known in memory: re-allowing is a no-op.
+    backup_spawner
+        .allow_local_source(Path::new("/srv/acme/widgets"))
+        .unwrap();
+    backup_spawner
+        .allow_local_source(Path::new("/srv/acme/other"))
+        .unwrap();
+    let after = std::fs::read_to_string(&cfg).unwrap();
+    assert!(after.contains("/srv/acme/widgets") && after.contains("/srv/acme/other"));
+
+    // The daemon's in-memory set still lists "widgets" but the disk lost
+    // it: allow_local_source must repair from the disk truth.
+    std::fs::write(&cfg, "[safe]\n").unwrap();
+    daemon
+        .allow_local_source(Path::new("/srv/acme/widgets"))
+        .unwrap();
+    assert!(std::fs::read_to_string(&cfg)
+        .unwrap()
+        .contains("/srv/acme/widgets"));
+}
