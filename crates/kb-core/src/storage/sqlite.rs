@@ -81,6 +81,12 @@ fn newest_capture_pred(artifact_col: &str, session_id_expr: &str) -> String {
 /// leak. The prefix has no LIKE metacharacters. A caller scoped to one
 /// session must also constrain `session_id`; a bare prefix matches every
 /// session's serves.
+/// How far apart (seconds) a live serve and the capture row of the same
+/// injection may be. The capture row's `recalled_at` is its enclosing turn's
+/// `ts`; the serve is stamped when the hook's recall request lands, moments
+/// after the prompt that opened the turn.
+const SERVE_CAPTURE_SLACK_SECS: i64 = 300;
+
 fn served_artifact_pred(artifact_col: &str) -> String {
     format!("{artifact_col} LIKE 'served-%'")
 }
@@ -4502,7 +4508,10 @@ impl Db {
     /// siblings) still filters capture rows to the newest capture via
     /// `newest_capture_pred` at query time, and ORs in live-serve rows
     /// (`artifact_id` LIKE 'served-%') beside that filter. Those rows are
-    /// not a capture, so the newest predicate alone would hide them.
+    /// not a capture, so the newest predicate alone would hide them. The
+    /// capture's rows retire the serve rows they duplicate (M7, see the
+    /// loop below), so an injection that was both served and captured
+    /// counts once.
     pub fn memory_recalls_replace(
         &mut self,
         artifact_id: &str,
@@ -4519,7 +4528,33 @@ impl Db {
                     (memory_kb, memory_id, session_id, turn_id, recalled_at, artifact_id, used, pos)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
+            // M7 — one recall injection must be ONE ledger row. The live
+            // serve (`memory_recalls_append`) and the Stop-hook capture of
+            // the same injection both write a row, and every reader ORs
+            // capture rows with `served-%` rows, so the census counted the
+            // same injection twice. The capture is the authoritative record
+            // (it carries `turn_id`/`used`), so it retires the serve rows it
+            // covers, in the same transaction: same session, same memory,
+            // same pos (a pre-MR1 capture row has no pos and matches on
+            // memory alone) and a serve time within `SERVE_CAPTURE_SLACK_SECS`
+            // of the capture row's turn ts (a capture row without a ts
+            // matches on identity alone).
+            let mut retire = tx.prepare_cached(
+                "DELETE FROM memory_recalls
+                 WHERE artifact_id LIKE 'served-%'
+                   AND session_id = ?1 AND memory_id = ?2
+                   AND (?3 IS NULL OR pos = ?3)
+                   AND (?4 IS NULL OR recalled_at IS NULL
+                        OR ABS(recalled_at - ?4) <= ?5)",
+            )?;
             for r in rows {
+                retire.execute(params![
+                    r.session_id,
+                    r.memory_id,
+                    r.pos,
+                    r.recalled_at,
+                    SERVE_CAPTURE_SLACK_SECS,
+                ])?;
                 stmt.execute(params![
                     r.memory_kb,
                     r.memory_id,
@@ -11717,6 +11752,99 @@ mod tests {
         assert_eq!(rows[0].artifact_id, "cap-2", "the NEWEST capture wins");
         // sid-b's rows are a different session_id — untouched by sid-a's replace.
         assert_eq!(db.memory_recalls_for_session("sid-b").unwrap().len(), 1);
+    }
+
+    /// M7 — ONE injection must be ONE ledger row. The recall route's live
+    /// serve and the Stop-hook capture both write a row for the same
+    /// (session, memory, pos); the census and `/recalls` OR the two sources,
+    /// so before the capture retired its serve rows the count was 2.
+    #[test]
+    fn memory_recalls_capture_retires_the_serve_row_for_the_same_injection() {
+        let mut db = db();
+        let t = 1_700_000_000_i64;
+        let serve = |memory_id: &str, pos: u32, at: i64| ServedRecallRow {
+            memory_kb: "notes".into(),
+            memory_id: memory_id.into(),
+            pos,
+            title: "t".into(),
+            injected_chars: 1,
+            served_at: at,
+        };
+        db.memory_recalls_append(
+            "sid-m7",
+            &[
+                serve("aaaaaaaaaaaa", 1, t + 1),
+                serve("bbbbbbbbbbbb", 2, t + 1),
+                // same memory, same pos, but a different turn far outside
+                // the capture row's slack: a distinct injection
+                serve("aaaaaaaaaaaa", 1, t + 10_000),
+            ],
+        )
+        .unwrap();
+        db.sessions_upsert(&session_row("cap-m7", "sid-m7", t))
+            .unwrap();
+        let mut cap =
+            memory_recall_row("notes", "aaaaaaaaaaaa", "sid-m7", "t-1", Some(t), "cap-m7");
+        cap.pos = Some(1);
+        db.memory_recalls_replace("cap-m7", &[cap]).unwrap();
+
+        let rows = db.memory_recalls_for_session("sid-m7").unwrap();
+        let of = |id: &str| rows.iter().filter(|r| r.memory_id == id).count();
+        assert_eq!(
+            of("aaaaaaaaaaaa"),
+            2,
+            "the capture row plus the LATER, distinct serve; the covered serve is gone"
+        );
+        assert_eq!(of("bbbbbbbbbbbb"), 1, "an uncaptured serve survives");
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.memory_id == "aaaaaaaaaaaa" && r.artifact_id == "cap-m7")
+                .count(),
+            1
+        );
+        let counts = db
+            .memory_recalls_counts_for_ids(Some("notes"), &["aaaaaaaaaaaa".to_string()])
+            .unwrap();
+        assert_eq!(
+            counts[0].count, 2,
+            "census: capture + the distinct later serve, not 3"
+        );
+
+        // Re-capturing the identical transcript is idempotent.
+        let mut cap =
+            memory_recall_row("notes", "aaaaaaaaaaaa", "sid-m7", "t-1", Some(t), "cap-m7");
+        cap.pos = Some(1);
+        db.memory_recalls_replace("cap-m7", &[cap]).unwrap();
+        assert_eq!(db.memory_recalls_for_session("sid-m7").unwrap().len(), 3);
+    }
+
+    /// A3.f2 — every `memory_recalls` statement keyed on `artifact_id`
+    /// (replace, cascade, relocate, sweep) must be served by an index.
+    #[test]
+    fn memory_recalls_artifact_id_is_indexed() {
+        let db = db();
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_memory_recalls_artifact_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        let plan: String = db
+            .conn
+            .query_row(
+                "EXPLAIN QUERY PLAN DELETE FROM memory_recalls WHERE artifact_id = 'x'",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("idx_memory_recalls_artifact_id"),
+            "plan: {plan}"
+        );
     }
 
     /// CT-C5 (V0037) — `used` round-trips through `memory_recalls_replace` +
