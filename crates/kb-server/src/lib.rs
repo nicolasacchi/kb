@@ -1382,7 +1382,7 @@ async fn off_host_copy(
     }
     let cfg = backup.for_tarball(tarball);
     let tarball = tarball.to_path_buf();
-    let outcome = match tokio::task::spawn_blocking(move || {
+    match tokio::task::spawn_blocking(move || {
         let outcome = bk::run_remote_copy(&cfg, &tarball);
         if matches!(outcome, Some(bk::RemoteCopyOutcome::Ok)) {
             if let Err(e) = bk::mark_uploaded(&tarball) {
@@ -1399,8 +1399,7 @@ async fn off_host_copy(
         Err(e) => Some(bk::RemoteCopyOutcome::Failed {
             message: format!("off-host copy task did not complete: {e}"),
         }),
-    };
-    outcome
+    }
 }
 
 /// Boot-then-period export task. `None` when `[backup] schedule_hours` is
