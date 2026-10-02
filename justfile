@@ -60,19 +60,22 @@ ci-invariants:
 doc-anchors:
     scripts/check-doc-anchors.sh
 
-# rust-toolchain.toml is the single source of the toolchain version, and CI's
-# 14 `uses: dtolnay/rust-toolchain@X.Y.Z` lines are hardcoded literals that do
-# NOT read it (O8). dtolnay's action resolves the REF, never the file, so the
-# two can diverge silently — and rustup's precedence puts the directory
-# override (rust-toolchain.toml) ABOVE `rustup default`, so bumping the toml
-# changes what `cargo` resolves to inside the path-filtered `code-*` jobs
-# anyway, while the action keeps installing the old literal.
+# rust-toolchain.toml is the single source of the toolchain version. Jobs get
+# it through the composite action .github/actions/setup-rust, which READS the
+# file and hands it to dtolnay/rust-toolchain (pinned by commit SHA) — there is
+# no per-job literal left to drift (O8). dtolnay's action resolves the REF or
+# its `toolchain` input, never the file, so the structural guarantee only holds
+# while nothing bypasses the composite action.
 #
-# So this recipe asserts equality instead: every hardcoded pin in
-# .github/workflows/ must equal the `channel` in rust-toolchain.toml. A bump
-# that misses a job now fails loudly instead of leaving a job compiling with a
-# toolchain its own comment claims it is pinned to. Same shape as
-# licenses-set-check: a cheap, compile-free assertion over committed text.
+# So this recipe asserts the structure instead of equality of 14 literals:
+#   1. no workflow or action OTHER than setup-rust uses dtolnay/rust-toolchain
+#      directly (a stray `@1.96.0` line would reintroduce a second pin);
+#   2. setup-rust exists, reads rust-toolchain.toml and SHA-pins dtolnay;
+#   3. the Dockerfile's builder tag `rust:X.Y[.Z]-trixie` agrees with the
+#      toml's channel (the image is the one toolchain consumer that cannot
+#      call the action).
+# Same shape as licenses-set-check: a cheap, compile-free assertion over
+# committed text.
 toolchain-pin-check:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -82,43 +85,55 @@ toolchain-pin-check:
       echo "FAIL: no channel = \"…\" found in rust-toolchain.toml — cannot assert the CI pins." >&2
       exit 1
     fi
-    # Refuse to compare against a moving channel. `channel = "stable"` makes
-    # every literal below a lie, and an assertion that cannot be evaluated
-    # must fail loudly rather than pass vacuously.
+    # Refuse to compare against a moving channel: a floating channel makes the
+    # Dockerfile comparison below meaningless.
     if ! printf '%s' "$channel" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
       echo "FAIL: rust-toolchain.toml channel is \"$channel\", not an exact X.Y.Z." >&2
-      echo "      A floating channel cannot be asserted against a literal pin." >&2
       exit 1
     fi
-    # The ref is what dtolnay/rust-toolchain actually resolves, so `@master`
-    # and `@stable` must not slip through as if they were pins.
     bad=0
-    total=0
-    while IFS=$'\t' read -r file line ref; do
-      total=$((total + 1))
-      if [ "$ref" != "$channel" ]; then
-        echo "MISMATCH  $file:$line  dtolnay/rust-toolchain@$ref != rust-toolchain.toml channel $channel" >&2
-        bad=$((bad + 1))
-      fi
-    done < <(grep -rnoE '^[[:space:]]*(- )?uses:[[:space:]]*dtolnay/rust-toolchain@[^[:space:]]+' \
-               .github/workflows/ \
-             | sed -E 's/^([^:]*):([0-9]+):.*dtolnay\/rust-toolchain@/\1\t\2\t/')
-    if [ "$total" -eq 0 ]; then
-      echo "FAIL: found 0 dtolnay/rust-toolchain pins in .github/workflows/." >&2
-      echo "      Either the grep is wrong or every job lost its toolchain;" >&2
-      echo "      either way this assertion has nothing to compare." >&2
-      exit 1
+    action=".github/actions/setup-rust/action.yml"
+    # 1. no direct use outside the composite action. Comment lines are ignored;
+    #    a `uses:` line (with or without a leading `- `) is not.
+    stray="$(grep -rnE '^[[:space:]]*(- )?uses:[[:space:]]*dtolnay/rust-toolchain@' .github/ | grep -v "^$action:" || true)"
+    if [ -n "$stray" ]; then
+      echo "$stray" >&2
+      echo "FAIL: direct dtolnay/rust-toolchain use outside $action — call ./.github/actions/setup-rust instead." >&2
+      bad=$((bad + 1))
     fi
+    # 2. the composite action itself.
+    if [ ! -f "$action" ]; then
+      echo "FAIL: $action is missing." >&2
+      bad=$((bad + 1))
+    else
+      grep -q 'rust-toolchain\.toml' "$action" || { echo "FAIL: $action does not read rust-toolchain.toml." >&2; bad=$((bad + 1)); }
+      grep -Eq 'uses:[[:space:]]*dtolnay/rust-toolchain@[0-9a-f]{40}' "$action" || { echo "FAIL: $action does not SHA-pin dtolnay/rust-toolchain." >&2; bad=$((bad + 1)); }
+    fi
+    # Every consumer must go through it: count the uses so a rename of the
+    # action path cannot leave the assertion vacuously green.
+    users="$(grep -rlE 'uses:[[:space:]]*\./\.github/actions/setup-rust' .github/workflows/ | wc -l | tr -d ' ')"
+    if [ "$users" -eq 0 ]; then
+      echo "FAIL: no workflow uses ./.github/actions/setup-rust — nothing installs a toolchain, or the path moved." >&2
+      bad=$((bad + 1))
+    fi
+    # 3. Dockerfile builder tag.
+    docker_tags="$(grep -oE '^FROM rust:[0-9]+\.[0-9]+(\.[0-9]+)?' Dockerfile | sed 's/^FROM rust://')"
+    if [ -z "$docker_tags" ]; then
+      echo "FAIL: found no 'FROM rust:X.Y' line in Dockerfile — cannot compare it with the toolchain." >&2
+      bad=$((bad + 1))
+    fi
+    for t in $docker_tags; do
+      case "$channel" in
+        "$t"|"$t".*) ;;
+        *) echo "MISMATCH  Dockerfile builder rust:$t != rust-toolchain.toml channel $channel" >&2; bad=$((bad + 1)) ;;
+      esac
+    done
     if [ "$bad" -gt 0 ]; then
-      echo "FAIL: $bad of $total CI toolchain pin(s) disagree with rust-toolchain.toml (channel $channel)." >&2
-      echo "      The action reads its REF, never the file, so a mismatch means" >&2
-      echo "      that job builds with a different rustc than the repo pins and" >&2
-      echo "      than its own comment claims. Bump every pin, or revert the toml." >&2
+      echo "FAIL: $bad toolchain-pin problem(s) (channel $channel)." >&2
       exit 1
     fi
-    # Printed only on the passing path. An "all match" line above the
-    # mismatch report is a lie the reader has to scroll back to un-believe.
-    echo "toolchain-pin gate: $total pin(s) across .github/workflows/, all == rust-toolchain.toml channel $channel"
+    # Printed only on the passing path.
+    echo "toolchain-pin gate: $users workflow file(s) use setup-rust, Dockerfile rust:${docker_tags//$'\n'/ } agrees with rust-toolchain.toml channel $channel"
 
 # Supply-chain gate — local mirror of the CI `supply-chain` job. Needs
 # cargo-deny on PATH: `cargo install --locked cargo-deny`. Split so a license

@@ -56,6 +56,14 @@ env:
 permissions:
   contents: read
 
+# `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
+# implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
+# tee's exit status and a failing `cmd` goes green (the e2e vacuous pass,
+# d4f3063d). Setting it once here covers every `run:` step in this file.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   bench-nightly:
     name: bench-nightly (kb bench, keyword/BM25-only)
@@ -88,7 +96,7 @@ jobs:
 
       - name: Install Rust toolchain
         # Pinned to rust-toolchain.toml's version, same as ci.yml.
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         # Its own cache family, deliberately — but not for the reason this
