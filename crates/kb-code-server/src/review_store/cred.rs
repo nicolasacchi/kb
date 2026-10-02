@@ -61,6 +61,10 @@
 //! `GITHUB_TOKEN` and the enterprise variants are deliberately NOT passed:
 //! they would override the keyring and make `--user` meaningless.
 
+// No swallowed `Result` in the credential ladder: a failed read must be a
+// named outcome, never a silent fallthrough to a more permissive rung.
+#![deny(clippy::let_underscore_must_use)]
+
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
