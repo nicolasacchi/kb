@@ -12,10 +12,18 @@ export const ATTACHMENT_SCHEME = "attachment:";
 
 /// Absolute serve URL for an attachment blob (built against the current
 /// daemon base so it works against a remote daemon too).
+///
+/// v0.44 P2 (A2.f5) — carries the operator's `?visibility=all` read opt-in,
+/// the same one `fetchReview` sends: the daemon 404s a blob owned by a
+/// PRIVATE note for every caller without it (an `<img src>` cannot send a
+/// header), so without the query the operator saw broken images inside
+/// their own notes. Only the SPA builds this URL; the `attachment:<aid>`
+/// token in a comment body — the form every agent-facing export carries —
+/// never includes it.
 export function attachmentServeUrl(kb: string, id: string, aid: string): string {
   return `${currentDaemonBase()}/api/kb/${encodeURIComponent(
     kb,
-  )}/review/${encodeURIComponent(id)}/attachments/${encodeURIComponent(aid)}`;
+  )}/review/${encodeURIComponent(id)}/attachments/${encodeURIComponent(aid)}?visibility=all`;
 }
 
 /// `true` for a raster image content-type (rendered inline as an `<img>`;

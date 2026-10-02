@@ -74,6 +74,10 @@ type Comment = {
   body: string;
   createdAt: string;
   editedAt: string | null;
+  /// Never sent by the daemon or the SPA bridge (both project private notes
+  /// away before this script sees the payload). Declared ONLY so `paintAll`
+  /// can refuse one defensively — this script must never render a note.
+  private?: boolean;
   replies: Array<{
     id: string;
     author: "you" | "claude";
@@ -293,7 +297,10 @@ function injectStyle() {
   document.head.appendChild(s);
 }
 
-function paintAll(comments: Comment[]) {
+function paintAll(all: Comment[]) {
+  // Defence in depth (v0.44 P2): a private note is never drawn, stored in
+  // `lastComments`, or addressable from here, even if one arrives.
+  const comments = all.filter((c) => c.private !== true);
   lastComments = comments;
   // Drop existing markers + highlight bands + icons (re-paints on
   // cm:refresh / resize).

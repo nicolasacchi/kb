@@ -6,7 +6,9 @@ import type { ReviewFile } from "../api/client";
 // endpoint and the Rust `extract` read the same shape.
 export const KB_REVIEW_STATE_ID = "kb-review-state";
 
-const SCHEMA = "kb-comments/1";
+// `/2` is what the daemon stamps on a sidecar that carries a private note (so a
+// pre-notes binary refuses it instead of publishing it); same document shape.
+const SCHEMAS = ["kb-comments/1", "kb-comments/2"];
 
 /// Inject (or replace) the review state as an inert
 /// `<script type="application/json" id="kb-review-state">` block, returning a
@@ -45,7 +47,7 @@ export function extractReviewFromHtml(html: string): ReviewFile | null {
   const raw = html.slice(open + 1, close).replace(/<\\\//g, "</").trim();
   if (!raw) return null;
   const file = JSON.parse(raw) as ReviewFile;
-  if (file.schema !== SCHEMA) {
+  if (!SCHEMAS.includes(file.schema)) {
     throw new Error(`unsupported embedded review schema: ${String(file.schema)}`);
   }
   return file;
