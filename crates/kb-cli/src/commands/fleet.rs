@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn absent_status_header_names_the_missing_path() {
-        let path = Path::new("/home/user/.config/kb/daemons.toml");
+        let path = Path::new("/tmp/x/.config/kb/daemons.toml");
         let msg = status_header(1, path, true);
         assert!(
             msg.contains("fleet: 1 daemon(s); daemons.toml absent"),
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn missing_book_warn_names_the_path() {
-        let path = Path::new("/home/user/.config/kb/daemons.toml");
+        let path = Path::new("/tmp/x/.config/kb/daemons.toml");
         let msg = missing_book_warn(path);
         assert!(msg.starts_with("WARN:"), "{msg}");
         assert!(msg.contains("daemons.toml absent"), "{msg}");

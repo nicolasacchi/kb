@@ -1,0 +1,36 @@
+# Repo hygiene: (1) the public-repo leak gate over the WHOLE tracked tree, and
+# (2) the review-store gate driver's rail self-test (python only, no cargo).
+#
+# The gate's pattern list is private and lives in the repository secret
+# PUBLIC_GATE_PATTERNS (an extended regex). It is never printed: the script
+# emits file:line only. On a fork / Dependabot PR the secret is unavailable and
+# the gate skips with a notice; on push to main an empty secret FAILS.
+name: Repo hygiene
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  public-gate:
+    name: Public gate (whole tree)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Grep the tracked tree for the private pattern list
+        env:
+          PUBLIC_GATE_PATTERNS: ${{ secrets.PUBLIC_GATE_PATTERNS }}
+          PUBLIC_GATE_REQUIRED: ${{ github.event_name == 'push' && '1' || '0' }}
+        run: scripts/ci/public-gate.sh
+
+  review-store-selftest:
+    name: Review-store driver self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prove the safety rails (path-independent, touches nothing; hosted python3 >= 3.11)
+        run: python3 scripts/review-store/run_gates.py --self-test

@@ -901,7 +901,7 @@ design's §1 measurement is 198 `refs/kbc/*` refs in one clone
 repository, fetched into the user's `refs/remotes`, and inherited
 the user's remotes, refspecs, shallow and single-branch state, and
 their ssh-agent. A fleet of clones then drifts from itself — two clones
-of one project disagree about what `refs/kbc/pr/15790` points at, and
+of one project disagree about what `refs/kbc/pr/123` points at, and
 the answer depends on which mirror the CLI happened to open. The store is
 kb-owned: one bare repository per forge PROJECT, one writer (a
 per-store `flock`), and the user's clone is never written again.
@@ -1347,7 +1347,7 @@ The obvious implementation is `-c credential.helper='!gh auth
 git-credential'`. kb does not use it in production, because
 `gh auth git-credential` **always answers with whichever account is
 ACTIVE**, and the machine this was designed on has two
-(`nicolasacchi` and `acme-jira-bot`). That is a silent identity
+(a personal account and a bot account). That is a silent identity
 swap, not a convenience.
 
 Instead kb:

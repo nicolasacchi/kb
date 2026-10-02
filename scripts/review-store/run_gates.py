@@ -16,10 +16,10 @@ third-party deps — BUILDER-RULES / README §9), Python 3.11+ (`tomllib`).
         python3 run_gates.py \\
             --before-server /tmp/gates-bin-before/kb-code-server \\
             --after-server  /tmp/gates-bin-after/kb-code-server \\
-            --before-root /home/user/kbc-gates-state \\
-            --after-root  /home/user/kbc-gates-after \\
+            --before-root /path/to/gates-state \\
+            --after-root  /path/to/gates-after \\
             --before-port 4790 --after-port 4791 \\
-            --out /home/user/kbc-gates-out
+            --out /path/to/gates-out
 
     Re-run ONE gate (gates 4 and 5 need a live `gh` and a warm store, so
     they are meant to be re-runnable alone):
@@ -169,7 +169,8 @@ SAFETY RAILS (each reachable from `--self-test`, see RAIL SELF-TESTS below)
                  gate 6 takes, the output dir, an artefact under it, the
                  build log, a configured clone.
   R3 user git  — no git WRITE is ever run against a clone under
-                 `/home/user/progetti/`. Every git argv passes a guard that
+                 the user-clone prefix (`$KBC_GATES_USER_CLONES`, default
+                 `~/user-clones`). Every git argv passes a guard that
                  refuses a mutating subcommand on such a path.
   R4 no token  — every argv passes a guard that refuses a GitHub-token-
                  shaped string, so a token can never reach `ps`/history.
@@ -255,8 +256,10 @@ INVARIANCE_TOOL = HERE / "repo_invariance.py"
 # a daemon here. (4000/4001 = prod kb, 4747 = live kb-code.)
 FORBIDDEN_PORTS = (4000, 4001, 4747)
 
-# R3 — the operator's real repositories.
-USER_CLONE_PREFIX = Path("/home/user/progetti")
+# R3 — the operator's real repositories: whatever lives under this prefix is
+# only ever READ. Set KBC_GATES_USER_CLONES to the directory that holds your
+# real clones; the default is a neutral per-user path, never a host layout.
+USER_CLONE_PREFIX = Path(os.environ.get("KBC_GATES_USER_CLONES", str(Path.home() / "user-clones")))
 
 # R2 — the LIVE kb / kb-code state root. No flag value can make it an allowed
 # root: pointing --before-root/--after-root here is refused, because a wrong
@@ -376,14 +379,18 @@ GATE_NAMES = {
     7: "existing suite + TS regen (CI)",
 }
 
-DEFAULT_REPO = "acme-rails-01"
-DEFAULT_FORGE = "acme/acme"
-DEFAULT_REVIEW = 65
-DEFAULT_PR = 15790
+# No defaults that name a real project: the live gates (2, 4, 5) need the
+# operator to say which repo / forge project / PR they run against. A dry run
+# and --self-test do not (they touch nothing), so the flags are validated in
+# main() only when a live gate is about to run.
+DEFAULT_REPO = ""
+DEFAULT_FORGE = ""
+DEFAULT_REVIEW = 0
+DEFAULT_PR = 0
 DEFAULT_CI_REPO = "nicolasacchi/kb"
 DEFAULT_CI_PR = 166
 DEFAULT_GH_USER = "nicolasacchi"
-STACKED_BASE_PREFIX = "feature/15646-statsig-"
+STACKED_BASE_PREFIX = ""  # set with --stacked-base-prefix; empty = no stacked-PR check
 
 EXIT_OK = 0
 EXIT_GATES = 1
@@ -533,7 +540,7 @@ class Ctx:
         self.bundle = Path(args.bundle).resolve()
         self.before_port = int(args.before_port)
         self.after_port = int(args.after_port)
-        self.log_path = Path(args.build_log).resolve()
+        self.log_path = Path(args.build_log or (Path(args.out) / "BUILD-LOG.md")).resolve()
         self.selected: list[int] = sorted(set(args.gate)) if args.gate else list(range(1, 8))
         self.template = False
         self.steps: list[Step] = []
@@ -587,7 +594,7 @@ class Ctx:
     def check_clone_path(self, path: str | Path, name: str) -> Path:
         """A CONFIGURED clone: it must exist, and it is only ever READ (R3
         enforces that on every git argv). A user clone under
-        /home/user/progetti is deliberately admissible here — it is the very
+        a user clone under USER_CLONE_PREFIX is deliberately admissible here — it is the very
         thing gate 2 hashes — while any other path outside the two environment
         roots is refused like any other out-of-scope path.
 
@@ -3725,6 +3732,40 @@ def write_log(ctx: Ctx, results: Sequence[GateResult], exit_code: int) -> None:
 
 
 def self_test(args: argparse.Namespace) -> int:
+    """Run the rail self-test inside a throwaway environment, so it proves the
+    rails on ANY host: no operator path, no pre-existing bundle, no real clone.
+    The user-clone prefix, the volumes, the output dir and the bundle are all
+    created under one temp dir and removed afterwards."""
+    global USER_CLONE_PREFIX
+    saved = USER_CLONE_PREFIX
+    with tempfile.TemporaryDirectory(prefix="run-gates-selftest-env-") as tmp:
+        root = Path(tmp).resolve()
+        USER_CLONE_PREFIX = root / "user-clones"
+        (USER_CLONE_PREFIX / "client" / "repo.01").mkdir(parents=True)
+        (USER_CLONE_PREFIX / "other").mkdir()
+        bundle = root / "bundle"
+        bundle.mkdir()
+        (bundle / "payload").write_text("self-test\n", encoding="utf-8")
+        (bundle / "SHA256SUMS").write_text(
+            hashlib.sha256(b"self-test\n").hexdigest() + "  payload\n", encoding="utf-8"
+        )
+        ns = argparse.Namespace(
+            **{
+                **vars(args),
+                "before_root": str(root / "before"),
+                "after_root": str(root / "after"),
+                "out": str(root / "out"),
+                "bundle": str(bundle),
+                "build_log": str(root / "BUILD-LOG.md"),
+            }
+        )
+        try:
+            return _self_test_body(ns)
+        finally:
+            USER_CLONE_PREFIX = saved
+
+
+def _self_test_body(args: argparse.Namespace) -> int:
     """Exercise all five rails with inputs that MUST be refused (and controls
     that must be allowed), touching no volume, daemon or clone."""
     checks: list[tuple[str, bool, str]] = []
@@ -3763,13 +3804,13 @@ def self_test(args: argparse.Namespace) -> int:
     expect_allow("R1 free port 4791", lambda: ctx.check_port(4791, "start a test daemon"))
 
     print("R2 (paths)")
-    expect_refuse("R2 the live kb-code volume", lambda: ctx.check_path("/home/user/.local/state/kb/kb-code/index.db", "read"))
+    expect_refuse("R2 the live kb-code volume", lambda: ctx.check_path(LIVE_STATE_PREFIX / "kb-code" / "index.db", "read"))
     expect_refuse("R2 an unrelated path", lambda: ctx.check_path("/etc/passwd", "read"))
     expect_allow("R2 the before volume", lambda: ctx.check_path(ctx.before_root / "state/kb-code/index.db", "read"))
     expect_allow("R2 the after volume", lambda: ctx.check_path(ctx.after_root, "read"))
     expect_allow("R2 the output dir", lambda: ctx.check_path(ctx.out / "x.json", "write"))
     expect_allow("R2 a CONFIGURED user clone (read-only hashing, gate 2's subject)",
-                 lambda: ctx.check_clone_path("/home/user/progetti/acme/rails/acme.01", "acme-rails-01"))
+                 lambda: ctx.check_clone_path(USER_CLONE_PREFIX / "client" / "repo.01", "client-repo-01"))
     hostile = Ctx(argparse.Namespace(**{**vars(args), "before_root": str(LIVE_STATE_PREFIX)}))
     expect_refuse("R2 even when a flag makes the LIVE state root an allowed root",
                   lambda: hostile.check_path(LIVE_STATE_PREFIX / "kb-code" / "index.db", "read"))
@@ -3829,14 +3870,14 @@ def self_test(args: argparse.Namespace) -> int:
     expect_refuse("R2 a configured clone inside the LIVE state root is refused",
                   lambda: ctx.check_clone_path(LIVE_STATE_PREFIX / "kb-code", "live-clone"))
     expect_refuse("R2 a user clone is not an ordinary path (only check_clone_path admits it)",
-                  lambda: ctx.check_path("/home/user/progetti/kb", "read"))
+                  lambda: ctx.check_path(USER_CLONE_PREFIX / "other", "read"))
     user_root_ctx = Ctx(argparse.Namespace(
         **{**vars(args), "before_root": str(USER_CLONE_PREFIX), "after_root": str(USER_CLONE_PREFIX)}
     ))
     expect_allow(
         "R2 check_clone_path admits a user clone even when a flag makes its parent an allowed root",
         lambda: user_root_ctx.check_clone_path(
-            "/home/user/progetti/acme/rails/acme.01", "acme-rails-01"
+            USER_CLONE_PREFIX / "client" / "repo.01", "client-repo-01"
         ),
     )
     expect_refuse(
@@ -3871,9 +3912,9 @@ def self_test(args: argparse.Namespace) -> int:
                  lambda: missing_cli_ctx.cli_for_gate(3))
 
     print("R3 (no git write on a user clone)")
-    clone = "/home/user/progetti/acme/rails/acme.01"
+    clone = str(USER_CLONE_PREFIX / "client" / "repo.01")
     expect_refuse("R3 `git fetch` on a user clone", lambda: ctx.guard_argv(["git", "-C", clone, "fetch", "origin"]))
-    expect_refuse("R3 `git gc` on a user clone", lambda: ctx.guard_argv(["git", "-C", "/home/user/progetti/kb", "gc"]))
+    expect_refuse("R3 `git gc` on a user clone", lambda: ctx.guard_argv(["git", "-C", str(USER_CLONE_PREFIX / "other"), "gc"]))
     expect_refuse("R3 `git worktree prune` on a user clone", lambda: ctx.guard_argv(["git", "-C", clone, "worktree", "prune"]))
     expect_allow("R3 `git for-each-ref` on a user clone (read-only)", lambda: ctx.guard_argv(["git", "-C", clone, "for-each-ref"]))
     expect_allow("R3 `git fetch` into a scratch repo", lambda: ctx.guard_argv(["git", "-C", str(ctx.out / "scratch"), "fetch", "origin"]))
@@ -3919,6 +3960,37 @@ def self_test(args: argparse.Namespace) -> int:
     # shapes come from the product's own redactor; this proves both the
     # fixture/doc exclusions and that a plausible full token still counts.
     # ------------------------------------------------------------------
+
+    print("No real-project defaults (a live run must name its subject)")
+    bare = argparse.Namespace(**{**vars(build_parser().parse_args([])), "gate": None})
+    need = missing_live_flags(bare, [2, 4, 5])
+    checks.append(
+        (
+            "a live run with no subject flags is refused, naming every flag",
+            {"--repo", "--forge", "--pr", "--review", "--ops-pr", "--stacked-base-prefix",
+             "--expect-tip", "--expect-base"} <= set(need),
+            ", ".join(need)[:150],
+        )
+    )
+    checks.append(
+        (
+            "an empty --stacked-base-prefix is refused, not read as 'matches every PR'",
+            "--stacked-base-prefix" in missing_live_flags(bare, [5]),
+            "gate 5 requires an explicit prefix",
+        )
+    )
+    checks.append(
+        (
+            "no flag default hardcodes a host path (home-relative only)",
+            not any(
+                needle in str(a.default).replace(str(Path.home()), "~")
+                for a in build_parser()._actions
+                for needle in ("/home/", "/Users/")
+                if a.default is not None
+            ),
+            "scanned every argparse default",
+        )
+    )
 
     print("G6 (a secret is a credential, not a prefix)")
     FIXTURE = "ghp_TESTTOKEN_FAKE_does_not_match_a_real_alphabet_sekrit"
@@ -4923,17 +4995,17 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--before-server", required=True, help="pre-upgrade (V0044) kb-code-server binary")
-    p.add_argument("--after-server", required=True, help="post-upgrade kb-code-server binary")
+    p.add_argument("--before-server", default="", help="pre-upgrade (V0044) kb-code-server binary")
+    p.add_argument("--after-server", default="", help="post-upgrade kb-code-server binary")
     p.add_argument("--before-cli", help="pre-upgrade kb-code CLI (default: kb-code beside --before-server)")
     p.add_argument("--after-cli", help="post-upgrade kb-code CLI (default: kb-code beside --after-server)")
-    p.add_argument("--before-root", default="/home/user/kbc-gates-state", help="'before' KB_HOME root")
-    p.add_argument("--after-root", default="/home/user/kbc-gates-after", help="'after' KB_HOME root")
+    p.add_argument("--before-root", default=str(Path.home() / "kbc-gates-state"), help="'before' KB_HOME root")
+    p.add_argument("--after-root", default=str(Path.home() / "kbc-gates-after"), help="'after' KB_HOME root")
     p.add_argument("--before-port", type=int, default=4790)
     p.add_argument("--after-port", type=int, default=4791)
-    p.add_argument("--out", default="/home/user/kbc-gates-out", help="output dir (artefacts, logs, plan)")
-    p.add_argument("--build-log", default=str(REPO_ROOT / "BUILD-LOG.md"), help="where to write BUILD-LOG.md")
-    p.add_argument("--bundle", default="/home/user/kbc-gates-bundle-2026-09-24")
+    p.add_argument("--out", default=str(Path.home() / "kbc-gates-out"), help="output dir (artefacts, logs, plan)")
+    p.add_argument("--build-log", default=None, help="where to write BUILD-LOG.md (default: <--out>/BUILD-LOG.md; never inside the repo)")
+    p.add_argument("--bundle", default=str(Path.home() / "kbc-gates-bundle"))
     p.add_argument("--gate", type=int, action="append", choices=sorted(GATES),
                    help="run only this gate (repeatable); default: all seven")
     p.add_argument("--dry-run", action="store_true", help="print the full plan and execute nothing")
@@ -4945,14 +5017,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default=DEFAULT_REPO, help="the repo the live gates operate on")
     p.add_argument("--review", type=int, default=DEFAULT_REVIEW, help="gate 4's review id")
     p.add_argument("--pr", type=int, default=DEFAULT_PR, help="gate 4's GitHub PR number")
-    p.add_argument("--ops-pr", type=int, default=15873,
+    p.add_argument("--ops-pr", type=int, default=0,
                    help="gate 2's PR for the operation sequence (never gate 4's review, so gate 4 stays pristine)")
-    p.add_argument("--expect-tip", default="525631b506e7", help="gate 4: expected ps tip prefix")
-    p.add_argument("--expect-base", default="7c1ed0cfdd", help="gate 4: expected ps base prefix")
-    p.add_argument("--expect-commits", type=int, default=10)
-    p.add_argument("--expect-files", type=int, default=40)
+    p.add_argument("--expect-tip", default="", help="gate 4: expected ps tip prefix")
+    p.add_argument("--expect-base", default="", help="gate 4: expected ps base prefix")
+    p.add_argument("--expect-commits", type=int, default=0)
+    p.add_argument("--expect-files", type=int, default=0)
     p.add_argument("--expect-verdict-ps", type=int, default=3, help="gate 4: the ps findings+verdict must stay on")
     p.add_argument("--forge", default=DEFAULT_FORGE, help="GitHub project for gates 4/5")
+    p.add_argument("--stacked-base-prefix", default=STACKED_BASE_PREFIX,
+                   help="gate 5: base-ref prefix that marks a stacked PR (required for gate 5)")
     p.add_argument("--gh-user", default=DEFAULT_GH_USER, help="the gh-cli credential's pinned user (D12)")
     p.add_argument("--ci-repo", default=DEFAULT_CI_REPO)
     p.add_argument("--ci-pr", type=int, default=DEFAULT_CI_PR,
@@ -4979,10 +5053,39 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# Flags that used to default to one real project's values. They have no default
+# any more, so a live run must name them; a dry run and --self-test need none.
+_LIVE_FLAGS: dict[int, tuple[tuple[str, str], ...]] = {
+    2: (("repo", "--repo"), ("ops_pr", "--ops-pr")),
+    4: (
+        ("repo", "--repo"), ("review", "--review"), ("pr", "--pr"), ("forge", "--forge"),
+        ("expect_tip", "--expect-tip"), ("expect_base", "--expect-base"),
+        ("expect_commits", "--expect-commits"), ("expect_files", "--expect-files"),
+    ),
+    5: (("repo", "--repo"), ("forge", "--forge"), ("stacked_base_prefix", "--stacked-base-prefix")),
+}
+
+
+def missing_live_flags(args: argparse.Namespace, selected: Sequence[int]) -> list[str]:
+    """Flags a selected live gate needs but that were left at their empty
+    default. A falsy value (``""`` / ``0``) counts as unset: a stacked-PR
+    prefix of ``""`` would match every PR, so it must never pass silently."""
+    out: list[str] = []
+    for n in sorted(set(selected)):
+        for attr, flag in _LIVE_FLAGS.get(n, ()):
+            if not getattr(args, attr, None) and flag not in out:
+                out.append(flag)
+    return out
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.self_test:
         return self_test(args)
+    if not (args.before_server and args.after_server):
+        build_parser().error("--before-server and --after-server are required (except with --self-test)")
+    global STACKED_BASE_PREFIX
+    STACKED_BASE_PREFIX = args.stacked_base_prefix
     if not args.ci_pr:  # `--ci-pr 0` is not a PR number: it means "operator has not named one"
         args.ci_pr = None
 
@@ -5032,6 +5135,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Dry run complete: the plan above is what a real run would execute, in this order.")
         return EXIT_OK
 
+    missing_flags = missing_live_flags(args, ctx.selected)
+    if missing_flags:
+        print(
+            "run_gates.py: no defaults name a real project; these flags are required for the "
+            "selected gates: " + ", ".join(missing_flags),
+            file=sys.stderr,
+        )
+        return EXIT_ABORT
     ctx.ensure_out_dir()
     for root in (ctx.before_root, ctx.after_root):
         if not root.is_dir():
