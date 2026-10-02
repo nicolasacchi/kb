@@ -1,6 +1,15 @@
 //! `kb backup <kb> [--out PATH]` — write a CONSISTENT tarball snapshot of
-//! a kb's persistent state (`index.db` + `lance/` + `.review/`) plus the
-//! daemon-wide `slates/` store, under `<state>/exports/`.
+//! a kb's persistent state under `<state>/exports/`: every persistent
+//! per-kb member of `KbPaths::state_members` (`index.db`, `lance/`,
+//! `.review/`, `.attachments/`, `.proposals/`) plus the daemon-scope
+//! members (`slates/`, `saved-queries.json`, `memory-policy.json`,
+//! `tombstone-era.json`).
+//!
+//! The tarball is written by `kb_core::storage::backup::write_kb_export_with`
+//! — the SAME writer the daemon's `[backup] schedule_hours` task uses. This
+//! module keeps no packing logic of its own (it once had a twin that
+//! diverged: no `.attachments`/`.proposals`, and a failed `tar` left a
+//! truncated file under the real name).
 //!
 //! **sqlite is captured atomically** via `VACUUM INTO`
 //! (`kb_core::storage::backup::vacuum_into`): a transactionally-consistent
@@ -40,22 +49,22 @@
 //! before any tar — one stderr line, then an error — because the name list
 //! would be remote while each snapshot is this machine's `KbPaths`.
 //!
-//! When `[backup]` off-host copy is configured, `--all` appends each
-//! tarball's basename to `remote_dest`. A shared `{dest}` (`rclone copyto`)
-//! would otherwise keep only the last corpus.
+//! When `[backup]` off-host copy is configured, `--all` (and the daemon
+//! schedule) append each tarball's basename to `remote_dest`
+//! (`BackupSection::for_tarball`). A shared `{dest}` (`rclone copyto`)
+//! would otherwise keep only the last corpus. A single `kb backup <kb>`
+//! passes `remote_dest` verbatim.
 
 use super::{load_config_or_default, resolve_config_path};
 use crate::http::client_with_timeout_and_bearer;
 use anyhow::{anyhow, Context, Result};
 use kb_core::paths::KbPaths;
-use kb_core::storage::lance::Storage;
 use kb_core::types::KbName;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub async fn run(config_path: Option<&PathBuf>, kb: &str, out: Option<&Path>) -> Result<()> {
-    snapshot(config_path, kb, out, OffHostDest::Configured).await
+    snapshot(config_path, kb, out, OffHostDest::Configured, true).await
 }
 
 async fn snapshot(
@@ -63,6 +72,7 @@ async fn snapshot(
     kb: &str,
     out: Option<&Path>,
     off_host: OffHostDest,
+    include_daemon: bool,
 ) -> Result<()> {
     let kb_name = KbName::new(kb).map_err(|e| anyhow!("invalid kb {kb:?}: {e}"))?;
     let cfg_path = resolve_config_path(config_path)?;
@@ -78,22 +88,18 @@ async fn snapshot(
         ));
     }
 
-    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let out_path = out
-        .map(PathBuf::from)
-        .unwrap_or_else(|| paths.exports.join(format!("{kb_name}-{stamp}.tar.gz")));
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Stage a consistent snapshot under exports/, tar it, then clean up
-    // the staging dir unconditionally (success or error).
-    let staging = paths
-        .exports
-        .join(format!(".staging-{kb_name}-{}-{stamp}", std::process::id()));
-    let result = stage_and_tar(&paths, &kb_name, &staging, &out_path).await;
-    let _ = std::fs::remove_dir_all(&staging);
-    result?;
+    // One writer for every backup path: stages under exports/, tars to a
+    // `.partial`, renames on success, and cleans up on every outcome.
+    let out_path = kb_core::storage::backup::write_kb_export_with(
+        &paths,
+        &kb_name,
+        &kb_core::storage::backup::ExportOptions {
+            include_daemon,
+            out: out.map(PathBuf::from),
+        },
+    )
+    .await
+    .map_err(|e| anyhow!("{e}"))?;
 
     println!("backup: {} → {}", kb_state.display(), out_path.display());
 
@@ -107,16 +113,16 @@ async fn snapshot(
     // otherwise write every corpus onto the same object and keep only the
     // last. Append the tarball basename so each corpus is its own object.
     // A single-kb backup leaves `remote_dest` unchanged.
-    let mut backup_cfg = cfg.backup.clone();
-    if matches!(off_host, OffHostDest::PerCorpus) {
-        if let Some(dest) = backup_cfg.remote_dest.clone() {
-            backup_cfg.remote_dest = Some(remote_dest_for_corpus(&dest, &out_path));
-        }
-    }
+    let backup_cfg = if matches!(off_host, OffHostDest::PerCorpus) {
+        cfg.backup.for_tarball(&out_path)
+    } else {
+        cfg.backup.clone()
+    };
     let shown_dest = backup_cfg.remote_dest.as_deref().unwrap_or("?");
     match kb_core::storage::backup::run_remote_copy(&backup_cfg, &out_path) {
         None => {}
         Some(kb_core::storage::backup::RemoteCopyOutcome::Ok) => {
+            let _ = kb_core::storage::backup::mark_uploaded(&out_path);
             println!("backup: off-host copy → {shown_dest} ok");
         }
         Some(kb_core::storage::backup::RemoteCopyOutcome::Failed { message }) => {
@@ -176,10 +182,12 @@ pub async fn run_all(
         ));
     }
     let mut outcomes = Vec::with_capacity(names.len());
-    for kb in &names {
+    for (i, kb) in names.iter().enumerate() {
         // Do not `?` here. A failed kb must be recorded, and every later kb
         // must still be backed up.
-        let error = match snapshot(config_path, kb, None, OffHostDest::PerCorpus).await {
+        // Daemon-scope state (slates, daemon JSON) rides in the FIRST kb's
+        // tarball only, as in the daemon's schedule.
+        let error = match snapshot(config_path, kb, None, OffHostDest::PerCorpus, i == 0).await {
             Ok(()) => None,
             Err(e) => {
                 let msg = format!("{e:#}");
@@ -260,18 +268,6 @@ fn remote_daemon_refusal(daemon: &str) -> String {
     )
 }
 
-/// `{dest}/{tarball-basename}` so `--all` does not `copyto` every corpus
-/// onto one object. A trailing slash on `dest` is not doubled.
-fn remote_dest_for_corpus(dest: &str, tarball: &Path) -> String {
-    let base = tarball
-        .file_name()
-        .and_then(|n| n.to_str())
-        .filter(|n| !n.is_empty())
-        .unwrap_or("backup.tar.gz");
-    let dest = dest.trim_end_matches('/');
-    format!("{dest}/{base}")
-}
-
 async fn list_kb_names(daemon: Option<&str>, bearer: Option<&str>) -> Result<Vec<String>> {
     let base = daemon.unwrap_or(DEFAULT_DAEMON).trim_end_matches('/');
     let url = format!("{base}/api/kbs");
@@ -340,105 +336,6 @@ fn aggregate_backup_failures(outcomes: &[KbBackupOutcome<'_>]) -> Result<()> {
         "backup --all: {} kb(s) failed: {listed}",
         failed.len()
     ))
-}
-
-/// Build the consistent snapshot tree at `staging/<kb>/` and tar it.
-async fn stage_and_tar(
-    paths: &KbPaths,
-    kb_name: &KbName,
-    staging: &Path,
-    out_path: &Path,
-) -> Result<()> {
-    let staged_kb = staging.join(kb_name.as_str());
-    std::fs::create_dir_all(&staged_kb)?;
-
-    // 1. sqlite — transactionally-consistent copy (no torn DB).
-    kb_core::storage::backup::vacuum_into(&paths.kb_sqlite(kb_name), &staged_kb.join("index.db"))
-        .map_err(|e| anyhow!("sqlite snapshot failed: {e}"))?;
-
-    // 2. lance — copy, then validate by re-opening the staged dataset.
-    let src_lance = paths.kb_lance(kb_name);
-    if src_lance.exists() {
-        let staged_lance = staged_kb.join("lance");
-        copy_dir(&src_lance, &staged_lance)?;
-        let store = Storage::open(&staged_lance, None).await.map_err(|e| {
-            anyhow!(
-                "lance snapshot is inconsistent ({e}); the daemon likely committed mid-copy — \
-                 re-run `kb backup` with the daemon paused/stopped"
-            )
-        })?;
-        store.count_rows().await.map_err(|e| {
-            anyhow!("lance snapshot failed validation ({e}); re-run with the daemon paused/stopped")
-        })?;
-    }
-
-    // 3. comments — copy verbatim. Each .review/*.json is written via
-    //    atomic rename, so every file is already internally consistent.
-    let src_review = paths.kb_review_dir(kb_name);
-    if src_review.exists() {
-        copy_dir(&src_review, &staged_kb.join(".review"))?;
-    }
-
-    // 3b. SL2 — the daemon-wide `slates/` clause (design §7
-    //     "Registration"). Slates are the one sidecar family in invariant
-    //     #6 that is NOT per-kb: `<state>/slates/<slug>/` keys on a
-    //     PROJECT, so it rides ALONGSIDE `<kb>/` in the tarball rather
-    //     than inside it, and `kb restore` puts it back at the same level
-    //     (the tarball is extracted into the kb-state PARENT, which IS
-    //     `<state>`). Every ledger line is appended with `O_APPEND` +
-    //     fsync and `meta.json` lands via atomic rename, so a file copied
-    //     under a running daemon is at worst missing its newest line —
-    //     never torn (`load_posts` drops an unterminated tail by design).
-    //     `kb reset` still never touches slates; purge is the sole
-    //     deletion path.
-    let src_slates = paths.state.join("slates");
-    let staged_slates = staging.join("slates");
-    if src_slates.exists() {
-        copy_dir(&src_slates, &staged_slates)?;
-    }
-
-    // 4. tar the staging dir by the kb basename (tarball root is `<kb>/`,
-    //    matching the pre-B1 layout so existing restores keep working),
-    //    plus `slates/` when this daemon has any.
-    let mut cmd = Command::new("tar");
-    cmd.arg("-czf")
-        .arg(out_path)
-        .arg("-C")
-        .arg(staging)
-        .arg(kb_name.as_str());
-    if staged_slates.exists() {
-        cmd.arg("slates");
-    }
-    let status = cmd
-        .status()
-        .with_context(|| "tar invocation failed (is `tar` installed?)")?;
-    if !status.success() {
-        return Err(anyhow!("tar returned exit code {status}"));
-    }
-    Ok(())
-}
-
-/// Recursively copy the `src` directory into `dst` (created if missing).
-fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    for entry in walkdir::WalkDir::new(src) {
-        let entry = entry.with_context(|| format!("walk {}", src.display()))?;
-        let rel = entry
-            .path()
-            .strip_prefix(src)
-            .expect("walkdir yields paths under src");
-        let target = dst.join(rel);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)?;
-        } else {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(entry.path(), &target).with_context(|| {
-                format!("copy {} → {}", entry.path().display(), target.display())
-            })?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -579,23 +476,25 @@ mod tests {
 
     #[test]
     fn all_remote_dest_is_a_distinct_object_per_corpus() {
+        let cfg = kb_core::config::BackupSection {
+            remote_cmd: Some(vec![
+                "rclone".into(),
+                "copyto".into(),
+                "{src}".into(),
+                "{dest}".into(),
+            ]),
+            remote_dest: Some("remote:bucket/path".into()),
+            ..Default::default()
+        };
         let docs = Path::new("/state/exports/docs-20260922-120000.tar.gz");
         let memory = Path::new("/state/exports/memory-20260922-120000.tar.gz");
-        let docs_dest = remote_dest_for_corpus("remote:bucket/path", docs);
-        let memory_dest = remote_dest_for_corpus("remote:bucket/path", memory);
+        let docs_dest = cfg.for_tarball(docs).remote_dest.unwrap();
+        let memory_dest = cfg.for_tarball(memory).remote_dest.unwrap();
         assert_ne!(docs_dest, memory_dest);
         assert_eq!(docs_dest, "remote:bucket/path/docs-20260922-120000.tar.gz");
         assert_eq!(
             memory_dest,
             "remote:bucket/path/memory-20260922-120000.tar.gz"
-        );
-        assert_eq!(
-            remote_dest_for_corpus("remote:bucket/path/", docs),
-            "remote:bucket/path/docs-20260922-120000.tar.gz"
-        );
-        assert_eq!(
-            remote_dest_for_corpus("user@host:/backups/", memory),
-            "user@host:/backups/memory-20260922-120000.tar.gz"
         );
     }
 }

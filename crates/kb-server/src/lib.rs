@@ -1251,6 +1251,7 @@ fn backup_schedule_period(backup: &kb_core::config::BackupSection) -> Option<Dur
 }
 
 /// Result of one kb on one schedule tick.
+#[derive(Debug)]
 enum ScheduledBackup {
     Skipped,
     /// The tarball is on disk and complete. `remote` carries the GC-B4
@@ -1261,6 +1262,14 @@ enum ScheduledBackup {
     /// * `Some(Ok)` — the copy ran and exited 0.
     /// * `Some(Failed{..})` — the copy was attempted and did NOT land.
     Written {
+        path: std::path::PathBuf,
+        remote: Option<kb_core::storage::backup::RemoteCopyOutcome>,
+    },
+    /// Nothing was re-packed (no source changed), but the newest tarball
+    /// had never reached the off-host target — a previous copy failed or
+    /// the target was configured later — so the copy of that EXISTING
+    /// tarball was attempted again.
+    Retried {
         path: std::path::PathBuf,
         remote: Option<kb_core::storage::backup::RemoteCopyOutcome>,
     },
@@ -1296,36 +1305,102 @@ async fn backup_one_kb(
     paths: &kb_core::paths::KbPaths,
     kb: &KbName,
     backup: &kb_core::config::BackupSection,
+    include_daemon: bool,
 ) -> Result<ScheduledBackup> {
-    if kb_core::storage::backup::should_skip_scheduled_backup(paths, kb) {
+    use kb_core::storage::backup as bk;
+    // The stat walk (up to 20 000 entries per kb) is blocking IO.
+    let skip = {
+        let paths = paths.clone();
+        let kb = kb.clone();
+        tokio::task::spawn_blocking(move || {
+            bk::should_skip_scheduled_backup(&paths, &kb, include_daemon)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("backup skip probe did not complete: {e}"))?
+    };
+    if skip {
+        // Quiet kb. The skip predicate is local-only, so a tarball whose
+        // upload failed is its own "nothing changed" anchor; without this
+        // the copy was never attempted again. Retry the existing tarball.
+        if backup.is_configured() {
+            if let Some((path, _)) = bk::newest_scheduled_tarball(&paths.exports, kb.as_str()) {
+                if !bk::is_uploaded(&path) {
+                    let remote = off_host_copy(backup, &path).await;
+                    return Ok(ScheduledBackup::Retried { path, remote });
+                }
+            }
+        }
         return Ok(ScheduledBackup::Skipped);
     }
-    let path = kb_core::storage::backup::write_kb_export(paths, kb)
-        .await
-        .with_context(|| format!("export tarball for {kb}"))?;
-    // Only when fully configured — an unconfigured daemon must not pay a
-    // blocking-pool spawn per kb per tick for a guaranteed no-op.
-    let remote = if backup.is_configured() {
-        let cfg = backup.clone();
-        let tarball = path.clone();
+    let path = bk::write_kb_export_with(
+        paths,
+        kb,
+        &bk::ExportOptions {
+            include_daemon,
+            out: None,
+        },
+    )
+    .await
+    .with_context(|| format!("export tarball for {kb}"))?;
+    let remote = off_host_copy(backup, &path).await;
+    // Retention: the exports dir shares a volume with the live state, so an
+    // unpruned schedule ends in a full disk.
+    let keep = backup.keep_exports_count() as usize;
+    if keep > 0 {
+        let exports = paths.exports.clone();
+        let kb_str = kb.as_str().to_string();
         match tokio::task::spawn_blocking(move || {
-            kb_core::storage::backup::run_remote_copy(&cfg, &tarball)
+            bk::prune_scheduled_exports(&exports, &kb_str, keep)
         })
         .await
         {
-            Ok(outcome) => outcome,
-            // A panicked or cancelled copy task is a copy that did not
-            // land, NOT a failed backup: the tarball is complete on its
-            // own. Report it as the failure it is instead of turning it
-            // into an `Err` and implying the backup was lost.
-            Err(e) => Some(kb_core::storage::backup::RemoteCopyOutcome::Failed {
-                message: format!("off-host copy task did not complete: {e}"),
-            }),
+            Ok(removed) if !removed.is_empty() => {
+                tracing::info!(kb = %kb, removed = removed.len(), keep, "backup schedule: pruned old export tarballs");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(kb = %kb, error = %e, "backup schedule: export pruning did not complete")
+            }
         }
-    } else {
-        None
-    };
+    }
     Ok(ScheduledBackup::Written { path, remote })
+}
+
+/// Copy `tarball` off-host when `[backup]` is fully configured (`None`
+/// otherwise — an unconfigured daemon must not pay a blocking-pool spawn
+/// per kb per tick for a guaranteed no-op). `{dest}` is made specific to
+/// this tarball ([`BackupSection::for_tarball`]) so kbs never overwrite
+/// one another's object, and a successful copy is recorded
+/// (`mark_uploaded`) so a failed one is retried on the next tick.
+async fn off_host_copy(
+    backup: &kb_core::config::BackupSection,
+    tarball: &std::path::Path,
+) -> Option<kb_core::storage::backup::RemoteCopyOutcome> {
+    use kb_core::storage::backup as bk;
+    if !backup.is_configured() {
+        return None;
+    }
+    let cfg = backup.for_tarball(tarball);
+    let tarball = tarball.to_path_buf();
+    let outcome = match tokio::task::spawn_blocking(move || {
+        let outcome = bk::run_remote_copy(&cfg, &tarball);
+        if matches!(outcome, Some(bk::RemoteCopyOutcome::Ok)) {
+            if let Err(e) = bk::mark_uploaded(&tarball) {
+                tracing::warn!(error = %e, "backup: could not record the off-host copy; it will be retried");
+            }
+        }
+        outcome
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        // A panicked or cancelled copy task is a copy that did not land,
+        // NOT a failed backup: the tarball is complete on its own.
+        Err(e) => Some(bk::RemoteCopyOutcome::Failed {
+            message: format!("off-host copy task did not complete: {e}"),
+        }),
+    };
+    outcome
 }
 
 /// Boot-then-period export task. `None` when `[backup] schedule_hours` is
@@ -1358,18 +1433,23 @@ fn spawn_backup_schedule(
                 _ = ticker.tick() => {}
             }
             let names: Vec<KbName> = handles.kbs.keys().cloned().collect();
-            for kb_name in &names {
+            for (i, kb_name) in names.iter().enumerate() {
                 if *shutdown.borrow() {
                     return;
                 }
-                match backup_one_kb(&handles.paths, kb_name, &backup).await {
+                // Daemon-scope state (slates, daemon JSON) rides in ONE
+                // kb's tarball: the first in name order.
+                match backup_one_kb(&handles.paths, kb_name, &backup, i == 0).await {
                     Ok(ScheduledBackup::Skipped) => {
                         tracing::debug!(
                             kb = %kb_name,
                             "backup schedule: no packed source changed since the newest tarball, skipped"
                         );
                     }
-                    Ok(ScheduledBackup::Written { path, remote }) => {
+                    Ok(
+                        ScheduledBackup::Written { path, remote }
+                        | ScheduledBackup::Retried { path, remote },
+                    ) => {
                         let status = remote_status(remote.as_ref());
                         // Log level tracks the OFF-HOST outcome, not the
                         // local write: a tarball whose upload failed is the
@@ -1399,7 +1479,7 @@ fn spawn_backup_schedule(
                                 kb = %kb_name,
                                 path = %path.display(),
                                 remote = status,
-                                "backup schedule: wrote export tarball"
+                                "backup schedule: export tarball ready"
                             );
                         }
                         handles.bus.emit(
@@ -3049,9 +3129,8 @@ mod tests {
 
     fn backup_section(hours: Option<u64>) -> kb_core::config::BackupSection {
         kb_core::config::BackupSection {
-            remote_cmd: None,
-            remote_dest: None,
             schedule_hours: hours,
+            ..Default::default()
         }
     }
 
@@ -3135,14 +3214,12 @@ mod tests {
             .set_modified(recent)
             .unwrap();
 
-        match backup_one_kb(&paths, &kb, &backup_section(Some(24)))
+        match backup_one_kb(&paths, &kb, &backup_section(Some(24)), true)
             .await
             .unwrap()
         {
             ScheduledBackup::Skipped => {}
-            ScheduledBackup::Written { path, .. } => {
-                panic!("unchanged index must be skipped, wrote {}", path.display())
-            }
+            other => panic!("unchanged index must be skipped, got {other:?}"),
         }
         let stamped = std::fs::read_dir(&paths.exports)
             .unwrap()
@@ -3163,7 +3240,7 @@ mod tests {
             .unwrap()
             .set_modified(recent + Duration::from_secs(60))
             .unwrap();
-        match backup_one_kb(&paths, &kb, &backup_section(Some(24)))
+        match backup_one_kb(&paths, &kb, &backup_section(Some(24)), true)
             .await
             .unwrap()
         {
@@ -3181,7 +3258,7 @@ mod tests {
                     "an unconfigured [backup] attempts no off-host copy"
                 );
             }
-            ScheduledBackup::Skipped => panic!("an index write since the tarball must export"),
+            other => panic!("an index write since the tarball must export, got {other:?}"),
         }
     }
 
@@ -3207,11 +3284,12 @@ mod tests {
         std::fs::create_dir(&off_host).unwrap();
         let ok_cfg = kb_core::config::BackupSection {
             remote_cmd: Some(vec!["cp".into(), "{src}".into(), "{dest}".into()]),
-            remote_dest: Some(off_host.join("kb.tar.gz").to_string_lossy().into_owned()),
+            remote_dest: Some(off_host.to_string_lossy().into_owned()),
             schedule_hours: Some(24),
+            ..Default::default()
         };
         let ScheduledBackup::Written { path, remote } =
-            backup_one_kb(&paths, &kb, &ok_cfg).await.unwrap()
+            backup_one_kb(&paths, &kb, &ok_cfg, true).await.unwrap()
         else {
             panic!("no tarball was packed")
         };
@@ -3222,7 +3300,7 @@ mod tests {
         );
         assert!(path.is_file(), "the local tarball must survive the copy");
         assert!(
-            off_host.join("kb.tar.gz").is_file(),
+            off_host.join(path.file_name().unwrap()).is_file(),
             "the remote target never received the tarball"
         );
 
@@ -3241,9 +3319,10 @@ mod tests {
             remote_cmd: Some(vec!["/no/such/uploader-binary-xyz".into(), "{src}".into()]),
             remote_dest: Some("remote:bucket/path".into()),
             schedule_hours: Some(24),
+            ..Default::default()
         };
         let ScheduledBackup::Written { path, remote } =
-            backup_one_kb(&paths, &kb, &broken).await.unwrap()
+            backup_one_kb(&paths, &kb, &broken, true).await.unwrap()
         else {
             panic!("no tarball was packed")
         };
@@ -3260,5 +3339,178 @@ mod tests {
             "failed",
             "the bus payload token must not read as a success"
         );
+    }
+
+    /// A kb whose index and sidecars are all older than any tarball the
+    /// next export will carry, so a second tick skips.
+    fn quiet_kb(paths: &KbPaths, name: &str) -> KbName {
+        let kb = KbName::new(name).unwrap();
+        std::fs::create_dir_all(paths.kb_state(&kb)).unwrap();
+        {
+            let mut db = kb_core::storage::sqlite::Db::open(&paths.kb_sqlite(&kb)).unwrap();
+            db.history_record_search(name, 1_700_000_000, "operator")
+                .unwrap();
+        }
+        let ancient = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for f in [paths.kb_sqlite(&kb), {
+            let mut os = paths.kb_sqlite(&kb).into_os_string();
+            os.push("-wal");
+            std::path::PathBuf::from(os)
+        }] {
+            if f.is_file() {
+                std::fs::File::options()
+                    .write(true)
+                    .open(&f)
+                    .unwrap()
+                    .set_modified(ancient)
+                    .unwrap();
+            }
+        }
+        kb
+    }
+
+    /// v0.44 B1 / A3-1 — with the documented `copyto {src} {dest}` shape
+    /// and ONE `remote_dest`, every kb used to overwrite the same object
+    /// and every copy still reported ok. Two kbs must land as two objects.
+    #[tokio::test]
+    async fn scheduled_copy_gives_every_kb_its_own_remote_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "sched");
+        paths.ensure_dirs().unwrap();
+        let docs = quiet_kb(&paths, "docs");
+        let memory = quiet_kb(&paths, "memory");
+        let off_host = tmp.path().join("off-host");
+        std::fs::create_dir(&off_host).unwrap();
+        // `cp src dest` onto a FILE path is exactly `rclone copyto`.
+        let cfg = kb_core::config::BackupSection {
+            remote_cmd: Some(vec!["cp".into(), "{src}".into(), "{dest}".into()]),
+            remote_dest: Some(off_host.to_string_lossy().into_owned()),
+            schedule_hours: Some(24),
+            ..Default::default()
+        };
+        let mut local = Vec::new();
+        for (i, kb) in [&docs, &memory].into_iter().enumerate() {
+            let ScheduledBackup::Written { path, remote } =
+                backup_one_kb(&paths, kb, &cfg, i == 0).await.unwrap()
+            else {
+                panic!("{kb} was not exported")
+            };
+            assert_eq!(
+                remote,
+                Some(kb_core::storage::backup::RemoteCopyOutcome::Ok)
+            );
+            local.push(path.file_name().unwrap().to_owned());
+        }
+        let mut remote_names: Vec<_> = std::fs::read_dir(&off_host)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        remote_names.sort();
+        local.sort();
+        assert_eq!(
+            remote_names, local,
+            "each kb's tarball must be its own object off-host"
+        );
+        assert_eq!(remote_names.len(), 2);
+    }
+
+    /// v0.44 B1 / A3-4 — a failed upload of a QUIET kb is retried from the
+    /// existing tarball instead of being skipped forever, and a recorded
+    /// success stops the retries.
+    #[tokio::test]
+    async fn a_failed_upload_is_retried_while_the_kb_is_quiet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "sched");
+        paths.ensure_dirs().unwrap();
+        let kb = quiet_kb(&paths, "notes");
+        let off_host = tmp.path().join("off-host");
+        std::fs::create_dir(&off_host).unwrap();
+        let broken = kb_core::config::BackupSection {
+            remote_cmd: Some(vec!["/no/such/uploader-binary-xyz".into(), "{src}".into()]),
+            remote_dest: Some("remote:bucket".into()),
+            schedule_hours: Some(24),
+            ..Default::default()
+        };
+        let ScheduledBackup::Written { path, remote } =
+            backup_one_kb(&paths, &kb, &broken, true).await.unwrap()
+        else {
+            panic!("first tick must export")
+        };
+        assert!(matches!(
+            remote,
+            Some(kb_core::storage::backup::RemoteCopyOutcome::Failed { .. })
+        ));
+        assert!(!kb_core::storage::backup::is_uploaded(&path));
+
+        let working = kb_core::config::BackupSection {
+            remote_cmd: Some(vec!["cp".into(), "{src}".into(), "{dest}".into()]),
+            remote_dest: Some(off_host.to_string_lossy().into_owned()),
+            schedule_hours: Some(24),
+            ..Default::default()
+        };
+        match backup_one_kb(&paths, &kb, &working, true).await.unwrap() {
+            ScheduledBackup::Retried {
+                path: again,
+                remote,
+            } => {
+                assert_eq!(
+                    again, path,
+                    "the EXISTING tarball is retried, not re-packed"
+                );
+                assert_eq!(
+                    remote,
+                    Some(kb_core::storage::backup::RemoteCopyOutcome::Ok)
+                );
+            }
+            other => panic!("a quiet kb with an un-uploaded tarball must retry, got {other:?}"),
+        }
+        assert!(off_host.join(path.file_name().unwrap()).is_file());
+        assert!(kb_core::storage::backup::is_uploaded(&path));
+        assert!(matches!(
+            backup_one_kb(&paths, &kb, &working, true).await.unwrap(),
+            ScheduledBackup::Skipped
+        ));
+    }
+
+    /// v0.44 B1 / A3-3 — the schedule prunes to `keep_exports` per kb.
+    #[tokio::test]
+    async fn the_schedule_prunes_old_exports_after_a_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "sched");
+        paths.ensure_dirs().unwrap();
+        let kb = quiet_kb(&paths, "notes");
+        for day in ["01", "02", "03"] {
+            let f = paths
+                .exports
+                .join(format!("notes-202601{day}-000000.tar.gz"));
+            std::fs::write(&f, b"old").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&f)
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::UNIX_EPOCH
+                        + Duration::from_secs(1_600_000_000 + day.parse::<u64>().unwrap()),
+                )
+                .unwrap();
+        }
+        let cfg = kb_core::config::BackupSection {
+            schedule_hours: Some(24),
+            keep_exports: Some(2),
+            ..Default::default()
+        };
+        // The old tarballs predate the index, so this tick exports.
+        let ScheduledBackup::Written { path, .. } =
+            backup_one_kb(&paths, &kb, &cfg, true).await.unwrap()
+        else {
+            panic!("expected an export")
+        };
+        let left: Vec<String> = std::fs::read_dir(&paths.exports)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.starts_with("notes-") && n.ends_with(".tar.gz"))
+            .collect();
+        assert_eq!(left.len(), 2, "keep_exports = 2, found {left:?}");
+        assert!(left.contains(&path.file_name().unwrap().to_str().unwrap().to_string()));
     }
 }

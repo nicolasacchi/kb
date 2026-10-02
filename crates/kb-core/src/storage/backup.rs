@@ -14,7 +14,7 @@
 //! exec the `kb` binary.
 
 use crate::config::BackupSection;
-use crate::paths::KbPaths;
+use crate::paths::{KbPaths, Snapshot, StateClass, StateMember, StateScope};
 use crate::types::KbName;
 use crate::Result;
 use rusqlite::Connection;
@@ -68,33 +68,138 @@ pub enum RemoteCopyOutcome {
 /// **the remote copy is best-effort and must never fail the backup
 /// itself**; callers surface the outcome loudly (log + CLI exit
 /// message) but keep the backup's own success.
+///
+/// The uploader runs in its OWN process group with a wall deadline
+/// ([`BackupSection::remote_timeout`]). At the deadline the whole group
+/// is killed and the copy is reported `Failed { "timed out" }`: an
+/// `scp` stalled on a half-open connection used to block the schedule
+/// task, and so every later kb and tick, forever.
 pub fn run_remote_copy(cfg: &BackupSection, src: &Path) -> Option<RemoteCopyOutcome> {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
     let argv = cfg.build_argv(src)?;
     // `is_configured`/`build_argv` guarantee argv is non-empty.
     let (program, args) = argv
         .split_first()
         .expect("build_argv yields non-empty argv");
-    Some(match Command::new(program).args(args).output() {
-        Ok(out) if out.status.success() => {
+    let spawned = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => {
+            let message = format!("failed to spawn `{program}`: {e}");
+            tracing::warn!(program, %message, "backup: off-host copy FAILED");
+            return Some(RemoteCopyOutcome::Failed { message });
+        }
+    };
+    let pgid = child.id() as libc::pid_t;
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let mut buf = [0u8; 8192];
+                while let Ok(n) = pipe.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    // Keep draining past the cap so the child never
+                    // blocks on a full pipe.
+                    if kept.len() < 64 * 1024 {
+                        kept.extend_from_slice(&buf[..n]);
+                    }
+                }
+            }
+            kept
+        })
+    };
+    let out_t = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
+    let err_t = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
+    let deadline = std::time::Instant::now() + cfg.remote_timeout();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Ok(st),
+            Ok(None) => {}
+            Err(e) => break Err(e),
+        }
+        if std::time::Instant::now() >= deadline {
+            timed_out = true;
+            // SAFETY: killpg on the group this function created with
+            // `process_group(0)`; the pgid is the child's own pid.
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+            break child.wait();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    // The group is dead (or exited), so the pipes close and the drains end.
+    let _ = out_t.join();
+    let stderr_bytes = err_t.join().unwrap_or_default();
+    Some(match status {
+        _ if timed_out => {
+            let message = format!(
+                "`{program}` timed out after {}s and was killed",
+                cfg.remote_timeout().as_secs()
+            );
+            tracing::warn!(program, %message, "backup: off-host copy FAILED");
+            RemoteCopyOutcome::Failed { message }
+        }
+        Ok(st) if st.success() => {
             tracing::info!(program, dest = %cfg.remote_dest.as_deref().unwrap_or(""), "backup: off-host copy succeeded");
             RemoteCopyOutcome::Ok
         }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
+        Ok(st) => {
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
             let message = format!(
-                "`{program}` exited {}: {}",
-                out.status,
+                "`{program}` exited {st}: {}",
                 stderr.trim().lines().next().unwrap_or("(no stderr)")
             );
             tracing::warn!(program, %message, "backup: off-host copy FAILED");
             RemoteCopyOutcome::Failed { message }
         }
         Err(e) => {
-            let message = format!("failed to spawn `{program}`: {e}");
+            let message = format!("failed to wait for `{program}`: {e}");
             tracing::warn!(program, %message, "backup: off-host copy FAILED");
             RemoteCopyOutcome::Failed { message }
         }
     })
+}
+
+/// `<tarball>.uploaded` — written only after the off-host copy of that
+/// exact tarball exited 0. The scheduler's skip predicate is local-only,
+/// so without this record a failed upload of a quiet kb was never
+/// retried: the failed tarball was itself the "newest, nothing changed"
+/// anchor.
+pub fn uploaded_marker(tarball: &Path) -> PathBuf {
+    sidecar(tarball, ".uploaded")
+}
+
+/// Record that `tarball` reached the off-host target.
+pub fn mark_uploaded(tarball: &Path) -> Result<()> {
+    std::fs::write(uploaded_marker(tarball), b"")?;
+    Ok(())
+}
+
+/// Has `tarball` been copied off-host?
+pub fn is_uploaded(tarball: &Path) -> bool {
+    uploaded_marker(tarball).is_file()
 }
 
 /// Drop guard so a failed or cancelled export does not leave
@@ -129,35 +234,40 @@ enum TreeProbe {
 /// `true` when a scheduled export of `kb` should not write a tarball.
 ///
 /// Skip when the index is missing (nothing to snapshot), or when
-/// NOTHING [`write_kb_export`] packs is newer than the newest
+/// NOTHING [`write_kb_export_with`] packs is newer than the newest
 /// `<exports>/<kb>-YYYYMMDD-HHMMSS.tar.gz` — by mtime, not by name.
-/// The watched set is exactly the packed set: `index.db` and its `-wal`
-/// sidecar, `lance/`, `.review/`, and the daemon-wide `slates/`.
+/// The watched set is the packed set because both iterate
+/// [`KbPaths::state_members`]: `index.db` and its `-wal` sidecar, then
+/// every other per-kb persistent member (`lance/`, `.review/`,
+/// `.attachments/`, `.proposals/`), then — only when `include_daemon` —
+/// the daemon-scope members (`slates/` and the daemon JSON files).
+///
+/// `include_daemon` must be true for exactly the ONE kb whose tarball
+/// carries the daemon-scope members (see [`ExportOptions`]). Probing
+/// them for every kb, as this function once did, made any slate append
+/// "changed" for ALL kbs, so every tick wrote a full tarball of every kb.
 ///
 /// WHY the trees count and not just the db (2026-09-30, adversarial
-/// review O4): three of the four families this function used to ignore
-/// are written with ZERO sqlite traffic. `slates/` appends JSONL
-/// directly (`slates.rs`), and a comment/tag/anchor edit rewrites a
-/// `.review/<id>.json` sidecar. An old predicate that stat'd only
-/// `index.db` therefore called a day of pure comment + slate activity
-/// "unchanged" and skipped the export — so the one artifact that
-/// records the operator's review work was the one that could not be
-/// restored after a disk failure, while `kb doctor` still reported
-/// `backup-age: PASS` off the untouched `<state>/exports/` directory.
+/// review O4): `slates/` appends JSONL directly, a comment/tag/anchor
+/// edit rewrites a `.review/<id>.json` sidecar, and an attachment upload
+/// writes a blob — none of them touches sqlite.
 ///
 /// A missing exports dir or no matching tarball is not a skip: the first
 /// tick must write one. Unreadable metadata is never a skip either, and
 /// neither is an unfinished or over-budget probe (see
 /// [`probe_tree_mtime`]) — every "I could not tell" falls through to
 /// writing. `-shm` is ignored: a reader can touch it without a commit.
-pub fn should_skip_scheduled_backup(paths: &KbPaths, kb: &KbName) -> bool {
-    skip_within_budget(paths, kb, CHANGE_PROBE_ENTRY_BUDGET)
+///
+/// Synchronous stat walk of up to [`CHANGE_PROBE_ENTRY_BUDGET`] entries:
+/// async callers run it on the blocking pool.
+pub fn should_skip_scheduled_backup(paths: &KbPaths, kb: &KbName, include_daemon: bool) -> bool {
+    skip_within_budget(paths, kb, include_daemon, CHANGE_PROBE_ENTRY_BUDGET)
 }
 
 /// [`should_skip_scheduled_backup`] with the stat budget as a parameter,
 /// so the "a probe that cannot finish must write" rule is testable
 /// without inventing a 20 000-entry fixture tree.
-fn skip_within_budget(paths: &KbPaths, kb: &KbName, budget: usize) -> bool {
+fn skip_within_budget(paths: &KbPaths, kb: &KbName, include_daemon: bool, budget: usize) -> bool {
     let index_db = paths.kb_sqlite(kb);
     if !index_db.is_file() {
         return true;
@@ -171,18 +281,28 @@ fn skip_within_budget(paths: &KbPaths, kb: &KbName, budget: usize) -> bool {
         Some(_) => {}
     }
     let mut budget = budget;
-    for tree in [
-        paths.kb_lance(kb),
-        paths.kb_review_dir(kb),
-        paths.state.join("slates"),
-    ] {
-        match probe_tree_mtime(&tree, &mut budget) {
+    for member in packed_members(paths, kb, include_daemon) {
+        if member.name == "index.db" {
+            continue;
+        }
+        match probe_tree_mtime(&member.path, &mut budget) {
             TreeProbe::Newest(mtime) if mtime > since => return false,
             TreeProbe::Unknown => return false,
             TreeProbe::Absent | TreeProbe::Newest(_) => {}
         }
     }
     true
+}
+
+/// The members one tarball packs: every persistent per-kb member, plus
+/// the persistent daemon-scope members when `include_daemon`. The ONE
+/// selection the packer and the skip probe share.
+fn packed_members(paths: &KbPaths, kb: &KbName, include_daemon: bool) -> Vec<StateMember> {
+    paths
+        .state_members(kb)
+        .into_iter()
+        .filter(|m| m.is_persistent() && (m.scope == StateScope::PerKb || include_daemon))
+        .collect()
 }
 
 /// Newest mtime anywhere under `root`, charging every visited entry to
@@ -239,15 +359,57 @@ fn probe_tree_mtime(root: &Path, budget: &mut usize) -> TreeProbe {
     }
 }
 
+/// What one export tarball carries and where it lands.
+#[derive(Debug, Clone, Default)]
+pub struct ExportOptions {
+    /// Also pack the daemon-scope members (`slates/`, `saved-queries.json`,
+    /// `memory-policy.json`, `tombstone-era.json`) beside `<kb>/`. They are
+    /// daemon-wide, not per-kb, so a multi-kb sweep packs them into ONE
+    /// kb's tarball (the schedule designates the first kb in name order).
+    /// `kb restore` puts them back only when absent.
+    pub include_daemon: bool,
+    /// Explicit output path (`kb backup --out`). `None` =
+    /// `<exports>/<kb>-YYYYMMDD-HHMMSS.tar.gz`, the name the skip
+    /// predicate keys on.
+    pub out: Option<PathBuf>,
+}
+
+/// [`write_kb_export_with`] with daemon-scope members included and the
+/// default output name.
+pub async fn write_kb_export(paths: &KbPaths, kb: &KbName) -> Result<PathBuf> {
+    write_kb_export_with(
+        paths,
+        kb,
+        &ExportOptions {
+            include_daemon: true,
+            out: None,
+        },
+    )
+    .await
+}
+
 /// Write one restore-compatible export tarball for `kb`.
 ///
-/// Layout matches `kb backup`: `<kb>/index.db` (via [`vacuum_into`]),
-/// `<kb>/lance/` and `<kb>/.review/` when present, and a sibling
-/// `slates/` when the daemon has one. `tar` is executed directly — this
-/// function must not shell out to the `kb` binary. A missing index is an
-/// error (this does not create one). The caller decides whether an existing
-/// index is unchanged and should be skipped.
-pub async fn write_kb_export(paths: &KbPaths, kb: &KbName) -> Result<PathBuf> {
+/// The single writer behind `kb backup`, `kb backup --all` and the
+/// daemon's `[backup] schedule_hours` task. Layout: `<kb>/<member>` for
+/// each persistent per-kb member of [`KbPaths::state_members`] that exists
+/// (`index.db` via [`vacuum_into`], then `lance/`, `.review/`,
+/// `.attachments/`, `.proposals/`), and with `include_daemon` a sibling
+/// `<member>` per persistent daemon-scope member. `tar` is executed
+/// directly — this function must not shell out to the `kb` binary. A
+/// missing index is an error (this does not create one).
+///
+/// The tarball is written to `<out>.<pid>.partial` and renamed into place
+/// only when `tar` succeeded, so a crash, a full disk or a kill can never
+/// leave a truncated file under a name the skip predicate or `kb doctor`
+/// would read as a backup. Its mtime is set to the instant the snapshot
+/// STARTED, not when `tar` finished: a source edited while the tarball
+/// was being built is then newer than it and the next tick packs it.
+pub async fn write_kb_export_with(
+    paths: &KbPaths,
+    kb: &KbName,
+    opts: &ExportOptions,
+) -> Result<PathBuf> {
     // `Connection::open` creates a missing file. Refuse first so a scheduled
     // tick cannot invent an empty live index as a side effect of snapshotting.
     let sqlite_src = paths.kb_sqlite(kb);
@@ -258,54 +420,79 @@ pub async fn write_kb_export(paths: &KbPaths, kb: &KbName) -> Result<PathBuf> {
         )));
     }
     std::fs::create_dir_all(&paths.exports)?;
+    let snapshot_started = SystemTime::now();
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let out = paths.exports.join(format!("{kb}-{stamp}.tar.gz"));
+    let out = opts
+        .out
+        .clone()
+        .unwrap_or_else(|| paths.exports.join(format!("{kb}-{stamp}.tar.gz")));
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
     let staging = paths
         .exports
         .join(format!(".staging-{kb}-{}-{stamp}", std::process::id()));
+    // Fallback for a cancelled future. The normal path removes the
+    // staging tree explicitly, on the blocking pool, below.
     let _cleanup = RemoveOnDrop(staging.clone());
+    let result = export_inner(paths, kb, opts, &staging, &out, snapshot_started).await;
+    let cleanup = staging.clone();
+    // Deleting a multi-GB staged lance copy must not run on a runtime worker.
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&cleanup)).await;
+    result?;
+    Ok(out)
+}
 
-    let staged_kb = staging.join(kb.as_str());
-    let lance_src = paths.kb_lance(kb);
-    let review_src = paths.kb_review_dir(kb);
-    let slates_src = paths.state.join("slates");
-    let staged_sqlite = staged_kb.join("index.db");
-    let staged_lance = staged_kb.join("lance");
-    let staged_review = staged_kb.join(".review");
-    let staged_slates = staging.join("slates");
-
-    let stage_sqlite = sqlite_src.clone();
-    let stage_lance = lance_src.clone();
-    let stage_review = review_src.clone();
-    let stage_slates = slates_src.clone();
-    let stage_kb = staged_kb.clone();
-    let stage_sqlite_dest = staged_sqlite.clone();
-    let stage_lance_dest = staged_lance.clone();
-    let stage_review_dest = staged_review.clone();
-    let stage_slates_dest = staged_slates.clone();
-    tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&stage_kb)?;
-        vacuum_into(&stage_sqlite, &stage_sqlite_dest)?;
-        if stage_lance.exists() {
-            copy_dir(&stage_lance, &stage_lance_dest)?;
+async fn export_inner(
+    paths: &KbPaths,
+    kb: &KbName,
+    opts: &ExportOptions,
+    staging: &Path,
+    out: &Path,
+    snapshot_started: SystemTime,
+) -> Result<()> {
+    let members = packed_members(paths, kb, opts.include_daemon);
+    let staging_owned = staging.to_path_buf();
+    let kb_owned = kb.clone();
+    let stage_members = members.clone();
+    // Names relative to `staging`, in tar argument order.
+    let top_level: Vec<String> = tokio::task::spawn_blocking(move || {
+        let staged_kb = staging_owned.join(kb_owned.as_str());
+        std::fs::create_dir_all(&staged_kb)?;
+        let mut top = vec![kb_owned.as_str().to_string()];
+        for m in &stage_members {
+            let dest = match m.scope {
+                StateScope::PerKb => staged_kb.join(m.name),
+                StateScope::Daemon => staging_owned.join(m.name),
+            };
+            if m.scope == StateScope::Daemon && m.path.exists() {
+                top.push(m.name.to_string());
+            }
+            match m.class {
+                StateClass::Persistent(Snapshot::VacuumInto) => vacuum_into(&m.path, &dest)?,
+                StateClass::Persistent(Snapshot::CopyValidated) if m.path.exists() => {
+                    copy_lance_dir(&m.path, &dest)?
+                }
+                StateClass::Persistent(_) if m.path.is_dir() => copy_dir(&m.path, &dest)?,
+                StateClass::Persistent(_) if m.path.is_file() => {
+                    std::fs::copy(&m.path, &dest)?;
+                }
+                _ => {}
+            }
         }
-        if stage_review.exists() {
-            copy_dir(&stage_review, &stage_review_dest)?;
-        }
-        if stage_slates.exists() {
-            copy_dir(&stage_slates, &stage_slates_dest)?;
-        }
-        Ok::<(), crate::Error>(())
+        Ok::<Vec<String>, crate::Error>(top)
     })
     .await
     .map_err(|e| crate::Error::Storage(format!("backup staging task failed: {e}")))??;
 
+    let staged_lance = staging.join(kb.as_str()).join("lance");
     if staged_lance.exists() {
         let store = crate::storage::lance::Storage::open(&staged_lance, None)
             .await
             .map_err(|e| {
                 crate::Error::Storage(format!(
-                    "lance snapshot is inconsistent ({e}); a commit may have landed mid-copy"
+                    "lance snapshot is inconsistent ({e}); a commit may have landed \
+                     mid-copy — retry, or stop the daemon for a guaranteed snapshot"
                 ))
             })?;
         store.count_rows().await.map_err(|e| {
@@ -313,14 +500,83 @@ pub async fn write_kb_export(paths: &KbPaths, kb: &KbName) -> Result<PathBuf> {
         })?;
     }
 
-    let include_slates = staged_slates.exists();
-    let tar_staging = staging.clone();
-    let tar_out = out.clone();
-    let tar_kb = kb.as_str().to_string();
-    tokio::task::spawn_blocking(move || tar_tree(&tar_staging, &tar_out, &tar_kb, include_slates))
-        .await
-        .map_err(|e| crate::Error::Storage(format!("backup tar task failed: {e}")))??;
-    Ok(out)
+    let tar_staging = staging.to_path_buf();
+    let tar_out = out.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        tar_tree(&tar_staging, &tar_out, &top_level, snapshot_started)
+    })
+    .await
+    .map_err(|e| crate::Error::Storage(format!("backup tar task failed: {e}")))??;
+    Ok(())
+}
+
+/// Keep the newest `keep` scheduled tarballs of `kb` in `exports` and
+/// delete the rest, with their `.uploaded` markers. Returns what it
+/// removed. `keep == 0` removes nothing (pruning disabled). Only names
+/// [`is_scheduled_tarball_name`] accepts for exactly this kb are touched,
+/// so `--out` files, other kbs and `notes-extra-…` siblings are safe.
+/// Orphaned `<name>.<pid>.partial` files for this kb older than a day —
+/// a crash mid-tar — are removed too.
+pub fn prune_scheduled_exports(exports: &Path, kb: &str, keep: usize) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    let Ok(entries) = std::fs::read_dir(exports) else {
+        return removed;
+    };
+    let mut tarballs: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        if is_scheduled_tarball_name(name, kb) {
+            tarballs.push((mtime, name.to_string(), entry.path()));
+        } else if partial_target(name).is_some_and(|t| is_scheduled_tarball_name(t, kb))
+            && mtime
+                .elapsed()
+                .is_ok_and(|age| age > std::time::Duration::from_secs(86_400))
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            removed.push(entry.path());
+        }
+    }
+    if keep == 0 {
+        return removed;
+    }
+    tarballs.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    for (_, _, path) in tarballs.into_iter().skip(keep) {
+        if std::fs::remove_file(&path).is_ok() {
+            let _ = std::fs::remove_file(uploaded_marker(&path));
+            removed.push(path);
+        }
+    }
+    removed
+}
+
+/// `<name>.<pid>.partial` → `<name>`.
+fn partial_target(name: &str) -> Option<&str> {
+    let rest = name.strip_suffix(".partial")?;
+    let (target, pid) = rest.rsplit_once('.')?;
+    (!pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())).then_some(target)
+}
+
+/// The newest scheduled tarball of `kb` and its mtime.
+pub fn newest_scheduled_tarball(exports: &Path, kb: &str) -> Option<(PathBuf, SystemTime)> {
+    let mut newest: Option<(PathBuf, SystemTime)> = None;
+    for entry in std::fs::read_dir(exports).ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_scheduled_tarball_name(name, kb) {
+            continue;
+        }
+        let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        if newest.as_ref().is_none_or(|(_, prev)| mtime > *prev) {
+            newest = Some((entry.path(), mtime));
+        }
+    }
+    newest
 }
 
 fn newest_scheduled_tarball_mtime(exports: &Path, kb: &str) -> Option<SystemTime> {
@@ -414,24 +670,87 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Pack `staging` with `tar` directly. Not a shell, and not the `kb` binary.
-fn tar_tree(staging: &Path, out: &Path, kb: &str, include_slates: bool) -> Result<()> {
+/// Top-level entries of a lance dataset in COPY order: every metadata
+/// entry (`_versions/`, `_transactions/`, `_deletions/`, `_indices/`, …)
+/// first, `data/` last.
+///
+/// The dataset is copied while the daemon may be committing. Data files
+/// are immutable and a manifest only names files that already exist, so
+/// copying the manifests FIRST means every file they reference is there by
+/// the time `data/` is walked. The reverse order (a plain `walkdir`, which
+/// is `read_dir` order) could stage a manifest for version N+1 whose data
+/// file was never copied — and `Storage::open` + `count_rows` answer from
+/// manifest metadata alone, so validation could not notice.
+pub fn lance_copy_order(src: &Path) -> Result<Vec<PathBuf>> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(src)?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|e| e.path())
+        .collect();
+    entries.sort_by_key(|p| {
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        (name == "data", name.to_string())
+    });
+    Ok(entries)
+}
+
+fn copy_lance_dir(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in lance_copy_order(src)? {
+        let Some(name) = entry.file_name() else {
+            continue;
+        };
+        let target = dst.join(name);
+        if entry.is_dir() {
+            copy_dir(&entry, &target)?;
+        } else {
+            std::fs::copy(&entry, &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Pack `top_level` (names relative to `staging`) into `out` with `tar`
+/// directly. Not a shell, and not the `kb` binary. Writes to a sibling
+/// `.partial`, stamps it with `snapshot_started`, then renames; any
+/// failure removes the partial and leaves `out` untouched.
+fn tar_tree(
+    staging: &Path,
+    out: &Path,
+    top_level: &[String],
+    snapshot_started: SystemTime,
+) -> Result<()> {
+    let partial = sidecar(out, &format!(".{}.partial", std::process::id()));
     let mut cmd = Command::new("tar");
     cmd.arg("-czf")
-        .arg(out)
+        .arg(&partial)
         .arg("-C")
         .arg(staging)
-        .arg("--")
-        .arg(kb);
-    if include_slates {
-        cmd.arg("slates");
+        .arg("--");
+    for name in top_level {
+        cmd.arg(name);
     }
-    let status = cmd.status().map_err(|e| {
-        crate::Error::Storage(format!("tar invocation failed (is `tar` installed?): {e}"))
-    })?;
+    let status = match cmd.status() {
+        Ok(st) => st,
+        Err(e) => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(crate::Error::Storage(format!(
+                "tar invocation failed (is `tar` installed?): {e}"
+            )));
+        }
+    };
     if !status.success() {
-        let _ = std::fs::remove_file(out);
+        let _ = std::fs::remove_file(&partial);
         return Err(crate::Error::Storage(format!("tar exited {status}")));
+    }
+    let finish = std::fs::File::options()
+        .write(true)
+        .open(&partial)
+        .and_then(|f| f.set_modified(snapshot_started))
+        .and_then(|()| std::fs::rename(&partial, out));
+    if let Err(e) = finish {
+        let _ = std::fs::remove_file(&partial);
+        return Err(e.into());
     }
     Ok(())
 }
@@ -483,7 +802,7 @@ mod tests {
         let cfg = BackupSection {
             remote_cmd: Some(vec!["cp".into(), "{src}".into(), "{dest}".into()]),
             remote_dest: Some(dest.to_string_lossy().into_owned()),
-            schedule_hours: None,
+            ..Default::default()
         };
         let outcome = run_remote_copy(&cfg, &src);
         assert_eq!(outcome, Some(RemoteCopyOutcome::Ok));
@@ -510,7 +829,7 @@ mod tests {
                 "{dest}".into(),
             ]),
             remote_dest: Some("remote:bucket/path".into()),
-            schedule_hours: None,
+            ..Default::default()
         };
         match run_remote_copy(&cfg, &src) {
             Some(RemoteCopyOutcome::Failed { message }) => {
@@ -531,7 +850,7 @@ mod tests {
         let cfg = BackupSection {
             remote_cmd: Some(vec!["/no/such/uploader-binary-xyz".into(), "{src}".into()]),
             remote_dest: Some("remote:bucket/path".into()),
-            schedule_hours: None,
+            ..Default::default()
         };
         match run_remote_copy(&cfg, &src) {
             Some(RemoteCopyOutcome::Failed { message }) => {
@@ -604,7 +923,7 @@ mod tests {
         }
 
         fn skip(&self) -> bool {
-            should_skip_scheduled_backup(&self.paths, &self.kb)
+            should_skip_scheduled_backup(&self.paths, &self.kb, true)
         }
 
         /// Touch `path` to a stamp newer than the fixture's tarball, and
@@ -638,6 +957,13 @@ mod tests {
                 ["lance", rest @ ..] => rest
                     .iter()
                     .fold(self.paths.kb_lance(&self.kb), |a, s| a.join(s)),
+                [".attachments", rest @ ..] => rest.iter().fold(
+                    self.paths.kb_state(&self.kb).join(".attachments"),
+                    |a, s| a.join(s),
+                ),
+                [".proposals", rest @ ..] => rest
+                    .iter()
+                    .fold(self.paths.kb_proposals_dir(&self.kb), |a, s| a.join(s)),
                 ["slates", rest @ ..] => rest
                     .iter()
                     .fold(self.paths.state.join("slates"), |a, s| a.join(s)),
@@ -728,6 +1054,13 @@ mod tests {
             ("review sidecar", vec![".review", "c_abc.json"]),
             ("slate ledger", vec!["slates", "proj", "ledger.jsonl"]),
             ("lance commit", vec!["lance", "chunks", "0.lance"]),
+            // Invariant #6 families that used to be packed by nothing and
+            // watched by nothing.
+            (
+                "attachment blob",
+                vec![".attachments", "art1", "a_0123456789ab"],
+            ),
+            ("queued proposal", vec![".proposals", "p_abc.json"]),
         ] {
             let f = SkipFixture::new(Some(1_700_003_600));
             assert!(f.skip(), "{label}: an untouched kb must still skip");
@@ -795,11 +1128,11 @@ mod tests {
         }
         set_mtime_dir(&f.paths.kb_review_dir(&f.kb), epoch_plus(1_700_000_000));
         assert!(
-            skip_within_budget(&f.paths, &f.kb, 8),
+            skip_within_budget(&f.paths, &f.kb, true, 8),
             "a probe that finishes inside the budget skips an unchanged tree"
         );
         assert!(
-            !skip_within_budget(&f.paths, &f.kb, 2),
+            !skip_within_budget(&f.paths, &f.kb, true, 2),
             "a probe that runs out of budget must force the export"
         );
     }
@@ -891,7 +1224,7 @@ mod tests {
             }
         }
         assert!(
-            should_skip_scheduled_backup(&paths, &kb),
+            should_skip_scheduled_backup(&paths, &kb, true),
             "a kb whose every packed source predates the tarball this writer \
              just produced must be skipped"
         );
@@ -903,8 +1236,362 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !should_skip_scheduled_backup(&paths, &kb),
+            !should_skip_scheduled_backup(&paths, &kb, true),
             "a sidecar edited after the newest tarball must not be skipped"
         );
+    }
+
+    fn list_tar(tarball: &Path) -> Vec<String> {
+        let out = Command::new("tar")
+            .arg("-tzf")
+            .arg(tarball)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "tar -tzf failed");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim_end_matches('/').to_string())
+            .collect()
+    }
+
+    /// A kb with one real file in EVERY member of the registry, written
+    /// through the same path helpers the routes use.
+    fn kb_with_every_member(tmp: &Path) -> (KbPaths, KbName) {
+        let paths = KbPaths::rooted_at(tmp, "daemon");
+        let kb = KbName::new("notes").unwrap();
+        std::fs::create_dir_all(paths.kb_state(&kb)).unwrap();
+        {
+            let mut db = crate::storage::sqlite::Db::open(&paths.kb_sqlite(&kb)).unwrap();
+            db.history_record_search("hello", 1_700_000_000, "operator")
+                .unwrap();
+        }
+        let write = |p: PathBuf, bytes: &[u8]| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        };
+        write(paths.kb_review_file(&kb, "c_abc"), b"{}");
+        write(
+            paths.kb_attachment_blob(&kb, "art1", "a_0123456789ab"),
+            b"PNGBYTES",
+        );
+        write(paths.kb_attachment_manifest(&kb, "art1"), b"{}");
+        write(paths.kb_proposal_file(&kb, "p_abc"), b"{\"p\":1}");
+        write(paths.state.join("slates/proj/ledger.jsonl"), b"{}\n");
+        write(paths.saved_queries_file(), b"[]");
+        write(paths.memory_policy_file(), b"{}");
+        write(paths.tombstone_era_file(), b"{\"era\":1}");
+        // Not persistent: must never be packed.
+        write(paths.embed_cache_file(), b"cache");
+        write(paths.daemon_pid_file(), b"1234");
+        (paths, kb)
+    }
+
+    /// v0.44 B1 / A3-2 / I3 — invariant #6 says the sidecar family is
+    /// "registered in backup". Before the registry, `.attachments/` and
+    /// `.proposals/` were in neither writer, and `kb restore --force`
+    /// (remove_dir_all, then extract) destroyed them. This writes one
+    /// file per registry member and asserts the tarball carries exactly
+    /// the persistent ones.
+    #[tokio::test]
+    async fn every_persistent_state_member_is_in_the_tarball_and_no_other() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, kb) = kb_with_every_member(tmp.path());
+        let out = write_kb_export(&paths, &kb).await.unwrap();
+        let listing = list_tar(&out);
+        for want in [
+            "notes/index.db",
+            "notes/.review/c_abc.json",
+            "notes/.attachments/art1/a_0123456789ab",
+            "notes/.attachments/art1/_manifest.json",
+            "notes/.proposals/p_abc.json",
+            "slates/proj/ledger.jsonl",
+            "saved-queries.json",
+            "memory-policy.json",
+            "tombstone-era.json",
+        ] {
+            assert!(
+                listing.iter().any(|l| l == want),
+                "{want} missing from the tarball: {listing:?}"
+            );
+        }
+        for never in ["query-embed-cache.json", "kb-daemon.pid"] {
+            assert!(
+                !listing.iter().any(|l| l.contains(never)),
+                "{never} is regenerable/runtime and must not be packed: {listing:?}"
+            );
+        }
+
+        // Round trip: the attachment bytes survive extraction.
+        let extract = tmp.path().join("extract");
+        std::fs::create_dir(&extract).unwrap();
+        assert!(Command::new("tar")
+            .arg("-xzf")
+            .arg(&out)
+            .arg("-C")
+            .arg(&extract)
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            std::fs::read(extract.join("notes/.attachments/art1/a_0123456789ab")).unwrap(),
+            b"PNGBYTES"
+        );
+    }
+
+    /// The guard A13-6 found missing: every entry the daemon puts under a
+    /// kb's state dir (and under `<state>/`) must be classified by
+    /// `state_members`. A new sidecar written without registering it
+    /// fails here instead of being lost on the first restore.
+    #[test]
+    fn every_entry_under_state_is_classified_by_the_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, kb) = kb_with_every_member(tmp.path());
+        let members = paths.state_members(&kb);
+        let per_kb: Vec<&str> = members
+            .iter()
+            .filter(|m| m.scope == StateScope::PerKb)
+            .map(|m| m.name)
+            .collect();
+        for ent in std::fs::read_dir(paths.kb_state(&kb)).unwrap() {
+            let name = ent.unwrap().file_name().into_string().unwrap();
+            assert!(
+                per_kb.contains(&name.as_str()) || name == "index.db-wal" || name == "index.db-shm",
+                "{name} under <state>/<kb>/ is not in KbPaths::state_members"
+            );
+        }
+        let daemon: Vec<&str> = members
+            .iter()
+            .filter(|m| m.scope == StateScope::Daemon)
+            .map(|m| m.name)
+            .collect();
+        for ent in std::fs::read_dir(&paths.state).unwrap() {
+            let name = ent.unwrap().file_name().into_string().unwrap();
+            assert!(
+                daemon.contains(&name.as_str())
+                    || name == kb.as_str()
+                    || ["exports", "quarantine", "runs"].contains(&name.as_str()),
+                "{name} under <state>/ is not in KbPaths::state_members"
+            );
+        }
+        // Every registry member is documented persistent / regenerable / runtime;
+        // the persistent ones are exactly what the packer selects.
+        let packed: Vec<&str> = packed_members(&paths, &kb, true)
+            .iter()
+            .map(|m| m.name)
+            .collect();
+        for m in &members {
+            assert_eq!(
+                packed.contains(&m.name),
+                m.is_persistent(),
+                "{} packed/persistent mismatch",
+                m.name
+            );
+        }
+    }
+
+    /// A3-3 — slates are daemon-wide. A slate append must not make every
+    /// kb "changed"; only the kb that carries them (include_daemon).
+    #[test]
+    fn a_slate_append_does_not_unskip_a_kb_that_does_not_carry_slates() {
+        let f = SkipFixture::new(Some(1_700_003_600));
+        f.write_packed(&["slates", "proj", "ledger.jsonl"], b"{}");
+        assert!(
+            !should_skip_scheduled_backup(&f.paths, &f.kb, true),
+            "the designated kb must export a newer slate"
+        );
+        assert!(
+            should_skip_scheduled_backup(&f.paths, &f.kb, false),
+            "a kb that does not carry slates must not export for a slate append"
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_members_are_packed_only_when_asked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, kb) = kb_with_every_member(tmp.path());
+        let out = write_kb_export_with(
+            &paths,
+            &kb,
+            &ExportOptions {
+                include_daemon: false,
+                out: None,
+            },
+        )
+        .await
+        .unwrap();
+        let listing = list_tar(&out);
+        assert!(listing.iter().any(|l| l == "notes/.proposals/p_abc.json"));
+        assert!(
+            !listing
+                .iter()
+                .any(|l| l.starts_with("slates") || l.ends_with(".json") && !l.contains('/')),
+            "daemon-scope members leaked into a per-kb tarball: {listing:?}"
+        );
+    }
+
+    /// A4-1 / A3-9 / A4.f1 — a tar that fails leaves NOTHING under a name
+    /// the skip predicate or doctor could read as a backup, and does not
+    /// clobber an existing file at the destination.
+    #[test]
+    fn a_failed_tar_leaves_no_tarball_and_no_partial() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("notes-20260101-000000.tar.gz");
+        std::fs::write(&out, b"previous good backup").unwrap();
+        let err = tar_tree(
+            &tmp.path().join("no-such-staging"),
+            &out,
+            &["notes".to_string()],
+            SystemTime::now(),
+        );
+        assert!(err.is_err(), "tar of a missing tree must fail");
+        assert_eq!(std::fs::read(&out).unwrap(), b"previous good backup");
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.ends_with(".partial"))
+            .collect();
+        assert!(leftovers.is_empty(), "partial left behind: {leftovers:?}");
+
+        let fresh = tmp.path().join("notes-20260102-000000.tar.gz");
+        let _ = tar_tree(
+            &tmp.path().join("no-such-staging"),
+            &fresh,
+            &["notes".to_string()],
+            SystemTime::now(),
+        );
+        assert!(!fresh.exists(), "a failed tar must not create the tarball");
+    }
+
+    /// A3-9 — the tarball is stamped with the snapshot START, so a source
+    /// edited while it was being built is newer than it.
+    #[test]
+    fn the_tarball_mtime_is_the_snapshot_start_not_the_finish() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir_all(staging.join("notes")).unwrap();
+        std::fs::write(staging.join("notes/index.db"), b"db").unwrap();
+        let out = tmp.path().join("notes-20260101-000000.tar.gz");
+        let started = epoch_plus(1_700_000_000);
+        tar_tree(&staging, &out, &["notes".to_string()], started).unwrap();
+        let mtime = std::fs::metadata(&out).unwrap().modified().unwrap();
+        assert_eq!(mtime, started);
+        assert!(
+            std::fs::read_dir(tmp.path()).unwrap().all(|e| !e
+                .unwrap()
+                .file_name()
+                .to_str()
+                .unwrap()
+                .ends_with(".partial")),
+            "the partial must be renamed away"
+        );
+    }
+
+    /// A3-8 — metadata (`_versions/` …) is copied before `data/`.
+    #[test]
+    fn lance_metadata_is_copied_before_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        for d in [
+            "data",
+            "_versions",
+            "_transactions",
+            "_indices",
+            "_deletions",
+        ] {
+            std::fs::create_dir_all(tmp.path().join(d)).unwrap();
+        }
+        let order = lance_copy_order(tmp.path()).unwrap();
+        let names: Vec<String> = order
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names.last().map(String::as_str), Some("data"), "{names:?}");
+        let versions = names.iter().position(|n| n == "_versions").unwrap();
+        let data = names.iter().position(|n| n == "data").unwrap();
+        assert!(versions < data, "{names:?}");
+    }
+
+    /// A3-3 — retention keeps the newest K per kb and touches nothing else.
+    #[test]
+    fn prune_keeps_the_newest_k_per_kb_and_only_that_kbs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ex = tmp.path();
+        for (i, day) in ["01", "02", "03", "04"].iter().enumerate() {
+            let f = ex.join(format!("notes-202601{day}-000000.tar.gz"));
+            std::fs::write(&f, b"t").unwrap();
+            set_mtime(&f, epoch_plus(1_700_000_000 + i as u64 * 100));
+            mark_uploaded(&f).unwrap();
+        }
+        for other in [
+            "docs-20260101-000000.tar.gz",
+            "notes-extra-20260101-000000.tar.gz",
+            "notes-manual.tar.gz",
+        ] {
+            std::fs::write(ex.join(other), b"keep").unwrap();
+        }
+        let removed = prune_scheduled_exports(ex, "notes", 2);
+        assert_eq!(removed.len(), 2, "{removed:?}");
+        assert!(!ex.join("notes-20260101-000000.tar.gz").exists());
+        assert!(!uploaded_marker(&ex.join("notes-20260101-000000.tar.gz")).exists());
+        assert!(!ex.join("notes-20260102-000000.tar.gz").exists());
+        assert!(ex.join("notes-20260103-000000.tar.gz").exists());
+        assert!(ex.join("notes-20260104-000000.tar.gz").exists());
+        assert!(uploaded_marker(&ex.join("notes-20260104-000000.tar.gz")).exists());
+        for other in [
+            "docs-20260101-000000.tar.gz",
+            "notes-extra-20260101-000000.tar.gz",
+            "notes-manual.tar.gz",
+        ] {
+            assert!(ex.join(other).exists(), "{other} must not be pruned");
+        }
+        assert!(prune_scheduled_exports(ex, "notes", 0).is_empty());
+    }
+
+    /// A3-4 — a stalled uploader is killed at the deadline (with its
+    /// children) and reported as a failed copy instead of hanging forever.
+    #[test]
+    fn a_hung_uploader_is_killed_at_the_deadline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("kb.tar.gz");
+        std::fs::write(&src, b"x").unwrap();
+        let cfg = BackupSection {
+            remote_cmd: Some(vec![
+                "sh".into(),
+                "-c".into(),
+                "sleep 60; echo {src} {dest}".into(),
+            ]),
+            remote_dest: Some("remote:x".into()),
+            remote_timeout_secs: Some(1),
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        match run_remote_copy(&cfg, &src) {
+            Some(RemoteCopyOutcome::Failed { message }) => {
+                assert!(message.contains("timed out"), "{message}");
+            }
+            other => panic!("expected a timeout failure, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the deadline did not bound the uploader"
+        );
+    }
+
+    #[test]
+    fn the_uploaded_marker_is_per_tarball() {
+        let tmp = tempfile::tempdir().unwrap();
+        let t = tmp.path().join("notes-20260101-000000.tar.gz");
+        std::fs::write(&t, b"t").unwrap();
+        assert!(!is_uploaded(&t));
+        mark_uploaded(&t).unwrap();
+        assert!(is_uploaded(&t));
+        assert!(!is_uploaded(
+            &tmp.path().join("notes-20260102-000000.tar.gz")
+        ));
+        // The marker does not itself look like a tarball to the skipper.
+        let name = uploaded_marker(&t);
+        assert!(!is_scheduled_tarball_name(
+            name.file_name().unwrap().to_str().unwrap(),
+            "notes"
+        ));
     }
 }

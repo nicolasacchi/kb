@@ -621,6 +621,20 @@ pub struct BackupSection {
     /// existing `kb.toml` round-trip does not grow the key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_hours: Option<u64>,
+
+    /// Wall-clock deadline, in seconds, for ONE off-host copy command.
+    /// The uploader runs in its own process group and the whole group is
+    /// killed at the deadline, which is then reported as a failed copy.
+    /// Absent = [`BackupSection::DEFAULT_REMOTE_TIMEOUT_SECS`]; `0` is
+    /// not a deadline and also means the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_timeout_secs: Option<u64>,
+
+    /// How many scheduled tarballs to keep PER KB under `<state>/exports/`.
+    /// Pruned by the daemon schedule after a successful write. Absent =
+    /// [`BackupSection::DEFAULT_KEEP_EXPORTS`]; `0` disables pruning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_exports: Option<u64>,
 }
 
 /// MI-W2.1 — `[memory]`: daemon-wide agent-memory scoring knobs. Same
@@ -732,6 +746,48 @@ impl BackupSection {
                 .map(|arg| arg.replace("{src}", &src_str).replace("{dest}", dest))
                 .collect(),
         )
+    }
+
+    /// Default deadline for one off-host copy (2 hours).
+    pub const DEFAULT_REMOTE_TIMEOUT_SECS: u64 = 2 * 3_600;
+    /// Default scheduled-tarball retention per kb.
+    pub const DEFAULT_KEEP_EXPORTS: u64 = 7;
+
+    /// The off-host copy deadline in force (`None`/`0` → the default).
+    pub fn remote_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.remote_timeout_secs
+                .filter(|s| *s > 0)
+                .unwrap_or(Self::DEFAULT_REMOTE_TIMEOUT_SECS),
+        )
+    }
+
+    /// Scheduled tarballs kept per kb; `0` = keep everything.
+    pub fn keep_exports_count(&self) -> u64 {
+        self.keep_exports.unwrap_or(Self::DEFAULT_KEEP_EXPORTS)
+    }
+
+    /// This section with `{dest}` made specific to `tarball`: the
+    /// tarball's basename is appended to `remote_dest`
+    /// (`remote:bucket/kb-backups` becomes
+    /// `remote:bucket/kb-backups/docs-20260922-120000.tar.gz`).
+    ///
+    /// Both multi-kb paths (`kb backup --all` and the daemon's schedule)
+    /// MUST copy through this. `rclone copyto {src} {dest}` with one
+    /// shared `{dest}` writes every kb onto the same object, keeps only
+    /// the last, and reports every copy as ok. A single `kb backup <kb>`
+    /// leaves `remote_dest` verbatim. A trailing `/` is not doubled.
+    pub fn for_tarball(&self, tarball: &Path) -> BackupSection {
+        let mut cfg = self.clone();
+        if let Some(dest) = &self.remote_dest {
+            let base = tarball
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or("backup.tar.gz");
+            cfg.remote_dest = Some(format!("{}/{base}", dest.trim_end_matches('/')));
+        }
+        cfg
     }
 
     /// Positive `schedule_hours`. `None` and `0` are unset.
@@ -4300,6 +4356,62 @@ mod tests {
             .validate()
             .iter()
             .all(|i| !i.pointer.starts_with("/backup")));
+    }
+
+    /// v0.44 B1 / A3-1 — every multi-kb path copies through `for_tarball`,
+    /// so two kbs never share one `{dest}` object.
+    #[test]
+    fn backup_for_tarball_gives_every_kb_its_own_dest() {
+        let sec = BackupSection {
+            remote_cmd: Some(vec![
+                "rclone".into(),
+                "copyto".into(),
+                "{src}".into(),
+                "{dest}".into(),
+            ]),
+            remote_dest: Some("remote:bucket/kb-backups/".into()),
+            ..Default::default()
+        };
+        let docs = Path::new("/state/exports/docs-20260922-120000.tar.gz");
+        let memory = Path::new("/state/exports/memory-20260922-120000.tar.gz");
+        let a = sec.for_tarball(docs).build_argv(docs).unwrap();
+        let b = sec.for_tarball(memory).build_argv(memory).unwrap();
+        assert_eq!(a[3], "remote:bucket/kb-backups/docs-20260922-120000.tar.gz");
+        assert_eq!(
+            b[3],
+            "remote:bucket/kb-backups/memory-20260922-120000.tar.gz"
+        );
+        assert_ne!(a[3], b[3]);
+        // The original section is untouched, and an unset dest stays unset.
+        assert_eq!(
+            sec.remote_dest.as_deref(),
+            Some("remote:bucket/kb-backups/")
+        );
+        assert!(BackupSection::default()
+            .for_tarball(docs)
+            .remote_dest
+            .is_none());
+    }
+
+    #[test]
+    fn backup_timeout_and_retention_defaults() {
+        let sec = BackupSection::default();
+        assert_eq!(
+            sec.remote_timeout().as_secs(),
+            BackupSection::DEFAULT_REMOTE_TIMEOUT_SECS
+        );
+        assert_eq!(sec.keep_exports_count(), 7);
+        let zero = BackupSection {
+            remote_timeout_secs: Some(0),
+            keep_exports: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            zero.remote_timeout().as_secs(),
+            BackupSection::DEFAULT_REMOTE_TIMEOUT_SECS,
+            "0 is not a deadline"
+        );
+        assert_eq!(zero.keep_exports_count(), 0, "0 disables pruning");
     }
 
     #[test]

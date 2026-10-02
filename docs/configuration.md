@@ -383,31 +383,83 @@ alternative for a filtered, human-readable notification), see
 
 ## `[backup]`
 
-GC-B4 — daemon-wide, optional. Omit the table (the default) and `kb
+GC-B4 / O2 — daemon-wide, optional. Omit the table (the default) and `kb
 backup` behaves exactly as before: a local-only tarball under
-`<state>/exports/`. Set both keys to run an off-host copy step right
-after a successful local backup.
+`<state>/exports/`, and no scheduled backups. Set `remote_cmd` and
+`remote_dest` to run an off-host copy step right after each successful
+local backup; set `schedule_hours` to have the daemon take backups on its
+own.
 
 | key | type | default | meaning |
 |---|---|---|---|
-| `remote_cmd` | [string] | none | Explicit argv for the off-host copy command — **not** a shell string, so no shell is ever invoked (no quoting/injection surface). `{src}` is substituted with the local tarball's path, `{dest}` with `remote_dest`. The program is resolved via `PATH`. |
-| `remote_dest` | string | none | Destination passed through verbatim as `{dest}`, e.g. `remote:bucket/path` (rclone) or `user@host:/path/` (scp/rsync). |
+| `remote_cmd` | [string] | none | Explicit argv for the off-host copy command — **not** a shell string, so no shell is ever invoked (no quoting/injection surface). `{src}` is substituted with the local tarball's path, `{dest}` with the destination (see below). The program is resolved via `PATH`. |
+| `remote_dest` | string | none | Base destination, e.g. `remote:bucket/path` (rclone) or `user@host:/path/` (scp/rsync). See "How `{dest}` is built". |
+| `schedule_hours` | integer | unset | Daemon backup period in hours. Absent or `0` = unset (no scheduled backups). A positive value arms an **in-process** task: it runs once at boot and then every period. It does not run the `kb` CLI. |
+| `remote_timeout_secs` | integer | `7200` | Wall-clock deadline for ONE off-host copy. The uploader runs in its own process group and the whole group is killed at the deadline; the copy is then reported as failed (and retried, see below). `0` means the default. |
+| `keep_exports` | integer | `7` | Scheduled tarballs kept **per kb** under `<state>/exports/`; older ones are deleted after a successful scheduled write. `0` disables pruning. |
 
-Both keys must be set for the copy to run; either alone is a no-op and
-`kb config validate` warns. An empty `remote_cmd` array is a hard
-validation error (nothing to execute).
+Both `remote_cmd` and `remote_dest` must be set for the copy to run;
+either alone is a no-op and `kb config validate` warns. An empty
+`remote_cmd` array is a hard validation error (nothing to execute). A
+positive `schedule_hours` with no `remote_cmd` still writes local
+tarballs and `kb config validate` warns that the off-host copy will not
+run.
 
-The copy is **best-effort**: `kb backup` runs it after the local tarball
-is already written, and a failed or unreachable remote (bad credentials,
-network down, uploader not installed) is reported loudly — a stderr
-warning plus an annotated summary line on `kb backup`'s own stdout — but
-never fails the backup command itself (exit code stays `0`; the local
-tarball is already a complete backup on its own).
+### How `{dest}` is built
+
+A single `kb backup <kb>` passes `remote_dest` **verbatim** as `{dest}`.
+`kb backup --all` and the daemon schedule write several kbs, so they pass
+`{dest}` = `remote_dest` + `/` + the tarball's file name
+(`remote:bucket/kb-backups/` becomes
+`remote:bucket/kb-backups/docs-20260922-120000.tar.gz`; a trailing `/` is
+not doubled). Without that, `rclone copyto {src} {dest}` would write every
+kb onto the same object and keep only the last. Use `copyto`-style
+commands (or `scp`/`rsync` to a directory path). `rclone copy` treats the
+destination as a directory and will nest the file under a directory of
+that name — every kb still gets its own object, but the layout is
+unusual.
+
+### What the scheduled task does
+
+* **Skips unchanged kbs.** A kb is exported only when something its
+  tarball packs is newer than that kb's newest tarball: `index.db` (and
+  its WAL), `lance/`, `.review/`, `.attachments/`, `.proposals/`. The
+  daemon-wide state (`slates/`, `saved-queries.json`, `memory-policy.json`,
+  `tombstone-era.json`) is packed into **one** kb's tarball — the first
+  kb in name order — and only that kb's skip check watches it, so a slate
+  append no longer forces a full export of every kb.
+* **Writes atomically.** The tarball is built as `<name>.<pid>.partial`
+  and renamed on success; a failure leaves no file under the real name. Its
+  mtime is the instant the snapshot started.
+* **Retries a failed upload.** A copy that exits 0 leaves a
+  `<tarball>.uploaded` marker. A quiet kb whose newest tarball has no
+  marker has that **existing** tarball copied again on the next tick.
+  Pre-existing tarballs (written before off-host copy was configured) are
+  uploaded once.
+* **Reports honestly.** `maintenance.backup.written` carries
+  `remote` = `unset` (no off-host copy configured), `ok` or `failed`.
+* **Prunes** per `keep_exports`.
+
+Not backed up, on purpose: `<state>/query-embed-cache.json` (a
+regenerable perf cache), `<state>/kb-daemon.pid`, the `exports/` dir
+itself, and `<state>/quarantine/` — including the per-kb
+`*.embedding-models.json` records there. Those records only note which
+embedding model produced a quarantined index; a restored kb re-derives
+its embedding state on its next reindex.
+
+The copy is **best-effort**: it runs after the local tarball is already
+written, and a failed or unreachable remote (bad credentials, network
+down, uploader not installed) is reported loudly — a stderr warning plus
+an annotated summary line on `kb backup`'s own stdout, an error log line
+in the daemon — but never fails the backup itself (`kb backup` exits `0`;
+the local tarball is already a complete backup on its own).
 
 ```toml
 [backup]
-remote_cmd  = ["rclone", "copyto", "{src}", "{dest}"]
-remote_dest = "remote:bucket/kb-backups/"
+schedule_hours = 24
+remote_cmd     = ["rclone", "copyto", "{src}", "{dest}"]
+remote_dest    = "remote:bucket/kb-backups/"
+keep_exports   = 7
 ```
 
 ## `[memory]`

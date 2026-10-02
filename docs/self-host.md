@@ -660,8 +660,14 @@ manual step is needed — just start the v0.7.1 daemon.
 ## Backup & restore (B1)
 
 `kb backup <kb>` writes a **consistent** `tar.gz` of a kb's persistent
-state — `index.db`, the `lance/` dataset, and `.review/` comments — to
-`<state>/exports/<kb>-<timestamp>.tar.gz` (override with `--out PATH`):
+state — `index.db`, the `lance/` dataset, and the sidecar families
+`.review/` (comments), `.attachments/` (comment images) and `.proposals/`
+(queued memory proposals) — to
+`<state>/exports/<kb>-<timestamp>.tar.gz` (override with `--out PATH`).
+The daemon-wide state (`slates/`, `saved-queries.json`,
+`memory-policy.json`, `tombstone-era.json`) rides in the same tarball for
+a single `kb backup <kb>`; `kb backup --all` and the schedule pack it once,
+into the first kb's tarball:
 
 ```bash
 kb backup research                       # → <state>/exports/research-20260522-…​.tar.gz
@@ -671,7 +677,9 @@ kb backup research --out /backups/kb.tgz
 - **sqlite is snapshotted with `VACUUM INTO`**, so the copy is
   transactionally consistent even while the daemon writes — no torn
   `index.db`, no `-wal`/`-shm` to reconcile.
-- **lance is copied then validated** by re-opening the staged dataset. If
+- **lance is copied metadata-first** (`_versions/` … before `data/`, so
+  every file a copied manifest names exists), **then validated** by
+  re-opening the staged dataset. If
   the daemon commits mid-copy the backup fails loudly and asks you to
   retry; for a guaranteed-consistent lance snapshot under heavy indexing,
   **stop the daemon first** (the sqlite half is consistent regardless).
@@ -700,7 +708,9 @@ remote_dest = "remote:bucket/kb-backups/"
 
 - `remote_cmd` is an **explicit argv** (never a shell string — no shell is
   invoked, so there's no quoting/injection surface); `{src}` is replaced
-  with the local tarball's path, `{dest}` with `remote_dest`. Any argv
+  with the local tarball's path, `{dest}` with `remote_dest` (verbatim for
+  `kb backup <kb>`; `remote_dest/<tarball file name>` for `kb backup --all`
+  and the schedule, so kbs never share one object). Any argv
   works — `["scp", "{src}", "user@host:/path/"]`, `["rsync", "{src}",
   "{dest}"]`, a wrapper script, etc. The program is resolved via `PATH`
   like any other command.
@@ -727,7 +737,13 @@ Restore extracts into the kb's state dir and verifies the archive
 produced an `index.db` (catching a wrong tarball or a `--kb` that doesn't
 match the archive). **Stop the daemon for that kb before restoring** — it
 holds `index.db` open. `--force` is required to replace a non-empty state
-and wipes it first, so the restore is clean (no stale leftovers).
+and wipes it first, so the restore is clean (no stale leftovers) — which
+includes `.attachments/` and `.proposals/`. A tarball written before those
+were part of the backup carries neither, so `--force` with such a tarball
+prints a warning naming what it is about to delete. The daemon-wide
+members in a tarball (`slates/`, the daemon JSON files) are restored only
+when the destination does not already have them; `--force` never replaces
+them.
 
 ## Bearer-token auth (v0.4)
 
