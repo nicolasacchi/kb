@@ -760,9 +760,10 @@ fn filter_docs_in_window(
 /// carry no visibility bit: the ledger records that a comment was raised,
 /// not whether it is a private note. Without this join a private note
 /// whose ledger row predates its `private` flag renders in the daycard as
-/// a row with `open: false` — a wrong row AND an existence leak (the
-/// ledger is never filtered, deliberately: a note raised while public keeps
-/// its event-log row, and un-privating never backfills).
+/// a row with `open: false` — a wrong row AND an existence leak. The flip
+/// deletes that row (`history_forget_comment`), so a row survives only if
+/// the delete failed (logged at warn); this join is the backstop. Un-privating
+/// never backfills a row.
 ///
 /// Bounded by the window's DISTINCT artifact count, never by the comment
 /// count and never by the size of `.review/`: one `review::load` per
@@ -1675,9 +1676,9 @@ mod tests {
         assert_eq!(still_open, 0);
     }
 
-    /// A note raised while public keeps its `history` row (the ledger is an
-    /// event log, never rewritten), so the daycard lane must drop the row
-    /// itself — not render it as a closed item. `open_items` is empty here
+    /// A row that survives a public→private flip (only if
+    /// `history_forget_comment` failed on the flip) must not render: the
+    /// daycard lane drops the row itself — not render it as a closed item. `open_items` is empty here
     /// on purpose: `collect_open` already hides private notes, so if this
     /// lane relied on the open set alone the note would appear with
     /// `open: false` and its existence would leak.

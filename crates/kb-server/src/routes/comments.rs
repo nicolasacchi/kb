@@ -33,16 +33,21 @@
 //! `keep` and `keep_memory` refuse a note with 409, because a proposal and
 //! a memory artifact are both agent-readable and promoting a note is the
 //! worst promotion in the system.
-//! The single-comment mutations — `resolve`, `unresolve`, `set_anchor`,
-//! `add_reply` — refuse a note with the same 409 `keep` uses. The batch
-//! path already skipped notes in `resolve-all`/`unresolve-all`; these are
-//! its single-row twins and were the gap, because a note id is NOT secret
-//! (`/api/anchors/stale` answers it fleet-wide, and the indexer walks every
-//! open comment unfiltered), so "the caller cannot read the note" was never
-//! a barrier. The guard lives in `kb_core::review::reject_private_note` so
-//! both the HTTP routes and `BatchOp::{Resolve,Unresolve,SetAnchor,
-//! AddReply}` get it from one place. `PATCH …/meta` is deliberately NOT
-//! guarded: un-privating is how the operator re-opens a note to edit it.
+//! EVERY single-row mutation of a note — `resolve`, `unresolve`, `set_anchor`,
+//! `add_reply`, comment and reply body edit, comment and reply delete,
+//! attachment adopt/detach, and making the note public (`PATCH …/meta` with
+//! `private: false`) — is refused with the same 409 `keep` uses, UNLESS the
+//! request carries the operator's explicit intent (`X-Kb-Visibility: all`,
+//! the write-side twin of `?visibility=all`; see [`OPERATOR_INTENT_HEADER`]).
+//! A note id is NOT secret (`/api/anchors/stale` answers it fleet-wide, and
+//! the indexer walks every open comment unfiltered), so "the caller cannot
+//! read the note" was never a barrier. The guard lives in
+//! `kb_core::review::ReviewFile::reject_private_note`, so the HTTP routes
+//! and every `BatchOp` variant get it from one place. The SPA sends the
+//! marker; the CLI and every agent surface do not.
+//!
+//! A mutation that changes nothing an AGENT can read emits no
+//! `comments.updated` ([`emit_updated_gated`]).
 //!
 //! `keep` copies one open or resolved comment into the proposal queue
 //! (`source: "comment"`). It does not approve, does not ingest a memory,
@@ -69,7 +74,7 @@ use crate::state::KbHandles;
 use axum::{
     body::Body,
     extract::{Extension, Path, Query, State},
-    http::{Response, StatusCode},
+    http::{HeaderMap, Response, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -135,6 +140,19 @@ pub struct CommentMetaBody {
     /// `Some([])` clears the tags; `None` leaves them alone.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// v0.44 P2 (A4-10) — DELTA form: union these into the comment's CURRENT
+    /// tags, server-side, under the review lock. A client that reads the set,
+    /// merges, and PATCHes `tags` races every other writer between its read
+    /// and its write and silently erases whatever landed in between; a delta
+    /// has no read on the client at all. Applied after `tags` when both are
+    /// given.
+    #[serde(default)]
+    pub add_tags: Option<Vec<String>>,
+    /// DELTA form: drop these (slug-matched) from the CURRENT tags. Removing
+    /// a tag the comment does not carry is a no-op (`changed:false`), never a
+    /// clear.
+    #[serde(default)]
+    pub remove_tags: Option<Vec<String>>,
     /// `Some(false)` un-privates the comment, which makes the whole thread
     /// readable by every agent-facing surface again.
     #[serde(default)]
@@ -329,6 +347,54 @@ fn public_count(file: &ReviewFile) -> usize {
     file.comments.iter().filter(|c| !c.is_private()).count()
 }
 
+/// v0.44 P2 (A2-7/A2-8) — the request header that carries EXPLICIT OPERATOR
+/// INTENT on a mutation, the write-side twin of `?visibility=all` on reads.
+/// `X-Kb-Visibility: all` lets a mutation touch a private note (resolve,
+/// reply, edit, delete, attach/detach, make public); absent or any other
+/// value is the fail-closed default. The SPA sends it on its comment
+/// mutations; the CLI and the agent surfaces never do. It is an INTENT
+/// marker, not an authorization: kb has one trust tier and a loopback
+/// caller can set any header, so what it buys is that an agent holding a
+/// note id (they are enumerable, see `reject_private_note`) cannot destroy
+/// or publish the note without having been told to.
+pub(crate) const OPERATOR_INTENT_HEADER: &str = "x-kb-visibility";
+
+pub(crate) fn operator_intent(headers: &HeaderMap) -> bool {
+    headers
+        .get(OPERATOR_INTENT_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("all"))
+}
+
+/// Bytes of everything an AGENT can observe about `file`: the public
+/// comments and the verdict. Two fingerprints are equal exactly when no
+/// public read of the document would differ.
+pub(crate) fn public_fingerprint(file: &ReviewFile) -> Vec<u8> {
+    let public: Vec<&review::Comment> = file.comments.iter().filter(|c| !c.is_private()).collect();
+    serde_json::to_vec(&(public, &file.verdict)).unwrap_or_default()
+}
+
+/// v0.44 P2 (A2-6) — emit `comments.updated` ONLY when the public
+/// representation moved since `pre` (a [`public_fingerprint`] taken right
+/// after the load). A note-only write (create, retag, edit, resolve,
+/// delete) changes nothing an agent can read, and the frame itself — `kb
+/// push` prints it to a model as "comments updated on artifact X" — would
+/// date the note and prove it exists even with the counts filtered. The
+/// operator's own SPA tab refreshes through its mutation's local
+/// invalidation instead of the daemon bus.
+pub(crate) fn emit_updated_gated(
+    state: &KbHandles,
+    kb_name: &KbName,
+    id: &str,
+    pre: &[u8],
+    file: &ReviewFile,
+    user: Option<&str>,
+) {
+    if public_fingerprint(file) != pre {
+        emit_updated_by(state, kb_name, id, file, user);
+    }
+}
+
 /// Ownership for comment/reply body EDIT + DELETE (v0.34 Y1 attribution
 /// hygiene, not an ACL). A row with `user=None` belongs to the operator.
 /// Returns `None` when allowed, or a 403 problem+json response.
@@ -346,7 +412,7 @@ fn forbid_if_not_owner(
         "title": "Forbidden",
         "status": 403,
         "detail": format!(
-            "only the owner ({owner}) may edit or delete this comment/reply; identity is {}",
+            "only the owner ({owner}) may edit, delete, retag or re-privatise this comment/reply; identity is {}",
             identity.user
         ),
     });
@@ -368,6 +434,7 @@ async fn with_review_mut<F>(
     kb_name: &KbName,
     id: &str,
     success: StatusCode,
+    intent: bool,
     f: F,
 ) -> Response<Body>
 where
@@ -390,6 +457,8 @@ where
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     let (body, changed) = match f(&mut file) {
         Ok(v) => v,
         Err(e) => return error_to_problem_json(&e),
@@ -403,7 +472,7 @@ where
         return error_to_problem_json(&e);
     }
     drop(guard);
-    emit_updated(state, kb_name, id, &file);
+    emit_updated_gated(state, kb_name, id, &pre, &file, None);
     (success, Json(body)).into_response()
 }
 
@@ -473,6 +542,7 @@ pub async fn add_comment(
         Ok(None) => ReviewFile::empty_skeleton(&kb_name, &id, &title),
         Err(e) => return error_to_problem_json(&e),
     };
+    let pre = public_fingerprint(&file);
     // Adopt staged attachments (if any) onto the new comment under the SAME
     // guard as the review mutation — the manifest shares the review_lock.
     let manifest = if payload.attachment_ids.is_empty() {
@@ -511,7 +581,7 @@ pub async fn add_comment(
     }
     drop(guard);
 
-    emit_updated_by(&state, &kb_name, &id, &file, Some(&user));
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, Some(&user));
 
     // Record a history row for the new comment + emit `history.recorded`
     // (mirrors the whole-doc POST path; only brand-new comments do this).
@@ -559,10 +629,12 @@ pub async fn add_comment(
 
 pub async fn add_reply(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Extension(identity): Extension<Identity>,
     Path((kb, id, cid)): Path<(String, String, String)>,
     Json(payload): Json<AddReplyBody>,
 ) -> Response<Body> {
+    let intent = operator_intent(&headers);
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
         Err(resp) => return resp,
@@ -584,6 +656,8 @@ pub async fn add_reply(
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     // Resolve any staged attachments to adopt onto the reply (manifest
     // shares the review_lock).
     let (manifest, atts) = if payload.attachment_ids.is_empty() {
@@ -647,7 +721,7 @@ pub async fn add_reply(
         None => json!({ "id": rid }),
     };
     drop(guard);
-    emit_updated_by(&state, &kb_name, &id, &file, Some(&user));
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, Some(&user));
     (StatusCode::CREATED, Json(reply_json)).into_response()
 }
 
@@ -655,16 +729,34 @@ pub async fn add_reply(
 
 pub async fn resolve(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Path((kb, id, cid)): Path<(String, String, String)>,
 ) -> Response<Body> {
-    set_status(state, kb, id, cid, CommentStatus::Resolved).await
+    set_status(
+        state,
+        kb,
+        id,
+        cid,
+        CommentStatus::Resolved,
+        operator_intent(&headers),
+    )
+    .await
 }
 
 pub async fn unresolve(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Path((kb, id, cid)): Path<(String, String, String)>,
 ) -> Response<Body> {
-    set_status(state, kb, id, cid, CommentStatus::Open).await
+    set_status(
+        state,
+        kb,
+        id,
+        cid,
+        CommentStatus::Open,
+        operator_intent(&headers),
+    )
+    .await
 }
 
 async fn set_status(
@@ -673,6 +765,7 @@ async fn set_status(
     id: String,
     cid: String,
     status: CommentStatus,
+    intent: bool,
 ) -> Response<Body> {
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
@@ -685,7 +778,7 @@ async fn set_status(
     // stale-anchor sidecar. The shared path already holds the review lock
     // for the file rewrite; there is no sidecar write to sequence with it.
     if status != CommentStatus::Resolved {
-        return with_review_mut(&state, &kb_name, &id, StatusCode::OK, |file| {
+        return with_review_mut(&state, &kb_name, &id, StatusCode::OK, intent, |file| {
             let changed = file.set_comment_status(&cid, status)?;
             Ok((
                 json!({ "ok": true, "open_count": file.open_count() }),
@@ -712,6 +805,8 @@ async fn set_status(
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     let changed = match file.set_comment_status(&cid, status) {
         Ok(c) => c,
         Err(e) => return error_to_problem_json(&e),
@@ -730,7 +825,7 @@ async fn set_status(
     }
     drop(guard);
     if changed {
-        emit_updated(&state, &kb_name, &id, &file);
+        emit_updated_gated(&state, &kb_name, &id, &pre, &file, None);
     }
     (
         StatusCode::OK,
@@ -1232,7 +1327,9 @@ async fn set_all_status(
         Ok(k) => k,
         Err(resp) => return resp,
     };
-    with_review_mut(&state, &kb_name, &id, StatusCode::OK, |file| {
+    // Bulk flips skip notes by construction (`set_all_status`), so no
+    // operator intent is ever needed — or honoured — here.
+    with_review_mut(&state, &kb_name, &id, StatusCode::OK, false, |file| {
         let flipped = file.set_all_status(status);
         Ok((
             json!({ "flipped": flipped, "open_count": file.open_count() }),
@@ -1253,6 +1350,64 @@ pub struct ApplyBatchBody {
 /// resolve sequence, low enough to bound one request's work.
 const MAX_BATCH_OPS: usize = 512;
 
+/// Which row an owner-gated batch op targets (see [`batch_gate_target`]).
+enum GateTarget<'a> {
+    /// No ownership check: the op is open to every caller (invariant #4).
+    Open,
+    /// Owner-only on the comment's own row.
+    Comment(&'a str),
+    /// Owner-only on a reply row.
+    Reply(&'a str, &'a str),
+}
+
+/// The ownership policy of ONE batch op, declared per variant with no
+/// wildcard (v0.44 P2, twin-path conformance). F6 was `SetMeta` falling
+/// through a `_ => None` and being open to everyone while its PATCH twin
+/// answered 403; with every variant named here, adding a `BatchOp` variant
+/// is a compile error until its policy is chosen, and the matrix test in
+/// `tests/end_to_end.rs` then holds the batch arm and its single-route twin
+/// to the same status.
+///
+/// Policy source: invariant #4 — comment/reply body edit + delete and the
+/// meta (tags / private) verbs are owner-only; resolve, reply, attach,
+/// reanchor and the verdict stay open. Private NOTES are protected a layer
+/// down, in `kb_core::review::ReviewFile::reject_private_note`, for every
+/// variant that touches an existing row.
+#[deny(clippy::wildcard_enum_match_arm)]
+fn batch_gate_target(op: &review::BatchOp) -> GateTarget<'_> {
+    use review::BatchOp as B;
+    match op {
+        // Owner-only: rewrites or removes the author's own words.
+        B::EditComment { comment_id, .. } | B::DeleteComment { comment_id } => {
+            GateTarget::Comment(comment_id)
+        }
+        // Owner-only: `private: false` discloses a thread, a retag rewrites
+        // the owner's labels — the PATCH …/meta twin is gated the same way.
+        B::SetMeta { comment_id, .. } => GateTarget::Comment(comment_id),
+        B::EditReply {
+            comment_id,
+            reply_id,
+            ..
+        }
+        | B::DeleteReply {
+            comment_id,
+            reply_id,
+        } => GateTarget::Reply(comment_id, reply_id),
+        // Open (#4: "resolve/reply/attach/reanchor stay open"): creating a
+        // row, answering one, re-pointing an anchor, flipping status.
+        B::AddComment { .. }
+        | B::AddReply { .. }
+        | B::SetAnchor { .. }
+        | B::Resolve { .. }
+        | B::Unresolve { .. }
+        | B::ResolveAll
+        | B::UnresolveAll => GateTarget::Open,
+        // Open: the review-pass verdict belongs to the whole review, not to
+        // any one author's row.
+        B::SetVerdict { .. } | B::ClearVerdict => GateTarget::Open,
+    }
+}
+
 /// `POST …/review/{id}/apply` — apply an ordered batch of comment mutations
 /// atomically under one `review_lock` acquisition, with a single
 /// `save_atomic` + one `comments.updated` SSE for the whole batch. All-or-
@@ -1262,6 +1417,7 @@ const MAX_BATCH_OPS: usize = 512;
 /// for every comment the batch creates, exactly as `add_comment` does.
 pub async fn apply_batch(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Extension(identity): Extension<Identity>,
     Path((kb, id)): Path<(String, String)>,
     Json(payload): Json<ApplyBatchBody>,
@@ -1303,44 +1459,30 @@ pub async fn apply_batch(
         Ok(None) => ReviewFile::empty_skeleton(&kb_name, &id, &title),
         Err(e) => return error_to_problem_json(&e),
     };
-    // v0.34 Y1: the owner-only policy (body EDIT + DELETE) must hold through
-    // the batch path too — gate each owner-gated op against the loaded rows
-    // BEFORE applying (all-or-nothing: one forbidden op rejects the whole
-    // batch, matching apply_ops' atomicity). A missing target falls through
-    // to apply_ops' own NotFound. Resolve/reply/anchor ops stay open to all.
+    // v0.34 Y1: the owner-only policy (body EDIT + DELETE + SET_META) must
+    // hold through the batch path too — gate each owner-gated op against the
+    // loaded rows BEFORE applying (all-or-nothing: one forbidden op rejects
+    // the whole batch, matching apply_ops' atomicity). A missing target
+    // falls through to apply_ops' own NotFound. The per-op policy lives in
+    // `batch_gate_target`, an EXHAUSTIVE match: a new `BatchOp` variant does
+    // not compile until someone declares its policy there.
+    file.set_operator_intent(operator_intent(&headers));
+    let pre = public_fingerprint(&file);
     let operator = state.operator_user().to_string();
     for op in &payload.ops {
-        let row_user: Option<Option<&str>> = match op {
-            review::BatchOp::EditComment { comment_id, .. }
-            | review::BatchOp::DeleteComment { comment_id }
-            // `SetMeta` mutates the comment's OWN row, exactly like
-            // EditComment, and carries the same disclosure: `private: false`
-            // hands the whole thread back to every agent-facing surface —
-            // which is why `set_comment_meta` (the PATCH twin) is gated by
-            // `forbid_if_not_owner` for it. Without this arm `SetMeta` fell
-            // through `_ => None`, `row_user` was None, the owner check never
-            // ran, and a non-owner could un-private someone else's note via
-            // POST …/apply while the byte-identical PATCH returned 403.
-            | review::BatchOp::SetMeta { comment_id, .. } => file
+        let row_user: Option<Option<&str>> = match batch_gate_target(op) {
+            GateTarget::Open => None,
+            GateTarget::Comment(comment_id) => file
                 .comments
                 .iter()
-                .find(|c| &c.id == comment_id)
+                .find(|c| c.id == comment_id)
                 .map(|c| c.user.as_deref()),
-            review::BatchOp::EditReply {
-                comment_id,
-                reply_id,
-                ..
-            }
-            | review::BatchOp::DeleteReply {
-                comment_id,
-                reply_id,
-            } => file
+            GateTarget::Reply(comment_id, reply_id) => file
                 .comments
                 .iter()
-                .find(|c| &c.id == comment_id)
-                .and_then(|c| c.replies.iter().find(|r| &r.id == reply_id))
+                .find(|c| c.id == comment_id)
+                .and_then(|c| c.replies.iter().find(|r| r.id == reply_id))
                 .map(|r| r.user.as_deref()),
-            _ => None,
         };
         if let Some(row_user) = row_user {
             if let Some(resp) = forbid_if_not_owner(&identity, row_user, &operator) {
@@ -1394,7 +1536,7 @@ pub async fn apply_batch(
         return error_to_problem_json(&e);
     }
     drop(guard);
-    emit_updated(&state, &kb_name, &id, &file);
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, None);
     // History rows for any comments the batch created (mirrors `add_comment`).
     // Note: apply_ops itself does not yet stamp `user` on NewComment inside
     // the batch ops (ops schema is pre-Y); history attribution uses the
@@ -1483,10 +1625,18 @@ pub struct ImportQuery {
 /// (the inverse of `kb comments export --embed`). Refuses to overwrite
 /// existing PUBLIC comments unless `force=true`; private notes already in the
 /// sidecar are always carried over (merge, never replace), so it can't
-/// clobber live state — this is a restore/move operation, deliberately distinct from the
-/// R8-retired interactive whole-doc POST (which was dropped for concurrent-
-/// edit races, not for restore). The body's `artifact` ref is re-pinned to
-/// the import target so an artifact's comments can move to a new id/kb.
+/// clobber live state — this is a restore/move operation, deliberately
+/// distinct from the R8-retired interactive whole-doc POST (which was dropped
+/// for concurrent-edit races, not for restore). The body's `artifact` ref is
+/// re-pinned to the import target so an artifact's comments can move to a
+/// new id/kb.
+///
+/// Import NEVER removes a note, `force` or not (`force` replaces PUBLIC
+/// comments only); the route that deletes one is `DELETE …/comments/{cid}`,
+/// which needs the operator's explicit intent for a note. The `imported`
+/// field of the answer is the number of PUBLIC comments in the document
+/// AFTER the merge — not the number of rows in the payload — so a
+/// notes-only payload answers exactly like an empty one.
 pub async fn import(
     State(state): State<Arc<KbHandles>>,
     Path((kb, id)): Path<(String, String)>,
@@ -1498,11 +1648,12 @@ pub async fn import(
         Ok(k) => k,
         Err(resp) => return resp,
     };
-    if incoming.schema != review::SCHEMA {
+    if !review::schema_supported(&incoming.schema) {
         return error_to_problem_json(&kb_core::Error::BadRequest(format!(
-            "import schema {:?} not supported (expected {})",
+            "import schema {:?} not supported (expected {} or {})",
             incoming.schema,
-            review::SCHEMA
+            review::SCHEMA,
+            review::SCHEMA_V2
         )));
     }
     incoming.artifact.id = id.clone();
@@ -1511,6 +1662,9 @@ pub async fn import(
     let path = state.paths.kb_review_file(&kb_name, &id);
     let lock = state.review_lock_for(&kb_name);
     let guard = lock.lock().await;
+    // Fingerprint of what an agent could read BEFORE the write (nothing, when
+    // there is no sidecar yet), so a notes-only import emits no frame.
+    let mut pre = public_fingerprint(&ReviewFile::empty_skeleton(&kb_name, &id, ""));
     match review::load(&path) {
         // v0.40 TN2 (KB-TN-LEAK-002) — the refusal keys off the PUBLIC count,
         // not `!comments.is_empty()`, so a notes-only sidecar answers the
@@ -1530,6 +1684,7 @@ pub async fn import(
         // whether it is private is refused 403 (not-owner), exactly as the
         // PATCH twin would.
         Ok(Some(existing)) => {
+            pre = public_fingerprint(&existing);
             if !q.force {
                 let n = public_count(&existing);
                 if n > 0 {
@@ -1567,17 +1722,19 @@ pub async fn import(
         return error_to_problem_json(&e);
     }
     drop(guard);
-    emit_updated(&state, &kb_name, &id, &incoming);
+    emit_updated_gated(&state, &kb_name, &id, &pre, &incoming, None);
     (
         StatusCode::OK,
         Json(json!({
             "ok": true,
-            // v0.40 TN2 — public-only, on the same rule as every other
-            // agent-visible count. The IMPORT ITSELF is lossless: private
-            // notes in the payload are written verbatim (and existing notes
-            // the payload lacks are carried over, see the merge above), because this route
-            // is a restore/move transport and silently dropping operator
-            // data is a worse failure than the leak it would prevent.
+            // v0.40 TN2 — the number of PUBLIC comments in the document
+            // after the merge (not the payload's row count), on the same
+            // rule as every other agent-visible count. The IMPORT ITSELF is
+            // lossless: private notes in the payload are written verbatim
+            // (and existing notes the payload lacks are carried over, see
+            // the merge above), because this route is a restore/move
+            // transport and silently dropping operator data is a worse
+            // failure than the leak it would prevent.
             "imported": public_count(&incoming),
             "open_count": incoming.open_count(),
         })),
@@ -1589,10 +1746,12 @@ pub async fn import(
 
 pub async fn edit_comment(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Extension(identity): Extension<Identity>,
     Path((kb, id, cid)): Path<(String, String, String)>,
     Json(payload): Json<EditBody>,
 ) -> Response<Body> {
+    let intent = operator_intent(&headers);
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
         Err(resp) => return resp,
@@ -1613,6 +1772,8 @@ pub async fn edit_comment(
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     let row_user = match file.comments.iter().find(|c| c.id == cid) {
         Some(c) => c.user.clone(),
         None => return error_to_problem_json(&kb_core::Error::NotFound(format!("comment {cid}"))),
@@ -1627,16 +1788,18 @@ pub async fn edit_comment(
         return error_to_problem_json(&e);
     }
     drop(guard);
-    emit_updated_by(&state, &kb_name, &id, &file, Some(&identity.user));
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, Some(&identity.user));
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
 pub async fn edit_reply(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Extension(identity): Extension<Identity>,
     Path((kb, id, cid, rid)): Path<(String, String, String, String)>,
     Json(payload): Json<EditBody>,
 ) -> Response<Body> {
+    let intent = operator_intent(&headers);
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
         Err(resp) => return resp,
@@ -1660,6 +1823,8 @@ pub async fn edit_reply(
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     let row_user = match file
         .comments
         .iter()
@@ -1679,7 +1844,7 @@ pub async fn edit_reply(
         return error_to_problem_json(&e);
     }
     drop(guard);
-    emit_updated_by(&state, &kb_name, &id, &file, Some(&identity.user));
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, Some(&identity.user));
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -1705,15 +1870,21 @@ pub async fn edit_reply(
 /// that re-derived the normalisation itself would drift from the server the
 /// moment the rules changed. The server's answer is the only one.
 ///
-/// Ownership: gated by the same `forbid_if_not_owner` policy as body EDIT and
-/// DELETE, because `private: false` is a disclosure — it hands the whole
-/// thread back to every agent-facing surface. It is expressed as
-/// `Error::Forbidden` (still a 403 problem+json) because the check runs
-/// inside the `with_review_mut` closure, where the shared helper's
-/// pre-rendered `Response` cannot be threaded out through
-/// `kb_core::Result<…>`.
+/// Ownership: gated by the same policy as body EDIT and DELETE, because
+/// `private: false` is a disclosure — it hands the whole thread back to every
+/// agent-facing surface. The check runs inside the `with_review_mut` closure
+/// (which can only return `kb_core::Error`), so the closure records the
+/// owner and this handler answers with `forbid_if_not_owner` — the SAME
+/// `urn:kb:errors:not-owner` problem the batch `set_meta` twin returns.
+///
+/// `private: false` on an existing NOTE additionally needs the operator's
+/// explicit intent (`X-Kb-Visibility: all`), enforced in
+/// `ReviewFile::set_comment_meta`; privatising and tagging do not (neither
+/// discloses). When the comment was kept as a memory earlier the response
+/// carries `kept_as_memory` so the operator knows that artifact survives.
 pub async fn set_comment_meta(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Extension(identity): Extension<Identity>,
     Path((kb, id, cid)): Path<(String, String, String)>,
     Json(payload): Json<CommentMetaBody>,
@@ -1725,14 +1896,32 @@ pub async fn set_comment_meta(
     if let Err(resp) = check_subid(&cid, "comment id") {
         return resp;
     }
-    if payload.tags.is_none() && payload.private.is_none() {
+    if payload.tags.is_none()
+        && payload.add_tags.is_none()
+        && payload.remove_tags.is_none()
+        && payload.private.is_none()
+    {
         return error_to_problem_json(&kb_core::Error::BadRequest(
-            "comment meta patch must set at least one of: tags, private".to_string(),
+            "comment meta patch must set at least one of: tags, add_tags, remove_tags, private"
+                .to_string(),
         ));
     }
+    let intent = operator_intent(&headers);
 
     let operator = state.operator_user().to_string();
+    // v0.44 P2 (A2-11) — the owner refusal below runs inside the sync
+    // closure, which can only return `kb_core::Error`; it records WHO owns
+    // the row here so the handler can answer with `forbid_if_not_owner`'s
+    // `urn:kb:errors:not-owner` problem — the same URN the batch `set_meta`
+    // twin returns — instead of the generic `urn:kb:errors:forbidden`.
+    let refused_owner: Arc<std::sync::Mutex<Option<String>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let refused_owner_flag = Arc::clone(&refused_owner);
+    let identity_for_refusal = identity.clone();
+    let operator_for_refusal = operator.clone();
     let req_tags = payload.tags;
+    let req_add = payload.add_tags;
+    let req_remove = payload.remove_tags;
     let req_private = payload.private;
     // v0.40 TN2 — set when this PATCH turns an ALREADY-PUBLIC comment into a
     // note, which is the one transition that has to un-write history. Lifted
@@ -1746,7 +1935,10 @@ pub async fn set_comment_meta(
     // `cid` moves into the mutation closure below; the ledger delete runs
     // after it, so it gets its own copy.
     let cid_row = cid.clone();
-    let resp = with_review_mut(&state, &kb_name, &id, StatusCode::OK, move |file| {
+    // v0.44 P2 (A2.f4) — where `keep_memory` records the memory it derived
+    // from this comment, if it ever did.
+    let keep_path = keep_record_path(&state.paths.kb_review_dir(&kb_name), &cid);
+    let resp = with_review_mut(&state, &kb_name, &id, StatusCode::OK, intent, move |file| {
         // Same ownership rule as `forbid_if_not_owner`: a row with no
         // stamped `user` belongs to the operator. A MISSING comment falls
         // through to `set_comment_meta`, which raises the canonical 404 —
@@ -1759,6 +1951,9 @@ pub async fn set_comment_meta(
         if let Some(row_user) = row_user {
             let owner = row_user.as_deref().unwrap_or(operator.as_str());
             if identity.user != owner {
+                *refused_owner_flag
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(owner.to_string());
                 return Err(kb_core::Error::Forbidden(format!(
                     "only the owner ({owner}) may retag or re-privatise this comment; identity is {}",
                     identity.user
@@ -1771,7 +1966,39 @@ pub async fn set_comment_meta(
             .comments
             .iter()
             .any(|c| c.id == cid_row && !c.is_private());
-        let changed = file.set_comment_meta(&cid_row, req_tags.as_deref(), req_private)?;
+        // The effective tag set, computed HERE under the review lock from the
+        // row's CURRENT tags: `tags` replaces, `add_tags` unions, `remove_tags`
+        // subtracts (slug-matched). No delta form means "don't touch".
+        let next_tags: Option<Vec<String>> =
+            if req_tags.is_some() || req_add.is_some() || req_remove.is_some() {
+                let Some(current) = file
+                    .comments
+                    .iter()
+                    .find(|c| c.id == cid_row)
+                    .map(|c| c.tags.clone())
+                else {
+                    return Err(kb_core::Error::NotFound(format!("comment {cid_row}")));
+                };
+                let mut next = match &req_tags {
+                    Some(t) => review::normalize_comment_tags(t)?,
+                    None => current,
+                };
+                if let Some(add) = &req_add {
+                    for t in review::normalize_comment_tags(add)? {
+                        if !next.contains(&t) {
+                            next.push(t);
+                        }
+                    }
+                }
+                if let Some(rm) = &req_remove {
+                    let rm = review::normalize_comment_tags(rm)?;
+                    next.retain(|t| !rm.contains(t));
+                }
+                Some(next)
+            } else {
+                None
+            };
+        let changed = file.set_comment_meta(&cid_row, next_tags.as_deref(), req_private)?;
         if was_public
             && file
                 .comments
@@ -1787,12 +2014,32 @@ pub async fn set_comment_meta(
             Some(c) => (c.tags.clone(), c.private),
             None => (Vec::new(), false),
         };
-        Ok((
-            json!({ "ok": true, "changed": changed, "tags": tags, "private": private }),
-            changed,
-        ))
+        let mut body = json!({ "ok": true, "changed": changed, "tags": tags, "private": private });
+        // A comment that is a note NOW but was kept as a memory earlier: the
+        // memory is its own agent-recalled artifact and does not follow the
+        // flag. Report it so the operator can decide; never act on it here.
+        if private {
+            if let Some(rec) = read_keep_record(&keep_path) {
+                body["kept_as_memory"] = json!({ "id": rec.id });
+            }
+        }
+        Ok((body, changed))
     })
     .await;
+
+    let refused = refused_owner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if let Some(owner) = refused {
+        if let Some(r) = forbid_if_not_owner(
+            &identity_for_refusal,
+            Some(owner.as_str()),
+            &operator_for_refusal,
+        ) {
+            return r;
+        }
+    }
 
     // v0.40 TN2 — a note gets NO history-ledger row (the same rule
     // `add_comment` applies to a note born private, and for the same
@@ -1825,8 +2072,10 @@ pub async fn set_comment_meta(
     // and a GC call would be a no-op. What the flip DOES have to stop is the
     // BLOB being reachable, and that is enforced where reachability is
     // decided — `attachments::serve` refuses a blob whose owning comment is
-    // private, so the URL published in the comment body, in `?cm=on`, in
-    // `kb comments export` and in any share bundle stops resolving. Making
+    // private (except to the operator's explicit `?visibility=all`), so the
+    // URL published in the comment body, in `?cm=on` and in `kb comments
+    // export` stops resolving for an agent. A share bundle is NOT covered
+    // by that check: it carries copied blob bytes at relative paths. Making
     // the blob unreferenced instead would mean deleting the operator's own
     // screenshot on a REVERSIBLE toggle (un-privating would not bring it
     // back, and the note body would keep an `attachment:<aid>` ref to a
@@ -1865,9 +2114,11 @@ pub async fn set_comment_meta(
 /// no resolver logic is duplicated here.
 pub async fn set_anchor(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Path((kb, id, cid)): Path<(String, String, String)>,
     Json(payload): Json<SetAnchorBody>,
 ) -> Response<Body> {
+    let intent = operator_intent(&headers);
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
         Err(resp) => return resp,
@@ -1888,6 +2139,8 @@ pub async fn set_anchor(
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     let changed = match file.set_comment_anchor(&cid, payload.anchor) {
         Ok(c) => c,
         Err(e) => return error_to_problem_json(&e),
@@ -1918,7 +2171,7 @@ pub async fn set_anchor(
     }
     drop(guard);
 
-    emit_updated(&state, &kb_name, &id, &file);
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, None);
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -1926,9 +2179,11 @@ pub async fn set_anchor(
 
 pub async fn delete_comment(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Extension(identity): Extension<Identity>,
     Path((kb, id, cid)): Path<(String, String, String)>,
 ) -> Response<Body> {
+    let intent = operator_intent(&headers);
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
         Err(resp) => return resp,
@@ -1950,6 +2205,8 @@ pub async fn delete_comment(
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     let row_user = match file.comments.iter().find(|c| c.id == cid) {
         Some(c) => c.user.clone(),
         None => return error_to_problem_json(&kb_core::Error::NotFound(format!("comment {cid}"))),
@@ -1998,7 +2255,7 @@ pub async fn delete_comment(
     }
     drop(guard);
 
-    emit_updated_by(&state, &kb_name, &id, &file, Some(&identity.user));
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, Some(&identity.user));
     (
         StatusCode::OK,
         Json(json!({ "ok": true, "open_count": file.open_count() })),
@@ -2008,9 +2265,11 @@ pub async fn delete_comment(
 
 pub async fn delete_reply(
     State(state): State<Arc<KbHandles>>,
+    headers: HeaderMap,
     Extension(identity): Extension<Identity>,
     Path((kb, id, cid, rid)): Path<(String, String, String, String)>,
 ) -> Response<Body> {
+    let intent = operator_intent(&headers);
     let kb_name = match validate(&state, &kb, &id) {
         Ok(k) => k,
         Err(resp) => return resp,
@@ -2035,6 +2294,8 @@ pub async fn delete_reply(
         }
         Err(e) => return error_to_problem_json(&e),
     };
+    file.set_operator_intent(intent);
+    let pre = public_fingerprint(&file);
     let row_user = match file
         .comments
         .iter()
@@ -2074,7 +2335,7 @@ pub async fn delete_reply(
     }
     drop(guard);
 
-    emit_updated_by(&state, &kb_name, &id, &file, Some(&identity.user));
+    emit_updated_gated(&state, &kb_name, &id, &pre, &file, Some(&identity.user));
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 

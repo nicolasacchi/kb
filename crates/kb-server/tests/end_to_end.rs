@@ -3195,12 +3195,17 @@ async fn comments_updated_counts_exclude_private() {
     })
     .await;
 
-    // The LAST `comments.updated` for this artifact is the one the note's
-    // creation produced. Its counts must be the ones from BEFORE the note
-    // existed: overcounting would prove the note is there.
-    let last = comments_updated_frames(&buf, art)
-        .pop()
-        .unwrap_or_else(|| panic!("no comments.updated for {art}; frames:\n{buf}"));
+    // v0.44 P2 (A2-6) — the note's creation emits NO frame at all (the frame
+    // would be printed to an agent by `kb push` and date the note even with
+    // the counts filtered). The only frame for this artifact is the PUBLIC
+    // comment's, and its counts exclude the note that was written after it.
+    let frames = comments_updated_frames(&buf, art);
+    assert_eq!(
+        frames.len(),
+        1,
+        "exactly the public comment's frame, none for the note: {frames:?}\n{buf}"
+    );
+    let last = &frames[0];
     assert_eq!(
         last["open_count"], 1,
         "open_count must exclude the note: {last}"
@@ -22347,4 +22352,750 @@ async fn desk_aggregate_401_without_token_non_loopback() {
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 401);
+}
+
+// === v0.44 P2 — notes privacy second pass: twin-path matrix, quiet events,
+// attachment gate ==========================================================
+
+/// The operator-intent marker (the write-side twin of `?visibility=all`).
+const INTENT: (&str, &str) = ("X-Kb-Visibility", "all");
+
+/// One request against the real router. `who` is the `Remote-User` identity
+/// (a trusted-hop header on these loopback tests); `intent` adds the marker.
+async fn send_as(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    method: reqwest::Method,
+    path: &str,
+    who: &str,
+    intent: bool,
+    body: Option<serde_json::Value>,
+) -> (u16, serde_json::Value) {
+    let mut req = client.request(method, url(addr, path));
+    // "" = no identity header: the loopback operator, like `add_comment_at`.
+    if !who.is_empty() {
+        req = req.header("Remote-User", who);
+    }
+    if intent {
+        req = req.header(INTENT.0, INTENT.1);
+    }
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let resp = req.send().await.unwrap();
+    let status = resp.status().as_u16();
+    let v = resp.json::<serde_json::Value>().await.unwrap_or_default();
+    (status, v)
+}
+
+/// A fresh artifact holding alice's PUBLIC comment + reply and alice's
+/// PRIVATE note + reply. Returns `(public_cid, public_rid, note_cid,
+/// note_rid)`. The note's reply is written with operator intent (the only
+/// way one can exist).
+async fn matrix_fixture(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    art: &str,
+) -> (String, String, String, String) {
+    let base = format!("/api/kb/smoke/review/{art}");
+    let mk = |private: bool| {
+        serde_json::json!({
+            "body": if private { "alice note" } else { "alice public" },
+            "anchor": {"kind": "file"}, "author": "you", "private": private,
+        })
+    };
+    let (s, pub_c) = send_as(
+        client,
+        addr,
+        reqwest::Method::POST,
+        &format!("{base}/comments"),
+        "alice",
+        true,
+        Some(mk(false)),
+    )
+    .await;
+    assert_eq!(s, 201, "fixture public comment");
+    let (s, note_c) = send_as(
+        client,
+        addr,
+        reqwest::Method::POST,
+        &format!("{base}/comments"),
+        "alice",
+        true,
+        Some(mk(true)),
+    )
+    .await;
+    assert_eq!(s, 201, "fixture note");
+    let pc = pub_c["id"].as_str().unwrap().to_string();
+    let nc = note_c["id"].as_str().unwrap().to_string();
+    let reply = serde_json::json!({"author": "you", "body": "alice reply"});
+    let (s, pr) = send_as(
+        client,
+        addr,
+        reqwest::Method::POST,
+        &format!("{base}/comments/{pc}/replies"),
+        "alice",
+        true,
+        Some(reply.clone()),
+    )
+    .await;
+    assert_eq!(s, 201, "fixture public reply");
+    let (s, nr) = send_as(
+        client,
+        addr,
+        reqwest::Method::POST,
+        &format!("{base}/comments/{nc}/replies"),
+        "alice",
+        true,
+        Some(reply),
+    )
+    .await;
+    assert_eq!(s, 201, "fixture note reply (needs operator intent)");
+    (
+        pc,
+        pr["id"].as_str().unwrap().to_string(),
+        nc,
+        nr["id"].as_str().unwrap().to_string(),
+    )
+}
+
+/// The single-route twin of one batch op: `(method, path-suffix, body)`.
+/// EXHAUSTIVE on purpose — no wildcard — so adding a `BatchOp` variant
+/// breaks this build until its twin (or the lack of one) is declared, which
+/// is what keeps `batch_gate_target` and the single routes from drifting
+/// apart again (F6 / O5).
+fn single_twin(
+    op: &kb_core::review::BatchOp,
+) -> (reqwest::Method, String, Option<serde_json::Value>) {
+    use kb_core::review::BatchOp as B;
+    use reqwest::Method as M;
+    match op {
+        B::AddComment { .. } => (
+            M::POST,
+            "/comments".into(),
+            Some(serde_json::json!({"body": "x", "anchor": {"kind": "file"}, "author": "you"})),
+        ),
+        B::AddReply { comment_id, .. } => (
+            M::POST,
+            format!("/comments/{comment_id}/replies"),
+            Some(serde_json::json!({"author": "you", "body": "r"})),
+        ),
+        B::EditComment { comment_id, .. } => (
+            M::PATCH,
+            format!("/comments/{comment_id}"),
+            Some(serde_json::json!({"body": "edited"})),
+        ),
+        B::EditReply {
+            comment_id,
+            reply_id,
+            ..
+        } => (
+            M::PATCH,
+            format!("/comments/{comment_id}/replies/{reply_id}"),
+            Some(serde_json::json!({"body": "edited"})),
+        ),
+        B::SetAnchor { comment_id, .. } => (
+            M::PATCH,
+            format!("/comments/{comment_id}/anchor"),
+            Some(serde_json::json!({"anchor": {"kind": "file"}})),
+        ),
+        B::SetMeta { comment_id, .. } => (
+            M::PATCH,
+            format!("/comments/{comment_id}/meta"),
+            Some(serde_json::json!({"private": false})),
+        ),
+        B::Resolve { comment_id } => (M::POST, format!("/comments/{comment_id}/resolve"), None),
+        B::Unresolve { comment_id } => (M::POST, format!("/comments/{comment_id}/unresolve"), None),
+        B::ResolveAll => (M::POST, "/resolve-all".into(), None),
+        B::UnresolveAll => (M::POST, "/unresolve-all".into(), None),
+        B::DeleteComment { comment_id } => (M::DELETE, format!("/comments/{comment_id}"), None),
+        B::DeleteReply {
+            comment_id,
+            reply_id,
+        } => (
+            M::DELETE,
+            format!("/comments/{comment_id}/replies/{reply_id}"),
+            None,
+        ),
+        B::SetVerdict { .. } => (
+            M::POST,
+            "/verdict".into(),
+            Some(serde_json::json!({"state": "comment"})),
+        ),
+        B::ClearVerdict => (M::DELETE, "/verdict".into(), None),
+    }
+}
+
+/// One sample of EVERY batch variant aimed at `cid`/`rid`, as typed ops.
+fn sample_ops(cid: &str, rid: &str) -> Vec<kb_core::review::BatchOp> {
+    let raw = serde_json::json!([
+        {"op": "add_comment", "anchor": {"kind": "file"}, "author": "you", "body": "x"},
+        {"op": "add_reply", "comment_id": cid, "author": "you", "body": "r"},
+        {"op": "edit_comment", "comment_id": cid, "body": "edited"},
+        {"op": "edit_reply", "comment_id": cid, "reply_id": rid, "body": "edited"},
+        {"op": "set_anchor", "comment_id": cid, "anchor": {"kind": "file"}},
+        {"op": "set_meta", "comment_id": cid, "private": false},
+        {"op": "resolve", "comment_id": cid},
+        {"op": "unresolve", "comment_id": cid},
+        {"op": "resolve_all"},
+        {"op": "unresolve_all"},
+        {"op": "delete_comment", "comment_id": cid},
+        {"op": "delete_reply", "comment_id": cid, "reply_id": rid},
+        {"op": "set_verdict", "state": "comment"},
+        {"op": "clear_verdict"},
+    ]);
+    serde_json::from_value(raw).expect("sample ops parse")
+}
+
+fn op_name(op: &kb_core::review::BatchOp) -> String {
+    serde_json::to_value(op).unwrap()["op"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn class(status: u16) -> u16 {
+    if (200..300).contains(&status) {
+        200
+    } else {
+        status
+    }
+}
+
+/// v0.44 P2 (feature #3): every `BatchOp` variant × {owner, non-owner,
+/// private note without intent, private note WITH intent}, driven through the
+/// real router twice — once as `POST …/apply`, once through its single-route
+/// twin on a fresh identical artifact — and held to (a) the SAME status and
+/// (b) the policy table below. F6 (batch `set_meta` open to everyone while
+/// the PATCH twin said 403) and O5 (three of eight verbs guarded) are exactly
+/// this matrix failing.
+#[tokio::test]
+async fn batch_and_single_route_twins_agree_across_the_privacy_matrix() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let n_ops = sample_ops("c", "r").len();
+
+    // (name, requester, intent, target-is-note)
+    let scenarios: [(&str, &str, bool, bool); 4] = [
+        ("owner", "alice", false, false),
+        ("non-owner", "bob", false, false),
+        ("note-no-intent", "alice", false, true),
+        ("note-with-intent", "alice", true, true),
+    ];
+
+    let mut seen_ops = 0;
+    for (si, (scenario, who, intent, on_note)) in scenarios.iter().enumerate() {
+        for oi in 0..n_ops {
+            // --- batch arm, on its own fresh artifact ---
+            let art_b = format!("mxb{si}{oi:02}1111222233");
+            let (pc, pr, nc, nr) = matrix_fixture(&client, addr, &art_b).await;
+            let (cid, rid) = if *on_note { (&nc, &nr) } else { (&pc, &pr) };
+            let op = sample_ops(cid, rid).remove(oi);
+            let name = op_name(&op);
+            let (batch_status, _) = send_as(
+                &client,
+                addr,
+                reqwest::Method::POST,
+                &format!("/api/kb/smoke/review/{art_b}/apply"),
+                who,
+                *intent,
+                Some(serde_json::json!({"ops": [serde_json::to_value(&op).unwrap()]})),
+            )
+            .await;
+
+            // --- single-route twin, on a second fresh artifact ---
+            let art_s = format!("mxs{si}{oi:02}1111222233");
+            let (pc, pr, nc, nr) = matrix_fixture(&client, addr, &art_s).await;
+            let (cid, rid) = if *on_note { (&nc, &nr) } else { (&pc, &pr) };
+            let op = sample_ops(cid, rid).remove(oi);
+            let (method, suffix, body) = single_twin(&op);
+            let (single_status, _) = send_as(
+                &client,
+                addr,
+                method,
+                &format!("/api/kb/smoke/review/{art_s}{suffix}"),
+                who,
+                *intent,
+                body,
+            )
+            .await;
+
+            assert_eq!(
+                class(batch_status),
+                class(single_status),
+                "TWIN DIVERGENCE: {name} as {scenario}: batch {batch_status} vs single {single_status}"
+            );
+
+            // --- the policy table (invariant #4 + the private-note guard) ---
+            let owner_gated = matches!(
+                name.as_str(),
+                "edit_comment" | "edit_reply" | "set_meta" | "delete_comment" | "delete_reply"
+            );
+            let note_guarded = matches!(
+                name.as_str(),
+                "add_reply"
+                    | "edit_comment"
+                    | "edit_reply"
+                    | "set_anchor"
+                    | "set_meta"
+                    | "resolve"
+                    | "unresolve"
+                    | "delete_comment"
+                    | "delete_reply"
+            );
+            let expected = match *scenario {
+                "non-owner" if owner_gated => 403,
+                "note-no-intent" if note_guarded => 409,
+                _ => 200,
+            };
+            assert_eq!(
+                class(batch_status),
+                expected,
+                "POLICY: {name} as {scenario} expected {expected}, batch answered {batch_status}"
+            );
+            seen_ops += 1;
+        }
+    }
+    assert_eq!(seen_ops, scenarios.len() * n_ops, "matrix must be total");
+}
+
+/// v0.44 P2 (A2-11): the PATCH `…/meta` owner refusal carries the SAME
+/// problem type as the batch `set_meta` twin — `urn:kb:errors:not-owner` —
+/// so a client branching on the invariant's documented URN sees both.
+#[tokio::test]
+async fn meta_owner_refusal_uses_the_not_owner_urn_on_both_paths() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "urn111122223344";
+    let (pc, _pr, _nc, _nr) = matrix_fixture(&client, addr, art).await;
+    let base = format!("/api/kb/smoke/review/{art}");
+
+    let (s, v) = send_as(
+        &client,
+        addr,
+        reqwest::Method::PATCH,
+        &format!("{base}/comments/{pc}/meta"),
+        "bob",
+        false,
+        Some(serde_json::json!({"tags": ["x"]})),
+    )
+    .await;
+    assert_eq!(s, 403);
+    assert_eq!(
+        v["type"].as_str(),
+        Some("urn:kb:errors:not-owner"),
+        "PATCH: {v}"
+    );
+
+    let (s, v) = send_as(
+        &client,
+        addr,
+        reqwest::Method::POST,
+        &format!("{base}/apply"),
+        "bob",
+        false,
+        Some(serde_json::json!({"ops": [{"op": "set_meta", "comment_id": pc, "tags": ["x"]}]})),
+    )
+    .await;
+    assert_eq!(s, 403);
+    assert_eq!(
+        v["type"].as_str(),
+        Some("urn:kb:errors:not-owner"),
+        "batch: {v}"
+    );
+}
+
+/// Collect every `comments.updated` payload for `art` over `window`, while
+/// `act` runs after the stream is attached.
+async fn comments_updated_during<F, Fut>(
+    addr: std::net::SocketAddr,
+    art: &str,
+    act: F,
+) -> Vec<serde_json::Value>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    use futures::StreamExt;
+    let resp = reqwest::Client::new()
+        .get(url(addr, "/api/events?types=comments.updated"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    // Attach, then act, then drain for a moment.
+    let _ = tokio::time::timeout(Duration::from_millis(300), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(b) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&b));
+            }
+        }
+    })
+    .await;
+    act().await;
+    let _ = tokio::time::timeout(Duration::from_millis(900), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(b) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&b));
+            }
+        }
+    })
+    .await;
+    comments_updated_frames(&buf, art)
+}
+
+/// v0.44 P2 (A2-6): every note-only mutation is silent on the bus (a frame
+/// is what `kb push` prints to an agent), and a PUBLIC write on the same
+/// artifact still announces — so the silence is not a broken stream.
+#[tokio::test]
+async fn note_only_mutations_emit_no_comments_updated_frame() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "quiet11112222333";
+    let base = format!("/api/kb/smoke/review/{art}");
+
+    let frames = comments_updated_during(addr, art, || async {
+        let (s, note) = send_as(
+            &client, addr, reqwest::Method::POST, &format!("{base}/comments"), "alice", true,
+            Some(serde_json::json!({"body":"n","anchor":{"kind":"file"},"author":"you","private":true})),
+        )
+        .await;
+        assert_eq!(s, 201);
+        let nid = note["id"].as_str().unwrap().to_string();
+        let c = format!("{base}/comments/{nid}");
+        // retag, edit, reply, resolve, reopen, delete — all with intent.
+        for (m, p, b) in [
+            (reqwest::Method::PATCH, format!("{c}/meta"), Some(serde_json::json!({"tags":["a"]}))),
+            (reqwest::Method::PATCH, c.clone(), Some(serde_json::json!({"body":"edited"}))),
+            (reqwest::Method::POST, format!("{c}/replies"), Some(serde_json::json!({"author":"you","body":"r"}))),
+            (reqwest::Method::POST, format!("{c}/resolve"), None),
+            (reqwest::Method::POST, format!("{c}/unresolve"), None),
+            (reqwest::Method::DELETE, c.clone(), None),
+        ] {
+            let (s, _) = send_as(&client, addr, m, &p, "alice", true, b).await;
+            assert!(s == 200 || s == 201, "note op {p} must succeed with intent, got {s}");
+        }
+    })
+    .await;
+    assert!(
+        frames.is_empty(),
+        "a note-only write leaked a comments.updated frame: {frames:?}"
+    );
+
+    let loud = comments_updated_during(addr, art, || async {
+        let (s, _) = send_as(
+            &client,
+            addr,
+            reqwest::Method::POST,
+            &format!("{base}/comments"),
+            "alice",
+            false,
+            Some(serde_json::json!({"body":"p","anchor":{"kind":"file"},"author":"you"})),
+        )
+        .await;
+        assert_eq!(s, 201);
+    })
+    .await;
+    assert!(!loud.is_empty(), "a public write must still announce");
+}
+
+/// v0.44 P2 (A2-5): the first private note on an artifact with no public
+/// comment leaves the public GET (status, body bytes, ETag header) exactly
+/// as it was, and the answer is stable across requests.
+#[tokio::test]
+async fn first_private_note_leaves_the_public_get_unchanged() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "first1111222233a";
+    let base = format!("/api/kb/smoke/review/{art}");
+    let get = || async {
+        let r = client.get(url(addr, &base)).send().await.unwrap();
+        let etag = r
+            .headers()
+            .get("etag")
+            .map(|v| v.to_str().unwrap().to_string());
+        (r.status().as_u16(), etag, r.bytes().await.unwrap())
+    };
+    let before = get().await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(
+        before,
+        get().await,
+        "the absent-sidecar answer must be stable"
+    );
+
+    let (s, _) = send_as(
+        &client, addr, reqwest::Method::POST, &format!("{base}/comments"), "alice", true,
+        Some(serde_json::json!({"body":"SECRET","anchor":{"kind":"file"},"author":"you","private":true})),
+    )
+    .await;
+    assert_eq!(s, 201);
+    let after = get().await;
+    assert_eq!(before, after, "the first note changed the public GET");
+    assert!(before.1.is_none(), "no ETag for a blank public view");
+}
+
+/// v0.44 P2 (A13-2 + A2-9): an attachment owned by a comment is served while
+/// the comment is public, 404s the moment it is flipped private (comment AND
+/// reply attachments), comes back with the operator's `?visibility=all`, and
+/// is never marked `public`/`immutable` for shared caches.
+#[tokio::test]
+async fn private_note_attachments_are_gated_on_serve_and_not_publicly_cacheable() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let art = "attp1111222233a";
+    let base = format!("/api/kb/smoke/review/{art}");
+    let (cid, _) = add_comment_at(&client, addr, &base, "has a picture", false).await;
+    let (s, rep) = send_as(
+        &client,
+        addr,
+        reqwest::Method::POST,
+        &format!("{base}/comments/{cid}/replies"),
+        "",
+        false,
+        Some(serde_json::json!({"author":"you","body":"reply"})),
+    )
+    .await;
+    assert_eq!(s, 201);
+    let rid = rep["id"].as_str().unwrap().to_string();
+
+    async fn upload(client: &reqwest::Client, addr: std::net::SocketAddr, path: &str) -> String {
+        let form = reqwest::multipart::Form::new().part(
+            "file",
+            reqwest::multipart::Part::bytes(png_fixture())
+                .file_name("p.png")
+                .mime_str("image/png")
+                .unwrap(),
+        );
+        let resp = client
+            .post(url(addr, path))
+            .multipart(form)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 201, "adopt {path}");
+        let v: Vec<serde_json::Value> = resp.json().await.unwrap();
+        v[0]["id"].as_str().unwrap().to_string()
+    }
+    let a_comment = upload(&client, addr, &format!("{base}/comments/{cid}/attachments")).await;
+    let a_reply = upload(
+        &client,
+        addr,
+        &format!("{base}/comments/{cid}/replies/{rid}/attachments"),
+    )
+    .await;
+    let serve = |aid: &str, q: &str| url(addr, &format!("{base}/attachments/{aid}{q}"));
+
+    // Public: 200, and the cache header cannot outlive a visibility flip.
+    for aid in [&a_comment, &a_reply] {
+        let r = client.get(serve(aid, "")).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), 200, "public blob {aid}");
+        let cc = r
+            .headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            cc.contains("private") && !cc.contains("immutable") && !cc.contains("public"),
+            "cache-control must not let a shared cache keep a blob whose visibility is mutable: {cc}"
+        );
+    }
+
+    // Flip to a note.
+    let (s, _) = send_as(
+        &client,
+        addr,
+        reqwest::Method::PATCH,
+        &format!("{base}/comments/{cid}/meta"),
+        "",
+        false,
+        Some(serde_json::json!({"private": true})),
+    )
+    .await;
+    assert_eq!(s, 200);
+    for aid in [&a_comment, &a_reply] {
+        let r = client.get(serve(aid, "")).send().await.unwrap();
+        assert_eq!(
+            r.status().as_u16(),
+            404,
+            "note blob {aid} must not be served"
+        );
+        let body = r.text().await.unwrap().to_lowercase();
+        assert!(
+            !body.contains("private"),
+            "the 404 must not say why: {body}"
+        );
+        // The operator's explicit read opt-in gets it back.
+        let r = client
+            .get(serve(aid, "?visibility=all"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200, "operator read of {aid}");
+    }
+
+    // An agent-shaped detach of a note's attachment is refused; the
+    // operator's is honoured.
+    let detach = format!("{base}/comments/{cid}/attachments/{a_comment}");
+    let (s, _) = send_as(
+        &client,
+        addr,
+        reqwest::Method::DELETE,
+        &detach,
+        "",
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(s, 409, "agent detach of a note attachment");
+    // …and so is making it public again.
+    let (s, _) = send_as(
+        &client,
+        addr,
+        reqwest::Method::PATCH,
+        &format!("{base}/comments/{cid}/meta"),
+        "",
+        false,
+        Some(serde_json::json!({"private": false})),
+    )
+    .await;
+    assert_eq!(s, 409, "agent un-private of a note");
+    let (s, _) = send_as(
+        &client,
+        addr,
+        reqwest::Method::PATCH,
+        &format!("{base}/comments/{cid}/meta"),
+        "",
+        true,
+        Some(serde_json::json!({"private": false})),
+    )
+    .await;
+    assert_eq!(s, 200, "operator un-private");
+    for aid in [&a_comment, &a_reply] {
+        let r = client.get(serve(aid, "")).send().await.unwrap();
+        assert_eq!(r.status().as_u16(), 200, "public again: {aid}");
+    }
+}
+
+/// v0.44 P2 (A2.f4): flipping a comment that was KEPT AS A MEMORY to a note
+/// tells the operator the memory survives (it is its own artifact, recalled
+/// into agent prompts); a comment with no keep record reports nothing.
+#[tokio::test]
+async fn flipping_a_kept_comment_private_reports_the_surviving_memory() {
+    let (_tmp, addr, paths) = boot_with_paths().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/kept11112222333";
+    let (kept, _) = add_comment_at(&client, addr, base, "worth remembering", false).await;
+    let (plain, _) = add_comment_at(&client, addr, base, "never kept", false).await;
+
+    let keeps = paths
+        .kb_review_dir(&KbName::new("smoke").unwrap())
+        .join("keeps");
+    std::fs::create_dir_all(&keeps).unwrap();
+    std::fs::write(
+        keeps.join(format!("{kept}.json")),
+        serde_json::json!({"id": "mem_abc123", "path": "x.md", "comment_id": kept}).to_string(),
+    )
+    .unwrap();
+
+    let flip = |cid: String| {
+        let client = client.clone();
+        async move {
+            client
+                .patch(url(addr, &format!("{base}/comments/{cid}/meta")))
+                .header("Origin", ORIGIN)
+                .json(&serde_json::json!({"private": true}))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let r = flip(kept).await;
+    assert_eq!(r["private"], true);
+    assert_eq!(r["kept_as_memory"]["id"], "mem_abc123", "{r}");
+    let r = flip(plain).await;
+    assert_eq!(r["private"], true);
+    assert!(r.get("kept_as_memory").is_none(), "{r}");
+}
+
+/// v0.44 P2 (A2.f7): an unknown `?kb=` on the note index is a 404 (like
+/// `/reviews`), not an empty 200 that reads as "no notes".
+#[tokio::test]
+async fn review_notes_unknown_kb_is_404() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url(addr, "/api/review-notes?kb=no-such-kb"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let ok = client
+        .get(url(addr, "/api/review-notes?kb=smoke"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200, "a real kb still answers");
+}
+
+/// v0.44 P2 (A4-10): the DELTA form of `PATCH …/meta` (`add_tags` /
+/// `remove_tags`) is applied server-side to the CURRENT tags, so two
+/// concurrent writers cannot erase each other's tags the way the old
+/// client-side read-merge-PATCH-`tags` did.
+#[tokio::test]
+async fn meta_patch_delta_tags_merge_into_the_current_set() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let base = "/api/kb/smoke/review/delta111122223";
+    let (cid, _) = add_comment_at(&client, addr, base, "tag me", false).await;
+    let meta = format!("{base}/comments/{cid}/meta");
+    let patch = |body: serde_json::Value| {
+        let client = client.clone();
+        let meta = meta.clone();
+        async move {
+            client
+                .patch(url(addr, &meta))
+                .header("Origin", ORIGIN)
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    // Writer A adds `a`; writer B (who never saw A's write) adds `b`.
+    let r = patch(serde_json::json!({"add_tags": ["a"]})).await;
+    assert_eq!(r["tags"], serde_json::json!(["a"]));
+    let r = patch(serde_json::json!({"add_tags": ["B"]})).await;
+    assert_eq!(
+        r["tags"],
+        serde_json::json!(["a", "b"]),
+        "B's add must keep A's tag: {r}"
+    );
+
+    // Removing is slug-matched, and removing an absent tag changes nothing.
+    let r = patch(serde_json::json!({"remove_tags": ["A"]})).await;
+    assert_eq!(r["tags"], serde_json::json!(["b"]));
+    let r = patch(serde_json::json!({"remove_tags": ["nope"]})).await;
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["tags"], serde_json::json!(["b"]));
+
+    // Delta on a missing comment is a 404, not an empty-set write.
+    let resp = client
+        .patch(url(addr, &format!("{base}/comments/c_nope/meta")))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({"add_tags": ["x"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
 }
