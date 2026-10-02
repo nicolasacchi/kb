@@ -62,15 +62,20 @@ pub struct RetrackArgs {
     json: bool,
 }
 
-async fn client() -> Result<reqwest::Client, AgentError> {
+async fn client(timeout: std::time::Duration) -> Result<reqwest::Client, AgentError> {
     crate::client_builder()
-        .timeout(review_agent::READ_TIMEOUT)
+        .timeout(timeout)
         .build()
         .map_err(|e| AgentError::new("client", e.to_string(), envelope::EXIT_GENERIC))
 }
 
-async fn post(daemon: &str, path: &str, body: &Value) -> Result<Value, AgentError> {
-    let c = client().await?;
+async fn post(
+    daemon: &str,
+    path: &str,
+    body: &Value,
+    timeout: std::time::Duration,
+) -> Result<Value, AgentError> {
+    let c = client(timeout).await?;
     let url = format!("{}{path}", daemon.trim_end_matches('/'));
     let resp = c.post(&url).json(body).send().await.map_err(|e| {
         let exit = if e.is_connect() || e.is_timeout() || e.status().is_none() {
@@ -78,6 +83,14 @@ async fn post(daemon: &str, path: &str, body: &Value) -> Result<Value, AgentErro
         } else {
             envelope::EXIT_GENERIC
         };
+        if e.is_timeout() {
+            // The daemon was reached and may still be working: not "down".
+            return AgentError::new(
+                "timeout",
+                format!("POST {url}: {}", review_agent::timeout_note(timeout)),
+                exit,
+            );
+        }
         AgentError::new("unreachable", format!("POST {url}: {e}"), exit)
             .with_hint(format!("is kb-code-server running at {daemon}?"))
     })?;
@@ -122,11 +135,14 @@ async fn run_one(a: &RetrackArgs) -> Result<(), AgentError> {
             "--dry-run".into(),
         ]]));
     };
+    // `retrack` moves a whole review's base; a `/ps<n>` was silently ignored.
+    review_agent::reject_patchset_address(raw, "retrack")?;
     let resolved = review_agent::resolve(&a.daemon, raw, a.repo.as_deref(), None).await?;
     let body = post(
         &a.daemon,
         &format!("/api/reviews/{}/retrack", resolved.id),
         &serde_json::json!({ "base": a.base, "dry_run": a.dry_run }),
+        review_agent::READ_TIMEOUT,
     )
     .await?;
     if a.json {
@@ -156,6 +172,7 @@ async fn run_all(a: &RetrackArgs) -> Result<(), AgentError> {
             "legacy": a.legacy,
             "dry_run": dry_run,
         }),
+        review_agent::BULK_READ_TIMEOUT,
     )
     .await?;
     if a.json {

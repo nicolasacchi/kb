@@ -7855,8 +7855,9 @@ fn capture_client() -> Result<reqwest::Client> {
 /// bare status line.
 ///
 /// `err` is that status error, kept as this error's CAUSE deliberately:
-/// [`envelope::exit_code_for`] reads its table (401/403 → `EXIT_REFUSED`,
-/// 409 → `EXIT_CONFLICT`, 5 unreachable) off the `reqwest::Error` in the
+/// [`envelope::exit_code_for`] reads its table (`envelope::exit_for_status`:
+/// 400 usage, 401/403 refused, 404 not-found, 409/503 conflict; a
+/// connect/timeout is 5 unreachable) off the `reqwest::Error` in the
 /// chain, so dropping it would move every exit code without anything in
 /// this crate noticing. Keeping the error also leaves reqwest's status line
 /// in the `Caused by:` section — the body only ADDS the reason beside it.
@@ -8997,7 +8998,10 @@ async fn highlight_cmd(
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("highlight failed");
-        anyhow::bail!("POST {route}: HTTP {status}: {err}");
+        return Err(status_error(
+            status,
+            format!("POST {route}: HTTP {status}: {err}"),
+        ));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
@@ -11903,6 +11907,13 @@ fn recipe_client() -> Result<reqwest::Client> {
 /// surfaces, one server, two qualities of answer. This renders the body.
 /// `get_json` renders it now too, via `daemon_status_error`; the recipe
 /// family keeps its own because it reads the status off `get_json_raw`.
+/// An `anyhow` error that carries the HTTP status so `envelope::exit_code_for`
+/// maps it through the documented exit table (v044-X1 A8-1). Every
+/// `*_raw`-helper failure builder goes through this, never a bare `anyhow!`.
+fn status_error(status: reqwest::StatusCode, msg: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(envelope::StatusError::new(status.as_u16(), msg))
+}
+
 fn recipe_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> anyhow::Error {
     let msg = body["error"]
         .as_str()
@@ -11912,7 +11923,10 @@ fn recipe_api_error(status: reqwest::StatusCode, body: &serde_json::Value) -> an
         .as_str()
         .map(|t| format!(" [{t}]"))
         .unwrap_or_default();
-    anyhow::anyhow!("recipe: {msg} (HTTP {}){kind}", status.as_u16())
+    status_error(
+        status,
+        format!("recipe: {msg} (HTTP {}){kind}", status.as_u16()),
+    )
 }
 
 async fn recipe_get(
@@ -13771,7 +13785,7 @@ fn doclens_api_error(
             "\n  pick one:  kb-code doclens repos --kb {kb} --doc {doc}"
         ));
     }
-    anyhow::anyhow!(out)
+    status_error(status, out)
 }
 
 fn doclens_line_cell(r: &serde_json::Value) -> String {
@@ -14238,11 +14252,14 @@ async fn doclens_sync_cmd(daemon: &str, force: bool, json: bool) -> Result<()> {
         // The route is loopback-only, so the most likely non-2xx here is a
         // 404 from the gate rather than a doc-lens `reason` — say so.
         if status == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!(
-                "doclens sync: POST /api/doc-lens/sync answered 404 — that route is \
-                 LOOPBACK-ONLY, so this only works against a daemon on this machine \
-                 (--daemon {daemon})"
-            );
+            return Err(status_error(
+                status,
+                format!(
+                    "doclens sync: POST /api/doc-lens/sync answered 404 — that route is \
+                     LOOPBACK-ONLY, so this only works against a daemon on this machine \
+                     (--daemon {daemon})"
+                ),
+            ));
         }
         return Err(doclens_api_error(status, &body, "-", "-"));
     }
@@ -14370,7 +14387,13 @@ fn annotation_api_error(
     body: &serde_json::Value,
 ) -> anyhow::Error {
     let msg = body["error"].as_str().unwrap_or("(no error message)");
-    anyhow::anyhow!("{what} failed ({status}): {msg}")
+    // Typed so `envelope::exit_code_for` can read the status: the `*_raw`
+    // helpers drop the `reqwest::Error`, and an untyped `anyhow!` here made
+    // every 400/403/404/409 exit 1 (v044-X1 A8-1).
+    anyhow::Error::new(envelope::StatusError::new(
+        status.as_u16(),
+        format!("{what} failed ({status}): {msg}"),
+    ))
 }
 
 /// Empty / non-JSON HTTP bodies become `Null` so a loopback-gate 404
@@ -14396,10 +14419,13 @@ fn loopback_or_api_error(
     if status == reqwest::StatusCode::NOT_FOUND
         && body.get("error").and_then(|v| v.as_str()).is_none()
     {
-        return anyhow::anyhow!(
-            "{what} requires loopback — {daemon} answered 404 \
-             (this route is LOOPBACK-ONLY)"
-        );
+        return anyhow::Error::new(envelope::StatusError::new(
+            404,
+            format!(
+                "{what} requires loopback — {daemon} answered 404 \
+                 (this route is LOOPBACK-ONLY)"
+            ),
+        ));
     }
     annotation_api_error(what, status, body)
 }
@@ -14971,11 +14997,14 @@ async fn checkout_cmd(daemon: &str, repo: &str, target: &str, json: bool) -> Res
                 }
             }
         }
-        anyhow::bail!("checkout refused — working tree is dirty");
+        return Err(anyhow::Error::new(envelope::StatusError::new(
+            409,
+            "checkout refused — working tree is dirty",
+        )));
     }
     if !status.is_success() {
         let msg = body["error"].as_str().unwrap_or("checkout failed");
-        anyhow::bail!("checkout failed: {msg}");
+        return Err(status_error(status, format!("checkout failed: {msg}")));
     }
     if !json {
         let ref_ = body["ref"].as_str().unwrap_or(target);
@@ -16316,10 +16345,13 @@ async fn branch_fav_cmd(
     )
     .await?;
     if !status.is_success() {
-        anyhow::bail!(
-            "POST /api/branches/favourites → {status}: {}",
-            body["error"].as_str().unwrap_or("(no message)")
-        );
+        return Err(status_error(
+            status,
+            format!(
+                "POST /api/branches/favourites → {status}: {}",
+                body["error"].as_str().unwrap_or("(no message)")
+            ),
+        ));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
@@ -16357,10 +16389,13 @@ async fn branch_review_cmd(
     }
     let (status, body) = post_json_raw(&client, daemon, "/api/branches/review", &payload).await?;
     if !status.is_success() {
-        anyhow::bail!(
-            "POST /api/branches/review → {status}: {}",
-            body["error"].as_str().unwrap_or("(no message)")
-        );
+        return Err(status_error(
+            status,
+            format!(
+                "POST /api/branches/review → {status}: {}",
+                body["error"].as_str().unwrap_or("(no message)")
+            ),
+        ));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&body)?);
@@ -18544,9 +18579,12 @@ async fn review_findings_add_cmd(
     }
     if !status.is_success() {
         if status == reqwest::StatusCode::CONFLICT {
-            return Err(anyhow::anyhow!(
-                "review findings add failed (409): {}",
-                body["error"].as_str().unwrap_or("slug already exists")
+            return Err(status_error(
+                status,
+                format!(
+                    "review findings add failed (409): {}",
+                    body["error"].as_str().unwrap_or("slug already exists")
+                ),
             ));
         }
         return Err(loopback_or_api_error(
@@ -19983,7 +20021,10 @@ async fn suggest_apply_cmd(daemon: &str, id: &str, resolve: bool, json: bool) ->
         if !json {
             print!("{}", format_apply_drift(&body));
         }
-        anyhow::bail!("suggestion apply conflict on {id}");
+        return Err(anyhow::Error::new(envelope::StatusError::new(
+            409,
+            format!("suggestion apply conflict on {id}"),
+        )));
     }
     if !status.is_success() {
         return Err(loopback_or_api_error(
@@ -21307,7 +21348,7 @@ async fn scip_ingest_core(
         let (status, body) = post_json_raw(&client, daemon, "/api/scip/ingest", &payload).await?;
         if !status.is_success() {
             let msg = body["error"].as_str().unwrap_or("scip ingest failed");
-            anyhow::bail!("scip ingest failed: {msg}");
+            return Err(status_error(status, format!("scip ingest failed: {msg}")));
         }
         docs_received += body["docs_received"].as_u64().unwrap_or(0);
         docs_accepted += body["docs_accepted"].as_u64().unwrap_or(0);
@@ -26998,6 +27039,67 @@ mod tests {
     }
 
     #[test]
+    fn raw_status_helpers_exit_through_the_documented_table() {
+        // The 70 call sites share these two builders; the status must
+        // survive into `exit_code_for` (v044-X1 A8-1).
+        let empty = serde_json::Value::Null;
+        let msg = serde_json::json!({"error": "boom"});
+        for (status, want) in [
+            (400u16, envelope::EXIT_USAGE),
+            (403, envelope::EXIT_REFUSED),
+            (404, envelope::EXIT_NOT_FOUND),
+            (409, envelope::EXIT_CONFLICT),
+            (500, envelope::EXIT_GENERIC),
+        ] {
+            let sc = reqwest::StatusCode::from_u16(status).unwrap();
+            assert_eq!(
+                envelope::exit_code_for(&annotation_api_error("w", sc, &msg)),
+                want,
+                "annotation_api_error {status}"
+            );
+            assert_eq!(
+                envelope::exit_code_for(&loopback_or_api_error("w", "http://d", sc, &empty)),
+                want,
+                "loopback_or_api_error {status}"
+            );
+        }
+        // The recipe and doclens builders (and the status_error helper the
+        // highlight/scip/branches/checkout bails use) obey the same table.
+        let doc_body = serde_json::json!({"error": "x", "reason": "r"});
+        for (status, want) in [
+            (400u16, envelope::EXIT_USAGE),
+            (403, envelope::EXIT_REFUSED),
+            (404, envelope::EXIT_NOT_FOUND),
+            (409, envelope::EXIT_CONFLICT),
+        ] {
+            let sc = reqwest::StatusCode::from_u16(status).unwrap();
+            assert_eq!(
+                envelope::exit_code_for(&recipe_api_error(sc, &msg)),
+                want,
+                "recipe_api_error {status}"
+            );
+            assert_eq!(
+                envelope::exit_code_for(&doclens_api_error(sc, &doc_body, "k", "d")),
+                want,
+                "doclens_api_error {status}"
+            );
+            assert_eq!(
+                envelope::exit_code_for(&status_error(sc, "x")),
+                want,
+                "status_error {status}"
+            );
+        }
+        // `review compose` off-host: empty 404 -> "requires loopback" -> 8.
+        let e = loopback_or_api_error(
+            "review compose",
+            "http://d",
+            reqwest::StatusCode::NOT_FOUND,
+            &empty,
+        );
+        assert_eq!(envelope::exit_code_for(&e), envelope::EXIT_NOT_FOUND);
+    }
+
+    #[test]
     fn loopback_or_api_error_keeps_json_404_as_api_error() {
         let err = loopback_or_api_error(
             "apply suggestion \"ann_x\"",
@@ -27008,6 +27110,60 @@ mod tests {
         let rendered = format!("{err}");
         assert!(rendered.contains("annotation \"ann_x\""));
         assert!(!rendered.contains("requires loopback"));
+    }
+
+    /// v044-X1 A8.f4 — the kb-review-work skill tells agents which `kb-code
+    /// review <verb>` to type; a verb or `--flag` renamed in clap must fail
+    /// here instead of silently leaving the skill lying.
+    #[test]
+    fn review_work_skill_commands_exist_in_clap() {
+        use clap::CommandFactory;
+        let skill = include_str!("../../../plugins/kb-code/skills/kb-review-work/SKILL.md");
+        let cli = Cli::command();
+        let review = cli
+            .get_subcommands()
+            .find(|c| c.get_name() == "review")
+            .expect("`kb-code review` exists");
+        let mut checked = 0usize;
+        for line in skill.lines() {
+            let mut rest = line;
+            while let Some(i) = rest.find("kb-code review ") {
+                rest = &rest[i + "kb-code review ".len()..];
+                let verb: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                    .collect();
+                if verb.is_empty() {
+                    continue;
+                }
+                let sub = review
+                    .get_subcommands()
+                    .find(|c| c.get_name() == verb || c.get_all_aliases().any(|a| a == verb))
+                    .unwrap_or_else(|| {
+                        panic!("SKILL.md names `kb-code review {verb}`: no such verb")
+                    });
+                checked += 1;
+                // Every `--flag` on the SAME inline-code span must exist on the verb.
+                let span_end = rest.find('`').unwrap_or(rest.len());
+                for tok in rest[..span_end].split_whitespace() {
+                    if let Some(flag) = tok.strip_prefix("--") {
+                        let name: String = flag
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                            .collect();
+                        if name.is_empty() {
+                            continue;
+                        }
+                        let known = sub
+                            .get_arguments()
+                            .any(|a| a.get_long() == Some(name.as_str()))
+                            || name == "json";
+                        assert!(known, "SKILL.md: `review {verb}` has no --{name}");
+                    }
+                }
+            }
+        }
+        assert!(checked >= 8, "only {checked} skill commands checked");
     }
 
     #[test]
