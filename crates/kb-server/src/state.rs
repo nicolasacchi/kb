@@ -72,10 +72,10 @@ pub type ResolveFn = Arc<dyn Fn(String) -> ResolveFuture + Send + Sync>;
 
 /// The real resolver: the OS resolver via `tokio::net::lookup_host`.
 pub fn system_resolver() -> ResolveFn {
-    Arc::new(|name: String| {
+    Arc::new(|name: String| -> ResolveFuture {
         Box::pin(async move {
             let addrs = tokio::net::lookup_host((name.as_str(), 0)).await?;
-            Ok(addrs.map(|a| a.ip()).collect())
+            Ok::<Vec<IpAddr>, std::io::Error>(addrs.map(|a| a.ip()).collect())
         })
     })
 }
@@ -1802,7 +1802,7 @@ mod tests {
     fn fixed_resolver(
         answers: Arc<Mutex<std::collections::HashMap<String, std::io::Result<Vec<IpAddr>>>>>,
     ) -> ResolveFn {
-        Arc::new(move |name: String| {
+        Arc::new(move |name: String| -> ResolveFuture {
             let answers = answers.clone();
             Box::pin(async move {
                 match answers.lock().unwrap().get(&name) {
