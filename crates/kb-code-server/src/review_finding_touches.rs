@@ -75,6 +75,13 @@ pub const MAX_TOUCHED_IN_PATCHSETS: usize = 20;
 
 pub const OVERLAP_EXACT: &str = "exact";
 pub const OVERLAP_ADJACENT: &str = "adjacent";
+/// A7-5 — the later patchset sits on a DIFFERENT base than the finding's
+/// own patchset, so the own-tip -> later-tip diff mixes the author's edits
+/// with upstream movement. A hunk over the finding's lines is then NOT
+/// evidence the author acted: such a pair is reported as `rebased`, never
+/// `exact`/`adjacent`. (The rebase-aware per-patchset delta is future
+/// work; this is the honest minimum.)
+pub const OVERLAP_REBASED: &str = "rebased";
 
 /// A later hunk within this many lines of a finding's own range counts as
 /// `adjacent` rather than a miss — the same "near enough to be evidence,
@@ -295,6 +302,13 @@ pub fn compute_touched_in(
                 }
             }
             if let Some(o) = overlap {
+                // A7-5 — a different base_sha means the tip-to-tip diff
+                // includes base movement; downgrade to `rebased`.
+                let o = if ps.base_sha != own_row.base_sha {
+                    OVERLAP_REBASED
+                } else {
+                    o
+                };
                 entries.push(TouchedInEntry {
                     ps: ps.ps_number,
                     hunks: qualifying,
@@ -442,6 +456,42 @@ mod tests {
         assert_eq!(result.entries[0].ps, 2);
         assert_eq!(result.entries[0].overlap, OVERLAP_EXACT);
         assert_eq!(result.entries[0].hunks, 1);
+    }
+
+    /// A7-5 — a later patchset on a DIFFERENT base: the tip-to-tip hunk over
+    /// the finding's line may be pure upstream movement, so it must read
+    /// `rebased`, never `exact`. Fails without the base_sha comparison.
+    #[test]
+    fn a_pair_with_a_moved_base_is_rebased_never_exact() {
+        let tmp = init_repo();
+        let dir = tmp.path();
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
+        git(dir, &["add", "a.txt"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        let ps1_tip = git_out(dir, &["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("a.txt"), "l1\nl2\nl3-upstream\nl4\nl5\n").unwrap();
+        git(dir, &["commit", "-aq", "-m", "c2"]);
+        let ps2_tip = git_out(dir, &["rev-parse", "HEAD"]);
+
+        let moved_base = "f".repeat(40);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &ps1_tip, &ps1_tip),
+            ps_row(2, 1, 2, &moved_base, &ps2_tip),
+        ];
+        let queries = vec![TouchedInQuery {
+            finding_id: 9,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines: vec![3],
+        }];
+        let out = compute_touched_in(
+            &GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(dir)),
+            &patchsets,
+            &queries,
+        );
+        let result = out.get(&9).expect("finding present");
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].overlap, OVERLAP_REBASED);
     }
 
     #[test]
