@@ -224,7 +224,7 @@ pub async fn why(
             let is_loopback = kb_server::middleware::is_loopback_origin(
                 Some(peer.ip()),
                 &headers,
-                &state.auth.trusted_proxies,
+                &state.auth.trusted_proxies.load(),
             );
             let out = line_why(&state, repo, repo_id, path, line, is_loopback).await?;
             Ok(([(header::CACHE_CONTROL, "no-store")], Json(out)).into_response())

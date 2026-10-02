@@ -4638,7 +4638,7 @@ pub async fn create_review_pr(
     let is_loopback = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
     );
     body.gh_token =
         match crate::github::admit_cli_github_token(is_loopback, body.gh_token.as_deref()) {

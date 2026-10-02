@@ -1427,7 +1427,7 @@ pub async fn actions_route(
     let loopback = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
-        &state.auth.trusted_proxies,
+        &state.auth.trusted_proxies.load(),
     );
     let mutations = if loopback {
         MutationsNote {

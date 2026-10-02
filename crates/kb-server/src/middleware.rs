@@ -522,9 +522,18 @@ fn is_artifact_host(host: &str, suffix: &str) -> bool {
 /// the name lives — that sibling reads `Host` only and carries the same
 /// hole.
 pub fn effective_host_name(req: &Request<Body>) -> Option<&str> {
-    match req.headers().get(header::HOST) {
+    effective_host_name_of(req.headers(), req.uri())
+}
+
+/// [`effective_host_name`] for a handler that holds the headers and URI as
+/// separate extractors (the top-level fallback) rather than the `Request`.
+pub fn effective_host_name_of<'a>(
+    headers: &'a axum::http::HeaderMap,
+    uri: &'a axum::http::Uri,
+) -> Option<&'a str> {
+    match headers.get(header::HOST) {
         Some(v) => Some(v.to_str().unwrap_or("")),
-        None => req.uri().authority().map(|a| a.as_str()),
+        None => uri.authority().map(|a| a.as_str()),
     }
 }
 
@@ -570,7 +579,7 @@ pub fn host_gate_applies_to_peer(
 /// for a request from `peer`. Used by the SPA fallback to decide whether
 /// the permalink shell may consult the corpus (OG meta, moved-path 301).
 pub fn host_refused_for_peer(host: Option<&str>, peer: Option<IpAddr>, cfg: &OriginConfig) -> bool {
-    host_gate_applies_to_peer(peer, &cfg.trusted_proxies, !cfg.hostnames.is_empty())
+    host_gate_applies_to_peer(peer, &cfg.trusted_proxies.load(), !cfg.hostnames.is_empty())
         && !host_allowed(host, cfg)
 }
 
@@ -606,7 +615,7 @@ pub async fn host_guard(
     // admitted by `host_allowed`, other names via `hostnames`.
     if !host_gate_applies_to_request(
         &req,
-        &origin_cfg.trusted_proxies,
+        &origin_cfg.trusted_proxies.load(),
         !origin_cfg.hostnames.is_empty(),
     ) {
         return next.run(req).await;
@@ -717,8 +726,8 @@ pub async fn auth_bearer(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(addr)| addr.ip());
-    let is_loopback = is_loopback_origin(peer, req.headers(), &auth.trusted_proxies);
-    let peer_trusted = peer_is_trusted(peer, &auth.trusted_proxies);
+    let is_loopback = is_loopback_origin(peer, req.headers(), &auth.trusted_proxies.load());
+    let peer_trusted = peer_is_trusted(peer, &auth.trusted_proxies.load());
 
     // --- ADMISSION (byte-identical 401 surface; registry is additive) ---
     if !request_is_admitted(&auth, is_loopback, req.headers(), allow_no_auth()) {
@@ -1080,7 +1089,7 @@ pub struct RateLimiter {
     /// v0.7.1 — reverse-proxy IPs trusted to set `X-Forwarded-For`,
     /// shared with `AuthConfig` / `OriginConfig`. The loopback bypass
     /// mirrors `auth_bearer` and must see the same trusted set.
-    trusted_proxies: Arc<Vec<IpAddr>>,
+    trusted_proxies: crate::state::TrustedProxies,
 }
 
 /// v0.7.1 H6 — per-key windows plus a call counter for amortised
@@ -1109,7 +1118,7 @@ impl RateLimiter {
     pub fn new(
         capacity: u32,
         window: std::time::Duration,
-        trusted_proxies: Arc<Vec<IpAddr>>,
+        trusted_proxies: crate::state::TrustedProxies,
     ) -> Self {
         Self {
             capacity,
@@ -1186,10 +1195,10 @@ pub async fn rate_limit(
     req: Request<Body>,
     next: Next,
 ) -> Response<Body> {
-    if request_is_loopback(&req, &limiter.trusted_proxies) {
+    if request_is_loopback(&req, &limiter.trusted_proxies.load()) {
         return next.run(req).await;
     }
-    let key = rate_limit_key(&req, &limiter.trusted_proxies);
+    let key = rate_limit_key(&req, &limiter.trusted_proxies.load());
     match limiter.try_consume(&key) {
         Ok(()) => next.run(req).await,
         Err(retry_after) => rate_limited(retry_after),
@@ -1676,7 +1685,7 @@ mod tests {
         let limiter = RateLimiter::new(
             100,
             std::time::Duration::from_millis(5),
-            Arc::new(Vec::new()),
+            crate::state::TrustedProxies::default(),
         );
         // Fill the map with distinct keys — fewer than SWEEP_INTERVAL,
         // so no sweep has run yet.
@@ -1765,7 +1774,7 @@ mod tests {
         use tower::ServiceExt;
         let auth = AuthConfig {
             token: Some("s3cret".to_string()),
-            trusted_proxies: Arc::new(Vec::new()),
+            trusted_proxies: crate::state::TrustedProxies::default(),
             ..AuthConfig::default()
         };
         let app = auth_app(auth);
@@ -1801,7 +1810,7 @@ mod tests {
         use kb_core::identity::{TokenEntry, TokenSecret};
         AuthConfig {
             token: Some("legacy-shared".to_string()),
-            trusted_proxies: Arc::new(Vec::new()),
+            trusted_proxies: crate::state::TrustedProxies::default(),
             tokens: vec![
                 TokenEntry {
                     user: "alice".into(),
@@ -2439,7 +2448,8 @@ mod tests {
             hostnames: hostnames.iter().map(|h| h.to_string()).collect(),
             ..Default::default()
         };
-        let trusted = Arc::new(proxies.iter().map(|p| ip(p)).collect::<Vec<_>>());
+        let trusted =
+            crate::state::TrustedProxies::new(proxies.iter().map(|p| ip(p)).collect::<Vec<_>>());
         Arc::new(OriginConfig::from_server_section(&server, trusted))
     }
 
