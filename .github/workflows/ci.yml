@@ -108,6 +108,14 @@ permissions:
 # than on the PR path. Every family also saves ONLY on main (`save-if`): a
 # cache written on a PR branch is scoped to that branch, restorable by nobody
 # else, and still counts against the cap — PRs restore main's entry instead.
+# `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
+# implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
+# tee's exit status and a failing `cmd` goes green (the e2e vacuous pass,
+# d4f3063d). Setting it once here covers every `run:` step in this file.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   workspace-lint:
     name: workspace-lint (fmt + clippy)
@@ -148,22 +156,9 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
-        # the REF it is handed; it never opens the file, so this literal and
-        # the toml's `channel` are two INDEPENDENT pins that can drift apart
-        # silently. The comment here used to claim the pin came from the
-        # toml, and it did not (deep-review O8) — so the claim is replaced,
-        # not repeated. The toml is not inert, though: rustup's precedence
-        # puts the DIRECTORY override above `rustup default`, so bumping it
-        # changes what `cargo` resolves to in every job, path-filtered ones
-        # included, while this action goes on installing the old literal. The
-        # literal therefore still has to be RIGHT — it is what pre-installs
-        # the toolchain and its rustfmt/clippy components, so a wrong one
-        # compiles this job with a rustc the repo does not pin — and
-        # `just toolchain-pin-check` (a supply-chain step; it compiles
-        # nothing) fails the build the moment the two disagree. `@stable`
-        # would be worse than either: it drifts on every release.
-        uses: dtolnay/rust-toolchain@1.96.0
+        # Reads the version from rust-toolchain.toml (single source; see
+        # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
+        uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
 
@@ -208,7 +203,7 @@ jobs:
       # avoids running its (tiny) test suite twice.
       # Mirrors the justfile's `ci-workspace` + `ci-embedder`/`ci-code` split.
       - name: cargo clippy
-        run: cargo clippy --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip --all-targets -- -D warnings
 
       - name: Invariant-test coverage (GC-C2, non-blocking)
         # Prints the invariant:N → pinning-test coverage table (see
@@ -253,22 +248,9 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
-        # the REF it is handed; it never opens the file, so this literal and
-        # the toml's `channel` are two INDEPENDENT pins that can drift apart
-        # silently. The comment here used to claim the pin came from the
-        # toml, and it did not (deep-review O8) — so the claim is replaced,
-        # not repeated. The toml is not inert, though: rustup's precedence
-        # puts the DIRECTORY override above `rustup default`, so bumping it
-        # changes what `cargo` resolves to in every job, path-filtered ones
-        # included, while this action goes on installing the old literal. The
-        # literal therefore still has to be RIGHT — it is what pre-installs
-        # the toolchain and its rustfmt/clippy components, so a wrong one
-        # compiles this job with a rustc the repo does not pin — and
-        # `just toolchain-pin-check` (a supply-chain step; it compiles
-        # nothing) fails the build the moment the two disagree. `@stable`
-        # would be worse than either: it drifts on every release.
-        uses: dtolnay/rust-toolchain@1.96.0
+        # Reads the version from rust-toolchain.toml (single source; see
+        # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -302,13 +284,13 @@ jobs:
         # per-test isolation makes a hung test one failure, not a job wall.
         # Profile: .config/nextest.toml [profile.ci] (lance-heavy overrides
         # live there).
-        run: cargo nextest run --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
+        run: cargo nextest run --locked --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
 
       - name: cargo test --doc
         # nextest does not run doctests; the serial sweep it replaced did.
         # This keeps the flipped required job a coverage SUPERSET of the
         # old one (near-free when few doctests exist).
-        run: cargo test --doc --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
+        run: cargo test --locked --doc --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
 
       - name: Install just (drift-check recipe)
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
@@ -368,22 +350,9 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
-        # the REF it is handed; it never opens the file, so this literal and
-        # the toml's `channel` are two INDEPENDENT pins that can drift apart
-        # silently. The comment here used to claim the pin came from the
-        # toml, and it did not (deep-review O8) — so the claim is replaced,
-        # not repeated. The toml is not inert, though: rustup's precedence
-        # puts the DIRECTORY override above `rustup default`, so bumping it
-        # changes what `cargo` resolves to in every job, path-filtered ones
-        # included, while this action goes on installing the old literal. The
-        # literal therefore still has to be RIGHT — it is what pre-installs
-        # the toolchain and its rustfmt/clippy components, so a wrong one
-        # compiles this job with a rustc the repo does not pin — and
-        # `just toolchain-pin-check` (a supply-chain step; it compiles
-        # nothing) fails the build the moment the two disagree. `@stable`
-        # would be worse than either: it drifts on every release.
-        uses: dtolnay/rust-toolchain@1.96.0
+        # Reads the version from rust-toolchain.toml (single source; see
+        # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -432,7 +401,7 @@ jobs:
           if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -451,7 +420,7 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.changes.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         if: steps.changes.outputs.run == 'true'
@@ -522,7 +491,7 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -543,7 +512,7 @@ jobs:
         # round-trip, so the CLI must be built too — mirrors the justfile
         # `ci-e2e` recipe. Shipping stays `--release`
         # (build-image.yml / release.yml).
-        run: cargo build --profile fast -p kb-server -p kb-cli
+        run: cargo build --locked --profile fast -p kb-server -p kb-cli
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -574,6 +543,28 @@ jobs:
             echo "::error::annotator bundle exceeded 12 KiB budget" >&2
             exit 1
           fi
+
+      - name: Annotator bundle declares no globals (classic-script guard)
+        # A11.f2: the daemon injects annotate.js as a CLASSIC <script defer>
+        # into the artifact's own document, so any top-level function/var/
+        # const it declares lands in the page's global scope and can collide
+        # with the artifact's own names — the vite 8 mangler did exactly that
+        # (9d9f6234) and the whole script died with a SyntaxError. The e2e
+        # spec annotator-bundle-isolation.spec.ts proves the behaviour; this
+        # is the cheap structural pre-check that fails in seconds: the bundle
+        # must be a single IIFE, with no import/export statements.
+        working-directory: web
+        run: |
+          node -e '
+          const src = require("fs").readFileSync("dist/annotate.js", "utf8");
+          const body = src.replace(/^(\s|["\x27]use strict["\x27];?|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)+/, "");
+          const fail = (m) => { console.error("::error::annotate.js " + m); process.exit(1); };
+          if (!/^[(!]\s*(function\b|\(?\s*\)?\s*=>|async\b)/.test(body) && !/^\(\s*\(\s*\)\s*=>/.test(body))
+            fail("does not start with an IIFE; top-level declarations would leak into the host page. Starts with: " + JSON.stringify(body.slice(0, 60)));
+          if (/(^|[;}\n])\s*(import|export)\s*[\w{*"\x27]/.test(body)) fail("contains an import/export statement; it is injected as a classic script");
+          if (/\bimport\.meta\b/.test(body)) fail("uses import.meta; it is injected as a classic script");
+          console.log("annotate.js: IIFE-wrapped, no module syntax (" + src.length + " chars)");
+          '
 
       - name: Install Playwright deps
         working-directory: tests/e2e
@@ -614,17 +605,13 @@ jobs:
         # V72-C3 — capture to a file (in addition to the live `list` output)
         # so the next step can grep it.
         #
-        # `set -o pipefail` is REQUIRED here and was missing. This workflow
-        # sets no `defaults.run.shell` and no per-step `shell:`, so the step
-        # runs under Actions' unspecified Linux default, `bash -e {0}` —
-        # which has NO pipefail. In that shell a pipeline's status is the
-        # LAST command's, so `... | tee` reported tee's 0 and every failing
-        # spec still exited the step green. Measured:
-        #   bash -e            -c 'sh -c "exit 7" | tee /dev/null'  -> 0
-        #   bash -eo pipefail  -c 'sh -c "exit 7" | tee /dev/null'  -> 7
-        # A comment here previously asserted the opposite ("pipefail, the
-        # default shell for this workflow, confirmed by GH Actions' own step
-        # log"), which is not true of the unspecified default.
+        # `set -o pipefail` is REQUIRED for `... | tee`: in a shell without
+        # it a pipeline's status is the LAST command's, so a failing
+        # `playwright test` exited the step green (d4f3063d). The workflow now
+        # sets `defaults.run.shell: bash` (= `bash -eo pipefail`), which
+        # covers every step; the explicit `set -o pipefail` below is kept as a
+        # belt-and-braces line so this step stays correct if that default is
+        # ever removed.
         working-directory: tests/e2e
         run: set -o pipefail; npx playwright test 2>&1 | tee playwright-output.log
 
@@ -684,7 +671,7 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: ./.github/actions/setup-rust
         with:
           components: clippy
 
@@ -716,8 +703,8 @@ jobs:
       # ORT-free and fast.
       - name: cargo clippy (embedder + kb-core/local-embedder)
         run: |
-          cargo clippy -p kb-embedder --all-targets -- -D warnings
-          cargo clippy -p kb-core --features local-embedder --all-targets -- -D warnings
+          cargo clippy --locked -p kb-embedder --all-targets -- -D warnings
+          cargo clippy --locked -p kb-core --features local-embedder --all-targets -- -D warnings
 
   embedder-test:
     name: embedder-test (ORT surface — tests)
@@ -745,22 +732,9 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
-        # the REF it is handed; it never opens the file, so this literal and
-        # the toml's `channel` are two INDEPENDENT pins that can drift apart
-        # silently. The comment here used to claim the pin came from the
-        # toml, and it did not (deep-review O8) — so the claim is replaced,
-        # not repeated. The toml is not inert, though: rustup's precedence
-        # puts the DIRECTORY override above `rustup default`, so bumping it
-        # changes what `cargo` resolves to in every job, path-filtered ones
-        # included, while this action goes on installing the old literal. The
-        # literal therefore still has to be RIGHT — it is what pre-installs
-        # the toolchain and its rustfmt/clippy components, so a wrong one
-        # compiles this job with a rustc the repo does not pin — and
-        # `just toolchain-pin-check` (a supply-chain step; it compiles
-        # nothing) fails the build the moment the two disagree. `@stable`
-        # would be worse than either: it drifts on every release.
-        uses: dtolnay/rust-toolchain@1.96.0
+        # Reads the version from rust-toolchain.toml (single source; see
+        # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
@@ -786,8 +760,8 @@ jobs:
       # ORT-free and fast.
       - name: cargo test (embedder + kb-core/local-embedder)
         run: |
-          cargo test -p kb-embedder --no-fail-fast
-          cargo test -p kb-core --features local-embedder --no-fail-fast
+          cargo test --locked -p kb-embedder --no-fail-fast
+          cargo test --locked -p kb-core --features local-embedder --no-fail-fast
 
   code-lint:
     name: code-lint (kb-code + kb-lip clippy)
@@ -825,9 +799,9 @@ jobs:
     #     the very test that exists to catch it.
     #   rust-toolchain.toml — it decides which rustc the skipped jobs would
     #     have compiled with (rustup's directory override outranks
-    #     `rustup default`), and the `dtolnay/rust-toolchain@X.Y.Z` pins are
-    #     hardcoded literals that do not read it — `toolchain-pin-check`
-    #     (supply-chain) is what keeps the two from drifting apart.
+    #     `rustup default`), so a bump changes the toolchain
+    #     every job installs (via `.github/actions/setup-rust`, which reads it);
+    #     `toolchain-pin-check` (supply-chain) asserts nothing bypasses that.
     #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
     #     PR's only diff is this file, it used to be able to neuter every
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
@@ -860,7 +834,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -880,7 +854,7 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.changes.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: ./.github/actions/setup-rust
         with:
           components: clippy
 
@@ -902,7 +876,7 @@ jobs:
 
       - name: cargo clippy (kb-code + kb-lip)
         if: steps.changes.outputs.run == 'true'
-        run: cargo clippy -p kb-code-server -p kb-code-cli -p kb-lip --all-targets -- -D warnings
+        run: cargo clippy --locked -p kb-code-server -p kb-code-cli -p kb-lip --all-targets -- -D warnings
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
@@ -943,9 +917,9 @@ jobs:
     #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
     #     the very test that exists to catch it.
     #   rust-toolchain.toml — it decides which rustc the skipped jobs would
-    #     have compiled with, and the `dtolnay/rust-toolchain@X.Y.Z` pins are
-    #     hardcoded literals that do not read it — `toolchain-pin-check`
-    #     (supply-chain) is what keeps the two from drifting apart.
+    #     have compiled with, so a bump changes the toolchain
+    #     every job installs (via `.github/actions/setup-rust`, which reads it);
+    #     `toolchain-pin-check` (supply-chain) asserts nothing bypasses that.
     #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
     #     PR's only diff is this file, it used to be able to neuter every
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
@@ -988,7 +962,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1008,22 +982,9 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.changes.outputs.run == 'true'
-        # NOT read from rust-toolchain.toml. dtolnay/rust-toolchain resolves
-        # the REF it is handed; it never opens the file, so this literal and
-        # the toml's `channel` are two INDEPENDENT pins that can drift apart
-        # silently. The comment here used to claim the pin came from the
-        # toml, and it did not (deep-review O8) — so the claim is replaced,
-        # not repeated. The toml is not inert, though: rustup's precedence
-        # puts the DIRECTORY override above `rustup default`, so bumping it
-        # changes what `cargo` resolves to in every job, path-filtered ones
-        # included, while this action goes on installing the old literal. The
-        # literal therefore still has to be RIGHT — it is what pre-installs
-        # the toolchain and its rustfmt/clippy components, so a wrong one
-        # compiles this job with a rustc the repo does not pin — and
-        # `just toolchain-pin-check` (a supply-chain step; it compiles
-        # nothing) fails the build the moment the two disagree. `@stable`
-        # would be worse than either: it drifts on every release.
-        uses: dtolnay/rust-toolchain@1.96.0
+        # Reads the version from rust-toolchain.toml (single source; see
+        # .github/actions/setup-rust/action.yml) — no per-job literal to drift.
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         if: steps.changes.outputs.run == 'true'
@@ -1039,7 +1000,7 @@ jobs:
 
       - name: cargo test (kb-code + kb-lip)
         if: steps.changes.outputs.run == 'true'
-        run: cargo test -p kb-code-server -p kb-code-cli -p kb-lip --no-fail-fast
+        run: cargo test --locked -p kb-code-server -p kb-code-cli -p kb-lip --no-fail-fast
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
@@ -1080,9 +1041,9 @@ jobs:
     #     (tests/review/rs_u0_golden.rs), so a fixture-only edit skipped
     #     the very test that exists to catch it.
     #   rust-toolchain.toml — it decides which rustc the skipped jobs would
-    #     have compiled with, and the `dtolnay/rust-toolchain@X.Y.Z` pins are
-    #     hardcoded literals that do not read it — `toolchain-pin-check`
-    #     (supply-chain) is what keeps the two from drifting apart.
+    #     have compiled with, so a bump changes the toolchain
+    #     every job installs (via `.github/actions/setup-rust`, which reads it);
+    #     `toolchain-pin-check` (supply-chain) asserts nothing bypasses that.
     #   .github/workflows/ci.yml — the file that DEFINES this filter. If a
     #     PR's only diff is this file, it used to be able to neuter every
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
@@ -1115,7 +1076,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1197,7 +1158,7 @@ jobs:
             # silently skip.
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1219,7 +1180,7 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.changes.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: ./.github/actions/setup-rust
 
       - name: Cache cargo + target
         if: steps.changes.outputs.run == 'true'
@@ -1351,7 +1312,7 @@ jobs:
       # graph, so a toolchain must be on PATH (the old action bundled one inside
       # its container). We only resolve Cargo.lock here — never compile.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: ./.github/actions/setup-rust
       - name: Install cargo-deny
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
@@ -1378,6 +1339,14 @@ jobs:
           tool: cargo-about@0.9.2
       - name: Install just (NOTICE drift recipe)
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - name: Cargo.lock is committed and current (cargo metadata --locked)
+        # A12-2: no compile job could notice a Cargo.toml edit committed
+        # without its Cargo.lock update (they resolve a fresh lock on the
+        # runner and go green), and cargo-deny below audits whatever graph
+        # `cargo metadata` resolves. `--locked` fails when the resolve would
+        # have to change the lock, so the graph audited here is the graph
+        # committed. The compile lanes above also pass --locked.
+        run: cargo metadata --locked --format-version 1 > /dev/null
       - name: cargo-deny (advisories)
         run: cargo-deny check advisories
       - name: cargo-deny (licenses + bans + sources)
@@ -1419,7 +1388,7 @@ jobs:
       # WHY THE NEXT TWO STEPS LIVE IN THIS JOB
       # ---------------------------------------
       # Both are assertions over COMMITTED TEXT — the docs' `file.rs:LINE`
-      # citations, and the toolchain literals in these workflows. Neither
+      # citations, and the toolchain setup in these workflows. Neither
       # needs a compiler, and this is the only job in ci.yml whose header
       # states outright that no compile happens here, so adding them cannot
       # lengthen a compile lane. They are also UNFILTERED, which is the
@@ -1455,38 +1424,65 @@ jobs:
         run: just doc-anchors
 
       - name: CI toolchain pins == rust-toolchain.toml (just toolchain-pin-check)
-        # O8: all 14 `uses: dtolnay/rust-toolchain@X.Y.Z` lines are hardcoded
-        # literals; the action resolves the REF and never opens
-        # rust-toolchain.toml, so the two pins could drift apart silently.
-        # It matters more than a duplicate constant because rustup's directory
-        # override outranks `rustup default`: bumping the toml changes what
-        # `cargo` resolves to in the path-filtered `code-*` jobs anyway, while
-        # this action goes on installing the old literal and attaching
-        # rustfmt/clippy to the wrong toolchain. This step is the assertion
-        # that keeps the two equal. It scans release.yml and
-        # bench-nightly.yml too, so a bump cannot miss one of them.
+        # O8: the version lives in rust-toolchain.toml ONLY; every job gets it
+        # through .github/actions/setup-rust, which reads the file. This step
+        # asserts nothing bypasses that action (a direct dtolnay/rust-toolchain
+        # use anywhere in .github/ fails) and that the Dockerfile's
+        # `rust:X.Y-trixie` builder tag matches the same channel.
         if: ${{ !cancelled() }}
         run: just toolchain-pin-check
-  # CI-ONLY (branch rs/gates-binary, never merged): build the kb-code daemon +
-  # CLI for the review-store acceptance gates, which run against private data
-  # off-CI. The operator's rule is "compile only on CI", so the gates consume
-  # this artifact instead of a local build.
-  gates-binary:
-    name: gates-binary (kb-code-server + kb-code artifact)
+
+  # REQUIRED-CHECK AGGREGATOR (A12.f3). Branch protection should require THIS
+  # job name only: per-job names (some of them path-filtered, some renamed
+  # over time) cannot silently drop out of the protection rule if the gate is
+  # one stable name that `needs` every other job. `if: always()` makes it run
+  # (and report) even when a dependency failed or was cancelled; a job that
+  # was legitimately skipped is allowed, anything else is a failure. Add every
+  # new job of this file to `needs` — the `jobs-covered` step below fails if
+  # one is missing, so the list cannot rot quietly.
+  ci-gate:
+    name: ci-gate (required check)
+    if: always()
+    needs:
+      - workspace-lint
+      - workspace-test
+      - drift
+      - code-drift
+      - e2e
+      - embedder-lint
+      - embedder-test
+      - code-lint
+      - code-test
+      - code-spa
+      - code-e2e
+      - web-unit
+      - supply-chain
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
-      - name: Install protoc (lancedb transitive dep via kb-core)
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
-      - name: Build kb-code-server + kb-code (fast profile)
-        run: cargo build --profile fast -p kb-code-server -p kb-code-cli
-      - name: Upload binaries
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: kb-code-gates-${{ github.sha }}
-          path: |
-            target/fast/kb-code-server
-            target/fast/kb-code
-          retention-days: 7
+      - name: every job of ci.yml is in needs
+        run: |
+          declared="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{sub(/:$/,"",$1);print $1}' .github/workflows/ci.yml | grep -vx ci-gate | sort)"
+          listed="$(awk '/^  ci-gate:/{g=1} g && /^    needs:/{n=1;next} n && /^      - /{print $2;next} n{exit}' .github/workflows/ci.yml | sort)"
+          if [ -z "$declared" ] || [ -z "$listed" ]; then
+            echo "could not parse the job list (declared='$declared' listed='$listed')" >&2
+            exit 1
+          fi
+          if [ "$declared" != "$listed" ]; then
+            echo "ci-gate.needs != jobs declared in ci.yml" >&2
+            diff <(echo "$declared") <(echo "$listed") >&2 || true
+            exit 1
+          fi
+          echo "ci-gate covers $(echo "$declared" | wc -l) jobs"
+      - name: no needed job failed or was cancelled
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          bad = {k: v["result"] for k, v in json.load(sys.stdin).items()
+                 if v["result"] not in ("success", "skipped")}
+          for k, v in sorted(bad.items()):
+              print(f"{k}: {v}", file=sys.stderr)
+          sys.exit(1 if bad else 0)'

@@ -25,29 +25,48 @@ version = 2
 #   unmaintained   -> warn (workspace scope)  — see `unmaintained` below
 #   yanked         -> warn   (overridden to DENY below — see `yanked =`)
 #   notice/unsound -> warn
-# `ignore` is the escape hatch for a vetted, un-actionable advisory: add the
-# RUSTSEC id with a one-line justification. Keep this list EMPTY until
-# something fires — an empty list documents "clean today".
+# `ignore` is an AUDITED EXCEPTION LIST, not an empty-means-clean signal: it
+# currently holds three entries (below), each with an owner, a review-by date
+# and a re-check trigger. Adding one needs the same three things. An advisory
+# that fires is never silenced without a written reason that names why kb's
+# code cannot reach it.
 unmaintained = "workspace"
 # Override the v2 default (warn): a yanked crate in Cargo.lock fails CI. A yank
 # usually signals a withdrawn/compromised release, so it should block. cargo-deny
 # reports 0 yanked crates today (verified), so this only catches NEW yanks.
 yanked = "deny"
 ignore = [
+    # RUSTSEC-2026-0194/0195 — owner: whoever lands the next lance/datafusion
+    # lockstep; REVIEW BY 2026-12-31.
     # quick-xml 0.39.4 is pinned by object_store 0.13 (`quick-xml ^0.39`),
     # which datafusion 54 (= the ratified lockstep set) requires; the fixed
-    # 0.41 line needs object_store 0.14 / datafusion 55 — a future lockstep
-    # unit. The vulnerable XML parsing only runs on object_store's cloud
-    # (S3/GCS/azure) response paths; kb's build is local-only
-    # (`lancedb default-features = false`), so no kb code path parses
-    # untrusted XML through it.
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39 capped by object_store 0.13 (datafusion 54 lockstep); cloud-only XML path, not in kb's local-only build" },
-    { id = "RUSTSEC-2026-0195", reason = "same as RUSTSEC-2026-0194 (quick-xml 0.39 via object_store 0.13; cloud-only path)" },
-    # rsa Marvin timing sidechannel: "no safe upgrade is available". rsa
-    # enters via opendal's reqsign cloud-signing stack (lance-io aws/azure/
-    # gcs features) — compiled only in the all-features deny graph, never in
-    # kb's local-only build; no kb key material is ever handled by it.
-    { id = "RUSTSEC-2023-0071", reason = "no fix exists; rsa via opendal reqsign (cloud signing), unreachable in kb's local-only build" },
+    # 0.41 line needs object_store 0.14 / datafusion 55. The vulnerable XML
+    # parsing runs on object_store's cloud (S3/GCS/azure) RESPONSE paths.
+    #
+    # CORRECTION (v044-C1, review A12-7): the earlier text said kb's build is
+    # "local-only (`lancedb default-features = false`)". That is not what the
+    # manifests say: the workspace declares `lance` with its DEFAULT features
+    # (aws/azure/gcp/... enabled) and kb-core inherits it, so the cloud
+    # object-store stack, and quick-xml with it, IS compiled into the kb and
+    # kb-code binaries. The ignore is justified by REACHABILITY only: every
+    # lance/lancedb connect site opens a local filesystem path
+    # (crates/kb-core/src/storage/lance.rs, crates/kb-code-server/src/semantic/
+    # store.rs), so no untrusted remote XML is ever parsed. Trimming the
+    # features in Cargo.toml (`lance` with default-features = false) would make
+    # the original wording true; that is a separate Cargo.toml change.
+    # RE-CHECK TRIGGER: any non-filesystem URI (s3://, gs://, az://, http) given
+    # to lance/lancedb, or the datafusion 55 lockstep, whichever comes first.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39 capped by object_store 0.13 (datafusion 54 lockstep); compiled in via lance default features but only local filesystem URIs are ever opened. Review by 2026-12-31" },
+    { id = "RUSTSEC-2026-0195", reason = "same as RUSTSEC-2026-0194 (quick-xml 0.39 via object_store 0.13); same reachability argument. Review by 2026-12-31" },
+    # RUSTSEC-2023-0071 — rsa Marvin timing sidechannel: "no safe upgrade is
+    # available". REVIEW BY 2026-12-31. rsa enters via opendal's reqsign
+    # cloud-signing stack (reqsign-google / reqsign-azure-storage, from
+    # lance-io's cloud features, which lance's default features enable —
+    # see the CORRECTION above). kb never signs anything with an RSA key and
+    # opens no cloud URI, so the timing channel has no input.
+    # RE-CHECK TRIGGER: a fixed rsa release, or any cloud URI/credential
+    # being configured for lance.
+    { id = "RUSTSEC-2023-0071", reason = "no fix exists; rsa via opendal reqsign (cloud signing), compiled in but never invoked (no cloud URIs, no RSA keys handled). Review by 2026-12-31" },
 ]
 
 [licenses]

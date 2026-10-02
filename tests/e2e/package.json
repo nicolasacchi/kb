@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "description": "Playwright iframe + SSE smoke tests against the in-process kb daemon.",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
