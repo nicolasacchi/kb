@@ -76,7 +76,7 @@ refinery = { version = "0.9", features = ["rusqlite"] }
 # model downloads — pure-Rust TLS. Offline/air-gapped builds:
 # set ORT_STRATEGY=system + ORT_LIB_LOCATION=<dir with libonnxruntime> to skip
 # the CDN fetch and link a local copy.
-fastembed = { version = "5", default-features = false, features = [
+fastembed = { version = "7", default-features = false, features = [
     "ort-download-binaries-rustls-tls",
     "hf-hub-rustls-tls",
 ] }
