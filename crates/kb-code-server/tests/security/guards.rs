@@ -203,6 +203,56 @@ async fn a_rebound_host_is_refused_on_every_tier() {
     }
 }
 
+/// F1, kb-code half. A rebound page sets `X-Forwarded-For` itself (it is not
+/// a forbidden request header). The gate used to resolve "is the peer
+/// loopback" THROUGH that header, so one forged value switched the Host
+/// check off - and with `KB_ALLOW_NO_AUTH` that was the whole API. The gate
+/// is now the raw TCP peer: a forged XFF must still get the typed 403, not
+/// a 401/200 from the layers behind it.
+#[tokio::test]
+async fn a_forged_x_forwarded_for_cannot_switch_the_host_check_off() {
+    let repo = fixture_repo();
+    let (_tmp, base) = boot_default(repo.path()).await;
+    let client = reqwest::Client::new();
+    for xff in ["203.0.113.9", "8.8.8.8, 1.1.1.1", "127.0.0.1, 203.0.113.9"] {
+        let resp = client
+            .get(format!("{base}/api/repos"))
+            .header("Host", "attacker.example")
+            .header("X-Forwarded-For", xff)
+            .send()
+            .await
+            .unwrap();
+        assert_problem(resp, "urn:kb:errors:origin-refused").await;
+    }
+    // ...while the honest name with the same header is still admitted.
+    let resp = client
+        .get(format!("{base}/api/repos"))
+        .header("X-Forwarded-For", "203.0.113.9")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// O10, kb-code half. A `Host` header that is present but not valid UTF-8
+/// is an unreadable NAME, not an absent one: it must be refused, never
+/// waved through as "no name".
+#[tokio::test]
+async fn an_unreadable_host_header_is_refused_not_treated_as_absent() {
+    let repo = fixture_repo();
+    let (_tmp, base) = boot_default(repo.path()).await;
+    let resp = reqwest::Client::new()
+        .get(format!("{base}/api/repos"))
+        .header(
+            "Host",
+            reqwest::header::HeaderValue::from_bytes(b"attacker\xff.example").unwrap(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_problem(resp, "urn:kb:errors:origin-refused").await;
+}
+
 #[tokio::test]
 async fn a_configured_hostname_is_admitted() {
     let repo = fixture_repo();
