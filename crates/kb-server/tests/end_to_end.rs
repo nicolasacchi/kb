@@ -448,7 +448,7 @@ async fn turn_route_known_project_narrows_recall() {
         let dir = tmp.path().join(name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            dir.join("note.html"),
+            dir.join(format!("note-{name}.html")),
             format!(
                 r#"<html><head><meta name="kb-category" content="memory-user">
                 <title>Note {name}</title></head>
