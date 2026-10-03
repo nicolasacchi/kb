@@ -997,6 +997,10 @@ pub(crate) async fn recall_compose(
                         "recall: ensure_fts_index failed; continuing list_docs path"
                     );
                 }
+                // A3-5 — a corpus WITH an embedder that still answered from
+                // BM25 (dead query embedder, or no vector index) is a named
+                // degradation, not a silent one.
+                let mut vector_fallback = false;
                 let rows_result = if has_query {
                     match &ctx.embedder {
                         Some(emb) => {
@@ -1007,6 +1011,7 @@ pub(crate) async fn recall_compose(
                                     error = %e,
                                     "recall: ensure_vector_index failed; falling back to BM25"
                                 );
+                                vector_fallback = true;
                                 ctx.storage
                                     .bm25_query(params.q.clone(), per_corpus, false)
                                     .await
@@ -1019,6 +1024,7 @@ pub(crate) async fn recall_compose(
                                     }
                                     // Embed failed for this model → keyword fallback.
                                     None => {
+                                        vector_fallback = true;
                                         ctx.storage
                                             .bm25_query(params.q.clone(), per_corpus, false)
                                             .await
@@ -1034,7 +1040,16 @@ pub(crate) async fn recall_compose(
                     ctx.storage.list_docs(per_corpus).await
                 };
                 let (rows, query_degraded) = match rows_result {
-                    Ok(rows) => (rows, None),
+                    Ok(rows) => (
+                        rows,
+                        vector_fallback.then(|| {
+                            crate::routes::context::degraded_of(
+                                name.as_str(),
+                                "recall",
+                                crate::routes::context::QueryErrorClass::Embed,
+                            )
+                        }),
+                    ),
                     Err(e) => {
                         tracing::warn!(kb = %name, error = %e, "recall: query failed; skipping corpus");
                         (
