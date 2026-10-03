@@ -1756,6 +1756,99 @@ fn n_vanished_specs_cannot_exceed_the_pass_budget() {
     assert!(handed[0] <= budget);
 }
 
+fn fetch_err(class: FailureClass) -> StoreGitError {
+    StoreGitError {
+        op: "fetch",
+        class,
+        exit_code: Some(128),
+        detail: format!("injected {}", class.slug()),
+    }
+}
+
+/// K7 — the base-fetch Vanished retry gives up on the FIRST failure that is
+/// not `Vanished`: an auth failure on the second spec must not be re-asked
+/// for specs 3..N, each burning budget. Fails against the loop that ran every
+/// remaining spec through `run_within_budget` before inspecting any result
+/// (calls would be 6, not 2).
+#[test]
+fn a_non_vanished_failure_stops_the_base_retry_pass_at_once() {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let pairs: Vec<(u32, String)> = (0..6).map(|i| (i, format!("b{i}"))).collect();
+    let mut calls = 0;
+    let out = retry_vanished_base(deadline, pairs, |_, _| {
+        calls += 1;
+        Err(fetch_err(if calls == 1 {
+            FailureClass::Vanished
+        } else {
+            FailureClass::AuthRequired
+        }))
+    });
+    assert_eq!(calls, 2, "specs after the auth failure were still fetched");
+    match out {
+        BaseFetch::Failed { code, .. } => assert_eq!(code, "auth-required"),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+/// K7 — N vanished specs through the REAL `fetch_base_branches` retry
+/// (`retry_vanished_base`) stay within ONE pass budget: each fake fetch
+/// burns what it is handed (capped at 40 ms) and answers Vanished; 10 specs
+/// against a 100 ms budget run ~3 and the pass reports `timeout` instead of
+/// costing ten budgets.
+#[test]
+fn n_vanished_base_specs_stay_within_one_base_fetch_timeout() {
+    let started = Instant::now();
+    let budget = Duration::from_millis(100);
+    let pairs: Vec<(u32, String)> = (0..10).map(|i| (i, format!("b{i}"))).collect();
+    let mut calls = 0;
+    let out = retry_vanished_base(started + budget, pairs, |_, left| {
+        calls += 1;
+        std::thread::sleep(left.min(Duration::from_millis(40)));
+        Err(fetch_err(FailureClass::Vanished))
+    });
+    assert!((1..10).contains(&calls), "ran {calls} of 10");
+    assert!(
+        started.elapsed() < budget + Duration::from_millis(80),
+        "pass took {:?} for a {budget:?} budget",
+        started.elapsed()
+    );
+    match out {
+        BaseFetch::Failed { code, .. } => assert_eq!(code, "timeout"),
+        other => panic!("expected the single-deadline timeout, got {other:?}"),
+    }
+}
+
+/// K7 — a member clone's legacy `refs/kbc/pr/<n>` pin of a PR the store GC'd
+/// is NEVER imported: `import_member` enumerates only `refs/heads/` and
+/// `refs/kbc/review/` (the module doc: the PR pin is a re-fetchable cache),
+/// so unlike a `refs/kbc/review/*` pin it cannot come back on a sync. Pins
+/// that behaviour (the brief's "re-imported on every sync" does not hold at
+/// this HEAD; the test keeps it that way).
+#[test]
+fn a_legacy_pr_pin_in_the_clone_is_never_imported_by_a_sync() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(
+        &e.store,
+        "widgets-01",
+        Some("https://github.com/acme/widgets.git"),
+    ));
+    git(&e.fx.one, &["update-ref", &pr_ref(42), &e.fx.feat_tip]);
+    e.rs.seed(&e.store, id, false).unwrap();
+    let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
+    assert!(
+        !store_refs(&dir).contains(&pr_ref(42)),
+        "seed imported a legacy PR pin: {:?}",
+        store_refs(&dir)
+    );
+    let h = e.rs.handle_for_repo(&e.store, "widgets-01").unwrap();
+    e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(
+        !store_refs(&dir).contains(&pr_ref(42)),
+        "sync imported a legacy PR pin: {:?}",
+        store_refs(&dir)
+    );
+}
+
 /// M4 — one by-sha attempt is capped by what is left of the recovery pass.
 #[test]
 fn a_by_sha_attempt_never_outlives_the_pass() {
