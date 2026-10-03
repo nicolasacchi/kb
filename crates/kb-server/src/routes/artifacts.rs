@@ -164,7 +164,6 @@ pub struct CreateBody {
     pub client_ref: Option<String>,
 }
 
-/// The accepted shape of [`CreateBody::client_ref`].
 /// True when `name` has the exact shape of a KEYED memory file for the
 /// `-<client_ref>.html` suffix: a non-empty `memory_slug` stem (lowercase
 /// alphanumerics joined by single dashes, at most 60 chars) followed by the
@@ -194,6 +193,7 @@ fn memory_content_region(html: &str) -> Option<&str> {
     (start < end).then(|| &html[start..end])
 }
 
+/// The accepted shape of [`CreateBody::client_ref`].
 pub(crate) fn valid_client_ref(s: &str) -> bool {
     (8..=64).contains(&s.len())
         && s.bytes()

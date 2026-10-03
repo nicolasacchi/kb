@@ -228,13 +228,17 @@ fi
 
 # v0.44 F10 — the chores line. `kb chores --line` prints ONE counts-only
 # line when agent-layer upkeep is due (distill debt, slate tidy/rotate,
-# triage, resurface, stale markers, weekly note, CLI skew), at most once per
+# triage, resurface, stale markers, CLI-vs-daemon build skew), at most once per
 # UTC day (the CLI keeps the stamp), and exits 0 printing nothing when
 # nothing is due or the daemon is down. An old CLI without the verb fails;
-# that is swallowed. The hook adds no logic of its own.
+# that is swallowed. The one thing the hook tells it: KB_SKEW_SHOWN=1 when it
+# just printed its own (different) CLI-older-than-hooks notice, so the line
+# drops its cli-skew chore instead of repeating a skew warning.
 chores_block=""
 if command -v kb >/dev/null 2>&1; then
-  chores_block="$(run_to 3 kb chores --line "${extra[@]}" 2>/dev/null)" || chores_block=""
+  skew_env=0
+  [ -n "${skew_block:-}" ] && skew_env=1
+  chores_block="$(KB_SKEW_SHOWN=$skew_env run_to 3 kb chores --line "${extra[@]}" 2>/dev/null)" || chores_block=""
   # Counts only, one line: never let a misbehaving CLI inject more.
   chores_block="$(printf '%s\n' "$chores_block" | head -n 1)"
 fi

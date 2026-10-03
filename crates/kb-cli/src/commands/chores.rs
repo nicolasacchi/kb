@@ -198,13 +198,17 @@ pub fn weekly_note_age_days(notes: &Value, now_unix: i64) -> Option<u64> {
     Some((now_unix - newest).max(0) as u64 / 86_400)
 }
 
-/// Chores the one-line SessionStart form names. `cli-skew` is left out: the
-/// same hook already prints its own once-a-day skew notice (`kb-wake.sh`,
-/// silenced by `KB_SKEW_NOTICE=0`), and naming the condition in both blocks
-/// told the session the same thing twice. `kb chores` (no `--line`) and
-/// `kb doctor --hooks` still report it.
-pub fn line_due(due: &[Chore]) -> Vec<Chore> {
-    due.iter().filter(|c| c.id != "cli-skew").cloned().collect()
+/// Chores the one-line SessionStart form names. `cli-skew` (this CLI's build
+/// vs the daemon's) and the hook's own daily notice (CLI older than the hook
+/// contract) are DIFFERENT conditions, so the chore is dropped only when the
+/// hook says it just printed its notice (`skew_shown`, from `KB_SKEW_SHOWN=1`
+/// on the call); otherwise the line is the only SessionStart report of
+/// CLI-vs-daemon build skew and keeps it.
+pub fn line_due(due: &[Chore], skew_shown: bool) -> Vec<Chore> {
+    due.iter()
+        .filter(|c| !(skew_shown && c.id == "cli-skew"))
+        .cloned()
+        .collect()
 }
 
 /// The `--line` form: counts only, one line, nothing when nothing is due.
@@ -390,7 +394,10 @@ pub async fn run(
     };
     let due = decide(&inputs);
     if line {
-        let Some(text) = count_line(&line_due(&due)) else {
+        let Some(text) = count_line(&line_due(
+            &due,
+            std::env::var("KB_SKEW_SHOWN").as_deref() == Ok("1"),
+        )) else {
             return Ok(());
         };
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -544,22 +551,26 @@ mod tests {
     }
 
     #[test]
-    fn the_line_never_repeats_the_skew_the_hook_already_reports() {
+    fn the_line_keeps_the_build_skew_unless_the_hook_just_printed_its_notice() {
         let due = decide(&ChoreInputs {
             undistilled: Some(2),
             cli_skew: Some(skew_between("abc1234", "def5678")),
             ..ChoreInputs::default()
         });
-        assert_eq!(due.len(), 2, "the full agenda still lists the skew");
-        let line = count_line(&line_due(&due)).unwrap();
+        assert_eq!(due.len(), 2);
+        // Hook printed nothing about skew: this line is the only report.
+        let line = count_line(&line_due(&due, false)).unwrap();
+        assert!(line.contains("cli-skew"), "{line}");
+        // Hook already printed its own notice: do not say it twice.
+        let line = count_line(&line_due(&due, true)).unwrap();
         assert!(!line.contains("cli-skew"), "{line}");
         assert!(line.contains("1 due (distill)"), "{line}");
-        // Skew alone leaves the line empty (and the daily stamp unwritten).
         let only = decide(&ChoreInputs {
             cli_skew: Some(skew_between("abc1234", "def5678")),
             ..ChoreInputs::default()
         });
-        assert_eq!(count_line(&line_due(&only)), None);
+        assert!(count_line(&line_due(&only, false)).is_some());
+        assert_eq!(count_line(&line_due(&only, true)), None);
     }
 
     #[test]
