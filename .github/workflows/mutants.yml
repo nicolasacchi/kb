@@ -32,7 +32,7 @@ jobs:
   mutants:
     permissions:
       contents: read
-    name: cargo-mutants --in-diff (label: mutants)
+    name: "cargo-mutants --in-diff (label: mutants)"
     if: contains(github.event.pull_request.labels.*.name, 'mutants')
     runs-on: ubuntu-latest
     timeout-minutes: 180
