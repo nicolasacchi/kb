@@ -38,6 +38,29 @@ pub fn client_with_timeout(secs: u64) -> Result<reqwest::Client> {
 /// `kb` against an auth-on remote daemon. Self-host docs claimed they
 /// worked.
 pub fn client_with_timeout_and_bearer(secs: u64, bearer: Option<&str>) -> Result<reqwest::Client> {
+    // MI test-hardening (2026-08) — every call site hardcodes a timeout sized
+    // for a healthy, unloaded daemon; under host I/O contention an
+    // integration test can trip it while the daemon is merely slow. This
+    // narrowly-scoped override is honoured ONLY when a test sets
+    // `KB_TEST_HTTP_TIMEOUT_SECS` on the spawned `kb` subprocess's own env
+    // (see `kb-cli/tests/common/mod.rs::http_timeout_secs`) — unset in every
+    // real invocation, so production's snappy-failure defaults are untouched.
+    let secs = std::env::var("KB_TEST_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(secs);
+    client_with_exact_timeout(Duration::from_secs(secs), bearer)
+}
+
+/// The production client builder (identity header, bearer, timeout) with NO
+/// env override. [`client_with_timeout_and_bearer`] is this plus the test-only
+/// `KB_TEST_HTTP_TIMEOUT_SECS` hook; tests that need a sub-second timeout
+/// through the real header/bearer path call this directly rather than
+/// mutating process-global env.
+pub(crate) fn client_with_exact_timeout(
+    timeout: Duration,
+    bearer: Option<&str>,
+) -> Result<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     // M6: every kb-cli request advertises itself as a first-party
     // client so the daemon's Origin-allowlist middleware lets the
@@ -52,28 +75,8 @@ pub fn client_with_timeout_and_bearer(secs: u64, bearer: Option<&str>) -> Result
             .context("bearer token contained an invalid header byte")?;
         headers.insert(reqwest::header::AUTHORIZATION, value);
     }
-    // MI test-hardening (2026-08) — every call site above hardcodes its own
-    // timeout (5-600s), sized for a healthy daemon on an unloaded machine.
-    // Under host I/O contention a daemon can be merely slow (e.g. its
-    // single-writer storage actor queue backed up behind other tests'
-    // indexing) rather than actually stuck, and a mutating integration-test
-    // call like `kb notes new` can trip its call site's timeout before the
-    // daemon ever gets to answer — `notes_cli_links_and_backlinks` did
-    // exactly this (`error sending request … operation timed out`, not the
-    // poll-loop timeout `KB_TEST_INDEX_TIMEOUT_SECS` already covers). There's
-    // no knob for this that a test can already reach (each `secs` is a
-    // literal at its call site), so this is a narrowly-scoped test-only
-    // override: honoured ONLY when a test explicitly sets
-    // `KB_TEST_HTTP_TIMEOUT_SECS` on the spawned `kb` subprocess's own env
-    // (see `kb-cli/tests/common/mod.rs::http_timeout_secs`) — unset in every
-    // real invocation, so production's snappy-failure defaults are
-    // untouched.
-    let secs = std::env::var("KB_TEST_HTTP_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(secs);
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(secs))
+        .timeout(timeout)
         .default_headers(headers)
         .build()
         .context("reqwest client")

@@ -533,6 +533,17 @@ async fn fetch_kbs_with_timeout(
     secs: u64,
 ) -> Result<serde_json::Value> {
     let client = http::client_with_timeout_and_bearer(secs, bearer)?;
+    fetch_kbs_with_client(&client, daemon, secs).await
+}
+
+/// The request half of [`fetch_kbs_with_timeout`], split out so a test can
+/// drive the production error mapping with a client built by the production
+/// builder at a sub-second timeout.
+async fn fetch_kbs_with_client(
+    client: &reqwest::Client,
+    daemon: &str,
+    secs: u64,
+) -> Result<serde_json::Value> {
     let resp = client
         .get(format!("{daemon}{KBS_CONFIG_PATH}"))
         .send()
@@ -3138,19 +3149,17 @@ mod tests {
     #[tokio::test]
     async fn fetch_kbs_separates_slow_from_unreachable() {
         let (url, _rx) = stub_once(None);
-        // A bare client with its own timeout: `client_with_timeout_and_bearer`
-        // honours KB_TEST_HTTP_TIMEOUT_SECS (CI sets 120), which would turn
-        // this into a two-minute wait.
-        let e = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(300))
-            .build()
-            .unwrap()
-            .get(format!("{url}{KBS_CONFIG_PATH}"))
-            .send()
+        // The PRODUCTION client builder (identity header, bearer) at a
+        // 300 ms timeout, without the KB_TEST_HTTP_TIMEOUT_SECS override CI
+        // sets to 120 (which would turn this into a two-minute wait), run
+        // through fetch_kbs's own request + error-mapping half.
+        let client =
+            http::client_with_exact_timeout(std::time::Duration::from_millis(300), Some("tok"))
+                .unwrap();
+        let msg = fetch_kbs_with_client(&client, &url, 1)
             .await
-            .unwrap_err();
-        assert!(e.is_timeout());
-        let msg = kbs_request_error(&e, &url, 1).to_string();
+            .unwrap_err()
+            .to_string();
         assert!(msg.contains("daemon slow"), "{msg}");
         assert!(!msg.contains("not reachable"), "{msg}");
 
