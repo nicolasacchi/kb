@@ -2857,7 +2857,15 @@ mod tests {
             looks_token_shaped("Authorization authelia_at_abcdefghij0123456789ABCDEF").is_some()
         );
         assert!(looks_token_shaped("the authelia_at_ prefix").is_none());
-        // The dispatcher scans `sk-` anywhere, so the lint does too.
-        assert!(looks_token_shaped("disk-bound-and-everything-else-too").is_some());
+        // The dispatcher scans `sk-[A-Za-z0-9]{20,}` anywhere, so the lint
+        // flags an alphanumeric run after ANY `sk-` ...
+        assert!(looks_token_shaped("desk-abcdefghij0123456789").is_some());
+        // ... but a hyphenated slug is prose: the body class has no `-`.
+        for slug in [
+            "disk-bound-and-everything-else-too",
+            "task-based-error-handling-rules",
+        ] {
+            assert!(looks_token_shaped(slug).is_none(), "{slug}");
+        }
     }
 }

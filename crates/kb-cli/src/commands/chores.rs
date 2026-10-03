@@ -198,6 +198,19 @@ pub fn weekly_note_age_days(notes: &Value, now_unix: i64) -> Option<u64> {
     Some((now_unix - newest).max(0) as u64 / 86_400)
 }
 
+/// Chores the one-line SessionStart form names. `cli-skew` (this CLI's build
+/// vs the daemon's) and the hook's own daily notice (CLI older than the hook
+/// contract) are DIFFERENT conditions, so the chore is dropped only when the
+/// hook says it just printed its notice (`skew_shown`, from `KB_SKEW_SHOWN=1`
+/// on the call); otherwise the line is the only SessionStart report of
+/// CLI-vs-daemon build skew and keeps it.
+pub fn line_due(due: &[Chore], skew_shown: bool) -> Vec<Chore> {
+    due.iter()
+        .filter(|c| !(skew_shown && c.id == "cli-skew"))
+        .cloned()
+        .collect()
+}
+
 /// The `--line` form: counts only, one line, nothing when nothing is due.
 pub fn count_line(due: &[Chore]) -> Option<String> {
     if due.is_empty() {
@@ -249,7 +262,12 @@ async fn get_json(client: &reqwest::Client, url: &str) -> Option<Value> {
         .ok()
 }
 
-async fn gather(daemon: Option<&str>, bearer: Option<&str>, cwd: &Path) -> Result<ChoreInputs> {
+async fn gather(
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+    cwd: &Path,
+    line: bool,
+) -> Result<ChoreInputs> {
     let base = http::detect_daemon(daemon, bearer).await.ok_or_else(|| {
         anyhow!(
             "daemon not reachable{} — start it with `kb daemon`",
@@ -299,9 +317,17 @@ async fn gather(daemon: Option<&str>, bearer: Option<&str>, cwd: &Path) -> Resul
     };
 
     let now_unix = chrono::Utc::now().timestamp();
-    let weekly_note_age_days = get_json(&client, &format!("{base}/api/notes"))
-        .await
-        .map(|v| weekly_note_age_days(&v, now_unix));
+    // `GET /api/notes` lists the whole fleet's notes: far too heavy for the
+    // SessionStart hook's 3 s cap. The one-line form skips this lane (the
+    // weekly-note chore is then simply not evaluated there); the full
+    // `kb chores` still reads it.
+    let weekly_note_age_days = if line {
+        None
+    } else {
+        get_json(&client, &format!("{base}/api/notes"))
+            .await
+            .map(|v| weekly_note_age_days(&v, now_unix))
+    };
 
     let cli_skew = get_json(&client, &format!("{base}/api/identity"))
         .await
@@ -359,7 +385,7 @@ pub async fn run(
     bearer: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let inputs = match gather(daemon, bearer, &cwd).await {
+    let inputs = match gather(daemon, bearer, &cwd, line).await {
         Ok(i) => i,
         // `--line` runs from a session-start hook: an unreachable daemon
         // must stay silent, not print an error into the session.
@@ -368,7 +394,10 @@ pub async fn run(
     };
     let due = decide(&inputs);
     if line {
-        let Some(text) = count_line(&due) else {
+        let Some(text) = count_line(&line_due(
+            &due,
+            std::env::var("KB_SKEW_SHOWN").as_deref() == Ok("1"),
+        )) else {
             return Ok(());
         };
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -519,6 +548,29 @@ mod tests {
         });
         assert_eq!(d[0].id, "cli-skew");
         assert!(d[0].reason.contains("abc1234") && d[0].reason.contains("def5678"));
+    }
+
+    #[test]
+    fn the_line_keeps_the_build_skew_unless_the_hook_just_printed_its_notice() {
+        let due = decide(&ChoreInputs {
+            undistilled: Some(2),
+            cli_skew: Some(skew_between("abc1234", "def5678")),
+            ..ChoreInputs::default()
+        });
+        assert_eq!(due.len(), 2);
+        // Hook printed nothing about skew: this line is the only report.
+        let line = count_line(&line_due(&due, false)).unwrap();
+        assert!(line.contains("cli-skew"), "{line}");
+        // Hook already printed its own notice: do not say it twice.
+        let line = count_line(&line_due(&due, true)).unwrap();
+        assert!(!line.contains("cli-skew"), "{line}");
+        assert!(line.contains("1 due (distill)"), "{line}");
+        let only = decide(&ChoreInputs {
+            cli_skew: Some(skew_between("abc1234", "def5678")),
+            ..ChoreInputs::default()
+        });
+        assert!(count_line(&line_due(&only, false)).is_some());
+        assert_eq!(count_line(&line_due(&only, true)), None);
     }
 
     #[test]

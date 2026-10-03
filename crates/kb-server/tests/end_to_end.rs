@@ -11448,6 +11448,78 @@ async fn memory_ingest_client_ref_reuse_with_different_content_is_409() {
     assert_eq!(n, 1, "the conflicting writes must not create files");
 }
 
+/// v044-X9 - the "key owned by another file" probe matches the exact keyed
+/// filename shape (a memory_slug stem + `-<ref>.html`), not any file that
+/// happens to end in `-<ref>.html`.
+#[tokio::test]
+async fn memory_ingest_client_ref_owner_probe_ignores_unrelated_file_names() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    // Not a keyed-memory name (uppercase + underscore stem).
+    std::fs::write(
+        tmp.path()
+            .join("globalmem")
+            .join("Some_Note-aaaabbbbccccdddd.html"),
+        "<html><body>unrelated</body></html>",
+    )
+    .unwrap();
+    let r = reqwest::Client::new()
+        .post(url(addr, "/api/kb/globalmem/artifacts"))
+        .json(&serde_json::json!({
+            "title": "Owner Probe Heron",
+            "body": "a fresh memory",
+            "category": "memory-project",
+            "client_ref": "aaaabbbbccccdddd",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201, "an unrelated file must not own the key");
+}
+
+/// v044-X9 - a replay after the stored memory was pinned / re-tagged between
+/// the write and the replay is still idempotent (the INGESTED content is
+/// compared, not the whole file); new text under the key is still a 409.
+#[tokio::test]
+async fn memory_ingest_client_ref_replay_survives_a_meta_edit() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let post = |text: &str| {
+        client
+            .post(url(addr, "/api/kb/globalmem/artifacts"))
+            .json(&serde_json::json!({
+                "title": "Meta Edit Heron",
+                "body": text,
+                "category": "memory-project",
+                "tags": ["one"],
+                "client_ref": "1111222233334444",
+            }))
+            .send()
+    };
+    let first: serde_json::Value = post("same text").await.unwrap().json().await.unwrap();
+    let path = tmp
+        .path()
+        .join("globalmem")
+        .join(first["path"].as_str().unwrap());
+    let stored = std::fs::read_to_string(&path).unwrap();
+    let edited = stored.replace(
+        "<meta name=\"kb-tags\" content=\"one\">",
+        "<meta name=\"kb-tags\" content=\"one, two\">\n<meta name=\"kb-pinned\" content=\"true\">",
+    );
+    assert_ne!(edited, stored, "the fixture must actually change the metas");
+    std::fs::write(&path, edited).unwrap();
+
+    let again = post("same text").await.unwrap();
+    assert_eq!(
+        again.status(),
+        200,
+        "a replay after a pin/tag is idempotent"
+    );
+    let again: serde_json::Value = again.json().await.unwrap();
+    assert_eq!(again["replayed"], true);
+    let changed = post("different text").await.unwrap();
+    assert_eq!(changed.status(), 409);
+}
+
 /// Every `.html` file name under `root`, for the replay test's on-disk count.
 fn walkdir_html(root: &std::path::Path) -> Vec<String> {
     let mut out = Vec::new();
@@ -13750,6 +13822,7 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
         v.sort();
         v
     };
+    let probes_before = kb_server::routes::sessions::memory_count_probe_log();
     let queue = get("/api/sessions?undistilled=1&limit=50".into()).await;
     assert_eq!(
         ids_of(&queue),
@@ -13790,6 +13863,29 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
     assert!(ids_of(&future).is_empty(), "{future}");
     let triv = get("/api/sessions?undistilled=1&substance=trivial".into()).await;
     assert!(ids_of(&triv).is_empty(), "{triv}");
+
+    // v044-X9 - route-level pin of the memory_count skip. Across the
+    // undistilled walks above, the corpora were asked to count memories ONLY
+    // for rows that can survive (commit_count > 0); the commit-less
+    // `sid-und-c` and the zero-commit rows were never probed. Ids are unique
+    // to this test, so parallel tests cannot interfere.
+    let probes_after = kb_server::routes::sessions::memory_count_probe_log();
+    let new_probes: Vec<&String> = probes_after
+        .iter()
+        .skip(probes_before.len().min(probes_after.len()))
+        .collect();
+    let count_of = |sid: &str| new_probes.iter().filter(|p| p.as_str() == sid).count();
+    assert!(
+        count_of("sid-und-a") > 0 && count_of("sid-und-e") > 0,
+        "rows that can survive are probed: {new_probes:?}"
+    );
+    assert_eq!(
+        count_of("sid-und-c"),
+        0,
+        "a commit-less row can never survive the undistilled walk, so its memory \
+         count must not be fetched: {new_probes:?}"
+    );
+
     // Without the flag nothing is filtered.
     let plain = get("/api/sessions?limit=50".into()).await;
     assert_eq!(ids_of(&plain).len(), 5, "{plain}");

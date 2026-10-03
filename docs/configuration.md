@@ -688,6 +688,12 @@ own indicator to a constant status.
 | `capture_freshness_hours` | f64 | **maximum** | Hours between now and the newest `sessions.started_at` in this corpus. The staleness of the capture pipeline itself: a sessions corpus whose newest capture is four days old usually means the Stop hook stopped firing — a failure mode that is otherwise completely silent (the daemon is healthy, search works, the corpus just stops growing). Clock skew clamps to `0.0` rather than reporting a negative age. `unknown` when the corpus has no `sessions` rows (a non-sessions corpus is not stale, it simply has no capture pipeline). |
 | `recall_coverage_pct` | f64 | **minimum** | v0.44. Percentage of served memory injections that **landed in a capture**: `landed / (landed + lost)` over the newest capture per session in the trailing 7 days, sessions the live registry still tracks excluded (capture lag is not loss). `lost` = a live-serve the hook answered that no landed capture row covers. A turn with no relevant memory serves nothing and is in neither half, so user turns are not the denominator. `unknown` when nothing was served or landed in the window (an empty denominator is not 0%). |
 
+The closed set is **five** indicators (`kb_core::slo::SloKey` is the source of
+truth). The comment in `crates/kb-core/migrations/V0039__slo.sql` still lists
+the original four: that migration is checksummed and applied, so the comment is
+left as written and this table is the current list. `slo_snapshots.indicator` is
+free TEXT, so `recall_coverage_pct` rows needed no migration.
+
 ```toml
 [kb.sessions.slo]
 capture_freshness_hours  = 48      # warn if nothing captured in 2 days

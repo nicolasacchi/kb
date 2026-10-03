@@ -3130,10 +3130,13 @@ fn n_vanished_capture_specs_stay_within_one_base_fetch_timeout() {
     ));
     let mut report = capture::FetchReport::default();
     let mut calls = 0;
+    let mut consumed = std::time::Duration::ZERO;
     let pr_fetched =
         capture::retry_vanished_specs(&mut report, &specs, started + budget, |_, left| {
             calls += 1;
-            std::thread::sleep(left.min(std::time::Duration::from_millis(40)));
+            let burn = left.min(std::time::Duration::from_millis(40));
+            consumed += burn;
+            std::thread::sleep(burn);
             Err(StoreGitError {
                 op: "fetch",
                 class: FailureClass::Vanished,
@@ -3141,11 +3144,12 @@ fn n_vanished_capture_specs_stay_within_one_base_fetch_timeout() {
                 detail: "gone".into(),
             })
         });
-    assert!((1..10).contains(&calls), "ran {calls} of 10");
+    // Budget accounting, not wall time: the calls' consumed budgets cannot
+    // sum past the pass budget however slow the runner is.
+    assert!(calls < 10, "ran {calls} of 10");
     assert!(
-        started.elapsed() < budget + std::time::Duration::from_millis(80),
-        "pass took {:?} for a {budget:?} budget",
-        started.elapsed()
+        consumed <= budget,
+        "the fetches consumed {consumed:?} of a {budget:?} pass budget"
     );
     assert!(!pr_fetched);
     assert_eq!(report.state, "offline", "{report:?}");

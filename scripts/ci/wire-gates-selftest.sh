@@ -42,6 +42,14 @@ mk; echo 'export interface Foo { a: string }' >> "$tmp/r/web-code/src/api/types.
 printf '// Foo asserted here\n/* and Foo\n   again Foo */\n' > "$tmp/r/web-code/src/api/drift.ts"
 expect fail check-ts-shadows.sh "a name that appears only in drift.ts comments is not an assertion"
 
+mk; echo 'export interface Foo { a: string }' >> "$tmp/r/web-code/src/api/types.ts"
+printf 'const u = "//";  export type _Foo = Assert<Satisfies<FooWire, Foo>>;\n' > "$tmp/r/web-code/src/api/drift.ts"
+expect ok check-ts-shadows.sh "a // inside a string literal does not hide the code after it"
+
+mk; echo 'export interface Foo { a: string }' >> "$tmp/r/web-code/src/api/types.ts"
+printf 'const u = "//"; // Foo is only named in this comment\n' > "$tmp/r/web-code/src/api/drift.ts"
+expect fail check-ts-shadows.sh "a real comment after a // string still does not count"
+
 mk; echo 'web-code:Gone:web-code/src/api/types.ts' >> "$tmp/r/scripts/ci/ts-shadow-allowlist.txt"
 expect fail check-ts-shadows.sh "stale allowlist entry"
 

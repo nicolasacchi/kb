@@ -148,7 +148,10 @@ fn token_rules() -> &'static [TokenRule] {
 /// floor at 20 — the dispatcher's own scan floor — instead of the scrub's
 /// stricter 36/60, and `sk-` has NO word-boundary requirement (the dispatcher
 /// scans `sk-[A-Za-z0-9]{20,}` anywhere, so `desk-` followed by a 20-char
-/// body is flagged by the gate and therefore here). Short prose such as
+/// ALPHANUMERIC run is flagged by the gate and therefore here). The `sk-`
+/// body class is alphanumeric only (no `_`/`-`), exactly the dispatcher's, so
+/// a hyphenated slug such as `task-based-error-handling-rules` (whose `sk-`
+/// is followed by short words) is NOT flagged. Short prose such as
 /// `desk-shell`, or a bare prefix (a mention of `ghp_`), never matches: every
 /// rule requires a credential-length body.
 pub fn first_secret_token_kind(s: &str) -> Option<&'static str> {
@@ -162,7 +165,7 @@ pub fn first_secret_token_kind(s: &str) -> Option<&'static str> {
         [
             mk("github-token", r"gh[pousr]_[A-Za-z0-9]{20,}"),
             mk("github-pat", r"github_pat_[A-Za-z0-9_]{20,}"),
-            mk("api-key", r"sk-[A-Za-z0-9_\-]{20,}"),
+            mk("api-key", r"sk-[A-Za-z0-9]{20,}"),
         ]
     });
     if let Some(r) = lint.iter().find(|r| r.re.is_match(s)) {
@@ -328,12 +331,19 @@ mod tests {
             first_secret_token_kind(&format!("{}{}", "AKIA", "ABCDEFGHIJKLMNOP")),
             Some("aws-access-key-id")
         );
-        // The dispatcher scans `sk-` anywhere: a >=20-char body after `desk-`
-        // is flagged by the gate, so the lint must flag it too.
+        // The dispatcher scans `sk-` anywhere: a >=20-char ALPHANUMERIC run
+        // after `desk-` is flagged by the gate, so the lint must flag it too.
         assert_eq!(
-            first_secret_token_kind("disk-bound-and-everything-else-too"),
+            first_secret_token_kind("desk-abcdefghij0123456789"),
             Some("api-key")
         );
+        // Hyphenated slugs are prose, not credentials (the body class has no `-`).
+        for slug in [
+            "disk-bound-and-everything-else-too",
+            "task-based-error-handling-rules",
+        ] {
+            assert_eq!(first_secret_token_kind(slug), None, "{slug}");
+        }
         assert_eq!(
             first_secret_token_kind("x-sk-abcdefghij0123456789"),
             Some("api-key")

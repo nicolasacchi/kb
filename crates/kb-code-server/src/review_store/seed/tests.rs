@@ -1727,33 +1727,39 @@ fn a_gcd_patchset_is_not_resurrected_by_the_next_sync() {
 /// fake fetch consumes everything it is handed (capped at 40 ms), like a
 /// SIGKILLed-at-its-deadline git; with a 100 ms pass budget and 10 specs the
 /// old per-spec fresh budget would run all 10 (~400 ms); the shared one runs
-/// ~3 and leaves the rest unrun.
+/// ~3 and leaves the rest unrun. Asserted on BUDGET ACCOUNTING (what each call
+/// was handed, and what the calls together consumed), not on wall time: a
+/// loaded runner can stretch the clock, but it can never make the handed
+/// budgets sum past the pass budget.
 #[test]
 fn n_vanished_specs_cannot_exceed_the_pass_budget() {
     let started = std::time::Instant::now();
     let budget = Duration::from_millis(100);
     let deadline = started + budget;
     let mut handed = Vec::new();
+    let mut consumed = Duration::ZERO;
     let out = run_within_budget(deadline, 0..10, |_, left| {
         handed.push(left);
-        std::thread::sleep(left.min(Duration::from_millis(40)));
+        let burn = left.min(Duration::from_millis(40));
+        consumed += burn;
+        std::thread::sleep(burn);
     });
-    let elapsed = started.elapsed();
     let ran = out.iter().filter(|(_, r)| r.is_some()).count();
-    assert!((1..10).contains(&ran), "ran {ran} of 10");
+    assert!(ran < 10, "the pass ran all 10 specs");
+    assert_eq!(ran, handed.len(), "one handed budget per executed spec");
     assert!(
         out.iter().skip(ran).all(|(_, r)| r.is_none()),
         "once spent, every later item is unrun"
     );
     assert!(
-        elapsed < budget + Duration::from_millis(80),
-        "pass took {elapsed:?} for a {budget:?} budget"
+        consumed <= budget,
+        "the calls consumed {consumed:?} of a {budget:?} pass budget"
     );
     assert!(
         handed.windows(2).all(|w| w[1] < w[0]),
         "each call gets strictly less than the one before: {handed:?}"
     );
-    assert!(handed[0] <= budget);
+    assert!(handed.iter().all(|h| *h <= budget), "{handed:?}");
 }
 
 fn fetch_err(class: FailureClass) -> StoreGitError {
@@ -1794,23 +1800,26 @@ fn a_non_vanished_failure_stops_the_base_retry_pass_at_once() {
 /// (`retry_vanished_base`) stay within ONE pass budget: each fake fetch
 /// burns what it is handed (capped at 40 ms) and answers Vanished; 10 specs
 /// against a 100 ms budget run ~3 and the pass reports `timeout` instead of
-/// costing ten budgets.
+/// costing ten budgets. Asserted on the call count and the budget the calls
+/// consumed (their sum cannot pass the pass budget), never on wall time.
 #[test]
 fn n_vanished_base_specs_stay_within_one_base_fetch_timeout() {
     let started = Instant::now();
     let budget = Duration::from_millis(100);
     let pairs: Vec<(u32, String)> = (0..10).map(|i| (i, format!("b{i}"))).collect();
     let mut calls = 0;
+    let mut consumed = Duration::ZERO;
     let out = retry_vanished_base(started + budget, pairs, |_, left| {
         calls += 1;
-        std::thread::sleep(left.min(Duration::from_millis(40)));
+        let burn = left.min(Duration::from_millis(40));
+        consumed += burn;
+        std::thread::sleep(burn);
         Err(fetch_err(FailureClass::Vanished))
     });
-    assert!((1..10).contains(&calls), "ran {calls} of 10");
+    assert!(calls < 10, "ran {calls} of 10");
     assert!(
-        started.elapsed() < budget + Duration::from_millis(80),
-        "pass took {:?} for a {budget:?} budget",
-        started.elapsed()
+        consumed <= budget,
+        "the fetches consumed {consumed:?} of a {budget:?} pass budget"
     );
     match out {
         BaseFetch::Failed { code, .. } => assert_eq!(code, "timeout"),
