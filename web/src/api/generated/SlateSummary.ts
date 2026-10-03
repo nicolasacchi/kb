@@ -18,4 +18,10 @@ topics: Array<string>, counts: SlateCounts,
  * here (`meta.cursors.len()`). Served, never "read": it is
  * attribution, not acknowledgement, and nothing expires it (D5).
  */
-sessions_served: number, };
+sessions_served: number, 
+/**
+ * Posts in the CURRENT generation's ledger (tombstones included).
+ * Unlike `head_seq` this DROPS to 0 on `rotate`, so a "rotate is due"
+ * reader can key on it.
+ */
+generation_posts: number, };
