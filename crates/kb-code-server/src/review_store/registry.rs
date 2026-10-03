@@ -205,7 +205,14 @@ impl axum::response::IntoResponse for StoreRefusal {
             ),
             StoreUnavailable::LockedElsewhere => (StatusCode::CONFLICT, None),
             StoreUnavailable::NotRegistered => (StatusCode::CONFLICT, None),
-            StoreUnavailable::Error { .. } => (StatusCode::INTERNAL_SERVER_ERROR, None),
+            // A5-5: "could not tell right now" (a git-version probe that
+            // could not run, a DB read that failed) is retryable, not a
+            // server bug: 503 + Retry-After. The write was REFUSED, not
+            // diverted to the user clone.
+            StoreUnavailable::Error { .. } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some(SEEDING_RETRY_AFTER_SECS),
+            ),
             StoreUnavailable::CredentialRefused { .. } => (StatusCode::FORBIDDEN, None),
             _ => (StatusCode::CONFLICT, None),
         };
@@ -2162,6 +2169,38 @@ mod tests {
         let good = StoreGit::new(td.path().join("gh2")).unwrap();
         let probed = seed::git_version_probe(&good, seed::MIN_GIT);
         assert_eq!(probed, Ok(None), "this box runs a new git");
+    }
+
+    /// A5-5 (K3 residual) — a git-version probe that cannot RUN must refuse
+    /// the write (`Err`, never `Ok(None)` = "no store, write the user
+    /// clone"), and the refusal is retryable: 503 + Retry-After, on both the
+    /// registry's own response and the review API's mapping.
+    #[test]
+    fn a_failed_probe_refuses_the_write_retryably_instead_of_diverting_it() {
+        use axum::response::IntoResponse;
+        let td = tempfile::tempdir().unwrap();
+        let empty_bin = td.path().join("no-git-here");
+        std::fs::create_dir_all(&empty_bin).unwrap();
+        let bad = StoreGit::with_env_fn(td.path().join("gh1"), |k| {
+            (k == "PATH").then(|| empty_bin.clone().into_os_string())
+        })
+        .unwrap();
+        let settings =
+            StoreSettings::resolve(&crate::config::ReviewSection::default(), td.path(), &[]);
+        let rs = ReviewStores::from_parts(settings, Some(bad), None, Vec::new());
+        let store = crate::store::Store::open(&td.path().join("index.db")).unwrap();
+        let refusal = rs
+            .admit_mutation(&store, "any-repo")
+            .expect_err("a probe that could not run must refuse, not return Ok(None)");
+        assert!(matches!(refusal.0, StoreUnavailable::Error { .. }));
+        let resp = StoreRefusal(refusal.0.clone()).into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert!(resp.headers().contains_key(axum::http::header::RETRY_AFTER));
+        let api = crate::reviews::store_refusal_error(StoreRefusal(refusal.0));
+        assert_eq!(
+            api.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     /// D12 — one member's entry drives a store-wide credential, and it is
