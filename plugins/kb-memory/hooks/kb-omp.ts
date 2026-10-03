@@ -457,6 +457,15 @@ export default function kbMemoryOmp(pi: {
     try {
       info.sid = String(ctx.sessionManager.getSessionId() || "");
     } catch {}
+    // v0.44 X4 — publish the identity every `kb` CLI write resolves first, so
+    // a shell `kb remember` / `kb slate ...` the agent runs (omp spawns its
+    // bash tool from this process's environment) and every kb child this
+    // extension starts is attributed to THIS session and harness. Process-wide
+    // by nature: concurrent omp sessions in one process share the last writer.
+    if (info.sid) {
+      process.env.KB_SESSION_ID = info.sid;
+      process.env.KB_HARNESS = "omp";
+    }
     try {
       const f = ctx.sessionManager.getSessionFile();
       if (f) info.file = String(f);

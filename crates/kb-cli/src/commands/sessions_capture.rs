@@ -325,6 +325,11 @@ async fn capture(
     // a stored lane too; it was the one lane the floor skipped.
     let (subagents, digest_redacted) = super::sessions_scrub::scrub_subagents(subagents);
     secrets_redacted += digest_redacted;
+    // v0.44 X4 — the commits block is the other stored tail lane: the true
+    // subject/author/trailers come from `git show`, never through the
+    // transcript scrub above.
+    let (captured, commits_redacted) = super::sessions_scrub::scrub_commits(captured);
+    secrets_redacted += commits_redacted;
 
     let html = wrap_envelope(
         &capture_ts,
@@ -482,6 +487,69 @@ mod tests {
 {{"sessionId":"{sid}","type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"b1","content":"[main {sha}] whatever transcript subject"}}]}}}}
 "#
         )
+    }
+
+    /// v0.44 X4 — the commits block is scrubbed at WRITE time: a token typed
+    /// into a commit subject or trailer (text `git show` returns, which never
+    /// passes the transcript scrub) must not be stored in the envelope.
+    #[tokio::test]
+    async fn capture_scrubs_secrets_out_of_the_commits_block() {
+        const GH: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        run_git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("a.txt"), "one").unwrap();
+        run_git(&repo, &["add", "a.txt"]);
+        run_git(
+            &repo,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                &format!("feat: rotate {GH}\n\nKb-Session: sess-cap-2\nReviewed-by: key {GH}"),
+            ],
+        );
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let head_sha = String::from_utf8(head.stdout).unwrap().trim().to_string();
+        let short = &head_sha[..7];
+        assert!(
+            short.bytes().any(|b| b.is_ascii_alphabetic()),
+            "fixture commit abbreviates to {short:?} (all-decimal); re-pin the fixture"
+        );
+
+        let jsonl = fixture_with_commit("sess-cap-2", repo.to_str().unwrap(), short);
+        let transcript = write(&tmp.path().join("src"), "t.jsonl", &jsonl);
+        let out_dir = tmp.path().join("sessions");
+        let summary = capture(&transcript, None, None, &out_dir, false)
+            .await
+            .unwrap();
+        assert_eq!(summary.commits_resolved, 1);
+        assert!(summary.secrets_redacted >= 2, "{summary:?}");
+
+        let html = std::fs::read_to_string(&summary.path).unwrap();
+        assert!(!html.contains(GH), "token reached the stored envelope");
+        let block = kb_core::sessions::extract_commits_block(&html).unwrap();
+        assert!(block[0].resolved);
+        assert_eq!(block[0].sha_full.as_deref(), Some(head_sha.as_str()));
+        assert!(
+            block[0]
+                .subject
+                .as_deref()
+                .unwrap()
+                .starts_with("feat: rotate "),
+            "{:?}",
+            block[0].subject
+        );
+        assert!(block[0]
+            .trailers
+            .iter()
+            .any(|t| t == "Kb-Session: sess-cap-2"));
     }
 
     #[tokio::test]

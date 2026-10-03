@@ -260,6 +260,16 @@ test("exit 3 is surfaced as a REFUSAL that quotes the holder line", async () => 
   expect(text).toContain("anyway");
 });
 
+test("session_start exports KB_SESSION_ID/KB_HARNESS so shell kb writes are attributed", async () => {
+  delete process.env.KB_SESSION_ID;
+  delete process.env.KB_HARNESS;
+  const { handlers } = makePi();
+  await handlers.get("session_start")({}, ctx);
+  expect(process.env.KB_SESSION_ID).toBe(SID);
+  expect(process.env.KB_HARNESS).toBe("omp");
+  await handlers.get("session_shutdown")({}, ctx);
+});
+
 test(
   "session_start pushes ONE foreign post, and /kb-slate prints the counters",
   async () => {

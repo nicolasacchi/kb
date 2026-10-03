@@ -85,3 +85,10 @@ fn distill_nudge_hook_shell_tests() {
         run(s);
     }
 }
+
+/// v0.44 X4 — the hooks publish KB_SESSION_ID / KB_HARNESS (also through
+/// `$CLAUDE_ENV_FILE`) so shell `kb` writes are attributed to the session.
+#[test]
+fn hooks_export_session_identity_for_shell_writes() {
+    run("test-hook-identity.sh");
+}

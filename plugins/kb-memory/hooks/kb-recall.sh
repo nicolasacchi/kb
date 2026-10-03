@@ -110,8 +110,13 @@ extra=()
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
   hook_deadline_init() { :; }
   run_to() { shift; "$@"; }
+  hook_export_identity() { :; }
 }
 hook_deadline_init
+# v0.44 X4 — attribute shell `kb` writes of this session. This hook serves
+# claude, codex and kimi, so the harness is only named when it is knowable
+# (an already-set KB_HARNESS, else Claude's plugin root); never guessed.
+hook_export_identity "$sid" "${KB_HARNESS:-$([ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && echo claude)}"
 
 first_turn=0
 if [ -n "$sid" ]; then

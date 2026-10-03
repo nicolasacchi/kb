@@ -1652,6 +1652,58 @@ async fn batch_n_ops_one_sse_created_ids_order_and_cap() {
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
 }
 
+/// v0.44 X4 — a batched `add_reply` honours its `author` (it used to be
+/// dropped, saving an agent reply as the human `you`); absent stays `you`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn batch_add_reply_stores_the_named_author() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon_tmp, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let parent: serde_json::Value = client
+        .post(format!("{base}/api/annotations"))
+        .json(&serde_json::json!({
+            "repo": "r", "path": "lib.rs", "line": 3, "body": "question",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pid = parent["id"].as_str().unwrap().to_string();
+    let resp = client
+        .post(format!("{base}/api/annotations/batch"))
+        .json(&serde_json::json!({
+            "repo": "r",
+            "ops": [
+                {"op": "add_reply", "parent_id": pid, "body": "agent says", "author": "omp"},
+                {"op": "add_reply", "parent_id": pid, "body": "no author"},
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let created = body["created_ids"].as_array().unwrap().clone();
+    assert_eq!(created.len(), 2);
+    let listed: serde_json::Value = client
+        .get(format!("{base}/api/annotations"))
+        .query(&[("repo", "r"), ("path", "lib.rs")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let anns = listed["annotations"].as_array().unwrap();
+    let a = anns.iter().find(|x| x["id"] == created[0]).unwrap();
+    let b = anns.iter().find(|x| x["id"] == created[1]).unwrap();
+    assert_eq!(a["author"], "omp");
+    assert_eq!(b["author"], "you");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn batch_atomicity_and_all_noop() {
     let _guard = SERIAL.lock().await;
