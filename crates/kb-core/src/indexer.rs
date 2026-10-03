@@ -1244,6 +1244,24 @@ struct PreparedDoc {
     /// quarantine gate skipped the embed). Recorded beside the vector only
     /// after the upsert commits — see `finish_indexed_doc`.
     embedding_model: Option<String>,
+    /// What `doc_embedding_model` held for this artifact when `prepare_doc`
+    /// looked (it reads it anyway, for the reuse decision). `None` = the
+    /// lookup FAILED (unknown: always write); `Some(None)` = no row;
+    /// `Some(Some(m))` = recorded model. `finish_indexed_doc` skips the
+    /// per-doc record/clear round trip when it would change nothing.
+    stored_embedding_model: Option<Option<String>>,
+}
+
+/// Does recording `new` over `stored` change anything? `stored == None` is
+/// "lookup failed" and always writes; otherwise an unchanged value (same
+/// model, or no model on both sides) needs no actor round trip. A reindex of
+/// a whole corpus used to pay one write-lock DELETE per doc for the
+/// no-embedder case.
+fn embedding_model_write_needed(new: Option<&str>, stored: Option<&Option<String>>) -> bool {
+    let Some(stored) = stored else {
+        return true;
+    };
+    new.map(str::trim).filter(|m| !m.is_empty()) != stored.as_deref().map(str::trim)
 }
 
 /// Per-file run-completion bookkeeping shared by every exit path (the
@@ -2135,12 +2153,23 @@ async fn stored_embedding_model(
     quarantine_dir: &Path,
     artifact_id: &str,
 ) -> Option<String> {
+    stored_embedding_model_checked(storage, quarantine_dir, artifact_id)
+        .await
+        .flatten()
+}
+
+/// Like [`stored_embedding_model`] but keeps "the lookup failed" (`None`)
+/// distinct from "no row" (`Some(None)`).
+async fn stored_embedding_model_checked(
+    storage: &StorageHandle,
+    quarantine_dir: &Path,
+    artifact_id: &str,
+) -> Option<Option<String>> {
     ensure_embedding_sidecar_imported(storage, quarantine_dir).await;
     storage
         .embedding_model_get(artifact_id.to_string())
         .await
         .ok()
-        .flatten()
 }
 
 async fn record_embedding_model(
@@ -2714,8 +2743,9 @@ async fn prepare_doc(
     // TUI sums — and does not record embed latency. Doc and chunk vectors
     // are lock-step: `try_preserve_embeddings` returns both or neither.
     let resolved = embedder.map(embedder_identity);
-    let stored_model_name =
-        stored_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await;
+    let stored_model_checked =
+        stored_embedding_model_checked(storage, quarantine_dir, artifact_id.as_str()).await;
+    let stored_model_name: Option<String> = stored_model_checked.clone().flatten();
     let preserved = match (force && !re_embed && hash_matches, resolved) {
         (true, Some((model, dim))) => {
             let parsed = if chunked {
@@ -3047,6 +3077,7 @@ async fn prepare_doc(
         seed_linked_kbs,
         embed_gated,
         embedding_model,
+        stored_embedding_model: stored_model_checked,
     }))
 }
 
@@ -3092,12 +3123,15 @@ async fn finish_indexed_doc(
         seed_linked_kbs,
         embed_gated,
         embedding_model,
+        stored_embedding_model,
     } = p;
-    match &embedding_model {
-        Some(model) => {
-            record_embedding_model(storage, quarantine_dir, artifact_id.as_str(), model).await
+    if embedding_model_write_needed(embedding_model.as_deref(), stored_embedding_model.as_ref()) {
+        match &embedding_model {
+            Some(model) => {
+                record_embedding_model(storage, quarantine_dir, artifact_id.as_str(), model).await
+            }
+            None => clear_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await,
         }
-        None => clear_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await,
     }
     let path = path.as_path();
     let html = html.as_str();
@@ -6143,6 +6177,34 @@ mod tests {
             "NULL-hash error for another path must survive, got {open:?}"
         );
         assert_eq!(storage.count_rows().await.unwrap(), 2);
+    }
+
+    /// v044-X3 (I1 NB) — a reindex writes `doc_embedding_model` only when the
+    /// record would change; an unknown stored state (failed lookup) writes.
+    #[test]
+    fn embedding_model_write_is_skipped_when_nothing_changes() {
+        let none: Option<String> = None;
+        let bge = Some("bge-small-en-v1.5".to_string());
+        // no embedder, no row: the per-doc DELETE round trip is skipped
+        assert!(!embedding_model_write_needed(None, Some(&none)));
+        // same model recorded: skipped
+        assert!(!embedding_model_write_needed(
+            Some("bge-small-en-v1.5"),
+            Some(&bge)
+        ));
+        assert!(!embedding_model_write_needed(
+            Some(" bge-small-en-v1.5 "),
+            Some(&bge)
+        ));
+        // a change in either direction writes
+        assert!(embedding_model_write_needed(Some("jina"), Some(&bge)));
+        assert!(embedding_model_write_needed(None, Some(&bge)));
+        assert!(embedding_model_write_needed(
+            Some("bge-small-en-v1.5"),
+            Some(&none)
+        ));
+        // lookup failed: unknown, so write
+        assert!(embedding_model_write_needed(None, None));
     }
 
     /// v044-X3 / A3.f10 — only a `record_edges:` NULL-hash storage row is an
