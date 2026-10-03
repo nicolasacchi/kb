@@ -101,6 +101,7 @@ pub fn core_manifest() -> String {
             out.push_str(&format!("Example:\n```\n{example}\n```\n\n"));
         }
     }
+    debug_assert!(out.len() <= CORE_MAX_BYTES, "core manifest over budget");
     out
 }
 
