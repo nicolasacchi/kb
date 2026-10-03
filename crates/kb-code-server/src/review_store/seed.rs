@@ -73,6 +73,27 @@ pub fn budget_left(deadline: std::time::Instant) -> Option<Duration> {
         .filter(|d| !d.is_zero())
 }
 
+/// M4 — run `f` over `items` against ONE pass-wide `deadline`: every call
+/// gets only the time LEFT (never a fresh budget), and once the budget is
+/// spent the remaining items are returned unrun (`None`) instead of each
+/// costing another full timeout. This is the single shape both base-fetch
+/// retry loops (`fetch_base_branches`, the capture-side base fetch) go
+/// through, so "N vanished specs cannot exceed the bound" is a property of
+/// ONE function, pinned by its own test.
+pub fn run_within_budget<T, R>(
+    deadline: std::time::Instant,
+    items: impl IntoIterator<Item = T>,
+    mut f: impl FnMut(&T, Duration) -> R,
+) -> Vec<(T, Option<R>)> {
+    items
+        .into_iter()
+        .map(|item| {
+            let r = budget_left(deadline).map(|left| f(&item, left));
+            (item, r)
+        })
+        .collect()
+}
+
 /// `objects_state` for a review whose commits exist nowhere reachable.
 pub const OBJECTS_MISSING: &str = "objects-missing";
 
@@ -704,17 +725,20 @@ pub fn fetch_base_branches(
         Err(e) if e.class == FailureClass::Vanished => {
             // One by one, so a deleted base branch does not block the rest.
             let (mut ok, mut gone) = (Vec::new(), Vec::new());
-            for (spec, name) in specs.iter().zip(names) {
-                let Some(left) = budget_left(deadline) else {
-                    return BaseFetch::Failed {
-                        code: "timeout".into(),
-                        detail: "the base fetch pass ran out of its single deadline".into(),
-                    };
-                };
-                match git.fetch(git_dir, &base, std::slice::from_ref(spec), auth, left) {
-                    Ok(_) => ok.push(name),
-                    Err(e) if e.class == FailureClass::Vanished => gone.push(name),
-                    Err(e) => {
+            let pairs: Vec<_> = specs.iter().zip(names).collect();
+            for ((_, name), res) in run_within_budget(deadline, pairs, |(spec, _), left| {
+                git.fetch(git_dir, &base, std::slice::from_ref(*spec), auth, left)
+            }) {
+                match res {
+                    None => {
+                        return BaseFetch::Failed {
+                            code: "timeout".into(),
+                            detail: "the base fetch pass ran out of its single deadline".into(),
+                        }
+                    }
+                    Some(Ok(_)) => ok.push(name),
+                    Some(Err(e)) if e.class == FailureClass::Vanished => gone.push(name),
+                    Some(Err(e)) => {
                         return BaseFetch::Failed {
                             code: e.class.slug().into(),
                             detail: e.detail,
@@ -761,8 +785,22 @@ pub fn missing_objects(
         .collect())
 }
 
+/// M4 — one by-sha attempt gets the work-fetch deadline OR what is left of
+/// the recovery pass, whichever is smaller (a single attempt used to be able
+/// to run its full 120 s past an exhausted pass deadline).
+pub fn by_sha_attempt_timeout(left: Duration) -> Duration {
+    left.min(super::git::WORK_FETCH_TIMEOUT)
+}
+
 /// Try to fetch `sha` from a member BY OBJECT ID into `dst` (create-only).
-fn fetch_by_sha(git: &StoreGit, git_dir: &Path, member: &SeedMember, sha: &str, dst: &str) -> bool {
+fn fetch_by_sha(
+    git: &StoreGit,
+    git_dir: &Path,
+    member: &SeedMember,
+    sha: &str,
+    dst: &str,
+    left: Duration,
+) -> bool {
     let (Ok(src), Ok(dst)) = (RefSource::oid(sha), RefName::parse(dst)) else {
         return false;
     };
@@ -782,7 +820,7 @@ fn fetch_by_sha(git: &StoreGit, git_dir: &Path, member: &SeedMember, sha: &str, 
     git.run(
         GitCall::new("fetch", args)
             .git_dir(git_dir)
-            .timeout(super::git::WORK_FETCH_TIMEOUT),
+            .timeout(by_sha_attempt_timeout(left)),
     )
     .is_ok()
 }
@@ -819,9 +857,9 @@ pub fn verify_connectivity(
             continue;
         }
         for m in members {
-            if budget_left(deadline).is_none() {
+            let Some(left) = budget_left(deadline) else {
                 break;
-            }
+            };
             attempts += 1;
             if fetch_by_sha(
                 git,
@@ -829,6 +867,7 @@ pub fn verify_connectivity(
                 m,
                 &p.tip_sha,
                 &patchset_ref(p.review_id, p.ps_number),
+                left,
             ) {
                 recovered += 1;
                 break;

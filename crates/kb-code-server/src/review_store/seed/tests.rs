@@ -1722,3 +1722,49 @@ fn a_gcd_patchset_is_not_resurrected_by_the_next_sync() {
         "-base refs key on their patchset"
     );
 }
+
+/// M4 — a retry pass over N vanished specs cannot exceed ONE budget. Each
+/// fake fetch consumes everything it is handed (capped at 40 ms), like a
+/// SIGKILLed-at-its-deadline git; with a 100 ms pass budget and 10 specs the
+/// old per-spec fresh budget would run all 10 (~400 ms); the shared one runs
+/// ~3 and leaves the rest unrun.
+#[test]
+fn n_vanished_specs_cannot_exceed_the_pass_budget() {
+    let started = std::time::Instant::now();
+    let budget = Duration::from_millis(100);
+    let deadline = started + budget;
+    let mut handed = Vec::new();
+    let out = run_within_budget(deadline, 0..10, |_, left| {
+        handed.push(left);
+        std::thread::sleep(left.min(Duration::from_millis(40)));
+    });
+    let elapsed = started.elapsed();
+    let ran = out.iter().filter(|(_, r)| r.is_some()).count();
+    assert!(ran >= 1 && ran < 10, "ran {ran} of 10");
+    assert!(
+        out.iter().skip(ran).all(|(_, r)| r.is_none()),
+        "once spent, every later item is unrun"
+    );
+    assert!(
+        elapsed < budget + Duration::from_millis(80),
+        "pass took {elapsed:?} for a {budget:?} budget"
+    );
+    assert!(
+        handed.windows(2).all(|w| w[1] < w[0]),
+        "each call gets strictly less than the one before: {handed:?}"
+    );
+    assert!(handed[0] <= budget);
+}
+
+/// M4 — one by-sha attempt is capped by what is left of the recovery pass.
+#[test]
+fn a_by_sha_attempt_never_outlives_the_pass() {
+    assert_eq!(
+        by_sha_attempt_timeout(Duration::from_secs(3)),
+        Duration::from_secs(3)
+    );
+    assert_eq!(
+        by_sha_attempt_timeout(Duration::from_secs(3600)),
+        crate::review_store::git::WORK_FETCH_TIMEOUT
+    );
+}

@@ -849,8 +849,12 @@ impl<'a> StoreCtx<'a> {
             Err(e) if e.class == crate::review_store::FailureClass::Vanished => {
                 // One by one, so a missing ref never blocks the rest.
                 report.state = "fetched".into();
-                for (spec, label) in &specs {
-                    let Some(left) = crate::review_store::seed::budget_left(deadline) else {
+                for ((_, label), res) in crate::review_store::seed::run_within_budget(
+                    deadline,
+                    specs.iter(),
+                    |(spec, _), left| git.fetch(dir, &base, std::slice::from_ref(spec), auth, left),
+                ) {
+                    let Some(res) = res else {
                         report.state = "offline".into();
                         report.code = Some("timeout".into());
                         if label.is_none() {
@@ -858,10 +862,7 @@ impl<'a> StoreCtx<'a> {
                         }
                         continue;
                     };
-                    match (
-                        git.fetch(dir, &base, std::slice::from_ref(spec), auth, left),
-                        label,
-                    ) {
+                    match (res, label) {
                         (Ok(_), None) => pr_fetched = true,
                         (Ok(_), Some(_)) => {}
                         (Err(e), Some(b))
