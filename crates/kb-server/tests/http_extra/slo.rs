@@ -34,6 +34,15 @@ async fn boot(
     files: &[(&str, String)],
     slo: Option<SloSection>,
 ) -> (tempfile::TempDir, std::net::SocketAddr) {
+    boot_named("smoke", None, files, slo).await
+}
+
+async fn boot_named(
+    kb: &str,
+    memory_scope: Option<&str>,
+    files: &[(&str, String)],
+    slo: Option<SloSection>,
+) -> (tempfile::TempDir, std::net::SocketAddr) {
     let tmp = tempfile::tempdir().unwrap();
     let source = tmp.path().join("corpus");
     std::fs::create_dir_all(&source).unwrap();
@@ -47,7 +56,7 @@ async fn boot(
     );
     let mut kb_map: BTreeMap<KbName, KbSection> = BTreeMap::new();
     kb_map.insert(
-        KbName::new("smoke").unwrap(),
+        KbName::new(kb).unwrap(),
         KbSection {
             path: source.clone(),
             skip_patterns: Vec::new(),
@@ -59,7 +68,7 @@ async fn boot(
             outbound: None,
             atlas: None,
             templates: BTreeMap::new(),
-            memory_scope: None,
+            memory_scope: memory_scope.map(str::to_string),
             project_slugs: Vec::new(),
             default_search_category: None,
             code_url: None,
@@ -283,4 +292,95 @@ async fn an_unknown_kb_is_a_problem_json_not_an_empty_report() {
         .await
         .unwrap();
     assert_eq!(r.status(), 404);
+}
+
+/// v044-X9 - the `recall_coverage_pct` SLO excludes sessions the live registry
+/// still tracks (capture lag is not loss), through the real route: a served
+/// recall that no capture has seen is a LOST turn (0% coverage) until a beat
+/// marks the session live, at which point it leaves the denominator and the
+/// indicator is an honest `unknown`.
+#[tokio::test]
+async fn recall_coverage_slo_excludes_live_sessions_on_the_wire() {
+    let now = chrono::Utc::now();
+    let ts = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let iso = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let sid = "sid-slo-live-0001";
+    let jsonl = format!(
+        "{{\"type\":\"user\",\"sessionId\":\"{sid}\",\"timestamp\":\"{iso}\",\"promptSource\":\"typed\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n"
+    )
+    .replace('&', "&amp;")
+    .replace('<', "&lt;")
+    .replace('>', "&gt;");
+    let transcript = format!(
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <title>Session transcript {ts}</title>\
+         <meta name=\"kb-category\" content=\"memory-session\">\
+         <meta name=\"kb-session\" content=\"{sid}\"></head><body>\
+         <h1>Session transcript {ts}</h1><pre>{jsonl}</pre></body></html>"
+    );
+    let memory = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
+         <title>Quokka coverage memory</title>\
+         <meta name=\"kb-category\" content=\"memory-user\">\
+         <meta name=\"kb-salience\" content=\"0.9\"></head>\
+         <body><h1>Quokka coverage memory</h1><p>quokkaword is served</p></body></html>"
+        .to_string();
+    let transcript_name = format!("session-{ts}-{sid}.html");
+    let (_tmp, addr) = boot_named(
+        "sessions",
+        Some("global"),
+        &[
+            ("mem-quokka.html", memory),
+            (transcript_name.as_str(), transcript),
+        ],
+        None,
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // Serve one recall to the session: the ledger gets a `served-` row that
+    // no capture has seen yet.
+    common::poll_until("a measured recall_coverage_pct", || async {
+        let _ = client
+            .get(url(
+                addr,
+                &format!("/api/memory/recall?q=quokkaword&session={sid}"),
+            ))
+            .send()
+            .await;
+        let b = get_json(&client, addr, "/api/kb/sessions/slo").await;
+        (!indicator(&b, "recall_coverage_pct")["value"].is_null()).then_some(b)
+    })
+    .await;
+    let measured = get_json(&client, addr, "/api/kb/sessions/slo").await;
+    assert_eq!(
+        indicator(&measured, "recall_coverage_pct")["value"],
+        0.0,
+        "a served-but-uncaptured injection is a lost turn: {measured}"
+    );
+
+    // The hook beats for the session: it is live, so its lost turn is
+    // capture lag, not loss.
+    let beat = client
+        .post(url(addr, "/api/sessions/beat"))
+        .json(&serde_json::json!({
+            "session_id": sid,
+            "harness": "claude",
+            "event": "prompt",
+            "at": iso,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        beat.status().is_success(),
+        "beat accepted: {}",
+        beat.status()
+    );
+    let live = get_json(&client, addr, "/api/kb/sessions/slo").await;
+    let i = indicator(&live, "recall_coverage_pct");
+    assert!(
+        i["value"].is_null(),
+        "a live session leaves the denominator: {i}"
+    );
+    assert_eq!(i["status"], "unknown");
 }
