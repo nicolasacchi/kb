@@ -278,7 +278,9 @@ fn parse_audit_limit(raw: Option<&str>) -> Option<usize> {
     }
 }
 
-/// Full audit (every capture). Kept for callers that want exactness.
+/// Full audit (every capture) — tests only; production audits go through
+/// [`scan_dir_limited`] so the cap is always an explicit choice.
+#[cfg(test)]
 pub fn scan_dir(dir: &Path) -> DirAudit {
     scan_dir_limited(dir, None)
 }
