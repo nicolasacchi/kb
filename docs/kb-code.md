@@ -1699,17 +1699,20 @@ three base-fetch budgets, `retrack --all` up to six hours.
 Every verb that creates a row sends an `author`, resolved once
 (`kb-code-cli/src/author.rs`): `--author X` > `--as you` > `$KB_CODE_AUTHOR` >
 `$KB_HARNESS` > `claude`. It covers `annotate` (create form, `reply`, and the
-`add_comment` ops of `annotate batch` that name no author), `review findings
+`add_comment` and `add_reply` ops of `annotate batch` that name no author), `review findings
 add` and `import`, `review compose`, and `code-actions --suggest`. `--as you` is the human opt-out. Before
 this, none of these sent an author and the daemon saved every agent reply as the
 human `you`, so the Room's awaiting-agent chip never flipped and `annotate watch
---ignore-author claude` showed the agent its own replies.
+--ignore-author claude` showed the agent its own replies. The resolved name is
+trimmed and lowercased (the daemon compares stored authors byte for byte), and a
+name outside the vocabulary below prints a stderr warning, because the daemon
+would classify that row as a human.
 
 The default ends at `claude`: a HUMAN scripting the CLI without `--as you` is
 saved as an agent. Rows an agent already saved as `you` cannot be told apart
-from real human rows, so there is no backfill. `annotate batch`'s `add_reply`
-ops carry no author on the wire (the daemon stamps them), so that twin is
-unchanged.
+from real human rows, so there is no backfill: history stays as written (a
+recorded decision, v0.44). `annotate batch`'s `add_reply` ops carry the author on
+the wire too (the op takes an optional `author`; absent stays `you`).
 
 What counts as an agent is one list, `agent-authors.golden.json` (claude, codex,
 opencode, grok, kimi, omp, agent), read by the daemon's timeline/inbox and
