@@ -1640,3 +1640,22 @@ fn the_store_card_exposes_the_git_fallback_counters() {
     assert_eq!(f["odb_miss"], serde_json::json!(0), "{v}");
     assert!(f["unresolved"].is_u64(), "{v}");
 }
+
+/// M4 — a pass-wide deadline hands each retry only what is LEFT: a deadline
+/// in the future yields at most its span (never a fresh full budget), and
+/// one that has passed yields nothing, so a Vanished retry loop stops
+/// instead of spending `refs x budget`.
+#[test]
+fn a_pass_deadline_hands_out_only_the_time_left() {
+    let now = std::time::Instant::now();
+    let left = budget_left(now + Duration::from_secs(30)).expect("time left");
+    assert!(left <= Duration::from_secs(30), "{left:?}");
+    assert!(left > Duration::from_secs(20), "{left:?}");
+    let past = now.checked_sub(Duration::from_secs(1)).expect("past");
+    assert_eq!(budget_left(past), None);
+    assert_eq!(
+        budget_left(now),
+        None,
+        "an exhausted budget is not zero-length time"
+    );
+}

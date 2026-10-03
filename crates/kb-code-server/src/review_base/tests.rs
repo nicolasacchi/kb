@@ -2491,6 +2491,51 @@ fn a_capture_whose_policy_went_stale_mints_nothing() {
     assert!(ok.minted);
 }
 
+/// A6-3 (real wiring) — through `recapture`: a retrack persists a new
+/// policy AFTER recapture read its own (while it waited on the network
+/// fetch). recapture's own staleness closure must see it under the ops lock
+/// and refuse 409 `base-changed`, minting nothing and leaving the retracked
+/// policy alone.
+#[test]
+fn recapture_refuses_when_a_retrack_lands_during_its_fetch() {
+    let fx = fixture();
+    fx.push_pr(&fx.m1, &["a.rs"], "v1");
+    let prepared = fx
+        .with(|c| {
+            c.prepare_new(&NewReview {
+                pr: Some(PR),
+                forge_base_ref: Some("main".into()),
+                ..NewReview::default()
+            })
+        })
+        .unwrap();
+    let review = fx.pr_review(&prepared.base_ref, Some(&prepared.policy));
+    let id = review.id;
+    let rc = Recapture {
+        network: true,
+        after_fetch: Some(super::capture::TestHook(std::sync::Arc::new(
+            move |store| {
+                store
+                    .set_review_base(id, "track", Some("develop"), None, "user", None)
+                    .unwrap();
+            },
+        ))),
+        ..Recapture::default()
+    };
+    let err = fx
+        .with(|c| c.recapture(&review, &rc))
+        .expect_err("a recapture computed from a replaced policy must not mint");
+    assert_eq!(err.urn, URN_BASE_CHANGED, "{err}");
+    assert_eq!(err.status, 409);
+    assert!(fx.store.list_patchsets(id).unwrap().is_empty());
+    let row = fx.store.get_review_base(id).unwrap().unwrap();
+    assert_eq!(
+        row.base_branch.as_deref(),
+        Some("develop"),
+        "the retracked policy survives"
+    );
+}
+
 /// A6-7 — a tracked base branch the forge deleted: the dry run used to
 /// classify against the stale `refs/remotes/base/<branch>` the failed fetch
 /// left behind (no warning) while the apply answered 409 `base-vanished`.

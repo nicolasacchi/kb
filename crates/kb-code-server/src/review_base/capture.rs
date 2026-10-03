@@ -112,6 +112,13 @@ pub fn capture_at(
     max_patchsets: u32,
 ) -> Result<CaptureOutcome, ReviewGitError> {
     let merge_base = reviews::merge_base_sha(root, base_tip, tip)?;
+    // A6-1 — the shared choke point: the store paths, the no-store
+    // creation/reuse and the snapshot all mint through here.
+    if pr_of_head(&review.head_ref).is_some() && tip == merge_base {
+        return Err(ReviewGitError::PrAlreadyMerged(
+            tip[..tip.len().min(12)].to_string(),
+        ));
+    }
     let latest = store.latest_patchset(review.id).map_err(db_err)?;
     let kind = decide_kind(
         latest
@@ -216,6 +223,9 @@ fn write_failed(what: &str, detail: &str) -> String {
 
 fn capture_error(e: ReviewGitError) -> BaseError {
     match e {
+        ReviewGitError::PrAlreadyMerged(_) => {
+            BaseError::new(409, URN_PR_ALREADY_MERGED, e.to_string())
+        }
         ReviewGitError::NoMergeBase(a, b) => BaseError::new(
             400,
             URN_NO_MERGE_BASE,
@@ -469,6 +479,22 @@ pub struct Recapture {
     /// (e.g. `credential-account-mismatch`, D12) — carried onto the
     /// envelope and into `base_status.code`.
     pub api_warnings: Vec<BaseWarningOut>,
+    /// Test seam (A6-3): runs right after the network fetch, before the
+    /// capture takes the ops lock — where a concurrent retrack lands.
+    #[cfg(test)]
+    pub after_fetch: Option<TestHook>,
+}
+
+/// A clonable, debuggable `Fn(&Store)` for [`Recapture::after_fetch`].
+#[cfg(test)]
+#[derive(Clone)]
+pub struct TestHook(pub std::sync::Arc<dyn Fn(&Store) + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for TestHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TestHook")
+    }
 }
 
 /// What [`StoreCtx::recapture`] did.
@@ -813,6 +839,8 @@ impl<'a> StoreCtx<'a> {
                 "failed"
             }
         };
+        // M4 — ONE deadline for the whole pass (first fetch + retries).
+        let deadline = std::time::Instant::now() + git.base_fetch_timeout();
         match git.fetch(dir, &base, &all, auth, git.base_fetch_timeout()) {
             Ok(_) => {
                 report.state = "fetched".into();
@@ -822,14 +850,16 @@ impl<'a> StoreCtx<'a> {
                 // One by one, so a missing ref never blocks the rest.
                 report.state = "fetched".into();
                 for (spec, label) in &specs {
+                    let Some(left) = crate::review_store::seed::budget_left(deadline) else {
+                        report.state = "offline".into();
+                        report.code = Some("timeout".into());
+                        if label.is_none() {
+                            report.pr_error = Some("timeout".into());
+                        }
+                        continue;
+                    };
                     match (
-                        git.fetch(
-                            dir,
-                            &base,
-                            std::slice::from_ref(spec),
-                            auth,
-                            git.base_fetch_timeout(),
-                        ),
+                        git.fetch(dir, &base, std::slice::from_ref(spec), auth, left),
                         label,
                     ) {
                         (Ok(_), None) => pr_fetched = true,
@@ -1578,6 +1608,10 @@ impl<'a> StoreCtx<'a> {
             }
             None => FetchReport::cached(),
         };
+        #[cfg(test)]
+        if let Some(h) = &rc.after_fetch {
+            (h.0)(self.store);
+        }
         // A tracked base branch the forge no longer has.
         let mut vanished_branch = None;
         if let Some(p) = effective.policy().cloned() {

@@ -164,6 +164,10 @@ pub enum ReviewGitError {
     Unresolved(String),
     #[error("no merge-base between {0:?} and {1:?}")]
     NoMergeBase(String, String),
+    /// A6-1 — a PR-bound capture whose head the target tip already
+    /// contains (the PR was merged): the patchset would be empty.
+    #[error("the PR head {0} is already contained in the target tip (the PR was merged): capturing against the live target would mint an empty patchset; pin the merge-time base with --base <sha> to review what landed")]
+    PrAlreadyMerged(String),
 }
 
 impl From<HistoryError> for ReviewGitError {
@@ -205,6 +209,10 @@ impl From<ReviewGitError> for ApiError {
                 ApiError::not_found(format!("could not resolve {s:?}"))
             }
             ReviewGitError::NoMergeBase(_, _) => ApiError::bad_request(e.to_string()),
+            ReviewGitError::PrAlreadyMerged(_) => {
+                ApiError::new(StatusCode::CONFLICT, e.to_string())
+                    .with_problem_type(crate::review_base::URN_PR_ALREADY_MERGED)
+            }
         }
     }
 }
@@ -6832,6 +6840,57 @@ mod tests {
         assert_eq!(origin_branch_of_base_ref(&base_sha), None);
         assert_eq!(origin_branch_of_base_ref("refs/remotes/origin/"), None);
         assert_eq!(refresh_origin_base(&root, &base_sha), None);
+    }
+
+    /// A6-1 (no-store path) — `capture_patchset_outcome` is what creation,
+    /// reuse and snapshot call on a repo WITHOUT a ready store. After a real
+    /// `--no-ff` merge the target contains the PR head, and the capture used
+    /// to mint an empty patchset; it now refuses with 409 `pr-already-merged`.
+    #[test]
+    fn a_merged_pr_is_refused_on_the_no_store_capture_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        lgit(dir, &["init", "-q", "-b", "main"]);
+        lgit(dir, &["config", "user.email", "t@e.com"]);
+        lgit(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c1"]);
+        lgit(dir, &["checkout", "-q", "-b", "pr-branch"]);
+        std::fs::write(dir.join("b.txt"), "two\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c2"]);
+        let head = lgit_out(dir, &["rev-parse", "HEAD"]);
+        lgit(dir, &["update-ref", &pr_ref(7), &head]);
+        lgit(dir, &["checkout", "-q", "main"]);
+
+        let db = tempfile::tempdir().unwrap();
+        let store = Store::open(&db.path().join("i.db")).unwrap();
+        let bus = EventBus::default();
+        let id = store
+            .create_review("r", Some("t"), "main", &pr_ref(7), None, 1)
+            .unwrap();
+        let review = store.get_review(id).unwrap().unwrap();
+        let root = WorkTreeRoot::user_clone(dir);
+        // Open PR: a normal, non-empty capture.
+        let ps = capture_patchset_outcome(&store, &bus, &root, &review, 50, true).unwrap();
+        assert_ne!(ps.ps.base_sha, ps.ps.tip_sha);
+
+        lgit(
+            dir,
+            &["merge", "--no-ff", "-q", "-m", "Merge PR 7", "pr-branch"],
+        );
+        let before = store.list_patchsets(id).unwrap().len();
+        let err = capture_patchset_outcome(&store, &bus, &root, &review, 50, true)
+            .expect_err("a merged PR must not be captured against the live target");
+        assert!(matches!(err, ReviewGitError::PrAlreadyMerged(_)), "{err}");
+        let api = ApiError::from(err);
+        assert_eq!(api.status_code(), StatusCode::CONFLICT);
+        assert_eq!(
+            api.problem_type(),
+            Some(crate::review_base::URN_PR_ALREADY_MERGED)
+        );
+        assert_eq!(store.list_patchsets(id).unwrap().len(), before);
     }
 
     #[test]
