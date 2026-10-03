@@ -35,7 +35,8 @@ chmod +x "$TMPROOT/bin/kb"
 export PATH="$TMPROOT/bin:$PATH"
 
 SID="session_wakekimi-1111-2222"
-MARKER_NAME="waked-kimi-session-wakekimi-1111-2222"
+. "$HOOKS_DIR/kb-hook-lib.sh"
+MARKER_NAME="waked-kimi-$(hook_sid_key "$SID")"
 
 run_wake() {
   local cache="$1"
