@@ -66,18 +66,18 @@ echo "== kb-slate-harvest.sh test matrix =="
 echo "tmp root: $TMPROOT"
 echo
 
-# --- 1. normal harvest: found (with ref) / idea (no-evidence found +
-#        modeled) / ask (? appended) / tried (findings_error) / done -------
+# --- 1. normal harvest: ONE summary found per job (no per-finding posts),
+#        no ask for non-blocking questions, findings_error -> done --abandoned
 job1="$TMPROOT/job1"
 mk_job "$job1" "job-abc123" "sess-abc" "kimi" "/tmp/proj"
-jq -n '{ id: "job-abc123", session_id: "sess-abc", backend: "kimi", cwd: "/tmp/proj",
+jq -n '{ id: "job-abc123", title: "probe X", session_id: "sess-abc", backend: "kimi", cwd: "/tmp/proj",
          findings_error: "worker never wrote report.json'"'"'s findings array" }' >"$job1/meta.json"
 jq -n '{
   headlines: ["x"],
   findings: [
+    {id:"f0", claim:"projected cost is high", claim_type:"modeled", evidence:[]},
     {id:"f1", claim:"X does Y", claim_type:"observed", evidence:[{path:"src/x.rs", selector:".foo"}]},
-    {id:"f2", claim:"no evidence here", claim_type:"observed", evidence:[]},
-    {id:"f3", claim:"projected cost is high", claim_type:"modeled", evidence:[]}
+    {id:"f2", claim:"no evidence here", claim_type:"observed", evidence:[]}
   ],
   open_questions: ["does X do Y"]
 }' >"$job1/report.json"
@@ -89,40 +89,97 @@ unset KB_ARGV_SPY SLATE_OPEN_JSON
 spy1="$(cat "$TMPROOT/spy1.txt" 2>/dev/null)"
 
 case "$spy1" in
-*'slate found X does Y --harness'*'--ref path:src/x.rs'*) ok "observed finding WITH evidence -> found --ref path:..." ;;
-*) bad "observed finding WITH evidence -> found --ref path:... (got: $spy1)" ;;
+*'slate found job job-abc123 (probe X): 3 findings, 1 questions — X does Y --harness kimi'*'--ref job:job-abc123'*"--ref path:$job1/report.json"*)
+  ok "ONE summary found per job: counts + deterministic top finding, refs job:<id> + path:report.json" ;;
+*) bad "one summary found per job (got: $spy1)" ;;
+esac
+[ "$(printf '%s\n' "$spy1" | grep -c '^kb slate found ')" = "1" ] \
+  && ok "exactly one found post for a three-finding job" \
+  || bad "exactly one found post for a three-finding job (got: $spy1)"
+case "$spy1" in
+*'--body=- [modeled] projected cost is high'*'- [observed] X does Y (src/x.rs)'*) ok "body lists the finding lines" ;;
+*) bad "body lists the finding lines (got: $spy1)" ;;
 esac
 case "$spy1" in
-*'slate idea no evidence here --harness'*) ok "observed finding with NO evidence path -> idea, never a bare found" ;;
-*) bad "observed finding with NO evidence path -> idea (got: $spy1)" ;;
+*'slate idea'*|*'slate ask'*|*'slate tried'*) bad "no per-finding idea / non-blocking ask / tried (got: $spy1)" ;;
+*) ok "no per-finding idea, no ask for a non-blocking question, no tried noise" ;;
 esac
 case "$spy1" in
-*'slate idea projected cost is high --harness'*) ok "modeled finding -> idea" ;;
-*) bad "modeled finding -> idea (got: $spy1)" ;;
-esac
-case "$spy1" in
-*'slate ask does X do Y? --harness'*) ok "open_questions entry -> ask with a trailing ? appended" ;;
-*) bad "open_questions entry -> ask with ? appended (got: $spy1)" ;;
-esac
-case "$spy1" in
-*'slate tried job job-abc123 findings error --harness'*'--failed'*) ok "meta.json findings_error -> tried --failed" ;;
-*) bad "meta.json findings_error -> tried --failed (got: $spy1)" ;;
+*'--supersedes'*) bad "first harvest never supersedes (got: $spy1)" ;;
+*) ok "first harvest appends (no --supersedes)" ;;
 esac
 case "$spy1" in
 *'slate open --all --json --cwd /tmp/proj'*) ok "take lookup reads --cwd from meta.json" ;;
 *) bad "take lookup reads --cwd from meta.json (got: $spy1)" ;;
 esac
 case "$spy1" in
-*'slate done 7 job job-abc123 finished --harness'*) ok "resolved take seq 7 closed with a plain done (Finished, never re-live)" ;;
-*) bad "resolved take seq 7 closed with a plain done (got: $spy1)" ;;
-esac
-case "$spy1" in
-*'--abandoned'*) bad "normal harvest never passes --abandoned" ;;
-*) ok "normal harvest never passes --abandoned" ;;
+*'slate done 7 job job-abc123: findings error: worker never wrote'*'--abandoned findings error: worker never wrote'*)
+  ok "findings_error -> done --abandoned \"findings error: ...\" on the resolved take" ;;
+*) bad "findings_error -> done --abandoned (got: $spy1)" ;;
 esac
 case "$spy1" in
 *'--harness kimi'*'--session-id sess-abc'*) ok "harness + session-id forwarded from meta.json" ;;
 *) bad "harness + session-id forwarded from meta.json (got: $spy1)" ;;
+esac
+
+# --- 1b. clean job: plain done (Finished), blocking question -> ask --------
+job1b="$TMPROOT/job1b"
+mk_job "$job1b" "job-abc123" "sess-abc" "kimi" "/tmp/proj"
+jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"a.rs"}]}],
+        open_questions:[{question:"ship it", blocking:true}, {question:"minor thing", blocking:false}, "loose string"]}' >"$job1b/report.json"
+export KB_ARGV_SPY="$TMPROOT/spy1b.txt"
+export SLATE_OPEN_JSON="$TAKE_DIGEST"
+bash "$HARVEST" "$job1b"
+unset KB_ARGV_SPY SLATE_OPEN_JSON
+spy1b="$(cat "$TMPROOT/spy1b.txt" 2>/dev/null)"
+case "$spy1b" in
+*'slate ask ship it? --harness'*) ok "blocking open question -> ask with ? appended" ;;
+*) bad "blocking open question -> ask (got: $spy1b)" ;;
+esac
+[ "$(printf '%s\n' "$spy1b" | grep -c '^kb slate ask ')" = "1" ] \
+  && ok "non-blocking questions never become asks" \
+  || bad "non-blocking questions never become asks (got: $spy1b)"
+case "$spy1b" in
+*'slate done 7 job job-abc123 finished --harness'*) ok "clean job closed with a plain done (never --abandoned)" ;;
+*) bad "clean job closed with a plain done (got: $spy1b)" ;;
+esac
+case "$spy1b" in
+*'--abandoned'*) bad "clean job never passes --abandoned" ;;
+*) ok "clean job never passes --abandoned" ;;
+esac
+
+# --- 1c. re-harvest: supersede the earlier summary, never append again; an
+#         identical summary posts nothing --------------------------------
+job1c="$TMPROOT/job1c"
+mk_job "$job1c" "job-abc123" "sess-abc" "kimi" "/tmp/proj"
+jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"a.rs"}]},
+                  {claim:"B", claim_type:"observed", evidence:[{path:"b.rs"}]}], open_questions:[]}' >"$job1c/report.json"
+PRIOR_DIGEST='{"sections":{"take":[{"seq":7,"kind":"take","refs":[{"raw":"job:job-abc123"}]}],
+ "found_idea":[{"seq":12,"kind":"found","line":"job job-abc123: 1 findings, 0 questions — A","refs":[{"raw":"job:job-abc123"}]},
+               {"seq":15,"kind":"idea","line":"unrelated","refs":[{"raw":"job:job-abc123"}]}]}}'
+export KB_ARGV_SPY="$TMPROOT/spy1c.txt"
+export SLATE_OPEN_JSON="$PRIOR_DIGEST"
+bash "$HARVEST" "$job1c"
+unset KB_ARGV_SPY SLATE_OPEN_JSON
+spy1c="$(cat "$TMPROOT/spy1c.txt" 2>/dev/null)"
+case "$spy1c" in
+*'slate found job job-abc123: 2 findings, 0 questions — A --harness'*'--supersedes 12'*) ok "later round supersedes the job's earlier found (#12), not the idea" ;;
+*) bad "later round supersedes the earlier found (got: $spy1c)" ;;
+esac
+
+jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"a.rs"}]}], open_questions:[]}' >"$job1c/report.json"
+export KB_ARGV_SPY="$TMPROOT/spy1d.txt"
+export SLATE_OPEN_JSON="$PRIOR_DIGEST"
+bash "$HARVEST" "$job1c"
+unset KB_ARGV_SPY SLATE_OPEN_JSON
+spy1d="$(cat "$TMPROOT/spy1d.txt" 2>/dev/null)"
+case "$spy1d" in
+*'slate found'*) bad "re-harvest of an unchanged report posts nothing (got: $spy1d)" ;;
+*) ok "re-harvest of an unchanged report posts nothing (idempotent)" ;;
+esac
+case "$spy1d" in
+*'slate done 7 '*) ok "unchanged re-harvest still closes the take" ;;
+*) bad "unchanged re-harvest still closes the take (got: $spy1d)" ;;
 esac
 
 # --- 2. --abandoned mode: skips found/idea/ask/tried, only closes the take
