@@ -377,3 +377,83 @@ impl Store {
         Ok(rows)
     }
 }
+
+/// One `transcript_files` tail-state row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptFileRow {
+    pub id: i64,
+    pub inode: i64,
+    pub byte_offset: i64,
+    pub mtime: i64,
+}
+
+/// One `search_transcripts` hit — a `transcript_turns` row joined to its
+/// `transcript_files` parent for `project_dir`/`src_file` (the latter is
+/// what the search route's snippet builder needs to re-open the raw JSONL).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptSearchRow {
+    pub session_id: String,
+    pub uuid: String,
+    pub ts: i64,
+    pub kind: String,
+    pub tool_name: Option<String>,
+    pub project_dir: String,
+    pub src_file: String,
+    pub byte_offset: i64,
+    pub byte_len: i64,
+    pub is_sidechain: bool,
+}
+
+/// One `transcript_turns_for_session` row — see that method's doc for how
+/// this differs from [`TranscriptSearchRow`] (whole-session narrative walk,
+/// not an FTS5 hit).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptTurnRow {
+    pub session_id: String,
+    pub uuid: String,
+    pub parent_uuid: Option<String>,
+    pub ts: i64,
+    pub kind: String,
+    pub tool_name: Option<String>,
+    pub file_paths: Vec<String>,
+    pub is_sidechain: bool,
+    pub project_dir: String,
+    pub src_file: String,
+    pub byte_offset: i64,
+    pub byte_len: i64,
+}
+
+/// `kb-code transcripts status` / `GET /api/transcripts/status`'s payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TranscriptStats {
+    pub files: u64,
+    pub turns: u64,
+    pub indexed_bytes: u64,
+}
+
+/// One `transcript_sessions_touching_path` hit (W3.4) — just enough to
+/// dedupe-and-order into `provenance::why`'s `session_ids` list; the raw
+/// turn text never leaves the store for this query (see that method's doc).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptPathHit {
+    pub session_id: String,
+    /// Unix milliseconds (`transcript_turns.ts`).
+    pub ts: i64,
+}
+
+/// One `commit_sessions` row (W3.2, migration V0005) — the join ladder's
+/// precompute cache. Plain strings for `confidence`/`via` at this layer
+/// (the store has no opinion on `join::ladder::Confidence`'s 4-valued
+/// enum — that conversion lives in `join::ladder`, mirroring how this
+/// module already keeps its row types free of `search`/`semantic` concerns
+/// elsewhere). See the migration's doc for the freshness contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitSessionRow {
+    pub confidence: String,
+    pub via: String,
+    pub session_id: Option<String>,
+    pub kb: Option<String>,
+    pub display_name: Option<String>,
+    pub started_at: Option<i64>,
+    pub resolved_at: i64,
+}

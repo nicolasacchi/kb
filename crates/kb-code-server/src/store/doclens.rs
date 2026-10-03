@@ -263,3 +263,96 @@ impl Store {
         Ok(())
     }
 }
+
+/// One `doc_lens_pins` row (DCB W1.C) — see migration V0020's doc for why
+/// `repo` is a NAME and `repo_root` is recorded beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocLensPin {
+    pub kb: String,
+    pub doc_id: String,
+    pub repo: String,
+    pub repo_root: String,
+    pub doc_hash: Option<String>,
+    pub pinned_at: i64,
+}
+
+/// Reads the 6-column order every `doc_lens_pins` SELECT above uses.
+fn doc_lens_pin_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DocLensPin> {
+    Ok(DocLensPin {
+        kb: r.get(0)?,
+        doc_id: r.get(1)?,
+        repo: r.get(2)?,
+        repo_root: r.get(3)?,
+        doc_hash: r.get(4)?,
+        pinned_at: r.get(5)?,
+    })
+}
+
+/// One `doc_refs` row as READ BACK (`doc_refs_for_path`). DCB W3.A — a
+/// CLAIM, never a cached verdict: `resolved_path` is what the resolution
+/// found AT SYNC TIME and is re-validated against the live `files` table on
+/// every read (`doclens::sync::doc_refs_for`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocRefRow {
+    pub kb: String,
+    pub doc_id: String,
+    pub ordinal: i64,
+    pub kind: String,
+    pub raw_hint: String,
+    pub resolved_path: String,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
+    pub line_state: Option<String>,
+    pub group_key: Option<String>,
+    pub group_label: Option<String>,
+    pub doc_title: String,
+    pub doc_path: String,
+    pub doc_hash: Option<String>,
+    pub head_sha: Option<String>,
+    pub dirty: bool,
+    pub seen_at: i64,
+}
+
+/// The per-DOCUMENT half of one [`Store::replace_doc_refs`] write — split
+/// from [`NewDocRef`] because these columns are denormalized onto every row
+/// of the same doc, so passing them per-ref would invite them to disagree.
+#[derive(Debug, Clone, Copy)]
+pub struct DocRefWrite<'a> {
+    pub kb: &'a str,
+    pub doc_id: &'a str,
+    pub repo_id: i64,
+    pub doc_title: &'a str,
+    pub doc_path: &'a str,
+    pub doc_hash: Option<&'a str>,
+    /// The resolving repo's head_sha + dirty flag at sync time (amendment
+    /// 11's "resolving head_sha / worktree label").
+    pub head_sha: Option<&'a str>,
+    pub dirty: bool,
+    pub seen_at: i64,
+}
+
+/// The per-REFERENCE half of one [`Store::replace_doc_refs`] write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewDocRef {
+    /// The ref's own `coderef/1` ordinal — never reassigned.
+    pub ordinal: i64,
+    pub kind: String,
+    pub raw_hint: String,
+    pub resolved_path: String,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
+    pub line_state: Option<String>,
+    pub group_key: Option<String>,
+    pub group_label: Option<String>,
+}
+
+/// One `doclens_sync_cursors` row (DCB W3.A) — per-kb feed progress.
+/// `cursor` is OPAQUE here: the store persists and returns it verbatim and
+/// never parses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoclensSyncCursor {
+    pub kb: String,
+    pub cursor: Option<String>,
+    pub last_run_at: i64,
+    pub last_error: Option<String>,
+}

@@ -389,3 +389,44 @@ impl Store {
         Ok(got >= want)
     }
 }
+
+// ── V75-M1: the Workspace re-key ─────────────────────────────────────
+//
+// D13's two identities (`crate::workspace`), the paged backfill that
+// stamps them onto rows that predate the V0040 triggers
+// (`crate::rekey`), and the ONE read that goes through the new key: the
+// per-workspace derived-row census.
+//
+// A separate `impl Store` block, in the same module so it still reaches
+// the private connection `lock()`, kept apart so a 16k-line file gains a
+// section rather than an interleaving.
+
+/// One `workspaces` row.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorkspaceRow {
+    pub id: String,
+    pub common_dir: String,
+    pub root_commit: Option<String>,
+    pub created_at: i64,
+}
+
+fn worktree_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<crate::workspace::WorktreeRow> {
+    Ok(crate::workspace::WorktreeRow {
+        workspace_id: r.get(0)?,
+        id: r.get(1)?,
+        path: r.get(2)?,
+        branch: r.get(3)?,
+        head_sha: r.get(4)?,
+        is_main: r.get::<_, i64>(5)? != 0,
+        bare: r.get::<_, i64>(6)? != 0,
+        detached: r.get::<_, i64>(7)? != 0,
+        locked: r.get::<_, i64>(8)? != 0,
+        lock_reason: r.get(9)?,
+        prunable: r.get::<_, i64>(10)? != 0,
+        prunable_reason: r.get(11)?,
+        mounted: r.get::<_, i64>(12)? != 0,
+        path_resolution: r.get(13)?,
+        repo: r.get(14)?,
+        created_by_daemon: r.get::<_, i64>(15)? != 0,
+    })
+}

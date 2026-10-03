@@ -354,3 +354,41 @@ impl Store {
         Ok(n != 0)
     }
 }
+
+/// V3.2-B1 — `behavioral_meta` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BehavioralMetaRow {
+    pub repo_id: i64,
+    pub last_commit_sha: Option<String>,
+    pub updated_at: i64,
+}
+
+/// V3.2-B1 — one `path_stats` row (repo-addressed history counters).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathStatsRow {
+    pub path: String,
+    pub revisions: i64,
+    pub lines_added: i64,
+    pub lines_deleted: i64,
+    pub first_seen_unix: Option<i64>,
+    pub last_touch_unix: Option<i64>,
+}
+
+/// V3.2-B1 — one `author_stats` row for a path.
+/// V3.2-B2 adds `first_seen_unix` (nullable until rebuild).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorStatsRow {
+    pub author: String,
+    pub commits: i64,
+    pub first_seen_unix: Option<i64>,
+}
+
+/// V3.2-B2 — one `session_signals` row (pain evidence).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSignalsRow {
+    pub session_id: String,
+    pub fail_count: i64,
+    pub error_count: i64,
+    pub duration_secs: i64,
+    pub captured_at: i64,
+}

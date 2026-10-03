@@ -201,3 +201,43 @@ impl Store {
         Ok(n > 0)
     }
 }
+
+/// Phase N — reads the 8-column order `list_bookmarks`/`get_bookmark`
+/// both SELECT in.
+fn bookmark_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<BookmarkRow> {
+    Ok(BookmarkRow {
+        id: r.get(0)?,
+        repo: r.get(1)?,
+        path: r.get(2)?,
+        line: r.get(3)?,
+        mnemonic: r.get(4)?,
+        note: r.get(5)?,
+        created_at: r.get(6)?,
+        updated_at: r.get(7)?,
+    })
+}
+
+/// One `bookmarks` row (Phase N) — see migration V0011's doc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookmarkRow {
+    pub id: i64,
+    pub repo: String,
+    pub path: String,
+    pub line: i64,
+    pub mnemonic: Option<String>,
+    pub note: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// One todo list row — the `GET /api/todos` view over `comments/1`
+/// (V72-J1). The shape is unchanged from the deleted `todo_items`
+/// implementation so every existing consumer (the route, `kb-code todos`,
+/// `tree::sources`' two decoration lanes) reads it verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoItemRow {
+    pub path: String,
+    pub line: i64,
+    pub marker: String,
+    pub text: String,
+}

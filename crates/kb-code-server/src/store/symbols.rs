@@ -1840,3 +1840,76 @@ impl Store {
         Ok(n as u64)
     }
 }
+
+/// V71-G0 — one kbc-seq/1 projection row, resolved out of whichever table
+/// still owns it (`crate::seq`). `source` names that table: the layer is
+/// honest about being a layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeqProjectionRow {
+    pub projection: String,
+    pub id: String,
+    pub name: String,
+    /// `None` when the projection's element count is genuinely unknown to
+    /// this daemon (a board's opaque payload) — never a placeholder 0.
+    pub size: Option<i64>,
+    pub ref_label: Option<String>,
+    pub workspace_id: Option<String>,
+    pub source: &'static str,
+    pub updated_at: i64,
+}
+
+/// Read a `Symbol` starting at column `offset` (ordinal … param_max).
+fn symbol_from_row(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Symbol> {
+    let param_min: Option<i64> = r.get(offset + 10)?;
+    let param_max: Option<i64> = r.get(offset + 11)?;
+    Ok(Symbol {
+        ordinal: r.get(offset)?,
+        name: r.get(offset + 1)?,
+        kind: r.get(offset + 2)?,
+        line_start: r.get(offset + 3)?,
+        line_end: r.get(offset + 4)?,
+        col_start: r.get(offset + 5)?,
+        col_end: r.get(offset + 6)?,
+        container: r.get(offset + 7)?,
+        signature: r.get(offset + 8)?,
+        doc: r.get(offset + 9)?,
+        param_min: param_min.map(|n| n as u32),
+        param_max: param_max.map(|n| n as u32),
+    })
+}
+
+fn occurrence_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<crate::occurrences::Occurrence> {
+    occurrence_row_from_offset(r, 0)
+}
+
+fn occurrence_row_from_offset(
+    r: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<crate::occurrences::Occurrence> {
+    let local_def_ordinal: Option<i64> = r.get(offset + 7)?;
+    Ok(crate::occurrences::Occurrence {
+        ordinal: r.get(offset)?,
+        name: r.get(offset + 1)?,
+        role: r.get(offset + 2)?,
+        line: r.get(offset + 3)?,
+        col_start: r.get(offset + 4)?,
+        col_end: r.get(offset + 5)?,
+        source: r.get(offset + 6)?,
+        local_def_ordinal: local_def_ordinal.map(|n| n as u32),
+    })
+}
+
+/// One SCIP-derived occurrence row `crate::scip`'s ingest route hands to
+/// [`Store::replace_scip_occurrences`] — `ordinal`/`source` are the STORE's
+/// own concern there (continues the shared ordinal space, tags
+/// `source='scip'`), so this input type deliberately carries neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScipOccurrenceIn {
+    pub name: String,
+    /// `"def"` | `"ref"` — see `crate::scip`'s module doc for the SCIP
+    /// `SymbolRole` bit this is mapped from.
+    pub role: String,
+    pub line: u32,
+    pub col_start: u32,
+    pub col_end: u32,
+}
