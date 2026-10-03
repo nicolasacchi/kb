@@ -14,8 +14,8 @@ import { BASE, REPO_DIR, REPO_NAME } from "./helpers";
 /// valid Rust.
 
 const OVERSIZE_BYTES = 256 * 1024 + 1;
-const BIG = "oversize-finding";
-const SMALL = "small-finding";
+const BIG = "f-oversize-evidence";
+const SMALL = "f-small-evidence";
 
 function oversizeRust(): string {
   const line = "fn pad() -> i32 { 1 }\n";

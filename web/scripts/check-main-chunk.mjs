@@ -9,22 +9,23 @@
 // a failing build.
 //
 // How: walk the STATIC import closure (plus modulepreload links) of
-// dist/index.html and of dist/sketch.html (the only entry that may load
-// mermaid). Any large chunk (>= 500 KB) in the sketch closure that is ALSO in
-// the shell closure is mermaid (or something that drags it) in the main graph.
+// dist/index.html. Mermaid itself is identified by CONTENT, not by chunk name
+// (names are bundler-chosen): the chunk(s) under dist/assets that carry the
+// `mermaidAPI` export. None of them may be in the shell's static closure.
 // Dynamic `import(...)` edges are ignored on purpose: they are lazy by
-// definition. Name-independent, so a renamed chunk cannot slip through.
-import { readFileSync, statSync, existsSync } from "node:fs";
+// definition. The guard also fails when it finds no mermaid chunk at all, so
+// a rename of that export cannot silently turn it into a no-op.
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 
 const DIST = process.argv[2] ?? "dist";
-const BIG = 500 * 1024;
+const MARKER = "mermaidAPI";
 
 function htmlRoots(file) {
   const html = readFileSync(join(DIST, file), "utf8");
   const roots = new Set();
   for (const m of html.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+\.js)"[^>]*>/g)) {
-    if (/rel="(?!modulepreload)/.test(m[0]) && /<link/.test(m[0])) continue;
+    if (/<link/.test(m[0]) && !/rel="modulepreload"/.test(m[0])) continue;
     roots.add(normalize(m[1].replace(/^\//, "")));
   }
   return roots;
@@ -54,23 +55,21 @@ function closure(roots) {
 }
 
 const shell = closure(htmlRoots("index.html"));
-const sketch = closure(htmlRoots("sketch.html"));
-const size = (rel) => statSync(join(DIST, rel)).size;
 
-const bigSketch = [...sketch].filter((f) => size(f) >= BIG);
-if (bigSketch.length === 0) {
-  console.error("::error::check-main-chunk: found no large chunk in sketch.html's graph; the guard cannot tell where mermaid is (did the sketch entry move?)");
+const assets = join(DIST, "assets");
+const mermaidChunks = readdirSync(assets)
+  .filter((f) => f.endsWith(".js"))
+  .map((f) => normalize(join("assets", f)))
+  .filter((rel) => readFileSync(join(DIST, rel), "utf8").includes(MARKER));
+if (mermaidChunks.length === 0) {
+  console.error(`::error::check-main-chunk: no chunk under dist/assets contains "${MARKER}"; the guard cannot find mermaid (did its export name change?)`);
   process.exit(1);
 }
-const leaked = bigSketch.filter((f) => shell.has(f));
+const leaked = mermaidChunks.filter((f) => shell.has(f));
 if (leaked.length > 0) {
-  console.error(
-    "::error::mermaid-sized chunk(s) reachable from the SPA shell's static graph: " +
-      leaked.map((f) => `${f} (${(size(f) / 1024).toFixed(0)} KB)`).join(", "),
-  );
+  console.error("::error::mermaid is reachable from the SPA shell's static import graph via: " + leaked.join(", "));
   process.exit(1);
 }
 console.log(
-  `check-main-chunk: shell graph ${shell.size} chunks, none of the ${bigSketch.length} large sketch chunk(s) ` +
-    `(${bigSketch.map((f) => `${f} ${(size(f) / 1024).toFixed(0)} KB`).join(", ")}) is in it`,
+  `check-main-chunk: shell static graph ${shell.size} chunks; mermaid lives in ${mermaidChunks.join(", ")} and is not among them`,
 );

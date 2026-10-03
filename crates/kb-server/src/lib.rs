@@ -3203,7 +3203,8 @@ mod tests {
                 let _ = release_rx.recv();
             });
             started_rx.await.unwrap();
-            let fut = backup_one_kb(&paths, &kb, &backup_section(Some(24)), true);
+            let cfg = backup_section(Some(24));
+            let fut = backup_one_kb(&paths, &kb, &cfg, true);
             tokio::pin!(fut);
             assert!(
                 tokio::time::timeout(Duration::from_millis(300), &mut fut)
