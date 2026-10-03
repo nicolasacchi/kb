@@ -1,0 +1,28 @@
+{
+  "apply": "bool",
+  "rows": [
+    {
+      "checks": "null",
+      "close_reason": "null",
+      "closed": "bool",
+      "head_drift": "null",
+      "new_head_commits": "null",
+      "pr_number": "number",
+      "pr_state": "null",
+      "review_decision": "null",
+      "review_id": "number",
+      "suggest_close": "bool",
+      "unanswered_questions": "number",
+      "unavailable_reason": "string",
+      "verdict_stale": "bool"
+    }
+  ],
+  "schema": "string",
+  "summary": {
+    "closed": "number",
+    "refreshed": "number",
+    "suggest_close": "number",
+    "swept": "number",
+    "unavailable": "number"
+  }
+}

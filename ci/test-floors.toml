@@ -30,8 +30,7 @@ executed = 1400
 executed = 3050
 
 # kb-code-server + kb-code-cli + kb-lip under nextest (the code-test lane).
-# Seeded from a source-level count of #[test]/#[tokio::test] with margin, NOT
-# from a green run -- the first green run's witness line prints the real
-# number; raise this to just under it in a follow-up.
+# Seeded from PR #228's first run: 3918 executed (3920 run, 2 then-missing
+# goldens failing), floor a few percent under.
 [code-nextest]
-executed = 3000
+executed = 3850
