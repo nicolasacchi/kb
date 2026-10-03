@@ -43,6 +43,14 @@
 //! per route, gate ON + a valid token + non-loopback still 404s) and
 //! `tests/boards_route.rs` for the board apply never-moves pin.
 
+// v0.44 F1 (P2/K2 carry-over): no swallowed `Result` in a security-posture
+// module -- a failed check must be a named outcome, never a silent
+// fall-through. Test code is exempt; `cfg_attr(not(test), ..)` keeps
+// `--all-targets` clippy from judging fixture plumbing.
+// scripts/check-posture-swallow.sh ratchets the `.ok()` / `unwrap_or(` forms
+// this lint cannot see.
+#![cfg_attr(not(test), deny(clippy::let_underscore_must_use))]
+
 use crate::state::SharedState;
 use axum::{
     body::Body,
