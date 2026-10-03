@@ -65,6 +65,7 @@ use crate::git::Revspec;
 use crate::history;
 use crate::numstat::FileChange;
 use crate::review_hunks::{self, DiffHunk};
+use crate::review_since;
 use crate::store::ReviewPatchsetRow;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -117,7 +118,7 @@ pub struct TouchedInResult {
 type RenameCache = HashMap<(String, String), Vec<FileChange>>;
 /// `(from_sha, from_path, to_sha, to_path) -> parsed hunks`, computed at
 /// most once per distinct quad.
-type HunkCache = HashMap<(String, String, String, String), Vec<DiffHunk>>;
+type HunkCache = HashMap<(String, String, String, String, u32), Vec<DiffHunk>>;
 
 // A7.f8 — a process-wide memo for the two git reads above, keyed on
 // IMMUTABLE shas (a commit sha names one tree forever, in any repo), so a
@@ -196,6 +197,16 @@ fn hunk_overlap(lo: u32, hi: u32, hunk: &DiffHunk) -> Option<&'static str> {
     }
 }
 
+/// F9 — does a tip-to-tip hunk lie on lines the author's own change set
+/// newly touches? Both sides are in the LATER tip's coordinates: the
+/// hunk's new-side range (a zero-width deletion is the point `new_start`)
+/// against each `(first, last)` author range, touching ranges counting.
+fn hunk_is_authored(hunk: &DiffHunk, author: &[(u32, u32)]) -> bool {
+    let lo = hunk.new_start;
+    let hi = hunk.new_start + hunk.new_lines.saturating_sub(1);
+    author.iter().any(|&(a_lo, a_hi)| a_lo <= hi && lo <= a_hi)
+}
+
 /// Fold several hunks' verdicts into one per-ps verdict: `exact` beats
 /// `adjacent` beats nothing.
 fn better(a: Option<&'static str>, b: Option<&'static str>) -> Option<&'static str> {
@@ -263,12 +274,14 @@ fn parsed_hunks(
     from_path: &str,
     to_sha: &str,
     to_path: &str,
+    context: u32,
 ) -> Vec<DiffHunk> {
     let key = (
         from_sha.to_string(),
         from_path.to_string(),
         to_sha.to_string(),
         to_path.to_string(),
+        context,
     );
     if let Some(hunks) = cache.get(&key) {
         return hunks.clone();
@@ -280,11 +293,20 @@ fn parsed_hunks(
     let read = if from_path == to_path {
         let from = Revspec::trusted(from_sha.to_string());
         let to = Revspec::trusted(to_sha.to_string());
-        ctx.read_with_fallback(|root| diff::diff_file(root.git_path(), &from, Some(&to), from_path))
-            .ok()
+        ctx.read_with_fallback(|root| {
+            diff::diff_file_ctx(root.git_path(), &from, Some(&to), from_path, context)
+        })
+        .ok()
     } else {
         ctx.read_with_fallback(|root| {
-            diff::diff_blob_pair(root.git_path(), from_sha, from_path, to_sha, to_path)
+            diff::diff_blob_pair_ctx(
+                root.git_path(),
+                from_sha,
+                from_path,
+                to_sha,
+                to_path,
+                context,
+            )
         })
         .ok()
     };
@@ -333,6 +355,42 @@ pub fn compute_touched_in(
             else {
                 continue;
             };
+            // F9 — a later patchset on a DIFFERENT base: the tip-to-tip
+            // diff mixes the author's edits with base movement. Attribute
+            // each overlapping tip-to-tip hunk to the author only when it
+            // lies on lines the author's own change set (patchset vs ITS
+            // base, `review_since`) newly touches; upstream-only hunks are
+            // not evidence and produce no entry.
+            if ps.base_sha != own_row.base_sha {
+                if let Some(ranges) = review_since::author_ranges_between(ctx, own_row, ps) {
+                    let hunks = parsed_hunks(
+                        ctx,
+                        &mut hunk_cache,
+                        from_sha,
+                        &q.path,
+                        &ps.tip_sha,
+                        &resolved_path,
+                        0,
+                    );
+                    let author = ranges.get(&resolved_path).map(Vec::as_slice).unwrap_or(&[]);
+                    let mut overlap: Option<&'static str> = None;
+                    let mut qualifying = 0usize;
+                    for h in hunks.iter().filter(|h| hunk_is_authored(h, author)) {
+                        if let Some(o) = hunk_overlap(lo, hi, h) {
+                            qualifying += 1;
+                            overlap = better(overlap, Some(o));
+                        }
+                    }
+                    if let Some(o) = overlap {
+                        entries.push(TouchedInEntry {
+                            ps: ps.ps_number,
+                            hunks: qualifying,
+                            overlap: o,
+                        });
+                    }
+                    continue;
+                }
+            }
             let hunks = parsed_hunks(
                 ctx,
                 &mut hunk_cache,
@@ -340,6 +398,7 @@ pub fn compute_touched_in(
                 &q.path,
                 &ps.tip_sha,
                 &resolved_path,
+                3,
             );
             let mut overlap: Option<&'static str> = None;
             let mut qualifying = 0usize;
@@ -350,8 +409,10 @@ pub fn compute_touched_in(
                 }
             }
             if let Some(o) = overlap {
-                // A7-5 — a different base_sha means the tip-to-tip diff
-                // includes base movement; downgrade to `rebased`.
+                // A7-5 fallback — the later patchset sits on a different
+                // base and the author's own change set could not be read,
+                // so the tip-to-tip hunk cannot be attributed: downgrade
+                // to `rebased` rather than claim the author acted.
                 let o = if ps.base_sha != own_row.base_sha {
                     OVERLAP_REBASED
                 } else {
@@ -810,6 +871,90 @@ mod tests {
             1,
             "the failure must not have been cached"
         );
+    }
+
+    /// F9 fixture: main c0 (10 lines) -> feature ps1 edits line 3 -> main
+    /// moves on (upstream edits line 6) -> ps2 is the feature commit
+    /// cherry-picked onto the new main, optionally with a further author
+    /// edit of the SAME line 3. Returns (dir, c0, ps1 tip, new main, ps2 tip).
+    fn rebase_fixture(reedit: bool) -> (tempfile::TempDir, String, String, String, String) {
+        let tmp = init_repo();
+        let d = tmp.path();
+        let base_txt = "a1\na2\na3\na4\na5\na6\na7\na8\na9\na10\n";
+        std::fs::write(d.join("a.txt"), base_txt).unwrap();
+        git(d, &["add", "a.txt"]);
+        git(d, &["commit", "-q", "-m", "c0"]);
+        let c0 = git_out(d, &["rev-parse", "HEAD"]);
+        git(d, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(d.join("a.txt"), base_txt.replace("a3\n", "a3-author\n")).unwrap();
+        git(d, &["commit", "-aq", "-m", "feature"]);
+        let ps1_tip = git_out(d, &["rev-parse", "HEAD"]);
+        git(d, &["checkout", "-q", "main"]);
+        std::fs::write(d.join("a.txt"), base_txt.replace("a6\n", "a6-upstream\n")).unwrap();
+        git(d, &["commit", "-aq", "-m", "upstream"]);
+        let main_head = git_out(d, &["rev-parse", "HEAD"]);
+        git(d, &["checkout", "-q", "-b", "feature2", &main_head]);
+        git(d, &["cherry-pick", &ps1_tip]);
+        if reedit {
+            let cur = std::fs::read_to_string(d.join("a.txt")).unwrap();
+            std::fs::write(
+                d.join("a.txt"),
+                cur.replace("a3-author\n", "a3-author-v2\n"),
+            )
+            .unwrap();
+            git(d, &["commit", "-aq", "-m", "re-edit"]);
+        }
+        let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
+        (tmp, c0, ps1_tip, main_head, ps2_tip)
+    }
+
+    /// F9 — a pure rebase whose UPSTREAM movement sits near the finding
+    /// (line 6, finding on line 3) is not evidence the author acted. Fails
+    /// without the since-derived attribution: the tip-to-tip hunk at line 6
+    /// used to surface as a `rebased` entry.
+    #[test]
+    fn upstream_only_movement_near_a_finding_after_a_rebase_is_not_touched() {
+        let (tmp, c0, ps1_tip, main_head, ps2_tip) = rebase_fixture(false);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &c0, &ps1_tip),
+            ps_row(2, 1, 2, &main_head, &ps2_tip),
+        ];
+        let queries = vec![TouchedInQuery {
+            finding_id: 70,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines: vec![3],
+        }];
+        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(tmp.path()));
+        let out = compute_touched_in(&ctx, &patchsets, &queries);
+        assert!(
+            out[&70].entries.is_empty(),
+            "base movement is not an author edit: {:?}",
+            out[&70].entries
+        );
+    }
+
+    /// F9 — after a rebase, an author edit of the finding's own line IS
+    /// reported, and as a real `exact` (not the old blanket `rebased`).
+    #[test]
+    fn an_author_edit_after_a_rebase_is_exact_not_rebased() {
+        let (tmp, c0, ps1_tip, main_head, ps2_tip) = rebase_fixture(true);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &c0, &ps1_tip),
+            ps_row(2, 1, 2, &main_head, &ps2_tip),
+        ];
+        let queries = vec![TouchedInQuery {
+            finding_id: 71,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines: vec![3],
+        }];
+        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(tmp.path()));
+        let out = compute_touched_in(&ctx, &patchsets, &queries);
+        let e = &out[&71].entries;
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].ps, 2);
+        assert_eq!(e[0].overlap, OVERLAP_EXACT);
     }
 
     #[test]

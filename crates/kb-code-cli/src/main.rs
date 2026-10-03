@@ -201,6 +201,9 @@ mod review_agent;
 mod retrack_cmd;
 // RS-U10b — `review sync` / `review status`.
 mod review_sync;
+// v0.44 F9 — `review since` (rebase-aware author delta).
+mod review_queue;
+mod review_since;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -4471,6 +4474,20 @@ enum ReviewCmd {
     /// /api/reviews/{id}/status`). Read-only; `--fetch` (loopback-only)
     /// fetches into the review store first.
     Status(review_sync::StatusArgs),
+    /// `kb-code review since <REF> [--from verdict|psN] [--to psN|latest]
+    /// [--json]` — v0.44 F9: what the AUTHOR changed between two
+    /// patchsets (`GET /api/reviews/{id}/since`). Each patchset is diffed
+    /// against its OWN base, so a pure rebase reads `rebase_only: true`
+    /// and upstream movement is never counted. Surfaced, never a verdict.
+    Since(review_since::SinceArgs),
+    /// `kb-code review queue [--repo R] [--state open|closed|all]
+    /// [--json]` — v0.44 F9: what is waiting FOR THE AGENT (`GET
+    /// /api/reviews/agent-queue`). Lane 1: an open question thread whose
+    /// latest voice is not an agent; lane 2: a disputed finding with no
+    /// agent reply since the dispute. Oldest-waiting first; each row names
+    /// the command to run next. Computed per read, never a score; the
+    /// daemon launches nothing.
+    Queue(review_queue::QueueArgs),
     /// `kb-code review compose ID {--from-file FILE|--stdin} [--json]` —
     /// V70-R: `POST /api/reviews/{id}/compose` (design doc D9 scoped to
     /// v0). LOOPBACK-ONLY. The one-shot authoring call: a `kbc-compose/1`
@@ -6563,6 +6580,8 @@ async fn run(cli: Cli) -> Result<()> {
             ReviewCmd::Verify(a) => review_agent::verify_cmd(a).await,
             ReviewCmd::Sync(a) => review_sync::sync_cmd(a).await,
             ReviewCmd::Status(a) => review_sync::status_cmd(a).await,
+            ReviewCmd::Since(a) => review_since::since_cmd(a).await,
+            ReviewCmd::Queue(a) => review_queue::queue_cmd(a).await,
             ReviewCmd::Doc {
                 id,
                 ps,
@@ -30174,6 +30193,9 @@ mod tests {
             review_agent::review_cat_request("src/lib.rs", Some(1), "old"),
             // RS-U10b — `review status`.
             review_sync::review_status_request(true),
+            // v0.44 F9 — `review since`.
+            review_since::review_since_request("verdict", "latest"),
+            review_queue::agent_queue_request(Some("repo"), "open"),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -30272,7 +30294,10 @@ mod tests {
             // RS-U10a — the review git views + PR lookup, same walk.
             .chain(kb_code_server::review_views::RS_U10A_ROUTES.iter())
             // RS-U10b — `review status`, same walk.
-            .chain(kb_code_server::review_sync::RS_U10B_ROUTES.iter());
+            .chain(kb_code_server::review_sync::RS_U10B_ROUTES.iter())
+            // v0.44 F9 — `review since`, same walk.
+            .chain(kb_code_server::review_since::V044_F9_ROUTES.iter())
+            .chain(kb_code_server::review_queue::V044_F9_QUEUE_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()

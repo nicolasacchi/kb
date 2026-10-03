@@ -450,6 +450,8 @@ pub mod review_retrack;
 pub mod review_store;
 pub mod review_sweep;
 // RS-U10b — `review sync` / `review status` for agent reviewers.
+pub mod review_queue;
+pub mod review_since;
 pub mod review_sync;
 pub mod review_timeline;
 pub mod review_turns;
