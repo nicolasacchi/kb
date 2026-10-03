@@ -45,6 +45,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 # Call only after the commit-without-remember check. Slate stdout is
 # discarded so it cannot corrupt the systemMessage. Never blocks.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
   # Standalone copy without the shared lib: fail open (no distill ask).
   post_distill_ask() { return 0; }
 }
@@ -58,7 +59,7 @@ sid="$(jq -r '.id // empty' <<<"$meta" 2>/dev/null)"
 [ -n "$sid" ] || exit 0
 
 marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
-marker="$marker_dir/distill-nudged-codex-$(printf '%s' "$sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+marker="$marker_dir/distill-nudged-codex-$(hook_sid_key "$sid")"
 [ -f "$marker" ] && exit 0
 
 grep -E '"name":"(exec_command|shell|local_shell)"' "$tpath" 2>/dev/null \

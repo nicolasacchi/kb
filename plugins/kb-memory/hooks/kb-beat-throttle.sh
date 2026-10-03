@@ -47,6 +47,9 @@ command -v jq >/dev/null 2>&1 || exit 0
 MIN_INTERVAL="${KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS:-180}"
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HOOK_DIR/kb-hook-lib.sh" 2>/dev/null || {
+  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+}
 BEAT_SH="$HOOK_DIR/kb-beat.sh"
 
 harness="${1:-claude}"
@@ -64,7 +67,7 @@ sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
 
 marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
 mkdir -p "$marker_dir" 2>/dev/null || exit 0
-safe_sid="$(printf '%s' "$sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+safe_sid="$(hook_sid_key "$sid")"
 marker="$marker_dir/beat-heartbeat-$safe_sid"
 
 now="$(date -u +%s)" || exit 0

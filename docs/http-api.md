@@ -1756,7 +1756,12 @@ POST   /api/kb/{kb}/artifacts               write a memory artifact (write-only;
                                             a second POST with the same key answers
                                             200 {id, path, replayed:true} and
                                             writes nothing (a lost response, or
-                                            `kb remember`'s outbox replay). Absent
+                                            `kb remember`'s outbox replay). The
+                                            file records its key in a
+                                            `<meta name="kb-client-ref">` (v0.44
+                                            X10), which the owner probe trusts;
+                                            files without it fall back to the
+                                            name shape. Absent
                                             => the timestamp name, 201, as before.
                                             U3: four ADDITIVE optional
                                             provenance fields — author ("you" |

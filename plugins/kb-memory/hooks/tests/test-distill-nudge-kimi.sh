@@ -64,7 +64,7 @@ else
   bad "kimi commit, no success marker -> plain-text nudge fires (got: $out)"
 fi
 
-if [ -f "$TMPROOT/cache-fire/kb/distill-nudged-kimi-${SID_COMMIT//_/-}" ]; then
+if [ -f "$TMPROOT/cache-fire/kb/distill-nudged-kimi-$(. "$HOOKS_DIR/kb-hook-lib.sh"; hook_sid_key "$SID_COMMIT")" ]; then
   ok "once-per-session marker created"
 else
   bad "once-per-session marker created (dir: $(ls "$TMPROOT/cache-fire/kb" 2>/dev/null))"

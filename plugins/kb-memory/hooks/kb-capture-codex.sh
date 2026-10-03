@@ -126,6 +126,7 @@ TRANSLATE='
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
 }
@@ -188,7 +189,7 @@ capture_one() {
   # One file per session, overwritten on re-capture (same contract as
   # kb-capture.sh — the original start timestamp survives in the name).
   local safe_sid out f
-  safe_sid="$(printf '%s' "$sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+  safe_sid="$(hook_sid_key "$sid")"
   out=""
   for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
     [ -f "$f" ] && out="$f"

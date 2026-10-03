@@ -73,7 +73,7 @@ translate_export() {
   title="$(jq -r '.info.title // empty' "$src" 2>/dev/null)"
 
   local safe_sid ts out tmp jsonl
-  safe_sid="$(printf '%s' "$sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+  safe_sid="$(hook_sid_key "$sid")"
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   out=""
   for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
@@ -185,6 +185,7 @@ translate_export() {
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
 }
