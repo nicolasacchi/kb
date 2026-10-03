@@ -1740,7 +1740,7 @@ fn n_vanished_specs_cannot_exceed_the_pass_budget() {
     });
     let elapsed = started.elapsed();
     let ran = out.iter().filter(|(_, r)| r.is_some()).count();
-    assert!(ran >= 1 && ran < 10, "ran {ran} of 10");
+    assert!((1..10).contains(&ran), "ran {ran} of 10");
     assert!(
         out.iter().skip(ran).all(|(_, r)| r.is_none()),
         "once spent, every later item is unrun"

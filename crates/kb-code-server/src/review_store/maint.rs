@@ -2427,6 +2427,26 @@ async fn store_maintain_route_inner(
     }
 }
 
+/// `POST …/store/restore` success body (typed: the wire ratchet counts
+/// untyped json-macro response bodies).
+#[derive(Debug, Serialize)]
+pub struct RestoreEnvelope {
+    pub schema: &'static str,
+    pub repo: String,
+    pub report: RestoreReport,
+}
+
+#[derive(Debug, Serialize)]
+struct RestoreProblem {
+    error: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+fn restore_problem(status: StatusCode, error: String, kind: &'static str) -> Response {
+    (status, Json(RestoreProblem { error, kind })).into_response()
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RestoreBody {
     /// Absolute path of a store bundle file on the daemon's host.
@@ -2454,14 +2474,11 @@ async fn store_restore_route_inner(
     }
     let bundle = PathBuf::from(&body.bundle);
     if !bundle.is_absolute() || !bundle.is_file() {
-        return (
+        return restore_problem(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "bundle must be an existing absolute file path on the daemon host",
-                "type": "urn:kb:errors:bad-request",
-            })),
-        )
-            .into_response();
+            "bundle must be an existing absolute file path on the daemon host".into(),
+            "urn:kb:errors:bad-request",
+        );
     }
     let st = state.clone();
     let n = name.clone();
@@ -2469,25 +2486,20 @@ async fn store_restore_route_inner(
         let row = store_row_for(&st, &n)?;
         let now = chrono::Utc::now().timestamp();
         restore_bundle(&st.review_stores, &row, &bundle, now).map_err(|e| {
-            Box::new(
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": e.to_string(),
-                        "type": "urn:kb:errors:store-restore-failed",
-                    })),
-                )
-                    .into_response(),
-            )
+            Box::new(restore_problem(
+                StatusCode::CONFLICT,
+                e.to_string(),
+                "urn:kb:errors:store-restore-failed",
+            ))
         })
     })
     .await;
     match res {
-        Ok(Ok(report)) => Json(serde_json::json!({
-            "schema": "kbc-store-restore/1",
-            "repo": name,
-            "report": report,
-        }))
+        Ok(Ok(report)) => Json(RestoreEnvelope {
+            schema: "kbc-store-restore/1",
+            repo: name,
+            report,
+        })
         .into_response(),
         Ok(Err(resp)) => *resp,
         Err(e) => internal(e),
