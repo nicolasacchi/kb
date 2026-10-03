@@ -25,7 +25,7 @@ runs:
       shell: bash
       run: |
         channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' rust-toolchain.toml | head -1)"
-        if ! printf '%s' "$channel" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if [[ ! "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
           echo "rust-toolchain.toml channel is '$channel', not an exact X.Y.Z" >&2
           exit 1
         fi

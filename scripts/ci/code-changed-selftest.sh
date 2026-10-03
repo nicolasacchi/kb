@@ -57,6 +57,10 @@ while IFS= read -r p; do
   printf '%s\n' "$p" > "$work/one"; expect run=true "exact $p" "$work/one"
   printf '%s\n' "${p}.bak" > "$work/one"; expect run=false "near miss ${p}.bak" "$work/one"
 done < <(sed -n '/^EXACT=(/,/^)/p' "$sut" | grep -o '"[^"]*"' | tr -d '"')
+# the CI machinery the code lanes depend on (F1 carry): named, so dropping one fails here
+for p in ci/test-floors.toml scripts/ci/witness.py .config/nextest.toml scripts/ci/selfcheck.py; do
+  printf '%s\n' "$p" > "$work/one"; expect run=true "ci machinery $p" "$work/one"
+done
 printf 'README.md\ndocs/foo.md\n' > "$work/one"; expect run=false "docs-only change" "$work/one"
 
 # 4. no usable base -> run=true (never silently skip).

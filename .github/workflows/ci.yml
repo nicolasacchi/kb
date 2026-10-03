@@ -994,7 +994,8 @@ jobs:
     # and then had its POST-JOB cache save (a `tar` of target/ + the cargo
     # registry) hard-cancelled at 60m, reporting a green job as a failure —
     # this is the job that inherited that save, so it keeps the headroom.
-    # `cargo test` here mirrors `just ci-code`'s second line — keep the two
+    # `cargo nextest` here runs the same crates as `just ci-code`'s `cargo test`
+    # line (plus a --doc step, since nextest skips doctests) — keep the two
     # in lock-step (the sibling `code-lint` job runs its first).
     #
     # V70-A5 — this lane is ALSO the kbc-cmd/1 registry gate: `kb-code
@@ -1048,9 +1049,31 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
 
-      - name: cargo test (kb-code + kb-lip)
+      - name: Install cargo-nextest
         if: steps.changes.outputs.run == 'true'
-        run: cargo test --locked -p kb-code-server -p kb-code-cli -p kb-lip --no-fail-fast
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest
+
+      - name: cargo nextest run --profile ci-code (kb-code + kb-lip)
+        # v0.44 X5 (F1 carry): this lane used `cargo test`, so its pass count
+        # was never witnessed -- a harness that silently ran half the tests
+        # stayed green. nextest writes a junit report (.config/nextest.toml
+        # [profile.ci-code.junit]) that the Witness step below decides the lane
+        # from, exactly as `workspace-test` does for the rest of the workspace.
+        if: steps.changes.outputs.run == 'true'
+        run: cargo nextest run --locked --profile ci-code --no-fail-fast -p kb-code-server -p kb-code-cli -p kb-lip
+
+      - name: Witness (nextest junit -> floor + zero failures)
+        # `--only-if` is this lane's own path-filter output: a legitimately
+        # skipped lane is "skipped", not "0 of N tests".
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/witness.py nextest-junit target/nextest/ci-code/junit.xml --lane code-nextest --only-if "${{ steps.changes.outputs.run }}"
+
+      - name: cargo test --doc (kb-code + kb-lip)
+        # nextest does not run doctests; the `cargo test` it replaced did.
+        if: steps.changes.outputs.run == 'true'
+        run: cargo test --locked --doc -p kb-code-server -p kb-code-cli -p kb-lip
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'

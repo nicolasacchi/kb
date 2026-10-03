@@ -1,0 +1,94 @@
+# Advisory mutation testing of a PR's own diff (v0.44 X5, F1 carry).
+#
+# A test that still passes when the code it names is mutated (a `>` flipped, a
+# body replaced by `Default::default()`) proves nothing about that code. This
+# lane runs `cargo mutants --in-diff` -- only mutants inside the lines the PR
+# changed -- and uploads the surviving ("missed") mutants as an artifact and a
+# job summary.
+#
+# ADVISORY: it is opt-in (the `mutants` PR label), `continue-on-error`, and
+# never a required check. A survivor is a question for the reviewer ("what
+# test should have noticed this?"), not a gate: some mutants are equivalent.
+# It is label-triggered, not on every push, because a mutation run recompiles
+# and re-tests per mutant and costs far more than the PR lanes.
+name: Mutants (advisory)
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  mutants:
+    permissions:
+      contents: read
+    name: cargo-mutants --in-diff (label: mutants)
+    if: contains(github.event.pull_request.labels.*.name, 'mutants')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: mutants
+          save-if: false
+
+      - name: Install protoc (lancedb transitive dep via kb-core)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-mutants
+
+      - name: Diff of the PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff "$BASE_SHA...$HEAD_SHA" -- '*.rs' > "$RUNNER_TEMP/pr.diff"
+
+      - name: cargo mutants --in-diff
+        # No kb-embedder (static ONNX Runtime: CLAUDE.md invariant 26). An
+        # empty diff makes cargo-mutants exit 0 with "no mutants".
+        run: >-
+          cargo mutants --locked --in-diff "$RUNNER_TEMP/pr.diff"
+          --package kb-core --package kb-server --package kb-cli
+          --package kb-code-server --package kb-code-cli --package kb-lip
+          --jobs 2 --timeout 300 --output "$RUNNER_TEMP/mutants"
+
+      - name: Summarise surviving mutants
+        if: ${{ !cancelled() }}
+        run: |
+          out="$RUNNER_TEMP/mutants/mutants.out"
+          {
+            echo "### cargo-mutants (advisory)"
+            if [ -f "$out/missed.txt" ]; then
+              echo "Surviving mutants: $(wc -l < "$out/missed.txt")"
+              echo '```'
+              head -n 200 "$out/missed.txt"
+              echo '```'
+            else
+              echo "No missed.txt was produced (no mutants in the diff, or the run failed early)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutants report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-out
+          path: ${{ runner.temp }}/mutants/mutants.out
+          if-no-files-found: ignore

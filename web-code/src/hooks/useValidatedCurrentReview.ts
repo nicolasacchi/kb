@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { ApiError } from "../api/client";
-import { clearCurrentReview, peekCurrentReview, useCurrentReview } from "../lib/currentReview";
+import { clearCurrentReviewIfSet, useCurrentReview } from "../lib/currentReview";
 import { isReviewIdString, judgeCurrentReview } from "../lib/currentReviewValidity";
 import { mergeCurrentSearch } from "../lib/codeUrl";
 import { toast } from "../lib/toast";
@@ -41,8 +41,7 @@ export function useValidatedCurrentReview(repo: string) {
     // Several surfaces (reader, search, omnibox, top bar, annotations rail)
     // mount this hook at once. The first effect to run clears the marker;
     // the rest see it gone and stay quiet — one clear, one strip, one toast.
-    if (peekCurrentReview(repo) === null) return;
-    clearCurrentReview(repo);
+    if (!clearCurrentReviewIfSet(repo)) return;
     navigate({ search: mergeCurrentSearch((p) => p.delete("review")) }, { replace: true });
     toast.err(`Review #${id ?? "?"} doesn't exist in this repo — stopped working it`);
     // eslint-disable-next-line react-hooks/exhaustive-deps

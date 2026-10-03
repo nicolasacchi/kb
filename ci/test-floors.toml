@@ -28,3 +28,9 @@ executed = 1400
 
 [web-code-vitest]
 executed = 3050
+
+# kb-code-server + kb-code-cli + kb-lip under nextest (the code-test lane).
+# Seeded from PR #228's first run: 3918 executed (3920 run, 2 then-missing
+# goldens failing), floor a few percent under.
+[code-nextest]
+executed = 3850

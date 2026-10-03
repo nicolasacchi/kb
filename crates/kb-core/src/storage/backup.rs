@@ -1715,6 +1715,67 @@ mod tests {
         assert!(err.to_string().contains("missing from the copy"), "{err}");
     }
 
+    /// A3-8 (X5) — the EXPORT wiring, not just the verifier: a lance data file
+    /// that the staged copy lacks (here: absent from the source, which is what
+    /// a copy racing a compaction leaves behind in staging) must fail
+    /// `write_kb_export` and leave no tarball. `Storage::open` + `count_rows`
+    /// pass on such a copy, so only the `verify_staged_lance_data_files` call
+    /// inside `export_inner` can refuse it; delete that call and this fails.
+    #[tokio::test]
+    async fn export_fails_when_a_lance_data_file_is_missing_from_the_copy() {
+        use arrow::record_batch::RecordBatchIterator;
+        use arrow_array::{Int32Array, RecordBatch};
+        use arrow_schema::{DataType, Field, Schema};
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "daemon");
+        let kb = KbName::new("notes").unwrap();
+        std::fs::create_dir_all(paths.kb_state(&kb)).unwrap();
+        drop(crate::storage::sqlite::Db::open(&paths.kb_sqlite(&kb)).unwrap());
+
+        let table = paths.kb_lance(&kb).join("t.lance");
+        std::fs::create_dir_all(paths.kb_lance(&kb)).unwrap();
+        let schema =
+            std::sync::Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![std::sync::Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        lance::Dataset::write(
+            RecordBatchIterator::new(vec![Ok(batch)], schema),
+            table.to_str().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Control: the intact dataset exports.
+        write_kb_export(&paths, &kb)
+            .await
+            .expect("an intact lance dataset exports");
+
+        let mut removed = 0;
+        for e in std::fs::read_dir(table.join("data")).unwrap() {
+            std::fs::remove_file(e.unwrap().path()).unwrap();
+            removed += 1;
+        }
+        assert!(removed > 0, "the fixture must have written a data file");
+        for e in std::fs::read_dir(&paths.exports).unwrap() {
+            let _ = std::fs::remove_file(e.unwrap().path());
+        }
+
+        let err = write_kb_export(&paths, &kb).await.unwrap_err();
+        assert!(err.to_string().contains("missing from the copy"), "{err}");
+        let leftovers: Vec<_> = std::fs::read_dir(&paths.exports)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "a refused export leaves no tarball, partial or staging dir: {leftovers:?}"
+        );
+    }
+
     /// A3-3 — retention keeps the newest K per kb and touches nothing else.
     #[test]
     fn prune_keeps_the_newest_k_per_kb_and_only_that_kbs() {

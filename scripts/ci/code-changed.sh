@@ -45,6 +45,10 @@ EXACT=(
   ".github/workflows/ci.yml"
   ".github/actions/setup-rust/action.yml"
   "scripts/ci/code-changed.sh"
+  "ci/test-floors.toml"
+  "scripts/ci/witness.py"
+  ".config/nextest.toml"
+  "scripts/ci/selfcheck.py"
 )
 
 esc() { printf '%s' "$1" | sed -e 's/[][\.*^$+?(){}|]/\\&/g'; }
