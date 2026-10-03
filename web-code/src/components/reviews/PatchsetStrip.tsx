@@ -14,6 +14,10 @@ export interface PatchsetStripProps {
   onSelectPs: (n: number) => void;
   onComparePick: (n: number) => void;
   onToggleCompare: () => void;
+  /// v0.44 F9 — "ps4 · rebase-only since your verdict (0 author changes)",
+  /// from `GET /api/reviews/{id}/since` (`lib/reviewSince.ts`). Absent when
+  /// there is no verdict or no later patchset.
+  sinceLabel?: string | null;
 }
 
 export default function PatchsetStrip({
@@ -27,6 +31,7 @@ export default function PatchsetStrip({
   onSelectPs,
   onComparePick,
   onToggleCompare,
+  sinceLabel,
 }: PatchsetStripProps) {
   return (
     <>
@@ -82,6 +87,11 @@ export default function PatchsetStrip({
           {compareMode ? "Comparing…" : "Compare two"}
         </button>
       </div>
+      {sinceLabel && (
+        <p className="kbc-review__since" data-kbc-review-since>
+          {sinceLabel}
+        </p>
+      )}
       {compareMode && (
         <p className="kbc-review__compare-hint" data-kbc-review-compare-hint>
           {fromPs == null

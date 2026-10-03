@@ -296,7 +296,13 @@ the finding's cited lines, capped at 20 later patchsets
 (`touched_in_capped: true` when more existed). Derived per read, never
 stored, never a disposition — evidence the author acted near the location,
 never a claim that anything was "fixed"; `kb-code review findings list`
-prints it as `touched ps3 (exact)` after the location. `GET
+prints it as `touched ps3 (exact)` after the location. When the later
+patchset sits on a DIFFERENT base (a rebase), the tip-to-tip diff also holds
+base movement, so (v0.44 F9) a hunk only counts when it lies on lines the
+author's own change set newly touches (the `review since` derivation below);
+upstream-only hunks produce no entry, and if the author's change set cannot be
+read the entry degrades to `overlap: "rebased"` rather than claim the author
+acted. `GET
 `/api/reviews/{id}/findings/recurrence`
 (bearer) surfaces which of a review's own findings recur across the repo's
 other reviews, off the same `recurrence_pairs` query `review analytics`
@@ -901,9 +907,11 @@ Two other places the base model reaches the SPA:
   chain. `BaseSource::MergeRef` is a parseable slug and a display label
   and nothing else. `refs/kbc/prm/<n>` exists as a ref-NAME builder and
   parser for store-wide GC attribution; nothing fetches or writes it.
-* **A base watcher / rebase-aware interdiff.** `PatchsetStrip` has a
-  compare mode with two picked patchsets; the base model does not drive
-  it, and an interdiff is not rebase-aware.
+* **A base watcher.** `PatchsetStrip` has a compare mode with two picked
+  patchsets; the base model does not drive it. (Rebase-aware author deltas
+  now exist as `review since` / `GET /api/reviews/{id}/since`; the
+  tip-to-tip interdiff itself is unchanged and the Room's "Author changes
+  only" switch filters its file list by that delta.)
 * **A `review explain-base` verb.** The resolution chain is a pure
   function (`resolve_pr_base`, `classify_base`) and is fully tested, but
   no HTTP route or CLI verb exposes "the chain as evaluated" today.
@@ -1378,7 +1386,10 @@ that one state_json parse.
   keys are Phase 2 and `credential = "deploy-key"` is refused at resolve
   time, so there is nothing to manage. `key_fingerprint` / `key_read_only`
   are columns reserved for it.
-* A rebase-aware interdiff, and any base watcher.
+* Carry-forward of findings/verdicts across rebase-only patchsets, a
+  one-click re-affirm, the agent queue and the context bundle (the
+  rebase-aware author delta shipped as `review since`), and any base
+  watcher.
 
 ## Credentials: the fetch slot and the api slot
 
@@ -1735,6 +1746,7 @@ predates the field, the documented 404 to 8 mapping stands.
 | `review verify <REF> [--ps N] [--min-findings N]` | the post-compose gate: the document is present and lints clean, the findings count, every anchor resolves, the verdict sits on the latest patchset. **Exits 3 when any check fails** |
 | `review sync --repo R {--pr N [--title T] [--base SPEC] \| --open [--merged-since DATE]} [--dry-run] [--wait[=SECS]] [--reopen]` | ONE idempotent daemon operation per PR: create the review if missing, fetch base + head into the store, snapshot ONLY when `(tip, merge-base)` changed. A merged PR is final (`reason: merged-final`). `--open` runs it for every open PR, SEQUENTIALLY under the per-repo lock, and exits 7 when some failed |
 | `review status <REF> [--fetch]` | has the PR head moved past the LATEST patchset tip? base state, file-count drift against the forge, verdict staleness, open findings. Read-only; `--fetch` fetches into the store first and writes no row |
+| `review since <REF> [--from verdict\|psN] [--to psN\|latest]` | v0.44 F9, `GET /api/reviews/{id}/since` (`kbc-review-since/1`): what the AUTHOR changed between two patchsets. Each patchset is diffed against its OWN base with `-U0` (no rename detection), every hunk is addressed with `kbc-hunkid/1`, and the ids are compared as per-path COUNTS (identical changes share an id) into `paths[{path,carried,new,gone}]`, `author_delta{new_hunks,gone_hunks,paths_changed}`, `rebase_only` (nothing new or gone) and `bases{from,to,moved}`. A pure rebase reads `rebase_only: true`; an upstream edit in a file the PR touches is not counted; conflict resolution rightly shows as new hunks. Computed per read (memoised on the immutable sha pair), never stored, never a verdict, never "fixed". The ids are over `-U0` hunks, so they are NOT the SPA's stored viewed-hunk ids. `from=verdict` needs a recorded verdict (400 otherwise) |
 | `review retrack <ID\|pr:N> [--base SPEC] [--dry-run]` | one review: classify against a FRESHLY resolved target and re-capture when something would mint |
 | `review retrack --all [--repo R] [--pinned\|--legacy] --dry-run\|--yes` | every review in scope. `--yes` is required to write; it applies ONLY `stale-pin` rows. `custom` rows (a pin that is not an ancestor of the target) are always left for a human, `equivalent` rows need nothing |
 | `review compose ID {--from-file FILE\|--stdin}` / `--doc review.md` | the one-shot authoring transaction (see **Review — `kbc-review/1`** above) |
