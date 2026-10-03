@@ -974,6 +974,14 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/reviews/{id}/status",
             get(crate::review_sync::review_status_route),
         )
+        // v0.44 F9 — `GET /api/reviews/{id}/since?from=psN|verdict&to=psN`:
+        // what the AUTHOR changed between two patchsets, each diffed
+        // against its own base (`crate::review_since`). A bearer read,
+        // derived per request, never a verdict.
+        .route(
+            "/reviews/{id}/since",
+            get(crate::review_since::review_since_route),
+        )
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))
         // RS-U10a — the patchset's own git views, computed by the daemon
