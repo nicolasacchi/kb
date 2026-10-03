@@ -74,6 +74,86 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The source with `//` line comments and `/* */` blocks removed (comment
+/// markers inside a string literal are text). A mention of `impl Posture for
+/// X` or `assert_default_is_restrictive::<X>()` in a comment or a string must
+/// not satisfy the inventory, so the item checks below run on this.
+fn code_only(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_block = false;
+    for line in text.lines() {
+        let b: Vec<char> = line.chars().collect();
+        let (mut i, mut in_str) = (0, false);
+        let mut kept = String::new();
+        while i < b.len() {
+            let two: String = b[i..(i + 2).min(b.len())].iter().collect();
+            if in_block {
+                if two == "*/" {
+                    in_block = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            } else if in_str {
+                // A string's contents are blanked: they can never be an item.
+                if b[i] == '\\' {
+                    i += 2;
+                    continue;
+                }
+                if b[i] == '"' {
+                    in_str = false;
+                    kept.push('"');
+                }
+                i += 1;
+            } else if two == "//" {
+                break;
+            } else if two == "/*" {
+                in_block = true;
+                i += 2;
+            } else {
+                if b[i] == '"' {
+                    in_str = true;
+                }
+                kept.push(b[i]);
+                i += 1;
+            }
+        }
+        out.push_str(&kept);
+        out.push('\n');
+    }
+    out
+}
+
+/// Last path segment of a type token, ignoring generics and a trailing `{`.
+fn type_name_of(tok: &str) -> &str {
+    let tok = tok.trim_end_matches('{');
+    let tok = tok.split('<').next().unwrap_or(tok);
+    tok.rsplit("::").next().unwrap_or(tok)
+}
+
+/// Does `code` contain the ITEM `impl [path::]Posture for [path::]name`?
+fn implements_posture(code: &str, name: &str) -> bool {
+    code.lines().any(|l| {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        t.windows(4).any(|w| {
+            w[0] == "impl"
+                && w[1].rsplit("::").next() == Some("Posture")
+                && w[2] == "for"
+                && type_name_of(w[3]) == name
+        })
+    })
+}
+
+/// Does `code` contain a CALL `assert_default_is_restrictive::<[path::]name>(`?
+fn pins_default(code: &str, name: &str) -> bool {
+    const CALL: &str = "assert_default_is_restrictive::<";
+    code.match_indices(CALL).any(|(i, _)| {
+        let rest = &code[i + CALL.len()..];
+        rest.split_once(">(")
+            .is_some_and(|(ty, _)| ty.rsplit("::").next() == Some(name))
+    })
+}
+
 /// `(enum name -> files)` for every enum with a `#[default]` variant, plus
 /// the concatenated source of all scanned files (for the impl/test search).
 fn scan() -> (BTreeMap<String, Vec<String>>, String) {
@@ -120,7 +200,7 @@ fn scan() -> (BTreeMap<String, Vec<String>>, String) {
                 }
             }
         }
-        all.push_str(&text);
+        all.push_str(&code_only(&text));
         all.push('\n');
     }
     (found, all)
@@ -161,15 +241,11 @@ fn posture_entries_implement_the_trait_and_pin_their_default() {
         match class {
             Posture => {
                 assert!(
-                    all.contains(&format!("Posture for {name}")),
-                    "`{name}` is listed as Posture but has no `impl Posture for {name}`"
+                    implements_posture(&all, name),
+                    "`{name}` is listed as Posture but has no `impl Posture for {name}` item"
                 );
-                let pinned = all.lines().any(|l| {
-                    l.contains("assert_default_is_restrictive::<")
-                        && l.contains(&format!("{name}>"))
-                });
                 assert!(
-                    pinned,
+                    pins_default(&all, name),
                     "`{name}` implements Posture but no test calls \
                      `assert_default_is_restrictive::<{name}>()`"
                 );
@@ -177,4 +253,26 @@ fn posture_entries_implement_the_trait_and_pin_their_default() {
             Reviewed(why) => assert!(!why.trim().is_empty(), "`{name}`: empty review reason"),
         }
     }
+}
+
+/// The item checks parse code: a comment or string that merely MENTIONS the
+/// impl / the pinning call must not satisfy the inventory.
+#[test]
+fn item_checks_ignore_comments_and_strings() {
+    let fake = "// impl Posture for Ghost {\n\
+                /* assert_default_is_restrictive::<Ghost>() */\n\
+                let s = \"impl Posture for Ghost {\";\n\
+                let t = \"assert_default_is_restrictive::<Ghost>()\";\n";
+    let code = code_only(fake);
+    assert!(!implements_posture(&code, "Ghost"), "{code}");
+    assert!(!pins_default(&code, "Ghost"), "{code}");
+
+    let real = "impl kb_core::posture::Posture for Real {\n\
+                fn restrictive() -> Self { Real::A }\n}\n\
+                #[test] fn t() { assert_default_is_restrictive::<Real>(); }\n";
+    let code = code_only(real);
+    assert!(implements_posture(&code, "Real"));
+    assert!(pins_default(&code, "Real"));
+    assert!(!implements_posture(&code, "Rea"), "prefix is not a match");
+    assert!(!pins_default(&code, "Rea"));
 }

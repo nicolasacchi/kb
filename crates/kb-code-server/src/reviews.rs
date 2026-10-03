@@ -3423,7 +3423,7 @@ pub struct SetVerdictBody {
 /// GATED (`review_mutations_gate`: loopback unconditionally, else `[review]
 /// remote_mutations`, default OFF — see [`crate::review_gate::
 /// review_mutations_gate`]). Allowed on closed reviews. A review with zero
-/// patchsets is `400`. Identical `(state, note)` is a no-op
+/// patchsets is `400`. Identical `(state, note, ps)` is a no-op
 /// (`{changed:false}`, no SSE).
 pub async fn put_verdict(
     State(state): State<SharedState>,

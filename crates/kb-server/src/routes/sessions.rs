@@ -696,6 +696,38 @@ fn ids_needing_memory_count(rows: &[SessionOut], undistilled: bool) -> Vec<Strin
         .collect()
 }
 
+/// Bounded log of the session ids `list_page` asked the corpora to count
+/// memories for (newest last). It exists so a ROUTE-level test can prove the
+/// `?undistilled=1` skip really happens: the skipped rows are, by
+/// construction, never in the response, so the response alone cannot tell
+/// "skipped" from "counted then filtered".
+static MEMORY_COUNT_PROBES: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+const MEMORY_COUNT_PROBE_CAP: usize = 4096;
+
+fn note_memory_count_probe(ids: &[String]) {
+    let mut log = MEMORY_COUNT_PROBES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for id in ids {
+        if log.len() >= MEMORY_COUNT_PROBE_CAP {
+            log.pop_front();
+        }
+        log.push_back(id.clone());
+    }
+}
+
+/// The recent session ids whose `memory_count` a list page fetched (test
+/// observability for the undistilled skip; see [`MEMORY_COUNT_PROBES`]).
+pub fn memory_count_probe_log() -> Vec<String> {
+    MEMORY_COUNT_PROBES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect()
+}
+
 /// One keyset page of the sessions list, cross-kb merged, truncated to
 /// `limit`, with `memory_count` filled for the surviving rows. Returns
 /// `(rows, had_more)`.
@@ -784,6 +816,7 @@ async fn list_page(
     // read: it's the persisted V0017 column, projected by
     // `SessionOut::from_row` above (S4).
     let page_ids = ids_needing_memory_count(&out, undistilled);
+    note_memory_count_probe(&page_ids);
     let page_ids = &page_ids;
     let mut count_futs: Vec<super::CorpusFut<'_, HashMap<String, u64>>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {

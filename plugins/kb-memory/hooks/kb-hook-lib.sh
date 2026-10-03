@@ -161,6 +161,29 @@ hook_spool_dir() {
   fi
 }
 
+# hook_spool_key <raw-session-id>
+# The spool file stem. A plain id ([A-Za-z0-9-], <=80 chars - every UUID) keeps
+# its own name; anything else gets a sanitised prefix PLUS a hash of the FULL
+# raw id, so two distinct ids ("a_b" vs "a-b", or two ids sharing an 80-char
+# prefix) can never share one spool slot and overwrite each other.
+hook_spool_key() {
+  local raw="$1" safe h
+  safe="$(printf '%s' "$raw" | tr -c 'a-zA-Z0-9' '-')"
+  if [ -n "$raw" ] && [ "$safe" = "$raw" ] && [ "${#raw}" -le 80 ]; then
+    printf '%s' "$raw"
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    h="$(printf '%s' "$raw" | sha256sum | cut -c1-16)"
+  elif command -v shasum >/dev/null 2>&1; then
+    h="$(printf '%s' "$raw" | shasum -a 256 | cut -c1-16)"
+  else
+    h="$(printf '%s' "$raw" | cksum | tr ' ' '-')"
+  fi
+  safe="$(printf '%s' "$safe" | cut -c1-48)"
+  printf '%s-%s' "${safe:-session}" "$h"
+}
+
 # hook_spool_put <transcript> <raw-session-id> [cwd]
 # Dir 0700, files 0600, one item per session (latest snapshot wins, as the
 # corpus file does). Refuses a transcript over the 48MiB capture cap. Returns
@@ -173,8 +196,7 @@ hook_spool_put() {
     echo "kb-hook-lib: not spooling oversized transcript ($size bytes > 48MiB cap): $tpath" >&2
     return 1
   fi
-  key="$(printf '%s' "$raw_sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
-  [ -n "$key" ] || key=session
+  key="$(hook_spool_key "$raw_sid")"
   (
     umask 077
     mkdir -p "$dir" && chmod 700 "$dir" || exit 1
@@ -195,8 +217,7 @@ hook_spool_put() {
 hook_spool_drop() {
   local dir key
   dir="$(hook_spool_dir)" || return 0
-  key="$(printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
-  [ -n "$key" ] || key=session
+  key="$(hook_spool_key "$1")"
   rm -f "$dir/$key.jsonl" "$dir/$key.meta"
 }
 

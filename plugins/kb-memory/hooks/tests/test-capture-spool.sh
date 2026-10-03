@@ -111,6 +111,15 @@ el=$(( $(date +%s) - t0 ))
 [ -f "$KB_CAPTURE_SPOOL/$SID.jsonl" ] && ok "the hung capture is spooled, not lost" || bad "the hung capture is spooled, not lost"
 [ "$(corpus_files)" = 0 ] && ok "nothing raw reached the corpus" || bad "nothing raw reached the corpus"
 
+echo "== distinct session ids never share a spool slot =="
+rm -rf "$KB_SESSIONS_DIR" "$KB_CAPTURE_SPOOL"; mkdir -p "$KB_SESSIONS_DIR"
+for sid in "ab_cd" "ab-cd" "ab cd"; do
+  printf '%s' "{\"session_id\":\"$sid\",\"transcript_path\":\"$TRANSCRIPT\",\"cwd\":\"$TMPROOT\"}" \
+    | PATH="$TMPROOT/failbin:$PATH" bash "$HOOKS_DIR/kb-capture.sh" >/dev/null 2>&1
+done
+n_spooled="$(find "$KB_CAPTURE_SPOOL" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+[ "$n_spooled" = 3 ] && ok "three distinct ids -> three spool items" || bad "three distinct ids -> three spool items (got $n_spooled)"
+
 ROLLOUT="$TMPROOT/rollout.jsonl"
 cat >"$ROLLOUT" <<JSONL
 {"timestamp":"2026-03-01T09:00:00.000Z","type":"session_meta","payload":{"id":"codex-sess-0001","timestamp":"2026-03-01T09:00:00.000Z","cwd":"/tmp/x","originator":"codex","cli_version":"0"}}

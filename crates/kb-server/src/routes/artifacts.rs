@@ -164,6 +164,35 @@ pub struct CreateBody {
     pub client_ref: Option<String>,
 }
 
+/// True when `name` has the exact shape of a KEYED memory file for the
+/// `-<client_ref>.html` suffix: a non-empty `memory_slug` stem (lowercase
+/// alphanumerics joined by single dashes, at most 60 chars) followed by the
+/// suffix, and nothing else. A bare `ends_with` also matched unrelated names
+/// such as `<slug>-<ts>-<n>.html` or `x_<anything>-<ref>.html`.
+fn is_keyed_filename_for(name: &str, suffix: &str) -> bool {
+    let Some(stem) = name.strip_suffix(suffix) else {
+        return false;
+    };
+    !stem.is_empty()
+        && stem.len() <= 60
+        && !stem.starts_with('-')
+        && !stem.ends_with('-')
+        && !stem.contains("--")
+        && stem
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// The title + body region of a rendered memory artifact (`<h1>…` up to
+/// `</main>`) — the part a `client_ref` replay must compare. Metas (tags,
+/// pin, salience, `kb-created`) live in `<head>` and change legitimately
+/// after the write.
+fn memory_content_region(html: &str) -> Option<&str> {
+    let start = html.find("<h1>")?;
+    let end = html.rfind("\n</main>")?;
+    (start < end).then(|| &html[start..end])
+}
+
 /// The accepted shape of [`CreateBody::client_ref`].
 pub(crate) fn valid_client_ref(s: &str) -> bool {
     (8..=64).contains(&s.len())
@@ -433,7 +462,7 @@ pub(crate) fn ingest_keyed(
             .flatten()
             .any(|e| {
                 let n = e.file_name().to_string_lossy().into_owned();
-                n.ends_with(&suffix) && n != filename
+                n != filename && is_keyed_filename_for(&n, &suffix)
             });
         if owned_elsewhere {
             return Err(error_to_problem_json(&kb_core::Error::Conflict(format!(
@@ -442,20 +471,15 @@ pub(crate) fn ingest_keyed(
             ))));
         }
         if abs.exists() {
-            // Same key, same filename: it is a replay ONLY if the content is
-            // the same. Re-render with the stored creation stamp (the one
-            // field that legitimately differs) and compare bytes; anything
-            // else is a reuse of the key for different text and must be an
-            // error, not a silent drop of the new text.
+            // Same key, same filename: it is a replay ONLY if the INGESTED
+            // content is the same. Compare the title + body region, not the
+            // whole file: a memory pinned / flagged / re-tagged / re-scored
+            // between the write and the replay has legitimately different
+            // metas (and `kb-created`), and must still answer 200.
             let stored = std::fs::read_to_string(&abs).unwrap_or_default();
-            let created = stored
-                .split("<meta name=\"kb-created\" content=\"")
-                .nth(1)
-                .and_then(|t| t.split('"').next())
-                .and_then(|n| n.parse::<i64>().ok());
-            let same = match created {
-                Some(c) => render_with_created(c) == stored,
-                None => false,
+            let same = match (memory_content_region(&stored), memory_content_region(&html)) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
             };
             if !same {
                 return Err(error_to_problem_json(&kb_core::Error::Conflict(format!(

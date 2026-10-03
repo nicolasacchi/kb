@@ -25,26 +25,35 @@ cd "$(dirname "$0")/.."
 ALLOW=scripts/ci/ts-shadow-allowlist.txt
 status=0
 found=$(mktemp)
-trap 'rm -f "$found"' EXIT
+drift_code=$(mktemp)
+trap 'rm -f "$found" "$drift_code"' EXIT
 
-# Print a TS file with /* block */ and // line comments removed (naive about
-# comment markers inside string literals, which drift.ts does not use).
+# Print a TS file with /* block */ and // line comments removed. A tiny
+# tokenizer, not a regex: comment markers inside '...', "..." and `...`
+# string literals (a "//" URL, a glob) are text, not comments, so code that
+# follows such a string on the same line is kept. Backtick strings may span
+# lines; single/double quotes end at the line end.
 strip_comments() {
   awk '
     {
-      line = $0; out = ""
-      while (length(line) > 0) {
+      line = $0; out = ""; n = length(line); i = 1
+      while (i <= n) {
+        c = substr(line, i, 1); d = substr(line, i, 2)
         if (inblock) {
-          i = index(line, "*/")
-          if (i == 0) { line = ""; break }
-          line = substr(line, i + 2); inblock = 0
-        } else {
-          b = index(line, "/*"); l = index(line, "//")
-          if (l > 0 && (b == 0 || l < b)) { out = out substr(line, 1, l - 1); line = ""; break }
-          if (b > 0) { out = out substr(line, 1, b - 1); line = substr(line, b + 2); inblock = 1 }
-          else { out = out line; line = "" }
+          if (d == "*/") { inblock = 0; i += 2 } else { i++ }
+        } else if (q != "") {
+          out = out c
+          if (c == "\\" && i < n) { out = out substr(line, i + 1, 1); i += 2; continue }
+          if (c == q) q = ""
+          i++
+        } else if (d == "/*") { inblock = 1; i += 2 }
+        else if (d == "//") { break }
+        else {
+          if (c == "\"" || c == "\047" || c == "`") q = c
+          out = out c; i++
         }
       }
+      if (q != "`") q = ""
       print out
     }' "$1"
 }
@@ -53,7 +62,7 @@ for app in web web-code; do
   gen="$app/src/api/generated"
   [ -d "$gen" ] || continue
   drift="$app/src/api/drift.ts"
-  drift_code=$(mktemp)
+  : > "$drift_code"
   if [ -f "$drift" ]; then strip_comments "$drift" > "$drift_code"; fi
   for f in "$gen"/*.ts; do
     name=$(basename "$f" .ts)
@@ -68,7 +77,6 @@ for app in web web-code; do
         echo "$app:$name:$path" >> "$found"
       done || true
   done
-  rm -f "$drift_code"
 done
 sort -u -o "$found" "$found"
 
