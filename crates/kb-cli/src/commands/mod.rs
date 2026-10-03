@@ -8,6 +8,7 @@ pub mod bench;
 pub mod board;
 pub mod capture;
 pub mod cat;
+pub mod chores;
 pub mod comments;
 pub mod comments_watch;
 pub mod compact;
