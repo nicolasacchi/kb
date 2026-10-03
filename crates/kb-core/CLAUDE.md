@@ -100,6 +100,14 @@ subtly at runtime.
    boxed future (`BoxFuture`), dodging async-fn-in-trait the same way the
    share host's enum does (see root invariant on `ShareBackend`).
 
+## v0.44 notes (docs-facing)
+
+- `docs/configuration.md` must name every `pub` key of `BackupSection` and
+  `ServerSection` (`config::docs_coverage_tests`); add the doc row in the same
+  change as the key, or that test fails.
+- A notes-carrying `.review` sidecar is stamped `kb-comments/2`; see root
+  invariant #6 before touching `wire_schema_for`.
+
 ## When to update this file
 
 Add an invariant here when it lives entirely inside `kb-core` and a
