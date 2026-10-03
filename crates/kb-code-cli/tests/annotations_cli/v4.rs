@@ -297,3 +297,216 @@ async fn suggest_apply_non_loopback_404_says_requires_loopback() {
     .failure()
     .stderr(contains("requires loopback"));
 }
+
+/// v0.44 X4 — the DAEMON stores the CLI's resolved author on every
+/// finding-creating verb (add / import / compose), not just on annotations:
+/// `KB_HARNESS=omp` -> `omp`, an upper-case `--author Codex` is normalised to
+/// `codex`, and `--as you` opts out. Before, only the CLI's unit tests
+/// covered the ladder; a verb that forgot to send `author` would have been
+/// saved as the daemon's default and nothing would have failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn findings_add_import_and_compose_store_the_resolved_author() {
+    let repo_tmp = fixture_repo_with_feature();
+    let dir = repo_tmp.path();
+    let (_tmp, url, task) = boot(dir, "fixture").await;
+
+    let out = kb()
+        .args([
+            "review",
+            "start",
+            "feature",
+            "--repo",
+            "fixture",
+            "--base",
+            "main",
+            "--title",
+            "author e2e",
+            "--daemon",
+            &url,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let rid = created["id"].as_i64().unwrap().to_string();
+
+    let finding = |slug: &str, title: &str| {
+        serde_json::json!({
+            "slug": slug,
+            "severity": "concern",
+            "category": "Testing",
+            "location": {"path": "lib.rs", "kind": "single", "lines": [1]},
+            "title": title,
+            "rationale": "because tests say so",
+        })
+    };
+    let tmpdir = tempfile::tempdir().unwrap();
+    let write = |name: &str, v: &serde_json::Value| {
+        let p = tmpdir.path().join(name);
+        std::fs::write(&p, serde_json::to_vec(v).unwrap()).unwrap();
+        p.to_string_lossy().to_string()
+    };
+
+    // findings add under KB_HARNESS=omp
+    kb().env_remove("KB_CODE_AUTHOR")
+        .env("KB_HARNESS", "omp")
+        .args([
+            "review",
+            "findings",
+            "add",
+            &rid,
+            "--severity",
+            "concern",
+            "--category",
+            "Testing",
+            "--path",
+            "lib.rs",
+            "--line",
+            "1",
+            "-m",
+            "added by omp",
+            "--rationale",
+            "r",
+            "--daemon",
+            &url,
+        ])
+        .assert()
+        .success();
+
+    // findings import under --author Codex (upper-case -> codex)
+    let import = write(
+        "import.json",
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding("f-imported", "imported by codex")],
+        }),
+    );
+    kb().env_remove("KB_CODE_AUTHOR")
+        .env("KB_HARNESS", "omp")
+        .args([
+            "review",
+            "findings",
+            "import",
+            &rid,
+            "--from-file",
+            &import,
+            "--author",
+            "Codex",
+            "--daemon",
+            &url,
+        ])
+        .assert()
+        .success();
+
+    // compose (V0 body) under KB_CODE_AUTHOR=grok, in additive mode so the
+    // import above is not superseded
+    let compose = write(
+        "compose.json",
+        &serde_json::json!({
+            "summary": "composed",
+            "findings": {
+                "schema": "kbc-findings/1",
+                "mode": "additive",
+                "findings": [finding("f-composed", "composed by grok")],
+            },
+        }),
+    );
+    kb().env_remove("KB_HARNESS")
+        .env("KB_CODE_AUTHOR", "grok")
+        .args([
+            "review",
+            "compose",
+            &rid,
+            "--from-file",
+            &compose,
+            "--daemon",
+            &url,
+        ])
+        .assert()
+        .success();
+
+    // findings add --as you -> the human
+    kb().env("KB_HARNESS", "omp")
+        .args([
+            "review",
+            "findings",
+            "add",
+            &rid,
+            "--severity",
+            "concern",
+            "--category",
+            "Testing",
+            "--path",
+            "lib.rs",
+            "--line",
+            "1",
+            "-m",
+            "added by a human",
+            "--rationale",
+            "r",
+            "--as",
+            "you",
+            "--daemon",
+            &url,
+        ])
+        .assert()
+        .success();
+
+    let out = kb()
+        .args([
+            "review", "findings", "list", &rid, "--all", "--daemon", &url, "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let rows = listed["findings"].as_array().expect("findings array");
+    let finding_of = |title: &str| -> &serde_json::Value {
+        rows.iter()
+            .find(|f| f["title"] == title)
+            .unwrap_or_else(|| panic!("no finding titled {title:?} in {listed}"))
+    };
+
+    // Manual findings store the author on the finding record itself ...
+    assert_eq!(finding_of("added by omp")["author"], "omp");
+    assert_eq!(finding_of("added by a human")["author"], "you");
+
+    // ... imported / composed findings (origin=import) leave
+    // `review_findings.author` NULL by design and carry the supplied author on
+    // their linked annotation row, so read that back from the daemon.
+    let anns: serde_json::Value = reqwest::Client::new()
+        .get(format!("{url}/api/annotations"))
+        .query(&[("repo", "fixture"), ("path", "lib.rs")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let anns = anns["annotations"].as_array().expect("annotations array");
+    let ann_author = |title: &str| -> String {
+        let id = finding_of(title)["annotation_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("finding {title:?} has no annotation_id"))
+            .to_string();
+        anns.iter()
+            .find(|a| a["id"] == id.as_str())
+            .unwrap_or_else(|| panic!("annotation {id} for {title:?} not listed: {anns:?}"))
+            ["author"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(ann_author("imported by codex"), "codex");
+    assert_eq!(ann_author("composed by grok"), "grok");
+    // and the manual ones agree on their annotation rows too
+    assert_eq!(ann_author("added by omp"), "omp");
+    assert_eq!(ann_author("added by a human"), "you");
+
+    task.abort();
+}

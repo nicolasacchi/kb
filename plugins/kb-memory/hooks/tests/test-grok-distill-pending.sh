@@ -30,6 +30,8 @@ cat >"$TMPROOT/bin/kb" <<'EOF'
 # write path, so this test matrix exercises "cover the success of
 # either" write path (see test 1b below for the primary-path case).
 if [ "$1" = "sessions" ] && [ "$2" = "capture" ]; then exit 1; fi
+# v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
+if [ "$1" = "sessions" ] && [ "$2" = "scrub" ]; then exec cat; fi
 if [ "$1" = "recall" ]; then echo '{"hits":[]}'; exit 0; fi
 exit 0
 EOF
@@ -86,6 +88,8 @@ fi
 cat >"$TMPROOT/bin/kb" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1" = "sessions" ] && [ "$2" = "capture" ]; then exit 1; fi
+# v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
+if [ "$1" = "sessions" ] && [ "$2" = "scrub" ]; then exec cat; fi
 if [ "$1" = "recall" ]; then echo '{"hits":[]}'; exit 0; fi
 exit 0
 EOF
