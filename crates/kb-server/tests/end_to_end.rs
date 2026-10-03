@@ -13822,6 +13822,7 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
         v.sort();
         v
     };
+    let probes_before = kb_server::routes::sessions::memory_count_probe_log();
     let queue = get("/api/sessions?undistilled=1&limit=50".into()).await;
     assert_eq!(
         ids_of(&queue),
@@ -13862,6 +13863,29 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
     assert!(ids_of(&future).is_empty(), "{future}");
     let triv = get("/api/sessions?undistilled=1&substance=trivial".into()).await;
     assert!(ids_of(&triv).is_empty(), "{triv}");
+
+    // v044-X9 - route-level pin of the memory_count skip. Across the
+    // undistilled walks above, the corpora were asked to count memories ONLY
+    // for rows that can survive (commit_count > 0); the commit-less
+    // `sid-und-c` and the zero-commit rows were never probed. Ids are unique
+    // to this test, so parallel tests cannot interfere.
+    let probes_after = kb_server::routes::sessions::memory_count_probe_log();
+    let new_probes: Vec<&String> = probes_after
+        .iter()
+        .skip(probes_before.len().min(probes_after.len()))
+        .collect();
+    let count_of = |sid: &str| new_probes.iter().filter(|p| p.as_str() == sid).count();
+    assert!(
+        count_of("sid-und-a") > 0 && count_of("sid-und-e") > 0,
+        "rows that can survive are probed: {new_probes:?}"
+    );
+    assert_eq!(
+        count_of("sid-und-c"),
+        0,
+        "a commit-less row can never survive the undistilled walk, so its memory \
+         count must not be fetched: {new_probes:?}"
+    );
+
     // Without the flag nothing is filtered.
     let plain = get("/api/sessions?limit=50".into()).await;
     assert_eq!(ids_of(&plain).len(), 5, "{plain}");
