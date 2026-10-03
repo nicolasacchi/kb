@@ -182,7 +182,10 @@ async fn queue_run(a: &QueueArgs) -> Result<(), AgentError> {
             Ok(b) => b,
             Err(e) => {
                 // A transient daemon error must not end a /loop's watch.
-                eprintln!("[kb-code review queue] poll failed: {e}; retrying");
+                eprintln!(
+                    "[kb-code review queue] poll failed: {} ({}); retrying",
+                    e.message, e.code
+                );
                 continue;
             }
         };

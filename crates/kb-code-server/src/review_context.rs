@@ -8,28 +8,14 @@
 //! bundle is a PURE COMPOSITION of reads that already exist, in a fixed
 //! order, cut by a token budget:
 //!
-//!   1. `header`        — title, state, refs, PR binding, the patchset (with
-//!                        why it was minted), the base envelope and HOW the
-//!                        base was resolved, the verdict and the local drift
-//!                        probe. Always present; never cut.
-//!   2. `threads`       — the open human threads (non-finding), exactly the
-//!                        objects `GET …/comments` returns
-//!                        ([`crate::review_comments::compose_comments`]).
-//!   3. `findings`      — the findings with dispositions, exactly the objects
-//!                        `GET …/findings` returns
-//!                        ([`crate::review_findings::compose_findings_list`]),
-//!                        blockers first.
-//!   4. `other_reviews` — findings a human DISPUTED or WAIVED in other
-//!                        reviews of this repo on the paths this patchset
-//!                        changes ([`crate::store::Store::other_review_judgements`]).
-//!   5. `since`         — what the author changed since the verdict
-//!                        ([`crate::review_since`]), when a verdict sits on an
-//!                        earlier patchset.
-//!   6. `reading_order` — the deterministic reading order of the change set
-//!                        ([`crate::review_map::build_order_sync`]).
-//!   7. `files`         — the change set (stat rows).
-//!   8. `patch`         — the patch text in READING ORDER until the budget
-//!                        runs out.
+//! 1. `header`: title, state, refs, PR binding, the patchset (with why it was minted), the base envelope and HOW the base was resolved, the verdict and the local drift probe. Always present; never cut.
+//! 2. `threads`: the open human threads (non-finding), exactly the objects `GET …/comments` returns ([`crate::review_comments::compose_comments`]).
+//! 3. `findings`: the findings with dispositions, exactly the objects `GET …/findings` returns ([`crate::review_findings::compose_findings_list`]), blockers first.
+//! 4. `other_reviews`: findings a human DISPUTED or WAIVED in other reviews of this repo on the paths this patchset changes ([`crate::store::Store::other_review_judgements`]).
+//! 5. `since`: what the author changed since the verdict ([`crate::review_since`]), when a verdict sits on an earlier patchset.
+//! 6. `reading_order`: the deterministic reading order of the change set ([`crate::review_map::build_order_sync`]).
+//! 7. `files`: the change set (stat rows).
+//! 8. `patch`: the patch text in READING ORDER until the budget runs out.
 //!
 //! # The budget rule
 //!
@@ -407,8 +393,8 @@ pub fn resolution_chain(pr_bound: bool, recorded_source: Option<&str>) -> Vec<Ru
                 }
             };
             Rung {
-                rung: *rung,
-                label: *label,
+                rung,
+                label,
                 status,
             }
         })
