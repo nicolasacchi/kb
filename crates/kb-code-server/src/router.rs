@@ -990,6 +990,18 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/reviews/{id}/since",
             get(crate::review_since::review_since_route),
         )
+        // v0.44 F9b — `GET /api/reviews/{id}/context?ps=&budget=`: the one
+        // budgeted context bundle for the reviewing agent, and `GET
+        // /api/reviews/{id}/explain-base`: how the base was resolved
+        // (`crate::review_context`). Bearer reads, derived per request.
+        .route(
+            "/reviews/{id}/context",
+            get(crate::review_context::review_context_route),
+        )
+        .route(
+            "/reviews/{id}/explain-base",
+            get(crate::review_context::review_explain_base_route),
+        )
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))
         // RS-U10a — the patchset's own git views, computed by the daemon

@@ -202,6 +202,7 @@ mod retrack_cmd;
 // RS-U10b — `review sync` / `review status`.
 mod review_sync;
 // v0.44 F9 — `review since` (rebase-aware author delta).
+mod review_context;
 mod review_queue;
 mod review_since;
 
@@ -4488,6 +4489,22 @@ enum ReviewCmd {
     /// the command to run next. Computed per read, never a score; the
     /// daemon launches nothing.
     Queue(review_queue::QueueArgs),
+    /// `kb-code review context <REF> [--ps N] [--budget TOKENS] [--json]`
+    /// — v0.44 F9b: ONE deterministic context bundle for the agent
+    /// reviewing a patchset (`GET /api/reviews/{id}/context`,
+    /// `kbc-review-context/1`): header with how the base was resolved,
+    /// open human threads, findings, other reviews' disputes/waives on the
+    /// same paths, what the author changed since the verdict, the reading
+    /// order, the change set and the patch in reading order. A leading
+    /// part of the full content, never a summary; every cut is named under
+    /// `omitted`. Secret-denylisted files are named, never read.
+    Context(review_context::ContextArgs),
+    /// `kb-code review explain-base <REF> [--json]` — v0.44 F9b: how the
+    /// review's base was chosen (`GET /api/reviews/{id}/explain-base`,
+    /// `kbc-review-base-explain/1`): the resolution chain as the review
+    /// RECORDED it, the base envelope, and why each patchset exists. Does
+    /// not re-run the chain (no fetch).
+    ExplainBase(review_context::ExplainBaseArgs),
     /// `kb-code review compose ID {--from-file FILE|--stdin} [--json]` —
     /// V70-R: `POST /api/reviews/{id}/compose` (design doc D9 scoped to
     /// v0). LOOPBACK-ONLY. The one-shot authoring call: a `kbc-compose/1`
@@ -6586,6 +6603,8 @@ async fn run(cli: Cli) -> Result<()> {
             ReviewCmd::Status(a) => review_sync::status_cmd(a).await,
             ReviewCmd::Since(a) => review_since::since_cmd(a).await,
             ReviewCmd::Queue(a) => review_queue::queue_cmd(a).await,
+            ReviewCmd::Context(a) => review_context::context_cmd(a).await,
+            ReviewCmd::ExplainBase(a) => review_context::explain_base_cmd(a).await,
             ReviewCmd::Doc {
                 id,
                 ps,
@@ -30201,6 +30220,9 @@ mod tests {
             // v0.44 F9 — `review since`.
             review_since::review_since_request("verdict", "latest"),
             review_queue::agent_queue_request(Some("repo"), "open"),
+            // v0.44 F9b — `review context` / `review explain-base`.
+            review_context::review_context_request(Some(1), Some(1000)),
+            review_context::explain_base_request(),
         ];
         // V74-L3a — `kbc-recipe/1`'s four READS. `recipe_run_request`
         // returns owned pairs (its `p.`/`ctx.` keys are built at runtime),
@@ -30302,7 +30324,8 @@ mod tests {
             .chain(kb_code_server::review_sync::RS_U10B_ROUTES.iter())
             // v0.44 F9 — `review since`, same walk.
             .chain(kb_code_server::review_since::V044_F9_ROUTES.iter())
-            .chain(kb_code_server::review_queue::V044_F9_QUEUE_ROUTES.iter());
+            .chain(kb_code_server::review_queue::V044_F9_QUEUE_ROUTES.iter())
+            .chain(kb_code_server::review_context::V044_F9B_ROUTES.iter());
         for c in declared {
             let (path, query) = built
                 .iter()
