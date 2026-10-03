@@ -274,7 +274,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-nextest
 
@@ -1051,7 +1051,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: steps.changes.outputs.run == 'true'
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-nextest
 
@@ -1455,7 +1455,7 @@ jobs:
       - name: Install Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Install cargo-deny
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-deny
       # cargo-about is the same shape as cargo-deny: a prebuilt release binary
@@ -1475,7 +1475,7 @@ jobs:
       # that same version and committing the result, or the gate goes red for
       # a reason that has nothing to do with the dependency graph.
       - name: Install cargo-about
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-about@0.9.2
       - name: Install just (NOTICE drift recipe)
