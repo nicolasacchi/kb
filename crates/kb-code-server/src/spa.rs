@@ -103,27 +103,63 @@ fn with_security_headers(mut resp: Response<Body>) -> Response<Body> {
 }
 
 /// Resolve the SPA dist directory at boot. Order mirrors kb-server's
-/// `routes::spa::resolve_spa_dist` exactly (same two-step precedence, same
-/// "index.html must actually exist" check), substituting kb-code's own env
-/// var + directory name:
+/// `routes::spa::resolve_spa_dist` exactly (same precedence, same "index.html
+/// must actually exist" check), substituting kb-code's own env var +
+/// directory names:
 ///   1. `KB_CODE_SPA_DIST` env var (absolute path to a built dist dir)
 ///   2. `web-code/dist` relative to the current working directory
-///   3. `None` — the daemon serves `/api/*` only; every other path 404s
+///   3. `<exe dir>/../share/kb-code/web-code/dist` — the release tarball / image
+///      layout, so an installed `kb-code-server` finds its UI with no env var
+///   4. `None` — the daemon serves `/api/*` only; every other path 404s
 ///      (lets `cargo test`/CI boot the daemon without building the SPA).
 pub fn resolve_spa_dist() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("KB_CODE_SPA_DIST") {
+    resolve_spa_dist_from(
+        std::env::var("KB_CODE_SPA_DIST").ok(),
+        std::env::current_dir().ok(),
+        std::env::current_exe().ok(),
+    )
+}
+
+/// Pure core of [`resolve_spa_dist`] (all inputs explicit; unit-testable).
+pub(crate) fn resolve_spa_dist_from(
+    env: Option<String>,
+    cwd: Option<PathBuf>,
+    exe: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let has_index = |p: &PathBuf| p.join("index.html").is_file();
+    if let Some(p) = env {
         let pb = PathBuf::from(p);
-        if pb.join("index.html").is_file() {
+        if has_index(&pb) {
             return Some(pb);
         }
     }
-    let cwd = std::env::current_dir().ok()?;
-    let candidate = cwd.join("web-code").join("dist");
-    if candidate.join("index.html").is_file() {
-        Some(candidate)
-    } else {
-        None
+    if let Some(cwd) = cwd {
+        let candidate = cwd.join("web-code").join("dist");
+        if has_index(&candidate) {
+            return Some(candidate);
+        }
     }
+    if let Some(exe) = exe {
+        let mut exes = vec![exe.clone()];
+        if let Ok(real) = std::fs::canonicalize(&exe) {
+            if real != exe {
+                exes.push(real);
+            }
+        }
+        for e in exes {
+            if let Some(prefix) = e.parent().and_then(|bin| bin.parent()) {
+                let candidate = prefix
+                    .join("share")
+                    .join("kb-code")
+                    .join("web-code")
+                    .join("dist");
+                if has_index(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The fallback handler itself — resolved SPA dist (or a friendly 404 JSON
@@ -302,6 +338,34 @@ mod tests {
     // tests are (see that module's `ENV_LOCK`), so parallel `cargo test`
     // execution can't race one test's `set_var` against another's read.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // v044-F2: exe-relative SPA candidate (release tarball layout).
+    #[test]
+    fn spa_dist_resolves_next_to_the_executable() {
+        let root = tempfile::tempdir().unwrap();
+        let dist = root.path().join("share/kb-code/web-code/dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<html></html>").unwrap();
+        let exe = root.path().join("bin/kb-code-server");
+        let empty_cwd = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_spa_dist_from(None, Some(empty_cwd.path().into()), Some(exe.clone())),
+            Some(dist.clone())
+        );
+        // cwd's web-code/dist outranks the exe-relative candidate.
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cwd.path().join("web-code/dist")).unwrap();
+        std::fs::write(cwd.path().join("web-code/dist/index.html"), "x").unwrap();
+        assert_eq!(
+            resolve_spa_dist_from(None, Some(cwd.path().into()), Some(exe.clone())),
+            Some(cwd.path().join("web-code/dist"))
+        );
+        std::fs::remove_file(dist.join("index.html")).unwrap();
+        assert_eq!(
+            resolve_spa_dist_from(None, Some(empty_cwd.path().into()), Some(exe)),
+            None
+        );
+    }
 
     /// V70-A2 — the CSP's `script-src 'self'` (no `'unsafe-inline'`, no
     /// nonce) is only sound while the shell has NO inline script. Pinned

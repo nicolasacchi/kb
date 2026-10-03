@@ -35,16 +35,17 @@ same repo and the same tag, never a `kb` subcommand.
 Both images come from the one repo-root `Dockerfile`; kb-code's is its
 `kb-code-runtime` target, kb's is the (deliberately last) `runtime` stage.
 
-**Neither tarball bundles its SPA.** Both daemons resolve their web UI from
-disk at boot (`KB_SPA_DIST` / `KB_CODE_SPA_DIST`), so the archives ship
-binaries only and the `INSTALL` note in each points at `just ci-spa` /
-`just ci-code-spa`. The container images bake both SPAs in — that is the
-difference between the two channels.
+**Both tarballs bundle their SPA** (since v0.44) under `share/`:
+`share/kb/web/dist` + `share/kb/sample-corpus`, and
+`share/kb-code/web-code/dist`. Each daemon resolves it at
+`<exe dir>/../share/<pkg>/…` when `KB_SPA_DIST` / `KB_CODE_SPA_DIST` is unset
+and no `./web/dist` exists; `install.sh` copies `share/` to `$PREFIX/share`.
+The SPAs are built in the same job and with the same stamp as the binaries. The
+container images bake both SPAs in, plus the embedding model.
 
-The kb-code assets are **additive**: the kb tarball's name, contents and
-`INSTALL` text are unchanged by them, and
+The kb-code assets are **additive**: they never alter a kb asset, and
 [`scripts/install.sh`](../scripts/install.sh) — which resolves
-`kb-<version>-<triple>.tar.gz` by name — is untouched and installs kb only.
+`kb-<version>-<triple>.tar.gz` by name — installs kb only.
 
 ## Why hand-rolled, not cargo-dist
 
@@ -71,6 +72,21 @@ cap. They are still separate `cargo build` invocations, but for a different
 reason than the ORT split above: none of the three enables `local-embedder`,
 so what matters is only that they stay OUT of the `kb-embedder` invocation.
 
+## Release cadence
+
+Tag a `v*` release **at least monthly**, and **within 72 hours of any security
+fix** landing on `main`. kb-code milestone tags (`kb-code-vN.M`) do not trigger
+`release.yml` (its trigger is `on: tags: [v*]`); they ride the next `v*` tag.
+Before tagging: confirm the `ci.yml` push run on `main` is green for the exact
+commit (the release's `verify-ci` job refuses otherwise), and dry-run the gate
+with `gh workflow run release.yml -f dry_run=true -f sha=<sha>`. A curated
+release note placed at `packaging/release-notes/<tag>.md` becomes the release
+body (`--generate-notes` is thin on direct-to-main commits). After the run, the
+`channels exist` job must be green: it anonymously resolves `:latest` and
+`:<ver>` for both ghcr packages and the latest-release lookup `install.sh`
+uses. `ghcr-gc` never deletes a version carrying a semver or `latest` tag
+(`scripts/ghcr-gc.sh`, selection pinned by `scripts/ci/ghcr-gc-selftest.sh`).
+
 ## Cutting a release
 
 Run top-to-bottom for any new `vX.Y.Z` tag.
@@ -93,12 +109,11 @@ Run top-to-bottom for any new `vX.Y.Z` tag.
    - both `binaries` legs uploaded `kb-<ver>-<triple>.tar.gz` + `.sha256`.
      If `aarch64-unknown-linux-gnu` fails on the embedder link, it's the ORT
      aarch64 prebuilt (see the matrix TODO in `release.yml`) — either wire
-     `ORT_STRATEGY=system` + a system libonnxruntime, or drop that matrix row.
+     `ORT_LIB_PATH=<dir>` pointing at a system libonnxruntime, or drop that matrix row.
    - both legs also uploaded `kb-code-<ver>-<triple>.tar.gz` + `.sha256`
      (four tarballs + four checksums on the release in total). Spot-check one:
      `tar tzf` should list `kb-code-server`, `kb-code`, `kb-lip`, `INSTALL` and
-     no `web-code/dist` — the SPA is a separate `just ci-code-spa` build by
-     design.
+     `share/kb-code/web-code/dist/index.html` (the SPA ships in the tarball since v0.44).
    - `ghcr` pushed `ghcr.io/nicolasacchi/kb:<ver>` + `:latest` **and**
      `ghcr.io/nicolasacchi/kb-code:<ver>` + `:latest`. kb-code builds and
      pushes first (it's the small image); if the job dies between the two

@@ -40,27 +40,32 @@ store is your filesystem, recall costs no tokens, and it is all MIT.
 
 ## Install
 
-> Status: the first public tag has not been cut yet. Until it is, no release
-> tarball or image is published and building from source (option C below) is
-> the working path.
+> Supported platforms: Linux (x86_64 and aarch64, glibc >= 2.39) and WSL2.
+> Docker for older glibc. macOS and native Windows are unsupported.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nicolasacchi/kb/main/scripts/install.sh | sh
 ```
 
 Detects your OS/arch, downloads the matching release tarball, verifies its
-checksum, puts both binaries in `~/.local/bin`. `PREFIX=` overrides the root,
+checksum (a missing checksum is an error, not a skip; `KB_INSECURE_SKIP_VERIFY=1`
+overrides) and, when `gh` is signed in, its build provenance, then puts both
+binaries in `~/.local/bin` and the web reader under `~/.local/share/kb`. `PREFIX=` overrides the root,
 `KB_VERSION=` pins a release, `KB_BASE_URL=` points at a mirror. Other channels:
 
 - **Release tarball** — `kb-<version>-<target>.tar.gz` (+ `.sha256`) from
   [GitHub Releases](https://github.com/nicolasacchi/kb/releases), for
   `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, containing `kb`
-  and `kb-embedder`; the sibling daemon ships beside it as
-  `kb-code-<version>-<target>.tar.gz`. Neither bundles the web UI — that is a
-  `just ci-spa` build.
+  and `kb-embedder` plus the web reader and a sample corpus under `share/`;
+  the sibling daemon ships beside it as `kb-code-<version>-<target>.tar.gz`
+  with its own reader. Each archive carries a build-provenance attestation
+  ([verify it](docs/packaging.md#verifying-a-release)).
 - **Docker** — `docker pull ghcr.io/nicolasacchi/kb` (and
   `ghcr.io/nicolasacchi/kb-code`): binaries, SPA and an embedding model baked
-  in, the self-contained channel — [`docs/self-host.md`](docs/self-host.md).
+  in, the self-contained channel. On Linux run it with `--network host` so the
+  loopback-first daemon is reachable without a token — see
+  [`docs/quickstart.md`](docs/quickstart.md) and
+  [`docs/self-host.md`](docs/self-host.md).
 - **From source** — needs Rust (pinned in `rust-toolchain.toml`) and **protoc**:
 
   ```bash

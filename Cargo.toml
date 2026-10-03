@@ -74,8 +74,8 @@ refinery = { version = "0.9", features = ["rusqlite"] }
 # links it (no runtime dlopen) — the binary is self-contained (no libonnxruntime
 # at load time). rustls (not native-tls) for both the ORT binary fetch and hf-hub
 # model downloads — pure-Rust TLS. Offline/air-gapped builds:
-# set ORT_STRATEGY=system + ORT_LIB_LOCATION=<dir with libonnxruntime> to skip
-# the CDN fetch and link a local copy.
+# set ORT_LIB_PATH=<dir with libonnxruntime> (ORT_LIB_LOCATION is the deprecated
+# alias; ort-sys has no ORT_STRATEGY) to skip the CDN fetch and link a local copy.
 fastembed = { version = "5", default-features = false, features = [
     "ort-download-binaries-rustls-tls",
     "hf-hub-rustls-tls",

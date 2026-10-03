@@ -209,7 +209,7 @@ These pin paths deterministically — used by the test suite and handy for conta
 
 ### ONNX Runtime (embedder)
 
-`kb-embedder` statically bundles ONNX Runtime (`ort-download-binaries`, fetched from a CDN at build time); the resulting binary is self-contained (no `libonnxruntime` at load time, no `ORT_DYLIB_PATH`). For offline/air-gapped builds set **both** `ORT_STRATEGY=system` and `ORT_LIB_LOCATION=<dir containing libonnxruntime>` so the build links a local copy instead of fetching from the CDN. No system onnxruntime is required at runtime.
+`kb-embedder` statically bundles ONNX Runtime (`ort-download-binaries`, fetched from a CDN at build time); the resulting binary is self-contained (no `libonnxruntime` at load time, no `ORT_DYLIB_PATH`). For offline/air-gapped builds set `ORT_LIB_PATH=<dir containing libonnxruntime>` (`ORT_LIB_LOCATION` is the deprecated alias; there is no `ORT_STRATEGY` variable in ort-sys 2.x) so the build links a local copy instead of fetching from the CDN. No system onnxruntime is required at runtime.
 
 **`KB_EVENT_BUS_CAPACITY`** (env-only, default `1024`, floor `256`) — sizes the
 daemon-wide SSE event bus (both the live broadcast channel and the

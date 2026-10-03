@@ -1,0 +1,34 @@
+# scripts/install.sh must fail closed (missing checksum sidecar, missing sha
+# tool, failed provenance check = abort) and install the share/ tree next to
+# bin/. Self-test against a file:// mirror — no network, no real binaries.
+name: installer
+
+on:
+  pull_request:
+    paths:
+      - "scripts/install.sh"
+      - "scripts/ci/install-selftest.sh"
+      - ".github/workflows/installer.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/install.sh"
+      - "scripts/ci/install-selftest.sh"
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  selftest:
+    name: install.sh fail-closed selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sh -n scripts/install.sh
+      - run: bash scripts/ci/install-selftest.sh
