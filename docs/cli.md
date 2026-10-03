@@ -138,7 +138,16 @@ kb queries rm <name> [--daemon URL] [--json]
                                     Idempotent: succeeds even if the name
                                     isn't there.
 kb search <q> [--mode hybrid|keyword|semantic] [--kb NAME]
-   [--limit N] [--category C] [--offline] [--daemon URL] [--json]
+   [--scope one|all] [--limit N] [--category C] [--offline] [--daemon URL]
+   [--json]
+                                    With neither --kb nor --scope, a daemon
+                                    serving more than one kb is searched
+                                    across all of them (one-line stderr
+                                    note; hits print [kb/category], --json
+                                    hits carry "kb"). --kb pins one corpus;
+                                    --scope one keeps the strict form (400
+                                    when ambiguous); --scope all needs the
+                                    daemon (not --offline).
                                     hybrid (default) = BM25 + vector (RRF
                                     k=60); --offline reads lance directly
                                     (keyword-only); --json for parseable
@@ -442,10 +451,14 @@ kb events --follow [--types GLOB]…  v0.24 T1: operator tail of /api/events,
    [--kb NAME] [--artifact ID]      one line per event (NDJSON with --json).
    [--json] [--daemon URL]          Same reconnect loop as kb push; --types/
                                     --kb/--artifact filter SERVER-SIDE.
-kb tools                            v0.4 D4: emit Claude-prompt-friendly
-                                    markdown manifest of every CLI verb.
-                                    Drop into a system prompt to teach
-                                    Claude how to drive kb.
+kb tools [--core]                   Emit Claude-prompt-friendly markdown
+                                    manifest of every CLI verb. Drop into a
+                                    system prompt to teach Claude how to
+                                    drive kb. --core prints only the ten
+                                    core verbs (daemon, add, search, read,
+                                    remember, recall, why, recollect,
+                                    comments, slate), 8 KB or less, for
+                                    foreign-harness instruction files.
 kb status [--json] [--watch SECS]   sqlite-backed observability snapshot
                                     Q7: --watch loops with ANSI clear
                                     (mutually exclusive with --json).
