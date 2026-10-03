@@ -236,17 +236,27 @@ pub fn parse_git_version(s: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
+/// Probe the installed git. `Ok(Some(found))` = it ran and is older than
+/// `min` (or printed something unparseable); `Ok(None)` = new enough;
+/// `Err(detail)` = the probe itself could not run (timeout, spawn
+/// failure) — a TRANSIENT condition the caller must not cache.
+pub fn git_version_probe(git: &StoreGit, min: (u32, u32)) -> Result<Option<String>, String> {
+    let out = git
+        .run(GitCall::new("version", GitArgs::new("version")))
+        .map_err(|e| format!("git version probe failed ({})", e.slug()))?;
+    let text = out.stdout_str().trim().to_string();
+    Ok(match parse_git_version(&text) {
+        Some(v) if v >= min => None,
+        _ => Some(text.chars().take(64).collect()),
+    })
+}
+
 /// `Some(found)` when the store's git is older than `min` (or its version
 /// cannot be read); `None` when it is new enough.
 pub fn git_too_old(git: &StoreGit, min: (u32, u32)) -> Option<String> {
-    let out = match git.run(GitCall::new("version", GitArgs::new("version"))) {
-        Ok(o) => o,
-        Err(e) => return Some(format!("unknown ({})", e.slug())),
-    };
-    let text = out.stdout_str().trim().to_string();
-    match parse_git_version(&text) {
-        Some(v) if v >= min => None,
-        _ => Some(text.chars().take(64).collect()),
+    match git_version_probe(git, min) {
+        Ok(v) => v,
+        Err(e) => Some(format!("unknown ({e})")),
     }
 }
 

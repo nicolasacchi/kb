@@ -126,6 +126,17 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// Re-point a store row at the directory it actually lives in (the
+    /// state dir / store root was relocated). Returns `false` when `id`
+    /// does not exist.
+    pub fn set_review_store_git_dir(&self, id: i64, git_dir: &str) -> Result<bool> {
+        let n = self.lock().execute(
+            "UPDATE review_stores SET git_dir = ?2 WHERE id = ?1",
+            params![id, git_dir],
+        )?;
+        Ok(n > 0)
+    }
+
     /// THE `state_json` writer: set ONLY the named top-level keys (a JSON
     /// `null` value REMOVES the key), in one
     /// SQL statement (`json_set` over the row's CURRENT `state_json`, read

@@ -1353,6 +1353,53 @@ fn store_uuids_and_git_versions_are_validated() {
     assert!(git_too_old(e.rs.git().unwrap(), (999, 0)).is_some());
 }
 
+/// A5-4 — the state dir / store root was relocated: the row still records
+/// the OLD directory, but the store lives at `<current root>/<uuid>.git`.
+/// Open and adopt must find it there and correct the row, instead of
+/// wedging on "the store directory already exists".
+#[test]
+fn a_relocated_store_is_found_under_the_current_root_and_the_row_corrected() {
+    let e = env();
+    review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    let reg = e.rs.register_repo(&e.store, "widgets-01", None);
+    let id = member_id(&reg);
+    e.rs.seed(&e.store, id, false).unwrap();
+    let row = row_for(&e, "widgets-01");
+    assert_eq!(row.state, "ready");
+    let live = store_dir(&e.rs.settings().root, &row.uuid);
+    assert_eq!(PathBuf::from(&row.git_dir), live);
+
+    // Simulate the relocation: the recorded path now points nowhere.
+    let stale = e.fx.home.join("old-root").join(format!("{}.git", row.uuid));
+    e.store
+        .set_review_store_git_dir(row.id, &stale.to_string_lossy())
+        .unwrap();
+    let row = row_for(&e, "widgets-01");
+    assert_eq!(PathBuf::from(&row.git_dir), stale);
+
+    let handle = e.rs.open(&e.store, &row).unwrap();
+    assert_eq!(handle.git_dir, live, "open resolves the live directory");
+    assert_eq!(
+        PathBuf::from(row_for(&e, "widgets-01").git_dir),
+        live,
+        "the row is corrected"
+    );
+
+    // Adopt path: the row is `absent` with the stale path; seed adopts the
+    // directory under the current root instead of failing at `rename`.
+    e.store
+        .set_review_store_git_dir(row.id, &stale.to_string_lossy())
+        .unwrap();
+    e.store
+        .set_review_store_state(row.id, "absent", None)
+        .unwrap();
+    let report = e.rs.seed(&e.store, row.id, false);
+    assert!(report.is_ok(), "{report:?}");
+    let row = row_for(&e, "widgets-01");
+    assert_eq!(row.state, "ready");
+    assert_eq!(PathBuf::from(&row.git_dir), live);
+}
+
 /// RS-U5 / README §15.1, end to end (not `gc.rs`'s pure unit tests): two
 /// REAL member clones sharing one store, reviews in both — the store-wide
 /// GC engine (`gc::keep_set`/`attribute`/`delete_candidates`/`apply`)

@@ -26,9 +26,13 @@
 //! git process — every case in README §15.1 is a plain in-memory table);
 //! [`delete_candidates`] filters it; `apply` is the one
 //! `update-ref --stdin` transaction, each line old-value-guarded so a
-//! fetch or capture racing the GC can never be clobbered — call it under
-//! the store's `ops` lock (README §5.4/§4.2) and behind an
-//! `ApplyGuard`. A ref this module's parser
+//! ref this pass listed cannot be overwritten by a concurrent write that
+//! changed it in between — call it under the store's `ops` lock (README
+//! §5.4/§4.2) and behind an `ApplyGuard`. That guard does NOT cover a
+//! fresh `refs/kbc/pr/<n>` written by a fetch (taken under the BASE fetch
+//! lock, not `ops`) between the keep-set read and the ref listing, before
+//! its review row exists: that ref can be deleted and is simply
+//! re-fetched by the retried start-pr. A ref this module's parser
 //! (`crate::reviews::parse_kbc_ref`) or [`work_repo_id`] cannot classify is
 //! NEVER a delete candidate (same "never guess" posture as the parser
 //! itself).
