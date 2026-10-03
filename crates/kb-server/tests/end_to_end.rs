@@ -11504,7 +11504,7 @@ async fn memory_ingest_client_ref_marker_decides_ownership() {
         .filter(|f| f.contains("zzzz-aaaabbbbccccdddd"))
         .collect();
     assert_eq!(written.len(), 1, "{written:?}");
-    let html = std::fs::read_to_string(&written[0]).unwrap();
+    let html = std::fs::read_to_string(tmp.path().join("globalmem").join(&written[0])).unwrap();
     assert!(
         html.contains("<meta name=\"kb-client-ref\" content=\"zzzz-aaaabbbbccccdddd\">"),
         "the keyed file records its key"
