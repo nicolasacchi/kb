@@ -1353,6 +1353,57 @@ fn store_uuids_and_git_versions_are_validated() {
     assert!(git_too_old(e.rs.git().unwrap(), (999, 0)).is_some());
 }
 
+/// A5-4 — the state dir / store root was relocated: the row still records
+/// the OLD directory, but the store lives at `<current root>/<uuid>.git`.
+/// Open and adopt must find it there and correct the row, instead of
+/// wedging on "the store directory already exists".
+#[test]
+fn a_relocated_store_is_found_under_the_current_root_and_the_row_corrected() {
+    let e = env();
+    let r1 = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    // widgets-01 has two forge remotes; the PR binding's slug decides.
+    e.store
+        .set_review_pr_binding(r1, 7, "acme/widgets", None, None, None)
+        .unwrap();
+    let reg = e.rs.register_repo(&e.store, "widgets-01", None);
+    let id = member_id(&reg);
+    e.rs.seed(&e.store, id, false).unwrap();
+    let row = row_for(&e, "widgets-01");
+    assert_eq!(row.state, "ready");
+    let live = store_dir(&e.rs.settings().root, &row.uuid);
+    assert_eq!(PathBuf::from(&row.git_dir), live);
+
+    // Simulate the relocation: the recorded path now points nowhere.
+    let stale = e.fx.home.join("old-root").join(format!("{}.git", row.uuid));
+    e.store
+        .set_review_store_git_dir(row.id, &stale.to_string_lossy())
+        .unwrap();
+    let row = row_for(&e, "widgets-01");
+    assert_eq!(PathBuf::from(&row.git_dir), stale);
+
+    let handle = e.rs.open(&e.store, &row).unwrap();
+    assert_eq!(handle.git_dir, live, "open resolves the live directory");
+    assert_eq!(
+        PathBuf::from(row_for(&e, "widgets-01").git_dir),
+        live,
+        "the row is corrected"
+    );
+
+    // Adopt path: the row is `absent` with the stale path; seed adopts the
+    // directory under the current root instead of failing at `rename`.
+    e.store
+        .set_review_store_git_dir(row.id, &stale.to_string_lossy())
+        .unwrap();
+    e.store
+        .set_review_store_state(row.id, "absent", None)
+        .unwrap();
+    let report = e.rs.seed(&e.store, row.id, false);
+    assert!(report.is_ok(), "{report:?}");
+    let row = row_for(&e, "widgets-01");
+    assert_eq!(row.state, "ready");
+    assert_eq!(PathBuf::from(&row.git_dir), live);
+}
+
 /// RS-U5 / README §15.1, end to end (not `gc.rs`'s pure unit tests): two
 /// REAL member clones sharing one store, reviews in both — the store-wide
 /// GC engine (`gc::keep_set`/`attribute`/`delete_candidates`/`apply`)
@@ -1588,4 +1639,23 @@ fn the_store_card_exposes_the_git_fallback_counters() {
     let f = &v["runtime"]["git_fallbacks"];
     assert_eq!(f["odb_miss"], serde_json::json!(0), "{v}");
     assert!(f["unresolved"].is_u64(), "{v}");
+}
+
+/// M4 — a pass-wide deadline hands each retry only what is LEFT: a deadline
+/// in the future yields at most its span (never a fresh full budget), and
+/// one that has passed yields nothing, so a Vanished retry loop stops
+/// instead of spending `refs x budget`.
+#[test]
+fn a_pass_deadline_hands_out_only_the_time_left() {
+    let now = std::time::Instant::now();
+    let left = budget_left(now + Duration::from_secs(30)).expect("time left");
+    assert!(left <= Duration::from_secs(30), "{left:?}");
+    assert!(left > Duration::from_secs(20), "{left:?}");
+    let past = now.checked_sub(Duration::from_secs(1)).expect("past");
+    assert_eq!(budget_left(past), None);
+    assert_eq!(
+        budget_left(now),
+        None,
+        "an exhausted budget is not zero-length time"
+    );
 }
