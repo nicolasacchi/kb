@@ -365,7 +365,11 @@ async fn notes_new_stamps_the_env_session_not_the_global_marker() {
     let id = created.split_whitespace().nth(1).unwrap().to_string();
     let client = reqwest::Client::new();
     wait_indexed(&client, &url, &id).await;
+    // `show` strips frontmatter from body_md, so read the written source.
     let shown = run_ok(&url, &["show", &id, "--kb", "smoke", "--json"]);
-    assert!(shown.contains("kb-session: sess-from-env"), "{shown}");
-    assert!(!shown.contains("other-session-zzz"), "{shown}");
+    let detail: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    let rel = detail["source_relative"].as_str().expect("source_relative");
+    let on_disk = std::fs::read_to_string(tmp.path().join("corpus").join(rel)).unwrap();
+    assert!(on_disk.contains("kb-session: sess-from-env"), "{on_disk}");
+    assert!(!on_disk.contains("other-session-zzz"), "{on_disk}");
 }
