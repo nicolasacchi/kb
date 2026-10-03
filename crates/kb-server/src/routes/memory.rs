@@ -622,6 +622,16 @@ fn in_scope(scope: &str, project: Option<&str>, name: &KbName, ctx: &KbContext) 
     }
 }
 
+/// A3-5 — the named degradation for a corpus that has an embedder yet was
+/// answered from BM25 alone (lane `recall.vector`, class says why). `None`
+/// when the vector path ran.
+pub(crate) fn embed_fallback_lane(
+    kb: &str,
+    miss: Option<crate::routes::context::QueryErrorClass>,
+) -> Option<crate::routes::context::DegradedLane> {
+    miss.map(|class| crate::routes::context::degraded_of(kb, "recall.vector", class))
+}
+
 pub async fn recall(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<crate::middleware::Identity>,
@@ -1073,13 +1083,7 @@ pub(crate) async fn recall_compose(
                 let (rows, query_degraded) = match rows_result {
                     Ok(rows) => (
                         rows,
-                        vec_miss.map(|class| {
-                            crate::routes::context::degraded_of(
-                                name.as_str(),
-                                "recall.vector",
-                                class,
-                            )
-                        }),
+                        embed_fallback_lane(name.as_str(), vec_miss),
                     ),
                     Err(e) => {
                         tracing::warn!(kb = %name, error = %e, "recall: query failed; skipping corpus");
@@ -3645,6 +3649,18 @@ mod tests {
             code_hints_total: 0,
             drift_open: 0,
         }
+    }
+
+    /// A3-5: a vector fallback is NAMED (error_class embed); the vector path
+    /// is not.
+    #[test]
+    fn embed_fallback_is_named_degraded_lane() {
+        use crate::routes::context::QueryErrorClass;
+        let lane = embed_fallback_lane("memory-x", Some(QueryErrorClass::Embed)).expect("named");
+        assert_eq!(lane.kb, "memory-x");
+        assert_eq!(lane.lane, "recall.vector");
+        assert_eq!(lane.error_class, QueryErrorClass::Embed);
+        assert!(embed_fallback_lane("memory-x", None).is_none());
     }
 
     /// Serve-time ledger rows: one per returned hit, 1-based rank, title

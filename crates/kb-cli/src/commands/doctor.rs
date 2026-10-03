@@ -495,7 +495,7 @@ struct KbLite {
 }
 
 async fn fetch_kbs(client: &reqwest::Client, base: &str) -> Result<Vec<KbLite>> {
-    let url = format!("{base}/api/kbs");
+    let url = format!("{base}/api/kbs?counts=false");
     let resp = client
         .get(&url)
         .send()

@@ -7,6 +7,13 @@
 //! fail the request. Ranking is whatever `recall_compose` returns; this
 //! route does not re-sort or re-score.
 //!
+//! `project` / `visible_to` narrow the recall lane exactly as `kb recall`'s
+//! auto scope does (`scope=all` + both fields on `RecallParams`); the CLI
+//! derives them from its cwd with no network call and this route checks the
+//! project against its own `[kb.*]` config (a sync map lookup, no storage
+//! fan-out). An unknown project fails open to unscoped recall. `lanes=`
+//! (csv of `recall`, `context`) skips lanes the caller does not want.
+//!
 //! `head_seq` is omitted. The slate open helper is not callable from this
 //! crate without editing another file: `load_meta` in
 //! `crates/kb-server/src/routes/slates.rs` is private, and `slates::get`
@@ -48,6 +55,67 @@ pub struct TurnParams {
     /// Shared budget for both lanes. An arm that misses it is dropped and
     /// named `error_class: timeout`; absent means no cap.
     pub deadline_ms: Option<u64>,
+    /// Memory corpus name to narrow recall to (`memory-<slug>`). Checked
+    /// against the daemon's configured kbs; unknown ⇒ ignored.
+    pub project: Option<String>,
+    /// csv of slugs/corpus names always visible to this project's recall.
+    /// Only honoured together with a confirmed `project`.
+    pub visible_to: Option<String>,
+    /// csv subset of `recall,context`. Absent/blank ⇒ both.
+    pub lanes: Option<String>,
+}
+
+/// Which lanes a request wants. `Err` carries the offending token.
+fn parse_lanes(raw: Option<&str>) -> Result<(bool, bool), String> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok((true, true));
+    };
+    let (mut recall, mut context) = (false, false);
+    for tok in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        match tok {
+            "recall" => recall = true,
+            "context" => context = true,
+            other => return Err(other.to_string()),
+        }
+    }
+    Ok((recall, context))
+}
+
+/// Project/visible_to as they go onto `RecallParams`: the project only when
+/// it names a configured kb (config lookup, no storage), and `visible_to`
+/// only alongside it.
+fn confirmed_scope(
+    state: &KbHandles,
+    project: Option<&str>,
+    visible_to: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let known = |p: &str| {
+        kb_core::types::KbName::new(p)
+            .ok()
+            .is_some_and(|n| state.kbs.contains_key(&n))
+    };
+    scope_of(known, project, visible_to)
+}
+
+/// Pure core of [`confirmed_scope`]: `known` answers "is this a configured kb".
+fn scope_of(
+    known: impl Fn(&str) -> bool,
+    project: Option<&str>,
+    visible_to: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let Some(project) = project.map(str::trim).filter(|p| !p.is_empty()) else {
+        return (None, None);
+    };
+    if !known(project) {
+        return (None, None);
+    }
+    (
+        Some(project.to_string()),
+        visible_to
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -68,7 +136,7 @@ pub struct TurnResponse {
     pub degraded: Vec<DegradedLane>,
 }
 
-/// `GET /api/turn?q=&prompt=&session=&cwd=&deadline_ms=`
+/// `GET /api/turn?q=&prompt=&session=&cwd=&deadline_ms=&project=&visible_to=&lanes=`
 pub async fn get(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<crate::middleware::Identity>,
@@ -81,6 +149,19 @@ pub async fn get(
             "q or prompt is required".into(),
         ));
     }
+    let (want_recall, want_context) = match parse_lanes(params.lanes.as_deref()) {
+        Ok(l) => l,
+        Err(bad) => {
+            return error_to_problem_json(&kb_core::Error::BadRequest(format!(
+                "unknown lane {bad:?}; expected a csv of: recall, context"
+            )));
+        }
+    };
+    let (project, visible_to) = confirmed_scope(
+        &state,
+        params.project.as_deref(),
+        params.visible_to.as_deref(),
+    );
     let cwd = params.cwd.as_deref().and_then(non_empty);
     let session = params.session.as_deref().and_then(non_empty);
     let deadline = deadline_at(params.deadline_ms);
@@ -88,43 +169,53 @@ pub async fn get(
 
     // Sequential on purpose: both lanes embed the same text, and the context
     // composer already refuses to run its embed-bearing arms concurrently.
-    let hits = match run_recall(
-        &state,
-        identity.clone(),
-        &q,
-        remaining_ms(deadline),
-        deadline,
-    )
-    .await
-    {
-        Ok(recall) => {
-            extend_degraded(&mut degraded, recall.degraded);
-            recall.hits
-        }
-        Err(class) => {
-            push_degraded(&mut degraded, degraded_of("turn", "recall", class));
-            Vec::new()
+    let hits = if !want_recall {
+        Vec::new()
+    } else {
+        match run_recall(
+            &state,
+            identity.clone(),
+            &q,
+            project,
+            visible_to,
+            remaining_ms(deadline),
+            deadline,
+        )
+        .await
+        {
+            Ok(recall) => {
+                extend_degraded(&mut degraded, recall.degraded);
+                recall.hits
+            }
+            Err(class) => {
+                push_degraded(&mut degraded, degraded_of("turn", "recall", class));
+                Vec::new()
+            }
         }
     };
 
-    let scent = match run_context(
-        &state,
-        identity,
-        &q,
-        cwd,
-        session.clone(),
-        remaining_ms(deadline),
-        deadline,
-    )
-    .await
-    {
-        Ok((scent, lanes)) => {
-            extend_degraded(&mut degraded, lanes);
-            scent
-        }
-        Err(class) => {
-            push_degraded(&mut degraded, degraded_of("turn", "context", class));
-            String::new()
+    let scent = if !want_context {
+        String::new()
+    } else {
+        match run_context(
+            &state,
+            identity,
+            &q,
+            cwd,
+            session.clone(),
+            remaining_ms(deadline),
+            deadline,
+        )
+        .await
+        {
+            Ok((scent, lanes)) => {
+                extend_degraded(&mut degraded, lanes);
+                scent
+            }
+            Err(class) => {
+                push_degraded(&mut degraded, degraded_of("turn", "context", class));
+                String::new()
+            }
         }
     };
     // Same served-recall rows as GET /api/memory/recall?session=.
@@ -161,6 +252,8 @@ async fn run_recall(
     state: &Arc<KbHandles>,
     identity: crate::middleware::Identity,
     q: &str,
+    project: Option<String>,
+    visible_to: Option<String>,
     deadline_ms: Option<u64>,
     deadline: Option<std::time::Instant>,
 ) -> Result<memory::RecallResponse, QueryErrorClass> {
@@ -175,14 +268,13 @@ async fn run_recall(
             RecallParams {
                 q: q.to_string(),
                 scope: "all".to_string(),
-                // No cwd field on the recall composer. Leaving project /
-                // visible_to absent keeps the served order equal to
-                // `recall_compose`'s own ranking — this route does not
-                // re-rank. The CLI's `--cwd` narrowing stays in the CLI.
-                project: None,
+                // The caller's already-derived scope (see `confirmed_scope`);
+                // absent keeps the served order equal to `recall_compose`'s
+                // own ranking — this route does not re-rank.
+                project,
                 limit: Some(RECALL_LIMIT),
                 for_kb: None,
-                visible_to: None,
+                visible_to,
                 no_floor: false,
                 with_weekly: false,
                 deadline_ms,
@@ -511,5 +603,173 @@ mod summary_line_tests {
         assert_eq!(out, "\n    ↳ Fix:  use X  now");
         assert!(!out[1..].contains('\n'));
         assert!(!out.contains('\r'));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::scope_of;
+
+    fn known(p: &str) -> bool {
+        p == "memory-a"
+    }
+
+    #[test]
+    fn known_project_passes_project_and_visible_to() {
+        assert_eq!(
+            scope_of(known, Some(" memory-a "), Some("a, memory-a")),
+            (Some("memory-a".into()), Some("a, memory-a".into()))
+        );
+        assert_eq!(
+            scope_of(known, Some("memory-a"), Some("  ")),
+            (Some("memory-a".into()), None)
+        );
+    }
+
+    #[test]
+    fn unknown_project_yields_no_scope_at_all() {
+        assert_eq!(scope_of(known, Some("memory-z"), Some("a")), (None, None));
+    }
+
+    #[test]
+    fn visible_to_is_dropped_without_a_project() {
+        assert_eq!(scope_of(known, None, Some("a")), (None, None));
+        assert_eq!(scope_of(known, Some(""), Some("a")), (None, None));
+    }
+}
+
+#[cfg(test)]
+mod lanes_tests {
+    use super::parse_lanes;
+
+    #[test]
+    fn lanes_default_to_both_and_parse_subsets() {
+        assert_eq!(parse_lanes(None), Ok((true, true)));
+        assert_eq!(parse_lanes(Some("  ")), Ok((true, true)));
+        assert_eq!(parse_lanes(Some("recall")), Ok((true, false)));
+        assert_eq!(parse_lanes(Some("context, recall")), Ok((true, true)));
+        assert_eq!(parse_lanes(Some("context")), Ok((false, true)));
+    }
+
+    /// `slate` is not a lane of this route yet; naming it is an error, not a
+    /// silent no-op that would let a caller believe it got a slate head.
+    #[test]
+    fn unknown_lane_is_refused() {
+        assert_eq!(parse_lanes(Some("recall,slate")), Err("slate".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod hook_parity_tests {
+    use super::{compose_text, RecallResult};
+
+    fn hit(
+        kb: &str,
+        id: &str,
+        title: &str,
+        summary: Option<String>,
+        flagged: bool,
+        warns: bool,
+        drift_open: u32,
+    ) -> RecallResult {
+        RecallResult {
+            id: id.to_string(),
+            kb: kb.to_string(),
+            title: title.to_string(),
+            path: format!("/{id}.html"),
+            source_relative: format!("{id}.html"),
+            score: 1.0,
+            salience: 0.5,
+            pinned: false,
+            session_id: None,
+            summary,
+            memory_type: None,
+            source: None,
+            author: None,
+            source_kb: None,
+            source_artifact: None,
+            source_anchor: None,
+            global: false,
+            linked_kbs: Vec::new(),
+            read_pct: None,
+            last_read_at: None,
+            stopped_at: None,
+            rank: None,
+            rel: None,
+            decay: None,
+            age_days: None,
+            recall_count: 0,
+            last_recalled_at: None,
+            recall_used_count: 0,
+            relevance_factor: None,
+            stability: None,
+            decay_k: None,
+            recall_weekly: Vec::new(),
+            flagged,
+            warns,
+            code_hints: Vec::new(),
+            code_hints_total: 0,
+            drift_open,
+        }
+    }
+
+    /// The route's recall block must be the bytes `kb-recall.sh` (layout v2,
+    /// the default) injects for the same pack. The fixture was captured from
+    /// the hook itself; `test-recall-layout.sh` pins the hook side of it.
+    #[test]
+    fn compose_text_matches_the_v2_hook_golden() {
+        let hits = vec![
+        hit(
+            "kb",
+            "a1b2c3d4e5f6",
+            "demo-repo build cache setup",
+            Some("installed 2026-08-01; measured a modest speedup of roughly 15% (not the hoped-for 60%) because the build host is disk-bound not compute-bound; the parallel-jobs convention only helps once the scheduler is tuned, and the stale-lock gotcha bites when a build is killed mid-link rather than left to finish naturally.".to_string()),
+            false,
+            false,
+            0,
+        ),
+        hit(
+            "main",
+            "0f0f0f0f0f0f",
+            "Wrong port for the staging service",
+            Some("the staging service binds 127.0.0.1:9000 in the demo env and a spare port everywhere else; never curl 9000 from a test, and never bind it either — the demo container owns it and a bind fails closed, not shared.".to_string()),
+            true,
+            false,
+            1,
+        ),
+        hit(
+            "kb",
+            "111111111111",
+            "demo-repo fixture builds are IO-bound, not CPU-bound",
+            Some("the demo-repo build tree and its fixture corpus share one disk, so a parallel build starves the test run; tuned by pruning a background index job, switching the disk scheduler and lowering swap use.".to_string()),
+            false,
+            false,
+            0,
+        ),
+        hit(
+            "kb",
+            "222222222222",
+            "demo-repo CI workflow facts",
+            Some("sign-off needs a signed commit; the lint step runs before tests so a lint failure masks test failures; the main workflow only triggers on PRs to main, so stacked PRs run signature checks only.".to_string()),
+            false,
+            true,
+            0,
+        ),
+        hit(
+            "main",
+            "333333333333",
+            "Demo service file-descriptor ceiling",
+            Some("a long soak run exhausted the demo service's file descriptors and every request failed with too many open files; the fix is raising the descriptor limit and restarting the service.".to_string()),
+            false,
+            false,
+            0,
+        ),
+        ];
+        let golden =
+            include_str!("../../../../plugins/kb-memory/hooks/tests/fixtures/recall-layout-v2.txt");
+        assert_eq!(
+            compose_text(&hits, "no prior context"),
+            golden.trim_end_matches('\n')
+        );
     }
 }
