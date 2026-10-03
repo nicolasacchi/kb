@@ -12,7 +12,8 @@
  */
 
 import type { FramesResponse as FramesResponseWire } from "./generated/FramesResponse";
-import type { FramesResponse } from "./types";
+import type { ClaimOut as ClaimOutWire } from "./generated/ClaimOut";
+import type { ClaimOut, FramesResponse } from "./types";
 
 type Satisfies<Wire, Hand> = [Wire] extends [Hand] ? true : false;
 type Assert<T extends true> = T;
@@ -22,3 +23,14 @@ type Assert<T extends true> = T;
 // `OffHeadClass`) on the wire, and consumers index them with arbitrary
 // strings. Every wire value must still read as the hand type.
 export type _FramesResponse = Assert<Satisfies<FramesResponseWire, FramesResponse>>;
+
+// `ClaimOut` stays hand-written and NARROWER: `subject_kind` / `kind` /
+// `state` are closed unions here (`ClaimSubjectKind`, `ClaimKind`,
+// `ClaimLadderState`) but plain strings on the wire, and `refs` is optional
+// (older fixtures omit it; the routes always send it). So the check runs
+// hand ⊆ wire: every hand value must be a valid wire value, field for field,
+// with `refs` compared on its own below.
+export type _ClaimOut = Assert<Satisfies<Omit<ClaimOut, "refs">, Omit<ClaimOutWire, "refs">>>;
+export type _ClaimOutRefs = Assert<
+  Satisfies<NonNullable<ClaimOut["refs"]>, ClaimOutWire["refs"]>
+>;
