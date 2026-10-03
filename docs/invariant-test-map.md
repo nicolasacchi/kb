@@ -15,6 +15,31 @@ exercises, and — for the gaps — what a pin would need to look like). The
 script is non-blocking by design: an invariant with no runtime pin is often a
 legitimate structural/compile-time constraint, not a test-coverage bug.
 
+## Canaries: proof that a pin can fail (v0.44 F1)
+
+A `// invariant:N` marker is a COUNT, not evidence: it says a test exists, not
+that the test fails when the invariant breaks (the review found deleting the
+`/capture` `host_guard` route_layer failed nothing). `ci/canaries/NN-*.sh` are
+small anchored edits that break one invariant and name the test(s) that must
+then fail; `scripts/ci/run-canaries.sh` applies each, runs ONLY those tests
+under nextest, expects them to FAIL, and restores the tree. The nightly
+`canaries` workflow (and any PR touching the canary files) reports each as
+`caught`, `ESCAPED` (the pin is decorative) or `BROKEN` (the canary rotted: its
+anchor stopped matching exactly once, or the tree stopped compiling). Compile-
+time-only invariants (#1) get no canary and stay UNPINNED with their reason.
+
+| Canary | Invariant | Breaks | Pins that must FAIL |
+|---|---|---|---|
+| `01-host-guard-capture.sh` | #4 (SEC-02) | deletes the `host_guard` `route_layer` on `/capture` | `rebound_host_refused_on_capture_through_real_router` |
+| `02-connectinfo-loopback.sh` | #3 | `request_is_loopback` returns true when `ConnectInfo` is missing | `request_is_loopback_no_connect_info_fails_closed` |
+| `03-sweep-memory-recalls.sh` | #2 | drops `memory_recalls` from `SWEEP_TABLES` | `cascade_cleanup_tables_are_pinned`, `sweep_reclaims_orphan_capture_recalls_but_spares_live_serves` |
+
+Note on canary 03: the registry-completeness test
+`every_artifact_id_keyed_table_is_in_a_lifecycle_registry` accepts a table in
+EITHER `CASCADE_STEPS` or `SWEEP_TABLES`, and `memory_recalls` is in both, so
+that test does NOT see this removal — it is deliberately not listed as a pin
+for it. The golden list and the behavioural sweep test are.
+
 **Coverage at time of writing: 32/35 pinned, 3 UNPINNED, 0 slots retired** (see
 the "Unpinned" section at the bottom for the detailed rationale on each of the
 3). #23 and #31 were pinned in SC6 (web-only: a vitest SSE-invalidation-bridge
@@ -24,7 +49,7 @@ test + a Playwright scroll-restoration spec); the #32 `ErrorBoundary`
 | # | Invariant (one-liner) | Pinning test(s) | Note |
 |---|---|---|---|
 | 1 | Arrow version pinning (lance + arrow share one version) | **UNPINNED** | Enforced by `Cargo.toml [workspace.dependencies]` — a version skew is a *compile* failure (`RecordBatch` types fail to unify), not something a runtime test can assert. A pin would look like a CI step running `cargo tree -i arrow` and grepping for exactly one resolved version, which is redundant with the compile itself failing first. |
-| 2 | The doc↔code bridge: kb extracts hints, kb-code mints classes, nothing is cached (DCB v1) | `kb-core/src/coderefs.rs::symbol_const_requires_double_colon`, `kb-core/tests/coderef_goldens.rs::skip_tag_subtrees_yield_zero_refs`, `kb-core/src/storage/sqlite.rs::code_refs_rekey_on_relocate_cascade`, `kb-core/src/storage/actor.rs::record_code_refs_never_bumps_generation`, `kb-code-server/src/doclens/wire.rs::doclens_never_emits_a_resolve_trust_class` | Slot #2 was refilled by kb-users/1 (v0.34), then merged into #4 (see that row's addendum) in the DCB milestone (2026-08) to make room for this invariant. `symbol_const_requires_double_colon` (`kb-core/src/coderefs.rs:1445`) pins the closed-grammar `::`-required rule; `skip_tag_subtrees_yield_zero_refs` (`kb-core/tests/coderef_goldens.rs:67`) pins the `<template id="kb-prompt">`/`<script>`/`<style>`/`<noscript>` input-surface skip (also invariant #5); `code_refs_rekey_on_relocate_cascade` (`kb-core/src/storage/sqlite.rs:14762`) and `record_code_refs_never_bumps_generation` (`kb-core/src/storage/actor.rs:6242`) pin the lifecycle-registry and no-generation-bump rules — all four carry a `// invariant:2` source comment, re-verified present this session. kb-code's `doclens_never_emits_a_resolve_trust_class` (`kb-code-server/src/doclens/wire.rs:688`, R7-corrected name — was drafted as `doclens_never_emits_class_exact`) pins that `codelens/1` never borrows `resolve.rs`'s `CLASS_*` vocabulary; it shipped with W1.C without its own `// invariant:2` source comment, so `check-invariants.sh` counts it from the map, not the source. |
+| 2 | The doc↔code bridge: kb extracts hints, kb-code mints classes, nothing is cached (DCB v1) | `kb-core/src/coderefs.rs::symbol_const_requires_double_colon`, `kb-core/tests/coderef_goldens.rs::skip_tag_subtrees_yield_zero_refs`, `kb-core/src/storage/sqlite.rs::code_refs_rekey_on_relocate_cascade`, `kb-core/src/storage/actor.rs::record_code_refs_never_bumps_generation`, `kb-code-server/src/doclens/wire.rs::doclens_never_emits_a_resolve_trust_class` | Slot #2 was refilled by kb-users/1 (v0.34), then merged into #4 (see that row's addendum) in the DCB milestone (2026-08) to make room for this invariant. `symbol_const_requires_double_colon` (`kb-core/src/coderefs.rs:1445`) pins the closed-grammar `::`-required rule; `skip_tag_subtrees_yield_zero_refs` (`kb-core/tests/coderef_goldens.rs:67`) pins the `<template id="kb-prompt">`/`<script>`/`<style>`/`<noscript>` input-surface skip (also invariant #5); `code_refs_rekey_on_relocate_cascade` (`kb-core/src/storage/sqlite.rs:14890`) and `record_code_refs_never_bumps_generation` (`kb-core/src/storage/actor.rs:6242`) pin the lifecycle-registry and no-generation-bump rules — all four carry a `// invariant:2` source comment, re-verified present this session. kb-code's `doclens_never_emits_a_resolve_trust_class` (`kb-code-server/src/doclens/wire.rs:688`, R7-corrected name — was drafted as `doclens_never_emits_class_exact`) pins that `codelens/1` never borrows `resolve.rs`'s `CLASS_*` vocabulary; it shipped with W1.C without its own `// invariant:2` source comment, so `check-invariants.sh` counts it from the map, not the source. |
 | 3 | `ConnectInfo` read from request extensions, fails closed if absent | `kb-server/src/middleware.rs::request_is_loopback_no_connect_info_fails_closed` | Direct assertion that a missing `ConnectInfo` returns `false` (not loopback). |
 | 4 | `auth_bearer` is the ONE admission + attribution gate: loopback bypass trusted-hop-first, XFF right-to-left, fail-closed on token-less public bind; identity resolution (v0.34, kb-users/1, merged from #2 in the DCB milestone) | `middleware.rs::request_is_loopback_direct_remote_cannot_forge_xff`, `::refuse_public_bind_without_auth_truth_table`; `kb-server/tests/end_to_end.rs::daemon_refuses_public_bind_without_token`; **(absorbed from #2)** `middleware.rs::identity_ladder_token_beats_header_beats_legacy`, `::identity_untrusted_peer_header_ignored`, `::identity_invalid_header_username_falls_through`, `::identity_loopback_header_honored`, `::identity_registry_sha256_matches` | Truth-table test covers the full bind-refusal matrix; the e2e test drives it through a real `serve_with_paths` boot. **DCB addendum:** in the DCB milestone #4 absorbed #2's identity-resolution text (the merge freed slot #2 for the doc↔code bridge, row 2 above) along with its five identity-ladder pins, so #4's own coverage doesn't silently shrink when #2's number starts pointing at a different invariant — re-verified present in `crates/kb-server/src/middleware.rs` this session: `identity_ladder_token_beats_header_beats_legacy` (1352), `identity_untrusted_peer_header_ignored` (1390), `identity_invalid_header_username_falls_through` (1400), `identity_loopback_header_honored` (1410), `identity_registry_sha256_matches` (1420) — pinning the resolution order (registry token > trusted-hop header > legacy shared token > loopback), the untrusted-peer-header-ignored fail-closed gate, and the registry-token sha256 match. |
 | 5 | `<template id="kb-prompt">` convention; outbound scrub may strip it | `kb-core/src/scrub.rs::scrub_strips_kb_prompt_template` | Meta-edit's own template-preservation tests (invariant #12) additionally prove the id is never repurposed by other rewriters. |

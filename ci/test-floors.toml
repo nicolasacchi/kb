@@ -1,0 +1,30 @@
+# Per-lane test-count floors read by scripts/ci/witness.py.
+#
+# A green lane must say how many tests RAN and PASSED, and that number cannot
+# silently drop: the witness fails when `executed` (passed + flaky; skipped
+# does not count) is below the floor. Floors are seeded a few percent UNDER
+# the count of a green main run so ordinary churn does not trip them.
+#
+# The floor only moves DOWN in a PR whose description says why tests went
+# away (deleting obsolete tests is legitimate, but must be visible). On a
+# lane that is well above its floor the witness prints a suggested new value;
+# raising it is a one-line PR.
+#
+# Seeded from run 37058708851 (main, 2026-10-02):
+#   e2e 288 passed / 1 skipped          code-e2e 251 passed / 3 skipped
+#   nextest 3962 run (9 skipped)        web vitest 1451     web-code vitest 3162
+
+[e2e]
+executed = 280
+
+[code-e2e]
+executed = 245
+
+[nextest]
+executed = 3850
+
+[web-vitest]
+executed = 1400
+
+[web-code-vitest]
+executed = 3050

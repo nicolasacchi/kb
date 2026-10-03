@@ -9,7 +9,7 @@ prio := "nice -n 20 ionice -c 3"
 # ORT embedder surface, then the two kb generated-artifact drift guards
 # (TS wire bindings + the API route table). Not the GitHub ci.yml matrix —
 # the body names the lanes this skips. `just ci-all` runs every lane.
-ci: ci-workspace ci-embedder types-check api-docs-check doc-anchors toolchain-pin-check
+ci: ci-workspace ci-embedder types-check api-docs-check doc-anchors toolchain-pin-check ci-selfcheck
     @echo "did not run: code-lint, code-test, code-spa, code-e2e, e2e, web-unit, supply-chain, code-drift, scripts/check-invariants.sh — just ci-all"
 
 # Every lane .github/workflows/ci.yml runs, as the local recipe that
@@ -30,7 +30,7 @@ ci: ci-workspace ci-embedder types-check api-docs-check doc-anchors toolchain-pi
 #      toolchain pins → toolchain-pin-check)
 # Not mirrored (no recipe, so not run here): web-unit's `npm audit
 # --omit=dev`, and e2e's Firefox install + annotator size guard.
-ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check ci-e2e ci-embedder ci-code ci-code-spa ci-code-e2e test-spa deny licenses-set-check doc-anchors toolchain-pin-check
+ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check ci-e2e ci-embedder ci-code ci-code-spa ci-code-e2e test-spa deny licenses-set-check doc-anchors toolchain-pin-check ci-selfcheck
 
 # Invariant-to-test coverage table (GC-C2). A step of ci.yml's
 # workspace-lint job, not of `just ci`. Always exits 0 — a signal, not a gate.
@@ -40,25 +40,37 @@ ci-invariants:
 # Doc `file.rs:LINE` anchor gate (O11) — a step of ci.yml's supply-chain job,
 # which is the one lane in ci.yml that compiles nothing, so the gate costs a
 # file walk and an awk pass (~3 s measured) instead of a lane of its own.
-# `scripts/check-doc-anchors.sh` fails when a cited path matches no file, or
-# when the cited line (or a range's end) is past that file's last line.
-#
-# AMBIGUOUS is FATAL, and is the reason this gate is worth having: a bare
-# `config.rs:1414` is IN RANGE for at least one of the repo's five
-# `config.rs`, so a bounds check alone ships green on exactly the citations
-# an adversarial pass found ~30 of wrong. An unverifiable number is the
-# defect.
-#
-# It ran with `--no-ambiguous` from 2026-09-30 until the debt was cleared
-# the same day: 45 ambiguous anchors (35 configuration.md, 8
-# authoring-artifacts.md, 1 each invariant-test-map.md and kb-code.md), all
-# disambiguated AND re-pointed by reading the cited construct. The flag is
-# gone, so a new bare basename fails the build instead of being counted.
-# The other five regressions this surfaced — anchors that named the right
-# file but the WRONG line, which no gate can see — are recorded in
-# docs/research/kb-adversarial-review-2026-09-30.md.
+# `scripts/check-doc-anchors.sh` fails when a cited path matches no file, when
+# the cited line (or a range's end) is past that file's last line, when a bare
+# basename matches 2+ files (AMBIGUOUS — fatal since 2026-09-30; the
+# `--no-ambiguous` staging flag no longer exists), and — v0.44 F1 — when a
+# SYMBOL-PAIRED anchor, `Symbol` (`path.rs:N`), does not have its symbol within
+# 3 lines of N. That last class is "the right file, the WRONG line", which a
+# bounds check can never see; `scripts/check-doc-anchors.sh --fix` re-points
+# such anchors. Unpaired anchors are WEAK and held under a ceiling that may
+# only go down. Scope: docs/*.md + every tracked CLAUDE.md, plus the paired
+# citations in source comments; docs/research/** stays a frozen record.
+# The sibling scripts/check-pinned-by.sh resolves every "pinned by `name`" /
+# `file.rs::test_name` citation to a real definition.
 doc-anchors:
     scripts/check-doc-anchors.sh
+    scripts/check-pinned-by.sh
+
+# v0.44 F1 (I3) — compile-free proof that CI cannot pass without running, and
+# that the gates' own self-tests still pass. A step of ci.yml's supply-chain
+# job. See scripts/ci/selfcheck.py for the list; the rest are the self-tests of
+# the helpers the workflows lean on.
+ci-selfcheck:
+    python3 scripts/ci/selfcheck.py
+    python3 scripts/ci/selfcheck_selftest.py
+    python3 scripts/ci/witness_selftest.py
+    python3 scripts/check-posture-swallow.py --self-test
+    python3 scripts/check-posture-swallow.py
+    scripts/ci/code-changed-selftest.sh
+    scripts/ci/public-gate-selftest.sh
+    scripts/ci/run-canaries.sh --check-anchors
+    scripts/check-doc-anchors.sh --self-test
+    scripts/check-pinned-by.sh --self-test
 
 # rust-toolchain.toml is the single source of the toolchain version. Jobs get
 # it through the composite action .github/actions/setup-rust, which READS the

@@ -11,8 +11,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-permissions:
-  contents: read
+# Least privilege: nothing by default; every job below declares its own grants
+# (v0.44 F1, review A12.f7).
+permissions: {}
 
 # `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
 # implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
@@ -24,10 +25,12 @@ defaults:
 
 jobs:
   dco-check:
+    permissions:
+      contents: read
     name: Check DCO sign-off
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so every commit in the PR range is reachable.
           fetch-depth: 0
@@ -45,10 +48,12 @@ jobs:
   # matching one. If the script ever starts passing having checked nothing,
   # this job goes red on the PR that did it.
   dco-selftest:
+    permissions:
+      contents: read
     name: DCO check self-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run scripts/dco-check.sh against scratch repos
         run: |
           set -euo pipefail
@@ -103,3 +108,27 @@ jobs:
           still body"
           pasted="$(git rev-parse HEAD)"
           expect fail "sign-off text outside the trailer block" "$forged" "$pasted"
+
+          # 7. the Dependabot exception (scripts/dco-check.sh): authored as
+          #    the noreply bot address, signed as support@github.com -> ACCEPTED
+          git commit -q --allow-empty --author="dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>" -m "bump x
+
+          Signed-off-by: dependabot[bot] <support@github.com>"
+          dep="$(git rev-parse HEAD)"
+          expect pass "dependabot author with its support@github.com sign-off" "$pasted" "$dep"
+
+          # 8. near miss: the same sign-off on a bot-lookalike author with a
+          #    different numeric id -> REJECTED (the exception names one pair)
+          git commit -q --allow-empty --author="dependabot[bot] <12345+dependabot[bot]@users.noreply.github.com>" -m "bump y
+
+          Signed-off-by: dependabot[bot] <support@github.com>"
+          lookalike="$(git rev-parse HEAD)"
+          expect fail "dependabot-lookalike author id" "$dep" "$lookalike"
+
+          # 9. near miss: a HUMAN author with the support@github.com sign-off
+          #    -> REJECTED
+          git commit -q --allow-empty -m "human
+
+          Signed-off-by: dependabot[bot] <support@github.com>"
+          human="$(git rev-parse HEAD)"
+          expect fail "human author signed off as dependabot" "$lookalike" "$human"
