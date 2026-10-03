@@ -3,7 +3,8 @@
 //! The daemon already composes recall + the turn-1 scent under a shared
 //! deadline (`GET /api/turn`); this verb is the thin client. It works out the
 //! repo slug locally (git main-checkout basename + the local `project_slugs`
-//! aliases — no network, no `GET /api/kbs`), passes `project=` /
+//! aliases — no network, no `GET /api/kbs`), passes `project=` (every
+//! candidate corpus name, the daemon takes the first it has) /
 //! `visible_to=` so the daemon can narrow recall exactly as `kb recall`'s
 //! auto scope does, and names every degraded lane in one short line so a
 //! skipped lane is visible instead of silent.
@@ -25,9 +26,14 @@ pub const DEFAULT_DEADLINE_MS: u64 = 9000;
 /// HTTP slack on top of the server deadline (connect, serialisation).
 const HTTP_MARGIN_SECS: u64 = 2;
 
-/// `(project, visible_to)` for a repo slug, with no I/O. A local
-/// `project_slugs` alias names the corpus; otherwise `memory-<slug>`. The
-/// daemon checks the name against its own config and fails open on a miss.
+/// `(project, visible_to)` for a repo slug, with no I/O. `project` is a csv
+/// of CANDIDATES — the local `project_slugs` alias (when there is one) then
+/// `memory-<slug>` — because the daemon is the one that knows which corpora
+/// exist and takes the first it has, exactly as `kb recall`'s
+/// `confirm_derived_project` does. Sending only the alias made an alias
+/// absent from the daemon fail open to unfiltered recall even though
+/// `memory-<slug>` existed. `visible_to` carries the slug and every
+/// candidate. The daemon fails open when none exists.
 pub(crate) fn turn_scope(
     slug: &str,
     aliases: &HashMap<String, String>,
@@ -36,12 +42,16 @@ pub(crate) fn turn_scope(
     if slug.is_empty() {
         return (None, None);
     }
-    let project = aliases
-        .get(slug)
-        .cloned()
-        .unwrap_or_else(|| format!("memory-{slug}"));
-    let visible = format!("{slug},{project}");
-    (Some(project), Some(visible))
+    let derived = format!("memory-{slug}");
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(alias) = aliases.get(slug) {
+        candidates.push(alias.clone());
+    }
+    if !candidates.contains(&derived) {
+        candidates.push(derived);
+    }
+    let visible = format!("{slug},{}", candidates.join(","));
+    (Some(candidates.join(",")), Some(visible))
 }
 
 /// One short line naming every degraded lane, or `None` when nothing
@@ -79,6 +89,8 @@ pub async fn turn(
     session: Option<&str>,
     deadline_ms: Option<u64>,
     lanes: Option<&str>,
+    slate: Option<&str>,
+    slate_since: Option<u64>,
     daemon: Option<&str>,
     bearer: Option<&str>,
     json: bool,
@@ -107,6 +119,12 @@ pub async fn turn(
     }
     if let Some(l) = lanes {
         req = req.query(&[("lanes", l)]);
+    }
+    if let Some(sl) = slate {
+        req = req.query(&[("slate", sl)]);
+    }
+    if let Some(n) = slate_since {
+        req = req.query(&[("slate_since", n.to_string().as_str())]);
     }
     if let Some(p) = &project {
         req = req.query(&[("project", p.as_str())]);
@@ -167,14 +185,24 @@ mod tests {
         assert_eq!(v.as_deref(), Some("kb,memory-kb"));
     }
 
+    /// An alias is a candidate, not a replacement: BOTH names go on the wire
+    /// (alias first), so the daemon can fall back to `memory-<slug>` when the
+    /// alias is not one of ITS corpora.
     #[test]
-    fn scope_prefers_a_local_alias_and_skips_outside_a_repo() {
+    fn scope_sends_both_the_alias_and_the_derived_candidate() {
         let mut a = HashMap::new();
         a.insert("kb".to_string(), "memory-core".to_string());
         let (p, v) = turn_scope("kb", &a);
-        assert_eq!(p.as_deref(), Some("memory-core"));
-        assert_eq!(v.as_deref(), Some("kb,memory-core"));
+        assert_eq!(p.as_deref(), Some("memory-core,memory-kb"));
+        assert_eq!(v.as_deref(), Some("kb,memory-core,memory-kb"));
         assert_eq!(turn_scope("", &a), (None, None));
+        // An alias equal to the derived name is not sent twice.
+        let mut same = HashMap::new();
+        same.insert("kb".to_string(), "memory-kb".to_string());
+        assert_eq!(
+            turn_scope("kb", &same),
+            (Some("memory-kb".into()), Some("kb,memory-kb".into()))
+        );
     }
 
     #[test]

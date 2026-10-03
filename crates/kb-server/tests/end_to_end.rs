@@ -394,6 +394,36 @@ async fn kbs_route_lists_configured_kbs() {
     );
 }
 
+/// v044-X3 (A4.f6) — the project-key backfill is a daemon route (the storage
+/// actor stays the single writer): dry-run by default, `apply=true` echoed
+/// back, and every configured kb accounted for in `kbs`.
+#[tokio::test]
+async fn sessions_backfill_project_key_route_is_dry_run_by_default() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let dry: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-project-key"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(dry["apply"], false, "{dry}");
+    assert_eq!(dry["would_change"], 0, "{dry}");
+    assert_eq!(dry["changed"], 0, "{dry}");
+    assert_eq!(dry["kbs"][0]["kb"], "smoke", "{dry}");
+    let applied: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-project-key?apply=true"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(applied["apply"], true, "{applied}");
+}
+
 /// v044-F6 — `/api/turn` takes `project`/`visible_to`/`lanes`: an unknown
 /// lane is a 400 (not a silent skip), an unknown project fails open, and a
 /// lane subset is honoured.
@@ -402,11 +432,22 @@ async fn turn_route_lanes_and_project_params() {
     let (_tmp, addr) = boot().await;
     let client = reqwest::Client::new();
     let bad = client
-        .get(url(addr, "/api/turn?q=hello&lanes=recall,slate"))
+        .get(url(addr, "/api/turn?q=hello&lanes=recall,bogus"))
         .send()
         .await
         .unwrap();
     assert_eq!(bad.status().as_u16(), 400);
+    // `slate` IS a lane (v044-X3): naming it must not 400.
+    let slate_ok = client
+        .get(url(addr, "/api/turn?q=hello&lanes=slate"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        slate_ok.status().is_success(),
+        "lanes=slate must not 400: {}",
+        slate_ok.status()
+    );
     let ok = client
         .get(url(
             addr,
@@ -11310,6 +11351,83 @@ async fn memory_recall_ranks_higher_salience_first() {
 }
 
 // ---- v0.9 M4: memory ingest (write-only, collision-safe) -------------
+
+/// v044-X3 — a `client_ref` makes the memory write idempotent: the SAME key
+/// (a `kb remember` outbox replay, or a retry after a lost response) answers
+/// 200 with the original id/path and writes nothing new; a different key is
+/// a different memory; an unsafe key is a 400 (it becomes part of a path).
+#[tokio::test]
+async fn memory_ingest_client_ref_replay_is_idempotent() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let post = |reference: Option<&str>| {
+        let mut body = serde_json::json!({
+            "title": "Replay Proof Heron",
+            "body": "the heron memory must be written exactly once",
+            "category": "memory-project",
+        });
+        if let Some(r) = reference {
+            body["client_ref"] = serde_json::json!(r);
+        }
+        client
+            .post(url(addr, "/api/kb/globalmem/artifacts"))
+            .json(&body)
+            .send()
+    };
+    let first = post(Some("c0ffee0123456789")).await.unwrap();
+    assert_eq!(first.status(), 201);
+    let first: serde_json::Value = first.json().await.unwrap();
+
+    let again = post(Some("c0ffee0123456789")).await.unwrap();
+    assert_eq!(again.status(), 200, "a replay is not a second create");
+    let again: serde_json::Value = again.json().await.unwrap();
+    assert_eq!(again["id"], first["id"]);
+    assert_eq!(again["path"], first["path"]);
+    assert_eq!(again["replayed"], true);
+
+    let other = post(Some("deadbeef01234567")).await.unwrap();
+    assert_eq!(other.status(), 201, "a different key is a different memory");
+    let other: serde_json::Value = other.json().await.unwrap();
+    assert_ne!(other["id"], first["id"]);
+
+    for bad in ["../../etc/passwd", "short", "has space in it!"] {
+        let r = post(Some(bad)).await.unwrap();
+        assert_eq!(r.status(), 400, "client_ref {bad:?} must be refused");
+    }
+
+    // On disk: one file for the replayed key, not two.
+    let named = |needle: &str| {
+        let mut n = 0;
+        for entry in walkdir_html(tmp.path()) {
+            if entry.contains(needle) {
+                n += 1;
+            }
+        }
+        n
+    };
+    assert_eq!(named("c0ffee0123456789"), 1);
+    assert_eq!(named("deadbeef01234567"), 1);
+}
+
+/// Every `.html` file name under `root`, for the replay test's on-disk count.
+fn walkdir_html(root: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "html") {
+                out.push(e.file_name().to_string_lossy().to_string());
+            }
+        }
+    }
+    out
+}
 
 // invariant:10 write-only-ingest
 #[tokio::test]

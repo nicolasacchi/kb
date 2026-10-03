@@ -508,6 +508,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // R3 — `kb recollect`: semantic "has this been done?" over session
         // digests. Static segment, registered before `/{session_id}`.
         .route("/sessions/recollect", get(routes::sessions::recollect))
+        // v0.44 X3 (A4.f6) — `kb sessions backfill-project-key` through the
+        // daemon: the storage actor stays the single writer of index.db.
+        .route(
+            "/sessions/backfill-project-key",
+            post(routes::sessions::backfill_project_key),
+        )
         // R9 — research rollups + the activity funnel (static, before dynamic).
         .route(
             "/sessions/research-rollup",

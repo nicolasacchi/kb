@@ -498,7 +498,11 @@ fn fmt_age(unix: i64) -> String {
 
 /// GET `/api/kbs` → the configured kb names.
 async fn list_kb_names(daemon: Option<&str>, bearer: Option<&str>) -> Result<Vec<String>> {
-    let url = format!("{}/api/kbs", base_url(daemon));
+    let url = format!(
+        "{}{}",
+        base_url(daemon),
+        crate::commands::memory::KBS_CONFIG_PATH
+    );
     let client = client_with_timeout_and_bearer(5, bearer)?;
     let body: Value = client
         .get(&url)
@@ -2431,6 +2435,11 @@ mod tests {
             .unwrap();
         assert_eq!(owner, ("canon".to_string(), "a1".to_string()));
         assert_eq!(requests(&rx).len(), 3, "expected /api/kbs + 2 review scans");
+        let kbs_reqs = requests_to(&rx, "/api/kbs");
+        assert!(
+            kbs_reqs.iter().all(|t| t.contains("counts=false")),
+            "name-only kb listing must be config-only: {kbs_reqs:?}"
+        );
         assert!(
             requests_to(&rx, "/api/review-notes").is_empty(),
             "a resolvable id must not read the private-note index: {:?}",

@@ -8,7 +8,10 @@ To KEEP something durable, call:
   kb remember "<fact>" --summary "<one-line gloss>" [--link kb-a,kb-b] [--salience 0..1] [--tags a,b]
 The summary is what future sessions actually see under the title
 in recall — always pass it.
-By default a remembered fact is GLOBAL (recallable from every kb).
+Where a bare `kb remember` lands (first match wins):
+  1. a corpus named memory-<project>, or a project_slugs alias -> that project corpus;
+  2. else the global memory corpus, scoped to the kb named <project> when one exists;
+  3. else the global memory corpus, recallable from every kb.
 Pass `--link kb-a,kb-b` when the fact is only relevant to those kbs
 — scoping reduces noise in the per-kb /memory and Related-memories
 panels. Do this whenever you learn a durable user preference, a
