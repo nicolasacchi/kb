@@ -73,6 +73,7 @@ import type {
   ReviewDetail,
   ReviewFilesOut,
   ReviewInterdiffOut,
+  SinceReport,
   ReviewVerdictState,
   ReviewsListOut,
   SetVerdictOut,
@@ -1414,6 +1415,13 @@ export function fetchReviewInterdiff(id: number, from: number, to: number): Prom
     from: String(from),
     to: String(to),
   });
+}
+
+/// `GET /api/reviews/{id}/since?from=&to=` — what the AUTHOR changed
+/// between two patchsets (`verdict`/`psN` → `latest`/`psN`), each diffed
+/// against its own base. Surfaced, never a verdict.
+export function fetchReviewSince(id: number, from: string, to: string): Promise<SinceReport> {
+  return getJson<SinceReport>(`/api/reviews/${id}/since`, { from, to });
 }
 
 /// `GET /api/reviews/{id}/annotations` — open annotations grouped by path.

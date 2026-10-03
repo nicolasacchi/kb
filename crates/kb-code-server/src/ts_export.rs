@@ -34,6 +34,8 @@ mod tests {
         "src/github.rs",
         "src/workspace.rs",
         "src/claims.rs",
+        "src/review_since.rs",
+        "src/review_queue.rs",
     ];
 
     fn crate_root() -> PathBuf {

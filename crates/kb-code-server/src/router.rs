@@ -940,6 +940,14 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // (axum resolves literals over params regardless of registration
         // order, per the module doc's PRR-R3 note).
         .route("/reviews/inbox", get(review_inbox::list_inbox_route))
+        // v0.44 F9 — `GET /api/reviews/agent-queue`: what is waiting for
+        // the AGENT (`crate::review_queue`). Literal segment ahead of
+        // `/reviews/{id}`, same as `/reviews/inbox`. Bearer; derived per
+        // request, never a score.
+        .route(
+            "/reviews/agent-queue",
+            get(crate::review_queue::agent_queue_route),
+        )
         // S2-A — the federated three-lane attention queue (see the module
         // doc above); a literal `/inbox`, unambiguous with `/reviews/
         // inbox` above (different path entirely, not a param collision).
@@ -973,6 +981,14 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         .route(
             "/reviews/{id}/status",
             get(crate::review_sync::review_status_route),
+        )
+        // v0.44 F9 — `GET /api/reviews/{id}/since?from=psN|verdict&to=psN`:
+        // what the AUTHOR changed between two patchsets, each diffed
+        // against its own base (`crate::review_since`). A bearer read,
+        // derived per request, never a verdict.
+        .route(
+            "/reviews/{id}/since",
+            get(crate::review_since::review_since_route),
         )
         .route("/reviews/{id}", get(reviews::get_review))
         .route("/reviews/{id}/files", get(reviews::review_files))

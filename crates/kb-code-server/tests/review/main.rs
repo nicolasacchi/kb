@@ -22,6 +22,7 @@ mod review_analytics;
 mod review_comments;
 mod review_distill;
 mod review_doc;
+mod review_f9;
 mod review_findings;
 mod review_github_export;
 mod review_github_threads;

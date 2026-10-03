@@ -1,0 +1,190 @@
+{
+  "schema": "kbc-question-state/1",
+  "note": "One corpus, two implementations: crates/kb-code-server/src/review_queue.rs (awaiting_agent) and web-code/src/lib/questionState.ts (questionChipState). `chip` is the Room's chip; the daemon's agent queue lane 1 is exactly chip == awaiting-agent. Author-name vocabulary: agent-authors.golden.json.",
+  "cases": [
+    {
+      "name": "human question, no reply",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [],
+      "chip": "awaiting-agent"
+    },
+    {
+      "name": "agent replied last",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [
+        {
+          "author": "claude",
+          "createdAt": 200
+        }
+      ],
+      "chip": "awaiting-you"
+    },
+    {
+      "name": "human followed up after the agent",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [
+        {
+          "author": "claude",
+          "createdAt": 200
+        },
+        {
+          "author": "you",
+          "createdAt": 300
+        }
+      ],
+      "chip": "awaiting-agent"
+    },
+    {
+      "name": "resolved is nothing",
+      "intent": "question",
+      "resolved": true,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [],
+      "chip": null
+    },
+    {
+      "name": "human note is not a question",
+      "intent": "note",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [],
+      "chip": null
+    },
+    {
+      "name": "agent-opened note awaits the human",
+      "intent": "note",
+      "resolved": false,
+      "opener": {
+        "author": "claude",
+        "createdAt": 100
+      },
+      "replies": [],
+      "chip": "awaiting-you"
+    },
+    {
+      "name": "same-second tie: the reply wins",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [
+        {
+          "author": "claude",
+          "createdAt": 100
+        }
+      ],
+      "chip": "awaiting-you"
+    },
+    {
+      "name": "import-origin finding opener reads as agent",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [],
+      "findingOrigin": "import",
+      "chip": "awaiting-you"
+    },
+    {
+      "name": "manual-origin finding opener reads as human even under an agent name",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "claude",
+        "createdAt": 100
+      },
+      "replies": [],
+      "findingOrigin": "manual",
+      "chip": "awaiting-agent"
+    },
+    {
+      "name": "agent name is case and space insensitive",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [
+        {
+          "author": " Claude ",
+          "createdAt": 200
+        }
+      ],
+      "chip": "awaiting-you"
+    },
+    {
+      "name": "a human reply after an import-origin opener",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "claude",
+        "createdAt": 100
+      },
+      "replies": [
+        {
+          "author": "you",
+          "createdAt": 200
+        }
+      ],
+      "findingOrigin": "import",
+      "chip": "awaiting-agent"
+    },
+    {
+      "name": "unknown author is a human",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "reviewer-bob",
+        "createdAt": 100
+      },
+      "replies": [],
+      "chip": "awaiting-agent"
+    },
+    {
+      "name": "replies need not be sorted",
+      "intent": "question",
+      "resolved": false,
+      "opener": {
+        "author": "you",
+        "createdAt": 100
+      },
+      "replies": [
+        {
+          "author": "you",
+          "createdAt": 300
+        },
+        {
+          "author": "claude",
+          "createdAt": 200
+        }
+      ],
+      "chip": "awaiting-agent"
+    }
+  ]
+}
