@@ -79,7 +79,7 @@ if grep -q -- '--deadline-ms' "$LOG"; then ok "a deadline is passed to the daemo
 n=$((n + 1)); : >"$LOG"
 printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
 printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q2"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
-if grep -qE -- '--lanes recall,slate --' "$LOG" && ! grep -q -- 'recall,context' "$LOG"; then ok "turn 2+ asks for lanes recall,slate (no context scent)"; else bad "later-turn lanes wrong: $(cat "$LOG")"; fi
+if grep -E -- '^turn q2 ' "$LOG" | grep -qE -- '--lanes recall,slate --'; then ok "turn 2+ asks for lanes recall,slate (no context scent)"; else bad "later-turn lanes wrong: $(cat "$LOG")"; fi
 
 # --- 2. a degraded lane is named -----------------------------------------
 deg_json="$(jq -n --arg t "$gold" '{text:$t, recalled:[], degraded:[{kb:"turn",lane:"recall",error_class:"timeout"}], degraded_note:"kb: recall skipped (timeout)"}')"
