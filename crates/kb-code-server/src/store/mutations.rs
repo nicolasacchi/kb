@@ -75,3 +75,38 @@ impl Store {
         Ok(rows)
     }
 }
+
+/// V70-A2 — one row to append to the `mutations` ledger. A distinct input
+/// type from [`MutationRow`] because `id` is the store's own concern (same
+/// convention as `ScipOccurrenceIn` vs the row it becomes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationIn {
+    pub ts_unix: i64,
+    pub route: String,
+    pub method: String,
+    /// `"loopback"` | `"bearer"` | `"review_gate"` — the CHECK-constrained
+    /// vocabulary of `V0027__mutations_audit.sql`.
+    pub admission: String,
+    pub repo: Option<String>,
+    pub target: Option<String>,
+    pub blob_before: Option<String>,
+    pub blob_after: Option<String>,
+    pub request_id: String,
+    pub outcome: String,
+}
+
+/// V70-A2 — one `mutations` row as read back by `GET /api/audit`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationRow {
+    pub id: i64,
+    pub ts_unix: i64,
+    pub route: String,
+    pub method: String,
+    pub admission: String,
+    pub repo: Option<String>,
+    pub target: Option<String>,
+    pub blob_before: Option<String>,
+    pub blob_after: Option<String>,
+    pub request_id: String,
+    pub outcome: String,
+}

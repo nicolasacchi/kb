@@ -557,3 +557,194 @@ impl Store {
         Ok(rows)
     }
 }
+
+// --- kbc-canvas/1 boards (V74-L1, migration V0036) -------------------------
+
+/// One `canvas_boards` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasBoardRow {
+    pub id: i64,
+    pub repo_id: i64,
+    pub slug: String,
+    pub title: String,
+    pub description_md: String,
+    pub status: String,
+    pub authored_ref: Option<String>,
+    pub content_hash: String,
+    pub revision: i64,
+    pub created_unix: i64,
+    pub updated_unix: i64,
+}
+
+/// A board summary for `GET /api/boards` — the parent row plus the three
+/// child counts, so a list never has to fetch children to say how big a
+/// board is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasBoardSummaryRow {
+    pub id: i64,
+    pub slug: String,
+    pub title: String,
+    pub status: String,
+    pub revision: i64,
+    pub updated_unix: i64,
+    pub nodes: i64,
+    pub edges: i64,
+    pub steps: i64,
+}
+
+/// One `canvas_nodes` row. `ref_json` is this daemon's OWN typed reference
+/// (`boards::RefFields`), parsed on every read — see V0036's header for why
+/// that is the deliberate opposite of `reading_sets.desk_json`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanvasNodeRow {
+    pub node_id: String,
+    pub ordinal: i64,
+    pub kind: String,
+    pub title: Option<String>,
+    pub body_md: Option<String>,
+    pub ref_json: String,
+    pub group_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub anchor_snippet: Option<String>,
+    pub pin_x: Option<f64>,
+    pub pin_y: Option<f64>,
+}
+
+/// One `canvas_edges` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasEdgeRow {
+    pub from_node: String,
+    pub to_node: String,
+    pub kind: String,
+    pub label: Option<String>,
+    pub provenance: String,
+    pub trust: Option<String>,
+}
+
+/// One `canvas_steps` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasStepRow {
+    pub node_id: String,
+    pub caption: Option<String>,
+    /// V74-L3b — the per-step CAMERA, JSON, `None` on every board step.
+    /// Parsed by `tours::Camera`, never by this module.
+    pub camera_json: Option<String>,
+}
+
+/// The board half of an apply payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewCanvasBoard {
+    /// V74-L3b — `board` or `tour` (`tours::BOARD_KINDS`). Required, never
+    /// defaulted: see [`Store::list_canvas_boards`].
+    pub kind: String,
+    pub slug: String,
+    pub title: String,
+    pub description_md: String,
+    pub status: String,
+    pub authored_ref: Option<String>,
+    pub content_hash: String,
+}
+
+/// One node of an apply payload. `ordinal` is NOT a field: it is the
+/// position in the slice, so a caller cannot hand in a document whose
+/// declared order and actual order disagree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewCanvasNode {
+    pub node_id: String,
+    pub kind: String,
+    pub title: Option<String>,
+    pub body_md: Option<String>,
+    pub ref_json: String,
+    pub group_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub anchor_snippet: Option<String>,
+    pub pin_x: Option<f64>,
+    pub pin_y: Option<f64>,
+}
+
+/// One edge of an apply payload (see [`NewCanvasNode`] on `ordinal`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewCanvasEdge {
+    pub from_node: String,
+    pub to_node: String,
+    pub kind: String,
+    pub label: Option<String>,
+    pub provenance: String,
+    pub trust: Option<String>,
+}
+
+/// One step of an apply payload (see [`NewCanvasNode`] on `ordinal`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewCanvasStep {
+    pub node_id: String,
+    pub caption: Option<String>,
+    /// V74-L3b — the per-step camera, already serialized by the caller
+    /// AFTER the lint validated it.
+    pub camera_json: Option<String>,
+}
+
+/// What an apply DID — every field a caller needs to render the outcome
+/// without a second read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasApplyOutcome {
+    pub board_id: i64,
+    pub created: bool,
+    /// `true` when the document's content hash already matched: nothing was
+    /// written and `revision` did not move.
+    pub unchanged: bool,
+    pub revision: i64,
+    pub status: String,
+    /// `true` when a changed apply moved the board off `accepted`/
+    /// `archived` — D21's ruling, surfaced rather than silent.
+    pub status_reset: bool,
+}
+
+fn canvas_board_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<CanvasBoardRow> {
+    Ok(CanvasBoardRow {
+        id: r.get(0)?,
+        repo_id: r.get(1)?,
+        slug: r.get(2)?,
+        title: r.get(3)?,
+        description_md: r.get(4)?,
+        status: r.get(5)?,
+        authored_ref: r.get(6)?,
+        content_hash: r.get(7)?,
+        revision: r.get(8)?,
+        created_unix: r.get(9)?,
+        updated_unix: r.get(10)?,
+    })
+}
+
+/// V3.4-C1 — full `canvas_sets` row (incl. opaque payload).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasSetRow {
+    pub id: i64,
+    pub repo_id: i64,
+    pub name: String,
+    pub review_id: Option<i64>,
+    pub payload: String,
+    pub created_unix: i64,
+    pub updated_unix: i64,
+}
+
+/// V3.4-C1 — list-row (no payload body; `payload_bytes` only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasSetSummaryRow {
+    pub id: i64,
+    pub name: String,
+    pub review_id: Option<i64>,
+    pub updated_unix: i64,
+    pub payload_bytes: i64,
+}
+
+fn canvas_set_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<CanvasSetRow> {
+    Ok(CanvasSetRow {
+        id: r.get(0)?,
+        repo_id: r.get(1)?,
+        name: r.get(2)?,
+        review_id: r.get(3)?,
+        payload: r.get(4)?,
+        created_unix: r.get(5)?,
+        updated_unix: r.get(6)?,
+    })
+}

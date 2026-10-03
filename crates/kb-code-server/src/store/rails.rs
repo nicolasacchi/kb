@@ -178,3 +178,38 @@ impl Store {
         Ok(rows)
     }
 }
+
+/// PRR-N3 — column order matches every `rails_edges` SELECT above: `kind,
+/// src_path, src_line, src_symbol, dst_kind, dst_path, dst_symbol, trust,
+/// extra_json`. `kind`/`trust` are CHECK-constrained at the schema level
+/// (migration `V0026__rails_edges.sql`) and always written via
+/// `EdgeKind::as_str()`/`Trust::as_str()`, so a decode failure here can only
+/// mean the row was written by a future/foreign writer — surfaced as a
+/// real `rusqlite::Error` (never silently coerced to a default variant).
+fn rails_edge_row_from(
+    r: &rusqlite::Row<'_>,
+) -> rusqlite::Result<crate::frameworks::FrameworkEdge> {
+    use crate::frameworks::{EdgeKind, Trust};
+
+    let kind_str: String = r.get(0)?;
+    let kind = EdgeKind::from_str_opt(&kind_str).ok_or_else(|| {
+        rusqlite::Error::InvalidColumnType(0, "kind".to_string(), rusqlite::types::Type::Text)
+    })?;
+    let trust_str: String = r.get(7)?;
+    let trust = Trust::from_str_opt(&trust_str).ok_or_else(|| {
+        rusqlite::Error::InvalidColumnType(7, "trust".to_string(), rusqlite::types::Type::Text)
+    })?;
+    let src_line: Option<i64> = r.get(2)?;
+
+    Ok(crate::frameworks::FrameworkEdge {
+        kind,
+        src_path: r.get(1)?,
+        src_line: src_line.map(|n| n as u32),
+        src_symbol: r.get(3)?,
+        dst_kind: r.get(4)?,
+        dst_path: r.get(5)?,
+        dst_symbol: r.get(6)?,
+        trust,
+        extra_json: r.get(8)?,
+    })
+}

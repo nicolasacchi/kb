@@ -128,3 +128,111 @@ impl Store {
         })
     }
 }
+
+/// One `review_docs` revision, as read back. `doc_md` is the WHOLE
+/// document (front matter + body) byte-for-byte as it was composed — the
+/// lossless record; every other column is a denormalised copy of a parsed
+/// front-matter field and the document itself wins on a disagreement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewDocRow {
+    pub id: i64,
+    pub review_id: i64,
+    pub ps_number: i64,
+    pub revision: i64,
+    pub schema: String,
+    pub tier: String,
+    pub doc_md: String,
+    pub summary_md: String,
+    pub risk_level: Option<String>,
+    pub risk_why: Option<String>,
+    /// Raw JSON array (same "row types don't parse other modules' JSON"
+    /// convention `AnnotationRow`/`ReviewFindingRow` already follow).
+    pub omitted_json: String,
+    pub author_json: Option<String>,
+    pub byte_len: i64,
+    pub created_at: i64,
+}
+
+/// A revision ready to append. `revision` is assigned by the store (the
+/// caller never picks one), so two concurrent composes cannot both claim
+/// the same number — the UNIQUE index would reject the second anyway, and
+/// this way it never gets that far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewReviewDoc {
+    pub review_id: i64,
+    pub ps_number: i64,
+    pub schema: String,
+    pub tier: String,
+    pub doc_md: String,
+    pub summary_md: String,
+    pub risk_level: Option<String>,
+    pub risk_why: Option<String>,
+    pub omitted_json: String,
+    pub author_json: Option<String>,
+}
+
+const REVIEW_DOC_COLUMNS: &str = "id, review_id, ps_number, revision, schema, tier, doc_md,
+    summary_md, risk_level, risk_why, omitted_json, author_json, byte_len, created_at";
+
+fn review_doc_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewDocRow> {
+    Ok(ReviewDocRow {
+        id: r.get(0)?,
+        review_id: r.get(1)?,
+        ps_number: r.get(2)?,
+        revision: r.get(3)?,
+        schema: r.get(4)?,
+        tier: r.get(5)?,
+        doc_md: r.get(6)?,
+        summary_md: r.get(7)?,
+        risk_level: r.get(8)?,
+        risk_why: r.get(9)?,
+        omitted_json: r.get(10)?,
+        author_json: r.get(11)?,
+        byte_len: r.get(12)?,
+        created_at: r.get(13)?,
+    })
+}
+
+/// Append one revision on an already-open transaction. Returns the
+/// revision number it was given.
+fn insert_review_doc_on(tx: &Transaction<'_>, d: &NewReviewDoc, now: i64) -> Result<i64> {
+    let prev: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(revision), 0) FROM review_docs
+         WHERE review_id = ?1 AND ps_number = ?2",
+        params![d.review_id, d.ps_number],
+        |r| r.get(0),
+    )?;
+    let revision = prev + 1;
+    tx.execute(
+        "INSERT INTO review_docs
+            (review_id, ps_number, revision, schema, tier, doc_md, summary_md,
+             risk_level, risk_why, omitted_json, author_json, byte_len, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            d.review_id,
+            d.ps_number,
+            revision,
+            d.schema,
+            d.tier,
+            d.doc_md,
+            d.summary_md,
+            d.risk_level,
+            d.risk_why,
+            d.omitted_json,
+            d.author_json,
+            d.doc_md.len() as i64,
+            now,
+        ],
+    )?;
+    Ok(revision)
+}
+
+/// [`Store::compose_review_doc`]'s result — one field per write the
+/// transaction performed.
+#[derive(Debug, Clone)]
+pub struct ComposeDocOutcome {
+    pub findings: FindingsImportOutcome,
+    pub revision: i64,
+    pub report_set: bool,
+    pub verdict_changed: bool,
+}

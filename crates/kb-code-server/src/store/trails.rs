@@ -420,3 +420,101 @@ impl Store {
         Ok(rows)
     }
 }
+
+// --- V74-L3b: kbc-trail/1 rows -------------------------------------------
+
+/// One step of an ingest batch, AFTER the route derived and quantised its
+/// dwell. There is no `left_at` field: it was an input to `dwell_secs`, not
+/// a fact worth keeping (see `trails`'s module doc, property 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTrailStep {
+    pub via: String,
+    pub path: Option<String>,
+    pub line_start: Option<u32>,
+    pub line_end: Option<u32>,
+    pub symbol: Option<String>,
+    pub blob_sha: Option<String>,
+    pub entered_at: i64,
+    pub dwell_secs: i64,
+    pub day: String,
+    pub note: Option<String>,
+}
+
+/// An explicitly created trail — AUTHORED or a FORK. Both carry a NULL
+/// `day`, which is what exempts them from the one-recorded-trail-per-day
+/// unique index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTrail {
+    pub origin: String,
+    pub title: Option<String>,
+    pub parent_id: Option<String>,
+    pub parent_ordinal: Option<i64>,
+    pub session_hint: Option<String>,
+}
+
+/// One `trails` row plus its two derived counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailSummaryRow {
+    pub id: String,
+    pub origin: String,
+    pub title: Option<String>,
+    pub day: Option<String>,
+    pub parent_id: Option<String>,
+    pub parent_ordinal: Option<i64>,
+    pub created_unix: i64,
+    pub updated_unix: i64,
+    pub steps: i64,
+    pub dwell_secs: i64,
+}
+
+/// One `trail_steps` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailStepRow {
+    pub ordinal: i64,
+    pub via: String,
+    pub path: Option<String>,
+    pub line_start: Option<u32>,
+    pub line_end: Option<u32>,
+    pub symbol: Option<String>,
+    pub blob_sha: Option<String>,
+    pub entered_at: i64,
+    pub dwell_secs: i64,
+    pub day: String,
+    pub note: Option<String>,
+}
+
+/// One row of the aggregate read. No timestamp finer than a day exists on
+/// this struct, and that is the privacy contract rather than an oversight —
+/// `trails::tests::an_aggregate_row_carries_no_timestamp_finer_than_a_day`
+/// pins the wire shape it feeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailAggregateRow {
+    pub path: Option<String>,
+    pub symbol: Option<String>,
+    pub steps: i64,
+    pub dwell_secs: i64,
+    pub days: i64,
+    pub first_day: String,
+    pub last_day: String,
+}
+
+/// One dissent note on an AUTHORED trail — an ordinary `annotations` row,
+/// read back by its `trail_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailNoteRow {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub author: String,
+    pub intent: String,
+    pub body: String,
+    pub path: String,
+    pub resolved: bool,
+    pub created_at: i64,
+}
+
+/// V74-L3b — how many expired `trails` one
+/// [`Store::sweep_trail_retention_page`] covers. Same size and the same
+/// reasoning as [`LANE_GC_PAGE`]: one trail can own thousands of steps
+/// ([`crate::trails::MAX_STEPS_PER_TRAIL`]), and this number is the unit
+/// of write-mutex hold time on an IO-bound host.
+pub const TRAIL_GC_PAGE: usize = 32;
