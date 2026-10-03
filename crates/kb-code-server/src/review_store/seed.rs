@@ -410,6 +410,22 @@ pub fn is_review_ref(name: &str) -> bool {
     digits(id) && ps.strip_prefix("ps").is_some_and(digits)
 }
 
+/// `(review_id, ps_number)` of a `refs/kbc/review/<id>/ps<n>[-base]` name.
+pub fn review_ref_key(name: &str) -> Option<(i64, i64)> {
+    if !is_review_ref(name) {
+        return None;
+    }
+    let rest = name.strip_prefix("refs/kbc/review/")?;
+    let (id, ps) = rest.split_once('/')?;
+    let ps = ps.strip_suffix("-base").unwrap_or(ps);
+    Some((id.parse().ok()?, ps.strip_prefix("ps")?.parse().ok()?))
+}
+
+/// The `(review_id, ps_number)` pairs the DB still holds — the oracle
+/// [`import_member`] consults before re-importing a member clone's legacy
+/// `refs/kbc/review/*` pin (A5.f5).
+pub type LivePatchsets = BTreeSet<(i64, i64)>;
+
 /// `refs/kbc/review/<id>/ps<n>`.
 pub fn patchset_ref(review_id: i64, ps_number: i64) -> String {
     format!("refs/kbc/review/{review_id}/ps{ps_number}")
@@ -523,6 +539,7 @@ pub fn import_member(
     git_dir: &Path,
     member: &SeedMember,
     timeout: Duration,
+    live: &LivePatchsets,
 ) -> Result<MemberImport, StoreGitError> {
     git.allow_local_source(&member.common_dir)
         .map_err(|e| StoreGitError {
@@ -565,6 +582,15 @@ pub fn import_member(
                     _ => skipped += 1,
                 }
             } else if is_review_ref(name) {
+                // A5.f5 — a member clone keeps its legacy review pins after
+                // the store GC'd the patchset (or the whole review); the
+                // DB no longer lists it, so importing the pin again would
+                // resurrect a GC'd ref on every sync. Only patchsets the DB
+                // still holds are imported; the rest are counted skipped.
+                if !review_ref_key(name).is_some_and(|k| live.contains(&k)) {
+                    skipped += 1;
+                    continue;
+                }
                 match RefName::parse(name) {
                     Ok(r) => {
                         specs.push(FetchRefspec::new(false, RefSource::Ref(r.clone()), r));
@@ -938,12 +964,17 @@ fn seed_into(
         git.configure_remote(tmp, &RemoteName::base(), url)
             .map_err(|e| SeedError::git("config", e))?;
     }
+    let live: LivePatchsets = plan
+        .patchsets
+        .iter()
+        .map(|p| (p.review_id, p.ps_number))
+        .collect();
     let mut members = Vec::with_capacity(plan.members.len());
     for (i, m) in plan.members.iter().enumerate() {
         if plan.fail_after_members == Some(i) {
             return Err(SeedError::other("member-fetch", "injected failure"));
         }
-        let imp = import_member(git, tmp, m, SEED_FETCH_TIMEOUT)
+        let imp = import_member(git, tmp, m, SEED_FETCH_TIMEOUT, &live)
             .map_err(|e| SeedError::git("member-fetch", e))?;
         members.push(imp);
     }

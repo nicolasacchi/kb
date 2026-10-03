@@ -701,6 +701,11 @@ impl ReviewStores {
         let (members, _) = self.members_of(store, store_id);
         let ops = self.ops_lock(store_id);
         let mut out = PendingImport::default();
+        let live: seed::LivePatchsets = store
+            .patchset_keys_for_store(store_id)
+            .map_err(db)?
+            .into_iter()
+            .collect();
         for (r, m) in members {
             let pending = store
                 .repo_store(r.id)
@@ -711,7 +716,7 @@ impl ReviewStores {
             }
             let fl = self.fetch_lock(store_id, &RemoteName::work(r.id));
             let _g = fl.blocking_lock();
-            let imp = match seed::import_member(git, &dir, &m, seed::SEED_FETCH_TIMEOUT) {
+            let imp = match seed::import_member(git, &dir, &m, seed::SEED_FETCH_TIMEOUT, &live) {
                 Ok(i) => i,
                 Err(e) => {
                     // This warn IS the reporting channel for the
@@ -1895,8 +1900,19 @@ impl ReviewStores {
             .map_err(|d| StoreUnavailable::Error { detail: d })?;
         let mut members = Vec::new();
         let mut member_errors = Vec::new();
+        let live: seed::LivePatchsets = plan
+            .patchsets
+            .iter()
+            .map(|p| (p.review_id, p.ps_number))
+            .collect();
         for m in &plan.members {
-            match seed::import_member(git, &handle.git_dir, m, super::git::WORK_FETCH_TIMEOUT) {
+            match seed::import_member(
+                git,
+                &handle.git_dir,
+                m,
+                super::git::WORK_FETCH_TIMEOUT,
+                &live,
+            ) {
                 Ok(i) => {
                     mark_imported(store, &i);
                     members.push(i)

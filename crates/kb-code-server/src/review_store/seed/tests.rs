@@ -1659,3 +1659,66 @@ fn a_pass_deadline_hands_out_only_the_time_left() {
         "an exhausted budget is not zero-length time"
     );
 }
+
+/// A5.f5 — a member clone keeps its legacy `refs/kbc/review/*` pins after
+/// the store GC'd the patchset (and, separately, a whole review). A later
+/// `store sync` must not import them again: only patchsets the DB still
+/// lists come back. Fails against the pre-fix importer, which fetched every
+/// `refs/kbc/review/*` ref the clone carried.
+#[test]
+fn a_gcd_patchset_is_not_resurrected_by_the_next_sync() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(
+        &e.store,
+        "widgets-01",
+        Some("https://github.com/acme/widgets.git"),
+    ));
+    let kept = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    // A second patchset of the same review, and a second review entirely.
+    e.store
+        .insert_patchset(kept, 2, &e.fx.feat_tip, &e.fx.main_tip, 2)
+        .unwrap();
+    git(
+        &e.fx.one,
+        &["update-ref", &patchset_ref(kept, 2), &e.fx.feat_tip],
+    );
+    let gone = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    e.rs.seed(&e.store, id, false).unwrap();
+    let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
+    let refs = store_refs(&dir);
+    for r in [
+        patchset_ref(kept, 1),
+        patchset_ref(kept, 2),
+        patchset_ref(gone, 1),
+    ] {
+        assert!(
+            refs.contains(&r),
+            "seed imports live patchsets: {r} {refs:?}"
+        );
+    }
+
+    // The store GCs ps2 of `kept` and all of `gone`: DB rows and store refs
+    // go; the member clone's legacy pins stay (store GC never writes clones).
+    assert!(e.store.delete_patchset(kept, 2).unwrap());
+    e.store.delete_review(gone).unwrap();
+    git(&dir, &["update-ref", "-d", &patchset_ref(kept, 2)]);
+    git(&dir, &["update-ref", "-d", &patchset_ref(gone, 1)]);
+
+    let h = e.rs.handle_for_repo(&e.store, "widgets-01").unwrap();
+    let rep = e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(rep.member_errors.is_empty(), "{:?}", rep.member_errors);
+    let refs = store_refs(&dir);
+    assert!(refs.contains(&patchset_ref(kept, 1)), "{refs:?}");
+    assert!(
+        !refs.contains(&patchset_ref(kept, 2)),
+        "a GC'd patchset came back: {refs:?}"
+    );
+    assert!(
+        !refs.contains(&patchset_ref(gone, 1)),
+        "a GC'd review came back: {refs:?}"
+    );
+    assert!(
+        review_ref_key(&patchset_base_ref(kept, 2)) == Some((kept, 2)),
+        "-base refs key on their patchset"
+    );
+}
