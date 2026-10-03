@@ -45,7 +45,8 @@ vi.mock("../hooks/useReview", () => ({
   useReview: () => ({ setVerdict: vi.fn() }),
 }));
 
-vi.mock("../api/reviewNotes", () => ({
+vi.mock("../api/reviewNotes", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/reviewNotes")>()),
   patchCommentMeta: vi.fn().mockResolvedValue({ ok: true, changed: true, tags: [], private: false }),
 }));
 
@@ -280,5 +281,43 @@ describe("CommentsPanel — note meta rides the create (v0.40 TN)", () => {
     // body is byte-identical to the pre-TN one.
     expect("tags" in opts).toBe(false);
     expect("private" in opts).toBe(false);
+  });
+});
+
+// v0.44 X2 (P2 carry-over) — the tag editor sends add_tags/remove_tags
+// DELTAS like the CLI, never the full-replace `tags` key (a read-merge-write
+// client erases whatever another writer landed in between).
+describe("CommentsPanel — tag editor sends deltas (v0.44 X2)", () => {
+  beforeEach(() => {
+    vi.mocked(patchCommentMeta).mockClear();
+  });
+
+  it("editing tags PATCHes add_tags/remove_tags and no `tags` key", async () => {
+    const file = emptyReview("kb1", "art1", "Doc Title");
+    file.comments = [
+      {
+        id: "c1",
+        status: "open",
+        body: "tagged comment",
+        file: "art1",
+        fileLabel: "art1",
+        anchor: { kind: "file" },
+        author: "you",
+        createdAt: "2026-01-01T00:00:00Z",
+        editedAt: null,
+        replies: [],
+        tags: ["alpha", "beta"],
+      },
+    ] as unknown as typeof file.comments;
+    renderPanel({ file });
+    fireEvent.click(screen.getByText(/🏷 tags/));
+    fireEvent.change(screen.getByLabelText("comment tags"), {
+      target: { value: "beta, gamma" },
+    });
+    fireEvent.click(screen.getByText("save"));
+    await waitFor(() => expect(patchCommentMeta).toHaveBeenCalledTimes(1));
+    const patch = vi.mocked(patchCommentMeta).mock.calls[0][3];
+    expect(patch).toEqual({ add_tags: ["gamma"], remove_tags: ["alpha"] });
+    expect("tags" in patch).toBe(false);
   });
 });

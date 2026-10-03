@@ -40,7 +40,7 @@ import { useOmniSearch } from "../hooks/useOmniSearch";
 import { useReviewFiles } from "../hooks/useReviews";
 import { useScopes } from "../hooks/useScopes";
 import { readerUrl } from "../lib/breadcrumbs";
-import { useCurrentReview } from "../lib/currentReview";
+import { useValidatedCurrentReview } from "../hooks/useValidatedCurrentReview";
 import { sectionsToRowCounts } from "../lib/omniSearch";
 import { initialPaletteState, paletteReducer } from "../lib/paletteReducer";
 import { loadSearchPreviewOpen, saveSearchPreviewOpen } from "../lib/prefs";
@@ -160,13 +160,14 @@ export default function Search() {
   // there is no single "current review" to mean anything for a fleet-wide
   // search, and an unscoped hit's OWN repo may not even be the one the
   // marker is for.
-  const currentReview = useCurrentReview(repo ?? "");
-  const currentReviewIdNum = currentReview ? Number(currentReview.id) : NaN;
+  const { current: currentReview, reviewId: currentReviewIdNum } = useValidatedCurrentReview(
+    repo ?? "",
+  );
   const reviewFilesQ = useReviewFiles(
     repo,
-    Number.isFinite(currentReviewIdNum) ? currentReviewIdNum : undefined,
+    currentReviewIdNum,
     "latest",
-    !!repo && !!currentReview && Number.isFinite(currentReviewIdNum),
+    !!repo && !!currentReview && currentReviewIdNum !== undefined,
   );
   const reviewFilePaths = useMemo(
     () => (reviewFilesQ.data ? new Set(reviewFilesQ.data.files.map((f) => f.path)) : null),
