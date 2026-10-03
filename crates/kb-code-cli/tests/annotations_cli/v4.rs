@@ -466,18 +466,47 @@ async fn findings_add_import_and_compose_store_the_resolved_author() {
         .clone();
     let listed: serde_json::Value = serde_json::from_slice(&out).unwrap();
     let rows = listed["findings"].as_array().expect("findings array");
-    let author_of = |title: &str| -> String {
+    let finding_of = |title: &str| -> &serde_json::Value {
         rows.iter()
             .find(|f| f["title"] == title)
-            .unwrap_or_else(|| panic!("no finding titled {title:?} in {listed}"))["author"]
+            .unwrap_or_else(|| panic!("no finding titled {title:?} in {listed}"))
+    };
+
+    // Manual findings store the author on the finding record itself ...
+    assert_eq!(finding_of("added by omp")["author"], "omp");
+    assert_eq!(finding_of("added by a human")["author"], "you");
+
+    // ... imported / composed findings (origin=import) leave
+    // `review_findings.author` NULL by design and carry the supplied author on
+    // their linked annotation row, so read that back from the daemon.
+    let anns: serde_json::Value = reqwest::Client::new()
+        .get(format!("{url}/api/annotations"))
+        .query(&[("repo", "fixture"), ("path", "lib.rs")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let anns = anns["annotations"].as_array().expect("annotations array");
+    let ann_author = |title: &str| -> String {
+        let id = finding_of(title)["annotation_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("finding {title:?} has no annotation_id"))
+            .to_string();
+        anns.iter()
+            .find(|a| a["id"] == id.as_str())
+            .unwrap_or_else(|| panic!("annotation {id} for {title:?} not listed: {anns:?}"))
+            ["author"]
             .as_str()
             .unwrap()
             .to_string()
     };
-    assert_eq!(author_of("added by omp"), "omp");
-    assert_eq!(author_of("imported by codex"), "codex");
-    assert_eq!(author_of("composed by grok"), "grok");
-    assert_eq!(author_of("added by a human"), "you");
+    assert_eq!(ann_author("imported by codex"), "codex");
+    assert_eq!(ann_author("composed by grok"), "grok");
+    // and the manual ones agree on their annotation rows too
+    assert_eq!(ann_author("added by omp"), "omp");
+    assert_eq!(ann_author("added by a human"), "you");
 
     task.abort();
 }
