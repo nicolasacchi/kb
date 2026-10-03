@@ -622,6 +622,21 @@ fn in_scope(scope: &str, project: Option<&str>, name: &KbName, ctx: &KbContext) 
     }
 }
 
+/// A3-5 — the named degradation for a corpus that has an embedder yet was
+/// answered from BM25 alone. `None` when the vector path ran.
+pub(crate) fn embed_fallback_lane(
+    kb: &str,
+    fell_back: bool,
+) -> Option<crate::routes::context::DegradedLane> {
+    fell_back.then(|| {
+        crate::routes::context::degraded_of(
+            kb,
+            "recall",
+            crate::routes::context::QueryErrorClass::Embed,
+        )
+    })
+}
+
 pub async fn recall(
     State(state): State<Arc<KbHandles>>,
     Extension(identity): Extension<crate::middleware::Identity>,
@@ -1042,13 +1057,7 @@ pub(crate) async fn recall_compose(
                 let (rows, query_degraded) = match rows_result {
                     Ok(rows) => (
                         rows,
-                        vector_fallback.then(|| {
-                            crate::routes::context::degraded_of(
-                                name.as_str(),
-                                "recall",
-                                crate::routes::context::QueryErrorClass::Embed,
-                            )
-                        }),
+                        embed_fallback_lane(name.as_str(), vector_fallback),
                     ),
                     Err(e) => {
                         tracing::warn!(kb = %name, error = %e, "recall: query failed; skipping corpus");
@@ -3614,6 +3623,18 @@ mod tests {
             code_hints_total: 0,
             drift_open: 0,
         }
+    }
+
+    /// A3-5: a vector fallback is NAMED (error_class embed); the vector path
+    /// is not.
+    #[test]
+    fn embed_fallback_is_named_degraded_lane() {
+        use crate::routes::context::QueryErrorClass;
+        let lane = embed_fallback_lane("memory-x", true).expect("named");
+        assert_eq!(lane.kb, "memory-x");
+        assert_eq!(lane.lane, "recall");
+        assert_eq!(lane.error_class, QueryErrorClass::Embed);
+        assert!(embed_fallback_lane("memory-x", false).is_none());
     }
 
     /// Serve-time ledger rows: one per returned hit, 1-based rank, title
