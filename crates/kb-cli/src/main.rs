@@ -183,6 +183,14 @@ enum Cmd {
         link: Option<String>,
         #[arg(long)]
         daemon: Option<String>,
+        /// v0.44 X6 - deliver synchronously or fail. Without it a slow, down
+        /// or 5xx daemon makes `kb remember` exit 0 with `queued` (the write
+        /// is spooled and replays later, so there is NO id yet). With
+        /// `--wait` nothing is spooled: the command only succeeds, printing
+        /// the id, once the daemon has accepted the write; otherwise it exits
+        /// non-zero. Use it in scripts that need the id.
+        #[arg(long)]
+        wait: bool,
         #[arg(long)]
         json: bool,
     },
@@ -4392,6 +4400,7 @@ async fn main() -> Result<()> {
             global,
             link,
             daemon,
+            wait,
             json,
         } => {
             let bearer = read_bearer();
@@ -4415,6 +4424,7 @@ async fn main() -> Result<()> {
                 link.as_deref(),
                 daemon.as_deref(),
                 bearer.as_deref(),
+                wait,
                 json,
             )
             .await

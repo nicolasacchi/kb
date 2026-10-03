@@ -530,7 +530,7 @@ kb synth --out DIR [--docs N] [--seed S]
 kb bench {init,discover,run}        retrieval-quality bake-off: scaffold a
                                     queries.jsonl, discover relevant ids, then
                                     compute Recall@k / MRR / nDCG per (kb × mode)
-kb sessions capture                    Build a session capture artifact from a transcript file — the Rust engine `kb-capture.sh` shells out to (W0.4). Resolves each detected git commit sha before writing. Filesystem-only: never talks to the daemon
+kb sessions capture                    Build a session capture artifact from a transcript file — the Rust engine `kb-capture.sh` shells out to (W0.4). Resolves each detected git commit sha before writing. `--replay-spool` (v0.44 X6) lands the transcripts a failed hook capture parked in the private spool (`$KB_CAPTURE_SPOOL`, else `$XDG_CACHE_HOME/kb/capture-spool`) through this same scrubbed path and deletes them. Filesystem-only: never talks to the daemon
 kb sessions scrub                      v0.44 F7b — secrets-only scrub filter, JSONL stdin → stdout (the floor `capture` and `import claude-history` apply). The codex/opencode capture adapters pipe their translated transcript through it and write nothing if it is unavailable (fail closed)
 kb sessions rescrub [--dir D] [--apply|--dry-run] [--json]  v0.44 F7b — re-scrub captures already on disk across every lane (transcript, structured digest blocks incl. the commits block, sidecar text). Dry run by default (per-lane counts, writes nothing; `--dry-run` spells that out and conflicts with `--apply`); `--apply` atomically rewrites only the affected captures, keeping each file's permission bits; idempotent. `kb doctor --hooks` (check `capture-scrub`) prints the same per-harness, per-lane data-at-rest table for `$KB_SESSIONS_DIR`, but audits only the newest 500 captures by mtime (it reads and regex-scrubs every lane of each one, so an unbounded walk is minutes of IO on a large corpus); the line names the sample (`500 newest of N`), `KB_DOCTOR_SCRUB_LIMIT=<n>` changes the cap and `0` audits all, and `rescrub` (dry run) is always the exact full count
 kb sessions list [--limit N] [--json] List captured sessions newest-first. Filters: --project, --substance (trivial|routine|substantive), --harness (claude|codex|opencode|grok|kimi), --folder, --since (unix|YYYY-MM-DD|<N>d|<N>h). v0.44 F10 `--undistilled` is the distill-debt queue (committed, no memory, not trivial; `/kb-distill --pending` works through it)
@@ -610,7 +610,7 @@ kb remember <text> [--title T] [--summary S]
    [--supersedes ID] [--type episodic|semantic|procedural]
    [--source fetched-web|user-dictated|agent-inference]
    [--failed] [--session-id ID] [--no-session]
-   [--global | --link KB,KB] [--daemon URL] [--json]
+   [--global | --link KB,KB] [--daemon URL] [--wait] [--json]
                                     v0.9 M5: store an agent-explicit memory —
                                     renders an HTML artifact and POSTs it to
                                     a memory corpus. --global (default)
@@ -662,6 +662,13 @@ kb remember <text> [--title T] [--summary S]
                                     replay of a write that already landed
                                     with 200 and the original id, so nothing
                                     is written twice. A 4xx is never spooled.
+                                    A `queued` result carries NO id (exit 0 only
+                                    means "accepted for delivery"): scripts that
+                                    need the id pass `--wait`, which spools
+                                    nothing and exits non-zero unless the daemon
+                                    accepted the write. v0.44 X6: a client_ref
+                                    reused with DIFFERENT content is a 409, not
+                                    a silent drop of the new text.
 kb outbox flush [--daemon URL] [--json]
 kb outbox list [--json]
                                     v0.44 X3: replay / show the `kb remember`
