@@ -11476,6 +11476,50 @@ async fn memory_ingest_client_ref_owner_probe_ignores_unrelated_file_names() {
     assert_eq!(r.status(), 201, "an unrelated file must not own the key");
 }
 
+/// v044-X10 - a keyed file records its key in a `kb-client-ref` meta, and the
+/// owner probe trusts it: a memory keyed `zzzz-<ref>` has a filename that ends
+/// in `-<ref>.html` but belongs to a DIFFERENT key, so `<ref>` stays free
+/// (the filename-shape check alone called that a conflict). The same key with
+/// another title is still refused.
+#[tokio::test]
+async fn memory_ingest_client_ref_marker_decides_ownership() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    let post = |title: &'static str, client_ref: &'static str| {
+        reqwest::Client::new()
+            .post(url(addr, "/api/kb/globalmem/artifacts"))
+            .json(&serde_json::json!({
+                "title": title,
+                "body": "marker body",
+                "category": "memory-project",
+                "client_ref": client_ref,
+            }))
+            .send()
+    };
+    let longer = post("Marker Owner Ox", "zzzz-aaaabbbbccccdddd")
+        .await
+        .unwrap();
+    assert_eq!(longer.status(), 201);
+    let written: Vec<String> = walkdir_html(tmp.path())
+        .into_iter()
+        .filter(|f| f.contains("zzzz-aaaabbbbccccdddd"))
+        .collect();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let html = std::fs::read_to_string(&written[0]).unwrap();
+    assert!(
+        html.contains("<meta name=\"kb-client-ref\" content=\"zzzz-aaaabbbbccccdddd\">"),
+        "the keyed file records its key"
+    );
+
+    let shorter = post("Another Marker Ox", "aaaabbbbccccdddd").await.unwrap();
+    assert_eq!(
+        shorter.status(),
+        201,
+        "a file keyed under a longer ref does not own the shorter key"
+    );
+    let again = post("A Third Marker Ox", "aaaabbbbccccdddd").await.unwrap();
+    assert_eq!(again.status(), 409, "the same key, a different memory");
+}
+
 /// v044-X9 - a replay after the stored memory was pinned / re-tagged between
 /// the write and the replay is still idempotent (the INGESTED content is
 /// compared, not the whole file); new text under the key is still a 409.

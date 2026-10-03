@@ -183,6 +183,45 @@ fn is_keyed_filename_for(name: &str, suffix: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// Name of the `<meta>` that marks a file as written for one idempotency key.
+const CLIENT_REF_META: &str = "kb-client-ref";
+
+/// The `<meta name="kb-client-ref">` marker of a rendered artifact, if any.
+/// Written at ingest for every keyed memory; a file WITHOUT it (written
+/// before the marker existed, or never keyed) is judged by its name shape.
+fn client_ref_marker(html: &str) -> Option<&str> {
+    let head_end = html.find("</head>").unwrap_or(html.len());
+    let head = &html[..head_end];
+    let needle = format!("<meta name=\"{CLIENT_REF_META}\" content=\"");
+    let start = head.find(&needle)? + needle.len();
+    let len = head[start..].find('"')?;
+    Some(&head[start..start + len])
+}
+
+/// Does the file `name` (contents `html`) belong to the key `r`? The marker is
+/// authoritative when present - a title that merely slugs to `...-<ref>` has
+/// none, and a file keyed under a longer ref that happens to end in `-<r>`
+/// carries ITS ref, not `r`. Only a file with no marker falls back to the
+/// exact filename shape, so pre-marker keyed files keep working.
+fn file_owned_by_ref(name: &str, html: &str, r: &str, suffix: &str) -> bool {
+    match client_ref_marker(html) {
+        Some(marker) => marker == r,
+        None => is_keyed_filename_for(name, suffix),
+    }
+}
+
+/// Insert the marker meta before `</head>` (no-op without a head).
+fn with_client_ref_marker(html: String, r: &str) -> String {
+    match html.find("</head>") {
+        Some(i) => format!(
+            "{}<meta name=\"{CLIENT_REF_META}\" content=\"{r}\">\n{}",
+            &html[..i],
+            &html[i..]
+        ),
+        None => html,
+    }
+}
+
 /// The title + body region of a rendered memory artifact (`<h1>…` up to
 /// `</main>`) — the part a `client_ref` replay must compare. Metas (tags,
 /// pin, salience, `kb-created`) live in `<head>` and change legitimately
@@ -462,7 +501,16 @@ pub(crate) fn ingest_keyed(
             .flatten()
             .any(|e| {
                 let n = e.file_name().to_string_lossy().into_owned();
-                n != filename && is_keyed_filename_for(&n, &suffix)
+                // Only names ending in the key's suffix can belong to it, so
+                // only those are opened.
+                n != filename
+                    && n.ends_with(&suffix)
+                    && file_owned_by_ref(
+                        &n,
+                        &std::fs::read_to_string(e.path()).unwrap_or_default(),
+                        r,
+                        &suffix,
+                    )
             });
         if owned_elsewhere {
             return Err(error_to_problem_json(&kb_core::Error::Conflict(format!(
@@ -504,6 +552,12 @@ pub(crate) fn ingest_keyed(
     }
 
     let abs = ctx.source_path.join(&filename);
+    // A keyed file records its key, so the owner probe never has to guess from
+    // the filename.
+    let html = match client_ref {
+        Some(r) => with_client_ref_marker(html, r),
+        None => html,
+    };
     if let Err(e) = std::fs::write(&abs, &html) {
         return Err(error_to_problem_json(&kb_core::Error::Storage(format!(
             "write memory artifact {}: {e}",
@@ -976,6 +1030,50 @@ pub async fn patch_meta(
 mod tests {
     use super::*;
     use kb_core::review::{Anchor, Author};
+
+    /// v044-X10 - the marker is authoritative; the name shape is only the
+    /// fallback for a file that has none.
+    #[test]
+    fn client_ref_marker_beats_the_filename_shape() {
+        let keyed = with_client_ref_marker(
+            "<html><head><title>t</title></head><body></body></html>".to_string(),
+            "abcd1234efgh",
+        );
+        assert_eq!(client_ref_marker(&keyed), Some("abcd1234efgh"));
+        let suffix = "-efgh5678.html";
+        // Right shape, but the marker names another key.
+        assert!(!file_owned_by_ref(
+            "x-efgh5678.html",
+            &keyed,
+            "efgh5678",
+            suffix
+        ));
+        // Marker equals the key.
+        assert!(file_owned_by_ref(
+            "x-abcd1234efgh.html",
+            &keyed,
+            "abcd1234efgh",
+            "-abcd1234efgh.html"
+        ));
+        // No marker: exact-shape fallback keeps pre-marker files working.
+        let legacy = "<html><head></head><body></body></html>";
+        assert_eq!(client_ref_marker(legacy), None);
+        assert!(file_owned_by_ref(
+            "some-title-efgh5678.html",
+            legacy,
+            "efgh5678",
+            suffix
+        ));
+        assert!(!file_owned_by_ref(
+            "Some_Note-efgh5678.html",
+            legacy,
+            "efgh5678",
+            suffix
+        ));
+        // A marker in the BODY is not a marker.
+        let body_only = "<html><head></head><body><meta name=\"kb-client-ref\" content=\"efgh5678\"></body></html>";
+        assert_eq!(client_ref_marker(body_only), None);
+    }
 
     /// The U3 provenance fields are ADDITIVE: an `IngestBody` from a
     /// pre-U3 client (`kb remember`, the proposal-approval path, any
