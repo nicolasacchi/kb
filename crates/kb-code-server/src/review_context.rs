@@ -947,8 +947,13 @@ mod tests {
                 .all(|o| o["reason"] == "budget"),
             "every cut says why"
         );
-        let used = got["budget"]["used_bytes"].as_u64().unwrap();
-        assert!(used <= got["budget"]["bytes"].as_u64().unwrap(), "{used}");
+        // Used = the header, the one thread kept, and the (always shown)
+        // "since does not apply" answer - nothing from the cut sections.
+        let used = got["budget"]["used_bytes"].as_u64().unwrap() as usize;
+        let expect = json_len(&fixture().header)
+            + json_len(&fixture().threads[0])
+            + json_len(&json!({ "applicable": false, "reason": "no-verdict" }));
+        assert_eq!(used, expect);
     }
 
     #[test]
