@@ -338,7 +338,7 @@ pub async fn list_sets(
         }
     }
     let kind = params.kind.clone();
-    // 2026-08-31 incident (store.rs module doc): single store call, still
+    // 2026-08-31 incident (store/mod.rs module doc): single store call, still
     // wrapped so it can never park this async worker on the mutex wait.
     let rows = state
         .store
@@ -531,7 +531,7 @@ fn validate_spans(spans: &[SpanInput]) -> Result<Vec<NewReadingSetSpan>, ApiErro
 /// Build the full [`SetView`] for an already-fetched `row` — every mutation
 /// route re-reads and returns this after its write (same "return the whole
 /// resource" convention `routes::create_annotation`/`patch_annotation` use).
-/// 2026-08-31 incident (store.rs module doc): takes `&Store` (not
+/// 2026-08-31 incident (store/mod.rs module doc): takes `&Store` (not
 /// `&SharedState`) precisely so every call site can run this inside its
 /// own `run_blocking` closure alongside its other store calls, rather than
 /// this being a second async-context store touch of its own.
@@ -627,7 +627,7 @@ pub async fn create_set(
     let description = body.description.clone();
     let desk_json = body.desk_json.clone();
     let description_md = body.description_md.clone();
-    // 2026-08-31 incident (store.rs module doc): create + read-back + view
+    // 2026-08-31 incident (store/mod.rs module doc): create + read-back + view
     // compose run as one closure; `bus.emit` doesn't touch the store, so
     // it stays outside, after.
     let repo_name_bg = repo_name.clone();
@@ -673,7 +673,7 @@ pub async fn get_set(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 2026-08-31 incident (store.rs module doc): fetch + repo lookup + view
+    // 2026-08-31 incident (store/mod.rs module doc): fetch + repo lookup + view
     // compose run as one closure. `find_repo_by_id` only touches
     // `state.repos` (in-memory), so a cloned `state` handle rides along for
     // that lookup.
@@ -783,7 +783,7 @@ pub async fn patch_set(
     });
     let now = chrono::Utc::now().timestamp();
     let state_bg = state.clone();
-    // 2026-08-31 incident (store.rs module doc): existence check, the
+    // 2026-08-31 incident (store/mod.rs module doc): existence check, the
     // meta/span writes, and the read-back+view compose are up to five
     // sequential store calls with no async work between them — one
     // closure, one hop to the blocking pool. `bus.emit` doesn't touch the
@@ -874,7 +874,7 @@ pub async fn append_span(
     let span = validate_span(&body)?;
     let now = chrono::Utc::now().timestamp();
     let state_bg = state.clone();
-    // 2026-08-31 incident (store.rs module doc): existence check, append,
+    // 2026-08-31 incident (store/mod.rs module doc): existence check, append,
     // and read-back+view compose run as one closure; `bus.emit` doesn't
     // touch the store, so it stays outside, after.
     let (view, repo_name) = state
@@ -916,7 +916,7 @@ pub async fn delete_set(
     AxumPath(id): AxumPath<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let state_bg = state.clone();
-    // 2026-08-31 incident (store.rs module doc): existence check + delete
+    // 2026-08-31 incident (store/mod.rs module doc): existence check + delete
     // run as one closure; `bus.emit` doesn't touch the store, so it stays
     // outside, after.
     let repo_name = state
@@ -987,7 +987,7 @@ pub async fn from_session_route(
 
     let id = new_set_id();
     let now = chrono::Utc::now().timestamp();
-    // 2026-08-31 incident (store.rs module doc): the create + read-back +
+    // 2026-08-31 incident (store/mod.rs module doc): the create + read-back +
     // view compose (everything after the async session-diff pull above)
     // runs as one closure; `bus.emit` doesn't touch the store, so it stays
     // outside, after.
@@ -1132,7 +1132,7 @@ pub async fn from_doc_route(
     let doc_path = lens.doc_path.clone();
     let doc_hash = lens.doc_hash.clone();
 
-    // 2026-08-31 incident (store.rs module doc): the create + read-back +
+    // 2026-08-31 incident (store/mod.rs module doc): the create + read-back +
     // view compose (everything after the async lens resolve above) runs
     // as one closure; `bus.emit` doesn't touch the store, so it stays
     // outside, after.

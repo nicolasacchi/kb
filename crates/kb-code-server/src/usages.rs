@@ -176,7 +176,7 @@ pub async fn usages_route(
     let line = params.line;
     let col = params.col;
     let rev = params.rev.clone();
-    // 2026-08-31 incident (store.rs module doc): the sync usages ladder
+    // 2026-08-31 incident (store/mod.rs module doc): the sync usages ladder
     // runs on the blocking pool; the lip overlay below is the async leg.
     let repo_bg = repo.clone();
     let mut out = state

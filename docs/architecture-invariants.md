@@ -2761,7 +2761,7 @@ together, with goldens.
   blocking-pool hop); and the conn mutex is `parking_lot::Mutex`, because
   std's unfair handoff let the sink's per-file lock loop starve a parked
   reader for an entire burst (observed: `/api/identity` >90 s while single
-  sink messages were ~11 s). Full narrative: `store.rs` module doc; the
+  sink messages were ~11 s). Full narrative: `store/mod.rs` module doc; the
   regression pin is `kb-code-server/tests/starvation.rs`. Trigger to
   remember: if this repo's checkout is bind-mounted into a running kb-code
   instance (e.g. a prod deployment indexing its own source), an agent

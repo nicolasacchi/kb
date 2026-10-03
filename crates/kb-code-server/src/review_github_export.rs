@@ -251,7 +251,7 @@ pub async fn export_github_route(
             .collect()
     });
     let include_waived = params.include_waived;
-    // 2026-08-31 incident (store.rs module doc): the four sequential reads
+    // 2026-08-31 incident (store/mod.rs module doc): the four sequential reads
     // below (patchset, pr binding, findings, annotations) are contiguous
     // store work — one blocking-pool trip; the resolution loop after stays
     // outside since it touches only the git blob cache, not the store.

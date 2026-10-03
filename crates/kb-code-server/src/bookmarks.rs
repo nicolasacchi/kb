@@ -73,7 +73,7 @@ pub async fn list_bookmarks(
 ) -> Result<impl IntoResponse, ApiError> {
     let (_repo, _repo_id) = find_repo(&state, &params.repo)?;
     let repo_name = params.repo.clone();
-    // 2026-08-31 incident (store.rs module doc): single store call, still
+    // 2026-08-31 incident (store/mod.rs module doc): single store call, still
     // wrapped so it can never park this async worker on the mutex wait.
     let rows = state
         .store
@@ -137,7 +137,7 @@ pub async fn create_bookmark(
     let path = body.path.clone();
     let line = i64::from(body.line);
     let note = body.note.clone();
-    // 2026-08-31 incident (store.rs module doc): create + read-back run as
+    // 2026-08-31 incident (store/mod.rs module doc): create + read-back run as
     // one closure; `bus.emit` doesn't touch the store, so it stays
     // outside, after.
     let repo_name_bg = repo_name.clone();
@@ -214,7 +214,7 @@ pub async fn patch_bookmark(
     };
     let note = body.note.clone();
     let now = chrono::Utc::now().timestamp();
-    // 2026-08-31 incident (store.rs module doc): existence check, update,
+    // 2026-08-31 incident (store/mod.rs module doc): existence check, update,
     // and read-back are four sequential store calls with no async work
     // between them — one closure. `bus.emit` doesn't touch the store, so
     // it stays outside, after.
@@ -259,7 +259,7 @@ pub async fn delete_bookmark(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 2026-08-31 incident (store.rs module doc): existence check + delete
+    // 2026-08-31 incident (store/mod.rs module doc): existence check + delete
     // run as one closure; `bus.emit` doesn't touch the store, so it stays
     // outside, after.
     let repo = state

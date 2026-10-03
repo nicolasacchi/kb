@@ -908,7 +908,7 @@ pub async fn review_timeline_route(
 
     let (review, repo, repo_id) = require_review(&state, id).await?;
 
-    // 2026-08-31 incident (store.rs module doc): every store read this
+    // 2026-08-31 incident (store/mod.rs module doc): every store read this
     // composition needs, in ONE blocking-pool trip.
     let ps_param = params.ps.clone();
     let (

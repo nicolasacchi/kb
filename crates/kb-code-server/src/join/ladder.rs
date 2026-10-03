@@ -555,7 +555,7 @@ pub async fn resolve_commit(
         .unwrap_or_else(|| sha.trim().to_ascii_lowercase());
     let now = chrono::Utc::now().timestamp();
 
-    // 2026-08-31 incident (store.rs module doc): the cache read and the
+    // 2026-08-31 incident (store/mod.rs module doc): the cache read and the
     // (later) cache write are separate blocking-pool round trips — real
     // async work (`compute_ladder`'s kb HTTP calls) runs between them, so
     // they cannot share one closure.

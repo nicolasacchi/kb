@@ -408,7 +408,7 @@ pub async fn run(
     if raw_q.trim().is_empty() {
         let files_section = match routes::resolve_search_repos(state, repo_param) {
             Ok(repos) => {
-                // 2026-08-31 incident (store.rs module doc): `Store` calls
+                // 2026-08-31 incident (store/mod.rs module doc): `Store` calls
                 // reachable from async context must run on the blocking
                 // pool, never inline on a tokio worker.
                 let file_index = state.file_index.clone();

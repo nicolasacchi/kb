@@ -293,6 +293,17 @@ fn category_matches(wanted: Option<&str>, actual: Option<&str>) -> bool {
     }
 }
 
+/// The one-line stderr note a bare `kb search` prints when it widens to
+/// every kb on a multi-kb daemon. The federated path keeps R0's default
+/// exclusion of `memory-session` transcripts, so the note says how to reach
+/// them rather than letting "all of them" read as literally every document.
+fn widened_note(kb_count: usize) -> String {
+    format!(
+        "note: daemon serves {kb_count} kbs; searching all of them, except session transcripts \
+         (memory-session is excluded by default: pass --kb <your sessions kb> or --category memory-session \
+         for those; pass --kb <name> or --scope one to narrow)"
+    )
+}
 #[allow(clippy::too_many_arguments)]
 async fn search_via_http(
     daemon: &str,
@@ -315,10 +326,7 @@ async fn search_via_http(
     };
     let resolved = resolve_scope(scope, kb, kb_count)?;
     if resolved.widened {
-        eprintln!(
-            "note: daemon serves {} kbs; searching all of them (pass --kb <name> or --scope one to narrow)",
-            kb_count.unwrap_or(0)
-        );
+        eprintln!("{}", widened_note(kb_count.unwrap_or(0)));
     }
     let url = build_search_url(
         daemon,
@@ -452,6 +460,18 @@ fn print_hits_json(hits: &[Hit], ms: u64, source: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    /// v044-D1 — the bare-search stderr note must not claim "all kbs" without
+    /// the R0 caveat: the federated path keeps the default exclusion of
+    /// memory-session transcripts.
+    #[test]
+    fn widened_note_names_the_transcript_exclusion() {
+        let n = widened_note(3);
+        assert!(n.contains("3 kbs"), "{n}");
+        assert!(n.contains("memory-session"), "{n}");
+        assert!(n.contains("--category memory-session"), "{n}");
+        assert!(n.contains("--scope one"), "{n}");
+    }
     use super::*;
 
     #[test]

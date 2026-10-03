@@ -67,9 +67,9 @@ pub async fn review_distill_route(
 
     // `repo`'s borrow of `state` ends at the clone above, so `state`
     // itself (an `Arc`) can move into the closure — no extra clone.
-    // 2026-08-31 incident (store.rs module doc): `resolve_ps` folded into
+    // 2026-08-31 incident (store/mod.rs module doc): `resolve_ps` folded into
     // this EXISTING spawn_blocking (already the sanctioned off-worker
-    // path per store.rs's doc) rather than a second `run_blocking` trip —
+    // path per store/mod.rs's doc) rather than a second `run_blocking` trip —
     // it's a plain `&Store` call, safe on the blocking pool either way.
     let out = tokio::task::spawn_blocking(move || {
         let latest_ps = resolve_ps(&state.store, id, None)?;

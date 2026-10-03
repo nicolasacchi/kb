@@ -94,7 +94,7 @@ TAKE #55 [codex/8f2a 21m · stale? no beat 21m]  crates/kb-server/src/review_gat
 
 FOUND (3 of 6 · 1 dropped)
 [pin] #62 [job:01M11… 6m] +2  Store::open calls refuse_if_volume_ahead BEFORE migrations —
-     kb-code-server/src/store.rs:141
+     kb-code-server/src/store/mod.rs:141
      #65 [claude/4b7e 3m] (was #60)  review_gate reads ConnectInfo from extensions, matches #3 —
      kb-server/src/review_gate.rs:88 · #64 [codex/8f2a 9m] auth -> review_gate -> handler: bearer path ends at the gate
 TRIED (1 of 2)  #48 [claude/9c01 3h] e2e + cargo test concurrently -> OOM at the 10g cgroup; use the flock

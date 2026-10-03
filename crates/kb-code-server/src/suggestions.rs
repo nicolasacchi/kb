@@ -138,7 +138,7 @@ pub async fn apply_suggestion_route(
 ) -> Result<Response, ApiError> {
     let resolve_after = body.map(|Json(b)| b.resolve).unwrap_or(false);
     let state_bg = state.clone();
-    // 2026-08-31 incident (store.rs module doc): this handler has no
+    // 2026-08-31 incident (store/mod.rs module doc): this handler has no
     // `.await` anywhere — row/suggestion fetch, the working-tree read +
     // splice, and the store stamps are all synchronous — so the whole
     // body runs as ONE closure on the blocking pool.
@@ -150,7 +150,7 @@ pub async fn apply_suggestion_route(
 
 /// The sync body of [`apply_suggestion_route`] — see that fn's doc for why
 /// it runs as a single `run_blocking` closure (2026-08-31 incident,
-/// store.rs module doc).
+/// store/mod.rs module doc).
 fn apply_suggestion(
     store: &Store,
     state: &SharedState,
@@ -797,7 +797,7 @@ pub async fn apply_suggestions_batch_route(
     }
 
     let state_bg = state.clone();
-    // 2026-08-31 incident (store.rs module doc): this handler has no
+    // 2026-08-31 incident (store/mod.rs module doc): this handler has no
     // `.await` anywhere — the verify phase's per-id store+fs reads,
     // overlap detection, and the apply phase's per-file writes + store
     // stamps are all synchronous — so the whole two-phase body runs as

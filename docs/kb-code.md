@@ -1353,6 +1353,22 @@ map of that gate: one bearer route, every other row loopback.
 | `POST …/store/maintain` | loopback | the manual housekeeping-cadence trigger |
 | `POST …/store/restore` | loopback | reads a bundle by host path and writes `refs/kbc/*` into the store; flags the restore guard |
 
+#### Review and working-tree mutation gates
+
+The same exercise for the review verbs, checked against `router.rs`
+(`transcripts_api` = loopback-only HARD; `review_remote` = loopback, or a
+bearer caller when `[review] remote_mutations = true`, else a bodiless
+`404`; `api` = ordinary bearer):
+
+| route family | gate | notes |
+|---|---|---|
+| `POST /api/reviews`, `/reviews/{id}/snapshot`, `/reviews/{id}/retrack`, `PATCH`/`DELETE /reviews/{id}`, `POST /reviews/gc`, `/reviews/refs/gc`, `/reviews/pr`, `/reviews/sweep`, `/reviews/sync`, `/reviews/retrack-bulk`, `/branches/review` | loopback | creates, rewrites or deletes review state and refs, or runs git/`gh` |
+| `PUT /reviews/{id}/viewed`, `PUT`/`DELETE …/hunk-viewed`, `PUT /reviews/{id}/report`, `POST …/findings/import`, `POST …/compose`, `POST …/doc/render` | loopback | stay loopback regardless of the flag (pinned by the "never moves" suite) |
+| `POST /reviews/{id}/findings`, `PUT`/`DELETE …/findings/{slug}/disposition`, `POST …/findings/{slug}/published`, `POST …/verdict/published`, `PUT`/`DELETE …/verdict` | review_remote | the five graduated families |
+| `POST /boards/{slug}/accept`, `POST /boards/{slug}/archive`, `DELETE /boards/{slug}` | review_remote | `POST /boards/apply` and `/tours/apply` stay loopback |
+| `POST /annotations/{id}/apply`, `/annotations/apply-batch` (suggestion apply), `POST /checkout`, `/worktrees…`, `/prs/fetch`, `/scip/ingest`, `/doc-lens/sync` | loopback | the sanctioned working-tree and ref mutations |
+| `POST /annotations`, `PATCH`/`DELETE /annotations/{id}`, `PUT`/`DELETE …/suggestion`, `POST /annotations/batch`, `PUT`/`DELETE /annotations/{id}/review`, `POST /code-actions` | bearer | annotation rows only; no working-tree effect |
+
 No bearer route in this crate hands out a kb-internal path. Everything
 secret-adjacent — `cred_reason`, `cred_account`, `key_fingerprint`,
 `key_read_only` — never leaves the store DB.

@@ -1594,7 +1594,7 @@ const SALT_SWEEP_BUDGET: std::time::Duration = std::time::Duration::from_secs(12
 
 /// Slept between pages so the store's single connection mutex is genuinely
 /// released to readers and to the sink, rather than being re-taken in a
-/// tight loop (the 2026-08-31 starvation lesson in `store.rs`'s module doc).
+/// tight loop (the 2026-08-31 starvation lesson in `store/mod.rs`'s module doc).
 const SALT_SWEEP_PAUSE: std::time::Duration = std::time::Duration::from_millis(25);
 
 /// FNV-1a over the SORTED current salt set. Changes exactly when a release

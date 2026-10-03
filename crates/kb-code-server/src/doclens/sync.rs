@@ -504,7 +504,7 @@ async fn write_claims(
     // OLD id would otherwise be orphans no future pass ever revisits, so they
     // are dropped in the same pass that supersedes them. Both store writes
     // (the optional old-id claim drop + the replace) share ONE blocking-pool
-    // round trip — no async work between them (store.rs's 2026-08-31
+    // round trip — no async work between them (store/mod.rs's 2026-08-31
     // incident note).
     let kb_owned = kb.to_string();
     let doc_id = lens.doc_id.clone();

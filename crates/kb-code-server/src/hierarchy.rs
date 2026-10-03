@@ -812,7 +812,7 @@ pub async fn callees_route(
     let line = params.line;
     let col = params.col;
     let rev = params.rev.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the whole
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the whole
     // sync callees composition on the blocking pool.
     let state_bg = state.clone();
     let out = state
@@ -845,7 +845,7 @@ pub async fn callers_route(
     let line = params.line;
     let col = params.col;
     let rev = params.rev.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the whole
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the whole
     // sync callers composition on the blocking pool.
     let out = state
         .store
@@ -865,7 +865,7 @@ pub async fn types_route(
     let repo = repo.clone();
     let name = params.name.clone();
     let path = params.path.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the whole
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the whole
     // sync type-hierarchy composition on the blocking pool.
     let out = state
         .store

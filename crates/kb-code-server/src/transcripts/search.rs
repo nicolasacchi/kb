@@ -95,7 +95,7 @@ pub async fn search_transcripts(
         return Err(ApiError::bad_request("q must not be empty"));
     }
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    // 2026-08-31 incident (store.rs module doc): the FTS5 read AND the
+    // 2026-08-31 incident (store/mod.rs module doc): the FTS5 read AND the
     // snippet re-read (`to_hits` → `build_snippet`, its own blocking file
     // I/O) share one blocking-pool round trip.
     let q_owned = q.to_string();

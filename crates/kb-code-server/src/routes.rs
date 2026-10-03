@@ -197,7 +197,7 @@ pub async fn identity(
             )
         })
         .collect();
-    // 2026-08-31 incident (store.rs module doc): the per-repo file/symbol
+    // 2026-08-31 incident (store/mod.rs module doc): the per-repo file/symbol
     // count loop — previously N inline store calls on this async worker —
     // now runs as ONE closure on the blocking pool. Confirmed case named
     // in the incident writeup.
@@ -1025,7 +1025,7 @@ pub async fn commands(headers: axum::http::HeaderMap) -> Response {
 /// state. Counts come from `state.store`; HEAD/watcher state are live
 /// per-request reads (a HEAD read is a handful of stats + one ref resolve —
 /// cheap enough to do fresh every time rather than cache). 2026-08-31
-/// incident (store.rs module doc): the store calls here (this fn's own
+/// incident (store/mod.rs module doc): the store calls here (this fn's own
 /// counts plus `scip_status`'s) are no longer assumed "fast enough to call
 /// inline" — the whole per-repo loop below runs as one `run_blocking`
 /// closure on the blocking pool instead.
@@ -1319,7 +1319,7 @@ pub struct StatusParams {
 /// doc has the exact shape). Cached per `Store::generation()` inside
 /// `git_status::StatusIndex` — the generation READ and the (possible)
 /// subprocess call happen in the SAME `spawn_blocking` closure (2026-08-31
-/// incident precedent, `store.rs`'s module doc): both need to observe the
+/// incident precedent, `store/mod.rs`'s module doc): both need to observe the
 /// SAME generation snapshot, and `Store::generation()` itself is cheap
 /// enough that routing it through the blocking pool alongside the git call
 /// costs nothing extra.
@@ -1429,7 +1429,7 @@ pub struct FileResponse {
 /// hash — never derived on the spot: deriving here would either (a) skip
 /// persisting (repeated reads re-parse every time) or (b) persist under an
 /// arbitrary ref's content, which would corrupt `files`' "current working-
-/// tree state" invariant if this were the no-ref path (see `store.rs`'s
+/// tree state" invariant if this were the no-ref path (see `store/mod.rs`'s
 /// module doc) — so this route stays a pure read, and an unindexed blob
 /// just reports empty/`None`.
 pub async fn file(
@@ -1461,7 +1461,7 @@ pub async fn file(
         ),
     };
 
-    // 2026-08-31 incident (store.rs module doc): the frecency bump and the
+    // 2026-08-31 incident (store/mod.rs module doc): the frecency bump and the
     // symbols/highlights lookup are the only store calls this handler
     // makes, with no async work between them — one closure.
     let opened_at_ms = chrono::Utc::now().timestamp_millis();
@@ -1579,7 +1579,7 @@ pub async fn symbols(
                 RevResolver::maybe_bridged(git_ctx.as_ref(), params.rev.as_deref()),
             )?;
             let lang_info = lang::detect(path, Some(&read.bytes));
-            // 2026-08-31 incident (store.rs module doc): single store call,
+            // 2026-08-31 incident (store/mod.rs module doc): single store call,
             // still wrapped so it can never park this async worker.
             let symbols = match lang_info {
                 Some(li) => {
@@ -1620,7 +1620,7 @@ pub async fn symbols(
         }
         (None, Some(q)) => {
             let needle = q.to_lowercase();
-            // 2026-08-31 incident (store.rs module doc): single store call,
+            // 2026-08-31 incident (store/mod.rs module doc): single store call,
             // still wrapped so it can never park this async worker.
             let all = state
                 .store
@@ -1701,7 +1701,7 @@ pub async fn search_files(
     let limit = clamp_limit(params.limit);
     let q = params.q.trim().to_string();
     let file_index = state.file_index.clone();
-    // 2026-08-31 incident (store.rs module doc): whichever branch runs
+    // 2026-08-31 incident (store/mod.rs module doc): whichever branch runs
     // makes its store calls in one closure on the blocking pool.
     // V71-D1 — the same `LaneOpts` (and therefore the same factor flags and
     // the same matcher) the unified box hands its files lane: a hit must not
@@ -1752,7 +1752,7 @@ pub async fn search_symbols(
     let limit = clamp_limit(params.limit);
     let q = q.to_string();
     let symbol_index = state.symbol_index.clone();
-    // 2026-08-31 incident (store.rs module doc): single store-backed call,
+    // 2026-08-31 incident (store/mod.rs module doc): single store-backed call,
     // still wrapped so it can never park this async worker.
     let opts = search::LaneOpts {
         factors: state.search_factors,
@@ -1811,7 +1811,7 @@ pub async fn search_text_route(
     let q_owned = q.to_string();
     let regex = params.regex;
     let case = params.case;
-    // 2026-08-31 incident (store.rs module doc): `search_text` opens with a
+    // 2026-08-31 incident (store/mod.rs module doc): `search_text` opens with a
     // store call (`list_files`) and then runs a genuinely slow streaming
     // grep bounded by `DEFAULT_TIME_BUDGET` — the whole call runs on the
     // blocking pool, not just the store read.
@@ -2484,7 +2484,7 @@ fn missing_anchor_field_error(id: &str, field: &str, kind: &str) -> ApiError {
 /// `create_annotation`'s `view_content` local). A malformed stored anchor is
 /// a daemon-side data-integrity fault (500), never a caller mistake —
 /// nothing on the write path can produce one.
-/// 2026-08-31 incident (store.rs module doc): takes `store: &Store` (not
+/// 2026-08-31 incident (store/mod.rs module doc): takes `store: &Store` (not
 /// `&SharedState`) precisely so every async call site can run this inside
 /// its own `run_blocking` closure alongside its other store calls.
 /// `pub(crate)` (V71-X1) so `agentview::pack` can resolve the SAME view
@@ -2781,7 +2781,7 @@ pub async fn list_annotations(
     if let Some(set_id) = params.set_id.clone() {
         let state_bg = state.clone();
         let set_id_bg = set_id.clone();
-        // 2026-08-31 incident (store.rs module doc): the set lookup + the
+        // 2026-08-31 incident (store/mod.rs module doc): the set lookup + the
         // list + per-row resolve all run as one closure; `find_repo_by_id`
         // only touches `state.repos` (in-memory), so a cloned `state`
         // handle rides along for that lookup, same as `reading_sets::
@@ -2835,7 +2835,7 @@ pub async fn list_annotations(
     let repo_root = repo.path.clone();
     let repo_label = repo_name.clone();
     let path_bg = path.clone();
-    // 2026-08-31 incident (store.rs module doc): the list + per-row
+    // 2026-08-31 incident (store/mod.rs module doc): the list + per-row
     // resolve (a store call apiece for symbol-kind/reply rows) run as one
     // closure; no async work happens anywhere in this handler.
     let views = state
@@ -2903,7 +2903,7 @@ fn encode_json<T: Serialize>(value: &T, what: &str) -> Result<String, ApiError> 
     })
 }
 
-// `Clone` added 2026-08-31 incident fix (store.rs module doc): async call
+// `Clone` added 2026-08-31 incident fix (store/mod.rs module doc): async call
 // sites need an owned copy to move into a `'static` `run_blocking` closure.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateAnnotationBody {
@@ -3044,7 +3044,7 @@ struct ReviewCreateScope {
 /// `ps` resolves (default latest) + `side` is `old`/`new` (default `new`).
 /// Returns the review row alongside the resolved patchset+side so a bind
 /// caller that also needs `review.state` doesn't re-fetch it.
-/// 2026-08-31 incident (store.rs module doc): takes `store: &Store` plus
+/// 2026-08-31 incident (store/mod.rs module doc): takes `store: &Store` plus
 /// the specific primitives it needs (not `&CreateAnnotationBody`, which
 /// isn't `'static`-cloneable-for-free) so every async call site can run
 /// this inside its own `run_blocking` closure.
@@ -3257,7 +3257,7 @@ fn assemble_reply_annotation(
 }
 
 /// Async wrapper around [`resolve_review_create_scope`] — the ONE place
-/// that hops to the blocking pool for it (2026-08-31 incident, store.rs
+/// that hops to the blocking pool for it (2026-08-31 incident, store/mod.rs
 /// module doc); both call sites in [`assemble_top_level_annotation`] just
 /// `.await` this instead of duplicating the `run_blocking` wrap.
 async fn resolve_review_create_scope_async(
@@ -3557,7 +3557,7 @@ async fn assemble_top_level_annotation(
             let content = read_working_tree_text(repo, path)?;
             let line_text = line_at(&content, line, path)?;
             let blob_hash = ingest::git_blob_hash(content.as_bytes());
-            // 2026-08-31 incident (store.rs module doc): single store call,
+            // 2026-08-31 incident (store/mod.rs module doc): single store call,
             // still wrapped so it can never park this async worker.
             let current_symbols = match lang::detect(path, Some(content.as_bytes())) {
                 Some(li) => {
@@ -3675,7 +3675,7 @@ pub async fn create_annotation(
         let repo_label = payload.repo.clone();
         let path_bg = path.clone();
         let payload_bg = payload.clone();
-        // 2026-08-31 incident (store.rs module doc): assemble + insert +
+        // 2026-08-31 incident (store/mod.rs module doc): assemble + insert +
         // the working-tree read + the view resolve are all synchronous
         // (no `.await` on the reply path at all) — one closure.
         let (view, review_id) = state
@@ -3700,7 +3700,7 @@ pub async fn create_annotation(
 
     let built = assemble_top_level_annotation(&state, repo, repo_id, &path, &payload, now).await?;
     let repo_label = payload.repo.clone();
-    // 2026-08-31 incident (store.rs module doc): insert + the view resolve
+    // 2026-08-31 incident (store/mod.rs module doc): insert + the view resolve
     // are the only store calls left after the (possibly async, diff-kind)
     // assemble step above — one closure for them.
     let (view, review_id) = state
@@ -3751,7 +3751,7 @@ pub async fn patch_annotation(
     let now = chrono::Utc::now().timestamp();
     let state_bg = state.clone();
     let id_bg = id.clone();
-    // 2026-08-31 incident (store.rs module doc): update + read-back +
+    // 2026-08-31 incident (store/mod.rs module doc): update + read-back +
     // repo lookup + view resolve are all synchronous (no `.await` in this
     // handler at all) — one closure.
     let (view, repo_name, path, review_id) = state
@@ -3804,7 +3804,7 @@ pub async fn delete_annotation(
 ) -> Result<impl IntoResponse, ApiError> {
     let state_bg = state.clone();
     let id_bg = id.clone();
-    // 2026-08-31 incident (store.rs module doc): fetch + delete + repo
+    // 2026-08-31 incident (store/mod.rs module doc): fetch + delete + repo
     // lookup run as one closure; no async work anywhere in this handler.
     let (repo_name, path, review_id) = state
         .store
@@ -3868,7 +3868,7 @@ pub async fn bind_annotation_review(
     let now = chrono::Utc::now().timestamp();
     let state_bg = state.clone();
     let id_bg = id.clone();
-    // 2026-08-31 incident (store.rs module doc): fetch + validate + write +
+    // 2026-08-31 incident (store/mod.rs module doc): fetch + validate + write +
     // read-back are all synchronous (no `.await` in this handler at all) —
     // one closure.
     let (view, repo_name, path, old_review_id, new_review_id) = state
@@ -4140,7 +4140,7 @@ pub async fn put_annotation_suggestion(
 ) -> Result<impl IntoResponse, ApiError> {
     let state_bg = state.clone();
     let id_bg = id.clone();
-    // 2026-08-31 incident (store.rs module doc): fetch + repo lookup +
+    // 2026-08-31 incident (store/mod.rs module doc): fetch + repo lookup +
     // capture + upsert + read-back are all synchronous (no `.await`
     // anywhere in this handler) — one closure.
     let (body, repo_name, path, review_id) = state
@@ -4188,7 +4188,7 @@ pub async fn delete_annotation_suggestion(
 ) -> Result<impl IntoResponse, ApiError> {
     let state_bg = state.clone();
     let id_bg = id.clone();
-    // 2026-08-31 incident (store.rs module doc): fetch + delete + repo
+    // 2026-08-31 incident (store/mod.rs module doc): fetch + delete + repo
     // lookup run as one closure; no async work in this handler.
     let (repo_name, path, review_id) = state
         .store
@@ -4394,7 +4394,7 @@ pub async fn batch_annotations(
 
     // (a1) — the only per-op ASYNC work: assemble every `AddComment`'s
     // top-level annotation up front, in op order (2026-08-31 incident,
-    // store.rs module doc: `assemble_top_level_annotation` already wraps
+    // store/mod.rs module doc: `assemble_top_level_annotation` already wraps
     // its own store calls internally, so nothing extra to do for it here).
     // Every other op kind's store work is purely synchronous and is
     // folded into the ONE closure in (a2) below, alongside the write tx —
@@ -4723,7 +4723,7 @@ pub async fn list_open_annotations(
     let repo_label = params.repo.clone();
     let intent_owned = params.intent.clone();
     let path_prefix_owned = params.path_prefix.clone();
-    // 2026-08-31 incident (store.rs module doc): the list + per-row view
+    // 2026-08-31 incident (store/mod.rs module doc): the list + per-row view
     // resolve (a store call apiece for symbol-kind/reply rows) run as one
     // closure; no async work happens anywhere in this handler.
     let (entries, truncated) = state
@@ -5272,7 +5272,7 @@ pub async fn branches_route(
     let (repo, repo_id) = find_repo(&state, &params.repo)?;
     let sort = params.sort;
 
-    // 2026-08-31 incident (store.rs module doc): single store call, still
+    // 2026-08-31 incident (store/mod.rs module doc): single store call, still
     // wrapped so it can never park this async worker.
     let repo_name = repo.name.clone();
     let open_heads: HashSet<String> = match state
@@ -6772,7 +6772,7 @@ pub async fn list_todos(
         }
     };
 
-    // 2026-08-31 incident (store.rs module doc): single store call, still
+    // 2026-08-31 incident (store/mod.rs module doc): single store call, still
     // wrapped so it can never park this async worker.
     let marker = params.marker.clone();
     let path_prefix = params.path_prefix.clone();
