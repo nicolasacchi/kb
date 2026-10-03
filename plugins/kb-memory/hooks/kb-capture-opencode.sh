@@ -12,6 +12,13 @@
 # digest, kb why, and kb recollect work across harnesses. Lossy on purpose
 # (tool outputs capped, reasoning dropped). The export path (when a file)
 # or session id rides an adapter-meta line.
+#
+# Secrets floor (v0.44 F7b): this adapter hand-writes its own envelope (the
+# `kb-harness` meta `kb sessions capture` does not emit), so the translated
+# JSONL is piped through `kb sessions scrub` — the same secrets-only scrubber
+# every other lane uses — BEFORE it is embedded. FAIL CLOSED: with no `kb`
+# on PATH (or a `kb` too old to have the verb) the session is NOT captured;
+# an unscrubbed capture is never written.
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -122,6 +129,17 @@ translate_export() {
   ' "$src" 2>/dev/null)" || return 0
 
   [ -n "$jsonl" ] || return 0
+
+  # Secrets floor — fail closed (see the header).
+  if command -v kb >/dev/null 2>&1; then
+    jsonl="$(printf '%s\n' "$jsonl" | kb sessions scrub 2>/dev/null)" || jsonl=""
+  else
+    jsonl=""
+  fi
+  if [ -z "$jsonl" ]; then
+    echo "kb-capture-opencode.sh: kb sessions scrub unavailable — not capturing session $sid (fail closed)" >&2
+    return 0
+  fi
 
   mkdir -p "$KB_SESSIONS_DIR" || return 0
   tmp="$out.tmp"

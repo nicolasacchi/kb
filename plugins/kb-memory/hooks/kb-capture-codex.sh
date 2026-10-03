@@ -28,6 +28,13 @@
 #   custom_tool_call (apply_patch)     → generic tool_use (files ride the patch line)
 #   last token_count.total_token_usage → one trailing assistant usage line
 #   turn_context.model                 → message.model
+#
+# Secrets floor (v0.44 F7b): this adapter hand-writes its own envelope (the
+# `kb-harness` meta `kb sessions capture` does not emit), so the translated
+# JSONL is piped through `kb sessions scrub` — the same secrets-only scrubber
+# every other lane uses — BEFORE it is embedded. FAIL CLOSED: with no `kb`
+# on PATH (or a `kb` too old to have the verb) the session is NOT captured;
+# an unscrubbed capture is never written.
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -133,6 +140,18 @@ capture_one() {
                   usage: {input_tokens: ($u.input_tokens // 0),
                           output_tokens: ($u.output_tokens // 0)},
                   content: []}}' >>"$tmpjsonl" 2>/dev/null
+  fi
+
+  # Secrets floor — scrub in place, fail closed (see the header).
+  local scrubbed
+  scrubbed="$(mktemp)" || { rm -f "$tmpjsonl"; return 0; }
+  if command -v kb >/dev/null 2>&1 && kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
+     && [ -s "$scrubbed" ]; then
+    mv -f "$scrubbed" "$tmpjsonl"
+  else
+    echo "kb-capture-codex.sh: kb sessions scrub unavailable — not capturing session $sid (fail closed)" >&2
+    rm -f "$scrubbed" "$tmpjsonl"
+    return 0
   fi
 
   mkdir -p "$KB_SESSIONS_DIR" || { rm -f "$tmpjsonl"; return 0; }

@@ -1971,6 +1971,57 @@ fn backup_age_check(now: i64) -> HookCheck {
     decide_backup_age(scan_kb_exports(&paths, now))
 }
 
+/// v0.44 F7b — data-at-rest audit of the local sessions corpus: how many
+/// captures still hold a secret the floor would redact, per harness and lane
+/// (transcript / structured digest / sidecar text). Filesystem-only; reads
+/// `$KB_SESSIONS_DIR` (the capture hooks' own target). Warn, not fail: the
+/// fix is `kb sessions rescrub --apply`.
+fn decide_unscrubbed_captures(audit: &super::sessions_scrub::DirAudit) -> HookCheck {
+    if audit.captures == 0 {
+        return HookCheck::pass("capture-scrub", "no captures on disk to audit");
+    }
+    let table = super::sessions_scrub::render_lane_table(audit);
+    if audit.unscrubbed_captures == 0 {
+        return HookCheck::pass(
+            "capture-scrub",
+            format!(
+                "{} capture(s) audited, none hold an unredacted secret\n{}",
+                audit.captures,
+                indent_table(&table)
+            ),
+        );
+    }
+    HookCheck::warn(
+        "capture-scrub",
+        format!(
+            "{} of {} capture(s) hold secrets the floor would redact\n{}",
+            audit.unscrubbed_captures,
+            audit.captures,
+            indent_table(&table)
+        ),
+    )
+    .with_fix("kb sessions rescrub            # dry run: per-lane counts\n      kb sessions rescrub --apply    # rewrite the affected captures")
+}
+
+fn indent_table(t: &str) -> String {
+    t.lines()
+        .map(|l| format!("      {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn unscrubbed_captures_check() -> HookCheck {
+    match std::env::var_os("KB_SESSIONS_DIR") {
+        Some(v) if !v.is_empty() && Path::new(&v).is_dir() => {
+            decide_unscrubbed_captures(&super::sessions_scrub::scan_dir(Path::new(&v)))
+        }
+        _ => HookCheck::skip(
+            "capture-scrub",
+            "KB_SESSIONS_DIR is unset or not a directory — not auditing captures at rest",
+        ),
+    }
+}
+
 // ==================================================================== run
 
 fn git_toplevel(repo: &Path) -> Option<PathBuf> {
@@ -2108,6 +2159,9 @@ pub async fn hooks(
     // f) kb-code why-hook.
     checks.push(kb_code_why_hook_check());
 
+    // i) captures at rest: any lane still holding a redactable secret.
+    checks.push(unscrubbed_captures_check());
+
     // h) slate marker GC (D30, v0.42) — the ONLY check `--fix` acts on.
     let removed = fix.then(|| {
         let kb_dir = cache_dir
@@ -2129,6 +2183,38 @@ pub async fn hooks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_scrub_check_warns_with_a_per_lane_table_and_passes_when_clean() {
+        use super::super::sessions_scrub::{DirAudit, HarnessAudit, LaneHits};
+        let mut audit = DirAudit {
+            captures: 3,
+            unscrubbed_captures: 1,
+            ..Default::default()
+        };
+        audit.by_harness.insert(
+            "codex".into(),
+            HarnessAudit {
+                captures: 3,
+                unscrubbed_captures: 1,
+                hits: LaneHits {
+                    transcript: 2,
+                    digest: 0,
+                    sidecar_text: 1,
+                },
+            },
+        );
+        let c = decide_unscrubbed_captures(&audit);
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(
+            c.detail.contains("1 of 3") && c.detail.contains("codex"),
+            "{}",
+            c.detail
+        );
+        assert!(c.fix.as_deref().unwrap().contains("rescrub --apply"));
+        audit.unscrubbed_captures = 0;
+        assert_eq!(decide_unscrubbed_captures(&audit).status, CheckStatus::Pass);
+    }
 
     // --- slugify_repo_path ------------------------------------------------
 

@@ -53,6 +53,7 @@ pub mod session_bundle;
 pub mod session_read;
 pub mod sessions;
 pub mod sessions_capture;
+pub mod sessions_scrub;
 pub mod sessions_status;
 pub mod share;
 pub mod similar;

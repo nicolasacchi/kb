@@ -320,7 +320,11 @@ async fn capture(
     // Metadata already extracted above (session id, cwd, resolved commits)
     // came from the UNSCRUBBED `raw` on purpose; only what's about to be
     // EMBEDDED is redacted from here on.
-    let (raw, sidecar_texts, secrets_redacted) = scrub_capture_lanes(&raw, sidecar_texts);
+    let (raw, sidecar_texts, mut secrets_redacted) = scrub_capture_lanes(&raw, sidecar_texts);
+    // v0.44 F7b — the structured subagents digest (agent ids + file paths) is
+    // a stored lane too; it was the one lane the floor skipped.
+    let (subagents, digest_redacted) = super::sessions_scrub::scrub_subagents(subagents);
+    secrets_redacted += digest_redacted;
 
     let html = wrap_envelope(
         &capture_ts,
@@ -851,6 +855,40 @@ mod tests {
         // sidecar-lane redaction.
         let recovered = kb_core::sessions::recover_jsonl_from_capture(&html).unwrap();
         assert!(recovered.contains(&format!("\"sessionId\":\"{sid}\"")));
+    }
+
+    /// v0.44 F7b — the structured subagents DIGEST block (agent ids + file
+    /// paths) is a stored lane too; before this it was the one lane the
+    /// secrets floor skipped.
+    #[tokio::test]
+    async fn capture_redacts_known_secrets_from_the_subagents_digest_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sid = "sess-cap-secret-digest-1";
+        let jsonl = format!(
+            "{{\"sessionId\":\"{sid}\",\"type\":\"user\",\"timestamp\":\"2026-03-01T09:00:00.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"go\"}},\"promptSource\":\"typed\"}}\n"
+        );
+        let src_dir = tmp.path().join("src");
+        let transcript = write(&src_dir, "t.jsonl", &jsonl);
+        let canary = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+        let agent_raw = format!(
+            "{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{{\"file_path\":\"/work/{canary}/x.rs\"}}}}]}}}}\n"
+        );
+        write(
+            &src_dir.join(sid).join("subagents"),
+            "agent-a1.jsonl",
+            &agent_raw,
+        );
+
+        let out_dir = tmp.path().join("sessions");
+        let summary = capture(&transcript, None, None, &out_dir, false)
+            .await
+            .unwrap();
+        let html = std::fs::read_to_string(&summary.path).unwrap();
+        let block = kb_core::sessions::extract_subagents_block(&html).unwrap();
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(!json.contains(canary), "digest block leaked: {json}");
+        assert!(json.contains("[redacted:github-token]"), "{json}");
+        assert!(!html.contains(canary), "{html}");
     }
 
     #[tokio::test]
