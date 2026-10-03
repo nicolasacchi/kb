@@ -51,7 +51,7 @@ pub const SLO_GRAMMAR: &str = "kb-slo/1";
 /// forces a decision here rather than silently skewing the ratio.
 pub const CODEREF_PATH_SHAPED_KINDS: [&str; 4] = ["path", "path_line", "path_range", "path_list"];
 
-/// The four operator-seeded indicators. A CLOSED set in code; stored as TEXT
+/// The five operator-seeded indicators. A CLOSED set in code; stored as TEXT
 /// on the wire and in `slo_snapshots.indicator` so a row written by a newer
 /// binary still reads on an older one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -333,7 +333,7 @@ pub struct SloReport {
     /// Wall clock (unix seconds) the caller measured at — passed in, never
     /// read from a clock here.
     pub computed_at_unix: i64,
-    /// Always all four of [`SloKey::ALL`], in that order. An indicator is
+    /// Always all five of [`SloKey::ALL`], in that order. An indicator is
     /// never omitted: "we could not measure this" is itself a reading, and
     /// dropping the row would make a broken input look like a missing
     /// feature.
@@ -344,7 +344,7 @@ pub struct SloReport {
     pub warn_count: usize,
 }
 
-/// The four optional targets, resolved from `[kb.<name>.slo]`. `None`
+/// The five optional targets, resolved from `[kb.<name>.slo]`. `None`
 /// everywhere (a kb with no `[slo]` section) still produces a full report —
 /// every indicator measured, every status `unknown` for want of a target.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -374,7 +374,7 @@ impl SloTargets {
     }
 }
 
-/// Every raw count the four indicators need, read from EXISTING tables by the
+/// Every raw count the five indicators need, read from EXISTING tables by the
 /// caller. Nothing here is derived — this struct is the seam that keeps the
 /// computation pure and every `unknown` path fixture-testable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -691,9 +691,10 @@ mod tests {
     }
 
     #[test]
-    fn a_report_always_carries_all_four_indicators_even_with_no_inputs() {
+    fn a_report_always_carries_every_indicator_even_with_no_inputs() {
         let r = build("k", &SloInputs::default(), &no_targets(), 1_000);
-        assert_eq!(r.indicators.len(), 4);
+        assert_eq!(r.indicators.len(), SloKey::ALL.len());
+        assert_eq!(r.indicators.len(), 5);
         assert_eq!(r.grammar, SLO_GRAMMAR);
         assert_eq!(r.kb, "k");
         assert_eq!(r.computed_at_unix, 1_000);
