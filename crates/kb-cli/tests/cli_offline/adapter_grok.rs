@@ -72,8 +72,7 @@ fn kb_bin_dir() -> PathBuf {
         .to_path_buf()
 }
 
-/// PATH with ONLY the standard system tool dirs — no `kb` binary reachable
-/// — to force the script's bash hand-rolled-HTML fallback path.
+/// PATH with ONLY the standard system tool dirs — no `kb` binary reachable.
 fn bare_path() -> String {
     "/usr/bin:/bin".to_string()
 }
@@ -280,11 +279,58 @@ fn session_dir_mode_captures_the_expected_envelope_via_kb_sessions_capture() {
     assert_eq!(html_path, html_path2, "must reuse the same capture file");
 }
 
-/// The bash hand-rolled-HTML fallback path (no `kb` binary reachable) must
-/// produce an equivalent envelope — same meta tags, same session id — via
-/// its own independent write path.
+/// The bash hand-rolled-HTML fallback path (`kb sessions capture` failing)
+/// must produce an equivalent envelope — same meta tags, same session id —
+/// via its own independent write path, now scrubbed through the REAL
+/// `kb sessions scrub` (v0.44 X4: it used to embed the transcript raw).
 #[test]
-fn session_dir_mode_falls_back_to_hand_rolled_html_without_kb_on_path() {
+fn session_dir_mode_falls_back_to_scrubbed_hand_rolled_html_when_capture_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions_out = tmp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_out).unwrap();
+    let grok_root = tmp.path().join("grok-sessions");
+    let session_dir = seed_session_dir(&grok_root, FIXTURE_CWD, FIXTURE_SESSION_UUID);
+
+    // A `kb` whose `sessions capture` fails (forcing the bash fallback) and
+    // which runs the real binary for everything else, `sessions scrub` included.
+    let wrap = tmp.path().join("wrapbin");
+    std::fs::create_dir_all(&wrap).unwrap();
+    let real_kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
+    std::fs::write(
+        wrap.join("kb"),
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = sessions ] && [ \"$2\" = capture ]; then exit 1; fi\nexec \"{}\" \"$@\"\n",
+            real_kb.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(wrap.join("kb"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let run = run_script(
+        &["--session-dir", session_dir.to_str().unwrap()],
+        &sessions_out,
+        &grok_root,
+        &format!("{}:/usr/bin:/bin", wrap.display()),
+    );
+    assert!(run.status.success(), "stderr: {}", run.stderr);
+    assert!(run.stderr.contains("action=captured"), "{}", run.stderr);
+
+    let html_path = only_capture_html(&sessions_out);
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains(r#"<meta name="kb-category" content="memory-session">"#));
+    assert!(html.contains(r#"<meta name="kb-harness" content="grok">"#));
+    assert!(html.contains(&format!(
+        r#"<meta name="kb-session" content="{FIXTURE_SESSION_UUID}">"#
+    )));
+}
+
+/// v0.44 X4 — with NO `kb` reachable the fallback cannot scrub, so it FAILS
+/// CLOSED: nothing is written (it used to embed the raw transcript).
+#[test]
+fn session_dir_mode_without_kb_on_path_fails_closed_and_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let sessions_out = tmp.path().join("sessions");
     std::fs::create_dir_all(&sessions_out).unwrap();
@@ -297,16 +343,17 @@ fn session_dir_mode_falls_back_to_hand_rolled_html_without_kb_on_path() {
         &grok_root,
         &bare_path(),
     );
-    assert!(run.status.success(), "stderr: {}", run.stderr);
-    assert!(run.stderr.contains("action=captured"), "{}", run.stderr);
-
-    let html_path = only_capture_html(&sessions_out);
-    let html = std::fs::read_to_string(&html_path).unwrap();
-    assert!(html.contains(r#"<meta name="kb-category" content="memory-session">"#));
-    assert!(html.contains(r#"<meta name="kb-harness" content="grok">"#));
-    assert!(html.contains(&format!(
-        r#"<meta name="kb-session" content="{FIXTURE_SESSION_UUID}">"#
-    )));
+    assert!(
+        run.stderr.contains("fail closed"),
+        "stderr must name the skip: {}",
+        run.stderr
+    );
+    assert!(!run.stderr.contains("action=captured"), "{}", run.stderr);
+    let any_html = std::fs::read_dir(&sessions_out)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| e.file_name().to_string_lossy().ends_with(".html"));
+    assert!(!any_html, "an unscrubbed capture was written");
 }
 
 /// `--job-dir` mode: resolves `meta.json.grok_session_id` + `cwd` to the

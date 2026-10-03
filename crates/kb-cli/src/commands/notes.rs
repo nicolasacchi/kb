@@ -280,7 +280,9 @@ pub async fn new(
     // caller-supplied `kb-session` in `--body`/`--stdin` frontmatter always
     // wins (never overwritten).
     if !no_session {
-        if let Some(sid) = crate::session_identity::session_for_write(None) {
+        if let Some(sid) =
+            crate::session_identity::session_for_write(None, "the note will carry no kb-session")
+        {
             body_md = stamp_kb_session(&body_md, &sid);
         }
     }

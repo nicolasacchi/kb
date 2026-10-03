@@ -30,6 +30,8 @@ cat >"$TMPROOT/bin/kb" <<'EOF'
 # `kb sessions capture` fails -> forces kb-capture-kimi.sh's bash-fallback
 # write path, keeping this test hermetic (no real kb binary / daemon).
 if [ "$1" = "sessions" ] && [ "$2" = "capture" ]; then exit 1; fi
+# v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
+if [ "$1" = "sessions" ] && [ "$2" = "scrub" ]; then exec cat; fi
 exit 0
 EOF
 chmod +x "$TMPROOT/bin/kb"

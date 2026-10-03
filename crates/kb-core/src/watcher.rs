@@ -1106,6 +1106,46 @@ mod tests {
         assert!(path.ends_with("file.html"));
     }
 
+    /// v0.44 X4 — `kb sessions capture` and `kb sessions rescrub --apply`
+    /// replace a capture by writing `<name>.html.tmp` and renaming it over the
+    /// live file. The watcher must publish the FINAL path (so the daemon
+    /// re-indexes the rewritten bytes) and never the `.tmp` sibling.
+    #[tokio::test]
+    async fn atomic_tmp_rename_over_an_existing_file_republishes_the_final_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("session.html");
+        fs::write(&p, "<html>v1</html>").unwrap();
+
+        let bus = Arc::new(EventBus::default());
+        let _w = Watcher::start(
+            WatcherConfig::new(kb(), vec![tmp.path().to_path_buf()])
+                .with_debounce(Duration::from_millis(50)),
+            test_sink(&bus),
+        )
+        .unwrap();
+        let mut rx = bus.subscribe();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let staged = tmp.path().join("session.html.tmp");
+        fs::write(&staged, "<html>v2</html>").unwrap();
+        fs::rename(&staged, &p).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut final_seen = false;
+        while Instant::now() < deadline && !final_seen {
+            if let Ok(Ok(env)) = timeout(Duration::from_millis(200), rx.recv()).await {
+                let path = env.payload["path"].as_str().unwrap_or("");
+                assert!(!path.ends_with(".tmp"), "tmp sibling leaked: {path}");
+                if (env.type_ == "watch.create" || env.type_ == "watch.modify")
+                    && path.ends_with("session.html")
+                {
+                    final_seen = true;
+                }
+            }
+        }
+        assert!(final_seen, "no create/modify for the renamed-over file");
+    }
+
     // The Poll backend (`watch_mode = "poll"`, `HeldDebouncer::Poll`) is
     // otherwise only compile-checked. Drive a real `notify::PollWatcher` with a
     // short re-stat interval and assert a live CREATE is published end-to-end —

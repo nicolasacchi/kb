@@ -173,7 +173,7 @@ crates/
                        apply,drop}, annotate batch, and `annotate watch` —
                        the /loop-ready SSE triage verb (seed-then-diff
                        seen-set; the connect-time event replay is idempotent
-                       by construction; --ignore-author claude). v5.0 adds
+                       by construction; --ignore-agents). v5.0 adds
                        the pr family {list,show,checks,comments,fetch},
                        review {start-pr,pr-status,report,artifact,findings
                        {import,list,add},disposition,inbox,timeline,sweep,

@@ -535,7 +535,7 @@ capture_one() {
     # kb-capture.sh's own fallback path (no commit resolution, no sidecar
     # walk; still atomic, still one-file-per-sid).
     mkdir -p "$KB_SESSIONS_DIR" || { rm -f "$tmpjsonl"; return 1; }
-    local ts safe_sid out f esc tmp
+    local ts safe_sid out f esc tmp scrubbed
     ts="$(date -u +%Y%m%dT%H%M%SZ)"
     safe_sid="$(printf '%s' "$gid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
     out=""
@@ -543,6 +543,22 @@ capture_one() {
       [ -f "$f" ] && out="$f"
     done
     [ -n "$out" ] || out="$KB_SESSIONS_DIR/session-$ts-$safe_sid.html"
+    # Secrets floor (v0.44 X4) — this bash fallback hand-writes the envelope, so
+    # the translated JSONL goes through `kb sessions scrub` (the same
+    # secrets-only scrubber the codex/opencode adapters use) BEFORE it is
+    # embedded. FAIL CLOSED: no `kb`, or a `kb` too old for the verb, means this
+    # session is not captured here rather than captured unscrubbed.
+    scrubbed="$(mktemp)" || { rm -f "$tmpjsonl"; return 1; }
+    if command -v kb >/dev/null 2>&1 && kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
+       && [ -s "$scrubbed" ]; then
+      mv -f "$scrubbed" "$tmpjsonl"
+    else
+      echo "kb-capture-grok.sh: kb sessions scrub unavailable — not capturing session $gid in the bash fallback (fail closed)" >&2
+      rm -f "$scrubbed"
+      rm -f "$tmpjsonl"
+      return 1
+    fi
+
     esc="$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$tmpjsonl")" || { rm -f "$tmpjsonl"; return 1; }
     tmp="$out.tmp"
     cat >"$tmp" <<EOF || { rm -f "$tmp" "$tmpjsonl"; return 1; }

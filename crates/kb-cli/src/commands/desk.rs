@@ -97,7 +97,10 @@ pub async fn offer(
         Some(raw) => Some(parse_ttl(raw)?),
         None => None,
     };
-    let session = crate::session_identity::session_for_write(None);
+    let session = crate::session_identity::session_for_write(
+        None,
+        "the desk offer will carry no session link",
+    );
     let resolved_kb = resolve_default_kb(kb, daemon, bearer).await?;
     let base = base_url(daemon);
     let post_url = format!("{base}/api/kb/{}/desk", encode_path_segment(&resolved_kb));

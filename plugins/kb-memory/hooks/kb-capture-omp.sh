@@ -350,7 +350,7 @@ capture_one() {
   # any staged subagent sidecars (Rust-only feature, W0.5/W0.6) — same as
   # pre-OK4.
   mkdir -p "$KB_SESSIONS_DIR" || { rm -rf "$scratch"; return 0; }
-  local safe_sid out f esc tmp
+  local safe_sid out f esc tmp scrubbed
   safe_sid="$(printf '%s' "$sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
   out=""
   for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
@@ -362,6 +362,22 @@ capture_one() {
   tsize="$(stat -c %s "$tmpjsonl" 2>/dev/null || wc -c <"$tmpjsonl" 2>/dev/null)"
   if [ -n "$tsize" ] && [ "$tsize" -gt 50331648 ]; then
     echo "kb-capture-omp.sh: skipping oversized translated transcript ($tsize bytes > 48MiB cap) for session $sid" >&2
+    rm -rf "$scratch"
+    return 0
+  fi
+
+  # Secrets floor (v0.44 X4) — this bash fallback hand-writes the envelope, so
+  # the translated JSONL goes through `kb sessions scrub` (the same
+  # secrets-only scrubber the codex/opencode adapters use) BEFORE it is
+  # embedded. FAIL CLOSED: no `kb`, or a `kb` too old for the verb, means this
+  # session is not captured here rather than captured unscrubbed.
+  scrubbed="$(mktemp)" || { rm -rf "$scratch"; return 0; }
+  if command -v kb >/dev/null 2>&1 && kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
+     && [ -s "$scrubbed" ]; then
+    mv -f "$scrubbed" "$tmpjsonl"
+  else
+    echo "kb-capture-omp.sh: kb sessions scrub unavailable — not capturing session $sid in the bash fallback (fail closed)" >&2
+    rm -f "$scrubbed"
     rm -rf "$scratch"
     return 0
   fi

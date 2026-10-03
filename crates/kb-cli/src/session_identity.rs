@@ -65,6 +65,13 @@ impl Identity {
     /// A stderr note when the result is a guess the operator should know
     /// about; `None` when the identity is firm.
     pub fn caveat(&self) -> Option<String> {
+        self.caveat_for("nothing will be stamped with a session (slate posts show as unattributed)")
+    }
+
+    /// Like [`Identity::caveat`], but the "no session" consequence is the
+    /// calling verb's own (`remember` writes no `kb-session`; it is not a
+    /// slate post, so the slate wording would be a lie there).
+    pub fn caveat_for(&self, none_consequence: &str) -> Option<String> {
         match self.source {
             Source::LegacyFile => Some(
                 "note: session id came from the legacy global current-session file \
@@ -72,11 +79,7 @@ impl Identity {
                  or pass --session-id for exact attribution"
                     .to_string(),
             ),
-            Source::None => Some(
-                "note: no session id resolved — nothing will be stamped with a session \
-                 (slate posts show as unattributed)"
-                    .to_string(),
-            ),
+            Source::None => Some(format!("note: no session id resolved — {none_consequence}")),
             _ => None,
         }
     }
@@ -197,10 +200,13 @@ pub fn resolve_process(
 /// Convenience for writers that only need the session id (remember, notes,
 /// desk): resolves against the current directory and prints the caveat to
 /// stderr when the id is a guess.
-pub fn session_for_write(flag_session: Option<&str>) -> Option<String> {
+///
+/// `none_consequence` is the verb-specific tail of the "no session id
+/// resolved" note (see [`Identity::caveat_for`]).
+pub fn session_for_write(flag_session: Option<&str>, none_consequence: &str) -> Option<String> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let id = resolve_process(flag_session, None, &cwd);
-    if let Some(c) = id.caveat() {
+    if let Some(c) = id.caveat_for(none_consequence) {
         eprintln!("{c}");
     }
     id.session_id
@@ -324,6 +330,21 @@ mod tests {
         assert_eq!(id.session_id, None);
         assert_eq!(id.source, Source::None);
         assert!(id.caveat().unwrap().contains("unattributed"));
+    }
+
+    /// v0.44 X4 — `remember`/`notes`/`desk` are not slate posts; their note
+    /// must name their own consequence, never "slate posts".
+    #[test]
+    fn caveat_for_names_the_calling_verbs_consequence() {
+        let id = run(None, &[], None, None);
+        let c = id
+            .caveat_for("`kb remember` will write no kb-session")
+            .unwrap();
+        assert!(c.contains("`kb remember` will write no kb-session"), "{c}");
+        assert!(!c.contains("slate"), "{c}");
+        assert!(!c.contains("unattributed"), "{c}");
+        // firm identities stay silent
+        assert!(run(Some("x"), &[], None, None).caveat_for("y").is_none());
     }
 
     #[test]
