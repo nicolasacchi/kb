@@ -690,17 +690,20 @@ async fn store_sync_route_inner(
         .iter()
         .map(|r| state.review_stores.fetch_lock(handle.id, r))
         .collect();
-    let mut guards = Vec::with_capacity(locks.len());
-    for l in &locks {
-        guards.push(l.clone().lock_owned().await);
-    }
     let st = state.clone();
     let network = !q.offline;
+    // The fetch locks are taken INSIDE the blocking closure (as
+    // `import_pending_members` and capture do), so their lifetime equals
+    // the work's: a dropped request future (client disconnect, CLI
+    // timeout) must not release them while `sync_ready` is still fetching.
     let res = tokio::task::spawn_blocking(move || {
+        let _guards: Vec<_> = locks
+            .iter()
+            .map(|l| l.clone().blocking_lock_owned())
+            .collect();
         st.review_stores.sync_ready(&st.store, &handle, network)
     })
     .await;
-    drop(guards);
     match res {
         Ok(Ok(report)) => Json(serde_json::json!({
             "schema": "kbc-store-sync/1",
