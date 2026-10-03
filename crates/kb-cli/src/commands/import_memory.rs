@@ -284,6 +284,7 @@ pub fn map_candidate(
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| file_stem.to_string());
     let key = format!("cm-{}", content_hash(p, &title, target.as_deref()));
+    let legacy_key = format!("cm-{}", legacy_content_hash(p, &title));
     let mut tags = vec![IMPORT_TAG.to_string()];
     if let Some(t) = p.mem_type.as_deref().map(slugify).filter(|t| !t.is_empty()) {
         tags.push(format!("claude-type-{t}"));
@@ -312,7 +313,7 @@ pub fn map_candidate(
         tags,
         target,
         dedupe_key: key,
-        legacy_key: format!("cm-{}", legacy_content_hash(p, &title)),
+        legacy_key,
         mtime_unix,
         body,
         status: "new".to_string(),
