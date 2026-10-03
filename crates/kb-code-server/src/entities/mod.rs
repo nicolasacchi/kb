@@ -881,6 +881,7 @@ mod tests {
             .chain(crate::review_sync::RS_U10B_ROUTES.iter())
             // v0.44 F9 — `GET /api/reviews/{id}/since`.
             .chain(crate::review_since::V044_F9_ROUTES.iter())
+            .chain(crate::review_queue::V044_F9_QUEUE_ROUTES.iter())
         {
             let nested = c
                 .path
