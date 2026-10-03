@@ -820,3 +820,341 @@ impl Store {
             .map_err(Into::into)
     }
 }
+
+/// Reads exactly the 17-column order `list_annotations`/`get_annotation`/
+/// `list_open_annotations`/`list_review_annotations`/`list_annotations_by_
+/// set` all SELECT in (see those methods' doc) — positional, not by name,
+/// so it's fine to hand this to a query that SELECTs extra trailing
+/// columns of its own (`list_open_annotations`' `reply_count`, read
+/// separately by its caller at index 17 — V70-A10 pushed it from 16 to 17
+/// when `set_id` was appended at index 16, just before it).
+fn annotation_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotationRow> {
+    Ok(AnnotationRow {
+        id: r.get(0)?,
+        repo_id: r.get(1)?,
+        path: r.get(2)?,
+        anchor: r.get(3)?,
+        anchor_kind: r.get(4)?,
+        anchor2: r.get(5)?,
+        parent_id: r.get(6)?,
+        intent: r.get(7)?,
+        body: r.get(8)?,
+        author: r.get(9)?,
+        created_at: r.get(10)?,
+        updated_at: r.get(11)?,
+        resolved: r.get::<_, i64>(12)? != 0,
+        review_id: r.get(13)?,
+        ps_number: r.get(14)?,
+        side: r.get(15)?,
+        set_id: r.get(16)?,
+        trail_id: r.get(17)?,
+    })
+}
+
+/// V4.C1 — reads the 9-column order `get_annotation_suggestion` SELECTs in.
+fn annotation_suggestion_row_from(
+    r: &rusqlite::Row<'_>,
+) -> rusqlite::Result<AnnotationSuggestionRow> {
+    Ok(AnnotationSuggestionRow {
+        annotation_id: r.get(0)?,
+        replacement: r.get(1)?,
+        original: r.get(2)?,
+        base_blob_sha: r.get(3)?,
+        applied: r.get::<_, i64>(4)? != 0,
+        applied_at: r.get(5)?,
+        applied_head_sha: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+    })
+}
+
+/// Tx-scoped twins of the annotation / suggestion writers. Used only by
+/// [`Store::apply_annotation_ops`] so the whole batch is one commit.
+fn get_annotation_on(tx: &Transaction<'_>, id: &str) -> Result<Option<AnnotationRow>> {
+    tx.query_row(
+        "SELECT id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
+                body, author, created_at, updated_at, resolved,
+                review_id, ps_number, side, set_id, trail_id
+         FROM annotations WHERE id = ?1",
+        params![id],
+        annotation_row_from,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub(super) fn insert_annotation_on(tx: &Transaction<'_>, row: &AnnotationRow) -> Result<()> {
+    tx.execute(
+        "INSERT INTO annotations
+            (id, repo_id, path, anchor, anchor_kind, anchor2, parent_id, intent,
+             body, author, created_at, updated_at, resolved,
+             review_id, ps_number, side, set_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        params![
+            row.id,
+            row.repo_id,
+            row.path,
+            row.anchor,
+            row.anchor_kind,
+            row.anchor2,
+            row.parent_id,
+            row.intent,
+            row.body,
+            row.author,
+            row.created_at,
+            row.updated_at,
+            row.resolved as i64,
+            row.review_id,
+            row.ps_number,
+            row.side,
+            row.set_id,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(super) fn update_annotation_on(
+    tx: &Transaction<'_>,
+    id: &str,
+    body: Option<&str>,
+    resolved: Option<bool>,
+    intent: Option<&str>,
+    updated_at: i64,
+) -> Result<bool> {
+    let n = tx.execute(
+        "UPDATE annotations SET
+            body = COALESCE(?2, body),
+            resolved = COALESCE(?3, resolved),
+            intent = COALESCE(?4, intent),
+            updated_at = ?5
+         WHERE id = ?1",
+        params![id, body, resolved.map(|b| b as i64), intent, updated_at],
+    )?;
+    Ok(n > 0)
+}
+
+/// Tx-scoped twin of [`Store::update_annotation_review_scope`] — V80-M0's
+/// `BindReview`/`UnbindReview` batch ops. See that method's doc.
+fn update_annotation_review_scope_on(
+    tx: &Transaction<'_>,
+    id: &str,
+    scope: Option<(i64, i64, &str)>,
+    updated_at: i64,
+) -> Result<bool> {
+    let (review_id, ps_number, side) = match scope {
+        Some((r, p, s)) => (Some(r), Some(p), Some(s)),
+        None => (None, None, None),
+    };
+    let n = tx.execute(
+        "UPDATE annotations SET
+            review_id = ?2, ps_number = ?3, side = ?4, updated_at = ?5
+         WHERE id = ?1 OR parent_id = ?1",
+        params![id, review_id, ps_number, side, updated_at],
+    )?;
+    Ok(n > 0)
+}
+
+/// A7-2 — does a `review_findings` row use `annotation_id` as its thread?
+fn annotation_backs_finding_on(conn: &rusqlite::Connection, annotation_id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM review_findings WHERE annotation_id = ?1)",
+        params![annotation_id],
+        |r| r.get::<_, bool>(0),
+    )?)
+}
+
+fn delete_annotation_on(tx: &Transaction<'_>, id: &str) -> Result<bool> {
+    tx.execute(
+        "DELETE FROM annotation_suggestions
+         WHERE annotation_id = ?1
+            OR annotation_id IN (SELECT id FROM annotations WHERE parent_id = ?1)",
+        params![id],
+    )?;
+    tx.execute("DELETE FROM annotations WHERE parent_id = ?1", params![id])?;
+    let n = tx.execute("DELETE FROM annotations WHERE id = ?1", params![id])?;
+    Ok(n > 0)
+}
+
+fn upsert_suggestion_on(
+    tx: &Transaction<'_>,
+    annotation_id: &str,
+    replacement: &str,
+    original: &str,
+    base_blob_sha: &str,
+    now: i64,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO annotation_suggestions
+            (annotation_id, replacement, original, base_blob_sha,
+             applied, applied_at, applied_head_sha, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 0, NULL, NULL, ?5, ?5)
+         ON CONFLICT(annotation_id) DO UPDATE SET
+            replacement = excluded.replacement,
+            original = excluded.original,
+            base_blob_sha = excluded.base_blob_sha,
+            applied = 0,
+            applied_at = NULL,
+            applied_head_sha = NULL,
+            updated_at = excluded.updated_at",
+        params![annotation_id, replacement, original, base_blob_sha, now],
+    )?;
+    Ok(())
+}
+
+fn delete_suggestion_on(tx: &Transaction<'_>, annotation_id: &str) -> Result<bool> {
+    let n = tx.execute(
+        "DELETE FROM annotation_suggestions WHERE annotation_id = ?1",
+        params![annotation_id],
+    )?;
+    Ok(n > 0)
+}
+
+/// One `annotations` row (W4.6 migration V0006; D-server migration V0008
+/// adds `anchor_kind`/`anchor2`/`parent_id`/`intent`; V4.C1 / V0023 adds
+/// `review_id`/`ps_number`/`side`). `anchor`/`anchor2` are RAW JSON
+/// exactly as stored — callers (`crate::annotations`) deserialize them,
+/// never this module (the store stays free of kb-core's review types,
+/// same "row types don't know about other modules' concerns" convention
+/// `CommitSessionRow` (`store/transcripts.rs`) follows).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationRow {
+    pub id: String,
+    pub repo_id: i64,
+    pub path: String,
+    /// `None` only for a REPLY (`parent_id.is_some()`) — every top-level
+    /// annotation always has one. A JSON-encoded `kb_core::review::Anchor`.
+    pub anchor: Option<String>,
+    /// "line" | "range" | "symbol" | "diff" — vocab validated at the route
+    /// boundary (`crate::annotations::is_valid_anchor_kind`), never here.
+    /// Meaningless (left at its `'line'` DEFAULT) on a reply row.
+    pub anchor_kind: String,
+    /// Nullable, kind-dependent JSON payload — `None` for `line` and for a
+    /// reply; see `crate::annotations`'s module doc for what each OTHER
+    /// kind stores here.
+    pub anchor2: Option<String>,
+    /// `Some` for a REPLY — the annotation it's nested under. One level of
+    /// nesting only, enforced in code (`routes::create_annotation`), not a
+    /// SQL FK — see the migration's doc.
+    pub parent_id: Option<String>,
+    /// "note" | "question" | "todo" | "flag-for-agent" | "tour-stop" |
+    /// "claim" (V72-J2) — vocab validated at the route boundary
+    /// (`crate::annotations::is_valid_intent`).
+    pub intent: String,
+    pub body: String,
+    pub author: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub resolved: bool,
+    /// V4.C1 — `reviews.id` when this row is review-scoped. `None` for
+    /// ordinary working-tree annotations (every pre-V0023 row). No SQL
+    /// FK; cascade is `delete_review`'s job.
+    pub review_id: Option<i64>,
+    /// Patchset the comment was CREATED against (not the target it is
+    /// later resolved against — that is computed per request).
+    pub ps_number: Option<i64>,
+    /// `"old"` | `"new"` — which side of the patchset the anchor was
+    /// built from. Route-validated, never here.
+    pub side: Option<String>,
+    /// V70-A10 ("Workspaces v0") — `reading_sets.id` when this row is a
+    /// workspace note (general path-less, `annotations::ANCHOR_KIND_SET`,
+    /// OR an ordinary code-anchored comment scoped to a workspace via
+    /// `set_id` alongside its normal `line`/`range`/`symbol`/`diff`
+    /// anchor). `None` for every annotation not scoped to a workspace
+    /// (every pre-V0028 row). TEXT (matches `reading_sets.id`'s own TEXT
+    /// PK — see `V0028__workspaces.sql`'s doc), no SQL FK; cascade is
+    /// `delete_reading_set`'s job (same `review_id`/`delete_review`
+    /// precedent above). A reply inherits its parent's `set_id`
+    /// (`routes::assemble_reply_annotation`), so this is never a case
+    /// where a top-level row and its own reply disagree.
+    pub set_id: Option<String>,
+    /// V74-L3b (`kbc-trail/1`) — `trails.id` when this row is a DISSENT
+    /// note on an agent-AUTHORED trail (D12: "the human walks `]`/`[` and
+    /// dissents inline"). `None` for every annotation that is not one
+    /// (every pre-V0039 row). TEXT (matches `trails.id`'s own TEXT PK),
+    /// no SQL FK; a reply inherits it through the SAME
+    /// `routes::inherit_scope_field` ladder `set_id`/`review_id` use.
+    ///
+    /// Deliberately NOT removed by a trail purge: a note is the human's
+    /// own authored words, and invariant 23(a) rules that authored
+    /// content is not derived data. A note whose trail was purged reads
+    /// back saying so rather than vanishing with it.
+    pub trail_id: Option<String>,
+}
+
+/// One `annotation_suggestions` row (V4.C1 / V0023). V4.C2 owns the
+/// upsert/delete accessors; apply is S1. `applied` is SQLite's 0/1
+/// boolean, mapped to `bool` here like `AnnotationRow.resolved`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationSuggestionRow {
+    pub annotation_id: String,
+    pub replacement: String,
+    pub original: String,
+    pub base_blob_sha: String,
+    pub applied: bool,
+    pub applied_at: Option<i64>,
+    pub applied_head_sha: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// V4.C2 — one already-validated suggestion write. The route captures
+/// `original` / `base_blob_sha` from the blob BEFORE taking the store
+/// lock; this type just carries those bytes into the tx.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedSuggestionWrite {
+    pub annotation_id: String,
+    pub replacement: String,
+    pub original: String,
+    pub base_blob_sha: String,
+}
+
+/// V4.C2 — one op ready for [`Store::apply_annotation_ops`]. Named
+/// variants (not a pile of Options) so clippy's `type_complexity` stays
+/// quiet — same rationale as `routes::InheritedReviewScope`.
+#[derive(Debug, Clone)]
+pub enum PreparedAnnotationOp {
+    Insert {
+        row: Box<AnnotationRow>,
+        suggestion: Option<PreparedSuggestionWrite>,
+    },
+    EditBody {
+        id: String,
+        body: String,
+    },
+    SetIntent {
+        id: String,
+        intent: String,
+    },
+    SetResolved {
+        id: String,
+        resolved: bool,
+    },
+    Delete {
+        id: String,
+    },
+    UpsertSuggestion(PreparedSuggestionWrite),
+    ClearSuggestion {
+        annotation_id: String,
+    },
+    /// V80-M0 — bind/rebind an EXISTING top-level annotation's review
+    /// scope. `(review_id, ps_number, side)` is already fully resolved
+    /// (existence/repo-match/open-state validated) by the route.
+    BindReview {
+        id: String,
+        review_id: i64,
+        ps_number: i64,
+        side: String,
+    },
+    /// V80-M0 — clear an EXISTING annotation's review scope.
+    UnbindReview {
+        id: String,
+    },
+}
+
+/// Outcome of [`Store::apply_annotation_ops`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnnotationOpReport {
+    pub applied: usize,
+    pub created_ids: Vec<String>,
+    pub changed: bool,
+}

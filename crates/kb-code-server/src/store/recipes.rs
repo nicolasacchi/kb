@@ -170,3 +170,38 @@ impl Store {
             .map_err(Into::into)
     }
 }
+
+/// V74-L3a — one `recipe_trust` row (migration V0038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeTrustRow {
+    pub repo_id: i64,
+    pub slug: String,
+    pub source_path: String,
+    pub content_hash: String,
+    pub trusted_body: String,
+    pub trusted_unix: i64,
+}
+
+/// V74-L3a — one `recipes_server` row (migration V0038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeServerRow {
+    pub slug: String,
+    pub repo: Option<String>,
+    pub title: String,
+    pub body_json: String,
+    pub created_unix: i64,
+    pub updated_unix: i64,
+}
+
+/// V74-L3a — one materialised `recipe_runs` row (migration V0038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeRunRow {
+    pub id: String,
+    pub repo_id: i64,
+    pub slug: String,
+    pub params_json: String,
+    pub scope: Option<String>,
+    pub generation: u64,
+    pub result_json: String,
+    pub created_unix: i64,
+}
