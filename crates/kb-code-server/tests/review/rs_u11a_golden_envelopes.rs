@@ -40,16 +40,19 @@
 //! `pr_meta` with labels/checks/body) — a golden pinned entirely on
 //! `null`s would only prove key PRESENCE, not type, for those fields.
 //!
-//! **Pinned presence-only (the committed golden leaf is `null`, or an empty
-//! array with no element shape), so a retype of these is NOT caught:**
-//! `pr_meta_unavailable_reason`, `unavailable_reason` (both only appear when
-//! the forge is unreachable), the async job's `error`/`error_type` (a failed
-//! job), `review_files[].old_path` (no fixture file is renamed) and
-//! `review_files[].hunks_viewed` (no hunk is marked viewed, so the element
-//! shape is unpinned). Review `title`, `session_id`, `artifact_hint_id` and
-//! `artifact_hint_kb` ARE pinned non-null (v0.44 X2): every fixture below
-//! sets them. Pinning the rest needs fixtures that set them plus re-minted
-//! goldens.
+//! **Pinned presence-only in the happy-path goldens (the committed leaf is
+//! `null`):** `pr_meta_unavailable_reason`, `unavailable_reason` and the async
+//! job's `error`/`error_type` -- they only carry a value when the forge is
+//! unreachable or a job fails. X5 (A13-12) adds degraded-path tests
+//! (`unavailable_forge_golden_envelope_shapes`,
+//! `create_review_pr_async_job_failed_golden_envelope_shape`) whose goldens
+//! pin the string/object TYPES of `pr_meta_unavailable_reason`,
+//! `unavailable_reason` (pr-status and the sweep row) and `error`. Still
+//! presence-only: the failed job's `error_type` (it is only set for a typed
+//! problem such as a closed-binding 409). `review_files[].old_path` and
+//! `hunks_viewed[]` are NOW exercised non-null (the PR fixture renames a file
+//! and one hunk is marked viewed). Review `title`, `session_id`,
+//! `artifact_hint_id` and `artifact_hint_kb` are pinned non-null (v0.44 X2).
 //!
 //! # Regenerating (this crate builds with NO local cargo — see
 //! `BUILDER-RULES.md`; every golden here was minted on GitHub CI)
@@ -213,6 +216,11 @@ fn fixture_pr_repo(pr_number: u32) -> (tempfile::TempDir, tempfile::TempDir, Pat
 
     git(&repo_dir, &["checkout", "-q", "-b", "pr-branch"]);
     std::fs::write(repo_dir.join("feature.txt"), "feature\n").unwrap();
+    // X5 (A13-12): the PR also RENAMES a file (100% similar, so `diff -M`
+    // reports it as R with `old_path`), named to sort BEFORE `feature.txt` so
+    // it is the FIRST `review_files.files[]` element -- the one element whose
+    // shape the golden records.
+    git(&repo_dir, &["mv", "base.txt", "a-renamed.txt"]);
     git(&repo_dir, &["add", "-A"]);
     git(&repo_dir, &["commit", "-q", "-m", "pr commit"]);
     let pr_sha = git_out(&repo_dir, &["rev-parse", "HEAD"]);
@@ -560,6 +568,21 @@ async fn create_review_pr_sync_snapshot_list_show_files_and_pr_status_golden_env
         problems.push(e);
     }
 
+    // --- one hunk marked viewed, so `hunks_viewed[]` has an element whose
+    // shape the golden records (X5, A13-12). The id is opaque to the daemon.
+    let resp = client
+        .put(format!("{base}/api/reviews/{id}/hunk-viewed"))
+        .json(&serde_json::json!({"hunk_id": "00112233aabbccdd", "path": "a-renamed.txt"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+
     // --- GET /api/reviews/{id}/files ---------------------------------------
     let resp = client
         .get(format!("{base}/api/reviews/{id}/files"))
@@ -570,6 +593,16 @@ async fn create_review_pr_sync_snapshot_list_show_files_and_pr_status_golden_env
     let files_body: serde_json::Value = resp.json().await.unwrap();
     assert!(
         !files_body["files"].as_array().unwrap().is_empty(),
+        "{files_body}"
+    );
+    // The fixture really exercises the two fields (a golden minted from a
+    // fixture that no longer does would silently go back to presence-only).
+    assert_eq!(
+        files_body["files"][0]["old_path"], "base.txt",
+        "first file must be the rename: {files_body}"
+    );
+    assert_eq!(
+        files_body["hunks_viewed"][0]["hunk_id"], "00112233aabbccdd",
         "{files_body}"
     );
     if let Err(e) = golden_check("review_files", &files_body) {
@@ -647,6 +680,142 @@ async fn create_review_pr_async_job_golden_envelope_shape() {
 
     let mut problems = Vec::new();
     if let Err(e) = golden_check("create_review_pr_async_job", &job_body) {
+        problems.push(e);
+    }
+    finish(problems);
+}
+
+// --- X5 (A13-12): the degraded envelopes, with their reason fields non-null.
+// A forge that answers 404 to everything (an empty router) makes the bind
+// store no `pr_meta`, and makes pr-status / sweep report WHY. The happy-path
+// goldens above pin these fields as `null`, i.e. presence-only; these pin the
+// string/object TYPES. -------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unavailable_forge_golden_envelope_shapes() {
+    let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(104);
+    let (gh_addr, _gh_server) = mock_github_server(Router::new()).await;
+    let (_tmp, base) = boot(cfg_with_repo_and_github("fixture", &dir, gh_addr)).await;
+    let client = reqwest::Client::new();
+    let mut problems = Vec::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({
+            "repo": "fixture",
+            "pr_number": 104,
+            "title": "widgets: spin faster",
+            "session_id": "sess-fixture",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::CREATED,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let bind_body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        bind_body["pr_meta_unavailable_reason"]["code"].is_string(),
+        "a 404 forge must yield a typed pr_meta_unavailable_reason: {bind_body}"
+    );
+    let id = bind_body["id"].as_i64().expect("bound review has an id");
+    if let Err(e) = golden_check("create_review_pr_sync_unavailable", &bind_body) {
+        problems.push(e);
+    }
+
+    let resp = client
+        .get(format!("{base}/api/reviews/{id}/pr-status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let pr_status_body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        pr_status_body["unavailable_reason"].is_string(),
+        "{pr_status_body}"
+    );
+    if let Err(e) = golden_check("pr_status_unavailable", &pr_status_body) {
+        problems.push(e);
+    }
+
+    let resp = client
+        .post(format!("{base}/api/reviews/sweep"))
+        .json(&serde_json::json!({ "repo": "fixture" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let sweep_body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        sweep_body["rows"][0]["unavailable_reason"].is_string(),
+        "{sweep_body}"
+    );
+    if let Err(e) = golden_check("sweep_unavailable", &sweep_body) {
+        problems.push(e);
+    }
+    finish(problems);
+}
+
+// --- X5 (A13-12): a FAILED async job -- `error` non-null. A PR number with no
+// `refs/pull/<n>/head` on the remote makes the fetch fail. ------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_review_pr_async_job_failed_golden_envelope_shape() {
+    let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(105);
+    let (gh_addr, _gh_server) = mock_github_server(Router::new()).await;
+    let (_tmp, base) = boot(cfg_with_repo_and_github("fixture", &dir, gh_addr)).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr?async=1"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 999 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::ACCEPTED,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let job_id = resp.json::<serde_json::Value>().await.unwrap()["job_id"]
+        .as_str()
+        .expect("job_id")
+        .to_string();
+
+    let mut job_body = serde_json::Value::Null;
+    for _ in 0..200 {
+        job_body = client
+            .get(format!("{base}/api/reviews/jobs/{job_id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if job_body["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(job_body["status"], "failed", "{job_body}");
+    assert!(job_body["error"].is_string(), "{job_body}");
+
+    let mut problems = Vec::new();
+    if let Err(e) = golden_check("create_review_pr_async_job_failed", &job_body) {
         problems.push(e);
     }
     finish(problems);

@@ -1502,16 +1502,13 @@ fn spawn_backup_schedule(
                         }
                         handles.bus.emit(
                             "maintenance.backup.written",
-                            serde_json::json!({
-                                "kb": kb_name.as_str(),
-                                "path": path.display().to_string(),
-                                // Not part of the historical payload, and
-                                // load-bearing: a subscriber reading "backup
-                                // written" without it cannot tell a
-                                // local-only write from a copy that actually
-                                // reached the remote target.
-                                "remote": status,
-                            }),
+                            // The payload is built by the function the schema
+                            // route's test checks against the declared keys, so
+                            // the emitter and the declaration cannot drift. The
+                            // `remote` key is load-bearing: without it a
+                            // subscriber cannot tell a local-only write from a
+                            // copy that actually reached the remote target.
+                            routes::schema::backup_written_payload(kb_name.as_str(), &path, status),
                         );
                     }
                     Err(e) => {

@@ -1,0 +1,15 @@
+{
+  "error": "string",
+  "error_status": "number",
+  "error_type": "null",
+  "job_id": "string",
+  "kind": "string",
+  "pr_number": "number",
+  "progress": {
+    "stage": "string"
+  },
+  "repo": "string",
+  "result": "null",
+  "review_id": "null",
+  "status": "string"
+}

@@ -7,7 +7,10 @@ or `unwrap_or(<permissive default>)` (error -> the PERMISSIVE value). Neither
 is banned outright -- many are right -- so this counts them per file in the
 non-test part of each posture module and holds the count at a committed
 baseline (ci/posture-swallow-baseline.toml) that may only go DOWN. A new one
-must be justified by raising the baseline in a PR that says why.
+must be justified by raising the baseline in a PR that says why. The ratchet is
+exact in BOTH directions: a count BELOW the baseline fails until the baseline is
+lowered in the same PR, otherwise a later regrowth up to the stale number would
+pass silently.
 
 Usage: check-posture-swallow.py [--self-test]
 """
@@ -58,31 +61,47 @@ def measure(root=ROOT, files=FILES):
     return out
 
 
+def compare(now, base):
+    """(errors, notes) for measured counts `now` against `base`. Exact both ways."""
+    errors, notes = [], []
+    for f, n in now.items():
+        b = base.get(f)
+        if b is None:
+            errors.append(f"POSTURE RATCHET: {f} has no baseline entry (measured {n}); add it to ci/posture-swallow-baseline.toml")
+        elif n > b:
+            errors.append(f"POSTURE RATCHET: {f} now has {n} `.ok()`/`unwrap_or(` forms in non-test code, baseline {b}. "
+                          "Each can turn a failed security check into a permissive default; handle the error by name, or raise the baseline in a PR that says why.")
+        elif n < b:
+            errors.append(f"POSTURE RATCHET: {f} is down to {n}, baseline {b}. Lower its entry in ci/posture-swallow-baseline.toml to {n} in this PR, "
+                          "so a later regrowth up to the old number cannot pass silently.")
+    for f in set(base) - set(now):
+        errors.append(f"POSTURE RATCHET: baseline lists {f}, which is not in FILES")
+    return errors, notes
+
+
 def main():
     if "--self-test" in sys.argv:
         assert count("fn a(){ x.ok(); y.unwrap_or(1); }\n#[cfg(test)]\nmod t{ z.ok(); }") == 2
         assert count("// x.ok()\nfn a(){}") == 0
         assert count("fn a(){ q.unwrap_or_default(); }") == 1
+        # the ratchet is exact in both directions (F1 carry)
+        assert compare({"a": 3}, {"a": 3}) == ([], [])
+        assert len(compare({"a": 4}, {"a": 3})[0]) == 1, "growth must fail"
+        down = compare({"a": 2}, {"a": 3})[0]
+        assert len(down) == 1 and "Lower its entry" in down[0], "a drop below the baseline must fail"
+        assert len(compare({"a": 1}, {})[0]) == 1, "missing baseline must fail"
+        assert len(compare({}, {"a": 1})[0]) == 1, "stale baseline entry must fail"
         print("check-posture-swallow self-test ok")
         return 0
     with open(BASELINE, "rb") as fh:
         base = tomllib.load(fh).get("files", {})
     now = measure()
-    bad = 0
-    for f, n in now.items():
-        b = base.get(f)
-        if b is None:
-            print(f"POSTURE RATCHET: {f} has no baseline entry (measured {n}); add it to ci/posture-swallow-baseline.toml", file=sys.stderr)
-            bad += 1
-        elif n > b:
-            print(f"POSTURE RATCHET: {f} now has {n} `.ok()`/`unwrap_or(` forms in non-test code, baseline {b}. "
-                  "Each can turn a failed security check into a permissive default; handle the error by name, or raise the baseline in a PR that says why.", file=sys.stderr)
-            bad += 1
-        elif n < b:
-            print(f"note: {f} is down to {n} (baseline {b}); lower the baseline to keep the ratchet tight")
-    for f in set(base) - set(now):
-        print(f"POSTURE RATCHET: baseline lists {f}, which is not in FILES", file=sys.stderr)
-        bad += 1
+    errors, notes = compare(now, base)
+    for e in errors:
+        print(e, file=sys.stderr)
+    for n in notes:
+        print(n)
+    bad = len(errors)
     print(f"posture-swallow ratchet: {sum(now.values())} form(s) across {len(now)} module(s)")
     return 1 if bad else 0
 

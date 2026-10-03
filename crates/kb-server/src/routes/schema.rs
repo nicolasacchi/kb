@@ -429,7 +429,7 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
         "daemon.restarting" => json!({"type": kind, "payload": ["addr", "config_path"]}),
         "maintenance.retention.pruned" => json!({"type": kind, "payload": ["kb", "deleted"]}),
         "maintenance.backup.written" => {
-            json!({"type": kind, "payload": ["kb", "path", "remote"]})
+            json!({"type": kind, "payload": BACKUP_WRITTEN_KEYS})
         }
         "maintenance.logs.pruned" => json!({"type": kind, "payload": ["deleted"]}),
         // Identical payload shape to its recall sibling above — same
@@ -453,14 +453,31 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
     Json(schema).into_response()
 }
 
+/// The declared payload keys of `maintenance.backup.written`.
+pub const BACKUP_WRITTEN_KEYS: [&str; 3] = ["kb", "path", "remote"];
+
+/// The ONE builder of the `maintenance.backup.written` payload. The scheduler
+/// emits exactly this value and the schema route declares exactly
+/// [`BACKUP_WRITTEN_KEYS`]; the test below ties the two together by running the
+/// builder, so an emitted key the schema omits (or the reverse) fails it.
+/// `remote` is `unset|ok|failed` (see `docs/http-api.md`).
+pub fn backup_written_payload(kb: &str, path: &std::path::Path, remote: &str) -> serde_json::Value {
+    json!({
+        "kb": kb,
+        "path": path.display().to_string(),
+        "remote": remote,
+    })
+}
+
 #[cfg(test)]
 mod backup_written_schema {
     use super::*;
 
-    /// A3-14 — the schema route declares the `remote` field of
-    /// `maintenance.backup.written`, and the scheduler really emits it
-    /// (a subscriber cannot tell a local-only write from an off-host copy
-    /// without it).
+    /// A3-14 -- the schema route declares the `remote` field of
+    /// `maintenance.backup.written`, and what the scheduler emits carries
+    /// exactly the declared keys (a subscriber cannot tell a local-only write
+    /// from an off-host copy without it). Behavioural: it runs the emitter's
+    /// payload builder, not a text scan of lib.rs.
     #[tokio::test]
     async fn backup_written_schema_declares_remote_and_the_emitter_sends_it() {
         let resp = per_type(Path((
@@ -475,21 +492,20 @@ mod backup_written_schema {
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["payload"], json!(["kb", "path", "remote"]));
 
-        // The producer side: the emit site in lib.rs carries every declared key.
-        let lib = include_str!("../lib.rs");
-        let at = lib
-            .find("\"maintenance.backup.written\",")
-            .expect("scheduler emits maintenance.backup.written");
-        // Window = from the event name to the end of this `emit(` call
-        // (first `);` after it), so it neither panics on a char boundary nor
-        // silently stops covering the payload when it grows.
-        let end = lib[at..]
-            .find(");")
-            .map(|i| at + i)
-            .expect("emit call is terminated");
-        let emit = &lib[at..end];
-        for key in ["\"kb\":", "\"path\":", "\"remote\":"] {
-            assert!(emit.contains(key), "emit site is missing {key}");
+        for remote in ["unset", "ok", "failed"] {
+            let emitted =
+                backup_written_payload("notes", std::path::Path::new("/x/notes.tar.gz"), remote);
+            let mut keys: Vec<&str> = emitted
+                .as_object()
+                .expect("payload is an object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            let mut declared = BACKUP_WRITTEN_KEYS.to_vec();
+            declared.sort_unstable();
+            assert_eq!(keys, declared, "emitted keys differ from the declared ones");
+            assert_eq!(emitted["remote"], remote);
         }
     }
 }

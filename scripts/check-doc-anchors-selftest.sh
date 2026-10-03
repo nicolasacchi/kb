@@ -49,6 +49,12 @@ new_repo 1
 echo 'Somewhere around `src/x.rs:20` there is a function.' > "$work/r/docs/a.md"
 expect 0 "unpaired anchor at a ceiling of 1" "ceiling 1;"
 
+# 3b. ...and a count BELOW the ceiling fails too (the ratchet is exact; the
+#     constant must be lowered in the same PR)
+new_repo 3
+echo 'Somewhere around `src/x.rs:20` there is a function.' > "$work/r/docs/a.md"
+expect 1 "WEAK below the ceiling fails until it is lowered" "below the ceiling 3"
+
 # 4. a symbol that exists nowhere in the file
 new_repo 0
 echo 'It is `no_such_symbol` (`src/x.rs:20`).' > "$work/r/docs/a.md"

@@ -3345,6 +3345,17 @@ mod tests {
 
     const NOW: i64 = 1_767_225_600;
 
+    /// X5 (posture inventory, `kb_core::posture`): `Human` is the only value
+    /// that earns the `[you]` rendering and the pin check, so the default an
+    /// absent `origin` deserialises to must never be it.
+    #[test]
+    fn origin_default_never_claims_human() {
+        assert_ne!(Origin::default(), Origin::Human);
+        let p: Prov =
+            serde_json::from_str(r#"{"harness":"h"}"#).expect("origin is optional on the wire");
+        assert_ne!(p.origin, Origin::Human);
+    }
+
     fn prov(harness: &str, sid: Option<&str>, origin: Origin) -> Prov {
         Prov {
             harness: harness.to_string(),

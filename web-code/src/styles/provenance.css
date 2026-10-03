@@ -1155,6 +1155,16 @@ a.kbc-inspector__citedby-title:hover {
 .kbc-annotations__review-chip:hover {
   text-decoration: underline;
 }
+/* The note that replaces Rebind/Unbind on a thread that backs a finding
+   (the daemon answers 409 for those, so the controls are not offered). It sits
+   in the actions column beside the buttons, so it reads as a caption, not a
+   control: no border, muted ink, wrapped to the column width. */
+.kbc-annotations__bound-note {
+  max-width: 14em;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
 .kbc-annotations__review-picker-inline {
   margin-top: 6px;
   padding-top: 6px;
