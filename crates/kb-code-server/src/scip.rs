@@ -131,7 +131,7 @@ pub async fn scip_ingest_route(
     State(state): State<SharedState>,
     Json(body): Json<ScipIngestBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 2026-08-31 incident (store.rs module doc): this handler has no
+    // 2026-08-31 incident (store/mod.rs module doc): this handler has no
     // `.await` anywhere in it (repo lookup, the per-doc store writes, and
     // the git-head + scip_runs stamp are all synchronous) — the whole body
     // runs as ONE closure on the blocking pool instead of parking an async
@@ -149,7 +149,7 @@ pub async fn scip_ingest_route(
 }
 
 /// The sync body of [`scip_ingest_route`] — split out so it can run as a
-/// single `run_blocking` closure (2026-08-31 incident, store.rs module
+/// single `run_blocking` closure (2026-08-31 incident, store/mod.rs module
 /// doc). `body` is moved in by value; every field is read at most once
 /// after `body.docs` is consumed by the loop below, same ownership shape
 /// the original inline handler already relied on.

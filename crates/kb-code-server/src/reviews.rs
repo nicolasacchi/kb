@@ -2824,7 +2824,7 @@ pub struct InterdiffParams {
     pub to: i64,
 }
 
-// 2026-08-31 incident (store.rs module doc) — `get_review` runs on the
+// 2026-08-31 incident (store/mod.rs module doc) — `get_review` runs on the
 // blocking pool via `run_blocking`; `state` stays borrowed across the
 // `.await` (its own reference, not moved), so `find_repo`'s in-memory
 // (non-store) lookup afterward still returns a borrow tied to `state`'s
@@ -2953,7 +2953,7 @@ async fn create_review_value_inner(
     let base_ref_c = base_ref.clone();
     let head_ref = body.head_ref.clone();
     let session_id = body.session_id.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the two
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the two
     // sequential store calls (insert + re-fetch) in one blocking-pool trip.
     let review = state
         .store
@@ -3914,7 +3914,7 @@ pub async fn list_reviews(
     let repo_name = params.repo.clone();
     let state_filter = params.state.clone();
     let root = GitCtx::resolve_entry(&state.store, repo).await;
-    // PF-K1 (2026-08-31 incident doc, store.rs) — the whole list compose
+    // PF-K1 (2026-08-31 incident doc, store/mod.rs) — the whole list compose
     // (store batch fan-out + per-review git diff + CPU-only aggregation)
     // is now ONE blocking-pool trip, down from one initial fetch plus up
     // to three more PER REVIEW.
@@ -5269,7 +5269,7 @@ pub(crate) async fn create_review_pr_value_known(
     let slug_c = pr_repo_slug.clone();
     let fetched_c = fetched_sha.clone();
     let meta_c = pr_meta_json.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the sequential
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the sequential
     // store calls (insert + bind + re-fetch) in one blocking-pool trip.
     let review = state
         .store

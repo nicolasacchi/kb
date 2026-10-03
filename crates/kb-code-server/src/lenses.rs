@@ -126,7 +126,7 @@ pub async fn lenses_at(
         ))
     })?;
 
-    // 2026-08-31 incident (store.rs module doc): the declaration scan and
+    // 2026-08-31 incident (store/mod.rs module doc): the declaration scan and
     // the batch usage-count scan are independent of the async blame pull
     // below (both only need `read`/`salt`, already in hand) — coalesced
     // into ONE closure rather than two round trips to the blocking pool.

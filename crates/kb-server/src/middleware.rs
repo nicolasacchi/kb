@@ -2504,6 +2504,52 @@ mod tests {
         );
     }
 
+    /// v044-D1 (A15.f15) — the reference `[server]` block published in
+    /// docs/self-host.md must parse as a real `kb.toml`, validate without a
+    /// hard issue, and — resolved exactly the way boot resolves it — admit its
+    /// own published name through its own trusted proxy while still refusing a
+    /// rebound one. A doc that 403s its own deploy is the A1-1 regression.
+    #[tokio::test]
+    async fn the_self_host_reference_server_block_admits_its_own_published_name() {
+        let doc = include_str!("../../../docs/self-host.md");
+        let from = doc
+            .find("## v0.6 [server] block")
+            .expect("self-host.md keeps its reference [server] block section");
+        let rest = &doc[from..];
+        let open = rest.find("```toml\n").expect("a toml fence") + "```toml\n".len();
+        let body = &rest[open..];
+        let toml_src = &body[..body.find("```").expect("closing fence")];
+        let cfg = kb_core::config::KbConfig::from_toml_str(toml_src)
+            .expect("the reference [server] block parses as kb.toml");
+        assert!(
+            cfg.validate().iter().all(|i| !i.is_hard()),
+            "the reference block has a hard validation issue"
+        );
+        let proxies: Vec<std::net::IpAddr> = cfg
+            .server
+            .trusted_proxies
+            .iter()
+            .map(|p| p.parse().expect("trusted_proxies entries are IPs here"))
+            .collect();
+        assert!(!proxies.is_empty(), "the reference block lists its proxy");
+        let name = parent_origin_host(&cfg.server.parent_origin).expect("parent_origin has a host");
+        let origin = Arc::new(OriginConfig::from_server_section(
+            &cfg.server,
+            crate::state::TrustedProxies::new(proxies.clone()),
+        ));
+        let peer = proxies[0].to_string();
+        assert_eq!(
+            status_for(&origin, &peer, &name, None).await,
+            StatusCode::OK,
+            "the published name {name} must pass its own Host guard"
+        );
+        assert_eq!(
+            status_for(&origin, &peer, "attacker.example", None).await,
+            StatusCode::FORBIDDEN,
+            "the guard is really on for the documented proxy hop"
+        );
+    }
+
     /// The same-host proxy shape (quickstart): loopback bind, a proxy on
     /// 127.0.0.1 passing Host through.
     #[tokio::test]

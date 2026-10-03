@@ -513,7 +513,7 @@ pub async fn usages2_route(
     let col = params.col;
     let rev = params.rev.clone();
     let scopes = state.scopes.clone();
-    // 2026-08-31 incident (store.rs module doc): one coarse blocking hop
+    // 2026-08-31 incident (store/mod.rs module doc): one coarse blocking hop
     // for the whole synchronous ladder + enrichment; the lip overlay below
     // is the async leg.
     let repo_bg = repo.clone();

@@ -12,7 +12,7 @@
 //!
 //! [`RepoStatus`] (`git status --porcelain=v2 -z`) is cached per
 //! [`crate::store::Store::generation`] (the same counter `mirror.updated`
-//! bumps rise from — see `store.rs`'s field doc — so a repeat poll between
+//! bumps rise from — see `store/mod.rs`'s field doc — so a repeat poll between
 //! two file-content mutations is served from cache rather than re-shelling
 //! to `git` every time). [`list_worktree_dir`] (`git ls-files -z --cached
 //! --others --exclude-standard`) is NOT cached — `/api/tree`'s existing
@@ -298,7 +298,7 @@ impl StatusIndex {
     }
 
     /// `repo_root` is a blocking subprocess call — callers must already be
-    /// on the blocking pool (see `store.rs`'s 2026-08-31 incident note;
+    /// on the blocking pool (see `store/mod.rs`'s 2026-08-31 incident note;
     /// `routes::status_route` wraps this in `state.store.run_blocking`
     /// alongside the `Store::generation()` read so the two can never
     /// observe different generations).

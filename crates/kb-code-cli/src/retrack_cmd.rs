@@ -3,7 +3,7 @@
 //! * `kb-code review retrack <ID|pr:N> [--base SPEC] [--dry-run] [--repo R]`
 //!   — one review. Address resolution reuses [`crate::review_agent::
 //!   resolve`] (the SAME `<id>`/`pr:<N>` grammar `find`/`diff`/`log`/`cat`
-//!   already share), so `pr:15790` works with no `--repo` when exactly one
+//!   already share), so `pr:<N>` works with no `--repo` when exactly one
 //!   repo has a review bound to it.
 //! * `kb-code review retrack --all [--repo R] [--pinned|--legacy]
 //!   --dry-run|--yes` — every review in scope. `--yes` is required to

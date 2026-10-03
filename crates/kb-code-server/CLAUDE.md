@@ -276,7 +276,7 @@ invariant #2 records).
 11. **Two salts, two independently-gated families; a cache write purges
     every OTHER salt of the SAME language AND family for that blob; and a
     salt bump is a MEASURED decision** (V70-A3X, V72-B0, V72-H2b —
-    `store.rs`/`lang.rs`/`ingest.rs`/`reextract.rs`). *V72-H2b amendment
+    `store/`/`lang.rs`/`ingest.rs`/`reextract.rs`). *V72-H2b amendment
     (2026-09-07, D7 + D16), stated first because everything below is now
     read per family:* `LangInfo` carries `symbol_salt`
     (`{id}@{grammar}+qN` — keys `symbols`, `occurrences`, `import_specs`,
@@ -1564,6 +1564,21 @@ invariant #2 records).
     it is capped (`facts::MAX_TOUCHES_SCAN`) and captions `scanned` of
     `candidates`; its pathspec goes after an explicit `--` and is asserted
     by `tests/security/git_argv_lint.rs` like every other one.
+
+## v0.44 notes
+
+- The store is a directory (`src/store/`); the 2026-08-31 starvation
+  incident rationale that many comments cite is the `store/mod.rs` module
+  doc. New pointers say `store/mod.rs`, never `store.rs`.
+- Review-store forge access is fail-closed (no ambient fallback). The
+  deployment policy (forge features stay local-only until an `https` remote
+  and a pinned `token_file` exist) is in docs/configuration.md; the
+  per-route admission table is in docs/kb-code.md ("The route gates" and
+  "Review and working-tree mutation gates") and must be re-checked against
+  `router.rs` whenever a mutating route moves between `transcripts_api`,
+  `review_remote` and `api`.
+- Every `ReviewStoreSection`/`ServerSection` key must be documented in
+  docs/configuration.md (`config::docs_coverage_tests`).
 
 ## When to update this file
 
