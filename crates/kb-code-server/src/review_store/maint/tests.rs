@@ -1514,3 +1514,62 @@ fn the_maintenance_lock_is_one_mutex_per_store() {
     assert!(!std::sync::Arc::ptr_eq(&a, &e.rs.maint_lock(2)));
     assert!(!std::sync::Arc::ptr_eq(&a, &e.rs.ops_lock(1)));
 }
+
+/// Wave-1 carry — the restore-guard sentinel's read-modify-write is
+/// serialised across processes by an flock. The test plays the other
+/// process by holding the lock file: `admit_new_store` must wait for it
+/// (without the flock it returned immediately and could clobber a
+/// concurrent acknowledgement).
+#[test]
+fn admit_new_store_waits_for_the_sentinel_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    restore_guard::observe_boot_epoch(&p, Some(45), 100);
+    restore_guard::observe_boot_epoch(&p, Some(40), 200); // flagged
+    let held =
+        crate::review_store::manifest::lock_blocking(&p.with_extension("json.lock")).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = {
+        let p = p.clone();
+        std::thread::spawn(move || {
+            restore_guard::admit_new_store(&p, "new-store");
+            tx.send(()).unwrap();
+        })
+    };
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "admit_new_store must wait for the sentinel lock"
+    );
+    drop(held);
+    rx.recv_timeout(Duration::from_secs(10)).expect("proceeds");
+    worker.join().unwrap();
+    assert!(!restore_guard::read(&p).blocks("new-store"));
+}
+
+/// Wave-1 carry — concurrent admissions and acknowledgements all land.
+#[test]
+fn concurrent_sentinel_updates_lose_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    restore_guard::observe_boot_epoch(&p, Some(45), 100);
+    restore_guard::observe_boot_epoch(&p, Some(40), 200);
+    let handles: Vec<_> = (0..12)
+        .map(|i| {
+            let p = p.clone();
+            std::thread::spawn(move || {
+                if i % 2 == 0 {
+                    restore_guard::admit_new_store(&p, &format!("s{i}"));
+                } else {
+                    restore_guard::acknowledge(&p, &format!("s{i}"), 300).unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    let s = restore_guard::read(&p);
+    for i in 0..12 {
+        assert!(!s.blocks(&format!("s{i}")), "s{i} lost: {s:?}");
+    }
+}

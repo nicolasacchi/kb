@@ -432,6 +432,20 @@ pub mod restore_guard {
         state
     }
 
+    /// Exclusive cross-process lock for a read-modify-write of the sentinel.
+    /// `read` + mutate + `write` was unserialised: the daemon's boot pass,
+    /// a CLI `store gc --yes` acknowledgement and a new store's
+    /// `admit_new_store` could interleave and the last writer silently
+    /// dropped the others' change (a lost `acknowledged_stores` entry
+    /// leaves a store blocked; a lost `flagged` unblocks one). Held until
+    /// the returned guard drops.
+    fn lock(guard_path: &Path) -> std::io::Result<std::fs::File> {
+        if let Some(parent) = guard_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        super::super::manifest::lock_blocking(&guard_path.with_extension("json.lock"))
+    }
+
     fn write(guard_path: &Path, state: &RestoreGuardState) -> std::io::Result<()> {
         let attempt = || -> std::io::Result<()> {
             if let Some(parent) = guard_path.parent() {
@@ -473,6 +487,10 @@ pub mod restore_guard {
         current_epoch: Option<u32>,
         now: i64,
     ) -> RestoreGuardState {
+        // Boot must proceed; an unlockable sentinel degrades to the old
+        // unserialised behaviour (and `write` below fails closed if the
+        // directory really is unwritable).
+        let _lock = lock(guard_path).ok();
         let mut state = read(guard_path);
         state.just_flagged = false;
         if let Some(cur) = current_epoch {
@@ -516,6 +534,7 @@ pub mod restore_guard {
         reason: &str,
         now: i64,
     ) -> std::io::Result<RestoreGuardState> {
+        let _lock = lock(guard_path)?;
         let mut state = read(guard_path);
         state.flagged = true;
         state.flagged_at = Some(now);
@@ -535,6 +554,13 @@ pub mod restore_guard {
     /// a manual `gc --yes`. A no-op when nothing is flagged; best-effort
     /// (a failure leaves the store blocked, the safe direction).
     pub fn admit_new_store(guard_path: &Path, store_uuid: &str) {
+        let _lock = match lock(guard_path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, store = store_uuid, "kb-code: could not lock the restore guard; the new store stays blocked");
+                return;
+            }
+        };
         let mut state = read(guard_path);
         if !state.flagged || !state.acknowledged_stores.insert(store_uuid.to_string()) {
             return;
@@ -554,6 +580,7 @@ pub mod restore_guard {
         store_uuid: &str,
         now: i64,
     ) -> std::io::Result<RestoreGuardState> {
+        let _lock = lock(guard_path)?;
         let mut state = read(guard_path);
         if state.flagged {
             state.acknowledged_stores.insert(store_uuid.to_string());

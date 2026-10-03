@@ -190,6 +190,8 @@ const HELPER_FD: RawFd = 3;
 /// `GIT_CONFIG_GLOBAL=/dev/null`). Holds ONLY `safe.directory` entries for
 /// registered local sources — see [`StoreGit::allow_local_source`].
 const GLOBAL_CONFIG_NAME: &str = "gitconfig";
+/// Sibling lock file serialising the gitconfig read-merge-write.
+const GLOBAL_CONFIG_LOCK_NAME: &str = "gitconfig.lock";
 
 /// Extra ambient variables `inherit` mode strips (beyond
 /// [`RETARGETING_VARS`] and every `GIT_TRACE*`): GUI/askpass prompting,
@@ -565,6 +567,10 @@ impl StoreGit {
         // pass's). A constructor must therefore never truncate it: adopt
         // whatever entries are already on disk, and create the file only
         // when it does not exist yet.
+        // Under the same flock as `allow_local_source`: the create-if-missing
+        // write below would otherwise replace a file a concurrent spawner
+        // had just populated with an empty one.
+        let _xproc = super::manifest::lock_blocking(&sg.git_home.join(GLOBAL_CONFIG_LOCK_NAME))?;
         let existing = sg.read_global_config_dirs();
         let missing = !sg.global_config.exists();
         *sg.safe_dirs.lock().unwrap_or_else(|p| p.into_inner()) = existing.clone();
@@ -623,6 +629,11 @@ impl StoreGit {
                     "safe.directory source must be an absolute path without control characters",
                 )
             })?;
+        // Cross-process: another daemon/CLI on the same `git_home` runs this
+        // same read-merge-write, and the in-memory mutex cannot see it. The
+        // flock makes the merge-then-write atomic across processes, so two
+        // concurrent additions can never overwrite each other's entry.
+        let _xproc = super::manifest::lock_blocking(&self.git_home.join(GLOBAL_CONFIG_LOCK_NAME))?;
         let mut dirs = self.safe_dirs.lock().unwrap_or_else(|p| p.into_inner());
         // Trust the DISK, not only the in-memory set: another spawner on
         // the same `git_home` may have rewritten the file since we last did.
@@ -672,7 +683,15 @@ impl StoreGit {
             let esc = d.replace('\\', "\\\\").replace('"', "\\\"");
             body.push_str(&format!("\tdirectory = \"{esc}\"\n"));
         }
-        let tmp = self.git_home.join(format!("{GLOBAL_CONFIG_NAME}.tmp"));
+        // Unique per writer: the flock already serialises writers, but a
+        // shared tmp name would let a writer that skipped the lock truncate
+        // another's half-written file before the rename.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp = self.git_home.join(format!(
+            "{GLOBAL_CONFIG_NAME}.{}.{}.tmp",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
