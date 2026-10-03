@@ -1065,6 +1065,7 @@ pub async fn get(
     let mut query_vec: Option<Vec<f32>> = None;
     let mut embed_ms: u64 = 0;
     let mut cache_hit: bool = false;
+    let mut embed_miss: Option<crate::routes::context::QueryErrorClass> = None;
     if needs_vector {
         // Demand an embedder; if absent, surface a clean 400.
         let Some(emb) = &ctx.embedder else {
@@ -1090,7 +1091,13 @@ pub async fn get(
                 cache_hit = out.cache_hit;
                 query_vec = Some(out.vec);
             }
-            Err(e) => return error_to_problem_json(&e),
+            Err(e) => {
+                // v0.44 X6 — a dead query embedder degrades to BM25 and is
+                // NAMED in `degraded[]`, exactly like the federated path
+                // (it used to be a hard problem+json on scope=one only).
+                tracing::warn!(kb = %kb_name, error = %e, "search: query embed failed; falling back to keyword");
+                embed_miss = Some(crate::routes::context::QueryErrorClass::Embed);
+            }
         }
         // TM-track — record the query-side embed stage (only on a real
         // embed; a cache hit did no model work).
@@ -1118,7 +1125,13 @@ pub async fn get(
         std::collections::HashMap::new();
     let mut vec_rank_by_id: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
-    let (stage, result) = match (params.mode.as_str(), query_vec) {
+    // A failed query embed runs the keyword arm (the named degradation above).
+    let effective_mode: &str = if embed_miss.is_some() {
+        "keyword"
+    } else {
+        params.mode.as_str()
+    };
+    let (stage, result) = match (effective_mode, query_vec) {
         ("keyword", _) => {
             let r = ctx
                 .storage
@@ -1324,7 +1337,15 @@ pub async fn get(
         ms,
         embed_ms,
         cache_hit,
-        degraded: Vec::new(),
+        degraded: embed_miss
+            .map(|class| {
+                vec![crate::routes::context::degraded_of(
+                    kb_name.as_str(),
+                    "search.vector",
+                    class,
+                )]
+            })
+            .unwrap_or_default(),
     })
     .into_response()
 }

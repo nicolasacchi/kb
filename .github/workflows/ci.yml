@@ -1391,6 +1391,34 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/ci/witness.py vitest "$RUNNER_TEMP/witness/vitest-web.json" --lane web-vitest
 
+  hook-omp:
+    permissions:
+      contents: read
+    name: hooks (omp extension, bun)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # No `needs:` - a bash + bun lane over fake-`kb` fixtures; it never
+    # touches the Rust build. v0.44 X6: kb-omp.ts's env/identity/slate tests
+    # used to SKIP wherever bun was absent (i.e. in CI), so they pinned
+    # nothing. KB_REQUIRE_BUN=1 turns an absent bun into a failure.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Install bun
+        run: npm install --global bun@1.2.23
+
+      - name: kb-omp.ts tests (bun)
+        env:
+          KB_REQUIRE_BUN: "1"
+        run: |
+          bun --version
+          bash plugins/kb-memory/hooks/tests/test-omp-slate.sh
+
   supply-chain:
     permissions:
       contents: read
@@ -1580,6 +1608,7 @@ jobs:
       - code-spa
       - code-e2e
       - web-unit
+      - hook-omp
       - supply-chain
     runs-on: ubuntu-latest
     timeout-minutes: 5
