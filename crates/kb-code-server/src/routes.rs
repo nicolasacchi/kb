@@ -4215,6 +4215,12 @@ pub enum AnnotationBatchOp {
     AddReply {
         parent_id: String,
         body: String,
+        /// v0.44 X4 — the speaker. Absent = the human `you` (the same
+        /// default a direct `POST /api/annotations` reply gets); the CLI
+        /// stamps its resolved author here so a batched agent reply is not
+        /// saved as the human.
+        #[serde(default)]
+        author: Option<String>,
         #[serde(default)]
         intent: Option<String>,
     },
@@ -4447,6 +4453,7 @@ pub async fn batch_annotations(
                     AnnotationBatchOp::AddReply {
                         parent_id,
                         body,
+                        author,
                         intent,
                     } => {
                         let parent = require_existing_annotation(store, &parent_id)?;
@@ -4460,7 +4467,7 @@ pub async fn batch_annotations(
                             path: parent.path.clone(),
                             line: None,
                             body,
-                            author: None,
+                            author,
                             anchor_kind: None,
                             line_end: None,
                             sha: None,

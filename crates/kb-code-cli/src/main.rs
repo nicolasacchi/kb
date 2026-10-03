@@ -4677,11 +4677,15 @@ fn set_author_if_absent(payload: &mut serde_json::Value, author: &str) {
     }
 }
 
-/// Stamp `author` on every `add_comment` batch op that names none.
+/// Stamp `author` on every `add_comment` / `add_reply` batch op that names
+/// none (the daemon's `add_reply` op accepts `author` since v0.44 X4).
 fn stamp_batch_authors(ops: &mut serde_json::Value, author: &str) {
     if let Some(arr) = ops.as_array_mut() {
         for op in arr {
-            if op.get("op").and_then(|v| v.as_str()) == Some("add_comment") {
+            if matches!(
+                op.get("op").and_then(|v| v.as_str()),
+                Some("add_comment" | "add_reply")
+            ) {
                 set_author_if_absent(op, author);
             }
         }
@@ -27060,7 +27064,8 @@ mod tests {
         stamp_batch_authors(&mut ops, "omp");
         assert_eq!(ops[0]["author"], "omp");
         assert_eq!(ops[1]["author"], "you");
-        assert!(ops[2].get("author").is_none());
+        // add_reply now rides the wire with the author too.
+        assert_eq!(ops[2]["author"], "omp");
     }
 
     /// v0.44 F5 — `code-actions --suggest` ops carry the resolved author.
