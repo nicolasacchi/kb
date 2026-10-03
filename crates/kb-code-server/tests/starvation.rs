@@ -232,7 +232,7 @@ async fn boot_state(config: KbCodeConfig, store: Arc<Store>) -> anyhow::Result<S
         kb_client,
         backfill_depth,
         spa_dist: None,
-        github: github_client,
+        github: kb_code_server::state::AmbientGithub::new(github_client),
         scopes,
         comment_keywords: comment_keywords.clone(),
         review: review_cfg,

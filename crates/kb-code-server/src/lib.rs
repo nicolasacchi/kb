@@ -1220,7 +1220,7 @@ pub async fn bind_and_spawn(
         // W4.1 — resolved once at boot; see `spa::resolve_spa_dist`'s doc.
         spa_dist: spa::resolve_spa_dist(),
         // Phase G-server — the GitHub read overlay's federation handle.
-        github: github_client,
+        github: state::AmbientGithub::new(github_client),
         // Phase N — named path-set globs (`[scopes]`).
         scopes,
         // V72-J1 — the same keyword set the ingest pass classifies with.
@@ -1537,7 +1537,7 @@ pub(crate) async fn build_state_for_test(
         kb_client,
         backfill_depth,
         spa_dist: None,
-        github: github_client,
+        github: state::AmbientGithub::new(github_client),
         scopes,
         comment_keywords: comment_keywords.clone(),
         review: review_cfg,

@@ -6157,18 +6157,25 @@ pub async fn prs_route(
     Query(params): Query<PrsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (repo, _repo_id) = find_repo(&state, &params.repo)?;
-    let repo_root = repo.path.clone();
-    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&repo_root))
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("origin lookup task panicked: {e}"),
-            )
-        })??;
+    // K2 carry — the forge project + credential come from `forge_ctx`
+    // (the store's `forge_slug` + the D12 binding), never a bare ambient read.
+    let (gh_repo, github) = match crate::reviews::forge_access(&state, repo).await? {
+        crate::reviews::ForgeAccess::Ready { repo, client } => (repo, client),
+        crate::reviews::ForgeAccess::Unavailable(reason) => {
+            return Ok((
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(PrsResponse {
+                    schema: "prs/1",
+                    prs: Vec::new(),
+                    truncated: false,
+                    unavailable_reason: Some(reason),
+                }),
+            ))
+        }
+    };
 
     let (prs, truncated, unavailable_reason) =
-        match state.github.list_pulls(&gh_repo.owner, &gh_repo.name).await {
+        match github.list_pulls(&gh_repo.owner, &gh_repo.name).await {
             Ok(mut list) => {
                 let truncated = list.len() > crate::github::MAX_PRS;
                 list.truncate(crate::github::MAX_PRS);
@@ -6213,22 +6220,28 @@ pub async fn pr_comments_route(
     Query(params): Query<PrCommentsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (repo, _repo_id) = find_repo(&state, &params.repo)?;
-    let repo_root = repo.path.clone();
-    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&repo_root))
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("origin lookup task panicked: {e}"),
-            )
-        })??;
+    // K2 carry — the forge project + credential come from `forge_ctx`
+    // (the store's `forge_slug` + the D12 binding), never a bare ambient read.
+    let (gh_repo, github) = match crate::reviews::forge_access(&state, repo).await? {
+        crate::reviews::ForgeAccess::Ready { repo, client } => (repo, client),
+        crate::reviews::ForgeAccess::Unavailable(reason) => {
+            return Ok((
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(PrCommentsResponse {
+                    schema: "pr-comments/1",
+                    comments: Vec::new(),
+                    truncated: false,
+                    unavailable_reason: Some(reason),
+                }),
+            ))
+        }
+    };
 
     // V70-A3X: `list_pull_comments` now itself enforces `MAX_COMMENTS`
     // (paginating via `Link: rel="next"` up to that shared budget) and
     // reports honestly whether more existed — no further truncation needed
     // here.
-    let (comments, truncated, unavailable_reason) = match state
-        .github
+    let (comments, truncated, unavailable_reason) = match github
         .list_pull_comments(&gh_repo.owner, &gh_repo.name, number)
         .await
     {
@@ -6273,24 +6286,27 @@ pub async fn pr_route(
     Query(params): Query<PrDetailParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (repo, _repo_id) = find_repo(&state, &params.repo)?;
-    let repo_root = repo.path.clone();
-    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&repo_root))
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("origin lookup task panicked: {e}"),
-            )
-        })??;
-
-    let (pr, unavailable_reason) = match state
-        .github
-        .get_pull(&gh_repo.owner, &gh_repo.name, number)
-        .await
-    {
-        Ok(pr) => (Some(pr), None),
-        Err(e) => (None, Some(e.to_string())),
+    // K2 carry — the forge project + credential come from `forge_ctx`
+    // (the store's `forge_slug` + the D12 binding), never a bare ambient read.
+    let (gh_repo, github) = match crate::reviews::forge_access(&state, repo).await? {
+        crate::reviews::ForgeAccess::Ready { repo, client } => (repo, client),
+        crate::reviews::ForgeAccess::Unavailable(reason) => {
+            return Ok((
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(PrDetailResponse {
+                    schema: "pr-detail/1",
+                    pr: None,
+                    unavailable_reason: Some(reason),
+                }),
+            ))
+        }
     };
+
+    let (pr, unavailable_reason) =
+        match github.get_pull(&gh_repo.owner, &gh_repo.name, number).await {
+            Ok(pr) => (Some(pr), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
 
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
@@ -6324,37 +6340,40 @@ pub async fn pr_checks_route(
     Query(params): Query<PrDetailParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (repo, _repo_id) = find_repo(&state, &params.repo)?;
-    let repo_root = repo.path.clone();
-    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&repo_root))
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("origin lookup task panicked: {e}"),
-            )
-        })??;
-
-    let (checks, truncated, unavailable_reason) = match state
-        .github
-        .get_pull(&gh_repo.owner, &gh_repo.name, number)
-        .await
-    {
-        Ok(pr) => {
-            match state
-                .github
-                .list_checks(&gh_repo.owner, &gh_repo.name, &pr.head_sha)
-                .await
-            {
-                Ok(mut list) => {
-                    let truncated = list.len() > crate::github::MAX_CHECKS;
-                    list.truncate(crate::github::MAX_CHECKS);
-                    (list, truncated, None)
-                }
-                Err(e) => (Vec::new(), false, Some(e.to_string())),
-            }
+    // K2 carry — the forge project + credential come from `forge_ctx`
+    // (the store's `forge_slug` + the D12 binding), never a bare ambient read.
+    let (gh_repo, github) = match crate::reviews::forge_access(&state, repo).await? {
+        crate::reviews::ForgeAccess::Ready { repo, client } => (repo, client),
+        crate::reviews::ForgeAccess::Unavailable(reason) => {
+            return Ok((
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(PrChecksResponse {
+                    schema: "pr-checks/1",
+                    checks: Vec::new(),
+                    truncated: false,
+                    unavailable_reason: Some(reason),
+                }),
+            ))
         }
-        Err(e) => (Vec::new(), false, Some(e.to_string())),
     };
+
+    let (checks, truncated, unavailable_reason) =
+        match github.get_pull(&gh_repo.owner, &gh_repo.name, number).await {
+            Ok(pr) => {
+                match github
+                    .list_checks(&gh_repo.owner, &gh_repo.name, &pr.head_sha)
+                    .await
+                {
+                    Ok(mut list) => {
+                        let truncated = list.len() > crate::github::MAX_CHECKS;
+                        list.truncate(crate::github::MAX_CHECKS);
+                        (list, truncated, None)
+                    }
+                    Err(e) => (Vec::new(), false, Some(e.to_string())),
+                }
+            }
+            Err(e) => (Vec::new(), false, Some(e.to_string())),
+        };
 
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
@@ -6398,18 +6417,25 @@ pub async fn pr_reviews_route(
     Query(params): Query<PrDetailParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (repo, _repo_id) = find_repo(&state, &params.repo)?;
-    let repo_root = repo.path.clone();
-    let gh_repo = tokio::task::spawn_blocking(move || crate::github::github_repo(&repo_root))
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("origin lookup task panicked: {e}"),
-            )
-        })??;
+    // K2 carry — the forge project + credential come from `forge_ctx`
+    // (the store's `forge_slug` + the D12 binding), never a bare ambient read.
+    let (gh_repo, github) = match crate::reviews::forge_access(&state, repo).await? {
+        crate::reviews::ForgeAccess::Ready { repo, client } => (repo, client),
+        crate::reviews::ForgeAccess::Unavailable(reason) => {
+            return Ok((
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(PrReviewsResponse {
+                    schema: "pr-reviews/1",
+                    reviewers: Vec::new(),
+                    requested_reviewers: Vec::new(),
+                    review_decision: None,
+                    unavailable_reason: Some(reason),
+                }),
+            ))
+        }
+    };
 
-    let (reviewers, requested_reviewers, review_decision, unavailable_reason) = match state
-        .github
+    let (reviewers, requested_reviewers, review_decision, unavailable_reason) = match github
         .list_reviews(&gh_repo.owner, &gh_repo.name, number)
         .await
     {
