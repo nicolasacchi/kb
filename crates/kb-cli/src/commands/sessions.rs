@@ -232,34 +232,11 @@ pub(crate) fn render_coverage(body: &serde_json::Value) -> String {
     out
 }
 
-/// Seqs of the OPEN distill asks for `sid` in a raw slate ledger: an `ask`
-/// carrying the ref `session:<sid>` that no `done`/`drop`/`answer` has targeted
-/// (`re`; `answer` also closes an ask). Pure so idempotence is pinned without a daemon.
-pub(crate) fn open_distill_asks(posts: &[serde_json::Value], sid: &str) -> Vec<u64> {
-    let want = format!("session:{sid}");
-    let closed: HashSet<u64> = posts
-        .iter()
-        .filter(|p| matches!(p["kind"].as_str(), Some("done" | "drop" | "answer")))
-        .filter_map(|p| p["re"].as_u64())
-        .collect();
-    posts
-        .iter()
-        .filter(|p| p["kind"].as_str() == Some("ask"))
-        .filter(|p| {
-            p["refs"]
-                .as_array()
-                .is_some_and(|r| r.iter().any(|x| x.as_str() == Some(want.as_str())))
-        })
-        .filter_map(|p| p["seq"].as_u64())
-        .filter(|seq| !closed.contains(seq))
-        .collect()
-}
-
 /// `kb sessions distilled <sid> [--note ..] [--slate ..]` (v0.44 F10, the H1
 /// carry-over) — the idempotent close for a session's slate distill ask.
-/// Finds the open ask whose ref is `session:<sid>` and answers it with
-/// `done`; a second run (or a session with no ask) finds nothing open and
-/// exits 0 without posting. The slate is the one derived from the session's
+/// Asks the daemon to `done` every open ask whose ref is `session:<sid>`; a
+/// second run (or a session with no ask) finds nothing open and exits 0
+/// without posting. The slate is the one derived from the session's
 /// own working directory unless `--slate` names it.
 pub async fn distilled(
     sid: &str,
@@ -310,41 +287,26 @@ pub async fn distilled(
         json,
     };
     let ctx = super::slate::Ctx::resolve(&args)?;
-    // Page the raw ledger (the route caps one response) until exhausted.
-    let mut posts: Vec<serde_json::Value> = Vec::new();
-    let mut since: u64 = 0;
-    for _ in 0..50 {
-        let page: Vec<serde_json::Value> = client
-            .get(format!(
-                "{}/api/slates/{}/posts",
-                ctx.base,
-                http::encode_path_segment(&ctx.slug)
-            ))
-            .query(&[("since", since.to_string())])
-            .send()
-            .await?
-            .error_for_status()
-            .with_context(|| format!("reading slate {}", ctx.slug))?
-            .json()
-            .await?;
-        let last = page.last().and_then(|p| p["seq"].as_u64());
-        let full = page.len() >= 2_000;
-        posts.extend(page);
-        match last {
-            Some(l) if full => since = l,
-            _ => break,
-        }
-    }
-    let open = open_distill_asks(&posts, sid);
-    if open.is_empty() {
+    // The DAEMON decides which asks are open, inside its per-slate lock
+    // (`POST /api/slates/{slug}/asks/close`): a client-side read-then-post
+    // raced — two concurrent runs both saw the ask open and one failed
+    // `already-done` (or minted a `done` on top of a late `answer`).
+    let resp = super::slate::close_asks(&ctx, &format!("session:{sid}"), note).await?;
+    let closed = resp["closed"].as_array().cloned().unwrap_or_default();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else if closed.is_empty() {
         println!(
             "no open distill ask for session {sid} on slate {} — nothing to close",
             ctx.slug
         );
-        return Ok(());
-    }
-    for seq in open {
-        super::slate::done(&ctx, seq, note, None).await?;
+    } else {
+        for c in &closed {
+            println!(
+                "closed distill ask #{} (done #{}) on slate {}",
+                c["ask_seq"], c["done_seq"], ctx.slug
+            );
+        }
     }
     Ok(())
 }
@@ -3009,38 +2971,6 @@ mod f10_tests {
         assert_eq!(parse_since("12h", now).unwrap(), now - 12 * 3_600);
         assert_eq!(parse_since("2026-01-02", now).unwrap(), 1_767_312_000);
         assert!(parse_since("last tuesday", now).is_err());
-    }
-
-    /// The close path is idempotent by construction: an ask is open until a
-    /// `done`/`drop` targets it, only the matching session's ref counts, and
-    /// non-ask posts carrying the ref are ignored.
-    #[test]
-    fn open_distill_asks_finds_only_unanswered_asks_for_that_session() {
-        let posts = vec![
-            json!({"seq": 1, "kind": "ask", "refs": ["session:sid-a"]}),
-            json!({"seq": 2, "kind": "ask", "refs": ["session:sid-b"]}),
-            json!({"seq": 3, "kind": "ask", "refs": ["session:sid-a"]}),
-            json!({"seq": 4, "kind": "done", "re": 3, "refs": []}),
-            json!({"seq": 5, "kind": "found", "refs": ["session:sid-a"]}),
-            json!({"seq": 6, "kind": "ask", "refs": ["path:src/x.rs"]}),
-        ];
-        assert_eq!(open_distill_asks(&posts, "sid-a"), vec![1]);
-        assert_eq!(open_distill_asks(&posts, "sid-b"), vec![2]);
-        assert!(open_distill_asks(&posts, "sid-c").is_empty());
-        let mut after = posts.clone();
-        let answered = vec![
-            json!({"seq": 1, "kind": "ask", "refs": ["session:sid-a"]}),
-            json!({"seq": 2, "kind": "answer", "re": 1}),
-        ];
-        assert!(
-            open_distill_asks(&answered, "sid-a").is_empty(),
-            "an answered ask is not re-closed with done"
-        );
-        after.push(json!({"seq": 7, "kind": "done", "re": 1}));
-        assert!(
-            open_distill_asks(&after, "sid-a").is_empty(),
-            "a second run after the close finds nothing to post"
-        );
     }
 
     #[test]

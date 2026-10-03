@@ -1817,3 +1817,93 @@ async fn turn_route_slate_lane_serves_open_then_delta_with_head_seq() {
         "{missing}"
     );
 }
+
+async fn close_asks(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    slug: &str,
+    reference: &str,
+    session: &str,
+) -> (u16, Value) {
+    let resp = client
+        .post(url(addr, &format!("/api/slates/{slug}/asks/close")))
+        .json(&json!({"ref": reference, "line": "distilled", "prov": prov(Some(session))}))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+fn done_posts(raw: &[Value]) -> Vec<&Value> {
+    raw.iter().filter(|p| p["kind"] == "done").collect()
+}
+
+/// v0.44 F10: two concurrent closers of the same distill ask must produce
+/// exactly ONE `done` and neither may fail — the open set is decided inside
+/// the per-slug lock, not by a client-side read that races.
+#[tokio::test]
+async fn concurrent_ask_closers_post_exactly_one_done_and_none_fails() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    let mut ask = body("ask", "Distill session abc?", Some("asker"));
+    ask["refs"] = json!(["session:abc"]);
+    assert_eq!(post(&client, addr, "orchard", ask).await.0, 201);
+
+    let mut tasks = Vec::new();
+    for who in ["c1", "c2", "c3", "c4"] {
+        tasks.push(tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            close_asks(&client, addr, "orchard", "session:abc", who).await
+        }));
+    }
+    let mut closed = 0;
+    for t in tasks {
+        let (status, v) = t.await.unwrap();
+        assert_eq!(status, 200, "a loser of the race must not error: {v}");
+        closed += v["closed"].as_array().unwrap().len();
+    }
+    assert_eq!(closed, 1, "exactly one closer wins");
+    let raw: Vec<Value> =
+        serde_json::from_value(get_json(&client, addr, "/api/slates/orchard/posts").await).unwrap();
+    assert_eq!(done_posts(&raw).len(), 1, "one done on the ledger: {raw:?}");
+    assert_eq!(done_posts(&raw)[0]["re"], 1);
+}
+
+/// An `answer` closes an ask too: no `done` may be minted on top of it. An
+/// unrelated ask, an unknown slate and an unrelated ref are untouched no-ops.
+#[tokio::test]
+async fn an_answered_ask_is_not_closed_again_and_missing_slates_are_noops() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+    let mut ask = body("ask", "Distill session abc?", Some("asker"));
+    ask["refs"] = json!(["session:abc"]);
+    assert_eq!(post(&client, addr, "orchard", ask).await.0, 201);
+    let mut other = body("ask", "Distill session xyz?", Some("asker"));
+    other["refs"] = json!(["session:xyz"]);
+    assert_eq!(post(&client, addr, "orchard", other).await.0, 201);
+    let mut ans = body("answer", "handled by hand", Some("human-ish"));
+    ans["re"] = json!(1);
+    assert_eq!(post(&client, addr, "orchard", ans).await.0, 201);
+
+    let (status, v) = close_asks(&client, addr, "orchard", "session:abc", "c1").await;
+    assert_eq!(status, 200, "{v}");
+    assert!(v["closed"].as_array().unwrap().is_empty(), "{v}");
+
+    let (status, v) = close_asks(&client, addr, "no-such-slate", "session:abc", "c1").await;
+    assert_eq!(status, 200, "{v}");
+    assert!(v["closed"].as_array().unwrap().is_empty(), "{v}");
+
+    let (status, v) = close_asks(&client, addr, "orchard", "session:xyz", "c1").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["closed"][0]["ask_seq"], 2, "{v}");
+
+    let (status, v) = close_asks(&client, addr, "orchard", "not-a-ref", "c1").await;
+    assert_eq!(status, 400, "{v}");
+
+    let raw: Vec<Value> =
+        serde_json::from_value(get_json(&client, addr, "/api/slates/orchard/posts").await).unwrap();
+    let dones = done_posts(&raw);
+    assert_eq!(dones.len(), 1, "only the xyz ask got a done: {raw:?}");
+    assert_eq!(dones[0]["re"], 2);
+}
