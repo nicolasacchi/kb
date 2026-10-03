@@ -1606,3 +1606,59 @@ fn two_repacks_on_one_store_serialise_on_the_maint_lock() {
         assert_eq!(report.tasks_run, vec!["weekly"], "{report:?}");
     });
 }
+
+/// A5.f8 — `store restore --bundle`: a refs/kbc/* head the store lost is
+/// recreated from a bundle, an existing ref at another value is reported
+/// and NEVER overwritten (non-forced fetch), a second restore is a no-op,
+/// and a restore that wrote refs flags the restore guard.
+#[test]
+fn restore_bundle_recreates_lost_refs_never_overwrites_and_flags_the_guard() {
+    let e = env();
+    let r1 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let r2 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    let dir = Path::new(&row.git_dir);
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("out.bundle");
+    assert_eq!(
+        write_bundle(e.rs.git().unwrap(), dir, &dest).unwrap(),
+        BundleOutcome::Written
+    );
+    let (ref1, ref2) = (seed::patchset_ref(r1, 1), seed::patchset_ref(r2, 1));
+    // Damage: ref1 is lost; ref2 now points at an unrelated commit.
+    git(dir, &["update-ref", "-d", &ref1]);
+    let stranger = git(
+        dir,
+        &[
+            "commit-tree",
+            &format!("{}^{{tree}}", e.fx.feat_tip),
+            "-m",
+            "unrelated",
+        ],
+    );
+    git(dir, &["update-ref", &ref2, &stranger]);
+    let guard_path = &e.rs.settings().restore_guard_path;
+    assert!(!restore_guard::read(guard_path).flagged);
+
+    let rep = restore_bundle(&e.rs, &row, &dest, 500).unwrap();
+    assert_eq!(rep.heads, 2, "{rep:?}");
+    assert_eq!(rep.created, vec![ref1.clone()], "{rep:?}");
+    assert_eq!(rep.rejected, vec![ref2.clone()], "{rep:?}");
+    assert_eq!(git(dir, &["rev-parse", &ref1]), e.fx.feat_tip);
+    assert_eq!(
+        git(dir, &["rev-parse", &ref2]),
+        stranger,
+        "an existing ref at another value is never overwritten"
+    );
+    assert!(rep.guard_flagged);
+    assert!(restore_guard::read(guard_path).flagged);
+
+    // Idempotent: ref1 is now at the bundle's value.
+    let again = restore_bundle(&e.rs, &row, &dest, 600).unwrap();
+    assert!(again.created.is_empty(), "{again:?}");
+    assert_eq!(again.unchanged, vec![ref1], "{again:?}");
+    assert!(!again.guard_flagged);
+
+    // A relative or missing path is refused before git runs.
+    assert!(restore_bundle(&e.rs, &row, Path::new("nope.bundle"), 1).is_err());
+}
