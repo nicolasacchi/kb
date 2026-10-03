@@ -360,7 +360,7 @@ async fn the_queue_lists_unanswered_human_questions_and_disputes_until_the_agent
             "schema": "kbc-findings/1",
             "findings": [{
                 "slug": "f-one", "severity": "concern", "category": "style",
-                "location": {"path": "lib.txt", "kind": "whole_file"},
+                "location": {"path": "lib.txt", "kind": "single", "lines": [2]},
                 "title": "t", "rationale": "r",
             }],
         }))

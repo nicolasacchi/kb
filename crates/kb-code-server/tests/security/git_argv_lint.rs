@@ -153,6 +153,12 @@ const GIT_SPAWNING_FILES: &[&str] = &[
     // shas. The lint is not cfg-aware, so the file is listed like
     // `git/tests.rs` is.
     "review_finding_touches.rs",
+    // v0.44 F9 — `review_since.rs` spawns git ONLY inside its
+    // `#[cfg(test)]` fixture helper (`git -C <tmpdir> init/commit/rebase`,
+    // no caller-supplied ref or pathspec); production reads go through
+    // `diff::diff_range_u0` with two daemon-minted patchset shas that
+    // `patchset_hunks` checks are 40-hex first, and no pathspec at all.
+    "review_since.rs",
     // RS-U2 — the internal review store's hardened spawner: the ONLY git
     // spawn in this crate that may carry a credential. `env_clear()` +
     // allowlist, `-c` hardening, process-group timeouts, redacted stderr,
