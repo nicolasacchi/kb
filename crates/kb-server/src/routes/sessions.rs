@@ -3897,13 +3897,41 @@ pub(crate) async fn recollect_compose(
     // Embed the query once per distinct embedder model (mirrors recall).
     let mut vec_by_model: std::collections::HashMap<&'static str, Vec<f32>> =
         std::collections::HashMap::new();
+    // A3-5 — models whose query embed failed or missed `deadline_ms`; their
+    // corpora fall back to BM25 and are named (lane `recollect.vector`).
+    let mut embed_failures: std::collections::HashMap<
+        &'static str,
+        crate::routes::context::QueryErrorClass,
+    > = std::collections::HashMap::new();
     for (_, ctx) in state.kbs.iter() {
         if let Some(emb) = &ctx.embedder {
             let model = crate::embed_cache::embedder_model_name(emb);
+            if embed_failures.contains_key(model) {
+                continue;
+            }
             if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
-                if let Ok(out) = crate::embed_cache::embed_query(&state.embed_cache, emb, &q).await
+                match crate::routes::context::within_deadline(
+                    deadline,
+                    crate::embed_cache::embed_query(&state.embed_cache, emb, &q),
+                )
+                .await
                 {
-                    slot.insert(out.vec);
+                    Ok(Ok(out)) => {
+                        slot.insert(out.vec);
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(model, error = %e, "recollect: query embed failed; falling back to keyword");
+                        embed_failures
+                            .insert(model, crate::routes::context::QueryErrorClass::Embed);
+                    }
+                    Err(()) => {
+                        tracing::warn!(
+                            model,
+                            "recollect: query embed missed deadline_ms; falling back to keyword"
+                        );
+                        embed_failures
+                            .insert(model, crate::routes::context::QueryErrorClass::Timeout);
+                    }
                 }
             }
         }
@@ -3921,6 +3949,7 @@ pub(crate) async fn recollect_compose(
     }
     let q_ref = &q;
     let vbm = &vec_by_model;
+    let efm = &embed_failures;
     let mut futs: Vec<
         super::CorpusFut<'_, (Vec<Hit>, Option<crate::routes::context::DegradedLane>)>,
     > = Vec::new();
@@ -3951,6 +3980,20 @@ pub(crate) async fn recollect_compose(
                     let m = crate::embed_cache::embedder_model_name(emb);
                     vbm.get(m).cloned()
                 });
+                let embed_miss: Option<crate::routes::context::DegradedLane> =
+                    match (&ctx.embedder, &model_vec) {
+                        (Some(emb), None) => {
+                            let m = crate::embed_cache::embedder_model_name(emb);
+                            Some(crate::routes::context::degraded_of(
+                                kb_name.as_str(),
+                                "recollect.vector",
+                                efm.get(m)
+                                    .copied()
+                                    .unwrap_or(crate::routes::context::QueryErrorClass::Embed),
+                            ))
+                        }
+                        _ => None,
+                    };
                 let rows = match model_vec {
                     Some(v) => {
                         ctx.storage
@@ -3992,7 +4035,7 @@ pub(crate) async fn recollect_compose(
                     .map(|(rank, d)| (rank, d.id, d.summary))
                     .collect();
                 if cands.is_empty() {
-                    return (Vec::new(), None);
+                    return (Vec::new(), embed_miss);
                 }
                 let artifact_ids: Vec<String> = cands.iter().map(|(_, id, _)| id.clone()).collect();
                 let session_rows = match ctx.storage.sessions_get_by_artifact_ids(artifact_ids).await
@@ -4026,7 +4069,7 @@ pub(crate) async fn recollect_compose(
                         })
                     })
                     .collect::<Vec<_>>();
-                (hits, None)
+                (hits, embed_miss)
             };
             match crate::routes::context::within_deadline(deadline, work).await {
                 Ok(v) => v,

@@ -972,6 +972,11 @@ async fn matching_artifacts(
     // one's vector to the other's index returns garbage).
     let mut vec_by_model: std::collections::HashMap<&'static str, Vec<f32>> =
         std::collections::HashMap::new();
+    // A3-5 — a model whose query embed failed or missed `deadline_ms`. Every
+    // corpus on it falls back to BM25 and is named in `degraded[]` (lane
+    // `artifacts.vector`) instead of silently reading as a hybrid match.
+    let mut embed_failures: std::collections::HashMap<&'static str, QueryErrorClass> =
+        std::collections::HashMap::new();
     for (_, ctx) in state.kbs.iter() {
         if ctx.memory_scope.is_some() {
             continue;
@@ -980,15 +985,34 @@ async fn matching_artifacts(
             // Name is cached beside the mutex. A cold slot may lock briefly
             // inside the helper; that guard drops before the await below (#15).
             let model = crate::embed_cache::embedder_model_name(emb);
+            if embed_failures.contains_key(model) {
+                continue;
+            }
             if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
-                if let Ok(out) = crate::embed_cache::embed_query(&state.embed_cache, emb, q).await {
-                    slot.insert(out.vec);
+                match within_deadline(
+                    deadline,
+                    crate::embed_cache::embed_query(&state.embed_cache, emb, q),
+                )
+                .await
+                {
+                    Ok(Ok(out)) => {
+                        slot.insert(out.vec);
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(model, error = %e, "context: query embed failed; artifact match falls back to keyword");
+                        embed_failures.insert(model, QueryErrorClass::Embed);
+                    }
+                    Err(()) => {
+                        tracing::warn!(model, "context: query embed missed deadline_ms; artifact match falls back to keyword");
+                        embed_failures.insert(model, QueryErrorClass::Timeout);
+                    }
                 }
             }
         }
     }
 
     let vbm = &vec_by_model;
+    let efm = &embed_failures;
     type ContextLane = (Vec<(String, String)>, Option<DegradedLane>);
     let mut futs: Vec<super::CorpusFut<'_, ContextLane>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
@@ -1012,6 +1036,18 @@ async fn matching_artifacts(
                     let m = crate::embed_cache::embedder_model_name(emb);
                     vbm.get(m).cloned()
                 });
+                // The corpus HAS an embedder but no vector: name why.
+                let embed_miss: Option<DegradedLane> = match (&ctx.embedder, &model_vec) {
+                    (Some(emb), None) => {
+                        let m = crate::embed_cache::embedder_model_name(emb);
+                        Some(degraded_of(
+                            kb_name.as_str(),
+                            "artifacts.vector",
+                            efm.get(m).copied().unwrap_or(QueryErrorClass::Embed),
+                        ))
+                    }
+                    _ => None,
+                };
                 let rows = match model_vec {
                     Some(v) => {
                         ctx.storage
@@ -1046,7 +1082,7 @@ async fn matching_artifacts(
                     .take(ARTIFACT_MATCH_CAP)
                     .map(|d| (kb_name.as_str().to_string(), d.id))
                     .collect::<Vec<_>>();
-                (hits, None)
+                (hits, embed_miss)
             };
             match within_deadline(deadline, work).await {
                 Ok(v) => v,
