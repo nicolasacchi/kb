@@ -59,6 +59,18 @@ async fn get_json(addr: std::net::SocketAddr, path: &str) -> serde_json::Value {
         .unwrap()
 }
 
+/// kbs named by any degraded entry.
+fn degraded_kbs(body: &serde_json::Value) -> Vec<String> {
+    body["degraded"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d["kb"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn has_lane(body: &serde_json::Value, lane: &str, class: &str) -> bool {
     body["degraded"].as_array().is_some_and(|a| {
         a.iter()
@@ -116,16 +128,26 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
     )
     .unwrap();
 
+    // A keyword-only corpus (no embedding_model): answering from BM25 is its
+    // configuration, not a degradation, so it must never be named.
+    let kw = tmp.path().join("kw");
+    std::fs::create_dir_all(&kw).unwrap();
+    std::fs::write(
+        kw.join("kw.html"),
+        memory_html("Heron Log", "the heron stands on one leg by the river"),
+    )
+    .unwrap();
+
     let daemon_name = format!(
         "embdeg-{}",
         tmp.path().file_name().unwrap().to_string_lossy()
     );
     let mut kb_map: BTreeMap<KbName, KbSection> = BTreeMap::new();
-    let section = |path: std::path::PathBuf, memory_scope: Option<&str>| KbSection {
+    let section = |path: std::path::PathBuf, memory_scope: Option<&str>, embeds: bool| KbSection {
         path,
         skip_patterns: Vec::new(),
         ui: UiSection::default(),
-        embedding_model: Some("bge-small-en-v1.5".into()),
+        embedding_model: embeds.then(|| "bge-small-en-v1.5".to_string()),
         reranker_model: None,
         chunked_embeddings: false,
         graph_boost: None,
@@ -147,8 +169,15 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
         slo: None,
         id_patterns: Vec::new(),
     };
-    kb_map.insert(KbName::new("mem").unwrap(), section(mem, Some("global")));
-    kb_map.insert(KbName::new("docs").unwrap(), section(docs, None));
+    kb_map.insert(
+        KbName::new("mem").unwrap(),
+        section(mem, Some("global"), true),
+    );
+    kb_map.insert(KbName::new("docs").unwrap(), section(docs, None, true));
+    kb_map.insert(
+        KbName::new("kw").unwrap(),
+        section(kw, Some("global"), false),
+    );
     let cfg = KbConfig {
         daemon: DaemonSection {
             name: Some(daemon_name.clone()),
@@ -177,6 +206,7 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
         .expect("serve");
     common::wait_docs_listed(addr, "mem", 2).await;
     common::wait_docs_listed(addr, "docs", 1).await;
+    common::wait_docs_listed(addr, "kw", 1).await;
 
     // Control: with a healthy embedder neither route reports a degraded lane.
     let ok_search = get_json(addr, "/api/search?q=zigzag&scope=all&mode=hybrid").await;
@@ -208,6 +238,11 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
         "federated hybrid search with a dead embedder must name the lane in degraded[]: {search}"
     );
 
+    assert!(
+        !degraded_kbs(&search).contains(&"kw".to_string()),
+        "a keyword-only corpus is not a degraded one: {search}"
+    );
+
     let recall = get_json(addr, "/api/memory/recall?q=marmot&scope=all").await;
     assert!(
         recall["hits"].as_array().is_some_and(|h| !h.is_empty()),
@@ -216,6 +251,16 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
     assert!(
         has_lane(&recall, "recall.vector", "embed"),
         "recall with a dead embedder must name the lane in degraded[]: {recall}"
+    );
+    // Wiring of recall_compose's per-corpus fallback flag: the embedding
+    // corpus is named, the keyword-only one is not.
+    assert!(
+        degraded_kbs(&recall).contains(&"mem".to_string()),
+        "the corpus that lost its vector lane must be the one named: {recall}"
+    );
+    assert!(
+        !degraded_kbs(&recall).contains(&"kw".to_string()),
+        "a keyword-only corpus is not a degraded one: {recall}"
     );
 
     // The same dead embedder on the other two vector lanes that used to
