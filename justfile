@@ -71,6 +71,7 @@ ci-selfcheck:
     scripts/ci/run-canaries.sh --check-anchors
     scripts/check-doc-anchors.sh --self-test
     scripts/check-pinned-by.sh --self-test
+    plugins/kb-research/skills/kb-claims/claims.sh --self-test
 
 # rust-toolchain.toml is the single source of the toolchain version. Jobs get
 # it through the composite action .github/actions/setup-rust, which READS the
