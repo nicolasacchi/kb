@@ -91,6 +91,73 @@ fn served_artifact_pred(artifact_col: &str) -> String {
     format!("{artifact_col} LIKE 'served-%'")
 }
 
+/// The READ-time form of the live-serve term (v0.44 H1/I1, M7 reader side).
+///
+/// A live serve (`served-%`) whose injection a LANDED capture row already
+/// records must not count a second time. The write side retires such serve
+/// rows when a capture is replaced (`memory_recalls_replace`), but a serve
+/// appended AFTER that replace (the hook's recall request can land after the
+/// Stop-hook capture of the same turn) is never revisited, and a reader that
+/// ORs both terms counts the injection twice. So every reader selects serve
+/// rows through THIS predicate: a serve is visible unless the session's
+/// NEWEST capture holds a row for the same memory, the same pos (a pre-MR1
+/// capture row without a pos matches on memory alone) within
+/// `SERVE_CAPTURE_SLACK_SECS` — exactly the write-side retire rule, so the
+/// two can never disagree. Only the NEWEST capture covers: a stale
+/// capture's rows are invisible to readers and must not hide a serve.
+///
+/// `outer` is the range variable (or table name) of the `memory_recalls`
+/// row being tested; the inner scan is aliased `cap`/`s9`.
+fn served_uncovered_pred(outer: &str) -> String {
+    format!(
+        "({outer}.artifact_id LIKE 'served-%' AND NOT EXISTS (\
+            SELECT 1 FROM memory_recalls cap \
+            WHERE cap.session_id = {outer}.session_id \
+              AND cap.memory_id = {outer}.memory_id \
+              AND cap.artifact_id NOT LIKE 'served-%' \
+              AND cap.artifact_id = (SELECT s9.artifact_id FROM sessions s9 \
+                                     WHERE s9.session_id = {outer}.session_id \
+                                       AND s9.is_newest = 1 LIMIT 1) \
+              AND (cap.pos IS NULL OR {outer}.pos = cap.pos) \
+              AND (cap.recalled_at IS NULL OR {outer}.recalled_at IS NULL \
+                   OR ABS({outer}.recalled_at - cap.recalled_at) <= {slack})))",
+        slack = SERVE_CAPTURE_SLACK_SECS,
+    )
+}
+
+/// v0.44 H1/I1 (A3.f9) — when the LAST capture of a session is deleted,
+/// drop that session's live-serve rows (`served-%`) with it.
+///
+/// Serve rows are tied to no artifact, so neither the per-artifact cascade
+/// nor the orphan sweep (its predicate excludes them) ever reclaims one; the
+/// only other reaper is the history-window prune, which is off unless a
+/// retention window is configured. With every capture gone the session has
+/// no transcript left for the ledger to describe: the rows would sit in the
+/// table forever and keep feeding the census. A session that STILL has any
+/// capture is untouched, and a re-captured transcript re-derives its own
+/// ledger rows from the `kb-recall` markers it carries. Runs inside the
+/// caller's transaction. Returns the rows deleted.
+fn drop_served_recalls_if_no_capture(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+) -> Result<usize> {
+    let remaining: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+        params![session_id],
+        |r| r.get(0),
+    )?;
+    if remaining > 0 {
+        return Ok(0);
+    }
+    Ok(tx.execute(
+        &format!(
+            "DELETE FROM memory_recalls WHERE session_id = ?1 AND {}",
+            served_artifact_pred("artifact_id")
+        ),
+        params![session_id],
+    )?)
+}
+
 /// PF-R1 (V0040) — re-derive the materialized `is_newest` flag for one
 /// `session_id`'s capture group, inside the CALLER's transaction. Clears any
 /// currently-flagged row for the group, then re-applies the flag to the
@@ -2736,6 +2803,64 @@ impl Db {
         Ok(n == 0)
     }
 
+    // --- doc_embedding_model (v0.44 I1 / A3-7) ----------------------------
+
+    /// The model that produced `artifact_id`'s stored vector, if recorded.
+    pub fn embedding_model_get(&self, artifact_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT model FROM doc_embedding_model WHERE artifact_id = ?1",
+                params![artifact_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    /// Record (`Some`) or clear (`None`) the producer model of an artifact's
+    /// vector. A blank id or model is ignored on set. Idempotent: an
+    /// unchanged value performs no write.
+    pub fn embedding_model_set(&mut self, artifact_id: &str, model: Option<&str>) -> Result<()> {
+        match model.map(str::trim) {
+            Some(m) if !artifact_id.is_empty() && !m.is_empty() => {
+                self.conn.execute(
+                    "INSERT INTO doc_embedding_model (artifact_id, model) VALUES (?1, ?2)
+                     ON CONFLICT(artifact_id) DO UPDATE SET model = excluded.model
+                     WHERE model != excluded.model",
+                    params![artifact_id, m],
+                )?;
+            }
+            Some(_) => {}
+            None => {
+                self.conn.execute(
+                    "DELETE FROM doc_embedding_model WHERE artifact_id = ?1",
+                    params![artifact_id],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One-shot import of the legacy JSON sidecar. `INSERT OR IGNORE`: a row
+    /// already recorded in sqlite is newer than the sidecar and wins.
+    pub fn embedding_model_import(&mut self, rows: &[(String, String)]) -> Result<usize> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut n = 0usize;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO doc_embedding_model (artifact_id, model) VALUES (?1, ?2)",
+            )?;
+            for (id, model) in rows {
+                n += stmt.execute(params![id, model])?;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
     // --- v0.34 X1 — identity backfill + per-user list overrides ----------
 
     /// Idempotent, config-aware startup pass (V0034). Migrations cannot
@@ -3988,6 +4113,7 @@ impl Db {
         )?;
         if let Some(sid) = session_id {
             recompute_is_newest(&tx, &sid)?;
+            drop_served_recalls_if_no_capture(&tx, &sid)?;
         }
         tx.commit()?;
         Ok(n)
@@ -4657,7 +4783,7 @@ impl Db {
              WHERE ({} OR (session_id = ?1 AND {}))
              ORDER BY (recalled_at IS NULL) ASC, recalled_at ASC, rowid ASC",
             newest_capture_pred("artifact_id", "?1"),
-            served_artifact_pred("artifact_id"),
+            served_uncovered_pred("memory_recalls"),
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt
@@ -4734,7 +4860,7 @@ impl Db {
             // failing unit test before this fix (a two-different-sessions
             // scenario collapsed to a single row).
             newest_capture_pred("artifact_id", "memory_recalls.session_id"),
-            served_artifact_pred("artifact_id"),
+            served_uncovered_pred("memory_recalls"),
             if memory_kb.is_some() {
                 " AND memory_kb = ?"
             } else {
@@ -4805,7 +4931,7 @@ impl Db {
                AND ({} OR {}){}
              GROUP BY memory_id, wk",
             newest_capture_pred("artifact_id", "memory_recalls.session_id"),
-            served_artifact_pred("artifact_id"),
+            served_uncovered_pred("memory_recalls"),
             if memory_kb.is_some() {
                 " AND memory_kb = ?"
             } else {
@@ -4870,6 +4996,7 @@ impl Db {
         limit: u32,
     ) -> Result<Vec<MemoryRecalledByRow>> {
         let served = served_artifact_pred("mr.artifact_id");
+        let uncovered = served_uncovered_pred("mr");
         let sql = format!(
             "SELECT mr.session_id, mr.turn_id, mr.recalled_at, s.title, s.first_user_prompt,
                     COALESCE(s.started_at, mr.recalled_at, 0), mr.used, mr.pos
@@ -4882,11 +5009,12 @@ impl Db {
                  ) ELSE mr.artifact_id END
              )
              WHERE mr.memory_kb = ?1 AND mr.memory_id = ?2
-               AND ({} OR {served})
+               AND ({} OR {uncovered})
              ORDER BY (mr.recalled_at IS NULL) ASC, mr.recalled_at DESC, mr.rowid ASC
              LIMIT ?3",
             newest_capture_pred("mr.artifact_id", "mr.session_id"),
             served = served,
+            uncovered = uncovered,
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt
@@ -6113,6 +6241,9 @@ impl Db {
             "memory_links_seeded",
             "doc_first_seen",
             "code_refs_docs",
+            // v0.44 I1 — relocate preserves the vector, so it must keep the
+            // record of which model produced it.
+            "doc_embedding_model",
         ] {
             // memory_links + code_refs have composite PKs — handled below.
             tx.execute(
@@ -6360,6 +6491,7 @@ impl Db {
                         out.sessions_removed = n;
                         if let Some(sid) = sessions_group {
                             recompute_is_newest(&tx, &sid)?;
+                            out.total_rows += drop_served_recalls_if_no_capture(&tx, &sid)?;
                         }
                     }
                     out.total_rows += n;
@@ -6508,6 +6640,12 @@ const CASCADE_STEPS: &[CascadeStep] = &[
         shape: DeleteShape::ByArtifactId,
         keep_user_data_prunes: true,
     },
+    // v0.44 I1 — producer model of the stored vector; derived at index time.
+    CascadeStep {
+        table: "doc_embedding_model",
+        shape: DeleteShape::ByArtifactId,
+        keep_user_data_prunes: true,
+    },
     CascadeStep {
         table: "pinned_memories",
         shape: DeleteShape::ByArtifactId,
@@ -6643,6 +6781,8 @@ const SWEEP_TABLES: &[(&str, &str, Option<&str>)] = &[
     ("pinned_memories", "artifact_id", None),
     ("reading_sections", "artifact_id", None),
     ("history", "artifact_id", None),
+    // v0.44 I1 — derived at index time; an orphan row is a leak.
+    ("doc_embedding_model", "artifact_id", None),
     // DCB W1.A — derived rows; an orphan here is a leak, never a tombstone.
     ("code_refs", "artifact_id", None),
     ("code_refs_docs", "artifact_id", None),
@@ -12175,6 +12315,149 @@ mod tests {
         assert_eq!(after[0].artifact_id, "cap-1");
     }
 
+    /// v0.44 H1/I1 (M7 reader side + lagging-capture race) — an injection that
+    /// is BOTH a live serve and a row of the session's landed capture counts
+    /// ONCE on every reader, even when the serve was appended AFTER the
+    /// capture replace (so the write-side retire in `memory_recalls_replace`
+    /// never saw it). A serve the capture does not cover — other memory, or
+    /// the same memory outside `SERVE_CAPTURE_SLACK_SECS` — still counts.
+    #[test]
+    fn served_row_covered_by_a_landed_capture_is_counted_once_on_every_reader() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        let mut captured = memory_recall_row(
+            "notes",
+            "aaaaaaaaaaaa",
+            "sid-a",
+            "t-1",
+            Some(1_700_000_100),
+            "cap-1",
+        );
+        captured.pos = Some(1);
+        db.memory_recalls_replace("cap-1", &[captured]).unwrap();
+        // The capture has landed; NOW the hook's serve for the same injection
+        // arrives (30 s after the turn ts), plus an unrelated serve.
+        let served = |id: &str, pos: u32, at: i64| ServedRecallRow {
+            memory_kb: "notes".into(),
+            memory_id: id.into(),
+            pos,
+            title: "t".into(),
+            injected_chars: 1,
+            served_at: at,
+        };
+        db.memory_recalls_append(
+            "sid-a",
+            &[
+                served("aaaaaaaaaaaa", 1, 1_700_000_130),
+                served("bbbbbbbbbbbb", 2, 1_700_000_131),
+            ],
+        )
+        .unwrap();
+        let ids = |db: &Db| -> Vec<String> {
+            db.memory_recalls_for_session("sid-a")
+                .unwrap()
+                .into_iter()
+                .map(|r| r.memory_id)
+                .collect()
+        };
+        assert_eq!(
+            ids(&db),
+            vec!["aaaaaaaaaaaa".to_string(), "bbbbbbbbbbbb".to_string()],
+            "the covered serve must not duplicate the capture row; the uncovered one stays"
+        );
+        let counts = |db: &Db, id: &str| -> u32 {
+            db.memory_recalls_counts_for_ids(None, &[id.to_string()])
+                .unwrap()
+                .first()
+                .map_or(0, |c| c.count)
+        };
+        assert_eq!(
+            counts(&db, "aaaaaaaaaaaa"),
+            1,
+            "census counts the injection once"
+        );
+        assert_eq!(counts(&db, "bbbbbbbbbbbb"), 1);
+        let weekly: u32 = db
+            .memory_recalls_weekly_for_ids(None, &["aaaaaaaaaaaa".to_string()], 1_700_000_200)
+            .unwrap()
+            .iter()
+            .map(|w| w.count)
+            .sum();
+        assert_eq!(weekly, 1, "the weekly histogram counts the injection once");
+        assert_eq!(
+            db.memory_recalls_for_memory("notes", "aaaaaaaaaaaa", 10)
+                .unwrap()
+                .len(),
+            1,
+            "recalled-by lists the injection once"
+        );
+
+        // Same memory + pos but far outside the slack: a different injection.
+        db.memory_recalls_append("sid-a", &[served("aaaaaaaaaaaa", 1, 1_700_001_000)])
+            .unwrap();
+        assert_eq!(counts(&db, "aaaaaaaaaaaa"), 2);
+    }
+
+    /// v0.44 H1/I1 (A3.f9) — deleting a session's LAST capture drops its
+    /// live-serve rows (tied to no artifact, so neither the cascade nor the
+    /// sweep reached them); deleting one of several captures keeps them.
+    #[test]
+    fn deleting_the_last_capture_drops_served_rows_but_not_while_another_remains() {
+        use crate::cascade::CascadeMode;
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        db.sessions_upsert(&session_row("cap-2", "sid-a", 1_700_000_500))
+            .unwrap();
+        db.sessions_upsert(&session_row("cap-9", "sid-b", 1_700_000_000))
+            .unwrap();
+        let served = |sid: &str| {
+            let rows = [ServedRecallRow {
+                memory_kb: "notes".into(),
+                memory_id: "cccccccccccc".into(),
+                pos: 1,
+                title: "t".into(),
+                injected_chars: 1,
+                served_at: 1_700_000_900,
+            }];
+            (sid.to_string(), rows)
+        };
+        for sid in ["sid-a", "sid-b"] {
+            let (sid, rows) = served(sid);
+            db.memory_recalls_append(&sid, &rows).unwrap();
+        }
+        let served_left = |db: &Db, sid: &str| -> i64 {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memory_recalls \
+                     WHERE session_id = ?1 AND artifact_id LIKE 'served-%'",
+                    params![sid],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        db.cascade_delete_doc("cap-1", CascadeMode::Full).unwrap();
+        assert_eq!(
+            served_left(&db, "sid-a"),
+            1,
+            "cap-2 still holds the session"
+        );
+        db.cascade_delete_doc("cap-2", CascadeMode::Full).unwrap();
+        assert_eq!(
+            served_left(&db, "sid-a"),
+            0,
+            "last capture gone: serves go too"
+        );
+        assert_eq!(served_left(&db, "sid-b"), 1, "another session is untouched");
+        assert_eq!(db.sessions_delete("cap-9").unwrap(), 1);
+        assert_eq!(
+            served_left(&db, "sid-b"),
+            0,
+            "sessions_delete drops them too"
+        );
+    }
+
     /// CT-C5 — the CT-B2 "recalled by" read surfaces `used` per row and
     /// stays scoped to each row's OWN session's newest capture (a stale
     /// re-capture's rows must not leak in).
@@ -14270,6 +14553,7 @@ mod tests {
                 "edges",
                 "corkboard",
                 "doc_first_seen",
+                "doc_embedding_model",
                 "pinned_memories",
                 "memory_links",
                 "memory_links_seeded",
@@ -14302,6 +14586,7 @@ mod tests {
                 "edges",
                 "corkboard",
                 "doc_first_seen",
+                "doc_embedding_model",
                 "pinned_memories",
                 "memory_links",
                 "memory_links_seeded",
@@ -14325,6 +14610,7 @@ mod tests {
                 "pinned_memories",
                 "reading_sections",
                 "history",
+                "doc_embedding_model",
                 // DCB W1.A — appended, matching SWEEP_TABLES' own order.
                 "code_refs",
                 "code_refs_docs",
@@ -15283,6 +15569,174 @@ mod tests {
                 "invariant #2: `{table}` carries an artifact_id but is in NEITHER \
                  CASCADE_STEPS nor SWEEP_TABLES — a delete would leak it and a \
                  relocate would strand it under a dead id forever",
+            );
+        }
+    }
+
+    /// v0.44 I1 (I3 / A3-11 / A13-6) — the BEHAVIOURAL half of invariant #2.
+    /// `every_artifact_id_keyed_table_is_in_a_lifecycle_registry` can only
+    /// check list membership; `cascade_relocate_doc` is hand-written SQL with
+    /// no list to inspect, and its omission is what stranded `memory_recalls`
+    /// (O3). So: for EVERY (table, column) the live schema keys on an
+    /// artifact id, synthesise one row from `pragma_table_info`, run a
+    /// relocate OLD→NEW and assert the row moved (none left under OLD, one
+    /// under NEW); then run the Full cascade delete on NEW and assert nothing
+    /// survives except the two documented tombstone/frame exemptions and the
+    /// reverse `session_files.target_artifact_id` pointer (a different
+    /// session's row about this doc, owned by that session's lifecycle).
+    /// A future table registered in CASCADE_STEPS but forgotten in the
+    /// relocate tx fails here.
+    #[test]
+    fn every_artifact_id_keyed_table_follows_a_relocate() {
+        use crate::cascade::CascadeMode;
+        use rusqlite::types::Value;
+        const OLD: &str = "oldoldoldold";
+        const NEW: &str = "newnewnewnew";
+        // Columns that are artifact ids for lifecycle purposes.
+        const ID_COLS: &[&str] = &[
+            "artifact_id",
+            "artifact_id_session",
+            "target_artifact_id",
+            "src_artifact",
+            "dst_artifact",
+        ];
+        // Tables the cascade DELETE deliberately leaves alone (same reasons
+        // as the registry test's exemptions) — relocate still rekeys them.
+        const DELETE_EXEMPT: &[&str] = &["list_entries", "atlas_snapshot_points"];
+        // CHECK-constrained enum columns the generic placeholder cannot satisfy.
+        let overrides: &[(&str, &str, &str)] = &[
+            ("history", "kind", "open"),
+            ("session_decisions", "kind", "plan"),
+            ("session_commits", "kind", "commit"),
+            ("session_research", "kind", "web"),
+            ("session_files", "action", "read"),
+        ];
+
+        let probe = db();
+        let pairs: Vec<(String, String)> = {
+            let mut stmt = probe
+                .conn
+                .prepare(
+                    "SELECT m.name, p.name FROM sqlite_master m \
+                     JOIN pragma_table_info(m.name) p \
+                     WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' \
+                     ORDER BY m.name, p.cid",
+                )
+                .unwrap();
+            let all = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            all.into_iter()
+                .filter(|(_, c)| ID_COLS.contains(&c.as_str()))
+                .collect()
+        };
+        assert!(
+            pairs.len() >= 20,
+            "schema probe found only {} artifact-id columns — the probe itself is broken",
+            pairs.len()
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(t, c)| t == "doc_embedding_model" && c == "artifact_id"),
+            "the V0044 table must be visible to the probe"
+        );
+
+        for (table, col) in &pairs {
+            let mut db = db();
+            db.conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+
+            // (name, declared type, notnull, has default)
+            let info: Vec<(String, String, bool, bool)> = {
+                let mut stmt = db
+                    .conn
+                    .prepare(
+                        "SELECT name, type, \"notnull\", dflt_value IS NOT NULL \
+                         FROM pragma_table_info(?1) ORDER BY cid",
+                    )
+                    .unwrap();
+                stmt.query_map(params![table], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)? != 0,
+                        r.get::<_, i64>(3)? != 0,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+            };
+            let mut names: Vec<String> = Vec::new();
+            let mut values: Vec<Value> = Vec::new();
+            for (name, ty, notnull, has_default) in &info {
+                let is_target = name == col;
+                if !is_target && (!*notnull || *has_default) {
+                    continue;
+                }
+                let v = if is_target {
+                    Value::Text(OLD.to_string())
+                } else if let Some((_, _, v)) = overrides
+                    .iter()
+                    .find(|(t, c, _)| *t == table.as_str() && *c == name.as_str())
+                {
+                    Value::Text((*v).to_string())
+                } else {
+                    let up = ty.to_ascii_uppercase();
+                    if up.contains("INT") {
+                        Value::Integer(0)
+                    } else if up.contains("REAL") || up.contains("FLOA") || up.contains("DOUB") {
+                        Value::Real(0.0)
+                    } else if up.contains("BLOB") {
+                        Value::Blob(vec![0])
+                    } else {
+                        Value::Text("x".to_string())
+                    }
+                };
+                names.push(format!("\"{name}\""));
+                values.push(v);
+            }
+            let sql = format!(
+                "INSERT INTO {table} ({}) VALUES ({})",
+                names.join(","),
+                vec!["?"; names.len()].join(",")
+            );
+            db.conn
+                .execute(&sql, rusqlite::params_from_iter(values.iter()))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "could not synthesise a row for {table}.{col}: {e} — add a placeholder \
+                         override for the new constraint"
+                    )
+                });
+            assert_eq!(count_where(&db, table, col, OLD), 1, "{table}.{col} seed");
+
+            let mid = db
+                .moves_insert_intent(OLD, NEW, "old.html", "new.html", 1000)
+                .unwrap();
+            db.cascade_relocate_doc(OLD, NEW, "old.html", "new.html", mid, 2000)
+                .unwrap();
+            assert_eq!(
+                count_where(&db, table, col, OLD),
+                0,
+                "invariant #2: a relocate left `{table}.{col}` rows stranded under the dead id"
+            );
+            assert_eq!(
+                count_where(&db, table, col, NEW),
+                1,
+                "invariant #2: a relocate dropped `{table}.{col}` instead of rekeying it"
+            );
+
+            if *col == "target_artifact_id" || DELETE_EXEMPT.contains(&table.as_str()) {
+                continue;
+            }
+            db.cascade_delete_doc(NEW, CascadeMode::Full).unwrap();
+            assert_eq!(
+                count_where(&db, table, col, NEW),
+                0,
+                "invariant #2: the Full cascade delete left `{table}.{col}` rows behind"
             );
         }
     }

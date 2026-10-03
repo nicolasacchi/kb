@@ -449,9 +449,18 @@ kb index-page --kb NAME [--filter k=v] [--group-by FIELD] [--out PATH]
                                     group by kb-status|kb-category|kb-severity
 
 — Index maintenance & ops —
-kb reindex [--kb NAME] [--daemon URL] [--json]
+kb reindex [--kb NAME] [--daemon URL] [--json] [--re-embed]
                                     force a re-walk + re-emit watch.modify
-                                    for every HTML file (bypasses hash dedup)
+                                    for every HTML file (bypasses hash dedup).
+                                    Stored vectors are REUSED when the file's
+                                    bytes hash and the embedder model/dim
+                                    match: the reuse key is the file hash,
+                                    NOT the embed-input text, so after a
+                                    parser / digest / embed-recipe change a
+                                    plain reindex rebuilds the BM25 columns
+                                    but keeps the old vectors. After such a
+                                    change run with --re-embed (sends
+                                    re_embed=true; costs one embed per doc)
 kb exclude <target> [--kb NAME] [--rm] [--list] [--note TEXT] [--json]
                                     v0.24 X3: per-file index exclusion.
                                     Excluded = dropped from the index but

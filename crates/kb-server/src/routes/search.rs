@@ -1634,19 +1634,49 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     let wants_vector = matches!(params.mode.as_str(), "hybrid" | "semantic");
     let mut vec_by_model: std::collections::HashMap<String, Vec<f32>> =
         std::collections::HashMap::new();
+    // A3-5 — a requested vector embed that FAILED (or missed `deadline_ms`)
+    // for a model. Each corpus on that model falls back to BM25 below and
+    // names the fallback in `degraded[]` instead of returning a silently
+    // shorter, still-"hybrid" 200.
+    let mut embed_failures: std::collections::HashMap<
+        String,
+        crate::routes::context::QueryErrorClass,
+    > = std::collections::HashMap::new();
     if wants_vector {
         for (_, ctx) in state.kbs.iter() {
             if let Some(emb) = &ctx.embedder {
                 // Cached beside the mutex; do not lock just to read the name.
                 // A cold slot's guard drops inside the helper, before the await.
                 let model = crate::embed_cache::embedder_model_name(emb).to_string();
-                if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
-                    if let Ok(out) =
-                        crate::embed_cache::embed_query(&state.embed_cache, emb, &params.q).await
+                if embed_failures.contains_key(&model) {
+                    continue;
+                }
+                if let std::collections::hash_map::Entry::Vacant(slot) =
+                    vec_by_model.entry(model.clone())
+                {
+                    // The embed is bounded by the request's `deadline_ms`
+                    // like every fan-out arm (the IPC timeout alone is 60 s).
+                    match crate::routes::context::within_deadline(
+                        deadline,
+                        crate::embed_cache::embed_query(&state.embed_cache, emb, &params.q),
+                    )
+                    .await
                     {
-                        total_embed_ms += out.embed_ms;
-                        any_cache_hit |= out.cache_hit;
-                        slot.insert(out.vec);
+                        Ok(Ok(out)) => {
+                            total_embed_ms += out.embed_ms;
+                            any_cache_hit |= out.cache_hit;
+                            slot.insert(out.vec);
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(model = %model, error = %e, "federated search: query embed failed; vector arms fall back to keyword");
+                            embed_failures
+                                .insert(model, crate::routes::context::QueryErrorClass::Embed);
+                        }
+                        Err(()) => {
+                            tracing::warn!(model = %model, "federated search: query embed missed deadline_ms; vector arms fall back to keyword");
+                            embed_failures
+                                .insert(model, crate::routes::context::QueryErrorClass::Timeout);
+                        }
                     }
                 }
             }
@@ -1671,6 +1701,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     }
     let filters = &filters;
     let vec_by_model = &vec_by_model;
+    let embed_failures = &embed_failures;
     let mut futs: Vec<ArmFut<'_, HybridArm>> = Vec::new();
     for (name, ctx) in state.kbs.iter() {
         let user = user.clone();
@@ -1698,6 +1729,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                     },
                 );
             }
+            let mut embed_miss: Option<crate::routes::context::QueryErrorClass> = None;
             let query_vec: Option<Vec<f32>> = if wants_vector {
                 if let Some(emb) = &ctx.embedder {
                     // SQ5 — ensure the index the vector arm queries.
@@ -1725,7 +1757,16 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                         );
                     }
                     let model = crate::embed_cache::embedder_model_name(emb).to_string();
-                    vec_by_model.get(&model).cloned()
+                    let v = vec_by_model.get(&model).cloned();
+                    if v.is_none() {
+                        embed_miss = Some(
+                            embed_failures
+                                .get(&model)
+                                .copied()
+                                .unwrap_or(crate::routes::context::QueryErrorClass::Embed),
+                        );
+                    }
+                    v
                 } else {
                     None
                 }
@@ -1890,7 +1931,11 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                     hits: Some(hits),
                     bm25_rank,
                     vec_rank,
-                    degraded: None,
+                    // A3-5 — the hits are real (keyword fallback) but the
+                    // requested vector lane did not run for this corpus.
+                    degraded: embed_miss.map(|class| {
+                        crate::routes::context::degraded_of(name.as_str(), "search.vector", class)
+                    }),
                 },
             )
             };
