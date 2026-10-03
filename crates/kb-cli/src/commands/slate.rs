@@ -1740,6 +1740,41 @@ fn tally(pairs: Vec<String>) -> Vec<(String, usize)> {
     v
 }
 
+/// Turn `harness\0session_id` tally keys into display rows. The label is
+/// `harness/<short>`; when two distinct sessions would share a label the full
+/// id is shown instead, so the rows stay countable per session.
+fn session_rows(rows: Vec<(String, usize)>) -> Vec<(String, usize)> {
+    let parts: Vec<(String, String, usize)> = rows
+        .into_iter()
+        .map(|(k, n)| {
+            let (h, sid) = k.split_once('\0').unwrap_or((k.as_str(), ""));
+            (h.to_string(), sid.to_string(), n)
+        })
+        .collect();
+    let label = |h: &str, sid: &str| {
+        if sid.is_empty() {
+            format!("{h}/(no session)")
+        } else {
+            format!("{h}/{}", short_session(sid))
+        }
+    };
+    let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (h, sid, _) in &parts {
+        *seen.entry(label(h, sid)).or_default() += 1;
+    }
+    parts
+        .into_iter()
+        .map(|(h, sid, n)| {
+            let l = label(&h, &sid);
+            if seen[&l] > 1 {
+                (format!("{h}/{sid}"), n)
+            } else {
+                (l, n)
+            }
+        })
+        .collect()
+}
+
 /// Every number `kb slate stats` reports (§13 "Metrics without a
 /// benchmark"). One struct so `--json` and the human render are the SAME
 /// arithmetic — the human render adds no fact the JSON lacks. Nothing here
@@ -1861,12 +1896,14 @@ pub(crate) fn compute_stats(slug: &str, digest: &Value, posts: &[Value]) -> Slat
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
+        // Keyed by the FULL session id so two sessions whose short tags
+        // collide are never merged; the display tag is derived afterwards.
         let s = match prov
             .and_then(|v| v.get("session_id"))
             .and_then(Value::as_str)
         {
-            Some(sid) => format!("{h}/{}", short_session(sid)),
-            None => format!("{h}/(no session)"),
+            Some(sid) => format!("{h}\u{0}{sid}"),
+            None => format!("{h}\u{0}"),
         };
         (h, s)
     };
@@ -1926,7 +1963,7 @@ pub(crate) fn compute_stats(slug: &str, digest: &Value, posts: &[Value]) -> Slat
             .filter(|p| p.get("abandoned").is_some_and(|a| !a.is_null()))
             .count(),
         by_harness: tally(posts.iter().map(|p| author(p).0).collect()),
-        by_session: tally(posts.iter().map(|p| author(p).1).collect()),
+        by_session: session_rows(tally(posts.iter().map(|p| author(p).1).collect())),
     }
 }
 
@@ -1996,29 +2033,14 @@ pub async fn stats(ctx: &Ctx) -> Result<()> {
 // (SL5) and the operator dispose. Exit status is always 0.
 // ---------------------------------------------------------------------------
 
-/// Prefixes that are a credential by construction, whatever surrounds them.
-const TOKEN_PREFIXES: [&str; 11] = [
-    "ghp_",
-    "gho_",
-    "ghu_",
-    "ghs_",
-    "ghr_",
-    "github_pat_",
-    "sk-",
-    "xoxb-",
-    "xoxp-",
-    "AKIA",
-    "authelia_at_",
-];
-
 /// Words that turn a following opaque run into a credential.
 const SECRET_WORDS: [&str; 6] = ["token", "secret", "password", "passwd", "apikey", "api_key"];
 
 /// Shortest opaque run that counts as token-shaped after a secret word.
 const OPAQUE_MIN: usize = 24;
 
-/// Does this text LOOK like it carries a credential? A lint, deliberately
-/// biased toward false positives: §12's dispatcher bridge secret-scans the
+/// Does this text LOOK like it carries a credential? A lint that predicts
+/// the dispatcher's secret scan without crying wolf on prose: §12's dispatcher bridge secret-scans the
 /// brief the digest is prepended to, and a token-shaped slate line would
 /// abort an offload with exit 2 before any job exists. Naming it here is
 /// cheaper than debugging that. Returns the reason, so the report says WHY.
@@ -2026,10 +2048,10 @@ pub(crate) fn looks_token_shaped(s: &str) -> Option<&'static str> {
     if s.contains("-----BEGIN ") && s.contains("PRIVATE KEY") {
         return Some("a PEM private key block");
     }
-    for p in TOKEN_PREFIXES {
-        if s.contains(p) {
-            return Some("a known credential prefix");
-        }
+    // The precise `secrets` table the dispatcher-side scrub uses: a prefix
+    // alone ("desk-shell", a prose mention of `ghp_`) is not a credential.
+    if kb_core::session_scrub::first_secret_token_kind(s).is_some() {
+        return Some("a known credential token");
     }
     let lower = s.to_ascii_lowercase();
     let bytes = s.as_bytes();
@@ -2595,5 +2617,35 @@ mod tests {
         assert!(looks_token_shaped("ghp_0123456789abcdefghijklmnopqrstuvwx").is_some());
         assert!(looks_token_shaped("KB_TOKEN=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA==").is_some());
         assert!(looks_token_shaped("-----BEGIN OPENSSH PRIVATE KEY-----").is_some());
+    }
+
+    #[test]
+    fn token_lint_does_not_flag_prose_that_merely_contains_a_prefix() {
+        // The four real false positives from the dry run.
+        assert!(looks_token_shaped("the desk-shell wrapper swallows stderr").is_none());
+        assert!(looks_token_shaped("builds are disk-bound on the shared box").is_none());
+        assert!(looks_token_shaped("a bare ghp_ needle is not a credential").is_none());
+        assert!(looks_token_shaped("tools named sk- are listed below").is_none());
+        // And the dispatcher's own patterns still trip it.
+        assert!(looks_token_shaped("sk-0123456789abcdefghijKLMN").is_some());
+        assert!(looks_token_shaped("use ghp_0123456789abcdefghij here").is_some());
+    }
+
+    #[test]
+    fn stats_tallies_uuid_v7_sessions_separately_by_full_id() {
+        let mk = |seq: u64, sid: &str| {
+            json!({"seq": seq, "kind": "found", "line": "x",
+                   "prov": {"harness": "omp", "session_id": sid}})
+        };
+        // Same leading timestamp characters, different random tails.
+        let a = "01a025fd-51eb-7cd3-86f2-95261769cb14";
+        let b = "01a025fd-6a00-7e11-9d0a-0123456789ab";
+        let posts = vec![mk(1, a), mk(2, a), mk(3, b)];
+        let digest = json!({"generation": 1, "head_seq": 3, "sections": {}});
+        let s = compute_stats("kb", &digest, &posts);
+        assert_eq!(
+            s.by_session,
+            vec![("omp/cb14".to_string(), 2), ("omp/89ab".to_string(), 1)]
+        );
     }
 }

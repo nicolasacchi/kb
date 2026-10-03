@@ -140,6 +140,37 @@ fn token_rules() -> &'static [TokenRule] {
     })
 }
 
+/// The kind of the first HIGH-PRECISION credential token in `s`, or `None`.
+/// Built on the same `secrets` table the transcript scrub redacts with, with
+/// two deliberate lint-side differences: the GitHub body floor is 20 (the
+/// dispatcher's own scan floor, so the lint is never LESS sensitive than the
+/// gate it predicts) and `sk-` must start at a word boundary (`desk-`,
+/// `disk-` are prose). Bare prefixes in prose (a mention of `ghp_`) never
+/// match: every rule requires a credential-length body.
+pub fn first_secret_token_kind(s: &str) -> Option<&'static str> {
+    static LINT: OnceLock<[TokenRule; 2]> = OnceLock::new();
+    let lint = LINT.get_or_init(|| {
+        [
+            TokenRule {
+                kind: "github-token",
+                re: Regex::new(r"gh[pousr]_[A-Za-z0-9]{20,}").expect("valid regex"),
+            },
+            TokenRule {
+                kind: "api-key",
+                re: Regex::new(r"(?:^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{20,}").expect("valid regex"),
+            },
+        ]
+    });
+    if let Some(r) = lint.iter().find(|r| r.re.is_match(s)) {
+        return Some(r.kind);
+    }
+    token_rules()
+        .iter()
+        .filter(|r| r.kind != "github-token" && r.kind != "api-key")
+        .find(|r| r.re.is_match(s))
+        .map(|r| r.kind)
+}
+
 fn labeled_rules() -> &'static [GroupRule] {
     static RULES: OnceLock<Vec<GroupRule>> = OnceLock::new();
     RULES.get_or_init(|| {
@@ -277,6 +308,31 @@ fn shannon_entropy(s: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lint_secret_kind_matches_dispatcher_shapes_and_not_prose() {
+        // Golden: the dispatcher scans `sk-[A-Za-z0-9]{20,}` / `ghp_[A-Za-z0-9]{20,}`.
+        assert_eq!(
+            first_secret_token_kind("sk-abcdefghij0123456789"),
+            Some("api-key")
+        );
+        assert_eq!(
+            first_secret_token_kind("ghp_abcdefghij0123456789"),
+            Some("github-token")
+        );
+        assert_eq!(
+            first_secret_token_kind(&format!("{}{}", "AKIA", "ABCDEFGHIJKLMNOP")),
+            Some("aws-access-key-id")
+        );
+        for prose in [
+            "desk-shell",
+            "disk-bound-and-everything-else-too",
+            "ghp_ in prose",
+            "sk-",
+        ] {
+            assert_eq!(first_secret_token_kind(prose), None, "{prose}");
+        }
+    }
 
     fn secrets() -> ScrubOptions {
         ScrubOptions::secrets_only()
