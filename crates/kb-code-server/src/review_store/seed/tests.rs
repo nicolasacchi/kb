@@ -1768,3 +1768,56 @@ fn a_by_sha_attempt_never_outlives_the_pass() {
         crate::review_store::git::WORK_FETCH_TIMEOUT
     );
 }
+
+/// Wave-1 carry — `state_json` keys are read as CURRENT signals when
+/// present, and seed paths MERGE keys, so a pass must overwrite what it owns.
+/// A dropped member recorded by a seed (or an adopt) must not stay in
+/// `member_problems` after a later pass found the member healthy. Fails
+/// against the old sync/adopt writes, which never touched the key.
+#[test]
+fn a_recovered_member_clears_member_problems_in_state_json() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    assert_eq!(
+        member_id(&e.rs.register_repo(&e.store, "widgets-01", None)),
+        id
+    );
+    let away = e.fx.two.with_extension("away");
+    let problems = |e: &Env| -> serde_json::Value {
+        let row = e.store.get_review_store(id).unwrap().unwrap();
+        let sj: serde_json::Value =
+            serde_json::from_str(row.state_json.as_deref().unwrap()).unwrap();
+        sj["member_problems"].clone()
+    };
+    std::fs::rename(&e.fx.two, &away).unwrap();
+    e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(
+        problems(&e).as_array().unwrap().len(),
+        1,
+        "{}",
+        problems(&e)
+    );
+
+    // The member comes back; a SYNC pass must replace the list.
+    std::fs::rename(&away, &e.fx.two).unwrap();
+    let h = e.rs.handle_for_repo(&e.store, "widgets-01").unwrap();
+    let rep = e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(rep.member_problems.is_empty(), "{:?}", rep.member_problems);
+    assert_eq!(
+        problems(&e),
+        serde_json::json!([]),
+        "sync left a stale list"
+    );
+
+    // Same for the adopt branch of a second seed.
+    std::fs::rename(&e.fx.two, &away).unwrap();
+    e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(problems(&e).as_array().unwrap().len(), 1);
+    std::fs::rename(&away, &e.fx.two).unwrap();
+    e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(
+        problems(&e),
+        serde_json::json!([]),
+        "adopt left a stale list"
+    );
+}

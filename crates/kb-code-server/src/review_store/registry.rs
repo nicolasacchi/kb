@@ -1597,7 +1597,13 @@ impl ReviewStores {
                                 ("class", serde_json::Value::Null),
                                 ("detail", serde_json::Value::Null),
                                 ("stage", serde_json::Value::Null),
+                                ("error", serde_json::Value::Null),
                                 ("objects_missing", serde_json::json!(missing)),
+                                // This pass's own answer, so the previous
+                                // seed's list cannot outlive the member
+                                // problem it named (a present key is read
+                                // as a current signal).
+                                ("member_problems", serde_json::json!(problems)),
                             ],
                             Some("ready"),
                         )
@@ -1793,6 +1799,7 @@ impl ReviewStores {
                     ("last_work_fetch", now().into()),
                     ("objects_missing", serde_json::json!(report.objects_missing)),
                     ("member_problems", serde_json::json!(problems)),
+                    ("error", serde_json::Value::Null),
                     ("elapsed_ms", (report.elapsed_ms as u64).into()),
                 ];
                 store
@@ -1988,6 +1995,15 @@ impl ReviewStores {
                 "objects_missing",
                 serde_json::to_value(&missing).unwrap_or_default(),
             ),
+            // This pass's answers REPLACE the seed's: a key that is merely
+            // present is read as a current signal, so a `member_problems`
+            // list from the seed (or a failure's class/detail/stage/error)
+            // must not outlive the condition it described.
+            ("member_problems", serde_json::json!(problems)),
+            ("class", serde_json::Value::Null),
+            ("detail", serde_json::Value::Null),
+            ("stage", serde_json::Value::Null),
+            ("error", serde_json::Value::Null),
         ];
         if matches!(base, BaseFetch::Fetched { .. }) {
             sets.push(("last_base_fetch", now().into()));
