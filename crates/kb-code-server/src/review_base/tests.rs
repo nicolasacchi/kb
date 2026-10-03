@@ -3425,11 +3425,17 @@ async fn forge_answering(status: u16) -> crate::config::GithubSection {
 /// `forge_pr_base_ref` reports the target unread with a named
 /// `forge-base-unread` warning, and a retrack fed that answer classes the
 /// row `unknown` and refuses to apply a guessed default — the review keeps
-/// its policy.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_forge_answering_403_or_404_leaves_the_target_unread_and_retrack_refuses_the_guess() {
+/// its policy. (A plain `#[test]` with its own runtime: the store fixture
+/// blocks, which a runtime worker thread may not.)
+#[test]
+fn a_forge_answering_403_or_404_leaves_the_target_unread_and_retrack_refuses_the_guess() {
     use crate::review_retrack::retrack_sync;
-    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let fx = fixture();
     fx.push_pr(&fx.m1, &["p1.rs"], "v1");
     let review = fx.pr_review(&fx.m1.clone(), None);
     let id = review.id;
@@ -3441,29 +3447,31 @@ async fn a_forge_answering_403_or_404_leaves_the_target_unread_and_retrack_refus
     let gh_dir = tempfile::tempdir().unwrap();
 
     for status in [403u16, 404] {
-        let github = forge_answering(status).await;
-        let state = unregistered_state_with(&fx, github).await;
-        let st = state.clone();
-        let row = tokio::task::spawn_blocking(move || {
-            st.review_stores.register_repo(
-                &st.store,
+        let (base, warnings) = rt.block_on(async {
+            let github = forge_answering(status).await;
+            let state = unregistered_state_with(&fx, github).await;
+            let st = state.clone();
+            let row = tokio::task::spawn_blocking(move || {
+                st.review_stores.register_repo(
+                    &st.store,
+                    REPO,
+                    Some("https://github.com/acme/widgets.git"),
+                );
+                st.store.store_for_repo_name(REPO).unwrap().unwrap()
+            })
+            .await
+            .unwrap();
+            let handle = store_handle_of(&row);
+            crate::reviews::forge_pr_base_ref(
+                &state,
+                &handle,
                 REPO,
-                Some("https://github.com/acme/widgets.git"),
-            );
-            st.store.store_for_repo_name(REPO).unwrap().unwrap()
-        })
-        .await
-        .unwrap();
-        let handle = store_handle_of(&row);
-        let (base, warnings) = crate::reviews::forge_pr_base_ref(
-            &state,
-            &handle,
-            REPO,
-            PR,
-            state.github.for_test().with_cli_token(None),
-            fake_gh(gh_dir.path(), "alice"),
-        )
-        .await;
+                PR,
+                state.github.for_test().with_cli_token(None),
+                fake_gh(gh_dir.path(), "alice"),
+            )
+            .await
+        });
         assert_eq!(base, None, "{status}: nothing readable");
         assert!(
             warnings
