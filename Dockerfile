@@ -197,7 +197,7 @@ RUN /tmp/kb model download bge-large-en-v1.5
 # Builds the React SPA (web/) into web/dist as static assets, copied into the
 # runtime image below. Node's glibc is irrelevant here — only static files
 # cross into runtime, never a binary, so a slim Node base is fine.
-FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS spa
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS spa
 WORKDIR /web
 # Lockfile-first so `npm ci`'s layer is cached until deps actually change.
 COPY web/package.json web/package-lock.json ./
@@ -255,7 +255,7 @@ RUN --mount=type=cache,id=kb-cargo-registry,target=/usr/local/cargo/registry,sha
     && strip target/release/kb-code-server \
     && cp target/release/kb-code-server /tmp/kb-code-server
 
-FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS kb-code-spa
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS kb-code-spa
 WORKDIR /web-code
 COPY web-code/package.json web-code/package-lock.json ./
 RUN npm ci
