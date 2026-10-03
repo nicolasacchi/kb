@@ -74,52 +74,121 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The source with `//` line comments and `/* */` blocks removed (comment
-/// markers inside a string literal are text). A mention of `impl Posture for
-/// X` or `assert_default_is_restrictive::<X>()` in a comment or a string must
-/// not satisfy the inventory, so the item checks below run on this.
+/// The source with comments removed and every string literal's CONTENTS
+/// blanked (newlines are kept so line structure survives). A mention of
+/// `impl Posture for X` or `assert_default_is_restrictive::<X>()` in a
+/// comment or a string must not satisfy the inventory, so the item checks
+/// below run on this.
+///
+/// Whole-text scan (not per line), so it handles: `//` comments, NESTED
+/// `/* */` blocks, ordinary strings that span lines (a trailing `\` or a bare
+/// newline inside the literal), raw strings `r"..."` / `r#"..."#` /
+/// `br##"..."##` with any number of hashes, and char literals such as `'"'`
+/// whose quote must not open a string (a lifetime like `'a` is not one).
 fn code_only(text: &str) -> String {
+    let b: Vec<char> = text.chars().collect();
     let mut out = String::new();
-    let mut in_block = false;
-    for line in text.lines() {
-        let b: Vec<char> = line.chars().collect();
-        let (mut i, mut in_str) = (0, false);
-        let mut kept = String::new();
-        while i < b.len() {
-            let two: String = b[i..(i + 2).min(b.len())].iter().collect();
-            if in_block {
-                if two == "*/" {
-                    in_block = false;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        let next = b.get(i + 1).copied();
+        // line comment
+        if c == '/' && next == Some('/') {
+            while i < b.len() && b[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // (nested) block comment
+        if c == '/' && next == Some('*') {
+            let mut depth = 1;
+            i += 2;
+            while i < b.len() && depth > 0 {
+                if b[i] == '/' && b.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if b[i] == '*' && b.get(i + 1) == Some(&'/') {
+                    depth -= 1;
                     i += 2;
                 } else {
+                    if b[i] == '\n' {
+                        out.push('\n');
+                    }
                     i += 1;
                 }
-            } else if in_str {
-                // A string's contents are blanked: they can never be an item.
+            }
+            continue;
+        }
+        // raw string: optional `b`, `r`, N hashes, `"` ... `"` N hashes. The
+        // prefix must not be the tail of an identifier (`our"` is not raw).
+        let prev_ident = i > 0 && (b[i - 1].is_alphanumeric() || b[i - 1] == '_');
+        if !prev_ident && (c == 'r' || (c == 'b' && next == Some('r'))) {
+            let mut j = i + if c == 'b' { 2 } else { 1 };
+            let mut hashes = 0;
+            while b.get(j) == Some(&'#') {
+                hashes += 1;
+                j += 1;
+            }
+            if b.get(j) == Some(&'"') {
+                out.extend(&b[i..=j]);
+                j += 1;
+                loop {
+                    if j >= b.len() {
+                        break;
+                    }
+                    if b[j] == '"' && (0..hashes).all(|k| b.get(j + 1 + k) == Some(&'#')) {
+                        out.push('"');
+                        j += 1 + hashes;
+                        break;
+                    }
+                    if b[j] == '\n' {
+                        out.push('\n');
+                    }
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+        // ordinary string (also `b"..."`: the `b` was already pushed)
+        if c == '"' {
+            out.push('"');
+            i += 1;
+            while i < b.len() && b[i] != '"' {
                 if b[i] == '\\' {
+                    if b.get(i + 1) == Some(&'\n') {
+                        out.push('\n');
+                    }
                     i += 2;
                     continue;
                 }
-                if b[i] == '"' {
-                    in_str = false;
-                    kept.push('"');
+                if b[i] == '\n' {
+                    out.push('\n');
                 }
-                i += 1;
-            } else if two == "//" {
-                break;
-            } else if two == "/*" {
-                in_block = true;
-                i += 2;
-            } else {
-                if b[i] == '"' {
-                    in_str = true;
-                }
-                kept.push(b[i]);
                 i += 1;
             }
+            out.push('"');
+            i += 1;
+            continue;
         }
-        out.push_str(&kept);
-        out.push('\n');
+        // char literal: `'x'`, `'\n'`, `'\u{..}'`, `'"'`. A lifetime has no
+        // closing quote right after one char / escape, so it falls through.
+        if c == '\'' {
+            let close = if next == Some('\\') {
+                (i + 2..(i + 12).min(b.len())).find(|&k| b[k] == '\'')
+            } else if b.get(i + 2) == Some(&'\'') {
+                Some(i + 2)
+            } else {
+                None
+            };
+            if let Some(k) = close {
+                out.push_str("''");
+                i = k + 1;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
     }
     out
 }
@@ -253,6 +322,29 @@ fn posture_entries_implement_the_trait_and_pin_their_default() {
             Reviewed(why) => assert!(!why.trim().is_empty(), "`{name}`: empty review reason"),
         }
     }
+}
+
+/// Literals that span lines, raw strings and char literals holding a quote
+/// must be blanked too: a fixture string inside a test that contains
+/// `impl Posture for X` is data, not an item.
+#[test]
+fn item_checks_ignore_multiline_and_raw_strings() {
+    let fake = "let a = \"first line\n\\\nimpl Posture for Ghost {\n\";\n\
+                let b = r#\"\nimpl Posture for Ghost2 {\nassert_default_is_restrictive::<Ghost2>()\n\"#;\n\
+                let c = br##\"\nimpl Posture for Ghost3 {\n\"#\nimpl Posture for Ghost4 {\n\"##;\n\
+                let q = '\"'; let l: &'static str = \"impl Posture for Ghost5 {\";\n\
+                /* outer /* nested */ impl Posture for Ghost6 { */\n";
+    let code = code_only(fake);
+    for g in ["Ghost", "Ghost2", "Ghost3", "Ghost4", "Ghost5", "Ghost6"] {
+        assert!(
+            !implements_posture(&code, g),
+            "{g} counted as code:\n{code}"
+        );
+    }
+    assert!(!pins_default(&code, "Ghost2"), "{code}");
+    // Real code after those literals is still seen.
+    let real = format!("{fake}impl Posture for Real {{\n}}\n");
+    assert!(implements_posture(&code_only(&real), "Real"));
 }
 
 /// The item checks parse code: a comment or string that merely MENTIONS the

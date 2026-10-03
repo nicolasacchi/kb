@@ -99,6 +99,13 @@ fn hooks_export_session_identity_for_shell_writes() {
     run("test-hook-identity.sh");
 }
 
+/// v0.44 X10 - every per-session hook file name comes from ONE collision-free
+/// helper (`hook_sid_key`), never the lossy `tr | cut -c1-80` form.
+#[test]
+fn per_session_hook_names_never_collide() {
+    run("test-sid-key.sh");
+}
+
 /// v0.44 X6 - a failing `kb sessions capture` spools the RAW transcript
 /// privately (never into the corpus); the next successful capture or
 /// `--replay-spool` lands it scrubbed. Needs the REAL `kb` binary.

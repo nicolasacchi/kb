@@ -184,6 +184,18 @@ hook_spool_key() {
   printf '%s-%s' "${safe:-session}" "$h"
 }
 
+# hook_sid_key <raw-session-id>
+# THE per-session file-name key for every hook marker, throttle file and
+# adapter capture name. Identical to the spool key: a plain id (every UUID)
+# is unchanged, any other id carries a hash of the FULL raw id, so the lossy
+# `tr -c ... | cut -c1-80` form (which maps "a_b" and "a-b", or two ids that
+# share an 80-char prefix, to ONE name) is no longer used for per-session state.
+hook_sid_key() { hook_spool_key "$1"; }
+
+# hook_sid_key_lossy <raw-session-id>
+# The pre-v0.44 lossy key. Kept ONLY so a cleanup can recognise legacy files.
+hook_sid_key_lossy() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+
 # hook_spool_put <transcript> <raw-session-id> [cwd]
 # Dir 0700, files 0600, one item per session (latest snapshot wins, as the
 # corpus file does). Refuses a transcript over the 48MiB capture cap. Returns
@@ -215,10 +227,19 @@ hook_spool_put() {
 # successful capture of the session: the spooled snapshot is older than what
 # just landed, and replaying it would overwrite the newer corpus file.
 hook_spool_drop() {
-  local dir key
+  local dir key legacy
   dir="$(hook_spool_dir)" || return 0
   key="$(hook_spool_key "$1")"
   rm -f "$dir/$key.jsonl" "$dir/$key.meta"
+  # A spool item written before the hashed key existed sits under the lossy
+  # name. For a non-plain id that name differs from `key`; drop it too, but
+  # ONLY when its .meta records exactly this raw id (a colliding id's item
+  # must survive).
+  legacy="$(hook_sid_key_lossy "$1")"
+  if [ "$legacy" != "$key" ] && [ -f "$dir/$legacy.meta" ] \
+    && grep -qxF "session_id=$1" "$dir/$legacy.meta" 2>/dev/null; then
+    rm -f "$dir/$legacy.jsonl" "$dir/$legacy.meta"
+  fi
 }
 
 # True when the spool holds at least one item.

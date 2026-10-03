@@ -11476,6 +11476,50 @@ async fn memory_ingest_client_ref_owner_probe_ignores_unrelated_file_names() {
     assert_eq!(r.status(), 201, "an unrelated file must not own the key");
 }
 
+/// v044-X10 - a keyed file records its key in a `kb-client-ref` meta, and the
+/// owner probe trusts it: a memory keyed `zzzz-<ref>` has a filename that ends
+/// in `-<ref>.html` but belongs to a DIFFERENT key, so `<ref>` stays free
+/// (the filename-shape check alone called that a conflict). The same key with
+/// another title is still refused.
+#[tokio::test]
+async fn memory_ingest_client_ref_marker_decides_ownership() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    let post = |title: &'static str, client_ref: &'static str| {
+        reqwest::Client::new()
+            .post(url(addr, "/api/kb/globalmem/artifacts"))
+            .json(&serde_json::json!({
+                "title": title,
+                "body": "marker body",
+                "category": "memory-project",
+                "client_ref": client_ref,
+            }))
+            .send()
+    };
+    let longer = post("Marker Owner Ox", "zzzz-aaaabbbbccccdddd")
+        .await
+        .unwrap();
+    assert_eq!(longer.status(), 201);
+    let written: Vec<String> = walkdir_html(tmp.path())
+        .into_iter()
+        .filter(|f| f.contains("zzzz-aaaabbbbccccdddd"))
+        .collect();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let html = std::fs::read_to_string(tmp.path().join("globalmem").join(&written[0])).unwrap();
+    assert!(
+        html.contains("<meta name=\"kb-client-ref\" content=\"zzzz-aaaabbbbccccdddd\">"),
+        "the keyed file records its key"
+    );
+
+    let shorter = post("Another Marker Ox", "aaaabbbbccccdddd").await.unwrap();
+    assert_eq!(
+        shorter.status(),
+        201,
+        "a file keyed under a longer ref does not own the shorter key"
+    );
+    let again = post("A Third Marker Ox", "aaaabbbbccccdddd").await.unwrap();
+    assert_eq!(again.status(), 409, "the same key, a different memory");
+}
+
 /// v044-X9 - a replay after the stored memory was pinned / re-tagged between
 /// the write and the replay is still idempotent (the INGESTED content is
 /// compared, not the whole file); new text under the key is still a 409.
@@ -13717,6 +13761,10 @@ async fn sessions_list_returns_indexed_session_with_memory_count() {
     assert_eq!(row["display_name"], "first prompt of the session");
 }
 
+/// Probe log fed by the sink the undistilled test installs (the library
+/// carries no test state of its own).
+static MEMORY_COUNT_PROBES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 /// v0.44 F10 — `GET /api/sessions?undistilled=1` is the distill-debt queue:
 /// newest capture with `commit_count > 0`, `memory_count = 0` and a
 /// non-trivial substance. A session with a memory, one without a commit and
@@ -13822,7 +13870,19 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
         v.sort();
         v
     };
-    let probes_before = kb_server::routes::sessions::memory_count_probe_log();
+    kb_server::routes::sessions::set_memory_count_probe_sink(|ids| {
+        MEMORY_COUNT_PROBES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(ids.iter().cloned());
+    });
+    let memory_count_probe_log = || -> Vec<String> {
+        MEMORY_COUNT_PROBES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    };
+    let probes_before = memory_count_probe_log();
     let queue = get("/api/sessions?undistilled=1&limit=50".into()).await;
     assert_eq!(
         ids_of(&queue),
@@ -13869,7 +13929,7 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
     // for rows that can survive (commit_count > 0); the commit-less
     // `sid-und-c` and the zero-commit rows were never probed. Ids are unique
     // to this test, so parallel tests cannot interfere.
-    let probes_after = kb_server::routes::sessions::memory_count_probe_log();
+    let probes_after = memory_count_probe_log();
     let new_probes: Vec<&String> = probes_after
         .iter()
         .skip(probes_before.len().min(probes_after.len()))

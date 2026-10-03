@@ -43,7 +43,8 @@ mkdir -p "$KB_SESSIONS_DIR"
 # Lay the fixture out in the real on-disk shape — the CLI mode derives the
 # session id from the session dir name three levels above wire.jsonl.
 SID="session_11112222-3333-4444-5555-666677778888"
-SAFE_SID="session-11112222-3333-4444-5555-666677778888"
+. "$HOOKS_DIR/kb-hook-lib.sh"
+SAFE_SID="$(hook_sid_key "$SID")"
 SDIR="$TMPROOT/kimi-home/sessions/wd_fixture_deadbeefcafe/$SID/agents/main"
 mkdir -p "$SDIR"
 cp "$FIXTURE" "$SDIR/wire.jsonl"
