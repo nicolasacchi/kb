@@ -864,15 +864,40 @@ pub(crate) async fn recall_compose(
     // jina-v2-base-code and bge-base-en-v1.5 are both 768), and feeding
     // one model's vector to another model's index returns garbage.
     let mut vec_by_model: HashMap<&'static str, Vec<f32>> = HashMap::new();
+    // A3-5 — models whose query embed failed or missed `deadline_ms`. Every
+    // corpus on such a model falls back to BM25 and says so in `degraded[]`
+    // (lane `recall.vector`) instead of returning a silent keyword-only 200.
+    let mut embed_failures: HashMap<&'static str, crate::routes::context::QueryErrorClass> =
+        HashMap::new();
     if has_query {
         for (_, ctx) in &corpora {
             if let Some(emb) = &ctx.embedder {
                 let model = crate::embed_cache::embedder_model_name(emb);
+                if embed_failures.contains_key(model) {
+                    continue;
+                }
                 if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
-                    if let Ok(out) =
-                        crate::embed_cache::embed_query(&state.embed_cache, emb, &params.q).await
+                    // Bounded by the request's `deadline_ms`; the embed IPC
+                    // timeout alone is 60 s, longer than the hook's own cap.
+                    match crate::routes::context::within_deadline(
+                        deadline,
+                        crate::embed_cache::embed_query(&state.embed_cache, emb, &params.q),
+                    )
+                    .await
                     {
-                        slot.insert(out.vec);
+                        Ok(Ok(out)) => {
+                            slot.insert(out.vec);
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(model, error = %e, "recall: query embed failed; vector lanes fall back to keyword");
+                            embed_failures
+                                .insert(model, crate::routes::context::QueryErrorClass::Embed);
+                        }
+                        Err(()) => {
+                            tracing::warn!(model, "recall: query embed missed deadline_ms; vector lanes fall back to keyword");
+                            embed_failures
+                                .insert(model, crate::routes::context::QueryErrorClass::Timeout);
+                        }
                     }
                 }
             }
@@ -941,6 +966,7 @@ pub(crate) async fn recall_compose(
     type RecallArmFut<'a> =
         std::pin::Pin<Box<dyn std::future::Future<Output = (&'a KbName, RecallArm)> + Send + 'a>>;
     let vec_by_model = &vec_by_model;
+    let embed_failures = &embed_failures;
     let params = &params;
     let mut futs: Vec<RecallArmFut<'_>> = Vec::new();
     for &(name, ctx) in &corpora {
@@ -997,6 +1023,9 @@ pub(crate) async fn recall_compose(
                         "recall: ensure_fts_index failed; continuing list_docs path"
                     );
                 }
+                // A3-5 — set when this corpus HAS an embedder but the vector
+                // lane did not run (index ensure failed / query embed failed).
+                let mut vec_miss: Option<crate::routes::context::QueryErrorClass> = None;
                 let rows_result = if has_query {
                     match &ctx.embedder {
                         Some(emb) => {
@@ -1007,6 +1036,9 @@ pub(crate) async fn recall_compose(
                                     error = %e,
                                     "recall: ensure_vector_index failed; falling back to BM25"
                                 );
+                                vec_miss = Some(crate::routes::context::classify_query_error(
+                                    &e.to_string(),
+                                ));
                                 ctx.storage
                                     .bm25_query(params.q.clone(), per_corpus, false)
                                     .await
@@ -1019,6 +1051,11 @@ pub(crate) async fn recall_compose(
                                     }
                                     // Embed failed for this model → keyword fallback.
                                     None => {
+                                        vec_miss = Some(
+                                            embed_failures.get(model).copied().unwrap_or(
+                                                crate::routes::context::QueryErrorClass::Embed,
+                                            ),
+                                        );
                                         ctx.storage
                                             .bm25_query(params.q.clone(), per_corpus, false)
                                             .await
@@ -1034,7 +1071,16 @@ pub(crate) async fn recall_compose(
                     ctx.storage.list_docs(per_corpus).await
                 };
                 let (rows, query_degraded) = match rows_result {
-                    Ok(rows) => (rows, None),
+                    Ok(rows) => (
+                        rows,
+                        vec_miss.map(|class| {
+                            crate::routes::context::degraded_of(
+                                name.as_str(),
+                                "recall.vector",
+                                class,
+                            )
+                        }),
+                    ),
                     Err(e) => {
                         tracing::warn!(kb = %name, error = %e, "recall: query failed; skipping corpus");
                         (
