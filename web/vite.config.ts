@@ -105,47 +105,46 @@ export default defineConfig({
         // Vendor-split node_modules into long-cache chunks so a heavy library
         // (CodeMirror, the markdown stack) loads once and is cached across
         // deploys, and the route-lazy chunks above don't each re-bundle it.
-        // Runs only over the `main` entry's graph; the `annotate` entry and
-        // the SharedWorker import none of this (the annotate entry shares the
-        // `rollupOptions.input` map with main/sketch, not a separate pass —
-        // it stays chunk-free because it imports nothing), so the 12 KiB
-        // annotate.js CI guard is unaffected.
-        // NOTE: the function form of `manualChunks` is a deprecated path in
-        // Vite 8 / rolldown (the replacement is `output.codeSplitting`
-        // groups). Not migrated here: it cannot be verified without a build,
-        // and the mermaid-stays-out-of-main property below must be re-checked
-        // against dist/ when it is.
-        manualChunks(id) {
-          if (!id.includes("node_modules")) return;
-          // SL4 — mermaid is deliberately NOT given a manualChunks bucket.
-          // Naming one was tried and reverted: forcing a chunk makes Rollup
-          // hoist Vite's shared `__vite__preload` helper into whichever
-          // manual chunk it visits first, and with a `mermaid` bucket that
-          // was the 3.1 MB mermaid chunk — every SPA route chunk then
-          // carried a hard `import "./mermaid-*.js"` and the shell paid for
-          // a diagram renderer it never calls. Left to the default
-          // algorithm, mermaid is reachable ONLY from `src/sketch/main.ts`
-          // (the second HTML entry), so Rollup keeps it out of the `main`
-          // graph on its own — which is what we wanted from the bucket.
-          if (id.includes("@codemirror") || id.includes("@lezer"))
-            return "codemirror";
-          if (
-            id.includes("react-markdown") ||
-            id.includes("remark-") ||
-            id.includes("micromark") ||
-            id.includes("mdast") ||
-            id.includes("unist") ||
-            id.includes("hast")
-          )
-            return "markdown";
-          if (id.includes("@tanstack")) return "tanstack";
-          if (
-            id.includes("react-router") ||
-            id.includes("/react-dom/") ||
-            id.includes("/react/") ||
-            id.includes("/scheduler/")
-          )
-            return "react-vendor";
+        // These are rolldown `codeSplitting` groups (Vite 8's replacement for
+        // the deprecated function-form `manualChunks`); higher `priority`
+        // wins when a module matches two groups, which reproduces the old
+        // first-`if`-wins order. Runs only over the `main` entry's graph; the
+        // `annotate` entry and the SharedWorker import none of this, so the
+        // 12 KiB annotate.js CI guard is unaffected.
+        //
+        // SL4 — mermaid is deliberately in NO group. Naming a bucket for it
+        // was tried and reverted: a forced chunk makes the bundler hoist
+        // Vite's shared `__vite__preload` helper into whichever group chunk
+        // it visits first, and with a `mermaid` bucket that was the 3.1 MB
+        // mermaid chunk — every SPA route chunk then carried a hard
+        // `import "./mermaid-*.js"`. Left to the default algorithm mermaid is
+        // reachable ONLY from `src/sketch/main.ts` (the second HTML entry).
+        // That used to be a comment; `scripts/check-main-chunk.mjs` (run by
+        // `npm run build`) now fails the build if a large sketch-graph chunk
+        // appears in the shell's static import closure.
+        codeSplitting: {
+          groups: [
+            {
+              name: "codemirror",
+              test: /node_modules[\\/](?:.*[\\/])?@(?:codemirror|lezer)[\\/]/,
+              priority: 40,
+            },
+            {
+              name: "markdown",
+              test: /node_modules[\\/](?:.*[\\/])?(?:react-markdown|remark-[^\\/]*|micromark[^\\/]*|mdast[^\\/]*|unist[^\\/]*|hast[^\\/]*)[\\/]/,
+              priority: 30,
+            },
+            {
+              name: "tanstack",
+              test: /node_modules[\\/]@tanstack[\\/]/,
+              priority: 20,
+            },
+            {
+              name: "react-vendor",
+              test: /node_modules[\\/](?:react-router[^\\/]*|react-dom|react|scheduler)[\\/]/,
+              priority: 10,
+            },
+          ],
         },
       },
     },
