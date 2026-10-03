@@ -914,6 +914,20 @@ GET  /api/sessions/recollect?q=…            R3 — episodic "has this been don
                                             digest excerpt that matched —
                                             `RecollectSessionOut.summary`,
                                             the R1 rank surface).
+POST /api/sessions/backfill-project-key     v0.44 X3 — fill NULL
+     [?apply=true]                          `sessions.project_key` from the row's
+                                            `repo_root`/`cwd`, every kb, through
+                                            each kb's storage actor (the daemon
+                                            stays the single writer; a run that
+                                            changed rows bumps the index
+                                            generation). Dry-run unless
+                                            `apply=true`. Returns {apply,
+                                            would_change, changed, kbs[{kb,
+                                            would_change, changed}],
+                                            degraded[]}. CLI: `kb sessions
+                                            backfill-project-key [--apply]`
+                                            (direct index.db open only when no
+                                            daemon answers).
 GET  /api/why?path=<file>                   R2 — the WHY assembler: the past
                                             sessions that touched a file + their
                                             prompt/decisions/commits. Basename-

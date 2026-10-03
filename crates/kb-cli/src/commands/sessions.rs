@@ -4,8 +4,10 @@
 //! Mirrors the `kb comments` verb pattern: the read verbs require a
 //! reachable daemon (the data lives in the per-kb V0008 sessions
 //! sqlite table + the cross-kb fan-out HTTP routes).
-//! `backfill-project-key` is the offline exception — it opens each
-//! configured kb's `index.db` and calls `Db::sessions_backfill_project_key`.
+//! `backfill-project-key` goes through the daemon's
+//! `POST /api/sessions/backfill-project-key` (its storage actor stays the
+//! single writer); only with NO daemon running does it open each configured
+//! kb's `index.db` and call `Db::sessions_backfill_project_key` itself.
 //! W0.6 adds three offline-git + daemon probes
 //! (`by_commit`, `provenance_report`, `why_line`) for kb-code's
 //! wave-0 sha→session wedge instrument.
@@ -2308,13 +2310,61 @@ pub async fn replay(
 /// `kb sessions backfill-project-key` — fill NULL `sessions.project_key`
 /// from a path already on the row (`repo_root`, else `cwd`).
 ///
-/// Dry-run unless `apply` is true (`--apply`). Other sessions verbs read
-/// the per-kb V0008 `sessions` table through the daemon's cross-kb fan-out,
-/// so this opens every configured kb `index.db` with [`Db::open`] (the same
-/// connection `kb status` uses for its sqlite fallback) and sums
-/// [`Db::sessions_backfill_project_key`]. Prints `would_change=<n> changed=<n>`.
-/// `apply == false` writes nothing.
-pub fn backfill_project_key(config: Option<&PathBuf>, apply: bool) -> Result<()> {
+/// Dry-run unless `apply` is true (`--apply`). With a daemon running the
+/// work goes through `POST /api/sessions/backfill-project-key`, so the
+/// daemon's storage actor stays the single writer of every `index.db` (and
+/// a run that changed rows bumps the index generation). Only when NO daemon
+/// answers does it open each configured kb's `index.db` itself with
+/// [`Db::open`] — nothing else is writing then. Prints
+/// `would_change=<n> changed=<n>`; `apply == false` writes nothing.
+pub async fn backfill_project_key(
+    config: Option<&PathBuf>,
+    apply: bool,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    if let Some(url) = http::detect_daemon(daemon, bearer).await {
+        let client = http::client_with_timeout_and_bearer(120, bearer)?;
+        let resp = client
+            .post(format!("{url}{}", backfill_project_key_path(apply)))
+            .send()
+            .await
+            .with_context(|| format!("POST {url}/api/sessions/backfill-project-key"))?
+            .error_for_status()?;
+        let body: serde_json::Value = resp.json().await?;
+        let (would, changed) = backfill_totals(&body)?;
+        println!("would_change={would} changed={changed}");
+        if let Some(d) = body.get("degraded").and_then(|d| d.as_array()) {
+            for lane in d {
+                eprintln!(
+                    "warning: backfill failed for kb {} ({})",
+                    lane["kb"].as_str().unwrap_or("?"),
+                    lane["error_class"].as_str().unwrap_or("other")
+                );
+            }
+        }
+        return Ok(());
+    }
+    backfill_project_key_offline(config, apply)
+}
+
+/// The route + query for one run (PURE: pinned by a unit test).
+pub(crate) fn backfill_project_key_path(apply: bool) -> String {
+    format!("/api/sessions/backfill-project-key?apply={apply}")
+}
+
+/// `(would_change, changed)` out of the route's reply.
+pub(crate) fn backfill_totals(body: &serde_json::Value) -> Result<(u64, u64)> {
+    let field = |k: &str| {
+        body.get(k)
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| anyhow!("backfill-project-key: reply has no `{k}` count"))
+    };
+    Ok((field("would_change")?, field("changed")?))
+}
+
+/// No daemon: open every configured kb `index.db` directly.
+fn backfill_project_key_offline(config: Option<&PathBuf>, apply: bool) -> Result<()> {
     let cfg_path = super::resolve_config_path(config)?;
     let cfg = super::load_config_or_default(&cfg_path)?;
     let paths = KbPaths::new(cfg.daemon.name.as_deref().unwrap_or("default"))?;
@@ -2343,6 +2393,24 @@ pub fn backfill_project_key(config: Option<&PathBuf>, apply: bool) -> Result<()>
 }
 
 #[cfg(test)]
+
+/// v044-X3 (A4.f6): the CLI no longer writes `index.db` behind a running
+/// daemon's back — it names the route, the dry-run default is explicit
+/// on the wire, and the reply's counts are what gets printed.
+#[test]
+fn backfill_goes_through_the_daemon_route_dry_run_by_default() {
+    assert_eq!(
+        backfill_project_key_path(false),
+        "/api/sessions/backfill-project-key?apply=false"
+    );
+    assert_eq!(
+        backfill_project_key_path(true),
+        "/api/sessions/backfill-project-key?apply=true"
+    );
+    let body = serde_json::json!({"apply": true, "would_change": 3, "changed": 2, "kbs": []});
+    assert_eq!(backfill_totals(&body).unwrap(), (3, 2));
+    assert!(backfill_totals(&serde_json::json!({})).is_err());
+}
 mod tests {
     use super::*;
 

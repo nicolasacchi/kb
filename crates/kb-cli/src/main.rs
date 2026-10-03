@@ -2672,11 +2672,17 @@ enum SessionsAction {
     /// Fill NULL session `project_key` values from `repo_root` or `cwd`
     /// already stored on the row. Dry-run by default (writes nothing,
     /// prints `would_change=<n> changed=<n>`); `--apply` writes. SQLite
-    /// only — no reindex.
+    /// only — no reindex. Runs through the daemon when one is up (its
+    /// storage actor stays the single writer); opens the index.db files
+    /// directly only when none answers.
     BackfillProjectKey {
         /// Write the keys. Absent = dry-run; nothing is written.
         #[arg(long)]
         apply: bool,
+        /// Daemon to run it through (default: the local one). With no
+        /// daemon reachable the index.db files are opened directly.
+        #[arg(long)]
+        daemon: Option<String>,
     },
 }
 
@@ -5989,8 +5995,15 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
-            SessionsAction::BackfillProjectKey { apply } => {
-                commands::sessions::backfill_project_key(cli.config.as_ref(), apply)
+            SessionsAction::BackfillProjectKey { apply, daemon } => {
+                let bearer = read_bearer();
+                commands::sessions::backfill_project_key(
+                    cli.config.as_ref(),
+                    apply,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await
             }
         },
         Cmd::Reading {

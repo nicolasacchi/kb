@@ -3804,6 +3804,90 @@ fn since_window_secs(s: &str) -> Option<i64> {
     }
 }
 
+/// `POST /api/sessions/backfill-project-key[?apply=true]` — fill NULL
+/// `sessions.project_key` from the path already on each row, in every
+/// configured kb.
+///
+/// Dry-run unless `apply=true`. Every write goes through the kb's storage
+/// actor (`StorageHandle::sessions_backfill_project_key`), so the daemon
+/// stays the single writer of `index.db` and a run that changed rows bumps
+/// the index generation. The CLI used to open each `index.db` itself while
+/// the daemon was serving it; it now calls this route and keeps the direct
+/// open only for "no daemon running".
+#[derive(Debug, Deserialize, Default)]
+pub struct BackfillProjectKeyParams {
+    #[serde(default)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackfillProjectKeyKb {
+    pub kb: String,
+    pub would_change: u64,
+    pub changed: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackfillProjectKeyResponse {
+    pub apply: bool,
+    pub would_change: u64,
+    pub changed: u64,
+    pub kbs: Vec<BackfillProjectKeyKb>,
+    /// kbs whose backfill failed (closed error class, never the raw text).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<crate::routes::context::DegradedLane>,
+}
+
+pub async fn backfill_project_key(
+    State(state): State<Arc<KbHandles>>,
+    Query(params): Query<BackfillProjectKeyParams>,
+) -> impl IntoResponse {
+    let apply = params.apply;
+    type Part = (
+        String,
+        Result<(u64, u64), crate::routes::context::QueryErrorClass>,
+    );
+    let mut futs: Vec<super::CorpusFut<'_, Part>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            let r = match ctx.storage.sessions_backfill_project_key(apply).await {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    tracing::warn!(kb = %kb_name, error = %e, "backfill-project-key failed");
+                    Err(crate::routes::context::classify_query_error(&e.to_string()))
+                }
+            };
+            (kb_name.as_str().to_string(), r)
+        }));
+    }
+    let mut resp = BackfillProjectKeyResponse {
+        apply,
+        would_change: 0,
+        changed: 0,
+        kbs: Vec::new(),
+        degraded: Vec::new(),
+    };
+    for (kb, r) in super::buffered_join(futs, state.fanout_cap).await {
+        match r {
+            Ok((would, did)) => {
+                resp.would_change += would;
+                resp.changed += did;
+                resp.kbs.push(BackfillProjectKeyKb {
+                    kb,
+                    would_change: would,
+                    changed: did,
+                });
+            }
+            Err(class) => resp.degraded.push(crate::routes::context::degraded_of(
+                &kb,
+                "backfill-project-key",
+                class,
+            )),
+        }
+    }
+    Json(resp)
+}
+
 /// `GET /api/sessions/recollect?q=&folder=&since=&limit=` (R3) — semantic
 /// "has something like this been done?" over the R1 insight digests. Federated
 /// hybrid (or BM25) search restricted to session digests, re-ranked

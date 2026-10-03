@@ -187,6 +187,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | DELETE | `/api/saved-queries/{name}` | `routes::saved_queries::delete` |
 | GET | `/api/search` | `routes::search::get` |
 | GET | `/api/sessions` | `routes::sessions::list` |
+| POST | `/api/sessions/backfill-project-key` | `routes::sessions::backfill_project_key` |
 | POST | `/api/sessions/beat` | `routes::sessions::beat` |
 | GET | `/api/sessions/by-artifact/{kb}/{artifact_id}` | `routes::sessions::by_artifact` |
 | GET | `/api/sessions/by-commit` | `routes::sessions::by_commit` |
@@ -238,4 +239,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_228 routes._
+_229 routes._
