@@ -231,13 +231,13 @@ pub(crate) fn render_coverage(body: &serde_json::Value) -> String {
 }
 
 /// Seqs of the OPEN distill asks for `sid` in a raw slate ledger: an `ask`
-/// carrying the ref `session:<sid>` that no `done`/`drop` has targeted
-/// (`re`). Pure so idempotence is pinned without a daemon.
+/// carrying the ref `session:<sid>` that no `done`/`drop`/`answer` has targeted
+/// (`re`; `answer` also closes an ask). Pure so idempotence is pinned without a daemon.
 pub(crate) fn open_distill_asks(posts: &[serde_json::Value], sid: &str) -> Vec<u64> {
     let want = format!("session:{sid}");
     let closed: HashSet<u64> = posts
         .iter()
-        .filter(|p| matches!(p["kind"].as_str(), Some("done" | "drop")))
+        .filter(|p| matches!(p["kind"].as_str(), Some("done" | "drop" | "answer")))
         .filter_map(|p| p["re"].as_u64())
         .collect();
     posts
@@ -2960,6 +2960,14 @@ mod f10_tests {
         assert_eq!(open_distill_asks(&posts, "sid-b"), vec![2]);
         assert!(open_distill_asks(&posts, "sid-c").is_empty());
         let mut after = posts.clone();
+        let answered = vec![
+            json!({"seq": 1, "kind": "ask", "refs": ["session:sid-a"]}),
+            json!({"seq": 2, "kind": "answer", "re": 1}),
+        ];
+        assert!(
+            open_distill_asks(&answered, "sid-a").is_empty(),
+            "an answered ask is not re-closed with done"
+        );
         after.push(json!({"seq": 7, "kind": "done", "re": 1}));
         assert!(
             open_distill_asks(&after, "sid-a").is_empty(),

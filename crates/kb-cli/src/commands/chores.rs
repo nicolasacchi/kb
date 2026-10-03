@@ -27,7 +27,7 @@ const DISTILL_PAGE: usize = 50;
 /// `found + idea` posts that make a tidy due (mirrors the slate's own
 /// per-session nudge, `kb_core::slate::NUDGE_THRESHOLD`).
 pub const SLATE_TIDY_FOUNDS: u64 = 8;
-/// Posts on the head of a slate at which a distill + rotate is due.
+/// Posts in a slate's CURRENT generation at which a distill + rotate is due.
 pub const SLATE_ROTATE_POSTS: u64 = 300;
 /// Memory triage items (the queue is bounded ~10) at which a pass is due.
 pub const TRIAGE_DUE_MIN: usize = 5;
@@ -42,7 +42,7 @@ pub const STALE_MARKER_DUE_MIN: usize = 2_000;
 pub struct SlateFacts {
     pub slug: String,
     pub found_idea: u64,
-    pub head_seq: u64,
+    pub generation_posts: u64,
     pub hand_unack: u64,
 }
 
@@ -92,13 +92,13 @@ pub fn decide(i: &ChoreInputs) -> Vec<Chore> {
                 ),
             });
         }
-        if s.head_seq >= SLATE_ROTATE_POSTS {
+        if s.generation_posts >= SLATE_ROTATE_POSTS {
             out.push(Chore {
                 id: "slate-rotate",
                 skill: "/kb-slate-distill, then `kb slate rotate`".into(),
                 reason: format!(
-                    "slate {}: {} posts on the head generation",
-                    s.slug, s.head_seq
+                    "slate {}: {} posts in the current generation",
+                    s.slug, s.generation_posts
                 ),
             });
         }
@@ -212,7 +212,7 @@ async fn gather(daemon: Option<&str>, bearer: Option<&str>, cwd: &Path) -> Resul
                     slug: slug.clone(),
                     found_idea: r["counts"]["found"].as_u64().unwrap_or(0)
                         + r["counts"]["idea"].as_u64().unwrap_or(0),
-                    head_seq: r["head_seq"].as_u64().unwrap_or(0),
+                    generation_posts: r["generation_posts"].as_u64().unwrap_or(0),
                     hand_unack: r["counts"]["hand_unack"].as_u64().unwrap_or(0),
                 })
         });
@@ -272,7 +272,13 @@ pub async fn run(
     bearer: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let inputs = gather(daemon, bearer, &cwd).await?;
+    let inputs = match gather(daemon, bearer, &cwd).await {
+        Ok(i) => i,
+        // `--line` runs from a session-start hook: an unreachable daemon
+        // must stay silent, not print an error into the session.
+        Err(_) if line => return Ok(()),
+        Err(e) => return Err(e),
+    };
     let due = decide(&inputs);
     if line {
         let Some(text) = count_line(&due) else {
@@ -326,12 +332,12 @@ pub async fn run(
 mod tests {
     use super::*;
 
-    fn slate(found_idea: u64, head_seq: u64, hand_unack: u64) -> ChoreInputs {
+    fn slate(found_idea: u64, generation_posts: u64, hand_unack: u64) -> ChoreInputs {
         ChoreInputs {
             slate: Some(Some(SlateFacts {
                 slug: "kb".into(),
                 found_idea,
-                head_seq,
+                generation_posts,
                 hand_unack,
             })),
             ..ChoreInputs::default()

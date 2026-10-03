@@ -273,6 +273,8 @@ export type SlateSummary = {
   /// purpose: a pre-v0.42 daemon omits it and the list renders no chip
   /// rather than a confident `0`.
   sessions_served?: number;
+  /// Posts in the CURRENT generation's ledger (drops to 0 on rotate).
+  generation_posts?: number;
 };
 
 export type SlateCounts = {

@@ -111,6 +111,10 @@ pub struct SlateSummary {
     /// here (`meta.cursors.len()`). Served, never "read": it is
     /// attribution, not acknowledgement, and nothing expires it (D5).
     pub sessions_served: usize,
+    /// Posts in the CURRENT generation's ledger (tombstones included).
+    /// Unlike `head_seq` this DROPS to 0 on `rotate`, so a "rotate is due"
+    /// reader can key on it.
+    pub generation_posts: usize,
 }
 
 /// `GET /api/slates/{slug}` — the projection plus the ONE fact
@@ -707,6 +711,7 @@ fn summarize(
         topics: topics_of(&loaded.posts),
         counts,
         sessions_served: loaded.meta.cursors.len(),
+        generation_posts: loaded.posts.len(),
     }
 }
 

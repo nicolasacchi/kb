@@ -791,6 +791,15 @@ async fn rotate_archives_the_ledger_and_bumps_the_generation() {
     assert_eq!(v["head_seq"], 3, "seqs stay unique across generations");
     assert_eq!(v["closed"], false, "rotating is not closing");
 
+    let rows: Vec<Value> =
+        serde_json::from_value(get_json(&client, addr, "/api/slates").await).unwrap();
+    let row = rows.iter().find(|r| r["slug"] == "orchard").unwrap();
+    assert_eq!(row["head_seq"], 3, "head_seq survives the rotate: {row}");
+    assert_eq!(
+        row["generation_posts"], 0,
+        "the per-generation count resets on rotate: {row}"
+    );
+
     let slug = kb_core::slate::SlateSlug::new("orchard").unwrap();
     assert!(
         paths.slate_archive_file(&slug, 1).exists(),
