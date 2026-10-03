@@ -323,16 +323,46 @@ fn init_at(path: &Path, daemon_flags: &[String], force: bool) -> Result<()> {
             ));
         }
     };
-    if path.exists() && !force {
-        return Err(anyhow!(
-            "refusing to overwrite {} — pass --force",
-            path.display()
-        ));
-    }
     let body = render_daemons_toml(&cfg);
-    kb_core::fsx::write_atomic(path, body.as_bytes())
-        .map_err(|e| anyhow!("write {}: {e}", path.display()))?;
+    if force {
+        kb_core::fsx::write_atomic(path, body.as_bytes())
+            .map_err(|e| anyhow!("write {}: {e}", path.display()))?;
+    } else {
+        create_new_book(path, body.as_bytes())?;
+    }
     println!("{}", path.display());
+    Ok(())
+}
+
+/// The no-`--force` write: the existence check and the create are ONE
+/// `O_EXCL` open (`create_new`), so two racing `fleet init` runs cannot both
+/// pass an exists-then-write check and clobber each other, and a dangling
+/// symlink at `path` counts as "exists" (it is not followed). A failed write
+/// removes the partial file it created.
+fn create_new_book(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| anyhow!("create {}: {e}", parent.display()))?;
+    }
+    let mut f = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(anyhow!(
+                "refusing to overwrite {} — pass --force",
+                path.display()
+            ));
+        }
+        Err(e) => return Err(anyhow!("write {}: {e}", path.display())),
+    };
+    if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
+        drop(f);
+        let _ = std::fs::remove_file(path);
+        return Err(anyhow!("write {}: {e}", path.display()));
+    }
     Ok(())
 }
 
@@ -766,6 +796,44 @@ mod tests {
         assert_eq!(forced.daemon.len(), 1, "force replaces the book");
         assert_eq!(forced.daemon["h"].endpoint, "https://kb.example");
         assert!(!forced.daemon.contains_key("local"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A4.f8 — the no-`--force` guard is an exclusive create, not an
+    /// exists-then-write. A dangling symlink reads as "does not exist" to
+    /// `Path::exists`, so the old sequence renamed over it; `create_new`
+    /// (`O_EXCL`) refuses without following it.
+    #[cfg(unix)]
+    #[test]
+    fn init_at_without_force_is_an_exclusive_create() {
+        let dir = std::env::temp_dir().join(format!(
+            "kb-fleet-init-excl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemons.toml");
+        let target = dir.join("elsewhere.toml");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(!path.exists(), "fixture: the symlink must dangle");
+
+        let refused = init_at(&path, &["h=https://kb.example".into()], false).unwrap_err();
+        assert!(
+            refused.to_string().contains("refusing to overwrite"),
+            "{refused}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the pre-existing entry must be left alone"
+        );
+        assert!(!target.exists(), "nothing may be written through the link");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
