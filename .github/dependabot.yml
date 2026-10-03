@@ -1,6 +1,7 @@
 # Dependabot — automated dependency PRs for every ecosystem in the repo.
 # Minor/patch bumps are grouped into one PR per ecosystem to limit noise;
-# majors come as individual PRs (they may need code changes). github-actions
+# majors come as individual PRs (they may need code changes) EXCEPT the
+# lockstep sets and the deliberately-pinned bases documented inline below. github-actions
 # is included so the SHA-pinned actions in .github/workflows stay current
 # (Dependabot bumps the SHA and its `# vX` comment together).
 version: 2
@@ -11,8 +12,49 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # LOCKSTEP SETS. Operator ruling (kb dependency majors, 2026-09):
+      # lance + lancedb + arrow + datafusion move ONLY as a set, and
+      # scraper <-> ego-tree move together. Invariant #1 says why: lance and
+      # arrow must share ONE arrow version or RecordBatch types stop
+      # unifying, so a PR that bumps any one of them alone can only ever be
+      # red (on 2026-10-03 Dependabot opened lance 12 (#199), lancedb 0.39
+      # (#200) and arrow-array 60 (#201) as three separate PRs, none of which
+      # could build).
+      #
+      # Dependabot assigns a dependency to the FIRST group whose patterns
+      # match it, in file order -- so these two groups MUST stay above
+      # `cargo-minor-patch`, or the generic group would swallow the members
+      # and split the set again. Within the set, minor/patch updates arrive
+      # as ONE PR; MAJORS are ignored below and taken by a deliberate
+      # migration unit that bumps the whole set by hand.
+      arrow-lance-lockstep:
+        patterns: ["lance", "lance-*", "lancedb", "arrow", "arrow-*", "datafusion", "datafusion-*"]
+      scraper-lockstep:
+        patterns: ["scraper", "ego-tree"]
       cargo-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "lance"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "lance-*"
+        update-types: ["version-update:semver-major"]
+      # lancedb is 0.x: a MINOR bump is a breaking release (0.38 -> 0.39
+      # moves the lance pin), so minor is ignored as well as major.
+      - dependency-name: "lancedb"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "arrow"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "arrow-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "datafusion"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "datafusion-*"
+        update-types: ["version-update:semver-major"]
+      # fastembed 5 -> 7 (#198) re-pins ort and the model-loading surface that
+      # kb-embedder links statically; it is its own migration unit, not a
+      # dependency bump.
+      - dependency-name: "fastembed"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/web"
@@ -113,6 +155,20 @@ updates:
       # Same reason as dtolnay/rust-toolchain below: the compiler is pinned
       # deliberately in rust-toolchain.toml; do not let Dependabot move it.
       - dependency-name: "rust"
+      # The Node base images are pinned to the 22 line on purpose: CI runs
+      # actions/setup-node 22, the package.json `engines` floor is
+      # ^22.22.2 || >=24.15.0 (the pinned digest is node 22.23.2, which
+      # satisfies it -- checked 2026-10-03), and the SPA is built and tested
+      # on 22 only. A node 26 base image (#194) would ship a bundle built on a
+      # runtime CI never exercised. Move the Dockerfiles and the CI node
+      # version TOGETHER, deliberately, then drop this ignore.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+      # The ruby-lsp provider image (Dockerfile.ruby, #196 3.4 -> 4.0) is
+      # validated against the ruby-lsp release in providers/; a Ruby major is
+      # a compatibility decision for that adapter, not a drive-by bump.
+      - dependency-name: "ruby"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"

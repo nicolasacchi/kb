@@ -66,6 +66,10 @@ defaults:
   run:
     shell: bash
 
+# Least privilege: nothing by default; every job below declares its own grants
+# (v0.44 F1, review A12.f7).
+permissions: {}
+
 jobs:
   build-image:
     # One leg per image. `label` is what shows up in the check name, `target`
@@ -142,7 +146,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # THE TRAP: this is a `workflow_run`-triggered run, so a bare
           # checkout (default `ref:`, resolving to this run's own

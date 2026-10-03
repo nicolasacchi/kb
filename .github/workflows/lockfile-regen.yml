@@ -1,0 +1,78 @@
+# Regenerate the npm lockfiles in CI and push the result to the branch.
+#
+# WHY THIS EXISTS (v0.44 F1, C1 carry-over): this repo's rule is that nobody
+# runs npm on the shared dev host, and a package.json edit without its
+# package-lock.json leaves `npm ci` red on every lane. This workflow is the one
+# sanctioned place a lockfile is (re)generated: `npm install --package-lock-only`
+# in the four package dirs, on the same Node major CI and the Dockerfiles use.
+#
+# HOW TO USE: either dispatch it on the branch (`gh workflow run
+# lockfile-regen.yml --ref <branch>`; GitHub only lists a dispatchable workflow
+# once it exists on the default branch) or put the `regen-lockfiles` label on
+# the pull request. It commits `package-lock.json` changes (DCO sign-off
+# included) to the PR branch. A push made with GITHUB_TOKEN does not trigger
+# other workflows, so push any follow-up commit (or re-run the checks) afterwards.
+#
+# SAFETY: the label path runs only for same-repo PRs; the branch name reaches
+# the shell through an env var, never interpolated into the script.
+name: lockfile-regen
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: lockfile-regen-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  regen:
+    permissions:
+      contents: write
+    name: regenerate package-lock.json (web, web-code, tests/e2e, web-code/e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'regen-lockfiles' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      - name: Setup Node.js (the CI / Dockerfile major)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: npm install --package-lock-only in each package dir
+        run: |
+          node --version
+          npm --version
+          for d in web web-code tests/e2e web-code/e2e; do
+            echo "::group::$d"
+            (cd "$d" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
+            echo "::endgroup::"
+          done
+
+      - name: Commit and push changed lockfiles
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          if git diff --quiet -- '*/package-lock.json'; then
+            echo "lockfiles already current; nothing to push"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- web/package-lock.json web-code/package-lock.json tests/e2e/package-lock.json web-code/e2e/package-lock.json
+          git commit -s -m "chore(deps): regenerate npm lockfiles in CI (lockfile-regen)"
+          git push origin "HEAD:refs/heads/${HEAD_REF}"

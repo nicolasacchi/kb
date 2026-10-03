@@ -54,6 +54,15 @@ ignore = [
     # store.rs), so no untrusted remote XML is ever parsed. Trimming the
     # features in Cargo.toml (`lance` with default-features = false) would make
     # the original wording true; that is a separate Cargo.toml change.
+    # v0.44 F1: that change was CONSIDERED and deliberately NOT made here. It
+    # edits the dependency graph (Cargo.lock sheds packages, which `--locked`
+    # rejects until the lock is regenerated) and lancedb's own `lance`
+    # dependency may re-enable the default features through feature
+    # unification -- neither is knowable without a build, and this unit may not
+    # build. So the wording above stays the honest one (reachability, not
+    # feature trimming). What IS enforced now: every `review by` date in this
+    # file is checked by `just ci-selfcheck` (scripts/ci/selfcheck.py) and the
+    # supply-chain job FAILS the day one expires.
     # RE-CHECK TRIGGER: any non-filesystem URI (s3://, gs://, az://, http) given
     # to lance/lancedb, or the datafusion 55 lockstep, whichever comes first.
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39 capped by object_store 0.13 (datafusion 54 lockstep); compiled in via lance default features but only local filesystem URIs are ever opened. Review by 2026-12-31" },
