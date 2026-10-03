@@ -27,7 +27,8 @@ use std::path::PathBuf;
 #[command(
     name = "kb",
     version = kb_buildstamp::VERSION,
-    about = "kb — html artifact daemon CLI"
+    about = "kb — html artifact daemon CLI",
+    before_help = commands::tools::START_HERE
 )]
 pub(crate) struct Cli {
     /// Path to kb.toml. Defaults to `~/.config/kb/kb.toml`.
@@ -63,8 +64,14 @@ enum Cmd {
     /// on the daemon (`kb model set <name> --kb <kb>`).
     Search {
         q: String,
+        /// Search only this kb.
         #[arg(long)]
         kb: Option<String>,
+        /// `one` | `all`. With neither `--kb` nor `--scope`, a daemon that
+        /// serves more than one kb is searched across all of them (a
+        /// one-line stderr note says so); `--kb` pins a single kb.
+        #[arg(long, value_parser = ["one", "all"])]
+        scope: Option<String>,
         #[arg(long, default_value = "hybrid")]
         mode: String,
         #[arg(long, default_value_t = 20)]
@@ -97,7 +104,8 @@ enum Cmd {
         #[arg(long)]
         read_to: Option<String>,
     },
-    /// v0.9 M5 — store a memory the agent wants to keep (agent-explicit
+    // Provenance: v0.9 M5
+    /// Store a memory the agent wants to keep (agent-explicit
     /// capture). Renders an HTML artifact and POSTs it to a memory corpus.
     ///
     /// MI-W3.4 threat model: a memory written from untrusted fetched
@@ -194,7 +202,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// v0.9 M5 — recall memories relevant to a query (ranked fan-out
+    // Provenance: v0.9 M5
+    /// Recall memories relevant to a query (ranked fan-out
     /// across the in-scope memory corpora).
     Recall {
         query: String,
@@ -248,7 +257,8 @@ enum Cmd {
         #[arg(long)]
         timeout: Option<u64>,
     },
-    /// CT-D1 — the ONE context pack for a task: recalled memories (with
+    // Provenance: CT-D1
+    /// The ONE context pack for a task: recalled memories (with
     /// their score decomposition), prior-session POINTERS, open comments on
     /// matching artifacts, and the kb-local code-path citations — assembled
     /// server-side, deterministically, under a hard char budget whose every
@@ -321,7 +331,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// v0.44 X3 — the `kb remember` outbox. A `kb remember` that hits a slow
+    // Provenance: v0.44 X3
+    /// The `kb remember` outbox. A `kb remember` that hits a slow
     /// or down daemon is spooled (under the cache dir) with an idempotency
     /// `client_ref` instead of being lost; the next successful `kb
     /// remember`, or `kb outbox flush`, replays it and the daemon dedupes.
@@ -329,7 +340,8 @@ enum Cmd {
         #[command(subcommand)]
         action: OutboxAction,
     },
-    /// R2 — why is a file the way it is? Pulls the past sessions that touched
+    // Provenance: R2
+    /// Why is a file the way it is? Pulls the past sessions that touched
     /// it (episodic memory) and inlines the prompt / decisions / commits that
     /// produced it. Distinct from `recall` (curated facts): this reconstructs
     /// what actually happened, with provenance and a confidence label.
@@ -341,10 +353,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// CT-B1 — why-memory: the fact → origin session → commits →
+    // Provenance: CT-B1
+    /// Why-memory: the fact → origin session → commits →
     /// files-changed-since chain as one verb. Zero new server surface (pure
     /// composition of existing endpoints) — the CLI's terminal twin of the
-    /// SPA's `ProvenanceThread` (MI-W4.6). Degrades honestly at every hop:
+    /// SPA's `ProvenanceThread`. Degrades honestly at every hop:
     /// no origin session recorded, a purged capture, or an unresolvable git
     /// lookup are all explicit lines, never a silent gap.
     WhyMemory {
@@ -360,7 +373,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// R3 — recollect: "has something like this been done?" Semantic search
+    // Provenance: R3
+    /// Recollect: "has something like this been done?" Semantic search
     /// over past sessions (episodic memory), surfacing each match's recency /
     /// staleness, errors, and commits so you can judge whether to trust it.
     /// Distinct from `recall`: pulled on demand, never asserted as truth.
@@ -392,7 +406,8 @@ enum Cmd {
         #[arg(long)]
         raw: bool,
     },
-    /// v0.9 M5 — forget a memory by id. MI-W2.3: soft-forgets by default
+    // Provenance: v0.9 M5
+    /// Forget a memory by id. Soft-forgets by default
     /// (tombstones the artifact in place — `kb-status: forgotten`, still
     /// on disk, still listed by a memory census, dropped from `recall`);
     /// pass `--purge` for the old hard delete (irreversible, no trace).
@@ -409,7 +424,8 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// W2.15b — queue a memory CANDIDATE for human review instead of
+    // Provenance: W2.15b
+    /// Queue a memory CANDIDATE for human review instead of
     /// writing it directly. This is the agent-layer submit verb: a skill
     /// that wants the proposal-inbox human gate (rather than `kb remember`'s
     /// immediate write) calls this — e.g. a future /kb-distill-style flow
@@ -445,7 +461,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// W2.15b — the proposal inbox: list/approve/reject queued memory
+    // Provenance: W2.15b
+    /// The proposal inbox: list/approve/reject queued memory
     /// candidates. Approving fires the EXACT memory-write path `kb remember`
     /// uses, carrying the candidate's provenance (`session_id` etc) along —
     /// the human gate the daemon's no-in-daemon-LLM invariant requires.
@@ -453,14 +470,16 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ProposalsAction>,
     },
-    /// MI-W2.4a — memory lineage. `kb memory log <id>` walks one supersede
+    // Provenance: MI-W2.4a
+    /// Memory lineage. `kb memory log <id>` walks one supersede
     /// chain in both directions (what it supersedes, what superseded it)
     /// with timestamps and forgotten-state, rendered as a timeline.
     Memory {
         #[command(subcommand)]
         action: MemoryAction,
     },
-    /// SL3 — `kb slate`: this project's shared working state (who is on
+    // Provenance: SL3
+    /// `kb slate`: this project's shared working state (who is on
     /// what, open questions, hypotheses, dead ends). NOT memory: a slate is
     /// per-project, mutable through later posts, and read by sessions of
     /// every harness. `kb slate open` first; `take` before touching a path
@@ -471,14 +490,14 @@ enum Cmd {
         #[command(subcommand)]
         action: SlateAction,
     },
-    /// Embedding-model lifecycle (v0.1). Manages the XDG cache and
+    /// Embedding-model lifecycle. Manages the XDG cache and
     /// per-kb model selection in kb.toml.
     Model {
         #[command(subcommand)]
         action: ModelAction,
     },
     /// Open the artifact in $BROWSER (xdg-open). Auto-detects the
-    /// daemon (GC-B5 / roadmap G17): daemon reachable → opens the served
+    /// daemon: reachable → opens the served
     /// SPA permalink; unreachable → falls back to the local file path.
     Read {
         id: String,
@@ -501,8 +520,9 @@ enum Cmd {
         #[arg(long)]
         record: bool,
     },
-    /// Dump artifact HTML to stdout. Auto-detects the daemon (GC-B5 /
-    /// roadmap G17): daemon reachable → `GET /api/kb/{kb}/artifact/{id}`;
+    // Provenance: GC-B5 / roadmap G17 (daemon auto-detect).
+    /// Dump artifact HTML to stdout. Auto-detects the daemon: daemon
+    /// reachable → `GET /api/kb/{kb}/artifact/{id}`;
     /// unreachable → falls back to a local read-only lance open.
     Cat {
         id: String,
@@ -525,7 +545,8 @@ enum Cmd {
         #[arg(long)]
         record: bool,
     },
-    /// U3 (v0.25 quick capture) — stage file(s) into a kb's `capture/`
+    // Provenance: U3 (v0.25 quick capture)
+    /// Stage file(s) into a kb's `capture/`
     /// folder, provenance-stamped, via `POST /api/kb/{kb}/capture`. With no
     /// FILES, `--url`/`--text` writes a url-stub `.md` capture instead (the
     /// daemon never fetches the URL).
@@ -632,7 +653,8 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// v0.38 CT-C6 — read-only diagnostics distinct from `kb daemon doctor`
+    // Provenance: v0.38 CT-C6
+    /// Read-only diagnostics distinct from `kb daemon doctor`
     /// (which probes the daemon's own HTTP health). `--hooks` is the first
     /// mode: the provenance-chain integrity check. Walks the fragile chain
     /// of session marker files → kb-memory plugin hooks → the git
@@ -669,7 +691,8 @@ enum Cmd {
         #[arg(long)]
         strict: bool,
     },
-    /// TM-track — print the daemon's request + pipeline timing snapshot
+    // Provenance: TM-track
+    /// Print the daemon's request + pipeline timing snapshot
     /// (`GET /api/metrics`). The coarse per-route latency table is always
     /// shown; the search-stage / per-kb / pipeline tables appear only when
     /// the daemon runs with `[server] metrics = true`.
@@ -681,9 +704,9 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Version — this binary's build stamp, and (`--contract`) the integer
+    /// This binary's build stamp, and (`--contract`) the integer
     /// hook contract the kb-memory hooks compare against to name CLI skew
-    /// (v0.44 F8). `kb --version` stays the one-line clap form.
+    /// (`kb --version` stays the one-line clap form).
     Version {
         /// Print only the hook-contract integer (what `kb-wake.sh` reads).
         #[arg(long)]
@@ -692,7 +715,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Whoami — print the daemon-resolved identity for this request
+    /// Print the daemon-resolved identity for this request
     /// (`GET /api/identity`). Human form is `user (source)`.
     Whoami {
         /// Force HTTP against this daemon URL (default 127.0.0.1:4000).
@@ -702,7 +725,7 @@ enum Cmd {
         #[arg(long)]
         output: Option<String>,
     },
-    /// Users — list configured ∪ observed users (`GET /api/users`).
+    /// List configured ∪ observed users (`GET /api/users`).
     Users {
         /// Force HTTP against this daemon URL (default 127.0.0.1:4000).
         #[arg(long)]
@@ -711,7 +734,7 @@ enum Cmd {
         #[arg(long)]
         output: Option<String>,
     },
-    /// History — list per-kb activity history (`GET /api/kb/{kb}/history`).
+    /// List per-kb activity history (`GET /api/kb/{kb}/history`).
     History {
         #[arg(long)]
         kb: Option<String>,
@@ -731,12 +754,12 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Comments — read kb-comments/1 review files (v0.2).
+    /// Read kb-comments/1 review files.
     Comments {
         #[command(subcommand)]
         action: CommentsAction,
     },
-    /// Sessions — captured Claude Code transcripts (v0.14 Track S).
+    /// Captured Claude Code session transcripts.
     /// `kb sessions list` prints the daemon's session enrichment rows;
     /// `kb sessions show <session_id>` includes the produced memories
     /// + touched artifacts.
@@ -744,7 +767,7 @@ enum Cmd {
         #[command(subcommand)]
         action: SessionsAction,
     },
-    /// Import — backfill external data into a kb corpus (filesystem-only; the
+    /// Backfill external data into a kb corpus (filesystem-only; the
     /// daemon's watcher does the indexing). `kb import claude-history` wraps
     /// every historical Claude Code transcript under `~/.claude/projects` in
     /// the same envelope the live capture hook produces and drops it in a
@@ -753,7 +776,7 @@ enum Cmd {
         #[command(subcommand)]
         action: ImportAction,
     },
-    /// Reading — RP-track reading-progress for an artifact: how far it was
+    /// Reading progress for an artifact: how far it was
     /// read, what was read vs skimmed, where the reader stopped, and which
     /// sections held their attention. `<target>` is a 12-hex id, a
     /// source-relative path, or a unique filename. `--lite` = whole-page
@@ -771,7 +794,8 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// v0.44 F10 — one derived agenda of due agent-layer upkeep: the
+    // Provenance: v0.44 F10
+    /// One derived agenda of due agent-layer upkeep: the
     /// distill queue, the project slate, memory triage, the resurface queue
     /// and stale hook markers, each as `chore → skill (why)`. Pull-only;
     /// nothing is scheduled, run or stored.
@@ -785,7 +809,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Resurface — pull-only queue of artifacts worth picking back up:
+    /// Pull-only queue of artifacts worth picking back up:
     /// open (unresolved) comments + unfinished reads, deterministically
     /// scored with reasons on every item. Nothing pushes, nothing nags;
     /// acting on an item clears it and idle reads fade out on their own.
@@ -803,7 +827,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Timeline — four synchronized, day-bucketed lanes over one UTC-day
+    /// Four synchronized, day-bucketed lanes over one UTC-day
     /// axis: artifacts created, artifacts read, work sessions captured, and
     /// comments raised. A pure view (`GET /api/kb/{kb}/timeline`, C-a); no
     /// streak, no best-day, no goal, no `--follow`.
@@ -831,12 +855,12 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Daycard — the CLI parity twin of the e-ink desk radiator (`GET
+    /// The CLI parity twin of the e-ink desk radiator (`GET
     /// /api/kb/{kb}/daycard`, Unit 2): a deterministic "day at a glance"
     /// digest (worth-picking-back-up + today's activity + a couple of
     /// recent/never-opened artifacts). Pull-only; no streak, no goal, no
     /// `--watch`. `--html` prints the exact bytes an e-ink panel would fetch.
-    /// `--since <WHEN>` (CT-E1) switches to "what happened while I was
+    /// `--since <WHEN>` switches to "what happened while I was
     /// away" instead — sessions/memories/artifacts/comments over a rolling
     /// window; mutually exclusive with `--day`.
     Daycard {
@@ -859,7 +883,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Reading lists — multiple named, ordered lists per kb whose
+    /// Multiple named, ordered lists per kb whose
     /// entries target a whole artifact or a §section of it. Read state
     /// is derived from your reading progress (override with
     /// `update --read/--unread`). `import`/`export` speak the portable
@@ -868,7 +892,8 @@ enum Cmd {
         #[command(subcommand)]
         action: ListAction,
     },
-    /// Boards v1 — a JSON Canvas (jsoncanvas.org) geometry sidecar for a
+    // Provenance: Boards v1
+    /// A JSON Canvas (jsoncanvas.org) geometry sidecar for a
     /// reading list. `kb board <list>` prints the canvas; `kb board set
     /// <list> --file <path|->` replaces it. Geometry lives in the corpus
     /// as `boards/<list_id>.canvas` — a sidecar, NOT part of the
@@ -877,7 +902,7 @@ enum Cmd {
         #[command(subcommand)]
         action: BoardAction,
     },
-    /// Notes — free-standing notes / todo-lists attached to a kb or a
+    /// Free-standing notes / todo-lists attached to a kb or a
     /// folder within it. A note is a Markdown artifact (`kb-category=note`),
     /// so it's searchable + commentable like any artifact; these verbs add
     /// checklist editing (check/uncheck/append) on top.
@@ -885,7 +910,7 @@ enum Cmd {
         #[command(subcommand)]
         action: NotesAction,
     },
-    /// Links — CT-F3 unlinked mentions: "the graph you wrote is half the
+    /// Unlinked mentions: "the graph you wrote is half the
     /// graph you meant." `suggest` lists docs whose prose names another
     /// artifact's exact title or unique basename with no link edge to show
     /// for it (derived per request, never stored); `apply` authors one of
@@ -897,7 +922,7 @@ enum Cmd {
         #[command(subcommand)]
         action: LinksAction,
     },
-    /// Backlinks — what references THIS artifact (notes that `[[wikilink]]` it,
+    /// What references THIS artifact (notes that `[[wikilink]]` it,
     /// or other artifacts that link it). Works on any artifact, not just notes.
     Backlinks {
         /// Artifact: 12-hex id, source-relative path, or unique filename.
@@ -909,7 +934,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Refs — the code references extracted from an artifact's own bytes
+    /// The code references extracted from an artifact's own bytes
     /// (paths, `path:line`, `Namespace::Class`, `Class#method`, gem paths,
     /// GitHub issues). kb reports HINTS only: it has no working tree and no
     /// symbol index, so nothing here says whether a path exists or a line
@@ -953,7 +978,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Versions — list an artifact's version timeline (git commits, kb
+    /// List an artifact's version timeline (git commits, kb
     /// index snapshots, and the working tree), per the kb's `versions`
     /// mode (auto|git|index|both|off).
     Versions {
@@ -977,7 +1002,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Diff — what changed between two versions of an artifact. Defaults
+    /// What changed between two versions of an artifact. Defaults
     /// to "most recent prior version → working tree". HTML diffs the
     /// rendered prose (markup-agnostic); `--raw` diffs the source bytes.
     Diff {
@@ -1012,7 +1037,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Prompt — read an artifact's stored generation prompt (the
+    /// Read an artifact's stored generation prompt (the
     /// `<template id="kb-prompt">` bundle it was authored with, 8 KiB-capped
     /// at index time). LOCAL-RENDER ONLY on a strip-configured corpus: a
     /// remote daemon (`--daemon http://...`) whose kb has `[kb.*.outbound]
@@ -1033,22 +1058,22 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Share — publish an artifact/folder to an OAuth-gated static host
+    /// Publish an artifact/folder to an OAuth-gated static host
     /// (Cloudflare Pages + Access) or a public one (GitHub Pages).
     /// `kb share <target>` deploys; `kb share list` / `kb share revoke
     /// <name>` manage existing shares.
     Share(ShareArgs),
-    /// Atlas — manage the per-kb 2-D layout (v0.3).
+    /// Manage the per-kb 2-D layout.
     Atlas {
         #[command(subcommand)]
         action: AtlasAction,
     },
-    /// Token — bearer-token lifecycle for v0.4 self-host.
+    /// Bearer-token lifecycle for self-hosting.
     Token {
         #[command(subcommand)]
         action: TokenAction,
     },
-    /// Push — tail /api/events as Claude-Code-friendly markdown blocks.
+    /// Tail /api/events as Claude-Code-friendly markdown blocks.
     /// Reconnects on disconnect with Last-Event-ID + exponential backoff.
     Push {
         /// Filter by event kind (repeatable). Default: print every event.
@@ -1058,8 +1083,8 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Events — operator tail of /api/events, one line per event
-    /// (v0.24 T1, the TUI EVENTS tab replacement). Same reconnect loop
+    /// Operator tail of /api/events, one line per event
+    /// (the replacement for the retired TUI events tab). Same reconnect loop
     /// as `kb push` (Last-Event-ID resume + exponential backoff), but
     /// filters run SERVER-SIDE: `--types` globs plus the `--kb` /
     /// `--artifact` payload filters.
@@ -1086,14 +1111,14 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Fleet — cross-daemon coverage report (Q4). Reads
+    /// Cross-daemon coverage report. Reads
     /// `~/.config/kb/daemons.toml` and compares each daemon's artifact
     /// set for a given kb.
     Fleet {
         #[command(subcommand)]
         action: FleetAction,
     },
-    /// Pull — one-shot fetch of every artifact in a remote kb that's
+    /// One-shot fetch of every artifact in a remote kb that's
     /// missing from a local folder, written as `<id>.html` for the
     /// local daemon's watcher to ingest. For a kb behind Authelia, pass
     /// `--oidc-token-url` + `--oidc-client-id` (and set
@@ -1123,7 +1148,7 @@ enum Cmd {
         #[arg(long, default_value = "authelia.bearer.authz")]
         scope: String,
     },
-    /// Get — fetch a single artifact's metadata or HTML body via the daemon.
+    /// Fetch a single artifact's metadata or HTML body via the daemon.
     Get {
         id: String,
         #[arg(long)]
@@ -1161,7 +1186,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Graph — deterministic corpus graph report: hubs by in-degree,
+    /// Deterministic corpus graph report: hubs by in-degree,
     /// orphans (never linked AND never opened), dead-edge link-rot, and
     /// dangling/ambiguous wikilinks re-resolved over Markdown sources
     /// (GET /api/kb/{kb}/graph/report, GS-track).
@@ -1176,7 +1201,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// SLO — CT-F5 corpus-health indicators over EXISTING tables: code-ref
+    /// Corpus-health indicators over EXISTING tables: code-ref
     /// path shape, orphan `kb_session` docs, recall-ledger parse failures,
     /// and capture freshness. Targets come from `[kb.<name>.slo]` in
     /// kb.toml; every key is optional, and an unconfigured indicator is
@@ -1190,7 +1215,7 @@ enum Cmd {
         #[command(subcommand)]
         action: SloAction,
     },
-    /// Queries — GC-B3, surface zero-hit search queries as a
+    /// Surface zero-hit search queries as a
     /// corpus-gap signal (grouped by normalized text, occurrence
     /// counts). `--scope one` (default) reads this kb's ring
     /// (`--kb` required unless the daemon serves exactly one);
@@ -1225,8 +1250,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Related — print outbound link graph for an artifact (uses
-    /// /api/kb/{kb}/graph/{id}?depth=N from v0.3 F2).
+    /// Print outbound link graph for an artifact (uses
+    /// /api/kb/{kb}/graph/{id}?depth=N).
     Related {
         id: String,
         #[arg(long)]
@@ -1238,8 +1263,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Similar — true (embedding-space) nearest neighbors for an artifact
-    /// (uses /api/kb/{kb}/atlas/similar/{id}?limit=N, W2.3a). Distinct from
+    /// True (embedding-space) nearest neighbors for an artifact
+    /// (uses /api/kb/{kb}/atlas/similar/{id}?limit=N). Distinct from
     /// `kb related`'s link graph — this is vector-space cosine similarity.
     Similar {
         id: String,
@@ -1253,11 +1278,17 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Tools — emit a Claude-prompt-friendly markdown manifest of every
+    /// Emit a Claude-prompt-friendly markdown manifest of every
     /// kb subcommand (synopsis + description + example). Drop into a
-    /// system prompt to teach Claude how to drive kb.
-    Tools,
-    /// Reindex — force the daemon to re-walk a kb's source folder and
+    /// system prompt to teach Claude how to drive kb. `--core` prints the
+    /// short (8 KB or less) manifest of the ten core verbs instead.
+    Tools {
+        /// Only the core verbs (daemon, add, search, read, remember, recall,
+        /// why, recollect, comments, slate) — sized for an instruction file.
+        #[arg(long)]
+        core: bool,
+    },
+    /// Force the daemon to re-walk a kb's source folder and
     /// re-emit `watch.modify` for every HTML file (bypasses the
     /// content-hash dedup gate via `force=true`). Stored embeddings are
     /// reused unless `--re-embed` is set. Reach for this when the SPA /
@@ -1279,7 +1310,7 @@ enum Cmd {
         #[arg(long)]
         re_embed: bool,
     },
-    /// Exclude — per-file index exclusion (v0.24). An excluded file is
+    /// Per-file index exclusion. An excluded file is
     /// removed from the index via the keep-user-data cascade (comments +
     /// reading history survive) and ignored by every ingest path until
     /// re-included with `--rm` (which reindexes it immediately, comments
@@ -1312,9 +1343,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Pause — stop a kb source's ingest (watcher, reconcile walk, and
-    /// reindex nudges are all gated) until `kb resume`. Enforced since
-    /// v0.24 (D6) — a paused source genuinely goes stale by design.
+    /// Stop a kb source's ingest (watcher, reconcile walk, and
+    /// reindex nudges are all gated) until `kb resume`. Enforced — a paused source genuinely goes stale by design.
     Pause {
         /// kb name. Defaults to the only configured kb when there's
         /// just one; required when there's >1.
@@ -1327,7 +1357,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Resume — undo `kb pause`; ingest re-enables live (the next
+    /// Undo `kb pause`; ingest re-enables live (the next
     /// reconcile pass catches anything that changed while paused).
     Resume {
         /// kb name. Defaults to the only configured kb when there's
@@ -1341,7 +1371,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Compact — run lance maintenance on the kb's dataset: merge small
+    /// Run lance maintenance on the kb's dataset: merge small
     /// data fragments, rebuild indices, prune old manifest versions.
     /// Reach for this when search latency has crept up after many
     /// reindex cycles (each upsert commits a fragment + manifest, so
@@ -1361,7 +1391,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Find — resolve a 12-hex id, source-relative path, or unique
+    /// Resolve a 12-hex id, source-relative path, or unique
     /// filename suffix to an artifact id via the daemon's
     /// `/api/kb/{kb}/lookup` endpoint. Prints the id on success; exits
     /// 1 with candidates on ambiguity, exits 2 on no match. Composes
@@ -1400,7 +1430,7 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// New — scaffold an HTML artifact from a template. Substitutes
+    /// Scaffold an HTML artifact from a template. Substitutes
     /// `{{title}}`, `{{date}}`, `{{slug}}`, and any `--var key=value`
     /// placeholders, writes to `--out` or stdout. `--template` is
     /// either a path (`./templates/idea.html`) or a short name
@@ -1429,7 +1459,7 @@ enum Cmd {
         #[arg(long)]
         kb: Option<String>,
     },
-    /// IndexPage — generate a self-contained HTML index of a kb's
+    /// Generate a self-contained HTML index of a kb's
     /// artifacts, grouped by status/category/severity. Designed to
     /// replace hand-maintained INDEX.md ledgers; output is itself a
     /// kb artifact (carries `<meta name="kb-category"
@@ -1469,7 +1499,7 @@ enum Cmd {
         #[arg(long)]
         title: Option<String>,
     },
-    /// Reset — wipe a kb's index state (Lance + SQLite) so the next
+    /// Wipe a kb's index state (Lance + SQLite) so the next
     /// daemon start reindexes from scratch. Preserves `.review/`
     /// comments by default; pass `--all` to drop them too. Refuses
     /// to run when it sees the daemon up unless `--force` is given.
@@ -1487,7 +1517,7 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// Synth — generate a directory of synthetic HTML artifacts for
+    /// Generate a directory of synthetic HTML artifacts for
     /// stress-testing the daemon at scale (S-milestone S8). Output is
     /// a corpus-shaped tree (changelog/, ideas/, incidents/, ...) the
     /// indexer can ingest as-is. Determinism: identical `--seed`
@@ -1504,7 +1534,7 @@ enum Cmd {
         #[arg(long, default_value_t = 0x5e7d)]
         seed: u64,
     },
-    /// Bench — retrieval-quality bake-off across embedding models.
+    /// Retrieval-quality bake-off across embedding models.
     /// Scaffolds query sets, discovers candidate-relevant artifact ids,
     /// and (in C2) drives the daemon to compute Recall@k / MRR / nDCG
     /// per (corpus, model, mode). One subcommand per stage.
@@ -4389,6 +4419,7 @@ async fn main() -> Result<()> {
         Cmd::Search {
             q,
             kb,
+            scope,
             mode,
             limit,
             category,
@@ -4403,6 +4434,7 @@ async fn main() -> Result<()> {
                 cli.config.as_ref(),
                 &q,
                 kb.as_deref(),
+                scope.as_deref(),
                 &mode,
                 limit,
                 category.as_deref(),
@@ -7124,7 +7156,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Cmd::Tools => commands::tools::run(),
+        Cmd::Tools { core } => commands::tools::run(core),
         Cmd::Find {
             input,
             kb,
