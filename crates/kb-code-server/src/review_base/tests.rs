@@ -2426,8 +2426,7 @@ fn a_pr_merged_into_its_target_is_refused_not_captured_as_an_empty_patchset() {
     // Creation (sync --merged-since, start-pr for a merged PR).
     let err = fx
         .with(|c| c.prepare_new(&nr()))
-        .err()
-        .expect("a merged PR must not be prepared against the live target");
+        .expect_err("a merged PR must not be prepared against the live target");
     assert_eq!(err.urn, URN_PR_ALREADY_MERGED, "{err}");
     assert_eq!(err.status, 409);
 
@@ -2435,8 +2434,7 @@ fn a_pr_merged_into_its_target_is_refused_not_captured_as_an_empty_patchset() {
     let review = fx.refetch(id);
     let err = fx
         .with(|c| c.recapture(&review, &fetch()))
-        .err()
-        .expect("a snapshot must not mint an empty patchset");
+        .expect_err("a snapshot must not mint an empty patchset");
     assert_eq!(err.urn, URN_PR_ALREADY_MERGED, "{err}");
 
     // Retrack: the dry run predicts what the apply does.
@@ -2483,8 +2481,7 @@ fn a_capture_whose_policy_went_stale_mints_nothing() {
     };
     let stale = fx
         .with(|c| c.capture_with(&review, &eff, &opts, || false, |_| panic!("must not run")))
-        .err()
-        .expect("a stale policy is refused");
+        .expect_err("a stale policy is refused");
     assert_eq!(stale.urn, URN_BASE_CHANGED, "{stale}");
     assert!(fx.store.list_patchsets(review.id).unwrap().is_empty());
     // The same call with a still-valid policy mints.

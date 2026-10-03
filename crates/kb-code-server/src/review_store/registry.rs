@@ -615,7 +615,7 @@ impl ReviewStores {
             Some(v) => v.clone(),
             None => match seed::git_version_probe(git, seed::MIN_GIT) {
                 Ok(v) => {
-                    let _ = self.git_version.set(v.clone());
+                    self.git_version.set(v.clone()).ok();
                     v
                 }
                 Err(detail) => return Some(StoreUnavailable::Error { detail }),

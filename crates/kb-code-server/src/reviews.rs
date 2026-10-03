@@ -2985,7 +2985,7 @@ async fn capture_new_in_store(
         Ok(r) => r,
         Err(e) => {
             discard_half_created(state, review.id).await;
-            return Err(e.into());
+            return Err(e);
         }
     };
     match res {
