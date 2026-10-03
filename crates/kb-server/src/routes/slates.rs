@@ -1816,12 +1816,54 @@ pub struct AsksCloseResponse {
     /// Empty when no ask carrying the ref was open: a no-op, not an error.
     pub closed: Vec<ClosedAsk>,
     pub head_seq: u64,
+    /// Present only on a PARTIAL close: a later `done` failed after the
+    /// `closed` ones were already committed. The listed `done`s are on the
+    /// ledger (and announced); re-running the same call closes the rest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 struct AsksClosed {
     response: AsksCloseResponse,
     events: Vec<serde_json::Value>,
     head: Option<crate::slate_registry::CachedHead>,
+    /// The failure that stopped the batch after `response.closed` was
+    /// already committed, if any.
+    failure: Option<AppendFail>,
+}
+
+/// One committed `done` of an ask-close batch.
+type ClosedStep = (
+    ClosedAsk,
+    Option<serde_json::Value>,
+    crate::slate_registry::CachedHead,
+);
+
+/// Drive `step` over each open ask, stopping at the first failure but KEEPING
+/// what already committed. Appends are not transactional (each `done` is its
+/// own fsynced ledger line), so discarding the earlier results on a later
+/// error would leave committed `done`s unannounced and unreported.
+fn close_each(
+    open: Vec<u64>,
+    mut step: impl FnMut(u64) -> Result<ClosedStep, AppendFail>,
+) -> (
+    Vec<ClosedAsk>,
+    Vec<serde_json::Value>,
+    Option<crate::slate_registry::CachedHead>,
+    Option<AppendFail>,
+) {
+    let (mut closed, mut events, mut head) = (Vec::new(), Vec::new(), None);
+    for ask_seq in open {
+        match step(ask_seq) {
+            Ok((c, ev, h)) => {
+                closed.push(c);
+                events.extend(ev);
+                head = Some(h);
+            }
+            Err(e) => return (closed, events, head, Some(e)),
+        }
+    }
+    (closed, events, head, None)
 }
 
 /// `POST /api/slates/{slug}/asks/close` — append a `done` for EVERY open
@@ -1869,11 +1911,25 @@ pub async fn close_asks(
             )))
         }
     };
+    // Whatever DID commit is announced and cached even when a later `done`
+    // failed - the ledger already holds it.
     if let Some(head) = outcome.head {
         state.slates.note_head(slug.as_str(), head);
     }
     for payload in outcome.events {
         state.bus.emit("slate.updated", payload);
+    }
+    if let Some(fail) = outcome.failure {
+        let (status, detail) = match &fail {
+            AppendFail::Slate(s) => (
+                StatusCode::from_u16(s.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                s.to_string(),
+            ),
+            AppendFail::Core(c) => (StatusCode::INTERNAL_SERVER_ERROR, c.to_string()),
+        };
+        let mut response = outcome.response;
+        response.error = Some(detail);
+        return no_store_json(status, response);
     }
     no_store_json(StatusCode::OK, outcome.response)
 }
@@ -1893,9 +1949,11 @@ fn close_asks_locked(
         response: AsksCloseResponse {
             closed: Vec::new(),
             head_seq,
+            error: None,
         },
         events: Vec::new(),
         head: None,
+        failure: None,
     };
     // No slate at all = nothing open: a no-op, never a 404 (the verb is
     // "make sure this is closed").
@@ -1916,10 +1974,7 @@ fn close_asks_locked(
         .into());
     }
     let policy = LivePolicy::default();
-    let mut closed = Vec::new();
-    let mut events = Vec::new();
-    let mut head = None;
-    for ask_seq in open {
+    let (closed, events, head, failure) = close_each(open, |ask_seq| {
         let mut done = PostBody {
             kind: Kind::Done,
             line: body.line.clone(),
@@ -1940,23 +1995,50 @@ fn close_asks_locked(
         stamp_provenance(&mut done, user.clone())?;
         slate::validate_post(&done, meta.head_seq, &posts)?;
         let appended = commit_post(
-            paths, slug, &mut meta, posts, done, now_unix, &policy, presence,
+            paths,
+            slug,
+            &mut meta,
+            std::mem::take(&mut posts),
+            done,
+            now_unix,
+            &policy,
+            presence,
         )?;
-        closed.push(ClosedAsk {
-            ask_seq,
-            done_seq: appended.response.post.seq,
-        });
-        events.extend(appended.event);
-        head = Some(appended.head);
+        let step = (
+            ClosedAsk {
+                ask_seq,
+                done_seq: appended.response.post.seq,
+            },
+            appended.event,
+            appended.head,
+        );
+        // Re-read so the NEXT done is validated against the board it will
+        // actually land on.
         posts = load_posts(paths, slug)?;
+        Ok(step)
+    });
+    let mut response = AsksCloseResponse {
+        closed,
+        head_seq: meta.head_seq,
+        error: None,
+    };
+    if let Some(f) = &failure {
+        response.error = Some(match f {
+            AppendFail::Slate(s) => s.to_string(),
+            AppendFail::Core(c) => c.to_string(),
+        });
+    }
+    // Nothing committed before the failure: a plain error, as before.
+    if response.closed.is_empty() {
+        if let Some(f) = failure {
+            return Err(f);
+        }
     }
     Ok(AsksClosed {
-        response: AsksCloseResponse {
-            closed,
-            head_seq: meta.head_seq,
-        },
+        response,
         events,
         head,
+        failure,
     })
 }
 
@@ -2332,6 +2414,59 @@ pub async fn purge(
 mod tests {
     use super::*;
     use kb_core::slate::Prov;
+
+    /// v044-X9 - a failure on the SECOND `done` must not discard the first:
+    /// it is committed, so it is reported (and its event handed back for the
+    /// SSE emit) instead of the whole call turning into a bare error.
+    #[test]
+    fn close_each_keeps_what_committed_before_a_later_failure() {
+        let head = |n| crate::slate_registry::CachedHead {
+            head_seq: n,
+            generation: 1,
+        };
+        let (closed, events, last_head, failure) = close_each(vec![3, 5, 7], |ask| {
+            if ask == 5 {
+                return Err(AppendFail::Core(kb_core::Error::Storage(
+                    "disk full".into(),
+                )));
+            }
+            Ok((
+                ClosedAsk {
+                    ask_seq: ask,
+                    done_seq: ask + 100,
+                },
+                Some(json!({"seq": ask + 100})),
+                head(ask + 100),
+            ))
+        });
+        assert_eq!(
+            closed,
+            vec![ClosedAsk {
+                ask_seq: 3,
+                done_seq: 103
+            }]
+        );
+        assert_eq!(
+            events,
+            vec![json!({"seq": 103})],
+            "the SSE payload survives"
+        );
+        assert_eq!(last_head, Some(head(103)));
+        assert!(failure.is_some(), "the failure is reported, not swallowed");
+
+        let (closed, events, _, failure) = close_each(vec![1, 2], |ask| {
+            Ok((
+                ClosedAsk {
+                    ask_seq: ask,
+                    done_seq: ask,
+                },
+                None,
+                head(ask),
+            ))
+        });
+        assert_eq!((closed.len(), events.len()), (2, 0));
+        assert!(failure.is_none());
+    }
 
     fn prov(session: Option<&str>) -> Prov {
         Prov {

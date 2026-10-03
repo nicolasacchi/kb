@@ -83,6 +83,12 @@ pub struct Candidate {
     pub target: Option<String>,
     /// The `cm-<hash12>` tag.
     pub dedupe_key: String,
+    /// The pre-X8 `cm-<hash12>` key (no target folded in). Read-only
+    /// transition key: a queue/corpus entry tagged with it counts as a
+    /// duplicate, so a re-run after upgrade does not re-queue facts that were
+    /// already imported or approved. Never written to a tag, never serialised.
+    #[serde(skip)]
+    pub legacy_key: String,
     pub mtime_unix: Option<i64>,
     /// The full proposal body (verbatim body + provenance footer).
     pub body: String,
@@ -227,14 +233,28 @@ pub fn project_slug(dirname: &str, home: Option<&str>) -> Option<String> {
 }
 
 fn content_hash(p: &Parsed, title: &str, target: Option<&str>) -> String {
-    let mut h = Sha256::new();
-    for part in [
+    hash_parts(&[
         title,
         target.unwrap_or(""),
         p.description.as_deref().unwrap_or(""),
         p.mem_type.as_deref().unwrap_or(""),
         p.body.as_str(),
-    ] {
+    ])
+}
+
+/// The pre-X8 hash shape: the same parts WITHOUT the target corpus.
+fn legacy_content_hash(p: &Parsed, title: &str) -> String {
+    hash_parts(&[
+        title,
+        p.description.as_deref().unwrap_or(""),
+        p.mem_type.as_deref().unwrap_or(""),
+        p.body.as_str(),
+    ])
+}
+
+fn hash_parts(parts: &[&str]) -> String {
+    let mut h = Sha256::new();
+    for part in parts {
         h.update((part.len() as u64).to_le_bytes());
         h.update(part.as_bytes());
     }
@@ -264,6 +284,7 @@ pub fn map_candidate(
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| file_stem.to_string());
     let key = format!("cm-{}", content_hash(p, &title, target.as_deref()));
+    let legacy_key = format!("cm-{}", legacy_content_hash(p, &title));
     let mut tags = vec![IMPORT_TAG.to_string()];
     if let Some(t) = p.mem_type.as_deref().map(slugify).filter(|t| !t.is_empty()) {
         tags.push(format!("claude-type-{t}"));
@@ -292,6 +313,7 @@ pub fn map_candidate(
         tags,
         target,
         dedupe_key: key,
+        legacy_key,
         mtime_unix,
         body,
         status: "new".to_string(),
@@ -383,7 +405,10 @@ pub fn build_plan(root: &Path, home: Option<&str>, link: Option<&str>) -> Result
 pub fn mark_duplicates(plan: &mut Plan, known: &BTreeSet<String>) {
     let mut seen = known.clone();
     for c in &mut plan.candidates {
-        if !seen.insert(c.dedupe_key.clone()) {
+        // Transition read: an entry imported before X8 carries the old key
+        // shape (no target folded in); it still marks the fact as known.
+        let legacy_known = known.contains(&c.legacy_key);
+        if !seen.insert(c.dedupe_key.clone()) || legacy_known {
             c.status = "duplicate".to_string();
         }
     }
@@ -922,6 +947,27 @@ mod tests {
         };
         mark_duplicates(&mut plan, &BTreeSet::new());
         assert!(plan.candidates.iter().all(|c| c.status == "new"));
+    }
+
+    #[test]
+    fn a_pre_x8_key_still_marks_the_fact_as_known() {
+        let p = parse_frontmatter(SAMPLE).unwrap();
+        let c = map_candidate("a/memory/f.md", "a", "f", &p, None, Some("memory-a".into()));
+        assert_ne!(c.legacy_key, c.dedupe_key);
+        // Re-run after upgrade: the queue/corpus only holds the OLD key.
+        let mut plan = Plan {
+            candidates: vec![c.clone()],
+            skipped: vec![],
+        };
+        mark_duplicates(&mut plan, &kbset(&[c.legacy_key.as_str()]));
+        assert_eq!(plan.candidates[0].status, "duplicate");
+        // An unrelated key does not.
+        let mut plan = Plan {
+            candidates: vec![c],
+            skipped: vec![],
+        };
+        mark_duplicates(&mut plan, &kbset(&["cm-000000000000"]));
+        assert_eq!(plan.candidates[0].status, "new");
     }
 
     #[test]
