@@ -35,6 +35,16 @@ corpus-wide, human-gated other half):
   skipped (the idempotency gate).
 - `--dry-run` — run the full pipeline, print the Step 7 plan table, write
   **nothing**.
+- `--pending` — work through the distill-debt queue instead of a window:
+  `kb sessions list --undistilled --json [--since <7d|YYYY-MM-DD>]` (newest
+  captures that committed work, have no memory stamped to them and are not
+  trivial; newest first). Each queued session runs Steps 2–9 as in forced
+  single-session mode. Mechanical sessions (a dependabot merge, a version
+  bump) that yield no durable fact are closed with the one-line outcome
+  `kb sessions distilled <sid> --note "nothing durable"` — that removes them
+  from the queue's ask, not from the list (the list re-derives from commits and
+  memories, so a skipped session stays listed until a memory is stamped to
+  it; skip it again, cheaply). Stop at 5 sessions per run unless asked for more.
 - No arguments → `--since 7d --folder <basename of cwd>`.
 
 ## Step 1 — resolve candidate sessions
@@ -235,10 +245,12 @@ or every candidate NOOPed/skipped on purpose), answer that ask so it stops
 sitting in every digest's ASK section:
 
 ```bash
-kb slate open --all --cwd "$PWD"      # find the ASK line "Distill session <sid> …" and its #seq
-kb slate done <ask-seq> "distilled: <memory ids, or 'nothing durable'>"
+kb sessions distilled <session-id> --note "distilled: <memory ids, or 'nothing durable'>"
 ```
 
-No matching open ask (non-Claude harness, daemon without a slate, already
-closed) is not an error — skip this step. Never `done` an ask for a session
-you did not distill in this run.
+`kb sessions distilled` finds the open ask whose ref is `session:<sid>` on the
+session's own slate (`--slate <slug>` overrides) and answers it with `done`. It
+is idempotent: no matching open ask (non-Claude harness, daemon without a
+slate, already closed, or a second run) prints a one-line "nothing to close"
+and exits 0, so it is safe to run unconditionally after each handled session.
+Never run it for a session you did not distill in this run.
