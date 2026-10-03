@@ -161,12 +161,12 @@ async fn confirmed_memory_scope(
             }
             (project, visible)
         }
-        Err(_) => {
+        Err(e) => {
             // Could not verify. Sending the derived name would be a filter
             // that might match nothing. This is not a confirmed miss, so it
             // does not use that line. Same wording as `recall_inner`.
             eprintln!(
-                "note: derived project corpus memory-{slug} could not be checked against GET /api/kbs; sending no project filter"
+                "note: derived project corpus memory-{slug} could not be checked against GET /api/kbs ({e}); sending no project filter"
             );
             (None, None)
         }

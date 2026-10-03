@@ -37,7 +37,19 @@ GET  /api/identity                          daemon name + version + kbs, plus
                                             /healthz stays pure liveness.
 GET  /api/users                             v0.34 — configured ∪ observed users
                                             {name,display,configured,observed}
-GET  /api/kbs                               list configured kbs
+GET  /api/kbs[?counts=false]                list configured kbs. Default: with
+                                            doc_count + last_index_at (one
+                                            storage-actor read per corpus).
+                                            counts=false: config fields only
+                                            (name, path, memory_scope,
+                                            default_search_category,
+                                            code_url) — never touches the
+                                            storage actor; the per-prompt
+                                            pre-flight (remember / recall
+                                            auto scope / context / doctor).
+                                            The count fields are ABSENT, not
+                                            0. An older daemon ignores the
+                                            param and returns counts.
 GET  /api/kb/{kb}/sources                   sources in a kb
 GET  /api/kb/{kb}/docs[?offset=N&limit=N&projection=slim|default|atlas
    &folder=PATH&folder_exact=1&tags=CSV&caps=CSV&since=7d|30d|all&index=1
@@ -1247,6 +1259,35 @@ GET  /api/events/schema/{kind}/{version}    per-type payload schema
                                             # are silent); payload carries
                                             # {kb, kind, id, artifact_id?,
                                             # query?, comment_id?}.
+
+# v0.44 F6 — the per-prompt turn block
+GET  /api/turn?q=…|prompt=…[&session=SID&cwd=PATH&deadline_ms=N
+                    &project=CORPUS&visible_to=CSV&lanes=recall,context]
+                                            recall + the turn-1 context scent
+                                            composed in-process under ONE
+                                            shared deadline. Returns
+                                            {text, recalled[{kb,id,pos,title}],
+                                            degraded[{kb,lane,error_class}]}.
+                                            `text` is the hook's v2 recall
+                                            block (golden-pinned against
+                                            kb-recall.sh) plus the scent
+                                            wrapper. project/visible_to narrow
+                                            recall like `kb recall --scope
+                                            auto` (scope=all + both fields);
+                                            project is checked against the
+                                            daemon's own [kb.*] config (no
+                                            storage) and an unknown name fails
+                                            OPEN to unscoped recall.
+                                            lanes= is a csv of recall|context
+                                            (default both); any other token is
+                                            400. No `head_seq`/slate lane yet.
+                                            A lane that misses the deadline or
+                                            fails is named in degraded[]
+                                            (error_class timeout|storage|
+                                            embed|index_fragment|other); a
+                                            corpus that answered keyword-only
+                                            because its query embedder is down
+                                            is named `embed`. No re-ranking.
 
 # v0.38 CT-D1 — the ONE context pack
 GET  /api/context?q=…[&cwd=PATH&budget=N&session=SID&no_floor=true

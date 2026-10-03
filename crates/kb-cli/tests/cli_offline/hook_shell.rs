@@ -37,6 +37,7 @@ fn recall_hook_shell_tests() {
         "test-recall-scent.sh",
         "test-recall-slate.sh",
         "test-recall-layout.sh",
+        "test-recall-turn.sh",
     ] {
         run(s);
     }
@@ -69,4 +70,18 @@ fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
 #[test]
 fn wake_hook_names_cli_skew_once_a_day() {
     run("test-wake-skew.sh");
+}
+
+/// The four distill nudges share `post_distill_ask` from `kb-hook-lib.sh`
+/// (previously four hand-copied definitions); these run each end to end.
+#[test]
+fn distill_nudge_hook_shell_tests() {
+    for s in [
+        "test-distill-nudge.sh",
+        "test-distill-nudge-codex.sh",
+        "test-distill-nudge-kimi.sh",
+        "test-distill-nudge-omp.sh",
+    ] {
+        run(s);
+    }
 }

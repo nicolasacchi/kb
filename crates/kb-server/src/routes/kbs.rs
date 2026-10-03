@@ -1,8 +1,12 @@
 //! `GET /api/kbs` — list configured kbs with doc counts (topic 11 §B.1).
 
 use crate::state::KbHandles;
-use axum::{extract::State, Json};
-use serde::Serialize;
+use axum::{
+    extract::{Query, State},
+    response::{IntoResponse, Response},
+    Json,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -32,7 +36,55 @@ pub struct KbSummary {
     pub code_url: Option<String>,
 }
 
-pub async fn list(State(state): State<Arc<KbHandles>>) -> Json<Vec<KbSummary>> {
+/// `GET /api/kbs?counts=false` — config fields only. Same field names as
+/// [`KbSummary`] minus `doc_count`/`last_index_at` (absent, not zero: a zero
+/// would read as "empty corpus").
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct KbConfigSummary {
+    pub name: String,
+    pub path: String,
+    pub memory_scope: Option<String>,
+    pub default_search_category: Option<String>,
+    pub code_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct ListParams {
+    /// The literal `false` skips the per-corpus `count_rows` + last-run reads
+    /// (the storage-actor fan-out). Absent or ANY other value (`true`, `0`,
+    /// empty, garbage) gives the full listing — deliberately a string, not a
+    /// bool, so a non-boolean value is never a 400.
+    pub counts: Option<String>,
+}
+
+/// Pure projection of `[kb.*]` config. Synchronous on purpose: with no
+/// `.await` in scope it cannot reach a storage actor, which is the property
+/// the per-prompt hot path depends on.
+pub(crate) fn config_summaries(state: &KbHandles) -> Vec<KbConfigSummary> {
+    state
+        .kbs
+        .iter()
+        .map(|(name, ctx)| KbConfigSummary {
+            name: name.to_string(),
+            path: ctx.source_path.to_string_lossy().to_string(),
+            memory_scope: ctx.memory_scope.clone(),
+            default_search_category: ctx.default_search_category.clone(),
+            code_url: ctx.code_url.clone(),
+        })
+        .collect()
+}
+
+pub async fn list(
+    State(state): State<Arc<KbHandles>>,
+    Query(params): Query<ListParams>,
+) -> Response {
+    if params.counts.as_deref() == Some("false") {
+        return Json(config_summaries(&state)).into_response();
+    }
+    Json(list_with_counts(&state).await).into_response()
+}
+
+async fn list_with_counts(state: &Arc<KbHandles>) -> Vec<KbSummary> {
     // FF-E — fan out the per-kb summary reads concurrently (bounded), collecting
     // in BTreeMap order. Pure reads.
     let mut futs: Vec<super::CorpusFut<'_, KbSummary>> = Vec::new();
@@ -59,6 +111,5 @@ pub async fn list(State(state): State<Arc<KbHandles>>) -> Json<Vec<KbSummary>> {
     }
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
-    let summaries = super::buffered_join(futs, state.fanout_cap).await;
-    Json(summaries)
+    super::buffered_join(futs, state.fanout_cap).await
 }
