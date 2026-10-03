@@ -12,6 +12,7 @@ mod doctor;
 mod doctor_hooks;
 mod fleet;
 mod hook_shell;
+mod import_memory;
 mod json_output;
 mod lookup;
 mod pull;
