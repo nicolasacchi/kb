@@ -90,7 +90,7 @@ recall_args=()
 [ -n "$cwd" ] && recall_args+=(--cwd "$cwd")
 # Deadline: hooks.json gives this hook 15s and everything (protocol, pending
 # block, slate digest) is emitted at the END, so one hung call must not eat
-# the whole budget. recall 5s + slate 4s = 9s worst case; a recall timeout
+# the whole budget. recall 5s + slate 4s + skew probe 2s = 11s worst case; a recall timeout
 # degrades to protocol-only output (index stays empty), never to no output.
 # `timeout` is guarded: without coreutils the call runs unwrapped.
 run_to() {
@@ -188,10 +188,45 @@ if [ -n "$slate_sid" ]; then
   fi
 fi
 
+# v0.44 F8 — name CLI/hook version skew. These hooks run straight from the
+# repo while the `kb` binary is whatever was last installed, so a hook that
+# leans on newer CLI behaviour silently does nothing against an old binary.
+# KB_HOOK_CONTRACT is the integer contract these hooks were written against
+# (kept in lock-step with `kb version --contract` by a unit test in
+# crates/kb-cli/src/commands/version.rs; bump both when a hook starts needing
+# new CLI behaviour). A binary that prints less, or fails the call because it
+# predates the flag, gets ONE counts-only line per day. Silence it with
+# KB_SKEW_NOTICE=0 (e.g. a CLI pinned on purpose on a second machine).
+KB_HOOK_CONTRACT=1
+skew_block=""
+if [ "${KB_SKEW_NOTICE:-1}" != "0" ] && command -v kb >/dev/null 2>&1; then
+  skew_stamp="${XDG_CACHE_HOME:-$HOME/.cache}/kb/skew-notice"
+  skew_today="$(date +%Y-%m-%d)"
+  if [ "$(cat "$skew_stamp" 2>/dev/null)" != "$skew_today" ]; then
+    # rc 0 + empty/unparseable output = unknown (no nag); rc 124 = the probe
+    # timed out (no nag); any other non-zero = the binary predates the verb.
+    skew_have="$(run_to 2 kb version --contract 2>/dev/null)"
+    skew_rc=$?
+    if [ "$skew_rc" -eq 124 ]; then
+      skew_have=""
+    elif [ "$skew_rc" -ne 0 ]; then
+      skew_have=0
+    else
+      case "$skew_have" in *[!0-9]*) skew_have="" ;; esac
+    fi
+    if [ -n "$skew_have" ] && [ "$skew_have" -lt "$KB_HOOK_CONTRACT" ]; then
+      skew_block="kb CLI is older than these hooks (hook contract $KB_HOOK_CONTRACT, CLI reports $skew_have): hook features that need newer CLI code are inert. Fix: install a current kb (copy the binary out of the daemon image, or run scripts/install.sh). Shown once a day; KB_SKEW_NOTICE=0 silences it."
+      mkdir -p "$(dirname "$skew_stamp")" 2>/dev/null \
+        && printf '%s\n' "$skew_today" >"$skew_stamp" 2>/dev/null || true
+    fi
+  fi
+fi
+
 ctx="$protocol"
 [ -n "${index:-}" ] && ctx="$ctx"$'\n\n'"$index"
 [ -n "${pending_block:-}" ] && ctx="$ctx"$'\n\n'"$pending_block"
 [ -n "${slate_text:-}" ] && ctx="$ctx"$'\n\n'"$slate_text"
+[ -n "${skew_block:-}" ] && ctx="$ctx"$'\n\n'"$skew_block"
 
 jq -n --arg ctx "$ctx" \
   '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}' \

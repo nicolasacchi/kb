@@ -46,3 +46,9 @@ fn recall_hook_shell_tests() {
 fn wake_hook_shell_tests() {
     run("test-wake-slate.sh");
 }
+
+/// v0.44 F8 — the once-a-day CLI/hook skew notice.
+#[test]
+fn wake_hook_names_cli_skew_once_a_day() {
+    run("test-wake-skew.sh");
+}

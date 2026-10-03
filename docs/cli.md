@@ -25,9 +25,30 @@ kb daemon log-level [FILTER]        read (no arg) or set the daemon's FILE
                                     no restart, stderr/RUST_LOG untouched.
                                     FILTER = EnvFilter directives, e.g.
                                     debug or info,kb_core=debug
+kb version [--contract] [--json]    this binary's build stamp (`kb 0.43-1-gabc
+                                    build <sha> hook-contract 1`; a binary
+                                    with no stamp says "stamp missing").
+                                    --contract prints only the integer hook
+                                    contract the kb-memory hooks compare
+                                    against: kb-wake.sh prints ONE line a day
+                                    (silence: KB_SKEW_NOTICE=0) when the CLI
+                                    reports less, or fails the call because
+                                    it predates the verb. Bump it (and
+                                    KB_HOOK_CONTRACT in kb-wake.sh) when a
+                                    hook starts needing new CLI behaviour.
 kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
    [--daemon URL] [--json] [--fix]  integrity check, distinct from `kb
-                                    daemon doctor` above — read-only,
+   [--strict]                       daemon doctor` above. v0.44 F8:
+                                    `cli-skew` (this binary's stamp vs the
+                                    daemon's /api/identity build_sha, with
+                                    commits behind when git can resolve
+                                    both; a missing stamp is a WARN),
+                                    one `backup-age:<kb>` check per kb (a
+                                    tarball that never reached a configured
+                                    off-host target WARNs), and --strict
+                                    exits 1 on any WARN/FAIL (SKIP never
+                                    trips it; default exit stays 0).
+                                    Read-only,
                                     PASS/WARN/SKIP + a one-line fix per
                                     link: session marker files, the git
                                     Kb-Session trailer hook, the

@@ -20,3 +20,4 @@ mod reindex;
 mod status;
 mod status_watch;
 mod token;
+mod version;

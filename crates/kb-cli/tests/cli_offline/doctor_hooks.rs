@@ -83,3 +83,47 @@ fn doctor_hooks_json_output_is_valid_and_has_expected_shape() {
         .iter()
         .any(|n| n.as_str().unwrap().contains("Claude Code only")));
 }
+
+/// F8 (A4.f4) — `--strict` turns the report into a gate. Against a dead
+/// daemon the `daemon-sessions-kb` check WARNs, so strict exits 1 while the
+/// default stays exit 0; the cli-skew check is present either way.
+#[test]
+fn doctor_hooks_strict_exits_nonzero_on_a_warn_and_default_does_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let args = |strict: bool| {
+        let mut a = vec![
+            "doctor".to_string(),
+            "--hooks".into(),
+            "--repo".into(),
+            tmp.path().to_str().unwrap().into(),
+            "--daemon".into(),
+            dead_endpoint(),
+            "--json".into(),
+        ];
+        if strict {
+            a.push("--strict".into());
+        }
+        a
+    };
+    Command::cargo_bin("kb")
+        .unwrap()
+        .args(args(false))
+        .assert()
+        .success();
+    let out = Command::cargo_bin("kb")
+        .unwrap()
+        .args(args(true))
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("--json under --strict");
+    let ids: Vec<&str> = parsed["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"cli-skew"), "{ids:?}");
+}

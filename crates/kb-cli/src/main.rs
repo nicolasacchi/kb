@@ -609,6 +609,11 @@ enum Cmd {
         /// check; every other `--hooks` check stays read-only.
         #[arg(long)]
         fix: bool,
+        /// Exit 1 when any check is WARN or FAIL (SKIP never trips it), so a
+        /// script can gate on the report. Without it the exit code is 0
+        /// whatever the report says.
+        #[arg(long)]
+        strict: bool,
     },
     /// TM-track — print the daemon's request + pipeline timing snapshot
     /// (`GET /api/metrics`). The coarse per-route latency table is always
@@ -619,6 +624,17 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
         /// Emit the raw JSON snapshot instead of the human-readable tables.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Version — this binary's build stamp, and (`--contract`) the integer
+    /// hook contract the kb-memory hooks compare against to name CLI skew
+    /// (v0.44 F8). `kb --version` stays the one-line clap form.
+    Version {
+        /// Print only the hook-contract integer (what `kb-wake.sh` reads).
+        #[arg(long)]
+        contract: bool,
+        /// Emit `{version, build_sha, hook_contract, stamp_missing}`.
         #[arg(long)]
         json: bool,
     },
@@ -4758,6 +4774,7 @@ async fn main() -> Result<()> {
             let bearer = read_bearer();
             commands::metrics::run(daemon.as_deref(), bearer.as_deref(), json).await
         }
+        Cmd::Version { contract, json } => commands::version::run(contract, json),
         Cmd::Whoami { daemon, output } => {
             let bearer = read_bearer();
             commands::whoami::run(daemon.as_deref(), bearer.as_deref(), output.as_deref()).await
@@ -4807,12 +4824,26 @@ async fn main() -> Result<()> {
             daemon,
             json,
             fix,
+            strict,
         } => {
             if !hooks {
                 anyhow::bail!("kb doctor needs a mode — pass --hooks (the only mode today)");
             }
             let bearer = read_bearer();
-            commands::doctor::hooks(repo, daemon.as_deref(), json, bearer.as_deref(), fix).await
+            let code = commands::doctor::hooks(
+                repo,
+                daemon.as_deref(),
+                json,
+                bearer.as_deref(),
+                fix,
+                strict,
+                cli.config.as_ref(),
+            )
+            .await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
         }
         Cmd::Share(args) => {
             let bearer = read_bearer();
