@@ -91,6 +91,73 @@ fn served_artifact_pred(artifact_col: &str) -> String {
     format!("{artifact_col} LIKE 'served-%'")
 }
 
+/// The READ-time form of the live-serve term (v0.44 H1/I1, M7 reader side).
+///
+/// A live serve (`served-%`) whose injection a LANDED capture row already
+/// records must not count a second time. The write side retires such serve
+/// rows when a capture is replaced (`memory_recalls_replace`), but a serve
+/// appended AFTER that replace (the hook's recall request can land after the
+/// Stop-hook capture of the same turn) is never revisited, and a reader that
+/// ORs both terms counts the injection twice. So every reader selects serve
+/// rows through THIS predicate: a serve is visible unless the session's
+/// NEWEST capture holds a row for the same memory, the same pos (a pre-MR1
+/// capture row without a pos matches on memory alone) within
+/// `SERVE_CAPTURE_SLACK_SECS` — exactly the write-side retire rule, so the
+/// two can never disagree. Only the NEWEST capture covers: a stale
+/// capture's rows are invisible to readers and must not hide a serve.
+///
+/// `outer` is the range variable (or table name) of the `memory_recalls`
+/// row being tested; the inner scan is aliased `cap`/`s9`.
+fn served_uncovered_pred(outer: &str) -> String {
+    format!(
+        "({outer}.artifact_id LIKE 'served-%' AND NOT EXISTS (\
+            SELECT 1 FROM memory_recalls cap \
+            WHERE cap.session_id = {outer}.session_id \
+              AND cap.memory_id = {outer}.memory_id \
+              AND cap.artifact_id NOT LIKE 'served-%' \
+              AND cap.artifact_id = (SELECT s9.artifact_id FROM sessions s9 \
+                                     WHERE s9.session_id = {outer}.session_id \
+                                       AND s9.is_newest = 1 LIMIT 1) \
+              AND (cap.pos IS NULL OR {outer}.pos = cap.pos) \
+              AND (cap.recalled_at IS NULL OR {outer}.recalled_at IS NULL \
+                   OR ABS({outer}.recalled_at - cap.recalled_at) <= {slack})))",
+        slack = SERVE_CAPTURE_SLACK_SECS,
+    )
+}
+
+/// v0.44 H1/I1 (A3.f9) — when the LAST capture of a session is deleted,
+/// drop that session's live-serve rows (`served-%`) with it.
+///
+/// Serve rows are tied to no artifact, so neither the per-artifact cascade
+/// nor the orphan sweep (its predicate excludes them) ever reclaims one; the
+/// only other reaper is the history-window prune, which is off unless a
+/// retention window is configured. With every capture gone the session has
+/// no transcript left for the ledger to describe: the rows would sit in the
+/// table forever and keep feeding the census. A session that STILL has any
+/// capture is untouched, and a re-captured transcript re-derives its own
+/// ledger rows from the `kb-recall` markers it carries. Runs inside the
+/// caller's transaction. Returns the rows deleted.
+fn drop_served_recalls_if_no_capture(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+) -> Result<usize> {
+    let remaining: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+        params![session_id],
+        |r| r.get(0),
+    )?;
+    if remaining > 0 {
+        return Ok(0);
+    }
+    Ok(tx.execute(
+        &format!(
+            "DELETE FROM memory_recalls WHERE session_id = ?1 AND {}",
+            served_artifact_pred("artifact_id")
+        ),
+        params![session_id],
+    )?)
+}
+
 /// PF-R1 (V0040) — re-derive the materialized `is_newest` flag for one
 /// `session_id`'s capture group, inside the CALLER's transaction. Clears any
 /// currently-flagged row for the group, then re-applies the flag to the
@@ -4046,6 +4113,7 @@ impl Db {
         )?;
         if let Some(sid) = session_id {
             recompute_is_newest(&tx, &sid)?;
+            drop_served_recalls_if_no_capture(&tx, &sid)?;
         }
         tx.commit()?;
         Ok(n)
@@ -4715,7 +4783,7 @@ impl Db {
              WHERE ({} OR (session_id = ?1 AND {}))
              ORDER BY (recalled_at IS NULL) ASC, recalled_at ASC, rowid ASC",
             newest_capture_pred("artifact_id", "?1"),
-            served_artifact_pred("artifact_id"),
+            served_uncovered_pred("memory_recalls"),
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt
@@ -4792,7 +4860,7 @@ impl Db {
             // failing unit test before this fix (a two-different-sessions
             // scenario collapsed to a single row).
             newest_capture_pred("artifact_id", "memory_recalls.session_id"),
-            served_artifact_pred("artifact_id"),
+            served_uncovered_pred("memory_recalls"),
             if memory_kb.is_some() {
                 " AND memory_kb = ?"
             } else {
@@ -4863,7 +4931,7 @@ impl Db {
                AND ({} OR {}){}
              GROUP BY memory_id, wk",
             newest_capture_pred("artifact_id", "memory_recalls.session_id"),
-            served_artifact_pred("artifact_id"),
+            served_uncovered_pred("memory_recalls"),
             if memory_kb.is_some() {
                 " AND memory_kb = ?"
             } else {
@@ -4928,6 +4996,7 @@ impl Db {
         limit: u32,
     ) -> Result<Vec<MemoryRecalledByRow>> {
         let served = served_artifact_pred("mr.artifact_id");
+        let uncovered = served_uncovered_pred("mr");
         let sql = format!(
             "SELECT mr.session_id, mr.turn_id, mr.recalled_at, s.title, s.first_user_prompt,
                     COALESCE(s.started_at, mr.recalled_at, 0), mr.used, mr.pos
@@ -4940,11 +5009,12 @@ impl Db {
                  ) ELSE mr.artifact_id END
              )
              WHERE mr.memory_kb = ?1 AND mr.memory_id = ?2
-               AND ({} OR {served})
+               AND ({} OR {uncovered})
              ORDER BY (mr.recalled_at IS NULL) ASC, mr.recalled_at DESC, mr.rowid ASC
              LIMIT ?3",
             newest_capture_pred("mr.artifact_id", "mr.session_id"),
             served = served,
+            uncovered = uncovered,
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt
@@ -6421,6 +6491,7 @@ impl Db {
                         out.sessions_removed = n;
                         if let Some(sid) = sessions_group {
                             recompute_is_newest(&tx, &sid)?;
+                            out.total_rows += drop_served_recalls_if_no_capture(&tx, &sid)?;
                         }
                     }
                     out.total_rows += n;
@@ -12242,6 +12313,149 @@ mod tests {
         let after = db.memory_recalls_for_session("sid-a").unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].artifact_id, "cap-1");
+    }
+
+    /// v0.44 H1/I1 (M7 reader side + lagging-capture race) — an injection that
+    /// is BOTH a live serve and a row of the session's landed capture counts
+    /// ONCE on every reader, even when the serve was appended AFTER the
+    /// capture replace (so the write-side retire in `memory_recalls_replace`
+    /// never saw it). A serve the capture does not cover — other memory, or
+    /// the same memory outside `SERVE_CAPTURE_SLACK_SECS` — still counts.
+    #[test]
+    fn served_row_covered_by_a_landed_capture_is_counted_once_on_every_reader() {
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        let mut captured = memory_recall_row(
+            "notes",
+            "aaaaaaaaaaaa",
+            "sid-a",
+            "t-1",
+            Some(1_700_000_100),
+            "cap-1",
+        );
+        captured.pos = Some(1);
+        db.memory_recalls_replace("cap-1", &[captured]).unwrap();
+        // The capture has landed; NOW the hook's serve for the same injection
+        // arrives (30 s after the turn ts), plus an unrelated serve.
+        let served = |id: &str, pos: u32, at: i64| ServedRecallRow {
+            memory_kb: "notes".into(),
+            memory_id: id.into(),
+            pos,
+            title: "t".into(),
+            injected_chars: 1,
+            served_at: at,
+        };
+        db.memory_recalls_append(
+            "sid-a",
+            &[
+                served("aaaaaaaaaaaa", 1, 1_700_000_130),
+                served("bbbbbbbbbbbb", 2, 1_700_000_131),
+            ],
+        )
+        .unwrap();
+        let ids = |db: &Db| -> Vec<String> {
+            db.memory_recalls_for_session("sid-a")
+                .unwrap()
+                .into_iter()
+                .map(|r| r.memory_id)
+                .collect()
+        };
+        assert_eq!(
+            ids(&db),
+            vec!["aaaaaaaaaaaa".to_string(), "bbbbbbbbbbbb".to_string()],
+            "the covered serve must not duplicate the capture row; the uncovered one stays"
+        );
+        let counts = |db: &Db, id: &str| -> u32 {
+            db.memory_recalls_counts_for_ids(None, &[id.to_string()])
+                .unwrap()
+                .first()
+                .map_or(0, |c| c.count)
+        };
+        assert_eq!(
+            counts(&db, "aaaaaaaaaaaa"),
+            1,
+            "census counts the injection once"
+        );
+        assert_eq!(counts(&db, "bbbbbbbbbbbb"), 1);
+        let weekly: u32 = db
+            .memory_recalls_weekly_for_ids(None, &["aaaaaaaaaaaa".to_string()], 1_700_000_200)
+            .unwrap()
+            .iter()
+            .map(|w| w.count)
+            .sum();
+        assert_eq!(weekly, 1, "the weekly histogram counts the injection once");
+        assert_eq!(
+            db.memory_recalls_for_memory("notes", "aaaaaaaaaaaa", 10)
+                .unwrap()
+                .len(),
+            1,
+            "recalled-by lists the injection once"
+        );
+
+        // Same memory + pos but far outside the slack: a different injection.
+        db.memory_recalls_append("sid-a", &[served("aaaaaaaaaaaa", 1, 1_700_001_000)])
+            .unwrap();
+        assert_eq!(counts(&db, "aaaaaaaaaaaa"), 2);
+    }
+
+    /// v0.44 H1/I1 (A3.f9) — deleting a session's LAST capture drops its
+    /// live-serve rows (tied to no artifact, so neither the cascade nor the
+    /// sweep reached them); deleting one of several captures keeps them.
+    #[test]
+    fn deleting_the_last_capture_drops_served_rows_but_not_while_another_remains() {
+        use crate::cascade::CascadeMode;
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        db.sessions_upsert(&session_row("cap-2", "sid-a", 1_700_000_500))
+            .unwrap();
+        db.sessions_upsert(&session_row("cap-9", "sid-b", 1_700_000_000))
+            .unwrap();
+        let served = |sid: &str| {
+            let rows = [ServedRecallRow {
+                memory_kb: "notes".into(),
+                memory_id: "cccccccccccc".into(),
+                pos: 1,
+                title: "t".into(),
+                injected_chars: 1,
+                served_at: 1_700_000_900,
+            }];
+            (sid.to_string(), rows)
+        };
+        for sid in ["sid-a", "sid-b"] {
+            let (sid, rows) = served(sid);
+            db.memory_recalls_append(&sid, &rows).unwrap();
+        }
+        let served_left = |db: &Db, sid: &str| -> i64 {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memory_recalls \
+                     WHERE session_id = ?1 AND artifact_id LIKE 'served-%'",
+                    params![sid],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        db.cascade_delete_doc("cap-1", CascadeMode::Full).unwrap();
+        assert_eq!(
+            served_left(&db, "sid-a"),
+            1,
+            "cap-2 still holds the session"
+        );
+        db.cascade_delete_doc("cap-2", CascadeMode::Full).unwrap();
+        assert_eq!(
+            served_left(&db, "sid-a"),
+            0,
+            "last capture gone: serves go too"
+        );
+        assert_eq!(served_left(&db, "sid-b"), 1, "another session is untouched");
+        assert_eq!(db.sessions_delete("cap-9").unwrap(), 1);
+        assert_eq!(
+            served_left(&db, "sid-b"),
+            0,
+            "sessions_delete drops them too"
+        );
     }
 
     /// CT-C5 — the CT-B2 "recalled by" read surfaces `used` per row and
