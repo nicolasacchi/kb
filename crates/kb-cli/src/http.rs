@@ -38,6 +38,29 @@ pub fn client_with_timeout(secs: u64) -> Result<reqwest::Client> {
 /// `kb` against an auth-on remote daemon. Self-host docs claimed they
 /// worked.
 pub fn client_with_timeout_and_bearer(secs: u64, bearer: Option<&str>) -> Result<reqwest::Client> {
+    // MI test-hardening (2026-08) — every call site hardcodes a timeout sized
+    // for a healthy, unloaded daemon; under host I/O contention an
+    // integration test can trip it while the daemon is merely slow. This
+    // narrowly-scoped override is honoured ONLY when a test sets
+    // `KB_TEST_HTTP_TIMEOUT_SECS` on the spawned `kb` subprocess's own env
+    // (see `kb-cli/tests/common/mod.rs::http_timeout_secs`) — unset in every
+    // real invocation, so production's snappy-failure defaults are untouched.
+    let secs = std::env::var("KB_TEST_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(secs);
+    client_with_exact_timeout(Duration::from_secs(secs), bearer)
+}
+
+/// The production client builder (identity header, bearer, timeout) with NO
+/// env override. [`client_with_timeout_and_bearer`] is this plus the test-only
+/// `KB_TEST_HTTP_TIMEOUT_SECS` hook; tests that need a sub-second timeout
+/// through the real header/bearer path call this directly rather than
+/// mutating process-global env.
+pub(crate) fn client_with_exact_timeout(
+    timeout: Duration,
+    bearer: Option<&str>,
+) -> Result<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     // M6: every kb-cli request advertises itself as a first-party
     // client so the daemon's Origin-allowlist middleware lets the
@@ -52,28 +75,8 @@ pub fn client_with_timeout_and_bearer(secs: u64, bearer: Option<&str>) -> Result
             .context("bearer token contained an invalid header byte")?;
         headers.insert(reqwest::header::AUTHORIZATION, value);
     }
-    // MI test-hardening (2026-08) — every call site above hardcodes its own
-    // timeout (5-600s), sized for a healthy daemon on an unloaded machine.
-    // Under host I/O contention a daemon can be merely slow (e.g. its
-    // single-writer storage actor queue backed up behind other tests'
-    // indexing) rather than actually stuck, and a mutating integration-test
-    // call like `kb notes new` can trip its call site's timeout before the
-    // daemon ever gets to answer — `notes_cli_links_and_backlinks` did
-    // exactly this (`error sending request … operation timed out`, not the
-    // poll-loop timeout `KB_TEST_INDEX_TIMEOUT_SECS` already covers). There's
-    // no knob for this that a test can already reach (each `secs` is a
-    // literal at its call site), so this is a narrowly-scoped test-only
-    // override: honoured ONLY when a test explicitly sets
-    // `KB_TEST_HTTP_TIMEOUT_SECS` on the spawned `kb` subprocess's own env
-    // (see `kb-cli/tests/common/mod.rs::http_timeout_secs`) — unset in every
-    // real invocation, so production's snappy-failure defaults are
-    // untouched.
-    let secs = std::env::var("KB_TEST_HTTP_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(secs);
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(secs))
+        .timeout(timeout)
         .default_headers(headers)
         .build()
         .context("reqwest client")
@@ -174,7 +177,9 @@ pub async fn resolve_default_kb(
         return Ok(k.to_string());
     }
     let base = daemon.unwrap_or(DEFAULT_DAEMON).trim_end_matches('/');
-    let url = format!("{base}/api/kbs");
+    // Only the NAME of the single configured kb is read: the config-only
+    // listing, not the per-corpus row-count fan-out.
+    let url = format!("{base}/api/kbs?counts=false");
     let client = client_with_timeout_and_bearer(5, bearer)?;
     let resp = client
         .get(&url)
@@ -354,7 +359,54 @@ pub async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<serde
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+
+    /// Test-only daemon stub: answers EVERY request with `body` and records
+    /// each request line, so a test can assert what a verb asked for.
+    pub(crate) fn recording_stub(
+        body: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { continue };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = tx.send(line.trim().to_string());
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    /// Every name-only `GET /api/kbs` caller asks for the config-only
+    /// listing (`counts=false`), never the per-corpus row-count fan-out.
+    #[tokio::test]
+    async fn resolve_default_kb_asks_for_the_config_only_listing() {
+        let (url, rx) = recording_stub(r#"[{"name":"only"}]"#);
+        let kb = resolve_default_kb(None, Some(&url), None).await.unwrap();
+        assert_eq!(kb, "only");
+        let line = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(line, "GET /api/kbs?counts=false HTTP/1.1");
+    }
     use super::*;
 
     #[test]

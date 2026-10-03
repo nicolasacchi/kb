@@ -3,13 +3,14 @@
 //! The query embed used to be `if let Ok(..) = embed_query(..).await {..}`:
 //! an Err was discarded and every vector arm silently fell back to BM25,
 //! returning a 200 that still read as hybrid/semantic with `degraded` absent
-//! (federated search AND memory recall). These tests boot a real daemon whose
+//! (federated search, memory recall, the /api/context artifact match and
+//! sessions recollect). These tests boot a real daemon whose
 //! `kb-embedder` is a fake script that embeds documents fine and then — once
 //! the flag file appears — answers every embed with an IPC error, and assert
 //! the fallback is reported on both routes while the keyword hits survive.
 //!
 //! Own test binary on purpose: it mutates process-global env
-//! (`KB_EMBEDDER_BIN`, `KB_FAKE_EMBED_FAIL`).
+//! (`KB_EMBEDDER_BIN`, `KB_FAKE_EMBED_FAIL`, `KB_FAKE_EMBED_SLOW`).
 #![cfg(unix)]
 
 mod common;
@@ -30,6 +31,7 @@ while IFS= read -r line; do
     *'"kind":"shutdown"'*) exit 0 ;;
     *'"kind":"embed"'*)
       rid=$(printf '%s' "$line" | sed 's/.*"req_id":\([0-9][0-9]*\).*/\1/')
+      if [ -e "$KB_FAKE_EMBED_SLOW" ]; then sleep 4; fi
       if [ -e "$KB_FAKE_EMBED_FAIL" ]; then
         printf '{"kind":"error","req_id":%s,"msg":"fake embedder down"}\n' "$rid"
       else
@@ -57,11 +59,32 @@ async fn get_json(addr: std::net::SocketAddr, path: &str) -> serde_json::Value {
         .unwrap()
 }
 
+/// kbs named by any degraded entry.
+fn degraded_kbs(body: &serde_json::Value) -> Vec<String> {
+    body["degraded"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d["kb"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn has_lane(body: &serde_json::Value, lane: &str, class: &str) -> bool {
     body["degraded"].as_array().is_some_and(|a| {
         a.iter()
             .any(|d| d["lane"] == lane && d["error_class"] == class)
     })
+}
+
+/// Any degraded entry of `class`. The timeout half asserts the CLASS, not the
+/// lane: once the embed has eaten the whole `deadline_ms`, the per-corpus
+/// arms behind it have zero budget left and are themselves named timeout.
+fn has_class(body: &serde_json::Value, class: &str) -> bool {
+    body["degraded"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|d| d["error_class"] == class))
 }
 
 #[tokio::test]
@@ -73,6 +96,8 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
     let flag = tmp.path().join("embedder-down.flag");
     std::env::set_var("KB_EMBEDDER_BIN", &script);
     std::env::set_var("KB_FAKE_EMBED_FAIL", &flag);
+    let slow_flag = tmp.path().join("embedder-slow.flag");
+    std::env::set_var("KB_FAKE_EMBED_SLOW", &slow_flag);
 
     let mem = tmp.path().join("mem");
     std::fs::create_dir_all(&mem).unwrap();
@@ -93,39 +118,65 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
     )
     .unwrap();
 
+    // A plain (non-memory) corpus: /api/context's artifact match skips
+    // memory-scoped kbs, and recollect fans out over every kb.
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("plain.html"),
+        r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Otter Ledger</title></head><body><h1>Otter Ledger</h1><p>otters keep a ledger of river stones</p></body></html>"#,
+    )
+    .unwrap();
+
+    // A keyword-only corpus (no embedding_model): answering from BM25 is its
+    // configuration, not a degradation, so it must never be named.
+    let kw = tmp.path().join("kw");
+    std::fs::create_dir_all(&kw).unwrap();
+    std::fs::write(
+        kw.join("kw.html"),
+        memory_html("Heron Log", "the heron stands on one leg by the river"),
+    )
+    .unwrap();
+
     let daemon_name = format!(
         "embdeg-{}",
         tmp.path().file_name().unwrap().to_string_lossy()
     );
     let mut kb_map: BTreeMap<KbName, KbSection> = BTreeMap::new();
+    let section = |path: std::path::PathBuf, memory_scope: Option<&str>, embeds: bool| KbSection {
+        path,
+        skip_patterns: Vec::new(),
+        ui: UiSection::default(),
+        embedding_model: embeds.then(|| "bge-small-en-v1.5".to_string()),
+        reranker_model: None,
+        chunked_embeddings: false,
+        graph_boost: None,
+        outbound: None,
+        atlas: None,
+        templates: BTreeMap::new(),
+        memory_scope: memory_scope.map(str::to_string),
+        project_slugs: Vec::new(),
+        default_search_category: None,
+        code_url: None,
+        decay_policy: None,
+        versions: None,
+        reading_progress: None,
+        search: Default::default(),
+        indexable_extensions: None,
+        reconcile_secs: None,
+        capture_dir: None,
+        resurface: None,
+        slo: None,
+        id_patterns: Vec::new(),
+    };
     kb_map.insert(
         KbName::new("mem").unwrap(),
-        KbSection {
-            path: mem,
-            skip_patterns: Vec::new(),
-            ui: UiSection::default(),
-            embedding_model: Some("bge-small-en-v1.5".into()),
-            reranker_model: None,
-            chunked_embeddings: false,
-            graph_boost: None,
-            outbound: None,
-            atlas: None,
-            templates: BTreeMap::new(),
-            memory_scope: Some("global".into()),
-            project_slugs: Vec::new(),
-            default_search_category: None,
-            code_url: None,
-            decay_policy: None,
-            versions: None,
-            reading_progress: None,
-            search: Default::default(),
-            indexable_extensions: None,
-            reconcile_secs: None,
-            capture_dir: None,
-            resurface: None,
-            slo: None,
-            id_patterns: Vec::new(),
-        },
+        section(mem, Some("global"), true),
+    );
+    kb_map.insert(KbName::new("docs").unwrap(), section(docs, None, true));
+    kb_map.insert(
+        KbName::new("kw").unwrap(),
+        section(kw, Some("global"), false),
     );
     let cfg = KbConfig {
         daemon: DaemonSection {
@@ -154,6 +205,8 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
         .await
         .expect("serve");
     common::wait_docs_listed(addr, "mem", 2).await;
+    common::wait_docs_listed(addr, "docs", 1).await;
+    common::wait_docs_listed(addr, "kw", 1).await;
 
     // Control: with a healthy embedder neither route reports a degraded lane.
     let ok_search = get_json(addr, "/api/search?q=zigzag&scope=all&mode=hybrid").await;
@@ -185,6 +238,11 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
         "federated hybrid search with a dead embedder must name the lane in degraded[]: {search}"
     );
 
+    assert!(
+        !degraded_kbs(&search).contains(&"kw".to_string()),
+        "a keyword-only corpus is not a degraded one: {search}"
+    );
+
     let recall = get_json(addr, "/api/memory/recall?q=marmot&scope=all").await;
     assert!(
         recall["hits"].as_array().is_some_and(|h| !h.is_empty()),
@@ -193,5 +251,59 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
     assert!(
         has_lane(&recall, "recall.vector", "embed"),
         "recall with a dead embedder must name the lane in degraded[]: {recall}"
+    );
+    // Wiring of recall_compose's per-corpus fallback flag: the embedding
+    // corpus is named, the keyword-only one is not.
+    assert!(
+        degraded_kbs(&recall).contains(&"mem".to_string()),
+        "the corpus that lost its vector lane must be the one named: {recall}"
+    );
+    assert!(
+        !degraded_kbs(&recall).contains(&"kw".to_string()),
+        "a keyword-only corpus is not a degraded one: {recall}"
+    );
+
+    // The same dead embedder on the other two vector lanes that used to
+    // discard the Err (`if let Ok`): the /api/context artifact match and
+    // sessions recollect.
+    let ctx = get_json(addr, "/api/context?q=ledger%20stones").await;
+    assert!(
+        has_lane(&ctx, "artifacts.vector", "embed"),
+        "/api/context with a dead embedder must name artifacts.vector: {ctx}"
+    );
+    let rec = get_json(addr, "/api/sessions/recollect?q=otter%20ledgers").await;
+    assert!(
+        has_lane(&rec, "recollect.vector", "embed"),
+        "recollect with a dead embedder must name recollect.vector: {rec}"
+    );
+
+    // The TIMEOUT half: the embedder is alive but slow (4 s per embed) and the
+    // caller's budget is 200 ms. Each lane must say `timeout`, not `embed`,
+    // and not stay silent. Fresh queries again so the embed cache cannot help.
+    std::fs::remove_file(&flag).unwrap();
+    std::fs::write(&slow_flag, b"slow").unwrap();
+    let started = std::time::Instant::now();
+    let search = get_json(
+        addr,
+        "/api/search?q=sedge&scope=all&mode=hybrid&deadline_ms=200",
+    )
+    .await;
+    assert!(
+        has_class(&search, "timeout"),
+        "a slow embedder past deadline_ms must be named timeout on search: {search}"
+    );
+    let recall = get_json(addr, "/api/memory/recall?q=heron&scope=all&deadline_ms=200").await;
+    assert!(
+        has_class(&recall, "timeout"),
+        "a slow embedder past deadline_ms must be named timeout on recall: {recall}"
+    );
+    let rec = get_json(addr, "/api/sessions/recollect?q=badger&deadline_ms=200").await;
+    assert!(
+        has_class(&rec, "timeout"),
+        "a slow embedder past deadline_ms must be named timeout on recollect: {rec}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(8),
+        "the 200 ms budget must bound the request, not the 4 s embedder"
     );
 }

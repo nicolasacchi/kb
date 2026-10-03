@@ -304,3 +304,112 @@ async fn backup_fails_clearly_when_kb_has_no_state_yet() {
     run_backup(&state, &config, &cache, "ghost-kb", &out_path).failure();
     assert!(!out_path.exists(), "no tarball on failure");
 }
+
+/// Stage one more REAL kb state (migrated sqlite + empty lance) beside the
+/// ones `stage_state` made.
+async fn stage_extra_kb(state: &Path, name: &str) {
+    let kb_state = state.join("default").join(name);
+    fs::create_dir_all(&kb_state).unwrap();
+    Db::open(&kb_state.join("index.db")).unwrap();
+    Storage::open(&kb_state.join("lance"), Some(384))
+        .await
+        .unwrap();
+}
+
+/// A one-connection-at-a-time daemon stub answering `GET /api/kbs…` with
+/// `body`; returns its base URL.
+fn stub_kb_list(body: &'static str) -> String {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut stream) = conn else { continue };
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                continue;
+            }
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                    break;
+                }
+            }
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// Names inside a tarball.
+fn tar_names(tarball: &Path) -> Vec<String> {
+    let out = StdCommand::new("tar")
+        .arg("-tzf")
+        .arg(tarball)
+        .output()
+        .expect("tar -tzf failed to start");
+    assert!(out.status.success(), "tar -tzf {}", tarball.display());
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// v044-X3 (F8 carry) — end to end through the real binary: `kb backup --all`
+/// puts the daemon-scope members (`saved-queries.json`, `slates/`) in the
+/// tarball of the FIRST kb IN NAME ORDER, and in no other. The daemon lists
+/// its kbs in the opposite order (zeta first) — the order the CLI once
+/// trusted — so a regression to "first in response order" fails here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backup_all_gives_daemon_scope_members_to_the_first_kb_by_name_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (state, config) = stage_state(tmp.path()).await;
+    stage_extra_kb(&state, "alpha").await;
+    stage_extra_kb(&state, "zeta").await;
+    // Daemon-scope state: a real saved-queries file at <state>/default/.
+    fs::write(state.join("default/saved-queries.json"), b"[]").unwrap();
+    let cache = tmp.path().join("cache");
+    let daemon = stub_kb_list(r#"[{"name":"zeta"},{"name":"alpha"}]"#);
+
+    Command::cargo_bin("kb")
+        .unwrap()
+        .env("KB_STATE_DIR", &state)
+        .env("KB_CONFIG_DIR", &config)
+        .env("KB_CACHE_DIR", &cache)
+        .args(["backup", "--all", "--daemon", &daemon])
+        .assert()
+        .success();
+
+    let exports = state.join("default/exports");
+    let tarball = |kb: &str| -> std::path::PathBuf {
+        fs::read_dir(&exports)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&format!("{kb}-")) && n.ends_with(".tar.gz"))
+            })
+            .unwrap_or_else(|| panic!("no tarball for {kb} in {}", exports.display()))
+    };
+    let has_daemon_member =
+        |names: &[String]| names.iter().any(|n| n.contains("saved-queries.json"));
+    let alpha = tar_names(&tarball("alpha"));
+    let zeta = tar_names(&tarball("zeta"));
+    assert!(
+        has_daemon_member(&alpha),
+        "the first kb by NAME carries the daemon-scope members: {alpha:?}"
+    );
+    assert!(
+        !has_daemon_member(&zeta),
+        "no other kb's tarball may carry them: {zeta:?}"
+    );
+}

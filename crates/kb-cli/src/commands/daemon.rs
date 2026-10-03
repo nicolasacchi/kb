@@ -345,7 +345,8 @@ async fn run_doctor_once(endpoint: Option<&str>, bearer: Option<&str>) -> Result
 
     // 2) kbs configured
     if report.last_status_is_ok() {
-        let kbs_url = format!("{base}/api/kbs");
+        // Names only (the loops below read `name`): config-only listing.
+        let kbs_url = format!("{base}/api/kbs?counts=false");
         let kbs: Vec<serde_json::Value> = match client.get(&kbs_url).send().await {
             Ok(r) => match r.error_for_status() {
                 Ok(r) => r.json().await.unwrap_or_default(),
@@ -372,6 +373,8 @@ async fn run_doctor_once(endpoint: Option<&str>, bearer: Option<&str>) -> Result
         // 3) open errors per kb
         let mut total_open = 0u64;
         let mut by_kb = Vec::new();
+        let mut total_edge_stuck = 0usize;
+        let mut edge_by_kb: Vec<String> = Vec::new();
         for kb in &kbs {
             let Some(name) = kb.get("name").and_then(|v| v.as_str()) else {
                 continue;
@@ -385,6 +388,11 @@ async fn run_doctor_once(endpoint: Option<&str>, bearer: Option<&str>) -> Result
                     if !arr.is_empty() {
                         total_open += arr.len() as u64;
                         by_kb.push(format!("{name}={}", arr.len()));
+                        let stuck = stuck_edge_write_errors(&arr);
+                        if stuck > 0 {
+                            total_edge_stuck += stuck;
+                            edge_by_kb.push(format!("{name}={stuck}"));
+                        }
                     }
                 }
             }
@@ -394,7 +402,7 @@ async fn run_doctor_once(endpoint: Option<&str>, bearer: Option<&str>) -> Result
         } else {
             report.push(Check::warn(
                 "errors",
-                format!("{total_open} open ({})", by_kb.join(", ")),
+                errors_detail(total_open, &by_kb, total_edge_stuck, &edge_by_kb),
             ));
         }
 
@@ -653,6 +661,40 @@ fn print_json(report: &DoctorReport) {
     println!("{out}");
 }
 
+/// Count open errors that are failed edge writes (`record_edges:` rows,
+/// kind `storage`, no content hash). The indexer retries these on every
+/// unchanged reconcile, so one still listed here has survived the bounded
+/// retry: the graph is missing that file's edges until the cause is fixed.
+fn stuck_edge_write_errors(rows: &[serde_json::Value]) -> usize {
+    rows.iter()
+        .filter(|r| {
+            r.get("kind").and_then(|v| v.as_str()) == Some("storage")
+                && r.get("content_hash").is_none_or(|h| h.is_null())
+                && r.get("message")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|m| m.starts_with(kb_core::enrich::EDGE_ERROR_PREFIX))
+        })
+        .count()
+}
+
+/// The `errors` check detail: the plain count, plus a named edge-write
+/// clause when any survived the indexer's unchanged-reconcile retry.
+fn errors_detail(
+    total_open: u64,
+    by_kb: &[String],
+    edge_stuck: usize,
+    edge_by_kb: &[String],
+) -> String {
+    let mut d = format!("{total_open} open ({})", by_kb.join(", "));
+    if edge_stuck > 0 {
+        d.push_str(&format!(
+            "; {edge_stuck} edge write(s) still failing after retry ({})",
+            edge_by_kb.join(", ")
+        ));
+    }
+    d
+}
+
 /// Build the decode-skips check from a parsed `/api/stats` body.
 /// `kbs[].decode_skips` (GC-B2) is the cumulative count of rows the
 /// storage layer silently dropped from search/list results because
@@ -737,6 +779,30 @@ async fn poke_event_bus(base: &str, bearer: Option<&str>) -> Check {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// v044-X3 / A3.f10 — doctor names edge writes that survived the
+    /// indexer's retry; a failed delete (same kind, NULL hash) and a hashed
+    /// row are not edge writes.
+    #[test]
+    fn doctor_names_stuck_edge_write_errors() {
+        let rows: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+              {"kind":"storage","message":"record_edges: boom","content_hash":null},
+              {"kind":"storage","message":"record_edges: boom2"},
+              {"kind":"storage","message":"delete: boom","content_hash":null},
+              {"kind":"storage","message":"record_edges: hashed","content_hash":"h"},
+              {"kind":"io","message":"record_edges: wrong kind","content_hash":null}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(stuck_edge_write_errors(&rows), 2);
+        let d = errors_detail(5, &["a=5".into()], 2, &["a=2".into()]);
+        assert!(
+            d.contains("2 edge write(s) still failing after retry (a=2)"),
+            "{d}"
+        );
+        assert_eq!(errors_detail(1, &["a=1".into()], 0, &[]), "1 open (a=1)");
+    }
 
     #[test]
     fn pid_is_alive_handles_self() {

@@ -47,7 +47,22 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     tarball that never reached a configured
                                     off-host target WARNs), and --strict
                                     exits 1 on any WARN/FAIL (SKIP never
-                                    trips it; default exit stays 0).
+                                    trips it; default exit stays 0). That
+                                    INCLUDES `cli-skew` (a CLI pinned on
+                                    purpose, or one built from a dirty tree,
+                                    WARNs) and the off-host WARN, so a gate
+                                    on a deliberately-skewed machine fails
+                                    until the skew is fixed — gate on the
+                                    JSON `status` of the ids you care about
+                                    instead if that is not what you want.
+                                    The skew wording names which side is
+                                    older (behind: install the daemon's
+                                    build; ahead: redeploy the daemon;
+                                    diverged / no git: update the older
+                                    side). A kb.toml that cannot be read
+                                    SKIPs `backup-offhost` (the off-host
+                                    half was not verified) rather than
+                                    silently assuming none is expected.
                                     Read-only,
                                     PASS/WARN/SKIP + a one-line fix per
                                     link: session marker files, the git
@@ -630,7 +645,26 @@ kb remember <text> [--title T] [--summary S]
                                     carrier, stored/filterable as
                                     ?tags=outcome-failed). SURFACED, NEVER
                                     SCORED — a failed memory ranks exactly
-                                    like an ordinary one.
+                                    like an ordinary one. v0.44 X3: every
+                                    write carries a client_ref (an
+                                    idempotency key the daemon turns into
+                                    the file name). A slow, down or 5xx
+                                    daemon does not lose the write: it is
+                                    SPOOLED under
+                                    ${XDG_CACHE_HOME:-~/.cache}/kb/outbox
+                                    (exit 0, `queued: true` in --json) and
+                                    replayed with the SAME client_ref by the
+                                    next successful `kb remember` or `kb
+                                    outbox flush`; the daemon answers a
+                                    replay of a write that already landed
+                                    with 200 and the original id, so nothing
+                                    is written twice. A 4xx is never spooled.
+kb outbox flush [--daemon URL] [--json]
+kb outbox list [--json]
+                                    v0.44 X3: replay / show the `kb remember`
+                                    spool. An entry the daemon refuses for
+                                    good (4xx) is parked as <ref>.rejected so
+                                    it cannot block the queue.
 kb propose --title T --body TEXT|-
    [--kb NAME] [--tags T,T]
    [--global | --link KB,KB]
@@ -727,7 +761,8 @@ kb context <query> [--cwd PATH] [--budget N] [--session SID] [--no-floor]
                                     `kb context`") points at: the hook injects
                                     COUNTS, this verb is the substance.
 kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
-   [--lanes recall,context] [--daemon URL] [--json]
+   [--lanes recall,context,slate] [--slate SLUG] [--slate-since SEQ]
+   [--daemon URL] [--json]
                                     v0.44 F6: the per-prompt hook's ONE call
                                     over `GET /api/turn` (recall + turn-1
                                     scent, composed by the daemon under a
@@ -735,8 +770,12 @@ kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
                                     repo slug (git main-checkout basename +
                                     local `project_slugs` aliases) is derived
                                     locally with NO network call and sent as
-                                    project=/visible_to=; the daemon checks
-                                    it against its own config. Prints `text`
+                                    project=/visible_to=: BOTH candidates
+                                    (the alias, then memory-<slug>) go on the
+                                    wire and the daemon takes the first it
+                                    has. --slate/--slate-since add the slate
+                                    lane (reply carries head_seq for your
+                                    cursor). Prints `text`
                                     verbatim. A lane that timed out / failed
                                     / fell back to keyword-only is NAMED in
                                     one line (`kb: recall skipped

@@ -28,7 +28,10 @@
 //! explicit about what it couldn't verify (a SKIP is never silently
 //! upgraded to a PASS — "detection is best-effort" means saying so, not
 //! guessing). FAIL is a report status, not a process exit — unless `--strict`,
-//! which exits 1 on any WARN or FAIL (SKIP never trips it). HTTP-backed
+//! which exits 1 on any WARN or FAIL (SKIP never trips it). That includes
+//! `cli-skew` and the off-host-copy WARN: a deliberately pinned CLI trips the
+//! gate, by design — the report names the check, and a caller that wants to
+//! ignore one gates on its JSON `status` instead. HTTP-backed
 //! checks are split into a thin async fetch + a
 //! pure decision fn (`decide_*`) so the interesting logic is unit-tested
 //! without a live daemon.
@@ -2033,11 +2036,33 @@ fn backup_age_checks(
             "could not resolve the state dir — not checking <state>/exports/",
         )];
     };
-    let offhost_expected = crate::commands::resolve_config_path(config)
-        .and_then(|p| crate::commands::load_config_or_default(&p))
-        .map(|c| c.backup.is_configured())
-        .unwrap_or(false);
-    decide_backup_age(scan_kb_exports(&paths, now, configured), offhost_expected)
+    // A config that cannot be read is NOT "no off-host copy configured": that
+    // would silently turn the off-host finding off for the one machine whose
+    // config is broken. Say it could not be verified (a SKIP, which `--strict`
+    // does not trip on) and run the local-age checks without the off-host half.
+    let loaded = crate::commands::resolve_config_path(config)
+        .and_then(|p| crate::commands::load_config_or_default(&p));
+    let (offhost_expected, config_skip) = offhost_expectation(loaded);
+    let mut checks = decide_backup_age(scan_kb_exports(&paths, now, configured), offhost_expected);
+    checks.extend(config_skip);
+    checks
+}
+
+/// `(offhost_expected, skip)` from the config load: a load failure yields
+/// `false` PLUS a `backup-offhost` SKIP naming why, never a bare `false`.
+fn offhost_expectation(loaded: Result<kb_core::config::KbConfig>) -> (bool, Option<HookCheck>) {
+    match loaded {
+        Ok(c) => (c.backup.is_configured(), None),
+        Err(e) => (
+            false,
+            Some(HookCheck::skip(
+                "backup-offhost",
+                format!(
+                    "could not load the kb config ({e:#}) — whether an off-host backup copy is expected was not verified"
+                ),
+            )),
+        ),
+    }
 }
 
 // ============================================================ l) cli skew
@@ -2093,6 +2118,12 @@ fn commit_divergence(repo: &Path, cli_sha: &str, daemon_sha: &str) -> Option<(us
 }
 
 const CLI_SKEW_FIX: &str = "install the daemon's build (e.g. copy the kb binary out of the daemon image, or run scripts/install.sh); a CLI pinned on purpose can ignore this";
+/// CLI older than the daemon.
+const CLI_SKEW_FIX_BEHIND: &str = CLI_SKEW_FIX;
+/// CLI newer than the daemon: the daemon is the side to update.
+const CLI_SKEW_FIX_AHEAD: &str = "redeploy the daemon from this build (the CLI is the newer side, so installing the daemon's build would downgrade it); a daemon pinned on purpose can ignore this";
+/// Direction unknown or diverged: say so instead of guessing.
+const CLI_SKEW_FIX_UNKNOWN: &str = "update whichever side is older (compare the two stamps above): install the daemon's build for an old CLI, redeploy the daemon for an old daemon; a pin on purpose can ignore this";
 
 fn decide_cli_skew(
     cli_describe: &str,
@@ -2146,19 +2177,42 @@ fn decide_cli_skew(
         )
         .with_fix(CLI_SKEW_FIX);
     }
-    let how = match divergence {
-        Some((behind, 0)) if behind > 0 => format!(", the CLI is {behind} commit(s) behind"),
-        Some((0, ahead)) if ahead > 0 => format!(", the CLI is {ahead} commit(s) ahead"),
-        Some((behind, ahead)) => format!(", {behind} commit(s) behind and {ahead} ahead"),
-        None => String::new(),
+    // WHICH side is older decides both the consequence and the remedy: a CLI
+    // BEHIND the daemon leaves hook features inert (install the daemon's
+    // build); a CLI AHEAD of the daemon means hooks may call flags or routes
+    // the daemon does not have yet (redeploy the daemon). Telling an ahead
+    // CLI to "install the daemon's build" would downgrade it.
+    let (how, consequence, fix) = match divergence {
+        Some((behind, 0)) if behind > 0 => (
+            format!(", the CLI is {behind} commit(s) behind"),
+            "hook features that need newer CLI code are inert",
+            CLI_SKEW_FIX_BEHIND,
+        ),
+        Some((0, ahead)) if ahead > 0 => (
+            format!(", the CLI is {ahead} commit(s) ahead of the daemon"),
+            "hooks may call flags or routes the daemon does not have yet",
+            CLI_SKEW_FIX_AHEAD,
+        ),
+        Some((behind, ahead)) => (
+            format!(
+                ", built from diverged histories ({behind} commit(s) behind and {ahead} ahead)"
+            ),
+            "features on either side may be missing from the other",
+            CLI_SKEW_FIX_UNKNOWN,
+        ),
+        None => (
+            ", direction unknown (no git checkout resolves both stamps)".to_string(),
+            "features on the older side are missing from the newer one",
+            CLI_SKEW_FIX_UNKNOWN,
+        ),
     };
     HookCheck::warn(
         ID,
         format!(
-            "CLI {cli_describe} ({cli_sha}) differs from daemon {daemon_version} ({daemon_sha}){how}; hook features that need newer CLI code are inert"
+            "CLI {cli_describe} ({cli_sha}) differs from daemon {daemon_version} ({daemon_sha}){how}; {consequence}"
         ),
     )
-    .with_fix(CLI_SKEW_FIX)
+    .with_fix(fix)
 }
 
 async fn cli_skew_check(client: &reqwest::Client, base: &str, repo: &Path) -> HookCheck {
@@ -3434,6 +3488,72 @@ mod tests {
 
         let down = decide_cli_skew("0.44-1-gabc", "9e1ac65aaaaa", Err("refused".into()), None);
         assert_eq!(down.status, CheckStatus::Skip);
+    }
+
+    /// v044-X3 — the skew message and remedy name the side that is OLDER. An
+    /// ahead CLI must not be told to install the daemon's (older) build, and
+    /// the "features inert" consequence belongs to a behind CLI only.
+    #[test]
+    fn cli_skew_wording_branches_on_behind_ahead_diverged_unknown() {
+        let go = |div| {
+            decide_cli_skew(
+                "0.44-1-gabc",
+                "111111111111",
+                daemon_stamp("9e1ac65aaaaa"),
+                div,
+            )
+        };
+        let behind = go(Some((7, 0)));
+        assert!(
+            behind.detail.contains("7 commit(s) behind"),
+            "{}",
+            behind.detail
+        );
+        assert!(behind.detail.contains("inert"), "{}", behind.detail);
+        assert_eq!(behind.fix.as_deref(), Some(CLI_SKEW_FIX_BEHIND));
+
+        let ahead = go(Some((0, 4)));
+        assert!(
+            ahead.detail.contains("4 commit(s) ahead of the daemon"),
+            "{}",
+            ahead.detail
+        );
+        assert!(!ahead.detail.contains("behind"), "{}", ahead.detail);
+        assert!(!ahead.detail.contains("inert"), "{}", ahead.detail);
+        let fix = ahead.fix.as_deref().unwrap();
+        assert!(fix.contains("redeploy the daemon"), "{fix}");
+        assert!(!fix.starts_with("install the daemon's build"), "{fix}");
+
+        let diverged = go(Some((3, 2)));
+        assert!(diverged.detail.contains("diverged"), "{}", diverged.detail);
+        assert_eq!(diverged.fix.as_deref(), Some(CLI_SKEW_FIX_UNKNOWN));
+
+        let unknown = go(None);
+        assert!(
+            unknown.detail.contains("direction unknown"),
+            "{}",
+            unknown.detail
+        );
+        assert!(!unknown.detail.contains("behind"), "{}", unknown.detail);
+        assert_eq!(unknown.status, CheckStatus::Warn);
+    }
+
+    /// v044-X3 — an unreadable config is a SKIP naming the cause, never a
+    /// silent `offhost_expected = false`; a readable one adds nothing.
+    #[test]
+    fn unreadable_config_skips_the_offhost_half_loudly() {
+        let (expected, skip) = offhost_expectation(Err(anyhow::anyhow!("toml: bad key at line 3")));
+        assert!(!expected);
+        let skip = skip.expect("a load failure must be reported");
+        assert_eq!(skip.id, "backup-offhost");
+        assert_eq!(skip.status, CheckStatus::Skip);
+        assert!(skip.detail.contains("bad key at line 3"), "{}", skip.detail);
+        // SKIP never trips --strict.
+        assert_eq!(strict_exit_code(&[skip], true), 0);
+
+        let (expected, skip) = offhost_expectation(Ok(kb_core::config::KbConfig::default()));
+        assert!(!expected);
+        assert!(skip.is_none());
     }
 
     /// F8 / A13.f11 — the scan covers exactly the kbs the daemon serves (the

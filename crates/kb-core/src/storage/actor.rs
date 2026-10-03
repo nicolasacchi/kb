@@ -579,6 +579,14 @@ pub enum StorageMsg {
         failed: u32,
         reply: oneshot::Sender<Result<usize>>,
     },
+    /// v0.44 X3 (A4.f6) — fill NULL `sessions.project_key` from a path already
+    /// on the row (`Db::sessions_backfill_project_key`). Routed through the
+    /// actor so the daemon's single writer stays the only writer of
+    /// `index.db`; a run that changed rows bumps the index generation.
+    SessionsBackfillProjectKey {
+        apply: bool,
+        reply: oneshot::Sender<Result<(u64, u64)>>,
+    },
     /// CT-F5 — append one `kb slo snapshot` run (one row per indicator).
     SloSnapshotAppend {
         taken_at_unix: i64,
@@ -2867,6 +2875,17 @@ impl StorageActor {
             StorageMsg::SessionsRecallCensusTotals { reply } => {
                 let _ = reply.send(self.db.sessions_recall_census_totals());
             }
+            StorageMsg::SessionsBackfillProjectKey { apply, reply } => {
+                let result = self.db.sessions_backfill_project_key(apply);
+                // `project_key` feeds the sessions lists/rollups that
+                // memoise on the generation, so a run that wrote rows must
+                // invalidate them. A dry run (or an already-filled corpus)
+                // changes nothing and must not.
+                if matches!(result, Ok((_, changed)) if changed > 0) {
+                    self.bump_generation();
+                }
+                let _ = reply.send(result);
+            }
             StorageMsg::SessionsSetRecallCensus {
                 artifact_id,
                 marker_parsed,
@@ -4419,6 +4438,14 @@ impl StorageHandle {
             reply,
         })
         .await
+    }
+
+    /// v0.44 X3 (A4.f6) — `(would_change, changed)` of the project-key
+    /// backfill; `apply = false` writes nothing. See
+    /// [`StorageMsg::SessionsBackfillProjectKey`].
+    pub async fn sessions_backfill_project_key(&self, apply: bool) -> Result<(u64, u64)> {
+        self.send_and_await(|reply| StorageMsg::SessionsBackfillProjectKey { apply, reply })
+            .await
     }
 
     /// CT-F5 — append one snapshot run: one row per indicator, all sharing
@@ -6064,6 +6091,63 @@ mod tests {
         assert!(count_of("admin") >= 1, "ensure_fts_index → admin recorded");
         assert!(count_of("query") >= 1, "bm25 → query recorded");
         assert!(count_of("read") >= 1, "list_docs → read recorded");
+    }
+
+    /// v0.44 X3 (A4.f6) — the project-key backfill is an ACTOR message (the
+    /// daemon stays the single writer of index.db): a dry run writes nothing
+    /// and does not bump the generation; an apply that fills rows bumps it
+    /// exactly once; a second apply has nothing to do and does not bump.
+    // invariant:15 generation-bump
+    #[tokio::test]
+    async fn sessions_backfill_project_key_runs_in_the_actor_and_bumps_only_on_change() {
+        let (h, _tmp) = handle().await;
+        let row = SessionRow {
+            artifact_id: "art-1".into(),
+            session_id: "sid-1".into(),
+            started_at: 1_700_000_000,
+            ended_at: 1_700_000_600,
+            message_count: 1,
+            first_user_prompt: None,
+            source_relative: "sessions/s.html".into(),
+            title: None,
+            cwd: Some("/tmp/kb/sub".into()),
+            git_branch: None,
+            files_read_count: 0,
+            files_edited_count: 0,
+            token_total: 0,
+            tool_calls: 0,
+            model: None,
+            error_count: 0,
+            subagent_count: 0,
+            subagent_tokens: 0,
+            subagent_tool_calls: 0,
+            subagent_files_edited: 0,
+            subagent_launched_unstatted: 0,
+            project_key: None,
+            repo_root: Some("/tmp/kb".into()),
+            harness: "claude".into(),
+            cc_version: None,
+            last_assistant_text: None,
+            all_cwds: None,
+            commit_count: 0,
+            user_turns: 1,
+            active_secs: 1,
+            substance: None,
+        };
+        h.sessions_upsert(row).await.unwrap();
+        let g0 = h.index_generation();
+
+        assert_eq!(
+            h.sessions_backfill_project_key(false).await.unwrap(),
+            (1, 0)
+        );
+        assert_eq!(h.index_generation(), g0, "a dry run must not bump");
+
+        assert_eq!(h.sessions_backfill_project_key(true).await.unwrap(), (1, 1));
+        assert_eq!(h.index_generation(), g0 + 1, "an applying run bumps once");
+
+        assert_eq!(h.sessions_backfill_project_key(true).await.unwrap(), (0, 0));
+        assert_eq!(h.index_generation(), g0 + 1, "a no-op apply must not bump");
     }
 
     /// P1 — the index generation must bump on exactly the mutations that

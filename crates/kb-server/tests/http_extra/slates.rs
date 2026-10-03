@@ -1711,3 +1711,100 @@ async fn the_delta_kinds_filter_narrows_posts_hides_and_text() {
     assert_eq!(v["code"], "bad-kind");
     assert!(v["detail"].as_str().unwrap().contains("sketch"), "{v}");
 }
+
+/// v044-X3 — `/api/turn`'s slate lane serves the SAME text as the verbs it
+/// replaces in the hook (`delta --since N` / `open --hybrid`), returns the
+/// `head_seq` the client advances its cursor to, appends after the other
+/// lanes' block, and names a missing slug instead of going silent.
+#[tokio::test]
+async fn turn_route_slate_lane_serves_open_then_delta_with_head_seq() {
+    let (_tmp, addr, _paths) = boot().await;
+    let client = reqwest::Client::new();
+
+    // No ledger yet: not a failure, nothing to say, no head_seq.
+    let none = get_json(&client, addr, "/api/turn?q=hello&lanes=slate&slate=orchard").await;
+    assert_eq!(none["text"], "");
+    assert!(none.get("head_seq").is_none(), "{none}");
+    assert!(none.get("degraded").is_none(), "{none}");
+
+    let (st, _) = post(
+        &client,
+        addr,
+        "orchard",
+        body("now", "pruning the north rows", Some("sess-a")),
+    )
+    .await;
+    assert_eq!(st, 201);
+
+    // Seed (no cursor) == `open --hybrid`.
+    let seed = get_json(&client, addr, "/api/turn?q=hello&lanes=slate&slate=orchard").await;
+    let open = get_json(&client, addr, "/api/slates/orchard?mode=hybrid&budget=2000").await;
+    assert_eq!(
+        seed["text"], open["text"],
+        "the lane is the open verb's text"
+    );
+    assert!(seed["text"]
+        .as_str()
+        .unwrap()
+        .contains("pruning the north rows"));
+    assert_eq!(seed["head_seq"], 1);
+
+    // Caught up: the delta is empty but head_seq still comes back.
+    let caught_up = get_json(
+        &client,
+        addr,
+        "/api/turn?q=hello&lanes=slate&slate=orchard&slate_since=1",
+    )
+    .await;
+    assert_eq!(caught_up["text"], "");
+    assert_eq!(caught_up["head_seq"], 1);
+
+    let (st, _) = post(
+        &client,
+        addr,
+        "orchard",
+        with_ref(body("warn", "frost tonight", Some("sess-b"))),
+    )
+    .await;
+    assert_eq!(st, 201);
+    let delta = get_json(
+        &client,
+        addr,
+        "/api/turn?q=hello&lanes=slate&slate=orchard&slate_since=1",
+    )
+    .await;
+    let verb = get_json(
+        &client,
+        addr,
+        "/api/slates/orchard/delta?since=1&budget=1500",
+    )
+    .await;
+    assert_eq!(
+        delta["text"], verb["text"],
+        "the lane is the delta verb's text"
+    );
+    assert!(delta["text"].as_str().unwrap().contains("frost tonight"));
+    assert_eq!(delta["head_seq"], 2);
+
+    // `slate=` alone (no `lanes`) implies the lane; it rides after the
+    // other lanes with one blank line.
+    let implied = get_json(
+        &client,
+        addr,
+        "/api/turn?q=hello&slate=orchard&slate_since=1",
+    )
+    .await;
+    assert!(
+        implied["text"].as_str().unwrap().contains("frost tonight"),
+        "{implied}"
+    );
+
+    // The lane without a slug is named, not silent.
+    let missing = get_json(&client, addr, "/api/turn?q=hello&lanes=slate").await;
+    assert!(
+        missing["degraded"]
+            .as_array()
+            .is_some_and(|d| d.iter().any(|l| l["lane"] == "slate")),
+        "{missing}"
+    );
+}
