@@ -3335,3 +3335,156 @@ async fn snapshot_retrack_and_bulk_run_as_daemon_jobs() {
     .into_response();
     assert_eq!(sync.status(), axum::http::StatusCode::OK);
 }
+
+// =====================================================================
+// v0.44 K6 — A6.f9: retrack racing snapshot/sync, and a forge that answers
+// 403 / 404
+// =====================================================================
+
+/// A6.f9 — a snapshot/sync that retargets the review (persisting a new
+/// auto policy) while a retrack is in its network fetch: the retrack's
+/// capture was computed from the policy it started with, so it must refuse
+/// 409 `base-changed` under the ops lock, mint nothing, and leave the
+/// snapshot's policy alone — the mirror image of
+/// `recapture_refuses_when_a_retrack_lands_during_its_fetch`.
+#[test]
+fn retrack_refuses_when_a_snapshot_retargets_during_its_fetch() {
+    use crate::review_retrack::{retrack_sync, tests_seam::AFTER_FETCH};
+    let fx = fixture();
+    git(&fx.author, &["checkout", "-q", "-B", "develop", "main"]);
+    commit(&fx.author, "d.txt", "d");
+    git(&fx.author, &["push", "-q", "origin", "develop"]);
+    git(&fx.author, &["checkout", "-q", "main"]);
+    fx.push_pr(&fx.m1, &["p1.rs"], "v1");
+    let policy = BasePolicy::pin(&fx.m1, SetBy::Legacy, BaseSource::Legacy);
+    let review = fx.pr_review(&fx.m1.clone(), Some(&policy));
+    let id = review.id;
+    recap(&fx, id, fetch());
+    let review = fx.refetch(id);
+    let before_ps = fx.store.list_patchsets(id).unwrap().len();
+
+    // The "snapshot" lands its retarget write right after retrack's fetch.
+    AFTER_FETCH.with(|h| {
+        *h.borrow_mut() = Some(super::capture::TestHook(std::sync::Arc::new(
+            move |store: &Store| {
+                store
+                    .set_review_base(id, "track", Some("develop"), None, "auto", None)
+                    .unwrap();
+            },
+        )));
+    });
+    let res = fx.with(|c| retrack_sync(c, &review, None, true, Some("main"), vec![], false));
+    AFTER_FETCH.with(|h| *h.borrow_mut() = None);
+    let err = res
+        .err()
+        .expect("a retrack computed from a replaced policy must not mint");
+    assert_eq!(err.urn, URN_BASE_CHANGED, "{err}");
+    assert_eq!(err.status, 409);
+    assert_eq!(fx.store.list_patchsets(id).unwrap().len(), before_ps);
+    let row = fx.store.get_review_base(id).unwrap().unwrap();
+    assert_eq!(
+        row.base_branch.as_deref(),
+        Some("develop"),
+        "the snapshot's policy survives"
+    );
+    assert_eq!(row.base_set_by, "auto");
+}
+
+/// A forge whose every GET answers `status` (a 403 from a token without
+/// `repo` scope, a 404 from a private repo the token cannot see).
+async fn forge_answering(status: u16) -> crate::config::GithubSection {
+    // A test mock of the forge, not a daemon wire body: the body is built as a
+    // Value first so the wire ratchet counts production response bodies only.
+    let denied = serde_json::json!({ "message": "denied" });
+    let router = axum::Router::new().fallback(move || {
+        let denied = denied.clone();
+        async move {
+            (
+                axum::http::StatusCode::from_u16(status).unwrap(),
+                axum::Json(denied),
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    crate::config::GithubSection {
+        token_file: None,
+        api_base: format!("http://{addr}"),
+    }
+}
+
+/// A6.f9 — the REAL forge read failing 403 / 404 (not a synthetic warning):
+/// `forge_pr_base_ref` reports the target unread with a named
+/// `forge-base-unread` warning, and a retrack fed that answer classes the
+/// row `unknown` and refuses to apply a guessed default — the review keeps
+/// its policy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forge_answering_403_or_404_leaves_the_target_unread_and_retrack_refuses_the_guess() {
+    use crate::review_retrack::retrack_sync;
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    fx.push_pr(&fx.m1, &["p1.rs"], "v1");
+    let review = fx.pr_review(&fx.m1.clone(), None);
+    let id = review.id;
+    fx.store
+        .set_review_base(id, "pin", None, None, "legacy", None)
+        .unwrap();
+    recap(&fx, id, fetch());
+    let before = fx.store.get_review_base(id).unwrap().unwrap();
+    let gh_dir = tempfile::tempdir().unwrap();
+
+    for status in [403u16, 404] {
+        let github = forge_answering(status).await;
+        let state = unregistered_state_with(&fx, github).await;
+        let st = state.clone();
+        let row = tokio::task::spawn_blocking(move || {
+            st.review_stores.register_repo(
+                &st.store,
+                REPO,
+                Some("https://github.com/acme/widgets.git"),
+            );
+            st.store.store_for_repo_name(REPO).unwrap().unwrap()
+        })
+        .await
+        .unwrap();
+        let handle = store_handle_of(&row);
+        let (base, warnings) = crate::reviews::forge_pr_base_ref(
+            &state,
+            &handle,
+            REPO,
+            PR,
+            state.github.for_test().with_cli_token(None),
+            fake_gh(gh_dir.path(), "alice"),
+        )
+        .await;
+        assert_eq!(base, None, "{status}: nothing readable");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == crate::reviews::FORGE_BASE_UNREAD),
+            "{status}: {warnings:?}"
+        );
+
+        let review = fx.refetch(id);
+        let w = warnings.clone();
+        let dry = fx
+            .with(|c| retrack_sync(c, &review, None, true, base.as_deref(), w, true))
+            .unwrap();
+        assert_eq!(
+            dry.class,
+            RetrackClass::Unknown,
+            "{status}: {:?}",
+            dry.warnings
+        );
+        let err = fx
+            .with(|c| retrack_sync(c, &review, None, true, base.as_deref(), warnings, false))
+            .err()
+            .expect("a guessed target must not be applied");
+        assert_eq!(err.urn, URN_BASE_UNDETERMINED, "{status}: {err}");
+        let after = fx.store.get_review_base(id).unwrap().unwrap();
+        assert_eq!(after.base_set_by, before.base_set_by, "{status}");
+        assert_eq!(after.base_mode, before.base_mode, "{status}");
+    }
+}

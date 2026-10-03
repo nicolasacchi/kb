@@ -391,7 +391,7 @@ pub(crate) fn retrack_sync_with(
         api_warnings,
         base_memo: memo.cloned(),
         #[cfg(test)]
-        after_fetch: None,
+        after_fetch: tests_seam::AFTER_FETCH.with(|h| h.borrow().clone()),
     };
     let r = ctx.recapture(review, &rc)?;
     warnings.extend(r.warnings.clone());
@@ -816,4 +816,16 @@ async fn retrack_all_for_repo(
         });
     }
     Ok(rows)
+}
+
+/// Test seam (K6 / A6.f9): lets a test land a concurrent snapshot's policy
+/// write right after retrack's network fetch, where the race lives.
+#[cfg(test)]
+pub(crate) mod tests_seam {
+    use crate::review_base::capture::TestHook;
+    use std::cell::RefCell;
+
+    thread_local! {
+        pub(crate) static AFTER_FETCH: RefCell<Option<TestHook>> = const { RefCell::new(None) };
+    }
 }
