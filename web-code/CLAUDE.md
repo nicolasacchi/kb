@@ -1273,7 +1273,7 @@ by every unrelated handler sharing that thread. `highlight_route` and
 `highlight_batch_route` now wrap their work in
 `tokio::task::spawn_blocking`
 (`crates/kb-code-server/src/highlight.rs:798-835`) — the same discipline
-`routes::diff_route` (`crates/kb-code-server/src/routes.rs:2233`) already used for its
+`routes::diff_route` (`crates/kb-code-server/src/routes.rs:2242`) already used for its
 `git diff` subprocess: there blocking I/O, here CPU. The caps are checked
 INSIDE the hop, not in front of it, so every oversize, duplicate-id and
 over-total refusal is still the same 400 out of `highlight_batch` with the
