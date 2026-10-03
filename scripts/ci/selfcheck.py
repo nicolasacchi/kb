@@ -14,7 +14,11 @@ without running. Every check reads committed text; nothing builds.
      ci/test-floors.toml, and every floor lane is witnessed;
   5. every `actions/checkout` pin is the same commit SHA with the same version
      label, and no workflow uses a floating checkout tag;
-  6. deny.toml `review by <date>` exceptions have not expired.
+  6. deny.toml `review by <date>` exceptions have not expired;
+  7. `just ci-code` runs the same test commands as ci.yml's `code-test` job
+     (nextest with the `ci-code` profile, then a `--doc` step), and no
+     workflow carries an unquoted `name:` scalar containing `: ` (invalid
+     YAML: GitHub rejects the whole file, so the lane never runs).
 
 Usage: selfcheck.py [--today YYYY-MM-DD] [--root DIR]
 """
@@ -150,6 +154,32 @@ def check_deny_review_by(root, today, errs):
         errs.append("deny.toml: no `review by <date>` marker found -- the expiry check would be vacuous")
 
 
+def check_ci_code_recipe(root, errs):
+    """`just ci-code` must run what CI runs: nextest (profile ci-code) + --doc."""
+    text = open(os.path.join(root, "justfile"), encoding="utf-8").read()
+    m = re.search(r"^ci-code:\n((?:    .*\n|\n)*)", text, re.M)
+    if not m:
+        errs.append("justfile: no `ci-code:` recipe")
+        return
+    body = m.group(1)
+    if not re.search(r"^    cargo nextest run\b.*--profile ci-code\b", body, re.M):
+        errs.append("justfile: `ci-code` does not run `cargo nextest run --profile ci-code` like the CI code-test job")
+    if not re.search(r"^    cargo test\b.*--doc\b", body, re.M):
+        errs.append("justfile: `ci-code` has no `cargo test --doc` step (nextest skips doctests; CI runs one)")
+    if re.search(r"^    cargo test\b(?!.*--doc)", body, re.M):
+        errs.append("justfile: `ci-code` still runs a plain `cargo test` sweep CI replaced with nextest")
+
+
+PLAIN_NAME_COLON = re.compile(r"^\s*(?:-\s+)?name:\s+([^\"'\s|>&*!%@`#\[{][^#]*?):\s")
+
+
+def check_yaml_names(root, errs):
+    for path in sorted(glob.glob(os.path.join(root, ".github/**/*.yml"), recursive=True)):
+        for i, line in enumerate(open(path, encoding="utf-8"), 1):
+            if PLAIN_NAME_COLON.match(line):
+                errs.append(f"{os.path.relpath(path, root)}:{i}: unquoted `name:` scalar contains `: ` (invalid YAML): {line.strip()[:90]}")
+
+
 def run(root, today):
     errs = []
     check_workflows(root, errs)
@@ -158,6 +188,8 @@ def run(root, today):
     check_witness(root, errs)
     check_checkout_pins(root, errs)
     check_deny_review_by(root, today, errs)
+    check_ci_code_recipe(root, errs)
+    check_yaml_names(root, errs)
     return errs
 
 
@@ -172,7 +204,7 @@ def main(argv=None):
         print(f"SELFCHECK FAIL: {e}", file=sys.stderr)
     if errs:
         return 1
-    print("ci-selfcheck: workflows, code-* filter, witness floors, checkout pins, deny review-by: ok")
+    print("ci-selfcheck: workflows, code-* filter, witness floors, checkout pins, deny review-by, ci-code recipe, yaml names: ok")
     return 0
 
 
