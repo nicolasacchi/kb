@@ -43,29 +43,45 @@
 # (crates/kb-lip) — a separate daemon that ships from the same repo and the
 # same tag, never a subcommand of `kb`.
 #
-# ADDITIVE, never a repack: the kb tarball's filename, contents (kb +
-# kb-embedder + INSTALL) and INSTALL text are byte-for-byte what they were
-# before kb-code was added here, and `scripts/install.sh` — which resolves
-# `kb-<version>-<triple>.tar.gz` and its `.sha256` by name — is untouched. A
-# kb-code packaging failure can never alter a kb asset.
+# Tarball contents (v0.44 F2): each archive carries its binaries, an INSTALL
+# note AND the web reader under share/ — `share/kb/web/dist` +
+# `share/kb/sample-corpus` for kb, `share/kb-code/web-code/dist` for kb-code —
+# the layout the container images use. Both daemons resolve their SPA at
+# `<exe dir>/../share/<pkg>/…` with no env var (spa.rs resolve_spa_dist), and
+# `scripts/install.sh` copies share/ next to bin/. The SPAs are built in the
+# same job as the binaries with the SAME stamp (KB_BUILD_SHA for cargo,
+# KB_GIT_SHA for vite), so the SPA/daemon drift banner stays quiet.
+# `scripts/install.sh` still locates binaries by `find`, so the extra share/
+# tree cannot break it; a kb-code packaging failure can never alter a kb asset.
 #
-# Neither tarball bundles its SPA. The kb tarball has always shipped without
-# `web/dist` (the daemon serves it from disk; you build it with `just ci-spa`),
-# and the kb-code tarball MIRRORS that: no `web-code/dist`, built with `just
-# ci-code-spa` and pointed at via KB_CODE_SPA_DIST. The container images bake
-# both SPAs in — that is the difference between the two channels, and keeping
-# it uniform across the two archives is deliberate.
+# Provenance: every tarball and both images get a SLSA build-provenance
+# attestation (actions/attest-build-provenance). `gh attestation verify` is
+# documented in docs/packaging.md and run by install.sh when gh is available.
 #
-# STATUS: this workflow has run end to end once (the v0.43 tag, run
-# 34126444096, success): release creation, asset upload, the ubuntu-24.04-arm
-# leg and the ghcr push all worked on GitHub-hosted runners. The remaining
-# unverified item is package visibility (see the per-step notes below).
+# Manual runs: `workflow_dispatch` with dry_run exercises ONLY the verify-ci
+# gate (no release, no uploads, no pushes).
+#
+# STATUS: the v0.43 tag (run 34126444096) exercised release creation, asset
+# upload, the ubuntu-24.04-arm leg and the ghcr push on GitHub-hosted runners.
+# The attestation steps and the share/ packing are first exercised by the
+# v0.44 tag. The channels-exist job after the pushes turns the run red if a
+# documented channel does not resolve anonymously.
 
 name: release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only run the verify-ci gate (no release is created or published)"
+        type: boolean
+        default: true
+      sha:
+        description: "Commit to check (default: the dispatched ref's head)"
+        type: string
+        default: ""
 
 # Least privilege by default; jobs widen as needed.
 # Least privilege: nothing by default; every job below declares its own grants
@@ -89,11 +105,12 @@ defaults:
 
 jobs:
   # ── 0. Refuse to release a commit whose ci run was not green ───────────────
-  # A12-3: a v* tag on a red, cancelled or never-run commit (a tag on a
-  # feature-branch sha) used to publish a Release and :latest images anyway.
-  # build-image.yml gates its main-<sha> tags on ci success; this gives the
-  # release path the same rule. ci.yml runs on push to main, so a tag cut on a
-  # main commit has a successful push run for that exact sha.
+  # A12-3: a v* tag on a red, cancelled or never-run commit used to publish a
+  # Release and :latest images anyway. v0.44 F2 (C1): the run that satisfies
+  # the gate must be a `push` run on branch `main` for that exact sha — a green
+  # `pull_request` run on an unmerged branch sha used to count, so a tag cut on
+  # a feature-branch commit could ship. build-image.yml gates its main-<sha>
+  # tags on the same rule.
   verify-ci:
     name: verify ci is green for the tagged commit
     runs-on: ubuntu-latest
@@ -102,25 +119,27 @@ jobs:
       actions: read
       contents: read
     steps:
-      - name: Require a successful ci run for ${{ github.sha }}
+      - name: Require a successful ci.yml push run on main for the commit
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ inputs.sha || github.sha }}
         run: |
           n="$(gh run list --repo "$REPO" --workflow ci.yml --commit "$SHA" \
+                 --branch main --event push \
                  --status success --json databaseId --jq 'length')"
           if [ "${n:-0}" -lt 1 ]; then
-            echo "no successful ci.yml run found for $SHA — refusing to release." >&2
-            echo "Tag a commit on main whose ci run is green." >&2
+            echo "no successful ci.yml push run on main found for $SHA — refusing to release." >&2
+            echo "Tag a commit on main whose push ci run is green." >&2
             exit 1
           fi
-          echo "ci.yml has $n successful run(s) for $SHA"
+          echo "ci.yml has $n successful push run(s) on main for $SHA"
 
   # ── 1. Ensure a GitHub Release exists for the tag ──────────────────────────
   create-release:
     name: create release
     needs: verify-ci
+    if: github.event_name == 'push' && !inputs.dry_run
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -135,6 +154,13 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists — reusing"
+          elif [ -f "packaging/release-notes/${TAG}.md" ]; then
+            # A curated note (--generate-notes is thin on direct-to-main
+            # commits) wins over the generated one.
+            gh release create "$TAG" \
+              --title "kb $TAG" \
+              --notes-file "packaging/release-notes/${TAG}.md" \
+              --verify-tag
           else
             gh release create "$TAG" \
               --title "kb $TAG" \
@@ -155,6 +181,9 @@ jobs:
     timeout-minutes: 180
     permissions:
       contents: write
+      # Build-provenance attestation of the tarballs (OIDC + attestations API).
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -211,6 +240,35 @@ jobs:
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: release-${{ matrix.target }}
+
+      - name: Stamp the build (one sha for the binaries AND the SPAs)
+        # build.rs honours KB_BUILD_SHA; vite honours KB_GIT_SHA. Both get the
+        # same value so the SPA/daemon drift banner does not fire. The tree is
+        # clean here (fresh checkout), which is also what git would report.
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse --short=12 HEAD)"
+          echo "KB_BUILD_SHA=${sha}" >> "$GITHUB_ENV"
+          echo "stamp: ${sha}"
+
+      - name: Setup Node.js (SPA builds)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Build the kb web reader (web/dist)
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci
+          KB_GIT_SHA="$KB_BUILD_SHA" npm run build
+
+      - name: Build the kb-code web reader (web-code/dist)
+        working-directory: web-code
+        run: |
+          set -euo pipefail
+          npm ci
+          KB_GIT_SHA="$KB_BUILD_SHA" npm run build
 
       # Two SEPARATE cargo invocations — invariant #26 + docs/self-host.md.
       # Building kb-cli and kb-embedder together unifies kb-core's
@@ -278,24 +336,38 @@ jobs:
           mkdir "$PKG"
           cp target/release/kb target/release/kb-embedder "$PKG/"
           strip "$PKG/kb" "$PKG/kb-embedder" || true
+          # Web reader + sample corpus, in the layout the daemon resolves
+          # relative to its own executable (<prefix>/bin/kb -> <prefix>/share/kb).
+          test -f web/dist/index.html
+          mkdir -p "$PKG/share/kb/web"
+          cp -R web/dist "$PKG/share/kb/web/dist"
+          cp -R corpus/canon "$PKG/share/kb/sample-corpus"
           cat > "$PKG/INSTALL" <<EOF
           kb ${VERSION} — ${TARGET}
 
           Contents:
             kb            the CLI + daemon
             kb-embedder   the embedding / rerank sidecar (spawned by the daemon)
+            share/kb/web/dist       the web reader (served automatically)
+            share/kb/sample-corpus  a few sample artifacts to try it on
 
           Install both into ONE directory — the daemon finds kb-embedder as a
           sibling of the running kb (architecture invariant #26):
 
             install -m 0755 kb kb-embedder ~/.local/bin/
 
-          Then:  kb daemon        # → http://127.0.0.1:4000/
+          and copy share/ to the SAME prefix (install.sh does this):
 
-          The web UI is NOT bundled here. Build it once with the repo's
-          'just ci-spa' (writes web/dist, which the daemon serves), or run the
-          all-in-one container which bakes in the SPA + an embedding model:
-            docker run -p 4000:4000 ghcr.io/nicolasacchi/kb:${VERSION}
+            cp -R share/. ~/.local/share/
+
+          The daemon finds the web reader at <bin dir>/../share/kb/web/dist,
+          so with the layout above no environment variable is needed.
+
+          Then:  kb daemon        # → http://127.0.0.1:4000/
+                 kb add ~/.local/share/kb/sample-corpus --kb canon
+
+          Verify this archive's provenance:
+            gh attestation verify ${PKG}.tar.gz -R nicolasacchi/kb
 
           Docs: https://github.com/nicolasacchi/kb
           EOF
@@ -320,13 +392,8 @@ jobs:
         # repack of it. `scripts/install.sh` resolves `kb-<ver>-<triple>` by
         # name and is unaffected by a sibling asset.
         #
-        # NO `web-code/dist` here, deliberately: the kb tarball has never
-        # bundled `web/dist` either (both daemons resolve their SPA from disk
-        # at boot — KB_SPA_DIST / KB_CODE_SPA_DIST), so shipping one SPA and
-        # not the other would be the inconsistency. The INSTALL note points at
-        # `just ci-code-spa` + KB_CODE_SPA_DIST, exactly as kb's points at
-        # `just ci-spa`; the container images are the batteries-included
-        # channel for both.
+        # Carries `share/kb-code/web-code/dist` (v0.44 F2), like the kb
+        # tarball carries `share/kb/web/dist`.
         id: pkg_code
         env:
           TARGET: ${{ matrix.target }}
@@ -338,6 +405,9 @@ jobs:
           cp target/release/kb-code-server target/release/kb-code \
              target/release/kb-lip "$PKG/"
           strip "$PKG/kb-code-server" "$PKG/kb-code" "$PKG/kb-lip" || true
+          test -f web-code/dist/index.html
+          mkdir -p "$PKG/share/kb-code/web-code"
+          cp -R web-code/dist "$PKG/share/kb-code/web-code/dist"
           cat > "$PKG/INSTALL" <<EOF
           kb-code ${VERSION} — ${TARGET}
 
@@ -362,12 +432,14 @@ jobs:
           Needs a real 'git' binary on PATH — blame / diff / checkout shell out
           to it.
 
-          The web-code reader UI is NOT bundled here, matching the kb tarball.
-          Build it once with the repo's 'just ci-code-spa' (writes
-          web-code/dist) and point the daemon at it:
-            KB_CODE_SPA_DIST=/abs/path/to/web-code/dist kb-code-server
-          Or run the container, which bakes the UI in:
-            docker run -p 4747:4747 ghcr.io/nicolasacchi/kb-code:${VERSION}
+          The web-code reader UI ships in share/kb-code/web-code/dist. Copy
+          share/ to the same prefix as bin/ and the daemon finds it at
+          <bin dir>/../share/kb-code/web-code/dist (override with
+          KB_CODE_SPA_DIST=/abs/path/to/dist). The container bakes it in too:
+            docker run --network host ghcr.io/nicolasacchi/kb-code:${VERSION}
+
+          Verify this archive's provenance:
+            gh attestation verify ${PKG}.tar.gz -R nicolasacchi/kb
 
           Docs: https://github.com/nicolasacchi/kb
           EOF
@@ -387,10 +459,20 @@ jobs:
           set -euo pipefail
           gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
 
+      - name: Attest build provenance (both tarballs)
+        # SHA-pinned like every other action here:
+        #   gh api repos/actions/attest-build-provenance/git/ref/tags/v4.2.2
+        #     -> 4d101475d8b20a2381f78447822ac1eab6504dd8 (commit)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            kb-*.tar.gz
+
   # ── 3. Container images → ghcr.io ──────────────────────────────────────────
   ghcr:
     name: ghcr images (kb + kb-code)
     needs: verify-ci
+    if: github.event_name == 'push' && !inputs.dry_run
     runs-on: ubuntu-latest
     # Independent of `binaries` — builds the existing repo-root Dockerfile,
     # BOTH of its runtime targets: `kb-code-runtime` and the default (last)
@@ -408,6 +490,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Image provenance attestation, pushed to the registry beside the image.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -465,6 +550,7 @@ jobs:
       # (fetched dep graph + sources) that kb's build then reuses from the
       # local build cache instead of redoing.
       - name: Build + push kb-code image
+        id: build_code
         # `--target kb-code-runtime`: the Dockerfile's LAST stage is kb's
         # `runtime` on purpose (a bare `docker build` must keep shipping kb),
         # so kb-code is only ever reachable by explicit target.
@@ -491,6 +577,9 @@ jobs:
             .
           docker push "${CODE_IMAGE}:${VERSION}"
           docker push "${CODE_IMAGE}:latest"
+          # Digest for the provenance attestation below (the local copy is
+          # removed before kb's build).
+          echo "code_digest=$(docker inspect --format '{{index .RepoDigests 0}}' "${CODE_IMAGE}:${VERSION}" | sed 's/.*@//')" >> "$GITHUB_OUTPUT"
 
       - name: Reclaim disk between the two image builds
         # The kb-code image is already ON ghcr at this point, so its local
@@ -521,6 +610,7 @@ jobs:
           df -h /
 
       - name: Build + push kb image
+        id: build_kb
         # No `--target`: the Dockerfile's last stage IS kb's runtime.
         # Tags: :<version> and :latest, unchanged from before kb-code was
         # added to this job.
@@ -541,6 +631,21 @@ jobs:
             .
           docker push "${IMAGE}:${VERSION}"
           docker push "${IMAGE}:latest"
+          echo "digest=$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${VERSION}" | sed 's/.*@//')" >> "$GITHUB_OUTPUT"
+
+      - name: Attest kb image provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.img.outputs.image }}
+          subject-digest: ${{ steps.build_kb.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest kb-code image provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.img.outputs.code_image }}
+          subject-digest: ${{ steps.build_code.outputs.code_digest }}
+          push-to-registry: true
 
       - name: Report what was published
         env:
@@ -553,3 +658,26 @@ jobs:
             echo "pushed ${CODE_IMAGE}:${VERSION} + :latest"
             echo "pushed ${IMAGE}:${VERSION} + :latest"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 4. The documented channels must resolve for a stranger ─────────────────
+  # Anonymous probe of :latest and :<this version> for both packages plus the
+  # latest-release lookup install.sh performs. Runs after BOTH publishing jobs;
+  # red here means a channel the README advertises is dead.
+  channels-exist:
+    name: channels exist (anonymous)
+    needs: [binaries, ghcr]
+    if: github.event_name == 'push' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Probe ghcr + the latest-release lookup
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}" scripts/ci/channels-exist.sh
