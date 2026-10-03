@@ -156,6 +156,8 @@ is the owning spec for that test and R7 rules its name; this reference is
 updated to match so `check-invariants.sh`'s grep target and the shipped test
 agree, m24).
 
+**Canary (v0.44 F1):** `ci/canaries/03-sweep-memory-recalls.sh` drops `memory_recalls` from `SWEEP_TABLES`; `cascade_cleanup_tables_are_pinned` and `sweep_reclaims_orphan_capture_recalls_but_spares_live_serves` must then FAIL (the registry-completeness test accepts either registry and does not see it).
+
 ### 3. `ConnectInfo<SocketAddr>` read from request extensions
 
 Not as an extractor (`req.extensions().get::<ConnectInfo<SocketAddr>>()`). A
@@ -164,6 +166,8 @@ enforce auth/rate-limit); treating it as loopback would fail-OPEN the security
 layer if the router were ever served bare. Every `serve_*` entrypoint wires
 `into_make_service_with_connect_info`, so it's never `None` at runtime.
 Middleware tests pass an explicit `ConnectInfo` (the `req_with` helper).
+
+**Canary (v0.44 F1):** `ci/canaries/02-connectinfo-loopback.sh` makes a missing `ConnectInfo` read as loopback and `request_is_loopback_no_connect_info_fails_closed` must then FAIL.
 
 ### 4. `auth_bearer` is the ONE admission + attribution gate
 
@@ -272,6 +276,8 @@ under the old name until a future `kb users rename` backfill; never data loss.
 `Identity` rides along, but no kbc route consumes it), and everything listed as
 shared-forever in the non-goal — memory, sessions, pins, saved queries, purge,
 config, `DELETE /api/kb`. Every identity is a full co-operator.
+
+**Canary (v0.44 F1):** `ci/canaries/01-host-guard-capture.sh` deletes the `/capture` `host_guard` `route_layer` and `rebound_host_refused_on_capture_through_real_router` must then FAIL (see docs/invariant-test-map.md "Canaries").
 
 ### 5. `<template id="kb-prompt">` convention
 
