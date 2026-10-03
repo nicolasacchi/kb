@@ -334,3 +334,42 @@ async fn notes_cli_links_and_backlinks() {
         "kb backlinks missing the linker: {bl}"
     );
 }
+
+/// v0.44 F5 - `kb notes new` stamps the session from the shared identity
+/// ladder. A concurrent session's id sitting in the legacy global
+/// `current-session` file must LOSE to this shell's own
+/// `CLAUDE_CODE_SESSION_ID` (it used to win: the file was the only source).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn notes_new_stamps_the_env_session_not_the_global_marker() {
+    let (tmp, url) = boot().await;
+    let cache = tmp.path().join("xdg-cache");
+    std::fs::create_dir_all(cache.join("kb")).unwrap();
+    std::fs::write(cache.join("kb/current-session"), "other-session-zzz\n").unwrap();
+    let out = Command::cargo_bin("kb")
+        .unwrap()
+        .env("KB_TEST_HTTP_TIMEOUT_SECS", common::http_timeout_secs())
+        .env("XDG_CACHE_HOME", &cache)
+        .env_remove("KB_SESSION_ID")
+        .env_remove("GROK_SESSION_ID")
+        .env("CLAUDE_CODE_SESSION_ID", "sess-from-env")
+        .args([
+            "notes", "new", "--kb", "smoke", "--title", "Identity", "--body", "- [ ] x",
+            "--daemon", &url,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created = String::from_utf8(out).unwrap();
+    let id = created.split_whitespace().nth(1).unwrap().to_string();
+    let client = reqwest::Client::new();
+    wait_indexed(&client, &url, &id).await;
+    // `show` strips frontmatter from body_md, so read the written source.
+    let shown = run_ok(&url, &["show", &id, "--kb", "smoke", "--json"]);
+    let detail: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    let rel = detail["source_relative"].as_str().expect("source_relative");
+    let on_disk = std::fs::read_to_string(tmp.path().join("corpus").join(rel)).unwrap();
+    assert!(on_disk.contains("kb-session: sess-from-env"), "{on_disk}");
+    assert!(!on_disk.contains("other-session-zzz"), "{on_disk}");
+}

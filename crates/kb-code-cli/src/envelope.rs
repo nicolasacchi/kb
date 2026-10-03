@@ -230,6 +230,11 @@ pub fn exit_for_status(status: u16) -> i32 {
 pub struct StatusError {
     pub status: u16,
     pub message: String,
+    /// Set (to the daemon URL) when this is a LOOPBACK-ONLY route's bodiless
+    /// 404. `main()` then asks `GET /api/identity` whether the caller is
+    /// loopback; if not, the failure is `needs-daemon-host` (exit 4), not a
+    /// confusing not-found (v0.44 F5).
+    pub loopback_gate: Option<String>,
 }
 
 impl StatusError {
@@ -237,8 +242,27 @@ impl StatusError {
         Self {
             status,
             message: message.into(),
+            loopback_gate: None,
         }
     }
+
+    pub fn with_loopback_gate(mut self, daemon: impl Into<String>) -> Self {
+        self.loopback_gate = Some(daemon.into());
+        self
+    }
+}
+
+/// The daemon URL of a loopback-gate 404 anywhere in the cause chain.
+pub fn loopback_gate_daemon(err: &anyhow::Error) -> Option<String> {
+    err.chain()
+        .find_map(|c| c.downcast_ref::<StatusError>()?.loopback_gate.clone())
+}
+
+/// Read `caller_loopback` out of a `GET /api/identity` body. `None` when the
+/// field is absent (older daemon) or not a bool — the caller then keeps the
+/// plain not-found exit rather than guessing.
+pub fn caller_loopback_from_identity(body: &serde_json::Value) -> Option<bool> {
+    body.get("caller_loopback")?.as_bool()
 }
 
 impl std::fmt::Display for StatusError {

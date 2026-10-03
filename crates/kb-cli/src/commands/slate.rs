@@ -260,23 +260,6 @@ fn write_marker(path: &Path, value: &str) {
     }
 }
 
-/// The session-id ladder (§12's harness-reach table, mirrored by
-/// kb-wake.sh and kb-beat.sh): explicit flag → `KB_SESSION_ID` → the
-/// `current-session` marker the SessionStart hook wrote.
-pub(crate) fn resolve_session_id(flag: Option<&str>, env: Option<&str>) -> Option<String> {
-    let pick = |s: &str| {
-        let t = s.trim();
-        (!t.is_empty()).then(|| t.to_string())
-    };
-    if let Some(s) = flag.and_then(pick) {
-        return Some(s);
-    }
-    if let Some(s) = env.and_then(pick) {
-        return Some(s);
-    }
-    crate::session_marker::read_session_marker()
-}
-
 /// Rules matrix "`origin`": client-declared, never verified. Explicit
 /// `--origin` wins; `--as you` means the operator; a `--job` post is the
 /// dispatcher's import. `unattributed` is the ONE value a client cannot
@@ -381,8 +364,16 @@ impl Ctx {
             );
         }
         let cache = cache_dir();
-        let session_id =
-            resolve_session_id(a.session_id, std::env::var("KB_SESSION_ID").ok().as_deref());
+        // v0.44 F5 — the ONE identity ladder (flag > KB_SESSION_ID >
+        // CLAUDE_CODE_SESSION_ID > GROK_SESSION_ID > fresh repo marker >
+        // flagged legacy file > none → the daemon stamps `unattributed`).
+        let ident = crate::session_identity::resolve_process(a.session_id, a.harness, &cwd_path);
+        if ident.source == crate::session_identity::Source::LegacyFile {
+            if let Some(c) = ident.caveat() {
+                eprintln!("{c}");
+            }
+        }
+        let session_id = ident.session_id.clone();
         let post_topic = match a.topic {
             Some(t) => Some(t.trim().to_string()),
             None => cache
@@ -390,13 +381,7 @@ impl Ctx {
                 .zip(session_id.as_deref())
                 .and_then(|(d, sid)| read_marker(&topic_file(d, sid))),
         };
-        let harness = a
-            .harness
-            .map(str::to_string)
-            .or_else(|| std::env::var("KB_HARNESS").ok())
-            .map(|h| h.trim().to_string())
-            .filter(|h| !h.is_empty())
-            .unwrap_or_else(|| "claude".to_string());
+        let harness = ident.harness.clone();
         let mut refs: Vec<String> = a.refs.to_vec();
         if let Some(j) = a.job {
             // Rules matrix "Job provenance": the job id rides `prov.job_id`
@@ -2300,22 +2285,6 @@ mod tests {
     fn post_row_falls_back_to_the_harness_when_no_session_is_declared() {
         let p = json!({"seq": 3, "kind": "idea", "line": "x", "prov": {"harness": "grok"}});
         assert_eq!(render_post_row(&p), "#3 idea [grok] x");
-    }
-
-    #[test]
-    fn session_id_ladder_is_flag_then_env_then_marker() {
-        assert_eq!(
-            resolve_session_id(Some("from-flag"), Some("from-env")).as_deref(),
-            Some("from-flag")
-        );
-        assert_eq!(
-            resolve_session_id(None, Some("from-env")).as_deref(),
-            Some("from-env")
-        );
-        assert_eq!(
-            resolve_session_id(Some("  "), Some("from-env")).as_deref(),
-            Some("from-env")
-        );
     }
 
     #[test]

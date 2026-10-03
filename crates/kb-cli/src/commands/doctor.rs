@@ -203,7 +203,7 @@ fn resolve_cache_dir() -> Option<PathBuf> {
 /// ASCII paths (the overwhelmingly common case — repo paths on this box);
 /// non-ASCII paths are NOT guaranteed to match bash's C-locale byte-wise
 /// `tr` behaviour (out of scope for a diagnostic tool).
-fn slugify_repo_path(path: &str) -> String {
+pub(crate) fn slugify_repo_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     let mut prev_dash = false;
     for c in path.chars() {
@@ -224,7 +224,7 @@ fn slugify_repo_path(path: &str) -> String {
 /// including its `marker_ts` fallback to `0` on anything non-numeric
 /// (which then always reads as maximally stale, never fresh). `None` when
 /// the first line (the session id) is blank.
-fn parse_repo_marker(contents: &str) -> Option<(String, i64)> {
+pub(crate) fn parse_repo_marker(contents: &str) -> Option<(String, i64)> {
     let mut lines = contents.lines();
     let sid = lines.next().unwrap_or("").trim();
     if sid.is_empty() {
@@ -242,17 +242,17 @@ fn parse_repo_marker(contents: &str) -> Option<(String, i64)> {
 /// `trailer-logic.sh`'s exact freshness test: `age = now - marker_ts`,
 /// fresh iff `0 <= age <= max_age_secs` (a future-dated marker — negative
 /// age, clock skew — reads as NOT fresh, same as the bash `-ge 0` guard).
-fn marker_is_fresh(now: i64, marker_ts: i64, max_age_secs: i64) -> bool {
+pub(crate) fn marker_is_fresh(now: i64, marker_ts: i64, max_age_secs: i64) -> bool {
     let age = now - marker_ts;
     (0..=max_age_secs).contains(&age)
 }
 
 /// ~40 minutes — `trailer-logic.sh`'s `max_age=2400`.
-const REPO_MARKER_MAX_AGE_SECS: i64 = 2400;
+pub(crate) const REPO_MARKER_MAX_AGE_SECS: i64 = 2400;
 
 // ======================================================= a) plain marker
 
-fn plain_marker_check(cache_dir: Option<&Path>, now: i64) -> HookCheck {
+fn plain_marker_check(cache_dir: Option<&Path>, now: i64, env_sid: Option<&str>) -> HookCheck {
     let Some(cache_dir) = cache_dir else {
         return HookCheck::skip(
             "session-marker",
@@ -262,6 +262,26 @@ fn plain_marker_check(cache_dir: Option<&Path>, now: i64) -> HookCheck {
     let path = cache_dir.join("kb").join("current-session");
     match std::fs::read_to_string(&path) {
         Ok(raw) if !raw.trim().is_empty() => {
+            // v0.44 F5 — the global marker is last-writer-wins across
+            // concurrent sessions; when this shell's own session id
+            // disagrees, anything still reading the marker is attributing
+            // to someone else's session.
+            if let Some(env_sid) = env_sid.map(str::trim).filter(|e| !e.is_empty()) {
+                if raw.trim() != env_sid {
+                    return HookCheck::warn(
+                        "session-marker",
+                        format!(
+                            "{} holds {} but CLAUDE_CODE_SESSION_ID is {} — the marker is \
+                             last-writer-wins across concurrent sessions; kb writers now \
+                             prefer the env id, anything still reading the marker is \
+                             attributing to another session",
+                            path.display(),
+                            raw.trim(),
+                            env_sid
+                        ),
+                    );
+                }
+            }
             let age = std::fs::metadata(&path)
                 .ok()
                 .and_then(|m| m.modified().ok())
@@ -2232,7 +2252,12 @@ pub async fn hooks(
     let mut checks: Vec<HookCheck> = Vec::new();
 
     // a) plain session marker.
-    checks.push(plain_marker_check(cache_dir.as_deref(), now));
+    let env_sid = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
+    checks.push(plain_marker_check(
+        cache_dir.as_deref(),
+        now,
+        env_sid.as_deref(),
+    ));
 
     // b) repo-keyed marker.
     let slug_root = git_toplevel(&repo_path).unwrap_or_else(|| repo_path.clone());
@@ -2488,7 +2513,7 @@ mod tests {
         let dir = tmp.path().join("kb");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("current-session"), "sess-xyz\n").unwrap();
-        let c = plain_marker_check(Some(tmp.path()), chrono::Utc::now().timestamp());
+        let c = plain_marker_check(Some(tmp.path()), chrono::Utc::now().timestamp(), None);
         assert_eq!(c.status, CheckStatus::Pass);
         assert!(c.detail.contains("present"));
     }
@@ -2496,7 +2521,7 @@ mod tests {
     #[test]
     fn plain_marker_check_warns_when_absent() {
         let tmp = tempfile::tempdir().unwrap();
-        let c = plain_marker_check(Some(tmp.path()), chrono::Utc::now().timestamp());
+        let c = plain_marker_check(Some(tmp.path()), chrono::Utc::now().timestamp(), None);
         assert_eq!(c.status, CheckStatus::Warn);
     }
 
@@ -2506,15 +2531,31 @@ mod tests {
         let dir = tmp.path().join("kb");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("current-session"), "\n  \n").unwrap();
-        let c = plain_marker_check(Some(tmp.path()), chrono::Utc::now().timestamp());
+        let c = plain_marker_check(Some(tmp.path()), chrono::Utc::now().timestamp(), None);
         assert_eq!(c.status, CheckStatus::Warn);
         assert!(c.detail.contains("empty"));
     }
 
     #[test]
     fn plain_marker_check_skips_when_no_cache_dir() {
-        let c = plain_marker_check(None, 0);
+        let c = plain_marker_check(None, 0, None);
         assert_eq!(c.status, CheckStatus::Skip);
+    }
+
+    #[test]
+    fn plain_marker_check_warns_when_env_session_disagrees() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("kb")).unwrap();
+        std::fs::write(tmp.path().join("kb/current-session"), "other-sid\n").unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let c = plain_marker_check(Some(tmp.path()), now, Some("my-sid"));
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("other-sid") && c.detail.contains("my-sid"));
+        // agreeing env id stays an informational pass
+        assert_eq!(
+            plain_marker_check(Some(tmp.path()), now, Some("other-sid")).status,
+            CheckStatus::Pass
+        );
     }
 
     // --- repo_marker_check (file fixtures) ----------------------------------

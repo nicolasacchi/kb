@@ -16,7 +16,6 @@ use crate::http::{
     client_with_timeout_and_bearer, encode_path_segment, resolve_artifact_target,
     resolve_default_kb, send_json,
 };
-use crate::session_marker;
 
 const DEFAULT_DAEMON: &str = "http://127.0.0.1:4000";
 
@@ -98,7 +97,7 @@ pub async fn offer(
         Some(raw) => Some(parse_ttl(raw)?),
         None => None,
     };
-    let session = session_marker::read_session_marker();
+    let session = crate::session_identity::session_for_write(None);
     let resolved_kb = resolve_default_kb(kb, daemon, bearer).await?;
     let base = base_url(daemon);
     let post_url = format!("{base}/api/kb/{}/desk", encode_path_segment(&resolved_kb));
