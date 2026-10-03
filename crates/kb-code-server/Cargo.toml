@@ -62,7 +62,7 @@ getrandom = { workspace = true }
 # adds no new entries to the dependency graph.
 rusqlite = { workspace = true }
 refinery = { workspace = true }
-# 2026-08-31 incident (store.rs module doc): `Store.conn`'s mutex must be
+# 2026-08-31 incident (store/mod.rs module doc): `Store.conn`'s mutex must be
 # parking_lot's, NOT std's — std::sync::Mutex has no fairness guarantee, so
 # the sink's per-file lock/unlock loop re-acquires immediately and a parked
 # HTTP-handler reader can starve for an ENTIRE reconcile burst (observed

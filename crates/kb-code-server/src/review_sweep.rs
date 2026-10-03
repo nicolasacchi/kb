@@ -123,7 +123,7 @@ pub(crate) struct SweepOutcome {
 /// identical derivation to `review_inbox::list_inbox_route`'s own, just
 /// extracted so `sweep_one_with` can call it without re-deriving the grouping.
 ///
-/// 2026-08-31 incident (store.rs module doc): takes `&Store` (not
+/// 2026-08-31 incident (store/mod.rs module doc): takes `&Store` (not
 /// `&SharedState`, its only prior use) so `sweep_one_with` wraps the whole
 /// thing in ONE `run_blocking` closure.
 fn local_only_fields(store: &store::Store, review: &ReviewRow) -> Result<(bool, i64), ApiError> {
@@ -458,7 +458,7 @@ pub async fn sweep_route(
         Some("open")
     };
 
-    // 2026-08-31 incident (store.rs module doc): the whole repo×review
+    // 2026-08-31 incident (store/mod.rs module doc): the whole repo×review
     // scan is pure store work — one blocking-pool trip instead of one
     // round trip per (repo, review) pair.
     let state_filter_owned = state_filter.map(|s| s.to_string());

@@ -74,7 +74,7 @@ pub async fn framework_edges_route(
     let (_repo, repo_id) = find_repo(&state, &params.repo)?;
     let path = params.path.clone();
     let kind = params.kind.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the two
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the two
     // sequential store scans (src + dst path) in one closure.
     let out = state
         .store

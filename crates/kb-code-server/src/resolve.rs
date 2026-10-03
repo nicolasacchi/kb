@@ -243,7 +243,7 @@ pub async fn resolve_route(
     let line = params.line;
     let col = params.col;
     let rev = params.rev.clone();
-    // 2026-08-31 incident (store.rs module doc): the whole sync
+    // 2026-08-31 incident (store/mod.rs module doc): the whole sync
     // occurrence/symbol/import ladder runs on the blocking pool in one
     // hop; the lsp-live overlay below is the async leg and stays outside.
     let state_bg = state.clone();

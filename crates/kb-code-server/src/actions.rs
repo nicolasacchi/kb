@@ -1455,7 +1455,7 @@ pub async fn actions_route(
     let end_line = params.end_line;
     let end_col = params.end_col;
 
-    // 2026-08-31 incident (store.rs module doc): the whole synchronous half
+    // 2026-08-31 incident (store/mod.rs module doc): the whole synchronous half
     // — one file read plus one symbol-table lookup — is ONE blocking hop.
     let (targets, mut notes) = state
         .store

@@ -178,7 +178,7 @@ pub(crate) fn is_agent_author(name: &str) -> bool {
 /// this crate's OWN two callers, `tests/measure/latency.rs`'s PR Room
 /// budget calls this directly, in-process, without a daemon.
 ///
-/// 2026-08-31 incident (store.rs module doc): takes `&Store` (not
+/// 2026-08-31 incident (store/mod.rs module doc): takes `&Store` (not
 /// `&SharedState`, its only prior use) so every async caller wraps the
 /// whole repo×review scan in ONE `run_blocking` closure.
 ///

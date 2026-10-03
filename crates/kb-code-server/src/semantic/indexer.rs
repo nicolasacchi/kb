@@ -253,7 +253,7 @@ pub async fn reindex_repo_incremental(
 ) -> Result<ReindexStats> {
     let mut stats = ReindexStats::default();
 
-    // 2026-08-31 incident (store.rs module doc): `Store` calls reachable
+    // 2026-08-31 incident (store/mod.rs module doc): `Store` calls reachable
     // from async context (this is a background `tokio::spawn`ed task) run
     // on the blocking pool via `run_blocking`, never inline. The read AND
     // the pure in-memory dedup pass share ONE round trip.
