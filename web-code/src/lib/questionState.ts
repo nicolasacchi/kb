@@ -13,14 +13,29 @@
 
 import type { ReviewComment, ReviewCommentsOut, ReviewFinding } from "../api/types";
 
-/// The `--ignore-author claude` convention (root CLAUDE.md invariant #29's
-/// sibling doc-bridge posture, and `FindingCard.tsx`'s own doc: "author
-/// strings are already reliable") — the ONLY signal available for a plain
-/// `ReviewComment`/`ReviewCommentReply`, neither of which carries a
-/// `ReviewFinding`-style `origin` field. Case/whitespace-insensitive so a
-/// hook that trims less aggressively than the daemon still matches.
+/// The author names the daemon reads as an AGENT — the SAME closed set as
+/// `kb_code_server::review_timeline::AGENT_AUTHOR_NAMES`. Both sides are
+/// pinned to ONE fixture (`crates/kb-code-server/grammar/
+/// agent-authors.golden.json`; this half by `agentAuthors.golden.test.ts`)
+/// — the bundle never imports across the crate boundary, so the set is
+/// restated here and the test is what keeps it honest. A NAME convention:
+/// kb-code authenticates nobody.
+export const AGENT_AUTHOR_NAMES: readonly string[] = [
+  "claude",
+  "codex",
+  "opencode",
+  "grok",
+  "kimi",
+  "omp",
+  "agent",
+];
+
+/// The ONLY signal available for a plain `ReviewComment`/
+/// `ReviewCommentReply`, neither of which carries a `ReviewFinding`-style
+/// `origin` field. Case/whitespace-insensitive so a hook that trims less
+/// aggressively than the daemon still matches.
 export function isAgentAuthorName(author: string): boolean {
-  return author.trim().toLowerCase() === "claude";
+  return AGENT_AUTHOR_NAMES.includes(author.trim().toLowerCase());
 }
 
 export interface QuestionVoice {

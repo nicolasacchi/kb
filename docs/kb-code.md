@@ -1656,7 +1656,7 @@ table was NOT adopted; these are envelope.rs's".
 | 1 | generic | an unclassified failure — the byte-identical pre-RS-U10a default |
 | 2 | usage | a clap parse error, a malformed `<id>`/`pr:<N>`/`<id>/ps<n>` address, an ambiguous `pr:<N>`, or a daemon 400 (any verb) |
 | 3 | conflict | HTTP 409, HTTP 503 (including a store still seeding), a `verify` that FAILS, and a `lint` ERROR — the request was fine, the state refuses it |
-| 4 | refused | an UNAMBIGUOUS 401/403 bearer-auth failure, including the secret denylist |
+| 4 | refused | an UNAMBIGUOUS 401/403 bearer-auth failure, including the secret denylist; or `needs-daemon-host` — a loopback-only route's bodiless 404 when `/api/identity` says the caller is not loopback |
 | 5 | unreachable | the daemon could not be reached at all — connection refused, DNS failure, timeout; never got as far as an HTTP status |
 | 6 | upstream | an upstream the daemon depends on failed: a forge fetch/API call that is offline, unauthenticated or vanished (`store sync`, a `sync` job whose forge leg failed) |
 | 7 | partial | the verb partly succeeded — `sync --open` synced some PRs and failed others, `store sync` fetched some members and not all. The envelope carries `degraded: true` |
@@ -1689,6 +1689,36 @@ verdict`, `suggest apply`, `findings add`, `disposition`, `publish`, `checkout`,
 with code `timeout` and says the daemon may still be working (it is not
 "daemon down"); `review snapshot`/`start`/single `retrack` wait up to
 three base-fetch budgets, `retrack --all` up to six hours.
+
+### Who is speaking: the author rule
+
+Every verb that creates a row sends an `author`, resolved once
+(`kb-code-cli/src/author.rs`): `--author X` > `--as you` > `$KB_CODE_AUTHOR` >
+`$KB_HARNESS` > `claude`. It covers `annotate` (create form, `reply`, and the
+`add_comment` ops of `annotate batch` that name no author), `review findings
+add` and `import`, `review compose`, and `code-actions --suggest`. `--as you` is the human opt-out. Before
+this, none of these sent an author and the daemon saved every agent reply as the
+human `you`, so the Room's awaiting-agent chip never flipped and `annotate watch
+--ignore-author claude` showed the agent its own replies.
+
+The default ends at `claude`: a HUMAN scripting the CLI without `--as you` is
+saved as an agent. Rows an agent already saved as `you` cannot be told apart
+from real human rows, so there is no backfill. `annotate batch`'s `add_reply`
+ops carry no author on the wire (the daemon stamps them), so that twin is
+unchanged.
+
+What counts as an agent is one list, `agent-authors.golden.json` (claude, codex,
+opencode, grok, kimi, omp, agent), read by the daemon's timeline/inbox and
+pinned against the SPA's `isAgentAuthorName` by a test on each side.
+`annotate watch --ignore-agents` (also on `kb-code watch`) skips all of those
+names; `--ignore-author` stays for a single literal name.
+
+A LOOPBACK-ONLY route answers an off-host caller with a bodiless 404.
+`GET /api/identity` now carries `caller_loopback` (this request's peer class,
+independent of `[review] remote_mutations`); when a bodiless 404 comes back the
+CLI asks it, and if the daemon says the caller is not loopback the verb exits 4
+with code `needs-daemon-host` instead of 8. If the probe fails or the daemon
+predates the field, the documented 404 to 8 mapping stands.
 
 ### The verbs
 
