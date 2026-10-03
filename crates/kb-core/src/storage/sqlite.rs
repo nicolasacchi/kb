@@ -2736,6 +2736,64 @@ impl Db {
         Ok(n == 0)
     }
 
+    // --- doc_embedding_model (v0.44 I1 / A3-7) ----------------------------
+
+    /// The model that produced `artifact_id`'s stored vector, if recorded.
+    pub fn embedding_model_get(&self, artifact_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT model FROM doc_embedding_model WHERE artifact_id = ?1",
+                params![artifact_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    /// Record (`Some`) or clear (`None`) the producer model of an artifact's
+    /// vector. A blank id or model is ignored on set. Idempotent: an
+    /// unchanged value performs no write.
+    pub fn embedding_model_set(&mut self, artifact_id: &str, model: Option<&str>) -> Result<()> {
+        match model.map(str::trim) {
+            Some(m) if !artifact_id.is_empty() && !m.is_empty() => {
+                self.conn.execute(
+                    "INSERT INTO doc_embedding_model (artifact_id, model) VALUES (?1, ?2)
+                     ON CONFLICT(artifact_id) DO UPDATE SET model = excluded.model
+                     WHERE model != excluded.model",
+                    params![artifact_id, m],
+                )?;
+            }
+            Some(_) => {}
+            None => {
+                self.conn.execute(
+                    "DELETE FROM doc_embedding_model WHERE artifact_id = ?1",
+                    params![artifact_id],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One-shot import of the legacy JSON sidecar. `INSERT OR IGNORE`: a row
+    /// already recorded in sqlite is newer than the sidecar and wins.
+    pub fn embedding_model_import(&mut self, rows: &[(String, String)]) -> Result<usize> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut n = 0usize;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO doc_embedding_model (artifact_id, model) VALUES (?1, ?2)",
+            )?;
+            for (id, model) in rows {
+                n += stmt.execute(params![id, model])?;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
     // --- v0.34 X1 — identity backfill + per-user list overrides ----------
 
     /// Idempotent, config-aware startup pass (V0034). Migrations cannot
@@ -6113,6 +6171,9 @@ impl Db {
             "memory_links_seeded",
             "doc_first_seen",
             "code_refs_docs",
+            // v0.44 I1 — relocate preserves the vector, so it must keep the
+            // record of which model produced it.
+            "doc_embedding_model",
         ] {
             // memory_links + code_refs have composite PKs — handled below.
             tx.execute(
@@ -6508,6 +6569,12 @@ const CASCADE_STEPS: &[CascadeStep] = &[
         shape: DeleteShape::ByArtifactId,
         keep_user_data_prunes: true,
     },
+    // v0.44 I1 — producer model of the stored vector; derived at index time.
+    CascadeStep {
+        table: "doc_embedding_model",
+        shape: DeleteShape::ByArtifactId,
+        keep_user_data_prunes: true,
+    },
     CascadeStep {
         table: "pinned_memories",
         shape: DeleteShape::ByArtifactId,
@@ -6643,6 +6710,8 @@ const SWEEP_TABLES: &[(&str, &str, Option<&str>)] = &[
     ("pinned_memories", "artifact_id", None),
     ("reading_sections", "artifact_id", None),
     ("history", "artifact_id", None),
+    // v0.44 I1 — derived at index time; an orphan row is a leak.
+    ("doc_embedding_model", "artifact_id", None),
     // DCB W1.A — derived rows; an orphan here is a leak, never a tombstone.
     ("code_refs", "artifact_id", None),
     ("code_refs_docs", "artifact_id", None),
@@ -14270,6 +14339,7 @@ mod tests {
                 "edges",
                 "corkboard",
                 "doc_first_seen",
+                "doc_embedding_model",
                 "pinned_memories",
                 "memory_links",
                 "memory_links_seeded",
@@ -14302,6 +14372,7 @@ mod tests {
                 "edges",
                 "corkboard",
                 "doc_first_seen",
+                "doc_embedding_model",
                 "pinned_memories",
                 "memory_links",
                 "memory_links_seeded",
@@ -14325,6 +14396,7 @@ mod tests {
                 "pinned_memories",
                 "reading_sections",
                 "history",
+                "doc_embedding_model",
                 // DCB W1.A — appended, matching SWEEP_TABLES' own order.
                 "code_refs",
                 "code_refs_docs",
@@ -15283,6 +15355,174 @@ mod tests {
                 "invariant #2: `{table}` carries an artifact_id but is in NEITHER \
                  CASCADE_STEPS nor SWEEP_TABLES — a delete would leak it and a \
                  relocate would strand it under a dead id forever",
+            );
+        }
+    }
+
+    /// v0.44 I1 (I3 / A3-11 / A13-6) — the BEHAVIOURAL half of invariant #2.
+    /// `every_artifact_id_keyed_table_is_in_a_lifecycle_registry` can only
+    /// check list membership; `cascade_relocate_doc` is hand-written SQL with
+    /// no list to inspect, and its omission is what stranded `memory_recalls`
+    /// (O3). So: for EVERY (table, column) the live schema keys on an
+    /// artifact id, synthesise one row from `pragma_table_info`, run a
+    /// relocate OLD→NEW and assert the row moved (none left under OLD, one
+    /// under NEW); then run the Full cascade delete on NEW and assert nothing
+    /// survives except the two documented tombstone/frame exemptions and the
+    /// reverse `session_files.target_artifact_id` pointer (a different
+    /// session's row about this doc, owned by that session's lifecycle).
+    /// A future table registered in CASCADE_STEPS but forgotten in the
+    /// relocate tx fails here.
+    #[test]
+    fn every_artifact_id_keyed_table_follows_a_relocate() {
+        use crate::cascade::CascadeMode;
+        use rusqlite::types::Value;
+        const OLD: &str = "oldoldoldold";
+        const NEW: &str = "newnewnewnew";
+        // Columns that are artifact ids for lifecycle purposes.
+        const ID_COLS: &[&str] = &[
+            "artifact_id",
+            "artifact_id_session",
+            "target_artifact_id",
+            "src_artifact",
+            "dst_artifact",
+        ];
+        // Tables the cascade DELETE deliberately leaves alone (same reasons
+        // as the registry test's exemptions) — relocate still rekeys them.
+        const DELETE_EXEMPT: &[&str] = &["list_entries", "atlas_snapshot_points"];
+        // CHECK-constrained enum columns the generic placeholder cannot satisfy.
+        let overrides: &[(&str, &str, &str)] = &[
+            ("history", "kind", "open"),
+            ("session_decisions", "kind", "plan"),
+            ("session_commits", "kind", "commit"),
+            ("session_research", "kind", "web"),
+            ("session_files", "action", "read"),
+        ];
+
+        let probe = db();
+        let pairs: Vec<(String, String)> = {
+            let mut stmt = probe
+                .conn
+                .prepare(
+                    "SELECT m.name, p.name FROM sqlite_master m \
+                     JOIN pragma_table_info(m.name) p \
+                     WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' \
+                     ORDER BY m.name, p.cid",
+                )
+                .unwrap();
+            let all = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            all.into_iter()
+                .filter(|(_, c)| ID_COLS.contains(&c.as_str()))
+                .collect()
+        };
+        assert!(
+            pairs.len() >= 20,
+            "schema probe found only {} artifact-id columns — the probe itself is broken",
+            pairs.len()
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(t, c)| t == "doc_embedding_model" && c == "artifact_id"),
+            "the V0044 table must be visible to the probe"
+        );
+
+        for (table, col) in &pairs {
+            let mut db = db();
+            db.conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+
+            // (name, declared type, notnull, has default)
+            let info: Vec<(String, String, bool, bool)> = {
+                let mut stmt = db
+                    .conn
+                    .prepare(
+                        "SELECT name, type, \"notnull\", dflt_value IS NOT NULL \
+                         FROM pragma_table_info(?1) ORDER BY cid",
+                    )
+                    .unwrap();
+                stmt.query_map(params![table], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)? != 0,
+                        r.get::<_, i64>(3)? != 0,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+            };
+            let mut names: Vec<String> = Vec::new();
+            let mut values: Vec<Value> = Vec::new();
+            for (name, ty, notnull, has_default) in &info {
+                let is_target = name == col;
+                if !is_target && !(*notnull && !*has_default) {
+                    continue;
+                }
+                let v = if is_target {
+                    Value::Text(OLD.to_string())
+                } else if let Some((_, _, v)) = overrides
+                    .iter()
+                    .find(|(t, c, _)| *t == table.as_str() && *c == name.as_str())
+                {
+                    Value::Text((*v).to_string())
+                } else {
+                    let up = ty.to_ascii_uppercase();
+                    if up.contains("INT") {
+                        Value::Integer(0)
+                    } else if up.contains("REAL") || up.contains("FLOA") || up.contains("DOUB") {
+                        Value::Real(0.0)
+                    } else if up.contains("BLOB") {
+                        Value::Blob(vec![0])
+                    } else {
+                        Value::Text("x".to_string())
+                    }
+                };
+                names.push(format!("\"{name}\""));
+                values.push(v);
+            }
+            let sql = format!(
+                "INSERT INTO {table} ({}) VALUES ({})",
+                names.join(","),
+                vec!["?"; names.len()].join(",")
+            );
+            db.conn
+                .execute(&sql, rusqlite::params_from_iter(values.iter()))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "could not synthesise a row for {table}.{col}: {e} — add a placeholder \
+                         override for the new constraint"
+                    )
+                });
+            assert_eq!(count_where(&db, table, col, OLD), 1, "{table}.{col} seed");
+
+            let mid = db
+                .moves_insert_intent(OLD, NEW, "old.html", "new.html", 1000)
+                .unwrap();
+            db.cascade_relocate_doc(OLD, NEW, "old.html", "new.html", mid, 2000)
+                .unwrap();
+            assert_eq!(
+                count_where(&db, table, col, OLD),
+                0,
+                "invariant #2: a relocate left `{table}.{col}` rows stranded under the dead id"
+            );
+            assert_eq!(
+                count_where(&db, table, col, NEW),
+                1,
+                "invariant #2: a relocate dropped `{table}.{col}` instead of rekeying it"
+            );
+
+            if *col == "target_artifact_id" || DELETE_EXEMPT.contains(&table.as_str()) {
+                continue;
+            }
+            db.cascade_delete_doc(NEW, CascadeMode::Full).unwrap();
+            assert_eq!(
+                count_where(&db, table, col, NEW),
+                0,
+                "invariant #2: the Full cascade delete left `{table}.{col}` rows behind"
             );
         }
     }
