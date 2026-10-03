@@ -63,6 +63,20 @@ class SelfCheck(unittest.TestCase):
         d = self.tree(GOOD_WF.replace("      - run: echo hi", "      # was: git diff | grep -qE x\n      - run: echo hi"))
         self.assertEqual(self.errs(selfcheck.check_workflows, d), [])
 
+    def test_quiet_grep_in_composite_action_and_justfile(self):
+        d = self.tree()
+        os.makedirs(os.path.join(d, ".github/actions/a"))
+        with open(os.path.join(d, ".github/actions/a/action.yml"), "w") as fh:
+            fh.write("runs:\n  steps:\n    - run: |\n        git log | grep -Eq '^x'\n")
+        e = self.errs(selfcheck.check_quiet_grep, d)
+        self.assertTrue(any("action.yml:4" in x for x in e), e)
+        os.remove(os.path.join(d, ".github/actions/a/action.yml"))
+        with open(os.path.join(d, "justfile"), "w") as fh:
+            fh.write("t:\n    # git log | grep -q x\n    git log | grep -q x\n")
+        e = self.errs(selfcheck.check_quiet_grep, d)
+        self.assertEqual(len(e), 1, e)
+        self.assertIn("justfile:3", e[0])
+
     def test_checkout_pin_label_and_floating_tag(self):
         d = self.tree(GOOD_WF.replace("# v7.0.1", "# v4"))
         self.assertTrue(any("version label" in x for x in self.errs(selfcheck.check_checkout_pins, d)))

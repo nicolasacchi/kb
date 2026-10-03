@@ -99,7 +99,7 @@ toolchain-pin-check:
     fi
     # Refuse to compare against a moving channel: a floating channel makes the
     # Dockerfile comparison below meaningless.
-    if ! printf '%s' "$channel" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if [[ ! "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       echo "FAIL: rust-toolchain.toml channel is \"$channel\", not an exact X.Y.Z." >&2
       exit 1
     fi
