@@ -173,7 +173,7 @@ describe("warningShortLabel / warningChipSpec", () => {
   it("every warning shares the same tone — the wire carries no severity axis", () => {
     expect(BASE_WARNING_CHIP).toEqual({ token: "--warn", icon: "Warn" });
     for (const code of [
-      // the base model's own (`review_base.rs::warn`)
+      // the base model's own (`pub mod warn` in review_base.rs)
       "base-pinned",
       "pr-target-assumed",
       "base-upgraded",

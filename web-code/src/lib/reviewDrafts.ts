@@ -271,7 +271,7 @@ export function draftsToBatch(
   return { repo, ops };
 }
 
-/// `MAX_ANNOTATION_BATCH_OPS` on the server (`routes.rs:3573`). Mirrored
+/// `MAX_ANNOTATION_BATCH_OPS` (`crates/kb-code-server/src/routes.rs:4163`) on the server. Mirrored
 /// here so the tray can REFUSE loudly at compose time rather than have the
 /// whole publish 400 after the reviewer has written 120 comments — the
 /// same "never a silent truncation" posture root CLAUDE.md #35 states for

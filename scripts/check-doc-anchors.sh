@@ -48,33 +48,55 @@
 #   MALFORMED  LINE < 1, or a range whose END < START
 #   AMBIGUOUS  the path matches 2+ files, so the anchor names no one of them
 #
-# SEVERITY — WHY AMBIGUOUS IS COUNTED BUT NOT YET FATAL
-# -----------------------------------------------------
-# The first three are unambiguous: the citation is wrong, and no amount of
-# re-reading the doc makes it right. They exit 1 today and forever after.
+# SEVERITY — every class is fatal
+# -------------------------------
+# DANGLING, PAST-EOF, MALFORMED and AMBIGUOUS all exit 1. AMBIGUOUS was staged
+# non-fatal (`--no-ambiguous`) from 2026-09-30 until the 45-anchor debt was
+# rewritten the same day; the flag is gone from this script and the awk
+# program no longer has a staged mode, so there is nothing to grep for.
 #
-# AMBIGUOUS is a different animal, and the measurement is the argument for
-# staging it: on the tree this shipped with, DANGLING/PAST-EOF/MALFORMED is
-# 0 and AMBIGUOUS is 45 of 87. The brief's literal gate ("fails when the file
-# does not exist or N is past its end") would therefore have shipped GREEN on
-# exactly the 47 anchors the adversarial pass found ~30 of wrong — because a
-# bare `config.rs:1414` is in range for at least one of the five config.rs,
-# so no range check can ever flag it. The number is wrong the only way that
-# matters (it points into the wrong file) and a bounds check is blind to it.
-# So AMBIGUOUS is the class that carries the finding, and it is reported in
-# full, counted in the summary, and made fatal ONCE the 45 are rewritten to
-# name one file each. Failing CI on 45 pre-existing anchors the same commit
-# introduces the gate for would land every PR red and teach everyone to skip
-# the step, which is strictly worse than a green gate nobody reads.
+# THE CLASS THE BOUNDS CHECK CANNOT SEE — "right file, WRONG line"
+# ----------------------------------------------------------------
+# An anchor that names the right file but a line that has since moved is in
+# range, resolves to one file, and passes every check above. Two such anchors
+# sat green in docs/web-internals.md (`CommentsPanelProps` cited at
+# CommentsPanel.tsx:13, defined at :95). So an anchor may CARRY ITS CLAIM:
 #
-# The promotion is a one-line change and it is DELIBERATE, not forgotten:
-# drop `--no-ambiguous` from the awk invocation in the invocation below and
-# the class becomes fatal. `--no-ambiguous` is the ONLY reason AMBIGUOUS is
-# non-fatal, so `grep -c 'no-ambiguous' scripts/check-doc-anchors.sh` answers
-# "is this gate still staged?" without reading the whole file.
+#     `Symbol` (`path.rs:N`)            symbol BEFORE the anchor
+#     `path.rs:N` (`Symbol`)            symbol right AFTER it (also without parens)
 #
-# SCOPE: docs/*.md ONLY, deliberately not docs/**/*.md
-# ----------------------------------------------------
+# and the gate then asserts the identifier occurs, as a whole word, within
+# [N-3, END+3] of the cited file. Otherwise SYMBOL (fatal), naming the nearest
+# line where the identifier really is. Only the EXPLICIT adjacent pairing is
+# checked -- not "any identifier on the line" -- so a long table row that
+# names several things cannot manufacture false positives.
+#
+# `--fix` rewrites each SYMBOL failure's N to the symbol's current definition
+# line (first `fn|struct|enum|trait|type|const|class|function|interface ...
+# Symbol`, else the first whole-word occurrence), keeping a range's width.
+# It edits the docs in place, never docs/research/** (the scope rule below).
+#
+# An anchor with NO adjacent symbol is WEAK: it resolves and is in range, but
+# nothing can ever tell whether the line is still the right one. WEAK is not
+# fatal per anchor; it is held under WEAK_CEILING below, which may only go
+# DOWN (being under it is a printed note, never a failure): pairing an anchor with its symbol lowers the real count, and the next
+# person lowers the constant to match. A NEW unpaired anchor raises the count
+# and fails the build, so the debt cannot grow quietly.
+#
+# SOURCE COMMENTS (A10.f5): the same adjacent-pair check runs over comment
+# lines in tracked *.rs/*.ts/*.tsx under crates/, web/src, web-code/src and
+# tests/. There only PAIRED citations are judged (a comment's `src/lib.rs:42`
+# is usually an illustrative example, not a promise), so an unpaired
+# `file:line` in a comment is neither WEAK nor failing -- but one that carries
+# a symbol cannot drift unnoticed.
+#
+# `pinned by` / `file.rs::test_name` citations are resolved by the sibling
+# scripts/check-pinned-by.sh, which `just doc-anchors` runs after this one.
+#
+# SCOPE: docs/*.md plus every tracked CLAUDE.md -- NOT docs/**/*.md
+# -----------------------------------------------------------------
+# (The CLAUDE.md files are loaded into every agent session and used to be
+# ungated.)
 # docs/research/** is a dated record of what was true when it was written.
 # Its `file.rs:LINE` citations are part of the historical claim and must NOT
 # be re-pointed at today's line numbers — doing so would falsify the record
@@ -93,8 +115,10 @@
 # subprocess, for the same reason. NR (not `wc -l`) is the right counter: it
 # counts a final line that has no trailing newline, which `wc -l` does not.
 #
-# Usage: scripts/check-doc-anchors.sh
-# Exit:  0 = every anchor resolves to exactly one file and lies inside it.
+# Usage: scripts/check-doc-anchors.sh [--fix]
+#        scripts/check-doc-anchors.sh --self-test
+# Exit:  0 = every anchor resolves to exactly one file, lies inside it, and
+#            every symbol-paired anchor lands on its symbol; WEAK <= ceiling.
 #        1 = at least one anchor does not (see the report above).
 set -uo pipefail
 
@@ -127,40 +151,95 @@ fi
 shopt -s nullglob
 DOCS=(docs/*.md)
 shopt -u nullglob
+# every tracked CLAUDE.md (not the untracked CLAUDE.local.md), outside docs/research
+while IFS= read -r f; do DOCS+=("$f"); done < <(git ls-files 'CLAUDE.md' '*/CLAUDE.md' | grep -v '^docs/research/' || true)
 if [ "${#DOCS[@]}" -eq 0 ]; then
   echo "FAIL: no docs/*.md found under $REPO_ROOT — nothing to scan, so this" >&2
   echo "      gate would pass vacuously." >&2
   exit 1
 fi
 
-AMBIENT=""
-if [ "${1:-}" = "--no-ambiguous" ]; then
-  # The staging switch named in the header. With it, AMBIGUOUS is reported
-  # and counted but does not decide the exit status.
-  AMBIENT="-v ambiguous_ok=1"
-elif [ -n "${1:-}" ]; then
-  echo "usage: $0 [--no-ambiguous]" >&2
-  exit 2
-fi
+FIX=0
+case "${1:-}" in
+  "") ;;
+  --fix) FIX=1 ;;
+  --self-test) exec "$SCRIPT_DIR/check-doc-anchors-selftest.sh" ;;
+  *) echo "usage: $0 [--fix | --self-test]" >&2; exit 2 ;;
+esac
 
-awk -v repo="$REPO_ROOT" -v ntracked="$nfiles" $AMBIENT '
-function lines_of(f,   c, l) {
-  if (f in linecount) return linecount[f]
+# The number of anchors with no adjacent `Symbol` pairing, as of this commit.
+# It may only go DOWN (see the header): pair an anchor, then lower this.
+WEAK_CEILING=84
+
+# Source-comment citations: only files that contain a `file:LINE`-shaped
+# token at all (the full tree would make the awk pass walk hundreds of
+# thousands of lines for nothing).
+SRCLIST="$(mktemp)"
+FIXFILE="$(mktemp)"
+trap 'rm -f "$FILELIST" "$SRCLIST" "$FIXFILE"' EXIT
+# KB_ANCHOR_SRC_PATHS (space separated pathspecs) exists for the self-test's scratch tree.
+read -r -a SRC_PATHS <<< "${KB_ANCHOR_SRC_PATHS:-crates/*.rs web/src/*.ts web/src/*.tsx web-code/src/*.ts web-code/src/*.tsx tests/*.ts}"
+git grep -lE '[A-Za-z0-9_]+\.(rs|ts|tsx|js|py|sh):[0-9]+' -- "${SRC_PATHS[@]}" 2>/dev/null | LC_ALL=C sort > "$SRCLIST" || true
+
+awk -v repo="$REPO_ROOT" -v ntracked="$nfiles" -v weak_ceiling="$WEAK_CEILING" -v fixfile="$FIXFILE" '
+# Lazily load a file into L[f,i] / N[f]; NR-style count (a final line without a
+# trailing newline still counts, which `wc -l` would miss).
+function load(f,   c, l) {
+  if (f in N) return N[f]
   c = 0
-  while ((getline l < f) > 0) c++
+  while ((getline l < f) > 0) { c++; L[f, c] = l }
   close(f)
-  linecount[f] = c
+  N[f] = c
   return c
 }
-NR == FNR { present[$0] = 1; next }
-FNR == 1 { infence = 0; ndocs++ }
+function lines_of(f) { return load(f) }
+# Whole-word occurrence of identifier `sym` on line text `t`.
+function has_word(t, sym) {
+  return match(t, "(^|[^A-Za-z0-9_])" sym "([^A-Za-z0-9_]|$)")
+}
+# Last identifier segment of `A::b`, `A#b`, `A.b`.
+function last_seg(x,   i) {
+  while ((i = match(x, /(::|[#.])/)) > 0) x = substr(x, RSTART + RLENGTH)
+  return x
+}
+# Is there a definition-looking line for sym? Returns the line number or 0.
+function def_line(f, sym,   i, n, t, re) {
+  n = load(f)
+  re = "(^|[^A-Za-z0-9_])(fn|struct|enum|trait|type|const|static|mod|union|interface|class|function|def|let|var|macro_rules!)[[:space:]]+(mut[[:space:]]+)?" sym "([^A-Za-z0-9_]|$)"
+  for (i = 1; i <= n; i++) if (match(L[f, i], re)) return i
+  return 0
+}
+function first_word(f, sym,   i, n) {
+  n = load(f)
+  for (i = 1; i <= n; i++) if (has_word(L[f, i], sym)) return i
+  return 0
+}
+# Nearest whole-word line to `near`, searching the whole file; 0 when absent.
+function nearest_word(f, sym, near,   i, n, best, bd, d) {
+  n = load(f); best = 0; bd = 1e9
+  for (i = 1; i <= n; i++) if (has_word(L[f, i], sym)) {
+    d = i > near ? i - near : near - i
+    if (d < bd) { bd = d; best = i }
+  }
+  return best
+}
+FILENAME == ARGV[1] { present[$0] = 1; next }
+FILENAME == ARGV[2] { srcset[$0] = 1; next }
+FNR == 1 { infence = 0; if (FILENAME in srcset) insrc = 1; else { insrc = 0; ndocs++ } }
 {
-  # Toggle on any fence line, with or without an info string.
-  if ($0 ~ /^[[:space:]]*```/) { infence = !infence; next }
-  if (infence) next
+  if (insrc) {
+    # Only comment text; a `file.rs:12` in code (a string literal in a test)
+    # is data, not a promise.
+    if ($0 !~ /(\/\/|^[[:space:]]*\*|^[[:space:]]*#)/) next
+  } else {
+    # Toggle on any fence line, with or without an info string.
+    if ($0 ~ /^[[:space:]]*```/) { infence = !infence; next }
+    if (infence) next
+  }
   rest = $0
   while (match(rest, /`[A-Za-z0-9_][A-Za-z0-9_.\/-]*\.(rs|ts|tsx|js|mjs|jsx|py|sh|bash|yml|yaml|md|sql|html|css|toml|json|txt):[0-9]+(-[0-9]+)?`/)) {
     anchor = substr(rest, RSTART, RLENGTH)
+    pre    = substr($0, 1, length($0) - length(rest) + RSTART - 1)
     rest   = substr(rest, RSTART + RLENGTH)
     text   = anchor
     gsub(/^`|`$/, "", text)
@@ -171,10 +250,27 @@ FNR == 1 { infence = 0; ndocs++ }
     start  = dash ? substr(spec, 1, dash - 1) : spec
     finish = dash ? substr(spec, dash + 1) : start
     start += 0; finish += 0
-    total++
+
+    # Adjacent symbol pairing: `Sym` (`path:N`)  |  `path:N` (`Sym`) / `path:N` `Sym`
+    sym = ""
+    if (match(pre, /`[A-Za-z_][A-Za-z0-9_]*((::|[#.])[A-Za-z_][A-Za-z0-9_]*)*`[[:space:]]*(\(|@|at )[[:space:]]*$/)) {
+      t = substr(pre, RSTART, RLENGTH)
+      sub(/^`/, "", t); sub(/`[[:space:]]*(\(|@|at )[[:space:]]*$/, "", t)
+      sym = last_seg(t)
+    } else if (match(rest, /^[[:space:]]*\(?`[A-Za-z_][A-Za-z0-9_]*((::|[#.])[A-Za-z_][A-Za-z0-9_]*)*`/)) {
+      t = substr(rest, RSTART, RLENGTH)
+      sub(/^[[:space:]]*\(?`/, "", t); sub(/`$/, "", t)
+      sym = last_seg(t)
+    }
+
+    # A one- or two-letter "symbol" is a key binding or a prose word (`u`, `gO`),
+    # not an identifier; in source comments require code-shaped names
+    # (snake_case or mixed case) so ordinary prose never pairs.
+    if (sym != "" && length(sym) < 3) sym = ""
+    if (insrc && sym != "" && sym !~ /_/ && sym !~ /[a-z][A-Z]/ && sym !~ /^[A-Z][a-z]+[A-Z]/) sym = ""
+    if (!insrc) total++
     if (start < 1 || finish < start) {
-      printf "MALFORMED  %s:%d  %s  (line < 1, or range end precedes its start)\n", FILENAME, FNR, anchor
-      malformed++
+      if (!insrc) { printf "MALFORMED  %s:%d  %s  (line < 1, or range end precedes its start)\n", FILENAME, FNR, anchor; malformed++ }
       continue
     }
     # Resolve: an exact repo-relative path first, else every tracked file
@@ -200,9 +296,16 @@ FNR == 1 { infence = 0; ndocs++ }
         if (length(f) >= length(suffix) && substr(f, length(f) - length(suffix) + 1) == suffix) hits[++nf] = f
       }
     }
-    if (nf == 0) {
+    if (insrc) {
+      # Source comments: judge ONLY a symbol-paired citation of a uniquely
+      # resolved, in-range file (see the header). Everything else is skipped.
+      if (sym == "" || nf != 1) continue
+      srcpairs++
+      if (finish > lines_of(repo "/" hits[1])) continue
+    } else if (nf == 0) {
       printf "DANGLING   %s:%d  %s  (no file in the tree ends in %s)\n", FILENAME, FNR, anchor, path
       dangling++
+      continue
     } else {
       # Candidates sorted before anything else looks at them: `for (f in
       # present)` walks the hash in an order gawk does not promise to be
@@ -217,10 +320,7 @@ FNR == 1 { infence = 0; ndocs++ }
       }
       # The longest candidate sets the ceiling an ambiguous anchor can still
       # clear. An anchor past the end of EVERY file it could name is broken
-      # under any reading, so it is PAST-EOF (always fatal) and not
-      # AMBIGUOUS (staged non-fatal) — otherwise --no-ambiguous would hide
-      # `config.rs:999999`, a hard error, behind a class that is only a
-      # to-do item.
+      # under any reading, so it is PAST-EOF and not AMBIGUOUS.
       maxlines = 0
       for (i = 1; i <= nf; i++) {
         c = lines_of(repo "/" hits[i])
@@ -237,46 +337,82 @@ FNR == 1 { infence = 0; ndocs++ }
           printf "PAST-EOF   %s:%d  %s  (past the end of ALL %d matching file(s); the longest, %s, has %d)\n", FILENAME, FNR, anchor, nf, hits[nf], maxlines
         }
         past_eof++
+        continue
       } else if (nf > 1) {
         printf "AMBIGUOUS  %s:%d  %s  (%d files match — write the path far enough to name ONE)\n", FILENAME, FNR, anchor, nf
         for (i = 1; i <= nf; i++) printf "             %s\n", hits[i]
         ambiguous++
-      } else {
-        ok++
+        continue
       }
     }
+
+    # nf == 1 and in range: the symbol check.
+    if (sym == "") { weak++; continue }
+    f1 = repo "/" hits[1]
+    load(f1)
+    lo = start - 3; if (lo < 1) lo = 1
+    hi = finish + 3; if (hi > N[f1]) hi = N[f1]
+    found = 0
+    for (i = lo; i <= hi; i++) if (has_word(L[f1, i], sym)) { found = 1; break }
+    if (found) { paired++; continue }
+    # Wrong line. Name where the symbol really is.
+    near = nearest_word(f1, sym, start)
+    where = FILENAME ":" FNR
+    if (near > 0) {
+      d = def_line(f1, sym); if (d == 0) d = first_word(f1, sym)
+      printf "SYMBOL     %s  %s  (`%s` is not within 3 lines of %s; defined/used at line %d, nearest use at %d)\n", where, anchor, sym, spec, d, near
+      width = finish - start
+      newspec = width > 0 ? d "-" (d + width) : d
+      printf "%s\t%d\t%s\t%s\n", FILENAME, FNR, anchor, "`" path ":" newspec "`" >> fixfile
+    } else {
+      printf "SYMBOL     %s  %s  (`%s` does not occur anywhere in %s)\n", where, anchor, sym, hits[1]
+    }
+    symbol_bad++
   }
 }
 END {
-  hard    = dangling + past_eof + malformed
-  broken  = hard + ambiguous
-  # `--no-ambiguous` downgrades AMBIGUOUS from fatal to reported. It exists
-  # for exactly one reason (see the SEVERITY section in the header) so the
-  # switch and its reason live in the same file and cannot drift apart.
-  if (ambiguous_ok) broken = hard
-  printf "\ndoc-anchor gate: %d anchor(s) across %d doc(s), %d tracked file(s)\n", total, ndocs, ntracked
+  hard    = dangling + past_eof + malformed + ambiguous + symbol_bad
+  weak_over = (weak > weak_ceiling)
+  printf "\ndoc-anchor gate: %d anchor(s) across %d doc(s) (+%d symbol-paired citation(s) in source comments), %d tracked file(s)\n", total, ndocs, srcpairs + 0, ntracked
   printf "  DANGLING   %4d   path matches no file (renamed / moved / deleted)\n", dangling + 0
   printf "  PAST-EOF   %4d   cited line, or range end, is past the last line of its file\n", past_eof + 0
   printf "  MALFORMED  %4d   line < 1, or a range whose end precedes its start\n", malformed + 0
-  printf "  AMBIGUOUS  %4d   path matches 2+ files, so the anchor names none of them%s\n", ambiguous + 0, (ambiguous_ok ? "   [STAGED: not failing this run]" : "")
-  printf "  OK         %4d\n", ok + 0
-  if (ambiguous > 0 && ambiguous_ok) {
-    printf "\nNOTE: %d AMBIGUOUS anchor(s) above are the measured O11 debt and are\n", ambiguous
-    printf "reported but not fatal while --no-ambiguous is passed. Each is a bare\n"
-    printf "basename matching 2+ files, so the line number cannot be checked and\n"
-    printf "cannot be trusted. Drop the flag once they are rewritten to name one\n"
-    printf "file each; `grep -c no-ambiguous scripts/check-doc-anchors.sh` says\n"
-    printf "whether the staging is still in place.\n"
+  printf "  AMBIGUOUS  %4d   path matches 2+ files, so the anchor names none of them\n", ambiguous + 0
+  printf "  SYMBOL     %4d   a symbol-paired anchor whose symbol is not within 3 lines of it\n", symbol_bad + 0
+  printf "  paired OK  %4d   anchors verified against their symbol\n", paired + 0
+  printf "  WEAK       %4d   resolve and are in range but carry no symbol (ceiling %d; may only go down)\n", weak + 0, weak_ceiling
+  if (hard > 0) {
+    printf "\nFAIL: %d doc anchor(s) are wrong. Each is a citation a reader cannot follow or\n", hard
+    printf "verify. Write the path far enough to name ONE file and re-point the line at the\n"
+    printf "code the sentence describes (`scripts/check-doc-anchors.sh --fix` re-points\n"
+    printf "symbol-paired anchors for you).\n"
   }
-  if (broken > 0) {
-    printf "\nFAIL: %d of %d doc anchor(s) do not resolve to exactly one in-range line.\n", broken, total
-    printf "Each is a citation a reader cannot follow or verify. Fix by writing the\n"
-    printf "path out far enough to name ONE file, then re-pointing the line at the\n"
-    printf "code the sentence actually describes.\n"
-    exit 1
+  if (weak_over) {
+    printf "\nFAIL: %d WEAK anchor(s) exceeds the ceiling of %d. A new `file:LINE` citation must name its\n", weak, weak_ceiling
+    printf "symbol -- write `Symbol` (`path.rs:N`) -- so the gate can tell when it goes stale.\n"
   }
-  printf "\nOK: every doc anchor names one existing file and lies inside it.\n"
+  if (weak < weak_ceiling) {
+    printf "\nNOTE: WEAK is %d, below the ceiling %d: lower WEAK_CEILING in this script to %d so the ratchet holds (not a failure).\n", weak, weak_ceiling, weak
+  }
+  if (hard > 0 || weak_over) exit 1
+  printf "\nOK: every doc anchor names one existing file, lies inside it, and every symbol-paired anchor lands on its symbol.\n"
 }
-' "$FILELIST" "${DOCS[@]}"
-# awk is the last command, so its verdict IS this script's exit status: 1
-# when any anchor is broken, 0 when none is.
+' "$FILELIST" "$SRCLIST" "${DOCS[@]}" $(cat "$SRCLIST")
+rc=$?
+
+if [ "$FIX" -eq 1 ]; then
+  if [ ! -s "$FIXFILE" ]; then
+    echo "--fix: nothing to re-point."
+  else
+    # Never touch the dated record.
+    while IFS=$'\t' read -r file lineno old new; do
+      case "$file" in docs/research/*) continue ;; esac
+      esc_old="$(printf '%s' "$old" | sed 's/[][\.*^$/|]/\\&/g')"
+      esc_new="$(printf '%s' "$new" | sed 's/[\&|]/\\&/g')"
+      sed -i "${lineno}s|${esc_old}|${esc_new}|" "$file"
+      echo "--fix: $file:$lineno  $old -> $new"
+    done < "$FIXFILE"
+    echo "--fix: re-run the gate to confirm."
+  fi
+fi
+exit "$rc"
