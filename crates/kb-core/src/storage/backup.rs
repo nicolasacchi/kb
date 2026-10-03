@@ -1486,6 +1486,55 @@ mod tests {
         );
     }
 
+    /// A3-13 — the export's staging (the multi-GB copy walk and the staging
+    /// cleanup) goes through the blocking pool. The runtime's only blocking
+    /// thread is held by the test: an export doing that work inline on the
+    /// async worker would complete anyway; one using `spawn_blocking` cannot.
+    #[test]
+    fn export_staging_runs_on_the_blocking_pool() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let (paths, kb) = kb_with_every_member(tmp.path());
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let hold = tokio::task::spawn_blocking(move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            });
+            started_rx.await.unwrap();
+            let opts = ExportOptions {
+                include_daemon: false,
+                out: None,
+            };
+            let fut = write_kb_export_with(&paths, &kb, &opts);
+            tokio::pin!(fut);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(300), &mut fut)
+                    .await
+                    .is_err(),
+                "the export finished while the blocking pool was saturated: it ran on the async worker"
+            );
+            release_tx.send(()).unwrap();
+            let out = tokio::time::timeout(std::time::Duration::from_secs(30), &mut fut)
+                .await
+                .expect("completes once the blocking thread is free")
+                .unwrap();
+            assert!(out.is_file());
+            hold.await.unwrap();
+            let leftovers: Vec<_> = std::fs::read_dir(&paths.exports)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(".staging-"))
+                .collect();
+            assert!(leftovers.is_empty(), "staging left behind");
+        });
+    }
+
     #[tokio::test]
     async fn daemon_members_are_packed_only_when_asked() {
         let tmp = tempfile::tempdir().unwrap();
