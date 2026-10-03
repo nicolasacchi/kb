@@ -94,6 +94,9 @@ post_distill_ask() {
   )
   [ -n "$cwd" ] && args+=(--cwd "$cwd")
   (
+    # v0.44 X4 — the ask is attributed to the session it is about even when
+    # the CLI is not handed the flags (subshell: nothing leaks to the hook).
+    export KB_SESSION_ID="$sid" KB_HARNESS="$harness"
     export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
     export no_proxy="127.0.0.1,localhost${no_proxy:+,$no_proxy}"
     unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
@@ -103,4 +106,33 @@ post_distill_ask() {
       kb "${args[@]}" >/dev/null 2>&1 || true
     fi
   )
+}
+
+# Export the session identity every `kb` CLI write resolves first
+# (KB_SESSION_ID, then KB_HARNESS — crates/kb-cli/src/session_identity.rs), so
+# a shell `kb remember` / `kb slate ...` run by or beside this hook is
+# attributed to THIS session instead of falling to the last-writer-wins marker.
+#
+#   hook_export_identity <session-id> [harness]
+#
+# * exports into the hook's own environment (children it spawns);
+# * on Claude Code's SessionStart, $CLAUDE_ENV_FILE is the one channel that
+#   carries an export into the AGENT's later Bash tool calls, so the same two
+#   lines are appended there (values %q-quoted; a missing/unwritable file is
+#   silently skipped);
+# * an unknown harness is never guessed: KB_HARNESS is left as the caller
+#   already had it (the CLI then falls back to the session env, then `claude`).
+# A blank session id is a no-op. Never fails.
+hook_export_identity() {
+  local sid="${1:-}" harness="${2:-}"
+  [ -n "$sid" ] || return 0
+  export KB_SESSION_ID="$sid"
+  [ -n "$harness" ] && export KB_HARNESS="$harness"
+  if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    {
+      printf 'export KB_SESSION_ID=%q\n' "$sid"
+      [ -n "$harness" ] && printf 'export KB_HARNESS=%q\n' "$harness"
+    } >>"$CLAUDE_ENV_FILE" 2>/dev/null || true
+  fi
+  return 0
 }

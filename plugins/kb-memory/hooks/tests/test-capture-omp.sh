@@ -29,6 +29,8 @@ mkdir -p "$TMPROOT/bin"
 cat >"$TMPROOT/bin/kb" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ]; then exit 1; fi
+# v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
+if [ "${1:-}" = "sessions" ] && [ "${2:-}" = "scrub" ]; then exec cat; fi
 exit 0
 EOF
 chmod +x "$TMPROOT/bin/kb"
