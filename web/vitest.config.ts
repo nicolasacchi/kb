@@ -26,8 +26,16 @@ process.env.TZ = "UTC";
 // on a dev box and in CI alike. Tests are colocated as `*.test.ts(x)` next
 // to their sources; they're picked up here and by `tsc -b` typecheck, and
 // never enter the vite production bundle (unreachable from the entries).
+//
+// v0.44 F1 -- KB_WITNESS_DIR (set in CI) adds vitest's JSON reporter so
+// scripts/ci/witness.py can decide the lane from the report (failed == 0 and
+// executed >= the ci/test-floors.toml floor), not from the exit code alone.
+const witnessDir = process.env.KB_WITNESS_DIR;
 export default defineConfig({
   test: {
+    ...(witnessDir
+      ? { reporters: ["default", "json"], outputFile: { json: `${witnessDir}/vitest-web.json` } }
+      : {}),
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     clearMocks: true,
