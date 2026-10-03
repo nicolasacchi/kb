@@ -1360,7 +1360,11 @@ fn store_uuids_and_git_versions_are_validated() {
 #[test]
 fn a_relocated_store_is_found_under_the_current_root_and_the_row_corrected() {
     let e = env();
-    review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    let r1 = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    // widgets-01 has two forge remotes; the PR binding's slug decides.
+    e.store
+        .set_review_pr_binding(r1, 7, "acme/widgets", None, None, None)
+        .unwrap();
     let reg = e.rs.register_repo(&e.store, "widgets-01", None);
     let id = member_id(&reg);
     e.rs.seed(&e.store, id, false).unwrap();
