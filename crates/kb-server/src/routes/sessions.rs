@@ -696,36 +696,23 @@ fn ids_needing_memory_count(rows: &[SessionOut], undistilled: bool) -> Vec<Strin
         .collect()
 }
 
-/// Bounded log of the session ids `list_page` asked the corpora to count
-/// memories for (newest last). It exists so a ROUTE-level test can prove the
-/// `?undistilled=1` skip really happens: the skipped rows are, by
-/// construction, never in the response, so the response alone cannot tell
-/// "skipped" from "counted then filtered".
-static MEMORY_COUNT_PROBES: std::sync::Mutex<std::collections::VecDeque<String>> =
-    std::sync::Mutex::new(std::collections::VecDeque::new());
-const MEMORY_COUNT_PROBE_CAP: usize = 4096;
+/// Observer for the session ids `list_page` asked the corpora to count
+/// memories for. Empty in production (the hot path pays one `OnceLock::get`
+/// and carries no state); a ROUTE-level test installs a sink with
+/// [`set_memory_count_probe_sink`] to prove the `?undistilled=1` skip really
+/// happens: the skipped rows are, by construction, never in the response, so
+/// the response alone cannot tell "skipped" from "counted then filtered".
+static MEMORY_COUNT_PROBE_SINK: std::sync::OnceLock<fn(&[String])> = std::sync::OnceLock::new();
 
-fn note_memory_count_probe(ids: &[String]) {
-    let mut log = MEMORY_COUNT_PROBES
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    for id in ids {
-        if log.len() >= MEMORY_COUNT_PROBE_CAP {
-            log.pop_front();
-        }
-        log.push_back(id.clone());
-    }
+/// Install the probe observer (first caller wins; later calls are no-ops).
+pub fn set_memory_count_probe_sink(sink: fn(&[String])) {
+    let _ = MEMORY_COUNT_PROBE_SINK.set(sink);
 }
 
-/// The recent session ids whose `memory_count` a list page fetched (test
-/// observability for the undistilled skip; see [`MEMORY_COUNT_PROBES`]).
-pub fn memory_count_probe_log() -> Vec<String> {
-    MEMORY_COUNT_PROBES
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .cloned()
-        .collect()
+fn note_memory_count_probe(ids: &[String]) {
+    if let Some(sink) = MEMORY_COUNT_PROBE_SINK.get() {
+        sink(ids);
+    }
 }
 
 /// One keyset page of the sessions list, cross-kb merged, truncated to
