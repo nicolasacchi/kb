@@ -2519,8 +2519,10 @@ mod tests {
             1_767_225_700,
             &[],
             &mut |_, _| Err(kb_core::Error::Storage("read failed".into())),
-        )
-        .expect("a partial close is Ok, not a bare error");
+        );
+        let Ok(out) = out else {
+            panic!("a partial close must be Ok, not a bare error");
+        };
         assert_eq!(out.response.closed.len(), 1, "the committed done is kept");
         assert_eq!(out.response.closed[0].ask_seq, 1);
         assert!(out.head.is_some(), "its head is cached");
