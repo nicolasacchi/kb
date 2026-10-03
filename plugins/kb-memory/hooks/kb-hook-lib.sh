@@ -136,3 +136,64 @@ hook_export_identity() {
   fi
   return 0
 }
+
+# --- capture spool (v0.44 X6) ------------------------------------------------
+# When `kb sessions capture` fails, a capture hook must NOT hand-write the raw
+# transcript into the corpus (that path skipped the secrets scrub). It parks the
+# raw transcript in a private spool OUTSIDE every corpus instead; the next
+# successful capture (or `kb sessions capture --replay-spool`) pushes it through
+# the normal scrubbed path and deletes it. The dir resolution mirrors
+# `sessions_capture::spool_dir` in kb-cli exactly:
+#   $KB_CAPTURE_SPOOL > $KB_CACHE_DIR/capture-spool >
+#   $XDG_CACHE_HOME/kb/capture-spool > $HOME/.cache/kb/capture-spool
+
+hook_spool_dir() {
+  if [ -n "${KB_CAPTURE_SPOOL:-}" ]; then
+    printf '%s' "$KB_CAPTURE_SPOOL"
+  elif [ -n "${KB_CACHE_DIR:-}" ]; then
+    printf '%s/capture-spool' "$KB_CACHE_DIR"
+  elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+    printf '%s/kb/capture-spool' "$XDG_CACHE_HOME"
+  elif [ -n "${HOME:-}" ]; then
+    printf '%s/.cache/kb/capture-spool' "$HOME"
+  else
+    return 1
+  fi
+}
+
+# hook_spool_put <transcript> <raw-session-id> [cwd]
+# Dir 0700, files 0600, one item per session (latest snapshot wins, as the
+# corpus file does). Refuses a transcript over the 48MiB capture cap. Returns
+# non-zero when nothing was spooled; never writes anywhere but the spool.
+hook_spool_put() {
+  local tpath="$1" raw_sid="$2" cwd="${3:-}" dir key tmp size
+  dir="$(hook_spool_dir)" || return 1
+  size="$(stat -c %s "$tpath" 2>/dev/null || wc -c <"$tpath" 2>/dev/null)"
+  if [ -n "$size" ] && [ "$size" -gt 50331648 ]; then
+    echo "kb-hook-lib: not spooling oversized transcript ($size bytes > 48MiB cap): $tpath" >&2
+    return 1
+  fi
+  key="$(printf '%s' "$raw_sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+  [ -n "$key" ] || key=session
+  (
+    umask 077
+    mkdir -p "$dir" && chmod 700 "$dir" || exit 1
+    tmp="$dir/.$key.jsonl.tmp.$$"
+    cp "$tpath" "$tmp" || { rm -f "$tmp"; exit 1; }
+    {
+      printf 'session_id=%s\n' "$raw_sid"
+      [ -n "$cwd" ] && printf 'cwd=%s\n' "$cwd"
+    } >"$dir/$key.meta" || { rm -f "$tmp"; exit 1; }
+    mv -f "$tmp" "$dir/$key.jsonl"
+  )
+}
+
+# True when the spool holds at least one item.
+hook_spool_pending() {
+  local dir f
+  dir="$(hook_spool_dir)" || return 1
+  for f in "$dir"/*.jsonl; do
+    [ -f "$f" ] && return 0
+  done
+  return 1
+}

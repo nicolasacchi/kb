@@ -92,3 +92,22 @@ fn distill_nudge_hook_shell_tests() {
 fn hooks_export_session_identity_for_shell_writes() {
     run("test-hook-identity.sh");
 }
+
+/// v0.44 X6 - a failing `kb sessions capture` spools the RAW transcript
+/// privately (never into the corpus); the next successful capture or
+/// `--replay-spool` lands it scrubbed. Needs the REAL `kb` binary.
+#[test]
+fn capture_hook_spools_instead_of_embedding_raw_and_replays_scrubbed() {
+    let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
+    let out = Command::new("bash")
+        .arg(tests_dir().join("test-capture-spool.sh"))
+        .env("KB_BIN_DIR", kb.parent().unwrap())
+        .output()
+        .expect("bash is required to run the hook shell tests");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && !stdout.contains("not ok"),
+        "test-capture-spool.sh failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
