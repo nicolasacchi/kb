@@ -5538,6 +5538,45 @@ impl Db {
         Ok(rows)
     }
 
+    /// v0.44 F10 — per-session inputs of the recall-coverage report.
+    ///
+    /// One row per session whose NEWEST capture started at or after
+    /// `since_unix`. `landed_turns` = distinct `turn_id`s the capture parse
+    /// found a memory injection on (the harness really injected). `lost_turns`
+    /// = distinct serve instants of live-serve rows that NO landed capture row
+    /// covers ([`served_uncovered_pred`], the same read-time rule every other
+    /// reader uses): the hook answered, but the capture never saw the
+    /// injection. Serves a capture covers are one fact with that capture row
+    /// (M7), so they are not a second count: landed turns are the canonical
+    /// recall, served rows only feed this diagnostic. Derived per call from
+    /// V0035/V0042 columns; nothing is stored.
+    pub fn sessions_recall_coverage(&self, since_unix: i64) -> Result<Vec<RecallCoverageRow>> {
+        let sql = format!(
+            "SELECT s.session_id, s.harness, s.user_turns,
+                    (SELECT COUNT(DISTINCT mr.turn_id) FROM memory_recalls mr
+                      WHERE mr.artifact_id = s.artifact_id AND mr.turn_id IS NOT NULL),
+                    (SELECT COUNT(DISTINCT mr.recalled_at) FROM memory_recalls mr
+                      WHERE mr.session_id = s.session_id AND {served})
+               FROM sessions s
+              WHERE s.is_newest = 1 AND s.started_at >= ?1
+              ORDER BY s.started_at DESC, s.artifact_id ASC",
+            served = served_uncovered_pred("mr"),
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt
+            .query_map(params![since_unix], |r| {
+                Ok(RecallCoverageRow {
+                    session_id: r.get(0)?,
+                    harness: r.get(1)?,
+                    user_turns: r.get::<_, i64>(2)?.max(0) as u64,
+                    landed_turns: r.get::<_, i64>(3)?.max(0) as u64,
+                    lost_turns: r.get::<_, i64>(4)?.max(0) as u64,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// W3.A/P4 — the `/api/sessions/projects` facet: per-project rollups
     /// PRE-registry-merge, grouped by `COALESCE(project_key, cwd)` (the
     /// P1-derived key, or a raw cwd for a session whose ladder never
@@ -7377,6 +7416,17 @@ pub struct SessionDecisionRow {
     pub kind: String,
     pub prompt: String,
     pub answer: Option<String>,
+}
+
+/// v0.44 F10 — one session's recall-coverage inputs (see
+/// [`Db::sessions_recall_coverage`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecallCoverageRow {
+    pub session_id: String,
+    pub harness: String,
+    pub user_turns: u64,
+    pub landed_turns: u64,
+    pub lost_turns: u64,
 }
 
 /// Per-folder rollup (P6) — the timeline-header stats for one working dir.
@@ -12479,6 +12529,80 @@ mod tests {
             raw,
             vec!["notes:false".to_string(), "other:true".to_string()],
             "replace retires notes/X's serve only; other/X's serve survives"
+        );
+    }
+
+    /// v0.44 F10 — recall coverage: landed turns come from the newest
+    /// capture's `turn_id`s, lost turns are serve instants NO capture row
+    /// covers; a stale capture's rows and an out-of-window session do not
+    /// count.
+    #[test]
+    fn sessions_recall_coverage_splits_landed_from_lost() {
+        let mut db = db();
+        let mut old = session_row("cap-old", "sid-a", 1_700_000_000);
+        old.user_turns = 4;
+        db.sessions_upsert(&old).unwrap();
+        let mut new = session_row("cap-new", "sid-a", 1_700_000_100);
+        new.user_turns = 10;
+        db.sessions_upsert(&new).unwrap();
+        let mut outside = session_row("cap-out", "sid-b", 1_600_000_000);
+        outside.user_turns = 99;
+        db.sessions_upsert(&outside).unwrap();
+        let row = |turn: &str, art: &str, at: i64, id: &str, pos: u32| {
+            let mut r = memory_recall_row("notes", id, "sid-a", turn, Some(at), art);
+            r.pos = Some(pos);
+            r
+        };
+        // Stale capture: its turn must NOT count.
+        db.memory_recalls_replace(
+            "cap-old",
+            &[row("t-stale", "cap-old", 1_700_000_010, "aaaaaaaaaaaa", 1)],
+        )
+        .unwrap();
+        // Newest capture: two hits on t-1 (one turn) + one on t-2.
+        db.memory_recalls_replace(
+            "cap-new",
+            &[
+                row("t-1", "cap-new", 1_700_000_200, "aaaaaaaaaaaa", 1),
+                row("t-1", "cap-new", 1_700_000_200, "bbbbbbbbbbbb", 2),
+                row("t-2", "cap-new", 1_700_000_300, "cccccccccccc", 1),
+            ],
+        )
+        .unwrap();
+        let served = |id: &str, pos: u32, at: i64| ServedRecallRow {
+            memory_kb: "notes".into(),
+            memory_id: id.into(),
+            pos,
+            title: "t".into(),
+            injected_chars: 1,
+            served_at: at,
+        };
+        db.memory_recalls_append(
+            "sid-a",
+            &[
+                // covered by the t-1 capture row (same memory + pos, close)
+                served("aaaaaaaaaaaa", 1, 1_700_000_210),
+                // not covered by anything: the harness never injected it
+                served("dddddddddddd", 1, 1_700_000_900),
+                served("eeeeeeeeeeee", 2, 1_700_000_900),
+            ],
+        )
+        .unwrap();
+        let rows = db.sessions_recall_coverage(1_700_000_000).unwrap();
+        assert_eq!(rows.len(), 1, "one newest capture in the window: {rows:?}");
+        let r = &rows[0];
+        assert_eq!(r.session_id, "sid-a");
+        assert_eq!(
+            r.user_turns, 10,
+            "newest capture's user_turns, not the stale one"
+        );
+        assert_eq!(
+            r.landed_turns, 2,
+            "t-1 and t-2; the stale capture's turn excluded"
+        );
+        assert_eq!(
+            r.lost_turns, 1,
+            "two uncovered serves share one instant = one turn"
         );
     }
 

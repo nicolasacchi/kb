@@ -763,6 +763,20 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
+    /// v0.44 F10 — one derived agenda of due agent-layer upkeep: the
+    /// distill queue, the project slate, memory triage, the resurface queue
+    /// and stale hook markers, each as `chore → skill (why)`. Pull-only;
+    /// nothing is scheduled, run or stored.
+    Chores {
+        #[arg(long)]
+        json: bool,
+        /// One counts-only line (nothing when nothing is due), at most once
+        /// per UTC day — for a SessionStart hook.
+        #[arg(long)]
+        line: bool,
+        #[arg(long)]
+        daemon: Option<String>,
+    },
     /// Resurface — pull-only queue of artifacts worth picking back up:
     /// open (unresolved) comments + unfinished reads, deterministically
     /// scored with reasons on every item. Nothing pushes, nothing nags;
@@ -2279,6 +2293,46 @@ enum SessionsAction {
         /// (claude|codex|opencode|grok|kimi|omp).
         #[arg(long)]
         harness: Option<String>,
+        /// v0.44 F10 — the distill-debt queue: newest captures that
+        /// committed work (`commit_count > 0`), have no memory stamped to
+        /// them and are not trivial. Derived read; /kb-distill --pending
+        /// works through it.
+        #[arg(long)]
+        undistilled: bool,
+        /// v0.44 F10 — only sessions started at or after this bound: unix
+        /// seconds, `YYYY-MM-DD` (UTC), or relative `<N>d` / `<N>h`.
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// v0.44 F10 — recall-hook coverage per harness over a trailing window:
+    /// user turns vs turns where a memory injection landed vs serves that
+    /// never landed. A health read (a floor, not a target); never scored.
+    Coverage {
+        /// Trailing window in days (default 7).
+        #[arg(long)]
+        days: Option<u32>,
+        #[arg(long)]
+        daemon: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// v0.44 F10 — close a session's slate distill ask (`Distill session
+    /// <sid>?`, ref `session:<sid>`) once it has been handled. Idempotent:
+    /// no open ask is a no-op, never an error.
+    Distilled {
+        /// The session id the distill ask is about.
+        session_id: String,
+        /// The `done` line: what settled it (memory ids, or
+        /// "nothing durable").
+        #[arg(long, default_value = "distilled")]
+        note: String,
+        /// Slate slug; default = the slate of the session's own cwd.
+        #[arg(long)]
+        slate: Option<String>,
+        #[arg(long)]
+        daemon: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// List the folders (working directories) sessions ran in, with counts.
     Folders {
@@ -5698,6 +5752,8 @@ async fn main() -> Result<()> {
                 project,
                 substance,
                 harness,
+                undistilled,
+                since,
             } => {
                 let bearer = read_bearer();
                 commands::sessions::list(
@@ -5710,6 +5766,30 @@ async fn main() -> Result<()> {
                     project.as_deref(),
                     substance.as_deref(),
                     harness.as_deref(),
+                    undistilled,
+                    since.as_deref(),
+                )
+                .await
+            }
+            SessionsAction::Coverage { days, daemon, json } => {
+                let bearer = read_bearer();
+                commands::sessions::coverage(days, daemon.as_deref(), bearer.as_deref(), json).await
+            }
+            SessionsAction::Distilled {
+                session_id,
+                note,
+                slate,
+                daemon,
+                json,
+            } => {
+                let bearer = read_bearer();
+                commands::sessions::distilled(
+                    &session_id,
+                    &note,
+                    slate.as_deref(),
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                    json,
                 )
                 .await
             }
@@ -5812,6 +5892,8 @@ async fn main() -> Result<()> {
                     project.as_deref(),
                     substance.as_deref(),
                     harness.as_deref(),
+                    false,
+                    None,
                 )
                 .await
             }
@@ -6067,6 +6149,10 @@ async fn main() -> Result<()> {
                 bearer.as_deref(),
             )
             .await
+        }
+        Cmd::Chores { json, line, daemon } => {
+            let bearer = read_bearer();
+            commands::chores::run(json, line, daemon.as_deref(), bearer.as_deref()).await
         }
         Cmd::Resurface {
             kb,

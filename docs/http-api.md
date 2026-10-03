@@ -590,7 +590,7 @@ GET  /api/anchors/stale                     Q1: fleet-wide cold load for the
 # v0.14 — sessions (track S)
 GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
      &folder=&q=&project=&substance=         Code transcripts (memory-session
-     &harness=]                              artifacts), newest-first. Cursor
+     &harness=&undistilled=1&since=]         artifacts), newest-first. Cursor
                                             paginated; default limit 50, cap
                                             1000. Response carries
                                             `next_cursor` (omitted at EOL).
@@ -612,13 +612,54 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             is a csv over the closed set
                                             `claude|codex|opencode|grok|kimi`
                                             (`kb_core::sessions::HARNESSES`),
-                                            closed-set validated (unknown
-                                            tokens dropped, never a 400);
-                                            absent/empty = no filter. CLI:
-                                            `kb sessions list`/`kb sessions
-                                            search <q>` (`--folder`/
-                                            `--project`/`--substance`/
-                                            `--harness`/`--limit`).
+                                            closed-set validated (an unknown
+                                            token is a 400, OK1); absent/empty
+                                            = no filter. v0.44 F10 —
+                                            `undistilled=1` (`1|true|yes`) is
+                                            the distill-debt queue: newest
+                                            capture, `commit_count > 0`,
+                                            `memory_count = 0`, substance not
+                                            `trivial` (NULL passes); an
+                                            explicit `substance=` is
+                                            intersected with that, never
+                                            overridden. Derived per request,
+                                            nothing stored; the walk fills a
+                                            page from successive keyset pages
+                                            and `next_cursor` is the last row
+                                            returned (or, if the round budget
+                                            ran out, the last row scanned) so
+                                            no row is skipped or repeated.
+                                            `since=<unix>` stops the walk at
+                                            the first session that started
+                                            earlier. CLI: `kb sessions list`/
+                                            `kb sessions search <q>`
+                                            (`--folder`/`--project`/
+                                            `--substance`/`--harness`/
+                                            `--limit`/`--undistilled`/
+                                            `--since`).
+GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
+                                            per harness over the trailing
+                                            window (default 7, clamp 1-365),
+                                            newest captures only:
+                                            `user_turns`, `landed_turns`
+                                            (distinct turns a capture parse
+                                            found an injection on — the
+                                            canonical "a recall happened"),
+                                            `lost_turns` (distinct serve
+                                            instants of V0042 `served-*` rows
+                                            that NO landed capture row covers,
+                                            same rule as every counting
+                                            reader), `landed_pct`, `lost_pct`
+                                            (null without a denominator),
+                                            plus a `total` row. Sessions the
+                                            live registry still tracks are
+                                            excluded (`excluded_live`):
+                                            capture lag reads low. A FLOOR,
+                                            not a target — a turn with no
+                                            relevant memory lands nothing.
+                                            Surfaced, never scored (#10);
+                                            no new table. CLI: `kb sessions
+                                            coverage [--days]`.
 GET  /api/sessions/projects                 W3.A/P4 — one card per
                                             `[projects.*]` registry entry or
                                             auto-project (`source:
@@ -1023,7 +1064,7 @@ POST /api/sessions/threads/save                                         P8 — s
 # and pin reserved to `origin: human`) are the human-vs-agent role split kb
 # already has, NOT an ACL. Reads never lock and never write — the cursor is
 # client-side and `?since=` only drives the `seen` header.
-GET  /api/slates                            every slate: {slug, head_seq, generation, updated_unix, closed, topics[], counts{now,warn,hand_unack,ask_open,take_live,take_stale,take_contested,found,idea,tried}, sessions_served}. The board's attention chip = hand_unack + ask_open + take_contested + take_stale, summed CLIENT-side — the daemon never sums an attention number for you.
+GET  /api/slates                            every slate: {slug, head_seq, generation, updated_unix, closed, topics[], counts{now,warn,hand_unack,ask_open,take_live,take_stale,take_contested,found,idea,tried}, sessions_served, generation_posts}. `generation_posts` = posts in the CURRENT generation's ledger (drops to 0 on `rotate`; `head_seq` never resets). The board's attention chip = hand_unack + ask_open + take_contested + take_stale, summed CLIENT-side — the daemon never sums an attention number for you.
 GET  /api/slates/{slug}                     the digest (THE projection, `kb_core::slate::project`). `text` is byte-identical to what `kb slate open` prints. `?mode=full|hybrid` (hybrid = the session-start injection block), `?budget=` CHARACTERS not tokens (default 6,000 full / 2,000 hybrid — the daemon links no tokenizer, so a token budget would be a character budget in costume), `?topic=`, `?all=1` (no truncation), `?session=` (marks "your own asks with new answers"; NEVER written), `?since=` (the client-side cursor; drives the `seen #a → #b` header only). Response = SlateDigest + {generation, closed}.
 GET  /api/slates/{slug}?view=board[&topic=] the SPA board projection: every shown post as a BoardCard = Projected + {body, marks_by[], has_sketch}. NEVER budget-truncated — the board scrolls. `has_sketch` is a ```mermaid fence in the body (D21: there is no `sketch` kind).
 GET  /api/slates/{slug}/posts[?since=&limit=]   RAW Post[] after a sequence number — the watch loop's refetch, the one read that hands back the ledger as written (minus the scrub floor).

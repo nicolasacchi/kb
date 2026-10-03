@@ -30,6 +30,8 @@ pub async fn list(
     project: Option<&str>,
     substance: Option<&str>,
     harness: Option<&str>,
+    undistilled: bool,
+    since: Option<&str>,
 ) -> Result<()> {
     let url = require_daemon(daemon, bearer).await?;
     let client = http::client_with_timeout_and_bearer(10, bearer)?;
@@ -59,6 +61,14 @@ pub async fn list(
     if let Some(h) = harness {
         req = req.query(&[("harness", h)]);
     }
+    // v0.44 F10 — the distill-debt queue and its window.
+    if undistilled {
+        req = req.query(&[("undistilled", "1")]);
+    }
+    if let Some(sn) = since {
+        let at = parse_since(sn, now_unix())?;
+        req = req.query(&[("since", at.to_string())]);
+    }
     let body: serde_json::Value = req.send().await?.error_for_status()?.json().await?;
     let empty: Vec<serde_json::Value> = Vec::new();
     let rows = body["sessions"].as_array().unwrap_or(&empty);
@@ -73,8 +83,18 @@ pub async fn list(
         return Ok(());
     }
     if rows.is_empty() {
-        println!("no sessions captured yet");
+        if undistilled {
+            println!("no undistilled sessions");
+        } else {
+            println!("no sessions captured yet");
+        }
         return Ok(());
+    }
+    if undistilled {
+        println!(
+            "{} undistilled session(s) (committed, no memory) — /kb-distill --pending",
+            rows.len().min(limit)
+        );
     }
     // A2/A3 — two-line rows: the readable display_name + a dimmed first
     // prompt, with a folder badge (A1) and the file-activity counts (A4/A6).
@@ -116,6 +136,215 @@ pub async fn list(
             "      {mc:>4} msg  {mem:>2} mem  {fr:>3} read  {fe:>3} edited  {prompt}",
             prompt = truncate(prompt, 60),
         );
+    }
+    Ok(())
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Parse a `--since` bound into unix seconds: bare unix seconds, a UTC
+/// `YYYY-MM-DD` date (midnight), or a relative `<N>d` / `<N>h` ago.
+pub(crate) fn parse_since(s: &str, now: i64) -> Result<i64> {
+    let s = s.trim();
+    if let Ok(secs) = s.parse::<i64>() {
+        return Ok(secs);
+    }
+    if let Some(n) = s.strip_suffix('d').and_then(|n| n.parse::<i64>().ok()) {
+        return Ok(now - n.max(0) * 86_400);
+    }
+    if let Some(n) = s.strip_suffix('h').and_then(|n| n.parse::<i64>().ok()) {
+        return Ok(now - n.max(0) * 3_600);
+    }
+    let date = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| {
+        anyhow!("invalid --since {s:?}: expected unix seconds, YYYY-MM-DD, <N>d or <N>h ({e})")
+    })?;
+    Ok(date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow!("invalid date {s:?}"))?
+        .and_utc()
+        .timestamp())
+}
+
+/// `kb sessions coverage [--days N]` (v0.44 F10) — per harness: user turns vs
+/// turns where a memory injection landed vs serves that never landed.
+/// Renders what `GET /api/sessions/recall-coverage` returns; no arithmetic of
+/// its own.
+pub async fn coverage(
+    days: Option<u32>,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let url = require_daemon(daemon, bearer).await?;
+    let client = http::client_with_timeout_and_bearer(15, bearer)?;
+    let mut req = client.get(format!("{url}/api/sessions/recall-coverage"));
+    if let Some(d) = days {
+        req = req.query(&[("days", d.to_string())]);
+    }
+    let body: serde_json::Value = req.send().await?.error_for_status()?.json().await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    print!("{}", render_coverage(&body));
+    Ok(())
+}
+
+pub(crate) fn render_coverage(body: &serde_json::Value) -> String {
+    let pct = |v: &serde_json::Value| -> String {
+        v.as_f64()
+            .map(|p| format!("{p:.1}%"))
+            .unwrap_or_else(|| "-".to_string())
+    };
+    let n = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+    let mut out = format!(
+        "recall coverage · last {} day(s) · {} live session(s) excluded\n",
+        n(&body["days"]),
+        n(&body["excluded_live"])
+    );
+    out.push_str("  harness      sessions  user_turns  landed   lost  landed%  lost%\n");
+    let mut rows: Vec<&serde_json::Value> = body["harnesses"]
+        .as_array()
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    rows.push(&body["total"]);
+    for r in rows {
+        out.push_str(&format!(
+            "  {:<12} {:>8}  {:>10}  {:>6}  {:>5}  {:>7}  {:>5}\n",
+            r["harness"].as_str().unwrap_or("?"),
+            n(&r["sessions"]),
+            n(&r["user_turns"]),
+            n(&r["landed_turns"]),
+            n(&r["lost_turns"]),
+            pct(&r["landed_pct"]),
+            pct(&r["lost_pct"]),
+        ));
+    }
+    out.push_str(
+        "  landed = turns with a captured injection (a floor, not 100%: no relevant memory \
+         lands nothing) · lost = serves no capture covers\n",
+    );
+    out
+}
+
+/// Seqs of the OPEN distill asks for `sid` in a raw slate ledger: an `ask`
+/// carrying the ref `session:<sid>` that no `done`/`drop`/`answer` has targeted
+/// (`re`; `answer` also closes an ask). Pure so idempotence is pinned without a daemon.
+pub(crate) fn open_distill_asks(posts: &[serde_json::Value], sid: &str) -> Vec<u64> {
+    let want = format!("session:{sid}");
+    let closed: HashSet<u64> = posts
+        .iter()
+        .filter(|p| matches!(p["kind"].as_str(), Some("done" | "drop" | "answer")))
+        .filter_map(|p| p["re"].as_u64())
+        .collect();
+    posts
+        .iter()
+        .filter(|p| p["kind"].as_str() == Some("ask"))
+        .filter(|p| {
+            p["refs"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|x| x.as_str() == Some(want.as_str())))
+        })
+        .filter_map(|p| p["seq"].as_u64())
+        .filter(|seq| !closed.contains(seq))
+        .collect()
+}
+
+/// `kb sessions distilled <sid> [--note ..] [--slate ..]` (v0.44 F10, the H1
+/// carry-over) — the idempotent close for a session's slate distill ask.
+/// Finds the open ask whose ref is `session:<sid>` and answers it with
+/// `done`; a second run (or a session with no ask) finds nothing open and
+/// exits 0 without posting. The slate is the one derived from the session's
+/// own working directory unless `--slate` names it.
+pub async fn distilled(
+    sid: &str,
+    note: &str,
+    slate: Option<&str>,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let url = require_daemon(daemon, bearer).await?;
+    let client = http::client_with_timeout_and_bearer(15, bearer)?;
+    let cwd: Option<PathBuf> = if slate.is_some() {
+        None
+    } else {
+        let detail: serde_json::Value = client
+            .get(format!(
+                "{url}/api/sessions/{}",
+                http::encode_path_segment(sid)
+            ))
+            .send()
+            .await?
+            .error_for_status()
+            .with_context(|| format!("session {sid} not found"))?
+            .json()
+            .await?;
+        let c = detail["cwd"]
+            .as_str()
+            .filter(|c| !c.is_empty())
+            .ok_or_else(|| anyhow!("session {sid} has no recorded cwd — pass --slate <slug>"))?;
+        Some(PathBuf::from(c))
+    };
+    let args = super::slate::CommonArgs {
+        slate,
+        cwd: cwd.as_deref(),
+        topic: None,
+        session_id: None,
+        harness: None,
+        model: None,
+        origin: None,
+        as_who: None,
+        job: None,
+        refs: &[],
+        re: None,
+        supersedes: None,
+        body: None,
+        daemon,
+        bearer,
+        json,
+    };
+    let ctx = super::slate::Ctx::resolve(&args)?;
+    // Page the raw ledger (the route caps one response) until exhausted.
+    let mut posts: Vec<serde_json::Value> = Vec::new();
+    let mut since: u64 = 0;
+    for _ in 0..50 {
+        let page: Vec<serde_json::Value> = client
+            .get(format!(
+                "{}/api/slates/{}/posts",
+                ctx.base,
+                http::encode_path_segment(&ctx.slug)
+            ))
+            .query(&[("since", since.to_string())])
+            .send()
+            .await?
+            .error_for_status()
+            .with_context(|| format!("reading slate {}", ctx.slug))?
+            .json()
+            .await?;
+        let last = page.last().and_then(|p| p["seq"].as_u64());
+        let full = page.len() >= 2_000;
+        posts.extend(page);
+        match last {
+            Some(l) if full => since = l,
+            _ => break,
+        }
+    }
+    let open = open_distill_asks(&posts, sid);
+    if open.is_empty() {
+        println!(
+            "no open distill ask for session {sid} on slate {} — nothing to close",
+            ctx.slug
+        );
+        return Ok(());
+    }
+    for seq in open {
+        super::slate::done(&ctx, seq, note, None).await?;
     }
     Ok(())
 }
@@ -2764,5 +2993,73 @@ span      10:04:11 → 10:11:55 (7m44s)
             "+0s",
             "a clamped negative delta never renders as a minus"
         );
+    }
+}
+
+#[cfg(test)]
+mod f10_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_since_accepts_unix_date_and_relative_forms() {
+        let now = 1_800_000_000;
+        assert_eq!(parse_since("1700000000", now).unwrap(), 1_700_000_000);
+        assert_eq!(parse_since("7d", now).unwrap(), now - 7 * 86_400);
+        assert_eq!(parse_since("12h", now).unwrap(), now - 12 * 3_600);
+        assert_eq!(parse_since("2026-01-02", now).unwrap(), 1_767_312_000);
+        assert!(parse_since("last tuesday", now).is_err());
+    }
+
+    /// The close path is idempotent by construction: an ask is open until a
+    /// `done`/`drop` targets it, only the matching session's ref counts, and
+    /// non-ask posts carrying the ref are ignored.
+    #[test]
+    fn open_distill_asks_finds_only_unanswered_asks_for_that_session() {
+        let posts = vec![
+            json!({"seq": 1, "kind": "ask", "refs": ["session:sid-a"]}),
+            json!({"seq": 2, "kind": "ask", "refs": ["session:sid-b"]}),
+            json!({"seq": 3, "kind": "ask", "refs": ["session:sid-a"]}),
+            json!({"seq": 4, "kind": "done", "re": 3, "refs": []}),
+            json!({"seq": 5, "kind": "found", "refs": ["session:sid-a"]}),
+            json!({"seq": 6, "kind": "ask", "refs": ["path:src/x.rs"]}),
+        ];
+        assert_eq!(open_distill_asks(&posts, "sid-a"), vec![1]);
+        assert_eq!(open_distill_asks(&posts, "sid-b"), vec![2]);
+        assert!(open_distill_asks(&posts, "sid-c").is_empty());
+        let mut after = posts.clone();
+        let answered = vec![
+            json!({"seq": 1, "kind": "ask", "refs": ["session:sid-a"]}),
+            json!({"seq": 2, "kind": "answer", "re": 1}),
+        ];
+        assert!(
+            open_distill_asks(&answered, "sid-a").is_empty(),
+            "an answered ask is not re-closed with done"
+        );
+        after.push(json!({"seq": 7, "kind": "done", "re": 1}));
+        assert!(
+            open_distill_asks(&after, "sid-a").is_empty(),
+            "a second run after the close finds nothing to post"
+        );
+    }
+
+    #[test]
+    fn render_coverage_prints_every_harness_and_the_total() {
+        let body = json!({
+            "days": 7, "excluded_live": 2,
+            "harnesses": [{"harness": "claude", "sessions": 3, "user_turns": 20,
+                "landed_turns": 8, "lost_turns": 1, "landed_pct": 40.0, "lost_pct": 11.1}],
+            "total": {"harness": "all", "sessions": 3, "user_turns": 20,
+                "landed_turns": 8, "lost_turns": 1, "landed_pct": 40.0}
+        });
+        let out = render_coverage(&body);
+        assert!(
+            out.contains("last 7 day(s) · 2 live session(s) excluded"),
+            "{out}"
+        );
+        assert!(out.contains("claude") && out.contains("40.0%") && out.contains("11.1%"));
+        assert!(out
+            .lines()
+            .any(|l| l.trim_start().starts_with("all") && l.contains('-')));
     }
 }
