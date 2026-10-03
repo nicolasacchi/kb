@@ -5,7 +5,8 @@ import {
   REVIEW_MUTATIONS_ADMITTED_HINT,
   useReviewMutationsAdmitted,
 } from "../../hooks/useReviewMutationsAdmitted";
-import { usePutReviewVerdict } from "../../hooks/useReviews";
+import { usePutReviewVerdict, useReviewSince } from "../../hooks/useReviews";
+import { canReaffirm, reaffirmLabel, sinceApplies } from "../../lib/reviewSince";
 import { Icon } from "../icons";
 import { isLoopbackRefusal } from "./ReviewHeader";
 
@@ -85,6 +86,18 @@ export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) 
   const disabled = !admitted || refused;
   const latestPs = review.patchsets.length > 0 ? review.patchsets[review.patchsets.length - 1].ps_number : null;
 
+  // v0.44 F9b — a stale verdict whose newer patchset is rebase-only offers a
+  // one-click re-affirm. The fetch runs only when the verdict is stale with a
+  // later patchset; the click records an ordinary verdict (a human action,
+  // never automatic: the daemon carries no verdict forward, D20).
+  const verdictPs = review.verdict?.ps ?? null;
+  const wantsSince = !!review.verdict_stale && sinceApplies(verdictPs, latestPs);
+  const sinceQ = useReviewSince(repo, reviewId, "verdict", "latest", wantsSince);
+  const reaffirm =
+    review.verdict && latestPs != null && canReaffirm(verdictPs, review.verdict_stale, latestPs, sinceQ.data)
+      ? { state: review.verdict.state, note: review.verdict.note ?? undefined, ps: latestPs }
+      : null;
+
   async function choose(state: ReviewVerdictState, withNote?: string) {
     if (disabled) return;
     try {
@@ -128,6 +141,19 @@ export default function VerdictBar({ repo, reviewId, review }: VerdictBarProps) 
           {stateLabel(review.verdict.state)} at ps{review.verdict.ps ?? "?"}
           {latestPs != null ? ` — ps${latestPs} landed` : " — newer patchset landed"}
         </span>
+      )}
+      {reaffirm && !disabled && (
+        <button
+          type="button"
+          className="kbc-verdict__reaffirm"
+          disabled={put.isPending}
+          title="The newer patchset is a rebase with no author changes since your verdict. Records your verdict again on it; nothing is carried forward automatically."
+          onClick={() => void choose(reaffirm.state, reaffirm.note ?? "")}
+          data-kbc-review-verdict-reaffirm={reaffirm.ps}
+        >
+          <Icon.Check />
+          {reaffirmLabel(reaffirm.state, reaffirm.ps)}
+        </button>
       )}
       {disabled && (
         <p
