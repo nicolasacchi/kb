@@ -7973,9 +7973,11 @@ fn http_client() -> Result<reqwest::Client> {
 /// `start-pr` already learned the hard way (V76-R1b's poll-and-`--wait`)
 /// and the same one `review retrack` already avoids through
 /// `retrack_cmd`'s 600 s client. `start-pr` and `sync` are the two verbs
-/// that went further still and became daemon-side jobs; these two have
-/// no job to attach to, so the honest answer is a backstop long enough
-/// for the work rather than a timeout short enough to be a default.
+/// that went further still and became daemon-side jobs; these two
+/// have since become daemon jobs too (X1/K3: [`post_json_job`] polls them), so
+/// this client only has to outlive the ADMISSION round trip — and, against a
+/// pre-job daemon that still answers inline, a backstop long enough for the
+/// work.
 fn capture_client() -> Result<reqwest::Client> {
     client_builder()
         .timeout(review_agent::READ_TIMEOUT)
@@ -14468,6 +14470,52 @@ async fn post_json_raw(
     Ok((status, json_body_or_null(&text)))
 }
 
+/// `POST path?async=1` for the verbs whose daemon work is a long network
+/// capture (`review start`, `review snapshot`): a job-capable daemon answers
+/// 202 + `job_id` at once and this polls it to the end (the `start-pr`
+/// pattern, [`poll_review_job`]), returning the `(status, body)` the
+/// synchronous route would have answered; an older daemon answers inline and
+/// that is returned as is. A job still running when the poll budget ends is
+/// an error that names the job, never a silent abandon.
+async fn post_json_job(
+    client: &reqwest::Client,
+    daemon: &str,
+    path: &str,
+    payload: &serde_json::Value,
+    label: &str,
+    json: bool,
+) -> Result<(reqwest::StatusCode, serde_json::Value)> {
+    let (status, body) = post_json_raw(client, daemon, &format!("{path}?async=1"), payload).await?;
+    let (true, Some(job_id)) = (
+        status == reqwest::StatusCode::ACCEPTED,
+        body["job_id"].as_str(),
+    ) else {
+        return Ok((status, body));
+    };
+    let budget = review_agent::JOB_POLL_BUDGET;
+    let Some(job) = poll_review_job(client, daemon, job_id, budget, json, label).await? else {
+        anyhow::bail!(
+            "{label} job {job_id} still running after {} s — the daemon is still working; \
+             poll GET /api/reviews/jobs/{job_id}",
+            budget.as_secs()
+        );
+    };
+    match classify_start_pr_job(&job) {
+        StartPrJob::Done(result) => Ok((reqwest::StatusCode::OK, result)),
+        StartPrJob::Failed { error, error_type } => {
+            let st = job["error_status"]
+                .as_u64()
+                .and_then(|s| reqwest::StatusCode::from_u16(s as u16).ok())
+                .unwrap_or(reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((
+                st,
+                serde_json::json!({ "error": error, "type": error_type }),
+            ))
+        }
+        StartPrJob::Running(_) => unreachable!("poll_review_job returns on a terminal state"),
+    }
+}
+
 /// `post_json_raw` with QUERY parameters — V72-H4a's lane ingest addresses
 /// `/api/lanes/{lane}/ingest?repo=<r>`, and the audit middleware reads its
 /// `repo`/`target` columns from the query string, so the repo must ride
@@ -15374,7 +15422,15 @@ async fn review_start_cmd(
         payload["session_id"] = serde_json::json!(s);
     }
     let client = capture_client()?;
-    let (status, body) = post_json_raw(&client, daemon, "/api/reviews", &payload).await?;
+    let (status, body) = post_json_job(
+        &client,
+        daemon,
+        "/api/reviews",
+        &payload,
+        "review start",
+        json,
+    )
+    .await?;
     if status.is_success() {
         // RS-U6 — README §12's one stderr line.
         review_agent::eprint_base_line(&body);
@@ -15654,11 +15710,13 @@ async fn review_snapshot_cmd(
     if no_fetch {
         payload["fetch"] = serde_json::json!(false);
     }
-    let (status, body) = post_json_raw(
+    let (status, body) = post_json_job(
         &client,
         daemon,
         &format!("/api/reviews/{id}/snapshot"),
         &payload,
+        "review snapshot",
+        json,
     )
     .await?;
     if status.is_success() {

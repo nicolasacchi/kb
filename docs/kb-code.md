@@ -805,12 +805,12 @@ Error URNs (`BaseError`, rendered RFC 7807 through `ApiError`):
 | `urn:kb:errors:base-unavailable` | 409 | the policy's base tip is not in the store (never fetched, or gone from the forge) |
 | `urn:kb:errors:no-merge-base` | 400 | head and base share no history |
 | `urn:kb:errors:base-vanished` | 409 | a user-set (or legacy) base branch no longer exists on the forge and no replacement could be resolved |
-| `urn:kb:errors:pr-already-merged` | 409 | the PR head is already an ancestor of the target tip (a merge-commit merge), so a capture against the live target would mint an EMPTY patchset; creation, snapshot/sync reuse and `retrack` (dry run and apply) refuse, on the store path AND on a repo with no ready store (the shared capture refuses). `review sync --merged-since` therefore reports such a PR as a failed item, and creates no review for it. Pin the merge-time base with `--base <sha>` to review what landed |
-| `urn:kb:errors:base-changed` | 409 | the review's base policy changed (a concurrent retrack/retarget) while a capture waited on the fetch; nothing was minted, retry |
+| `urn:kb:errors:pr-already-merged` | 409 | the PR head is already an ancestor of the target tip but NO merge commit on the target's first-parent history names the base it was merged into (a fast-forward merge; squash and rebase merges create new commits, so the head is not contained in the target and they are never refused), so a capture against the live target would mint an EMPTY patchset. Creation, snapshot/sync reuse and `retrack` (dry run and apply) refuse, on the store path AND on a repo with no ready store. A merge-COMMIT merge is not refused any more: the base is pinned to the merge-time target tip (`M^1` of the merge commit), so the merged PR stays reviewable. For a fast-forward merge pass `--base <sha>` (the commit the PR branched from) to review what landed. `review sync --merged-since` reports a refused PR as a failed item and creates no review for it |
+| `urn:kb:errors:base-changed` | 409 | the review's base policy changed (a concurrent retrack, or a snapshot/sync that followed a PR retarget) while this capture waited on the fetch; nothing was minted and the winning policy is untouched. RETRYABLE: re-run the same command and it resolves against the new policy |
 | `urn:kb:errors:capture-failed` | 500 | the capture itself failed (git or DB) |
 | `urn:kb:errors:store-disabled` | 503 | the store's git spawner is unavailable |
 
-Operator notes for the base model: a creation that fails after the review row exists (PR enrichment, binding, a failed first capture) deletes the whole just-created review, so a retry recreates it and a `review.created` event already emitted names a deleted id; `retrack --all --yes` holds the repo's sync guard for the whole bulk run (network fetches included), so `start-pr` and `sync` for that repo wait until it ends; a retrack of a merged PR answers `pr-already-merged` and the merge-time base is not pinned automatically (use `--base <sha>`).
+Operator notes for the base model: a review row, its base policy and (for a PR review) its PR binding are written in ONE transaction; PR enrichment (forge reads) runs before the row exists and a transient forge error only degrades `pr_meta` (a reason on the envelope), and only a failed first CAPTURE deletes the just-created review (a retry recreates it, and a `review.created` event already emitted then names a deleted id); `retrack --all` scans OPEN reviews only (a closed review's verdict and findings are final), classifies without holding the repo's sync guard, takes the guard per applied row, and fetches each distinct base branch once per run, so `start-pr` and `sync` for that repo no longer wait for the whole bulk run; `review start`, `review snapshot`, `review retrack` and `retrack --all` run as daemon jobs (`?async=1`, polled on `GET /api/reviews/jobs/{id}` like `start-pr`/`sync`; for snapshot/retrack the job's `pr_number` field carries the REVIEW id), so the CLI's single-request timeout is 600 s and the job poll budget is three base-fetch budgets (six hours for `retrack --all`); a retrack on a forge with no API (or an unreadable one) that falls to the default branch records `set_by=auto` / `default-assumed`, never a person's `user` decision.
 
 `urn:kb:errors:stale-mirror` and `ERR_STALE_MIRROR` are GONE: RS-U6
 removed the refusal and the constants together, and neither string exists
@@ -1701,8 +1701,9 @@ verdict`, `suggest apply`, `findings add`, `disposition`, `publish`, `checkout`,
 (a bodiless 404) exits 8 and a drifted `suggest apply` exits 3 — pinned by
 `tests/exit_contract`. A client-side timeout against a reached daemon exits 5
 with code `timeout` and says the daemon may still be working (it is not
-"daemon down"); `review snapshot`/`start`/single `retrack` wait up to
-three base-fetch budgets, `retrack --all` up to six hours.
+"daemon down"); `review snapshot`/`start`/single `retrack` poll their daemon
+job for up to three base-fetch budgets, `retrack --all` up to six hours (a
+single request times out at 600 s).
 
 ### Who is speaking: the author rule
 

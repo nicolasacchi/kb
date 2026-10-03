@@ -199,7 +199,7 @@ pub struct AppState {
     /// Phase G-server — the GitHub read overlay's federation handle
     /// (`GET /api/prs`, `GET /api/prs/{n}/comments`), same per-boot-
     /// singleton convention as `kb_client` above.
-    pub github: Arc<crate::github::GithubClient>,
+    pub github: AmbientGithub,
     /// V72-J1 — the effective `comments/1` annotation keyword set
     /// (`[comments] keywords`), resolved ONCE at boot (same no-live-reload
     /// posture as `scopes`/`semantic` below) and shared by the extraction
@@ -299,3 +299,31 @@ pub struct AppState {
 }
 
 pub type SharedState = Arc<AppState>;
+
+/// The process-wide ambient GitHub client (`[github]` config: token file /
+/// env / admitted CLI token). It is deliberately NOT a bare
+/// `Arc<GithubClient>` field: every review-adjacent forge read must go
+/// through `reviews::forge_ctx` (the store's `forge_slug` + the D12
+/// credential binding), and a bare `state.github.<call>` skips both. The
+/// client is reachable only with a [`crate::reviews::ForgeKey`], which only
+/// the `reviews` module can mint — the compiler, not a grep test, keeps
+/// every other module off it.
+#[derive(Clone)]
+pub struct AmbientGithub(Arc<crate::github::GithubClient>);
+
+impl AmbientGithub {
+    pub fn new(client: Arc<crate::github::GithubClient>) -> Self {
+        Self(client)
+    }
+
+    pub(crate) fn with_key(&self, _key: &crate::reviews::ForgeKey) -> &crate::github::GithubClient {
+        &self.0
+    }
+
+    /// Tests only: the ambient client for fixtures that build their own
+    /// `ForgeCtx` / pass a client to `forge_ctx_for_store`.
+    #[cfg(test)]
+    pub(crate) fn for_test(&self) -> &crate::github::GithubClient {
+        &self.0
+    }
+}

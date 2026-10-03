@@ -40,17 +40,20 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::config::RepoEntry;
-use crate::review_base::capture::{pr_of_head, read_mapped_remotes, Forge, Recapture, StoreCtx};
+use crate::review_base::capture::{
+    pr_of_head, read_mapped_remotes, BaseFetchMemo, Forge, Recapture, StoreCtx,
+};
 use crate::review_base::{
     base_out, classify_retrack, decide_kind, effective_base, BaseError, BaseMode, BaseStatus,
     BaseWarningOut, EffectiveBase, PatchsetKind, RetrackClass, ReviewBaseOut, SetBy,
     URN_CAPTURE_FAILED,
 };
 use crate::reviews::{
-    self, admit_store, forge_pr_base_ref, require_review, store_member, verdict_scope_changed,
-    with_store_ctx, ReviewGitError,
+    self, admit_store, require_review, store_member, verdict_scope_changed, with_store_ctx,
+    ReviewGitError,
 };
 use crate::routes::{find_repo, ApiError};
 use crate::state::SharedState;
@@ -183,6 +186,32 @@ pub(crate) fn retrack_sync(
     api_warnings: Vec<BaseWarningOut>,
     dry_run: bool,
 ) -> Result<RetrackOutcome, BaseError> {
+    retrack_sync_with(
+        ctx,
+        review,
+        base_input,
+        is_pr,
+        forge_base_ref,
+        api_warnings,
+        dry_run,
+        None,
+    )
+}
+
+/// [`retrack_sync`] with a bulk run's base-fetch memo (X1/K3): every distinct
+/// base branch is fetched once per run, by the dry classification or the
+/// apply, whichever needs it first.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retrack_sync_with(
+    ctx: &StoreCtx<'_>,
+    review: &ReviewRow,
+    base_input: Option<&str>,
+    is_pr: bool,
+    forge_base_ref: Option<&str>,
+    api_warnings: Vec<BaseWarningOut>,
+    dry_run: bool,
+    memo: Option<&Arc<BaseFetchMemo>>,
+) -> Result<RetrackOutcome, BaseError> {
     let mapped = ctx.mapped_remotes();
     let (old_mode, old_pin, _old_set_by) = current_base_state(ctx.store, review, &mapped);
     let auto_requested = base_input == Some("auto");
@@ -220,7 +249,14 @@ pub(crate) fn retrack_sync(
     // UNLESS the caller literally asked for `auto` — in which case the
     // chain's own `SetBy::Auto` policies are left alone so the review
     // keeps following retargets.
-    if !auto_requested && !target_guessed {
+    // A target that fell all the way to the assumed default branch is a
+    // GUESS whether the forge failed (`target_guessed`, refused on apply) or
+    // has no API at all (nothing to ask): either way it is never recorded as
+    // a person's decision — it stays `auto` / `default-assumed`, so the
+    // review keeps following a retarget once the target is knowable.
+    let assumed_default =
+        is_pr && !explicit && policy.source == crate::review_base::BaseSource::DefaultAssumed;
+    if !auto_requested && !assumed_default {
         policy.set_by = SetBy::User;
     }
     if target_guessed && !auto_requested && !dry_run {
@@ -245,7 +281,8 @@ pub(crate) fn retrack_sync(
                 Vec::new()
             };
             let access = ctx.access();
-            let fetch = ctx.fetch_forge(
+            let fetch = ctx.fetch_forge_memo(
+                memo.map(|m| &**m),
                 access.as_ref().map_err(String::as_str),
                 &branches,
                 pr_number,
@@ -276,13 +313,24 @@ pub(crate) fn retrack_sync(
         }
         let eff = EffectiveBase::Policy(policy.clone());
         ctx.import_base(&eff)?;
-        let target_tip = ctx.base_tip(&eff)?;
+        let mut target_tip = ctx.base_tip(&eff)?;
         let head_tip = ctx.head_tip(&review.head_ref)?;
-        let merge_base =
+        let mut merge_base =
             reviews::merge_base_sha(&ctx.root(), &target_tip, &head_tip).map_err(git_err)?;
-        // A6-1 twin: apply refuses a head the target already contains.
+        // A6-1 twin: the apply pins a head the target already contains to
+        // its merge-time base (or refuses when no merge names one); the dry
+        // run predicts exactly that.
         if is_pr {
-            crate::review_base::capture::refuse_merged_head(&head_tip, &merge_base)?;
+            if let Some(pin) = crate::review_base::capture::merged_pin(
+                &ctx.root(),
+                &head_tip,
+                &merge_base,
+                &target_tip,
+            )? {
+                merge_base =
+                    reviews::merge_base_sha(&ctx.root(), &pin, &head_tip).map_err(git_err)?;
+                target_tip = pin;
+            }
         }
         let latest = ctx.store.latest_patchset(review.id).ok().flatten();
         let would_mint = decide_kind(
@@ -341,8 +389,9 @@ pub(crate) fn retrack_sync(
         // which is for legacy auto-upgrades, not a deliberate retrack).
         policy_override: Some(policy.clone()),
         api_warnings,
+        base_memo: memo.cloned(),
         #[cfg(test)]
-        after_fetch: None,
+        after_fetch: tests_seam::AFTER_FETCH.with(|h| h.borrow().clone()),
     };
     let r = ctx.recapture(review, &rc)?;
     warnings.extend(r.warnings.clone());
@@ -414,12 +463,33 @@ pub struct RetrackBody {
     pub dry_run: bool,
 }
 
-/// `POST /api/reviews/{id}/retrack {base?, dry_run?}` — LOOPBACK-ONLY.
+/// `?async=1` on the retrack routes: run as a daemon job (X1/K3, the
+/// start-pr / sync pattern) — the request answers 202 + `job_id` at once and
+/// the caller polls `GET /api/reviews/jobs/{id}` instead of holding one HTTP
+/// request open for the whole network fetch.
+#[derive(Debug, Deserialize, Default)]
+pub struct AsyncParams {
+    #[serde(default, rename = "async")]
+    pub async_: Option<String>,
+}
+
+impl AsyncParams {
+    pub fn wants_async(&self) -> bool {
+        matches!(
+            self.async_.as_deref(),
+            Some("1") | Some("true") | Some("yes")
+        )
+    }
+}
+
+/// `POST /api/reviews/{id}/retrack {base?, dry_run?}[?async=1]` —
+/// LOOPBACK-ONLY.
 pub async fn retrack_route(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
+    axum::extract::Query(params): axum::extract::Query<AsyncParams>,
     raw: axum::body::Bytes,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let body: RetrackBody = if raw.iter().all(u8::is_ascii_whitespace) {
         RetrackBody::default()
     } else {
@@ -427,11 +497,32 @@ pub async fn retrack_route(
             .map_err(|e| ApiError::bad_request(format!("invalid retrack body: {e}")))?
     };
     let (review, _repo, _) = require_review(&state, id).await?;
+    if params.wants_async() {
+        // The job's number slot carries the REVIEW id (this job is about one
+        // review, not one PR); the key makes a different request a 409.
+        let key = format!("{}|{}", body.base.as_deref().unwrap_or(""), body.dry_run);
+        let repo = review.repo.clone();
+        let dry_run = body.dry_run;
+        let base = body.base.clone();
+        return crate::review_jobs::start_job(
+            state,
+            "retrack",
+            repo,
+            u32::try_from(id).unwrap_or(0),
+            key,
+            move |st, _handle| async move {
+                let outcome = retrack_one(&st, review, base, dry_run).await?;
+                Ok((StatusCode::OK, outcome_json(&outcome, dry_run)))
+            },
+        )
+        .await;
+    }
     let outcome = retrack_one(&state, review, body.base, body.dry_run).await?;
     Ok((
         [(axum::http::header::CACHE_CONTROL, "no-store")],
         Json(outcome_json(&outcome, body.dry_run)),
-    ))
+    )
+        .into_response())
 }
 
 async fn retrack_one(
@@ -453,17 +544,7 @@ async fn retrack_one(
     let member = store_member(state, &review.repo)?;
     let is_pr = pr_of_head(&review.head_ref).is_some();
     let (forge_base_ref, api_warnings) = match pr_of_head(&review.head_ref) {
-        Some(n) => {
-            forge_pr_base_ref(
-                state,
-                &handle,
-                &review.repo,
-                n,
-                state.github.with_cli_token(None),
-                crate::review_store::GhCli::from_process_env(),
-            )
-            .await
-        }
+        Some(n) => crate::reviews::forge_pr_base_ref_ambient(state, &handle, &review.repo, n).await,
         None => (None, vec![]),
     };
     let review2 = review.clone();
@@ -482,7 +563,7 @@ async fn retrack_one(
     Ok(outcome)
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct RetrackAllBody {
     #[serde(default)]
     pub repo: Option<String>,
@@ -501,30 +582,67 @@ fn dry_run_default() -> bool {
     true
 }
 
-/// `POST /api/reviews/retrack-bulk {repo?, pinned?, legacy?, dry_run}` —
-/// LOOPBACK-ONLY. README D17: `dry_run=false` applies ONLY `stale-pin`
-/// rows; `custom` rows are NEVER auto-applied. One repo's store-admission
-/// failure (seeding, locked) is recorded on `repo_errors` and skipped —
-/// never aborts the whole scan.
+/// `POST /api/reviews/retrack-bulk {repo?, pinned?, legacy?, dry_run}[?async=1]`
+/// — LOOPBACK-ONLY. README D17: `dry_run=false` applies ONLY `stale-pin`
+/// rows; `custom` rows are NEVER auto-applied. Only OPEN reviews are
+/// scanned (a closed review's verdict and findings are final). One repo's
+/// store-admission failure (seeding, locked) is recorded on `repo_errors`
+/// and skipped — never aborts the whole scan. `?async=1` runs it as a
+/// daemon job (X1/K3): 202 + `job_id`, polled on `GET /api/reviews/jobs/{id}`.
 pub async fn retrack_all_route(
     State(state): State<SharedState>,
+    axum::extract::Query(params): axum::extract::Query<AsyncParams>,
     Json(body): Json<RetrackAllBody>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
+    if let Some(r) = &body.repo {
+        find_repo(&state, r)?;
+    }
+    if params.wants_async() {
+        let key = format!(
+            "{}|{}|{}|{}",
+            body.repo.as_deref().unwrap_or("*"),
+            body.pinned,
+            body.legacy,
+            body.dry_run
+        );
+        let repo = body.repo.clone().unwrap_or_else(|| "*".to_string());
+        return crate::review_jobs::start_job(
+            state,
+            "retrack-bulk",
+            repo,
+            0,
+            key,
+            move |st, _handle| async move {
+                Ok((StatusCode::OK, retrack_all_value(&st, &body).await?))
+            },
+        )
+        .await;
+    }
+    let value = retrack_all_value(&state, &body).await?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(value),
+    )
+        .into_response())
+}
+
+/// The bulk scan's body, shared by the synchronous route and the job.
+async fn retrack_all_value(
+    state: &SharedState,
+    body: &RetrackAllBody,
+) -> Result<serde_json::Value, ApiError> {
     let repo_names: Vec<String> = match &body.repo {
-        Some(r) => {
-            find_repo(&state, r)?;
-            vec![r.clone()]
-        }
+        Some(r) => vec![r.clone()],
         None => state.repos.iter().map(|r| r.name.clone()).collect(),
     };
     let mut rows = Vec::new();
     let mut repo_errors = Vec::new();
     for name in &repo_names {
-        let Ok((repo, _)) = find_repo(&state, name) else {
+        let Ok((repo, _)) = find_repo(state, name) else {
             continue;
         };
         let repo = repo.clone();
-        match retrack_all_for_repo(&state, &repo, body.pinned, body.legacy, !body.dry_run).await {
+        match retrack_all_for_repo(state, &repo, body.pinned, body.legacy, !body.dry_run).await {
             Ok(mut r) => rows.append(&mut r),
             Err(e) => repo_errors.push(serde_json::json!({
                 "repo": name,
@@ -541,23 +659,30 @@ pub async fn retrack_all_route(
         .filter(|r| r["minted"].as_bool().unwrap_or(false))
         .count();
     let partial = !repo_errors.is_empty() || rows.iter().any(|r| r.get("row_error").is_some());
-    Ok((
-        [(axum::http::header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
-            "schema": RETRACK_ALL_SCHEMA,
-            "dry_run": body.dry_run,
-            "summary": {
-                "scanned": rows.len(),
-                "stale_pin": would_mint,
-                "applied": applied,
-            },
-            "rows": rows,
-            "repo_errors": repo_errors,
-            "degraded": partial,
-        })),
-    ))
+    Ok(serde_json::json!({
+        "schema": RETRACK_ALL_SCHEMA,
+        "dry_run": body.dry_run,
+        "summary": {
+            "scanned": rows.len(),
+            "stale_pin": would_mint,
+            "applied": applied,
+        },
+        "rows": rows,
+        "repo_errors": repo_errors,
+        "degraded": partial,
+    }))
 }
 
+/// One repo's bulk scan (X1/K3).
+///
+/// * The classification pass (every network fetch) runs WITHOUT
+///   [`crate::review_sync::repo_guard`]: it used to hold the per-repo lock
+///   across every candidate's fetch, so `start-pr` / `sync` for that repo
+///   blocked for the whole run. The guard is taken PER APPLIED ROW, only
+///   around the one capture that writes.
+/// * One [`BaseFetchMemo`] spans the repo's scan and its applies, so each
+///   distinct base branch is fetched ONCE rather than once per candidate
+///   (dry run) plus once more per applied row.
 async fn retrack_all_for_repo(
     state: &SharedState,
     repo: &RepoEntry,
@@ -565,11 +690,6 @@ async fn retrack_all_for_repo(
     legacy: bool,
     apply: bool,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
-    let _serial = if apply {
-        crate::review_sync::repo_guard(state, &repo.name).await
-    } else {
-        None
-    };
     let handle = match admit_store(state, &repo.name).await {
         Ok(Some(h)) => h,
         Ok(None) => return Ok(Vec::new()),
@@ -609,73 +729,103 @@ async fn retrack_all_for_repo(
         .collect();
 
     // Forge `base.ref` per PR-bound candidate — network, so gathered
-    // BEFORE the one sequential sync pass below (spawn_blocking cannot
-    // await).
+    // BEFORE the sequential sync pass below (spawn_blocking cannot await).
     let mut forge_refs: HashMap<i64, (Option<String>, Vec<BaseWarningOut>)> = HashMap::new();
     for review in &candidates {
         if let Some(n) = pr_of_head(&review.head_ref) {
-            let r = forge_pr_base_ref(
-                state,
-                &handle,
-                &repo.name,
-                n,
-                state.github.with_cli_token(None),
-                crate::review_store::GhCli::from_process_env(),
-            )
-            .await;
+            let r = crate::reviews::forge_pr_base_ref_ambient(state, &handle, &repo.name, n).await;
             forge_refs.insert(review.id, r);
         }
     }
 
-    let rows = with_store_ctx(state, handle, member, move |ctx| {
-        candidates
-            .into_iter()
-            .map(|review| {
-                let is_pr = pr_of_head(&review.head_ref).is_some();
-                let (forge_base_ref, api_warnings) =
-                    forge_refs.get(&review.id).cloned().unwrap_or_default();
-                let dry = match retrack_sync(
-                    ctx,
-                    &review,
-                    None,
-                    is_pr,
-                    forge_base_ref.as_deref(),
-                    api_warnings.clone(),
-                    true,
-                ) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        return serde_json::json!({
-                            "id": review.id,
-                            "repo": review.repo,
-                            "row_error": e.message,
-                        })
-                    }
-                };
-                if apply && matches!(dry.class, RetrackClass::StalePin) {
-                    match retrack_sync(
+    let memo = Arc::new(BaseFetchMemo::default());
+
+    // Pass 1 — classify every candidate (dry run), lock-free.
+    let dry_refs = forge_refs.clone();
+    let dry_memo = memo.clone();
+    let dry_rows: Vec<(ReviewRow, Result<RetrackOutcome, BaseError>)> =
+        with_store_ctx(state, handle.clone(), member.clone(), move |ctx| {
+            candidates
+                .into_iter()
+                .map(|review| {
+                    let is_pr = pr_of_head(&review.head_ref).is_some();
+                    let (forge_base_ref, api_warnings) =
+                        dry_refs.get(&review.id).cloned().unwrap_or_default();
+                    let dry = retrack_sync_with(
                         ctx,
                         &review,
                         None,
                         is_pr,
                         forge_base_ref.as_deref(),
                         api_warnings,
-                        false,
-                    ) {
-                        Ok(o) => outcome_json(&o, false),
-                        Err(e) => serde_json::json!({
-                            "id": review.id,
-                            "repo": review.repo,
-                            "class": "stale-pin",
-                            "row_error": e.message,
-                        }),
-                    }
-                } else {
-                    outcome_json(&dry, true)
-                }
-            })
-            .collect::<Vec<_>>()
-    })
-    .await?;
+                        true,
+                        Some(&dry_memo),
+                    );
+                    (review, dry)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await?;
+
+    // Pass 2 — render; apply stale-pin rows one at a time, each under the
+    // repo guard for just its own capture.
+    let mut rows = Vec::with_capacity(dry_rows.len());
+    for (review, dry) in dry_rows {
+        let dry = match dry {
+            Ok(o) => o,
+            Err(e) => {
+                rows.push(serde_json::json!({
+                    "id": review.id,
+                    "repo": review.repo,
+                    "row_error": e.message,
+                }));
+                continue;
+            }
+        };
+        if !(apply && matches!(dry.class, RetrackClass::StalePin)) {
+            rows.push(outcome_json(&dry, true));
+            continue;
+        }
+        let _serial = crate::review_sync::repo_guard(state, &repo.name).await;
+        let is_pr = pr_of_head(&review.head_ref).is_some();
+        let (forge_base_ref, api_warnings) =
+            forge_refs.get(&review.id).cloned().unwrap_or_default();
+        let (id, repo_label) = (review.id, review.repo.clone());
+        let apply_memo = memo.clone();
+        let applied = with_store_ctx(state, handle.clone(), member.clone(), move |ctx| {
+            retrack_sync_with(
+                ctx,
+                &review,
+                None,
+                is_pr,
+                forge_base_ref.as_deref(),
+                api_warnings,
+                false,
+                Some(&apply_memo),
+            )
+        })
+        .await?;
+        rows.push(match applied {
+            Ok(o) => outcome_json(&o, false),
+            Err(e) => serde_json::json!({
+                "id": id,
+                "repo": repo_label,
+                "class": "stale-pin",
+                "row_error": e.message,
+            }),
+        });
+    }
     Ok(rows)
+}
+
+/// Test seam (K6 / A6.f9): lets a test land a concurrent snapshot's policy
+/// write right after retrack's network fetch, where the race lives.
+#[cfg(test)]
+pub(crate) mod tests_seam {
+    use crate::review_base::capture::TestHook;
+    use std::cell::RefCell;
+
+    thread_local! {
+        pub(crate) static AFTER_FETCH: RefCell<Option<TestHook>> = const { RefCell::new(None) };
+    }
 }
