@@ -93,15 +93,15 @@ recall_args=()
 # the whole budget. recall 5s + slate 4s = 9s worst case; a recall timeout
 # degrades to protocol-only output (index stays empty), never to no output.
 # `timeout` is guarded: without coreutils the call runs unwrapped.
-run_to() {
-  local secs="$1"
-  shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@"
-  else
-    "$@"
-  fi
+# Shared deadline helpers (kb-hook-lib.sh): every call is capped at
+# min(its own cap, what is left of KB_HOOK_BUDGET_SECS, default 13) so the
+# lanes together stay under the hooks.json timeout. Standalone copy without
+# the lib: unbounded calls, as before H1.
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  hook_deadline_init() { :; }
+  run_to() { shift; "$@"; }
 }
+hook_deadline_init
 index="$(run_to 5 kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
   | jq -r '(.hits // [])
       | map("- \(.title)  [\(.kb)]"

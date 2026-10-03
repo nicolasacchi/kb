@@ -659,6 +659,28 @@ The hooks just call `kb` — any reachable daemon works. Two patterns:
        container's uid (commonly `uid=1000`).
     4. Recreate the container (`docker compose up -d kb`).
 
+## `KB_TURN` and the shared deadline (v0.44 F6)
+
+`KB_TURN=1` makes `kb-recall.sh` make ONE `kb turn` call (`GET /api/turn`) in
+place of the separate `kb context` (turn 1) and `kb recall` processes. The
+daemon composes recall and the turn-1 scent under a shared `deadline_ms`
+(`min(left of the hook budget - 1.5s, 9s)`), the CLI derives the repo slug
+locally with no `GET /api/kbs`, and the hook injects the route's `text` (the
+same bytes as the shell render under the default v2 layout, pinned by
+`tests/fixtures/recall-layout-v2.txt` on both sides). A lane that timed out,
+failed, or fell back to keyword-only is named in one trailing line
+(`kb: recall skipped (timeout)`) instead of vanishing. Any failure of the
+call, or a non-v2 `KB_RECALL_LAYOUT`, takes the old two-call path unchanged;
+unset, `kb turn` is never called. The slate lane is still its own call. Test:
+`tests/test-recall-turn.sh`.
+
+`kb-hook-lib.sh` holds what the hooks used to copy: `run_to <cap> cmd…` (each
+call runs under `min(cap, what is left of KB_HOOK_BUDGET_SECS, default 13)` on
+a millisecond clock; nothing left means skipped, rc 124) and
+`post_distill_ask`. Every hook sources it fail-open, so a standalone copy
+without the file runs unbounded as before. `tests/test-hook-deadlines.sh`
+asserts the worst case (every lane hung) against that budget.
+
 ## Install — pick one
 
 ### Mode 1: manual (settings.json)
@@ -667,6 +689,7 @@ The hooks just call `kb` — any reachable daemon works. Two patterns:
 mkdir -p ~/.claude/hooks
 cp plugins/kb-memory/hooks/kb-recall.sh plugins/kb-memory/hooks/kb-wake.sh \
    plugins/kb-memory/hooks/kb-capture.sh plugins/kb-memory/hooks/kb-distill-nudge.sh \
+   plugins/kb-memory/hooks/kb-hook-lib.sh plugins/kb-memory/hooks/memory-protocol.txt \
    ~/.claude/hooks/
 chmod +x ~/.claude/hooks/kb-*.sh
 ```
