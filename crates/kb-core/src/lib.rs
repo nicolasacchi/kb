@@ -41,6 +41,7 @@ pub mod metrics;
 pub mod notes;
 pub mod parser;
 pub mod paths;
+pub mod posture;
 pub mod procrustes;
 pub mod query;
 pub mod reading;

@@ -300,6 +300,12 @@ impl Visibility {
     }
 }
 
+impl crate::posture::Posture for Visibility {
+    fn restrictive() -> Self {
+        Visibility::Public
+    }
+}
+
 /// v0.40 TN1 — max comment tags on one comment. A chip row plus a facet
 /// list, not a metadata field.
 pub const MAX_COMMENT_TAGS: usize = 8;
@@ -2468,6 +2474,20 @@ mod tests {
             before,
             "an unmutated legacy sidecar must re-save byte-identically"
         );
+    }
+
+    #[test]
+    fn visibility_default_is_the_restrictive_value_and_hides_a_note() {
+        use crate::posture::{assert_default_is_restrictive, Posture};
+        assert_default_is_restrictive::<Visibility>();
+        let mut file = fixture_file();
+        file.comments[0].private = true;
+        assert!(
+            !Visibility::default().includes(&file.comments[0]),
+            "the default reader must not see a private note"
+        );
+        assert!(!Visibility::restrictive().includes(&file.comments[0]));
+        assert!(Visibility::All.includes(&file.comments[0]));
     }
 
     #[test]
