@@ -828,7 +828,7 @@ impl Store {
 /// columns of its own (`list_open_annotations`' `reply_count`, read
 /// separately by its caller at index 17 — V70-A10 pushed it from 16 to 17
 /// when `set_id` was appended at index 16, just before it).
-pub(super) fn annotation_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotationRow> {
+fn annotation_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotationRow> {
     Ok(AnnotationRow {
         id: r.get(0)?,
         repo_id: r.get(1)?,

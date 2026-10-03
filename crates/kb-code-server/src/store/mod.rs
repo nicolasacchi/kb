@@ -86,6 +86,7 @@ mod review_docs;
 mod review_stores;
 mod reviews;
 mod scip_runs;
+mod sweep;
 mod symbols;
 #[cfg(test)]
 mod tests;
@@ -96,8 +97,6 @@ mod workspace;
 // Row types, constants and shared helpers now live beside the domain
 // that owns them; every `crate::store::X` path is re-exported unchanged.
 pub use self::analytics::{AnalyticsFindingRow, RecurrenceRow, RECURRENCE_MIN_REVIEWS};
-#[cfg(test)]
-use self::annotations::annotation_row_from;
 use self::annotations::{insert_annotation_on, update_annotation_on};
 pub use self::annotations::{
     AnnotationOpReport, AnnotationRow, AnnotationSuggestionRow, PreparedAnnotationOp,
