@@ -82,6 +82,22 @@ pub(crate) fn degraded_note(resp: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// The slate slug to send: an explicit `--slate` wins; else, when `--lanes`
+/// names the slate lane, this repo's own slug (the cwd -> main-checkout
+/// basename `kb slate` uses), so a hook can ask for the lane without
+/// resolving a slug itself. No lane, or no slug -> none.
+fn slate_slug_for<'a>(
+    slate: Option<&'a str>,
+    lanes: Option<&str>,
+    repo_slug: &'a str,
+) -> Option<&'a str> {
+    if slate.is_some() {
+        return slate;
+    }
+    let wants = lanes.is_some_and(|l| l.split(',').any(|x| x.trim() == "slate"));
+    (wants && !repo_slug.is_empty()).then_some(repo_slug)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn turn(
     prompt: &str,
@@ -117,10 +133,28 @@ pub async fn turn(
     if let Some(s) = session {
         req = req.query(&[("session", s)]);
     }
+    // `--lanes ...slate` without `--slate` names this repo's slate (the same
+    // cwd -> main-checkout-basename slug `kb slate` uses) - what lets the hook
+    // ask for the lane without resolving a slug itself.
+    let slate_slug = slate_slug_for(slate, lanes, &slug);
+    // Outside a repo there is no slate to name: drop the lane instead of
+    // letting the daemon report it degraded on every prompt.
+    let lanes_owned: Option<String> = match (lanes, slate_slug) {
+        (Some(l), None) if l.split(',').any(|x| x.trim() == "slate") => Some(
+            l.split(',')
+                .filter(|x| x.trim() != "slate")
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        (l, _) => l.map(str::to_string),
+    };
+    // An explicit `--lanes slate` alone keeps its meaning (the daemon names
+    // the missing slug); only a MIXED list loses the unusable lane.
+    let lanes = lanes_owned.as_deref().filter(|l| !l.is_empty()).or(lanes);
     if let Some(l) = lanes {
         req = req.query(&[("lanes", l)]);
     }
-    if let Some(sl) = slate {
+    if let Some(sl) = slate_slug {
         req = req.query(&[("slate", sl)]);
     }
     if let Some(n) = slate_since {
@@ -231,5 +265,14 @@ mod tests {
     fn degraded_note_is_none_when_clean() {
         assert_eq!(degraded_note(&json!({"text": "x"})), None);
         assert_eq!(degraded_note(&json!({"degraded": []})), None);
+    }
+
+    #[test]
+    fn slate_lane_without_a_slug_uses_the_repo_slug() {
+        assert_eq!(slate_slug_for(None, Some("recall,slate"), "kb"), Some("kb"));
+        assert_eq!(slate_slug_for(Some("x"), Some("recall"), "kb"), Some("x"));
+        assert_eq!(slate_slug_for(None, Some("recall,context"), "kb"), None);
+        assert_eq!(slate_slug_for(None, None, "kb"), None);
+        assert_eq!(slate_slug_for(None, Some("slate"), ""), None);
     }
 }
