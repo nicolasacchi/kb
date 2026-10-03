@@ -607,7 +607,13 @@ kb import claude-memory [--dir PATH] [--limit N] [--apply] [--link KBS]
                                     proposal queue exceeds the daemon's 200-item
                                     listing cap; the target corpus is part of
                                     the hash, so identical content in two
-                                    projects is two candidates); the target corpus is a
+                                    projects is two candidates). Transition
+                                    read: a queue/corpus entry carrying the
+                                    pre-target key shape (the same hash without
+                                    the target corpus) also counts as a
+                                    duplicate, so a re-run after upgrading does
+                                    not re-queue facts already imported or
+                                    approved; the target corpus is a
                                     best-effort guess from the lossy project dir
                                     name (--link a,b overrides; an unconfigured
                                     --link is an error).

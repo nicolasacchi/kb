@@ -1779,6 +1779,16 @@ POST   /api/kb/{kb}/artifacts               write a memory artifact (write-only;
                                             validation) — the write-time TRUST tag,
                                             recorded as kb-source, SURFACED (census/
                                             recall), NEVER a score term.
+                                            v0.44 X8: optional `created_at` (unix
+                                            seconds) replaces the write time as
+                                            the memory's `kb-created` — the recall
+                                            DECAY BASIS (the filename keeps the
+                                            write time). Must be > 0 (else 400);
+                                            a future value is clamped to now.
+                                            Any caller can set it — it is not
+                                            reserved to proposal approval — so
+                                            it is a self-declared age, not a
+                                            verified one. Absent => now.
 GET    /api/memory/dupes[?threshold=0.90&limit=50&kb=NAME]
                                             MI-W3.1 — ON-DEMAND cross-corpus
                                             duplicate report: likely-redundant
