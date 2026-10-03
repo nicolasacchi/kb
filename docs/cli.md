@@ -694,6 +694,28 @@ kb context <query> [--cwd PATH] [--budget N] [--session SID] [--no-floor]
                                     sessions · 2 open comments — run
                                     `kb context`") points at: the hook injects
                                     COUNTS, this verb is the substance.
+kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
+   [--lanes recall,context] [--daemon URL] [--json]
+                                    v0.44 F6: the per-prompt hook's ONE call
+                                    over `GET /api/turn` (recall + turn-1
+                                    scent, composed by the daemon under a
+                                    shared deadline, default 9000 ms). The
+                                    repo slug (git main-checkout basename +
+                                    local `project_slugs` aliases) is derived
+                                    locally with NO network call and sent as
+                                    project=/visible_to=; the daemon checks
+                                    it against its own config. Prints `text`
+                                    verbatim. A lane that timed out / failed
+                                    / fell back to keyword-only is NAMED in
+                                    one line (`kb: recall skipped
+                                    (timeout)`; stderr in human mode, the
+                                    `degraded_note` field in --json). Any
+                                    non-zero exit (old daemon without the
+                                    route, unreachable, slow) means "fall
+                                    back to the separate calls"; wording
+                                    separates `daemon slow` from `daemon not
+                                    reachable`. kb-recall.sh uses it only
+                                    when KB_TURN=1.
 kb slate open [--topic T] [--budget N] [--all|--hybrid] [--json]
    [--slate SLUG] [--cwd PATH] [--session-id SID] [--daemon URL]
                                     SL3 (v0.41): this project's shared

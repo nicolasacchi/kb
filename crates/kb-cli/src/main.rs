@@ -277,6 +277,31 @@ enum Cmd {
         #[arg(long)]
         timeout: Option<u64>,
     },
+    /// The per-prompt hook's ONE call: recalled memories (narrowed to this
+    /// repo's project corpus, worked out locally) plus the turn-1 scent,
+    /// composed by the daemon under a shared deadline. Lanes that miss the
+    /// deadline or fail are NAMED (`kb: recall skipped (timeout)`), never
+    /// silently dropped. A non-zero exit means "use the separate calls".
+    Turn {
+        /// The prompt text.
+        prompt: String,
+        /// Your working directory (repo slug source + context sessions lane).
+        #[arg(long)]
+        cwd: Option<String>,
+        /// YOUR session id (served-recall ledger; excluded from context).
+        #[arg(long)]
+        session: Option<String>,
+        /// Shared budget in ms for all lanes (default 9000).
+        #[arg(long)]
+        deadline_ms: Option<u64>,
+        /// csv subset of `recall,context` (default both).
+        #[arg(long)]
+        lanes: Option<String>,
+        #[arg(long)]
+        daemon: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// R2 — why is a file the way it is? Pulls the past sessions that touched
     /// it (episodic memory) and inlines the prompt / decisions / commits that
     /// produced it. Distinct from `recall` (curated facts): this reconstructs
@@ -4295,6 +4320,28 @@ async fn main() -> Result<()> {
                 bearer.as_deref(),
                 json,
                 timeout,
+            )
+            .await
+        }
+        Cmd::Turn {
+            prompt,
+            cwd,
+            session,
+            deadline_ms,
+            lanes,
+            daemon,
+            json,
+        } => {
+            let bearer = read_bearer();
+            commands::turn::turn(
+                &prompt,
+                cwd.as_deref(),
+                session.as_deref(),
+                deadline_ms,
+                lanes.as_deref(),
+                daemon.as_deref(),
+                bearer.as_deref(),
+                json,
             )
             .await
         }
