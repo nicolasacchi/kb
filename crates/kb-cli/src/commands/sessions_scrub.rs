@@ -32,7 +32,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use kb_core::session_scrub::{scrub_transcript, ScrubOptions};
-use kb_core::sessions::SubagentDigest;
+use kb_core::sessions::{CapturedCommit, SubagentDigest};
 
 /// Scrub the one subagents-digest lane of a fresh capture: the agent id and
 /// every file path the digest carries. Returns the redacted digests and the
@@ -56,6 +56,35 @@ pub(crate) fn scrub_subagents(agents: Vec<SubagentDigest>) -> (Vec<SubagentDiges
         })
         .collect();
     (agents, total)
+}
+
+/// Scrub the commits block of a fresh capture (v0.44 X4). The block carries
+/// text that never came through the transcript scrub: the TRUE subject and
+/// author `git show` returned, the trailers (`Signed-off-by:`, `Co-Authored-By:`
+/// and any free-form `Key: value` a developer typed — a token pasted into a
+/// commit message lands here) and the repo root path. `rescrub` already
+/// covered this lane at rest; this is the same floor at write time, so a fresh
+/// capture is not "unscrubbed" the moment it lands. Returns the redacted
+/// commits and the redaction count.
+pub(crate) fn scrub_commits(commits: Vec<CapturedCommit>) -> (Vec<CapturedCommit>, u32) {
+    let opts = ScrubOptions::secrets_only();
+    let mut total = 0u32;
+    let mut one = |s: String| -> String {
+        let (out, r) = scrub_transcript(&s, &opts);
+        total += r.total;
+        out
+    };
+    let commits = commits
+        .into_iter()
+        .map(|mut c| {
+            c.subject = c.subject.map(&mut one);
+            c.author = c.author.map(&mut one);
+            c.repo_root = c.repo_root.map(&mut one);
+            c.trailers = c.trailers.into_iter().map(&mut one).collect();
+            c
+        })
+        .collect();
+    (commits, total)
 }
 
 /// `kb sessions scrub` — stdin → stdout, secrets-only.
@@ -207,7 +236,12 @@ fn capture_files(dir: &Path) -> Vec<PathBuf> {
 /// and the redaction hits still sitting at rest in each lane.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DirAudit {
+    /// Captures actually audited.
     pub captures: usize,
+    /// Captures on disk (>= `captures`; the difference is `skipped`).
+    pub total_captures: usize,
+    /// Captures the audit cap left out (oldest by mtime). 0 = exact.
+    pub skipped: usize,
     pub unscrubbed_captures: usize,
     pub unreadable: usize,
     /// harness → (captures, pending hits per lane).
@@ -221,9 +255,53 @@ pub struct HarnessAudit {
     pub hits: LaneHits,
 }
 
+/// How many captures `kb doctor --hooks` audits by default. The audit reads
+/// and regex-scrubs EVERY lane of each capture it visits (a multi-MB
+/// transcript each, on a corpus that grows by a file per session), so an
+/// unbounded walk makes a diagnostic cost minutes of IO on a large corpus.
+/// The newest [`DEFAULT_AUDIT_LIMIT`] by mtime are audited and the report says
+/// how many were left out; `KB_DOCTOR_SCRUB_LIMIT=0` audits all of them, and
+/// `kb sessions rescrub` (dry run) is always the full, exact count.
+pub const DEFAULT_AUDIT_LIMIT: usize = 500;
+
+/// `$KB_DOCTOR_SCRUB_LIMIT` -> audit cap (`0` = unlimited), default
+/// [`DEFAULT_AUDIT_LIMIT`].
+pub fn audit_limit_from_env() -> Option<usize> {
+    parse_audit_limit(std::env::var("KB_DOCTOR_SCRUB_LIMIT").ok().as_deref())
+}
+
+fn parse_audit_limit(raw: Option<&str>) -> Option<usize> {
+    match raw.and_then(|v| v.trim().parse::<usize>().ok()) {
+        Some(0) => None,
+        Some(n) => Some(n),
+        None => Some(DEFAULT_AUDIT_LIMIT),
+    }
+}
+
+/// Full audit (every capture). Kept for callers that want exactness.
 pub fn scan_dir(dir: &Path) -> DirAudit {
+    scan_dir_limited(dir, None)
+}
+
+/// Audit at most `limit` captures, newest first by mtime (`None` = all).
+/// `total_captures` always carries the true count on disk and `skipped` how
+/// many the cap left out, so a sampled report can never read as exact.
+pub fn scan_dir_limited(dir: &Path, limit: Option<usize>) -> DirAudit {
     let mut audit = DirAudit::default();
-    for path in capture_files(dir) {
+    let mut files = capture_files(dir);
+    audit.total_captures = files.len();
+    if let Some(n) = limit.filter(|n| *n < files.len()) {
+        files.sort_by_key(|p| {
+            std::cmp::Reverse(
+                std::fs::metadata(p)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH),
+            )
+        });
+        audit.skipped = files.len() - n;
+        files.truncate(n);
+    }
+    for path in files {
         let Ok(html) = std::fs::read_to_string(&path) else {
             audit.unreadable += 1;
             continue;
@@ -302,9 +380,20 @@ pub fn rescrub(dir: &Path, apply: bool) -> Result<RescrubSummary> {
         sum.redactions.digest += hits.digest;
         sum.redactions.sidecar_text += hits.sidecar_text;
         if apply {
-            // Atomic replace, same discipline as `kb sessions capture`.
+            // Atomic replace, same discipline as `kb sessions capture`: the
+            // watcher sees `<name>.html.tmp` (not indexable, ignored) and then
+            // the rename over `<name>.html`, which it re-indexes (pinned by
+            // `watcher::tests::atomic_tmp_rename_over_an_existing_file_*`).
+            // The new file would otherwise take the process umask, silently
+            // widening (or narrowing) whatever mode the capture was given, so
+            // the original permissions are carried over before the rename.
             let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+            let perms = std::fs::metadata(&path)
+                .with_context(|| format!("stat {}", path.display()))?
+                .permissions();
             std::fs::write(&tmp, &out).with_context(|| format!("write {}", tmp.display()))?;
+            std::fs::set_permissions(&tmp, perms)
+                .with_context(|| format!("restore mode on {}", tmp.display()))?;
             std::fs::rename(&tmp, &path).with_context(|| format!("finalize {}", path.display()))?;
             sum.rewritten += 1;
         }
@@ -399,6 +488,35 @@ mod tests {
     }
 
     #[test]
+    fn scrub_commits_redacts_subject_author_trailers_and_leaves_shas_alone() {
+        let c = CapturedCommit {
+            kind: "commit".into(),
+            sha: Some("abc1234".into()),
+            subject: Some(format!("fix: rotate {GH}")),
+            resolved: true,
+            sha_full: Some("abc1234abc1234abc1234abc1234abc1234abc1".into()),
+            repo_root: Some(format!("/work/{AWS}")),
+            author: Some(format!("dev <{AWS}@example.com>")),
+            parents: Some(1),
+            trailers: vec![
+                "Signed-off-by: Dev <dev@example.com>".into(),
+                format!("Reviewed-by: key {GH}"),
+            ],
+        };
+        let (out, n) = scrub_commits(vec![c]);
+        assert!(n >= 4, "n={n}");
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(!json.contains(GH) && !json.contains(AWS), "{json}");
+        assert_eq!(out[0].sha.as_deref(), Some("abc1234"));
+        assert_eq!(
+            out[0].sha_full.as_deref(),
+            Some("abc1234abc1234abc1234abc1234abc1234abc1")
+        );
+        assert_eq!(out[0].trailers[0], "Signed-off-by: Dev <dev@example.com>");
+        assert!(out[0].resolved && out[0].parents == Some(1));
+    }
+
+    #[test]
     fn scrub_capture_html_clears_all_three_lanes_and_keeps_structure() {
         let html = dirty_envelope();
         let (out, hits) = scrub_capture_html(&html);
@@ -446,6 +564,77 @@ mod tests {
         let again = rescrub(tmp.path(), true).unwrap();
         assert_eq!((again.affected, again.rewritten), (0, 0), "idempotent");
         assert_eq!(std::fs::read_to_string(&f).unwrap(), after);
+    }
+
+    /// v0.44 X4 — `rescrub --apply` must not change a capture's permission
+    /// bits (the rename'd tmp file would otherwise take the process umask).
+    #[cfg(unix)]
+    #[test]
+    fn rescrub_apply_preserves_the_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("session-20260301T090000Z-s1.html");
+        std::fs::write(&f, dirty_envelope()).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let applied = rescrub(tmp.path(), true).unwrap();
+        assert_eq!(applied.rewritten, 1);
+        let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "mode changed to {mode:o}");
+        // and a 0o600 capture stays private (umask 022 would have made it 644)
+        let g = tmp.path().join("session-20260301T090000Z-s3.html");
+        std::fs::write(&g, dirty_envelope()).unwrap();
+        std::fs::set_permissions(&g, std::fs::Permissions::from_mode(0o600)).unwrap();
+        rescrub(tmp.path(), true).unwrap();
+        assert_eq!(
+            std::fs::metadata(&g).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    /// v0.44 X4 — the capped audit visits the NEWEST captures by mtime and
+    /// reports the true total and how many it left out.
+    #[test]
+    fn scan_dir_limited_samples_newest_and_reports_the_remainder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("session-20260101T000000Z-old.html");
+        let new = tmp.path().join("session-20260301T000000Z-new.html");
+        let mid = tmp.path().join("session-20260201T000000Z-mid.html");
+        // the OLD one is the dirty one; a cap of 2 must leave it out
+        std::fs::write(&old, dirty_envelope()).unwrap();
+        std::fs::write(&mid, envelope("clean\n", &[], &[])).unwrap();
+        std::fs::write(&new, envelope("clean\n", &[], &[])).unwrap();
+        let t = |secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        for (p, secs) in [(&old, 1_000), (&mid, 2_000), (&new, 3_000)] {
+            std::fs::File::options()
+                .write(true)
+                .open(p)
+                .unwrap()
+                .set_modified(t(secs))
+                .unwrap();
+        }
+        let capped = scan_dir_limited(tmp.path(), Some(2));
+        assert_eq!(
+            (capped.captures, capped.total_captures, capped.skipped),
+            (2, 3, 1)
+        );
+        assert_eq!(
+            capped.unscrubbed_captures, 0,
+            "the dirty OLD file is out of the sample"
+        );
+        let full = scan_dir_limited(tmp.path(), None);
+        assert_eq!(
+            (full.captures, full.skipped, full.unscrubbed_captures),
+            (3, 0, 1)
+        );
+        assert_eq!(scan_dir(tmp.path()).captures, 3);
+    }
+
+    #[test]
+    fn audit_limit_parses_default_unlimited_and_garbage() {
+        assert_eq!(parse_audit_limit(None), Some(DEFAULT_AUDIT_LIMIT));
+        assert_eq!(parse_audit_limit(Some("0")), None);
+        assert_eq!(parse_audit_limit(Some(" 25 ")), Some(25));
+        assert_eq!(parse_audit_limit(Some("many")), Some(DEFAULT_AUDIT_LIMIT));
     }
 
     #[test]

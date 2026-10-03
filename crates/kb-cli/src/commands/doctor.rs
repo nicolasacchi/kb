@@ -2187,12 +2187,21 @@ fn decide_unscrubbed_captures(audit: &super::sessions_scrub::DirAudit) -> HookCh
         return HookCheck::pass("capture-scrub", "no captures on disk to audit");
     }
     let table = super::sessions_scrub::render_lane_table(audit);
+    // A capped audit must say so: "none hold a secret" over the newest N is
+    // not a claim about the corpus.
+    let scope = if audit.skipped > 0 {
+        format!(
+            "{} newest of {} capture(s) audited ({} older left out; KB_DOCTOR_SCRUB_LIMIT=0 audits all, `kb sessions rescrub` is the exact count)",
+            audit.captures, audit.total_captures, audit.skipped
+        )
+    } else {
+        format!("{} capture(s) audited", audit.captures)
+    };
     if audit.unscrubbed_captures == 0 {
         return HookCheck::pass(
             "capture-scrub",
             format!(
-                "{} capture(s) audited, none hold an unredacted secret\n{}",
-                audit.captures,
+                "{scope}, none hold an unredacted secret\n{}",
                 indent_table(&table)
             ),
         );
@@ -2200,7 +2209,7 @@ fn decide_unscrubbed_captures(audit: &super::sessions_scrub::DirAudit) -> HookCh
     HookCheck::warn(
         "capture-scrub",
         format!(
-            "{} of {} capture(s) hold secrets the floor would redact\n{}",
+            "{} of {} audited capture(s) hold secrets the floor would redact ({scope})\n{}",
             audit.unscrubbed_captures,
             audit.captures,
             indent_table(&table)
@@ -2219,7 +2228,10 @@ fn indent_table(t: &str) -> String {
 fn unscrubbed_captures_check() -> HookCheck {
     match std::env::var_os("KB_SESSIONS_DIR") {
         Some(v) if !v.is_empty() && Path::new(&v).is_dir() => {
-            decide_unscrubbed_captures(&super::sessions_scrub::scan_dir(Path::new(&v)))
+            decide_unscrubbed_captures(&super::sessions_scrub::scan_dir_limited(
+                Path::new(&v),
+                super::sessions_scrub::audit_limit_from_env(),
+            ))
         }
         _ => HookCheck::skip(
             "capture-scrub",
@@ -2443,6 +2455,32 @@ mod tests {
         assert!(c.fix.as_deref().unwrap().contains("rescrub --apply"));
         audit.unscrubbed_captures = 0;
         assert_eq!(decide_unscrubbed_captures(&audit).status, CheckStatus::Pass);
+    }
+
+    /// v0.44 X4 — a capped audit says so, in both the pass and warn shapes:
+    /// "none hold a secret" over the newest N must never read as a claim about
+    /// the whole corpus.
+    #[test]
+    fn capped_audit_names_the_sample_and_how_to_get_the_exact_count() {
+        use super::super::sessions_scrub::DirAudit;
+        let mut audit = DirAudit {
+            captures: 500,
+            total_captures: 1200,
+            skipped: 700,
+            ..Default::default()
+        };
+        let c = decide_unscrubbed_captures(&audit);
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert!(
+            c.detail.contains("500 newest of 1200") && c.detail.contains("700 older left out"),
+            "{}",
+            c.detail
+        );
+        assert!(c.detail.contains("KB_DOCTOR_SCRUB_LIMIT=0"), "{}", c.detail);
+        audit.unscrubbed_captures = 2;
+        let c = decide_unscrubbed_captures(&audit);
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("500 newest of 1200"), "{}", c.detail);
     }
 
     // --- slugify_repo_path ------------------------------------------------

@@ -2228,6 +2228,10 @@ enum SessionsAction {
         /// Rewrite affected captures in place (default: report only).
         #[arg(long)]
         apply: bool,
+        /// Report only, write nothing — the default, spelled out so a script
+        /// can say so. Conflicts with `--apply`.
+        #[arg(long = "dry-run", conflicts_with = "apply")]
+        dry_run: bool,
         #[arg(long)]
         json: bool,
     },
@@ -5624,9 +5628,12 @@ async fn main() -> Result<()> {
                 .await
             }
             SessionsAction::Scrub => commands::sessions_scrub::run_filter(),
-            SessionsAction::Rescrub { dir, apply, json } => {
-                commands::sessions_scrub::run_rescrub(dir, apply, json)
-            }
+            SessionsAction::Rescrub {
+                dir,
+                apply,
+                dry_run: _,
+                json,
+            } => commands::sessions_scrub::run_rescrub(dir, apply, json),
             SessionsAction::List {
                 daemon,
                 json,
@@ -7377,11 +7384,31 @@ fn init_tracing() {
 mod tests {
     use super::{
         looks_like_artifact_id, reconcile_comment_target, Cli, Cmd, DeskAction, ProposalsAction,
+        SessionsAction,
     };
     use clap::Parser;
 
     fn s(x: &str) -> Option<String> {
         Some(x.to_string())
+    }
+
+    /// v0.44 X4 — `sessions rescrub --dry-run` is a no-op spelling of the
+    /// default and conflicts with `--apply`.
+    #[test]
+    fn rescrub_dry_run_flag_parses_and_conflicts_with_apply() {
+        match Cli::try_parse_from(["kb", "sessions", "rescrub", "--dry-run"])
+            .unwrap()
+            .cmd
+        {
+            Cmd::Sessions {
+                action: SessionsAction::Rescrub { apply, dry_run, .. },
+            } => assert!(dry_run && !apply),
+            other => panic!("expected sessions rescrub, got {other:?}"),
+        }
+        let err = Cli::try_parse_from(["kb", "sessions", "rescrub", "--dry-run", "--apply"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot be used with"), "{err}");
     }
 
     /// `Cli::try_parse_from` cases pinning `kb capture`'s clap wiring
