@@ -606,10 +606,21 @@ impl ReviewStores {
                     .unwrap_or_else(|| "store git spawner unavailable".into()),
             });
         };
-        let too_old = self
-            .git_version
-            .get_or_init(|| seed::git_too_old(git, seed::MIN_GIT))
-            .clone();
+        // Cache only a DEFINITIVE answer. A probe that could not run
+        // (timeout on a loaded box, spawn EAGAIN) is a transient store
+        // error — re-probed on the next call, never frozen into
+        // `GitTooOld` for the process lifetime (which would route every
+        // review write to the user clones).
+        let too_old = match self.git_version.get() {
+            Some(v) => v.clone(),
+            None => match seed::git_version_probe(git, seed::MIN_GIT) {
+                Ok(v) => {
+                    self.git_version.set(v.clone()).ok();
+                    v
+                }
+                Err(detail) => return Some(StoreUnavailable::Error { detail }),
+            },
+        };
         too_old.map(|found| StoreUnavailable::GitTooOld { found })
     }
 
@@ -688,7 +699,7 @@ impl ReviewStores {
             });
         }
         self.admit_locked(store, &row)?;
-        let dir = PathBuf::from(&row.git_dir);
+        let dir = self.resolve_dir(store, &row);
         let (members, _) = self.members_of(store, store_id);
         let ops = self.ops_lock(store_id);
         let mut out = PendingImport::default();
@@ -844,7 +855,7 @@ impl ReviewStores {
             return Ok(());
         }
         let lock = self.acquire_lock(&row.uuid)?;
-        let dir = PathBuf::from(&row.git_dir);
+        let dir = self.resolve_dir(store, row);
         if let Err(p) = manifest::check(&dir, &row.uuid, &row.store_key) {
             drop(lock);
             let code = p.code();
@@ -902,6 +913,30 @@ impl ReviewStores {
         Ok(handle)
     }
 
+    /// Where store `row`'s directory actually is. The row's recorded
+    /// `git_dir` is authoritative while it exists; when it is GONE (the
+    /// state dir or `[review.store] root` was relocated and the store moved
+    /// with it) the path derived from the CURRENT root + uuid is tried, and
+    /// when its manifest matches the row, the row is corrected so open,
+    /// adopt, seed and the lock/tmp sweep (which all key on the root) agree
+    /// on one location again. Otherwise the recorded path is returned
+    /// unchanged and the caller's own missing/mismatch handling applies.
+    fn resolve_dir(&self, store: &Store, row: &ReviewStoreRow) -> PathBuf {
+        let recorded = PathBuf::from(&row.git_dir);
+        if recorded.exists() || !is_store_uuid(&row.uuid) {
+            return recorded;
+        }
+        let derived = seed::store_dir(&self.settings.root, &row.uuid);
+        if derived == recorded || manifest::check(&derived, &row.uuid, &row.store_key).is_err() {
+            return recorded;
+        }
+        best_effort(
+            "set_review_store_git_dir",
+            store.set_review_store_git_dir(row.id, &derived.to_string_lossy()),
+        );
+        derived
+    }
+
     /// Mutation admission: `Ok(Some(handle))` for a ready store, `Ok(None)`
     /// when the repo has no usable store yet (absent / not registered /
     /// disabled — the caller keeps today's user-repo behaviour), and a
@@ -948,8 +983,8 @@ impl ReviewStores {
                 code: "bad-uuid".into(),
             });
         }
-        let dir = PathBuf::from(&row.git_dir);
         self.admit_locked(store, row)?;
+        let dir = self.resolve_dir(store, row);
         Ok(StoreHandle {
             id: row.id,
             uuid: row.uuid.clone(),
@@ -1522,7 +1557,7 @@ impl ReviewStores {
                 held.insert(row.uuid.clone(), lock);
             }
         }
-        let dir = PathBuf::from(&row.git_dir);
+        let dir = self.resolve_dir(store, &row);
         if dir.exists() {
             // Already on disk (a DB left `absent`, e.g. after a restore):
             // adopt only if the manifest matches.
@@ -2065,6 +2100,38 @@ mod tests {
             credential,
             gh_user: gh_user.map(str::to_string),
         }
+    }
+
+    /// A5-5 — a git-version probe that cannot RUN is a transient store
+    /// error, not a cached `GitTooOld`: once git is reachable again the
+    /// same registry admits the store.
+    #[test]
+    fn a_failed_git_version_probe_is_not_cached_as_too_old() {
+        let td = tempfile::tempdir().unwrap();
+        let empty_bin = td.path().join("no-git-here");
+        std::fs::create_dir_all(&empty_bin).unwrap();
+        let bad = StoreGit::with_env_fn(td.path().join("gh1"), |k| {
+            (k == "PATH").then(|| empty_bin.clone().into_os_string())
+        })
+        .unwrap();
+        let settings =
+            StoreSettings::resolve(&crate::config::ReviewSection::default(), td.path(), &[]);
+        let rs = ReviewStores::from_parts(settings, Some(bad), None, Vec::new());
+        for _ in 0..2 {
+            assert!(
+                matches!(
+                    rs.unavailable_reason(),
+                    Some(StoreUnavailable::Error { .. })
+                ),
+                "a probe that could not run is a transient error"
+            );
+        }
+        assert!(rs.git_version.get().is_none(), "nothing was cached");
+        // git comes back (same registry, new spawner semantic): a
+        // definitive answer is cached and admits the store.
+        let good = StoreGit::new(td.path().join("gh2")).unwrap();
+        let probed = seed::git_version_probe(&good, seed::MIN_GIT);
+        assert_eq!(probed, Ok(None), "this box runs a new git");
     }
 
     /// D12 — one member's entry drives a store-wide credential, and it is

@@ -1304,7 +1304,10 @@ pub async fn review_status_route(
         _ => None,
     };
     let latest_ps = latest.as_ref().map(|p| p.ps_number);
-    let verdict_stale = review.verdict.is_some() && review.verdict_ps != latest_ps;
+    // The ONE staleness rule (`reviews::verdict_block`, shared with sweep,
+    // inbox and distill) — not a second `!=` variant that disagrees on a
+    // NULL `verdict_ps`.
+    let (_, verdict_stale) = reviews::verdict_block(&review, latest_ps);
     let open_findings = findings
         .iter()
         .filter(|f| f.severity != "ok" && f.disposition.is_none())
