@@ -507,5 +507,9 @@ export function startSseInvalidationBridge(): void {
   // skip events it doesn't replay (no `Last-Event-ID` bookkeeping here,
   // unlike kb's SharedWorker gap/resync path — W4.1 scope stops short of
   // that), so treat every reconnect as "something might have changed."
+  // That includes `["identity"]` (`staleTime: Infinity`): whether review
+  // writes are admitted (`review_mutations_admitted`) is computed per
+  // request, so a reconnect through a different path/proxy must re-ask
+  // (pinned by `queryClient.test.ts`).
   source.onopen = () => invalidateForRepo(undefined);
 }

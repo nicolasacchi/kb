@@ -14,7 +14,7 @@
 //     never POSTs to the daemon directly
 //
 // postMessage protocol (see docs in CommentsPanel.tsx + AnnotatorBridge):
-//   iframe → parent  (targetOrigin '*'; parent validates event.origin)
+//   iframe → parent  (targetOrigin = parent's exact origin, '*' only as the Firefox fallback; parent validates event.origin)
 //     {type:"cm:probe",        origin}
 //     {type:"cm:compose",      anchor, file, fileLabel}  // body composed in panel
 //     {type:"cm:focus",        commentId}           // clicked an in-page marker
@@ -243,11 +243,17 @@ if (env && env.file && Array.isArray(env.file.comments)) {
   init(env);
 }
 
-// Every iframe→parent message is targetOrigin '*' (the parent validates
-// event.origin on its side — see the header comment); one helper instead
-// of repeating `parent.postMessage(x, "*")` at each of the 7 call sites.
+// iframe→parent messages go to the parent's exact origin: the configured
+// `__KB_PARENT_ORIGIN` when it is a real origin, else (dev "*" / unset) the
+// browser-reported `location.ancestorOrigins[0]` (Chromium/Safari), the same
+// rule as the runtime_js bridge. Firefox has no ancestorOrigins, so it alone
+// keeps "*" (the parent still validates event.origin on its side).
 function post(msg: unknown) {
-  parent.postMessage(msg, "*");
+  const cfg = window.__KB_PARENT_ORIGIN;
+  const anc = location.ancestorOrigins;
+  const target =
+    cfg && cfg !== "*" ? cfg : anc && anc.length ? anc[0] : "*";
+  parent.postMessage(msg, target);
 }
 
 function init(envelope: Envelope) {

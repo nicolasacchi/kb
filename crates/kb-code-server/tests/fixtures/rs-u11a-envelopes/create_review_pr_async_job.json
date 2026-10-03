@@ -44,10 +44,10 @@
     "pr_repo_slug": "string",
     "repo": "string",
     "schema": "string",
-    "session_id": "null",
+    "session_id": "string",
     "state": "string",
     "tip_sha": "string",
-    "title": "null",
+    "title": "string",
     "updated_at": "number"
   },
   "review_id": "number",

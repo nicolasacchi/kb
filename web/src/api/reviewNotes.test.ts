@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchReviewNotes } from "./reviewNotes";
+import { fetchReviewNotes, tagDelta } from "./reviewNotes";
 
 // v0.40 TN — the note index's request URL is the wire contract the page's
 // filter bar depends on: a dropped axis is a silently unfiltered list, and a
@@ -101,5 +101,31 @@ describe("fetchReviewNotes() URL builder", () => {
     const calls = mockFetch();
     await fetchReviewNotes({ bodies: true });
     expect(qs(calls[0]).get("bodies")).toBe("true");
+  });
+});
+
+// v0.44 X2 — the tag editor's wire form is a delta, never a full replace.
+describe("tagDelta()", () => {
+  it("adds what is new and removes what was dropped", () => {
+    expect(tagDelta(["a", "b"], ["b", "c"])).toEqual({
+      add_tags: ["c"],
+      remove_tags: ["a"],
+    });
+  });
+
+  it("an unchanged list is an empty add (a valid no-op), no remove key", () => {
+    expect(tagDelta(["a", "b"], ["b", "a"])).toEqual({ add_tags: [] });
+  });
+
+  it("a case-only change is neither an add nor a remove", () => {
+    expect(tagDelta(["wording"], ["Wording"])).toEqual({ add_tags: [] });
+  });
+
+  it("clearing every tag is removes only", () => {
+    expect(tagDelta(["a"], [])).toEqual({ add_tags: [], remove_tags: ["a"] });
+  });
+
+  it("dedupes repeated additions", () => {
+    expect(tagDelta([], ["x", "X", "x"])).toEqual({ add_tags: ["x"] });
   });
 });

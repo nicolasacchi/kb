@@ -13,6 +13,10 @@
 // calls the export route at all.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ReviewDetailPr } from "../../api/types";
+import {
+  REVIEW_MUTATIONS_ADMITTED_HINT,
+  useReviewMutationsAdmitted,
+} from "../../hooks/useReviewMutationsAdmitted";
 import { usePublishFinding, usePublishVerdict, useReviewExportGithub } from "../../hooks/useReviews";
 import { clearMarks, useMarkedSlugs } from "../../lib/publishMarks";
 import { composeGhCommandsText, type GhExportInput } from "../../lib/publishGithub";
@@ -63,7 +67,13 @@ export default function PublishPreview({ repo, reviewId, review, onClose }: Publ
   const dlgRef = useRef<HTMLDialogElement | null>(null);
   const markedSlugs = useMarkedSlugs(reviewId);
   const [includeOrphanedAsGeneral, setIncludeOrphanedAsGeneral] = useState(false);
-  const loopback = usePublishLoopbackLatched();
+  // A9.f3 - the pre-probe: the daemon's own admission verdict for THIS caller
+  // (`GET /api/identity`) is read before a submit, not only the post-submit
+  // 404 latch. Publish recording is one of the gated review-mutation families.
+  const { admitted } = useReviewMutationsAdmitted();
+  const latched = usePublishLoopbackLatched();
+  const loopback = latched || !admitted;
+  const loopbackHint = admitted ? LOOPBACK_HINT : REVIEW_MUTATIONS_ADMITTED_HINT;
 
   const hasMarks = markedSlugs.length > 0;
   const exportQ = useReviewExportGithub(
@@ -271,8 +281,8 @@ export default function PublishPreview({ repo, reviewId, review, onClose }: Publ
               <Icon.Copy /> Copy gh commands
             </button>
             {loopback ? (
-              <span className="kbc-finding__foot-loopback" title={LOOPBACK_HINT} data-kbc-publish-mark-done-loopback>
-                {LOOPBACK_HINT}
+              <span className="kbc-finding__foot-loopback" title={loopbackHint} data-kbc-publish-mark-done-loopback>
+                {loopbackHint}
               </span>
             ) : (
               <button

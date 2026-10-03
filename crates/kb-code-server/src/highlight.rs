@@ -863,7 +863,6 @@ pub const V76_C1_ROUTES: &[crate::entities::RouteContract] =
 mod tests {
     use super::*;
     use std::future::Future;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     const RUST_SNIPPET: &str = "fn add(a: i32, b: i32) -> i32 {\n    // sum\n    a + b\n}\n";
     const PYTHON_SNIPPET: &str = "def greet(name):\n    # say hi\n    return f\"hi {name}\"\n";
@@ -1538,11 +1537,6 @@ mod tests {
 
     // ── the async routes: the parse must leave the runtime worker ───────
 
-    /// How often the probe asks the worker for a turn. One millisecond is
-    /// short enough to catch a real stall and long enough that a busy
-    /// machine does not make the sleep itself the thing under test.
-    const TICK: std::time::Duration = std::time::Duration::from_millis(1);
-
     /// Whole Ruby source lines, repeated — a real parse with real tokens,
     /// not a degenerate blob tree-sitter can chew through for free.
     const RUBY_FILL: &str = "def greet(name)\n  # say hi\n  \"hi #{name}\"\nend\n\n";
@@ -1574,147 +1568,131 @@ mod tests {
         HighlightBatchIn { items }
     }
 
-    /// Drive `request` to completion on the current (single-worker)
-    /// runtime while a SECOND task ticks every [`TICK`], and report how
-    /// many of those ticks were polled while the request was still in
-    /// flight. Zero means the one worker was pinned by the request for
-    /// its whole life — i.e. the handler parsed on the runtime thread.
+    /// A runtime whose blocking pool has exactly ONE thread.
+    fn one_blocking_thread_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
+    /// Prove `request` does its work on the BLOCKING POOL, deterministically.
     ///
-    /// The probe is spawned BEFORE the request is first polled, and
-    /// `join!` polls the request first, so a request that blocks its own
-    /// worker runs start-to-finish before the probe has had a single turn:
-    /// the count is then necessarily 0, with no ordering luck involved.
-    /// The `timeout` turns a genuine hang into a failure instead of a
-    /// stuck suite.
-    async fn ticks_while_in_flight<T>(request: impl Future<Output = T>) -> (usize, T) {
-        let in_flight = Arc::new(AtomicBool::new(true));
-        let flag = in_flight.clone();
-        let probe = tokio::spawn(async move {
-            let mut ticks = 0usize;
-            loop {
-                tokio::time::sleep(TICK).await;
-                // A tick polled AFTER the request finished proves nothing;
-                // only the ones that landed mid-flight are evidence.
-                if !flag.load(Ordering::SeqCst) {
-                    break;
-                }
-                ticks += 1;
-            }
-            ticks
+    /// The runtime's only blocking thread is held by this function. A
+    /// handler that hops through `spawn_blocking` cannot make progress until
+    /// the thread is released, so it must still be pending after a grace
+    /// period; one that parses inline on the async worker would simply
+    /// finish. The "still pending" check can only err toward PASSING for a
+    /// handler that is slow for other reasons, never toward failing a
+    /// correct one, and there is no tick count or latency bar to tune. The
+    /// request must then complete once the thread is released.
+    async fn completes_only_via_blocking_pool<T>(request: impl Future<Output = T>) -> T {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let hold = tokio::task::spawn_blocking(move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
         });
-        let flag = in_flight.clone();
-        // `join!` yields in ARGUMENT order — the request's own output first,
-        // then the probe task's `Result`. Binding them the other way round
-        // type-checks into the wrong pair, so the order is named here.
-        let (out, ticks) = tokio::time::timeout(std::time::Duration::from_secs(60), async move {
-            let request = async move {
-                let out = request.await;
-                flag.store(false, Ordering::SeqCst);
-                out
-            };
-            tokio::join!(request, probe)
-        })
-        .await
-        .expect("the request and the probe must both finish");
-        (ticks.expect("the probe task must not panic"), out)
+        started_rx.await.expect("the blocking thread is occupied");
+        tokio::pin!(request);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut request)
+                .await
+                .is_err(),
+            "the request finished while the blocking pool was saturated: \
+             its work ran on the async worker"
+        );
+        release_tx.send(()).expect("release the blocking thread");
+        let out = tokio::time::timeout(std::time::Duration::from_secs(60), &mut request)
+            .await
+            .expect("the request must finish once the blocking thread is free");
+        hold.await.expect("the holder task");
+        out
     }
 
     /// `highlight_batch_route` must keep its parse off the async worker:
-    /// one worker, one full-cap batch, and a probe that has to be polled
-    /// while that batch is in flight. Called inline again, the parse of
-    /// 64 snippets (a fresh `tree_sitter::Parser` each) pins the single
-    /// worker for the whole request and `ticks` lands on 0.
-    ///
-    /// TIMING-BASED — the one assertion in this file that is about
-    /// scheduling rather than a value, and so the least deterministic of
-    /// the change. The bar is deliberately coarse: the batch parses ~1 MiB
-    /// of Ruby, which is tens of milliseconds even on a fast box, so three
-    /// 1 ms ticks is a wide margin rather than a knife edge.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn batch_route_parses_off_the_async_worker() {
-        let (ticks, out) = ticks_while_in_flight(highlight_batch_route(Json(at_cap_batch()))).await;
-        assert!(
-            ticks >= 3,
-            "the batch parse ran on the async worker: only {ticks} tick(s) were polled \
-             while the request was in flight"
-        );
-
-        // The hop must not have changed a byte of the response: same
-        // 200, same `no-store`, same `highlight-batch/1` body with every
-        // item still painted in caller order.
-        let resp = out
-            .expect("a legal at-the-cap batch is a 200, never a refusal")
-            .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            resp.headers()
-                .get(header::CACHE_CONTROL)
-                .and_then(|v| v.to_str().ok()),
-            Some("no-store")
-        );
-        let body = axum::body::to_bytes(resp.into_body(), 64 << 20)
-            .await
-            .expect("a JSON body is readable");
-        let json: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
-        assert_eq!(json["schema"], HIGHLIGHT_BATCH_SCHEMA);
-        let items = json["items"].as_array().expect("items is an array");
-        assert_eq!(items.len(), MAX_BATCH_ITEMS);
-        for (i, item) in items.iter().enumerate() {
-            assert_eq!(item["id"], format!("i{i}"));
-            assert_eq!(item["tier"], "full", "item {i} lost its paint");
-            assert!(
-                !item["spans"]
-                    .as_array()
-                    .expect("spans is an array")
-                    .is_empty(),
-                "item {i} painted no spans"
+    /// with the blocking pool saturated, a full-cap batch (64 fresh
+    /// `tree_sitter::Parser`s) must stay pending, then complete when the
+    /// pool frees up. Called inline, it would pin the async worker and
+    /// finish regardless of the pool. Deterministic: nothing here depends
+    /// on how long a parse takes.
+    #[test]
+    fn batch_route_parses_off_the_async_worker() {
+        one_blocking_thread_runtime().block_on(async {
+            let out =
+                completes_only_via_blocking_pool(highlight_batch_route(Json(at_cap_batch()))).await;
+            // The hop must not have changed a byte of the response: same
+            // 200, same `no-store`, same `highlight-batch/1` body with every
+            // item still painted in caller order.
+            let resp = out
+                .expect("a legal at-the-cap batch is a 200, never a refusal")
+                .into_response();
+            assert_eq!(resp.status(), axum::http::StatusCode::OK);
+            assert_eq!(
+                resp.headers()
+                    .get(header::CACHE_CONTROL)
+                    .and_then(|v| v.to_str().ok()),
+                Some("no-store")
             );
-        }
+            let body = axum::body::to_bytes(resp.into_body(), 64 << 20)
+                .await
+                .expect("a JSON body is readable");
+            let json: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
+            assert_eq!(json["schema"], HIGHLIGHT_BATCH_SCHEMA);
+            let items = json["items"].as_array().expect("items is an array");
+            assert_eq!(items.len(), MAX_BATCH_ITEMS);
+            for (i, item) in items.iter().enumerate() {
+                assert_eq!(item["id"], format!("i{i}"));
+                assert_eq!(item["tier"], "full", "item {i} lost its paint");
+                assert!(
+                    !item["spans"]
+                        .as_array()
+                        .expect("spans is an array")
+                        .is_empty(),
+                    "item {i} painted no spans"
+                );
+            }
+        });
     }
 
     /// The same bar for the single-snippet route, at the per-snippet cap:
     /// one `tree_sitter::Parser` and one parse of `MAX_SNIPPET_BYTES` of
-    /// Ruby. The bar is ONE tick, not three — a single quarter-megabyte
-    /// parse is the smallest work this route can legally be handed, so
-    /// the honest claim is "the worker kept serving other tasks while it
-    /// ran", not "it ran for milliseconds".
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn snippet_route_parses_off_the_async_worker() {
-        let body = HighlightIn {
-            lang: Some("ruby".into()),
-            path: None,
-            text: ruby_source(MAX_SNIPPET_BYTES),
-            salt: false,
-        };
-        let (ticks, out) = ticks_while_in_flight(highlight_route(Json(body))).await;
-        assert!(
-            ticks >= 1,
-            "the snippet parse ran on the async worker: no tick was polled \
-             while the request was in flight"
-        );
-
-        let resp = out
-            .expect("a snippet at the cap is a 200, never a refusal")
-            .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            resp.headers()
-                .get(header::CACHE_CONTROL)
-                .and_then(|v| v.to_str().ok()),
-            Some("no-store")
-        );
-        let body = axum::body::to_bytes(resp.into_body(), 8 << 20)
-            .await
-            .expect("a JSON body is readable");
-        let json: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
-        assert_eq!(json["schema"], HIGHLIGHT_SCHEMA);
-        assert_eq!(json["tier"], "full");
-        assert!(
-            !json["spans"]
-                .as_array()
-                .expect("spans is an array")
-                .is_empty(),
-            "a tier-full snippet with no spans is a lie"
-        );
+    /// Ruby must wait for the blocking pool, not run on the async worker.
+    #[test]
+    fn snippet_route_parses_off_the_async_worker() {
+        one_blocking_thread_runtime().block_on(async {
+            let body = HighlightIn {
+                lang: Some("ruby".into()),
+                path: None,
+                text: ruby_source(MAX_SNIPPET_BYTES),
+                salt: false,
+            };
+            let out = completes_only_via_blocking_pool(highlight_route(Json(body))).await;
+            let resp = out
+                .expect("a snippet at the cap is a 200, never a refusal")
+                .into_response();
+            assert_eq!(resp.status(), axum::http::StatusCode::OK);
+            assert_eq!(
+                resp.headers()
+                    .get(header::CACHE_CONTROL)
+                    .and_then(|v| v.to_str().ok()),
+                Some("no-store")
+            );
+            let body = axum::body::to_bytes(resp.into_body(), 8 << 20)
+                .await
+                .expect("a JSON body is readable");
+            let json: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
+            assert_eq!(json["schema"], HIGHLIGHT_SCHEMA);
+            assert_eq!(json["tier"], "full");
+            assert!(
+                !json["spans"]
+                    .as_array()
+                    .expect("spans is an array")
+                    .is_empty(),
+                "a tier-full snippet with no spans is a lie"
+            );
+        });
     }
 }

@@ -10,9 +10,10 @@ import {
   usePatchAnnotation,
   useUnbindAnnotationReview,
 } from "../../hooks/useAnnotations";
-import { useReviews } from "../../hooks/useReviews";
+import { useReviewFindings, useReviews } from "../../hooks/useReviews";
 import {
   anchorBadgeLabel,
+  annotationBacksFinding,
   buildCreatePayload,
   buildReplyPayload,
   groupThreads,
@@ -21,7 +22,7 @@ import {
   type AnnotationThread,
 } from "../../lib/annotations";
 import { commitUrl, reviewUrl } from "../../lib/codeUrl";
-import { useCurrentReview } from "../../lib/currentReview";
+import { useValidatedCurrentReview } from "../../hooks/useValidatedCurrentReview";
 import { formatUnixSeconds, shortSha } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { useConfirm } from "../ConfirmProvider";
@@ -108,11 +109,8 @@ export default function AnnotationsPanel({
   // choice every time the ambient marker changes elsewhere (a Room visit
   // in another tab, say) would be more surprising than a preselection that
   // only applies once, fresh.
-  const currentReview = useCurrentReview(repo);
-  const [reviewId, setReviewId] = useState<number | null>(() => {
-    const n = currentReview ? Number(currentReview.id) : NaN;
-    return Number.isFinite(n) ? n : null;
-  });
+  const { reviewId: validatedReviewId } = useValidatedCurrentReview(repo);
+  const [reviewId, setReviewId] = useState<number | null>(() => validatedReviewId ?? null);
 
   const [line, setLine] = useState<number>(activeLine ?? 1);
   const [lineEnd, setLineEnd] = useState<number | null>(activeLineEnd);
@@ -409,6 +407,11 @@ function ThreadItem({
   onUnbindReview,
 }: ThreadItemProps) {
   const { parent, replies } = thread;
+  // A thread that backs a finding cannot be rebound or unbound (the daemon
+  // answers 409), so the controls are not offered. Same query key as the
+  // Room's findings read, so a bound review costs one shared fetch.
+  const findingsQ = useReviewFindings(repo, parent.review_id, { include_superseded: true });
+  const backsFinding = annotationBacksFinding(findingsQ.data?.findings, parent.id);
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [replyPending, setReplyPending] = useState(false);
@@ -510,10 +513,16 @@ function ThreadItem({
           <button type="button" onClick={() => setReplyOpen((v) => !v)} data-kbc-annot-reply-toggle>
             Reply{replies.length > 0 ? ` (${replies.length})` : ""}
           </button>
-          <button type="button" onClick={openBindPicker} data-kbc-annot-review-toggle>
-            {parent.review_id != null ? "Rebind" : "Bind to review…"}
-          </button>
-          {parent.review_id != null && (
+          {backsFinding ? (
+            <span className="kbc-annotations__bound-note" data-kbc-annot-backs-finding>
+              backs a finding — review binding is fixed
+            </span>
+          ) : (
+            <button type="button" onClick={openBindPicker} data-kbc-annot-review-toggle>
+              {parent.review_id != null ? "Rebind" : "Bind to review…"}
+            </button>
+          )}
+          {parent.review_id != null && !backsFinding && (
             <button type="button" disabled={bindPending} onClick={() => void unbindNow()} data-kbc-annot-review-unbind>
               Unbind
             </button>
