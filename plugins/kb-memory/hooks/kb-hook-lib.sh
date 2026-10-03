@@ -188,6 +188,18 @@ hook_spool_put() {
   )
 }
 
+# hook_spool_drop <raw-session-id>
+# Remove this session's spool item (same key as hook_spool_put). Called after a
+# successful capture of the session: the spooled snapshot is older than what
+# just landed, and replaying it would overwrite the newer corpus file.
+hook_spool_drop() {
+  local dir key
+  dir="$(hook_spool_dir)" || return 0
+  key="$(printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+  [ -n "$key" ] || key=session
+  rm -f "$dir/$key.jsonl" "$dir/$key.meta"
+}
+
 # True when the spool holds at least one item.
 hook_spool_pending() {
   local dir f

@@ -86,6 +86,19 @@ PATH="$REAL_PATH" kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR" >/
 [ "$(corpus_files)" = 1 ] && ok "--replay-spool: capture landed" || bad "--replay-spool: capture landed"
 if grep -rq "$GH" "$KB_SESSIONS_DIR" 2>/dev/null; then bad "--replay-spool: scrubbed"; else ok "--replay-spool: scrubbed"; fi
 
+echo "== a newer capture of the SAME session is not overwritten by its stale spool item =="
+rm -rf "$KB_SESSIONS_DIR" "$KB_CAPTURE_SPOOL"; mkdir -p "$KB_SESSIONS_DIR"
+hook "$TMPROOT/failbin:$PATH"   # turn 1 fails -> short snapshot spooled
+[ -f "$KB_CAPTURE_SPOOL/$SID.jsonl" ] || bad "same-session: turn 1 spooled"
+LONG="$TMPROOT/t-long.jsonl"
+cp "$TRANSCRIPT" "$LONG"
+printf '%s\n' "{\"sessionId\":\"$SID\",\"type\":\"user\",\"timestamp\":\"2026-03-01T09:05:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"second turn marker LONGER-TRANSCRIPT\"},\"promptSource\":\"typed\"}" >>"$LONG"
+printf '%s' "{\"session_id\":\"$SID\",\"transcript_path\":\"$LONG\",\"cwd\":\"$TMPROOT\"}" \
+  | PATH="$REAL_PATH" bash "$HOOKS_DIR/kb-capture.sh" >/dev/null 2>&1
+grep -rq 'LONGER-TRANSCRIPT' "$KB_SESSIONS_DIR" 2>/dev/null && ok "same-session: corpus holds the newer (longer) transcript" || bad "same-session: corpus holds the newer (longer) transcript"
+[ -f "$KB_CAPTURE_SPOOL/$SID.jsonl" ] && bad "same-session: spool item dropped" || ok "same-session: spool item dropped"
+[ -f "$KB_CAPTURE_SPOOL/$SID.meta" ] && bad "same-session: spool meta dropped" || ok "same-session: spool meta dropped"
+
 echo "== a hung kb is bounded by the shared deadline (INT4) =="
 mkdir -p "$TMPROOT/hangbin"
 printf '#!/usr/bin/env bash\nexec sleep 30\n' >"$TMPROOT/hangbin/kb"

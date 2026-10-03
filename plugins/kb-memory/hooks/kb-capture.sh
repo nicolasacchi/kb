@@ -30,6 +30,7 @@
   run_to() { shift; "$@"; }
   hook_spool_put() { return 1; }
   hook_spool_pending() { return 1; }
+  hook_spool_drop() { :; }
   hook_deadline_init() { :; }
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
@@ -53,6 +54,9 @@ if command -v kb >/dev/null 2>&1; then
        ${cwd:+--cwd "$cwd"} \
        --out "$KB_SESSIONS_DIR" \
        >/dev/null 2>&1; then
+    # This session's own spooled snapshot is now stale: drop it so the replay
+    # cannot overwrite the newer capture. Other sessions' items still land.
+    hook_spool_drop "$raw_sid"
     # A prior failure may have left spooled transcripts: land them now.
     if hook_spool_pending; then
       run_to 10 kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 || true
