@@ -44,27 +44,9 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # Call only after the commit-without-remember check. Slate stdout is
 # discarded so it cannot corrupt the plain-text nudge. Never blocks.
-post_distill_ask() {
-  local sid="$1" harness="$2" cwd="${3:-}"
-  command -v kb >/dev/null 2>&1 || return 0
-  local args=(
-    slate ask "Distill session ${sid} (${harness})?"
-    --harness "$harness"
-    --session-id "$sid"
-    --ref "session:${sid}"
-  )
-  [ -n "$cwd" ] && args+=(--cwd "$cwd")
-  # Loopback must not ride HTTP(S)_PROXY (same reason as kb-wake-kimi.sh).
-  (
-    export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
-    export no_proxy="127.0.0.1,localhost${no_proxy:+,$no_proxy}"
-    unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
-    if command -v timeout >/dev/null 2>&1; then
-      timeout 4 kb "${args[@]}" >/dev/null 2>&1 || true
-    else
-      kb "${args[@]}" >/dev/null 2>&1 || true
-    fi
-  )
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  # Standalone copy without the shared lib: fail open (no distill ask).
+  post_distill_ask() { return 0; }
 }
 
 input="$(cat)"

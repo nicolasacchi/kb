@@ -130,9 +130,50 @@ esac
 if printf '%s\n' "$block" | grep -q '^$'; then bad "kimi wake: blank line inside the injected hit"; else ok "kimi wake: no blank line inside the injected hit"; fi
 
 # --- 5. default budget below the hooks.json timeouts -----------------------
-budget="$(grep -o 'KB_HOOK_BUDGET_SECS:-[0-9]*' "$RECALL" | head -n 1 | grep -o '[0-9]*$')"
+budget="$(grep -o 'KB_HOOK_BUDGET_SECS:-[0-9]*' "$HOOKS_DIR/kb-hook-lib.sh" | head -n 1 | grep -o '[0-9]*$')"
 min_to="$(jq -r '[.hooks.UserPromptSubmit[0].hooks[0].timeout, .hooks.SessionStart[0].hooks[0].timeout] | min' "$HOOKS_DIR/hooks.json")"
 if [ -n "$budget" ] && [ "$budget" -lt "$min_to" ]; then ok "shared budget ${budget}s < hooks.json timeout ${min_to}s"; else bad "budget ${budget:-?} vs hooks.json ${min_to:-?}"; fi
+
+# --- 7. worst case: EVERY lane hangs, wall time stays inside the budget ---
+# Measured on a millisecond clock (the hooks' own helper), so the assertion
+# does not rest on `date +%s` granularity: with a 1s clock a hook that
+# overran by 900ms could still read as "within 1s".
+# shellcheck disable=SC1091
+. "$HOOKS_DIR/kb-hook-lib.sh"
+cat >"$TMPROOT/bin/kb" <<'EOF3'
+#!/usr/bin/env bash
+exec sleep 30
+EOF3
+chmod +x "$TMPROOT/bin/kb"
+t0="$(hook_now_ms)"
+printf '%s' '{"session_id":"dl-worst-1","cwd":"/tmp","prompt":"p"}' \
+  | KB_HOOK_BUDGET_SECS=2 KB_TURN=1 "$RECALL" >/dev/null
+el_ms=$(( $(hook_now_ms) - t0 ))
+# budget 2000ms + one process start / jq pass of slack.
+if [ "$el_ms" -le 4000 ]; then ok "all lanes hung (KB_TURN=1, turn 1): ${el_ms}ms <= 2000ms budget + slack(2s)"; else bad "all lanes hung took ${el_ms}ms against a 2000ms budget"; fi
+t0="$(hook_now_ms)"
+printf '%s' '{"session_id":"dl-worst-2","cwd":"/tmp","prompt":"p"}' \
+  | KB_HOOK_BUDGET_SECS=2 "$RECALL" >/dev/null
+el_ms=$(( $(hook_now_ms) - t0 ))
+if [ "$el_ms" -le 4000 ]; then ok "all lanes hung (old path, turn 1): ${el_ms}ms <= 2000ms budget + slack(2s)"; else bad "old path took ${el_ms}ms against a 2000ms budget"; fi
+# And the DEFAULT budget plus the worst per-call overshoot is under every
+# hooks.json timeout: the budget is the only thing the caps add up against.
+if [ "$((budget * 1000 + 800))" -lt "$((min_to * 1000))" ]; then ok "default budget ${budget}s + 0.8s slack < hooks.json ${min_to}s"; else bad "default budget leaves no slack under ${min_to}s"; fi
+
+# --- 8. the shared lib's clock is sub-second and run_to honours it -------
+a="$(hook_now_ms)"; sleep 0.2; b="$(hook_now_ms)"
+if [ $((b - a)) -ge 150 ] && [ $((b - a)) -lt 1000 ]; then ok "hook_now_ms resolves sub-second ($((b - a))ms for a 200ms sleep)"; else bad "hook_now_ms not sub-second: $((b - a))ms"; fi
+KB_HOOK_BUDGET_SECS=1 hook_deadline_init
+t0="$(hook_now_ms)"
+run_to 30 sleep 30
+rc=$?
+el_ms=$(( $(hook_now_ms) - t0 ))
+if [ "$rc" -eq 124 ] && [ "$el_ms" -le 1500 ]; then ok "run_to clips a 30s cap to the 1s budget (${el_ms}ms, rc 124)"; else bad "run_to rc=$rc after ${el_ms}ms"; fi
+KB_HOOK_BUDGET_SECS=5 hook_deadline_init
+run_to 30 true; rc=$?
+KB_HOOK_BUDGET_SECS=0 hook_deadline_init
+run_to 30 true; rc0=$?
+if [ "$rc" -eq 0 ] && [ "$rc0" -eq 124 ]; then ok "run_to skips a call once the budget is spent (rc 124), runs one within it"; else bad "run_to budget skip: rc=$rc rc0=$rc0"; fi
 
 echo
 echo "passed=$PASS failed=$FAIL"
