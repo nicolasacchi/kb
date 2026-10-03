@@ -13717,6 +13717,10 @@ async fn sessions_list_returns_indexed_session_with_memory_count() {
     assert_eq!(row["display_name"], "first prompt of the session");
 }
 
+/// Probe log fed by the sink the undistilled test installs (the library
+/// carries no test state of its own).
+static MEMORY_COUNT_PROBES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 /// v0.44 F10 — `GET /api/sessions?undistilled=1` is the distill-debt queue:
 /// newest capture with `commit_count > 0`, `memory_count = 0` and a
 /// non-trivial substance. A session with a memory, one without a commit and
@@ -13822,7 +13826,19 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
         v.sort();
         v
     };
-    let probes_before = kb_server::routes::sessions::memory_count_probe_log();
+    kb_server::routes::sessions::set_memory_count_probe_sink(|ids| {
+        MEMORY_COUNT_PROBES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(ids.iter().cloned());
+    });
+    let memory_count_probe_log = || -> Vec<String> {
+        MEMORY_COUNT_PROBES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    };
+    let probes_before = memory_count_probe_log();
     let queue = get("/api/sessions?undistilled=1&limit=50".into()).await;
     assert_eq!(
         ids_of(&queue),
@@ -13869,7 +13885,7 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
     // for rows that can survive (commit_count > 0); the commit-less
     // `sid-und-c` and the zero-commit rows were never probed. Ids are unique
     // to this test, so parallel tests cannot interfere.
-    let probes_after = kb_server::routes::sessions::memory_count_probe_log();
+    let probes_after = memory_count_probe_log();
     let new_probes: Vec<&String> = probes_after
         .iter()
         .skip(probes_before.len().min(probes_after.len()))
