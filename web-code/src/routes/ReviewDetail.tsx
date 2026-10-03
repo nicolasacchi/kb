@@ -31,12 +31,14 @@ import {
   useReviewMap,
   useReviewReadingOrder,
   useReviewReport,
+  useReviewSince,
   useReviewTimeline,
 } from "../hooks/useReviews";
 import { readerUrl } from "../lib/breadcrumbs";
 import { mergeCurrentSearch, parseDocCardsMode, parseReviewPs, parseReviewTab } from "../lib/codeUrl";
 import { setCurrentReview } from "../lib/currentReview";
 import { cardList } from "../lib/reviewDoc";
+import { sinceApplies, sinceLabel } from "../lib/reviewSince";
 import { indexThreads } from "../lib/reviewComments";
 // ── V76-R2a — the Room's rail geometry + density. The rail's truth is the
 // pure reducer; react-resizable-panels is the mechanism; keyboard resize
@@ -169,6 +171,27 @@ export default function ReviewDetail() {
     interdiffFrom,
     interdiffTo,
     compareMode && interdiffFrom != null && interdiffTo != null && interdiffFrom !== interdiffTo,
+  );
+
+  // v0.44 F9 — the rebase-aware author delta. (1) Comparing two patchsets:
+  // the interdiff panel's "author changes only" switch reads the SAME pair.
+  const interdiffSinceQ = useReviewSince(
+    repo,
+    idOk ? id : undefined,
+    interdiffFrom != null ? `ps${interdiffFrom}` : undefined,
+    interdiffTo != null ? `ps${interdiffTo}` : undefined,
+    compareMode && interdiffFrom != null && interdiffTo != null && interdiffFrom !== interdiffTo,
+  );
+  // (2) The strip label: latest patchset vs the patchset the verdict sits
+  // on. Only when a verdict exists and a later patchset landed; the daemon
+  // never carries the verdict forward, this just says what changed.
+  const verdictPs = review?.verdict?.ps ?? null;
+  const sinceVerdictQ = useReviewSince(
+    repo,
+    idOk ? id : undefined,
+    "verdict",
+    "latest",
+    sinceApplies(verdictPs, latestPs),
   );
 
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -676,6 +699,7 @@ export default function ReviewDetail() {
       data={interdiffQ.data}
       fromTipSha={tipOf(interdiffFrom)}
       toTipSha={tipOf(interdiffTo)}
+      since={interdiffSinceQ.data}
     />
   ) : compareMode ? (
     <div className="kbc-reader__hint">Select two patchsets to compare.</div>
@@ -738,6 +762,9 @@ export default function ReviewDetail() {
         activePsNum={activePsNum}
         interdiffFrom={interdiffFrom}
         interdiffTo={interdiffTo}
+        sinceLabel={
+          sinceApplies(verdictPs, latestPs) && sinceVerdictQ.data ? sinceLabel(sinceVerdictQ.data) : null
+        }
         onSelectPs={(n) => {
           setPsSel(n);
           setExpanded(null);

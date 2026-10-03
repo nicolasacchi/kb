@@ -2065,6 +2065,13 @@ export type { ReviewStoreDoctorFinding } from "./generated/ReviewStoreDoctorFind
 export type { ReviewStoreDisk } from "./generated/ReviewStoreDisk";
 export type { ReviewStoreRuntime } from "./generated/ReviewStoreRuntime";
 export type { GitFallbacks } from "./generated/GitFallbacks";
+// v0.44 F9: `GET /api/reviews/{id}/since` (kbc-review-since/1), generated
+// from `review_since.rs`.
+export type { SinceReport } from "./generated/SinceReport";
+export type { SincePath } from "./generated/SincePath";
+export type { SincePatchset } from "./generated/SincePatchset";
+export type { SinceAuthorDelta } from "./generated/SinceAuthorDelta";
+export type { SinceBases } from "./generated/SinceBases";
 
 /// `[[review.repos]] credential` pin (`review_store/cred.rs`'s
 /// `CredentialPin`).

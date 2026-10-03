@@ -53,8 +53,13 @@ The older verbs (`show`, `comments`, `findings list`, `timeline`,
    (across every configured repo unless `--repo` narrows it). Then
    `kb-code review status pr:N --json` to decide whether anything actually
    moved before you spend anything. For the whole queue:
-   `kb-code review inbox --all-repos --json` — take the top row (already
-   attention-ordered).
+   `kb-code review queue --json` — what is waiting for YOU, the agent: an
+   open question whose latest voice is not an agent (lane `question`), then a
+   disputed finding with no agent reply since the dispute (lane `dispute`),
+   oldest first. Take the top row; it carries the `next` command to run. An
+   empty queue is a real answer. (`review inbox --all-repos --json` is the
+   HUMAN-ordered view of the same reviews; use it to see what the human has
+   outstanding, not to pick your next task.)
 2. **Situational awareness** (all `--json`): `review status <id>` is THE drift
    answer — `head_moved` against the LATEST patchset tip, base state, the
    file-count drift vs. the forge, verdict staleness, open findings. Also

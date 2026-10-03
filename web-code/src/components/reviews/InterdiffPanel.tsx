@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import type { ReviewInterdiffFile, ReviewInterdiffOut } from "../../api/types";
+import type { ReviewInterdiffFile, ReviewInterdiffOut, SinceReport } from "../../api/types";
 import DiffFile from "../diff/DiffFile";
 import RangeDiffTable from "./RangeDiffTable";
 import { statusGlyph } from "./ReviewFileItem";
 import { useDiff } from "../../hooks/useDiff";
 import { useDiffHighlights } from "../../hooks/useDiffHighlights";
 import { parseUnifiedDiff } from "../../lib/diff";
+import { authorChangeCount, filterAuthorFiles } from "../../lib/reviewSince";
 import { loadDiffMode, saveDiffMode } from "../../lib/prefs";
 import type { DiffMode } from "../../lib/prefs";
 
@@ -16,6 +17,9 @@ export interface InterdiffPanelProps {
   data: ReviewInterdiffOut | undefined;
   fromTipSha: string | undefined;
   toTipSha: string | undefined;
+  /// v0.44 F9 — the author delta for THIS from/to pair (rebase-aware). When
+  /// present the panel offers an "author changes only" switch.
+  since?: SinceReport;
 }
 
 export default function InterdiffPanel({
@@ -25,20 +29,41 @@ export default function InterdiffPanel({
   data,
   fromTipSha,
   toTipSha,
+  since,
 }: InterdiffPanelProps) {
+  const [authorOnly, setAuthorOnly] = useState(false);
   if (loading) return <div className="kbc-reader__hint">Loading interdiff…</div>;
   if (error) return <div className="kbc-reader__hint kbc-reader__hint--error">{error.message}</div>;
   if (!data) return null;
+  const shown = authorOnly ? filterAuthorFiles(data.files, since) : data.files;
   return (
     <div data-kbc-review-interdiff>
       <h2 className="kbc-review__card-title">
         Files changed (ps{data.from} → ps{data.to})
       </h2>
-      {data.files.length === 0 ? (
-        <p className="kbc-review__card-empty">No file-level changes between these tips.</p>
+      {since && (
+        <label className="kbc-review__since-toggle" data-kbc-interdiff-author-only>
+          <input
+            type="checkbox"
+            checked={authorOnly}
+            onChange={(e) => setAuthorOnly(e.target.checked)}
+          />
+          Author changes only
+          <span className="kbc-review__since" data-kbc-interdiff-author-count>
+            {authorChangeCount(since)} author change{authorChangeCount(since) === 1 ? "" : "s"}
+            {since.bases.moved ? " · base moved" : ""}
+          </span>
+        </label>
+      )}
+      {shown.length === 0 ? (
+        <p className="kbc-review__card-empty">
+          {authorOnly
+            ? "No author changes between these patchsets."
+            : "No file-level changes between these tips."}
+        </p>
       ) : (
         <div className="kbc-review__files" data-kbc-review-interdiff-files>
-          {data.files.map((f) => (
+          {shown.map((f) => (
             <InterdiffFileRow
               key={f.path}
               repo={repo}

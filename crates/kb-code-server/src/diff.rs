@@ -100,10 +100,24 @@ pub fn diff_file(
     to: Option<&Revspec>,
     path: &str,
 ) -> Result<String> {
+    diff_file_ctx(repo_root, from, to, path, 3)
+}
+
+/// [`diff_file`] with an explicit context width. `-U0` is what the
+/// rebase-aware `since` derivation (`review_since`) needs: with no context
+/// lines a hunk's boundaries depend only on the changed lines.
+pub fn diff_file_ctx(
+    repo_root: &Path,
+    from: &Revspec,
+    to: Option<&Revspec>,
+    path: &str,
+    context: u32,
+) -> Result<String> {
+    let unified = format!("-U{context}");
     // V70-A2 (SEC-17) — `from`/`to` arrive already validated: `Revspec`'s
     // only constructor IS the injection gate, so there is no guard to
     // forget here and no way to call this fn with a raw `String`.
-    let mut args: Vec<&str> = vec!["diff", "--no-color", "-U3", from.as_str()];
+    let mut args: Vec<&str> = vec!["diff", "--no-color", unified.as_str(), from.as_str()];
     if let Some(to) = to {
         args.push(to.as_str());
     }
@@ -157,12 +171,60 @@ pub fn diff_blob_pair(
     to_sha: &str,
     to_path: &str,
 ) -> Result<String> {
+    diff_blob_pair_ctx(repo_root, from_sha, from_path, to_sha, to_path, 3)
+}
+
+/// [`diff_blob_pair`] with an explicit context width (see
+/// [`diff_file_ctx`]).
+pub fn diff_blob_pair_ctx(
+    repo_root: &Path,
+    from_sha: &str,
+    from_path: &str,
+    to_sha: &str,
+    to_path: &str,
+    context: u32,
+) -> Result<String> {
+    let unified = format!("-U{context}");
     let from_spec = format!("{from_sha}:{from_path}");
     let to_spec = format!("{to_sha}:{to_path}");
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .args(["diff", "--no-color", "-U3", &from_spec, &to_spec])
+        .args(["diff", "--no-color", unified.as_str(), &from_spec, &to_spec])
+        .output()
+        .map_err(DiffError::Spawn)?;
+    match output.status.code() {
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        other => Err(DiffError::GitFailed {
+            status: other.unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }),
+    }
+}
+
+/// `git diff --no-color --no-renames -U0 <base> <tip>` — the WHOLE change
+/// set of one patchset against its OWN base as one unified diff, with no
+/// context lines and no rename detection (a rename reads as a delete plus
+/// an add, the same way for every patchset, so a path key is stable across
+/// the pair `review_since` compares). `core.quotepath=false` keeps
+/// non-ASCII paths literal. Both args are daemon-minted full shas (a
+/// patchset row's own `base_sha`/`tip_sha`), never caller text, and the
+/// argv ends in no pathspec.
+pub fn diff_range_u0(repo_root: &Path, base_sha: &str, tip_sha: &str) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args([
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--no-color",
+            "--no-renames",
+            "--no-ext-diff",
+            "-U0",
+            base_sha,
+            tip_sha,
+        ])
         .output()
         .map_err(DiffError::Spawn)?;
     match output.status.code() {
