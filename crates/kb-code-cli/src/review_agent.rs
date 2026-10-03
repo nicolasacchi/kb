@@ -50,25 +50,27 @@ use std::time::Duration;
 
 pub const DEFAULT_DAEMON: &str = "http://127.0.0.1:4747";
 
-/// Daemon work (a diff over a large change set on a cold cache, a base
-/// fetch of a large clone) is not timed out client-side at the old 10 s; this
-/// is a backstop, DERIVED from the daemon's own budget so it cannot be
-/// shorter than the work it waits for: three base fetches (the first try plus
-/// the vanished-retry path) at the daemon's default
-/// `BASE_FETCH_TIMEOUT_SECS`, plus five minutes of slack. An operator who
-/// raises `[review.store] base_fetch_timeout_secs` past the default still
-/// outlives this; a timeout therefore says "the daemon may still be working",
-/// not "is it running" (see [`timeout_note`]).
-///
-/// The ONE such number in the CLI. `retrack_cmd` (single form) and the
-/// capture verbs in `main.rs` (`review start`, `review snapshot`) share it.
-pub const READ_TIMEOUT: Duration =
+/// Daemon work (a diff over a large change set on a cold cache) is not timed
+/// out client-side at the old 10 s; this is the backstop for a READ or a
+/// job admission/poll request. It is 600 s again (X1/K3): the long network
+/// work — `review snapshot`, `review start`, `review retrack` and
+/// `retrack --all` — now runs as a daemon JOB (`?async=1`, polled on
+/// `GET /api/reviews/jobs/{id}`, like `start-pr` and `sync`), so no single
+/// request has to outlive a base fetch any more. A timeout here therefore
+/// says "the daemon may still be working" (see [`timeout_note`]).
+pub const READ_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// How long the CLI polls ONE daemon job before handing the job id back:
+/// three base fetches (the first try plus the vanished-retry path) at the
+/// daemon's default `BASE_FETCH_TIMEOUT_SECS`, plus five minutes of slack —
+/// derived from the daemon's own budget so it cannot be shorter than the work
+/// it waits for.
+pub const JOB_POLL_BUDGET: Duration =
     Duration::from_secs(3 * kb_code_server::review_store::git::BASE_FETCH_TIMEOUT_SECS + 300);
 
-/// `review retrack --all` runs a dry plus an apply base fetch per candidate
-/// review inside ONE synchronous request (no job, no progress), so no
-/// per-fetch multiple bounds it; this is the backstop for the whole batch.
-pub const BULK_READ_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+/// The poll budget for `review retrack --all`: a whole fleet's dry run plus
+/// the applies. The daemon cancels any job at its 6 h stuck-job horizon.
+pub const BULK_JOB_POLL_BUDGET: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// What a client-side timeout means for a request the daemon may still be
 /// serving: not "daemon down". Used in place of the "is kb-code-server
@@ -2200,12 +2202,14 @@ mod tests {
     }
 
     #[test]
-    fn read_timeout_outlives_the_daemons_base_fetch_budget() {
-        // v044-X1 A6-6: the backstop must not be shorter than one daemon
-        // base fetch (it was 600 s against 1800 s).
+    fn job_polls_outlive_the_daemons_base_fetch_budget_and_requests_stay_short() {
+        // v044-X1 A6-6 / K6: the long network work is a daemon job, so the
+        // POLL budget must not be shorter than one daemon base fetch (it was
+        // 600 s against 1800 s), while a single request is back to 600 s.
         use kb_code_server::review_store::git::BASE_FETCH_TIMEOUT_SECS;
-        assert!(READ_TIMEOUT.as_secs() > 3 * BASE_FETCH_TIMEOUT_SECS);
-        assert!(BULK_READ_TIMEOUT > READ_TIMEOUT);
+        assert!(JOB_POLL_BUDGET.as_secs() > 3 * BASE_FETCH_TIMEOUT_SECS);
+        assert!(BULK_JOB_POLL_BUDGET > JOB_POLL_BUDGET);
+        assert_eq!(READ_TIMEOUT.as_secs(), 600);
         assert!(timeout_note(Duration::from_secs(7)).contains("may still be finishing"));
     }
 

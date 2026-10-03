@@ -2011,6 +2011,70 @@ fn bound_gh_warning(
     )
 }
 
+/// The capability to reach the process-wide ambient GitHub client
+/// ([`crate::state::AmbientGithub`]). The tuple field is private to this
+/// module, so ONLY `reviews` can mint one: every other module is held off
+/// the ambient client by the compiler and reaches GitHub through
+/// [`forge_ctx`] / [`forge_access`] (the store's `forge_slug` + the D12
+/// binding) instead.
+pub(crate) struct ForgeKey(());
+
+fn ambient(state: &SharedState) -> &crate::github::GithubClient {
+    state.github.with_key(&ForgeKey(()))
+}
+
+/// What a PR-lane route may do for a repo (K2 carry): talk to the forge
+/// project the repo's review store (or, with no store, its `origin`) names,
+/// with the credential ladder + D12 binding [`forge_ctx`] applies — or
+/// degrade with the reason nothing may be read.
+pub(crate) enum ForgeAccess {
+    Ready {
+        repo: crate::github::GithubRepo,
+        client: crate::github::GithubClient,
+    },
+    Unavailable(String),
+}
+
+/// [`forge_ctx`] for the read-only PR lanes. A repo that is not a GitHub
+/// project is a caller error (400, resolved BEFORE any network call); a
+/// refused context (store lookup failed, or a bound store's gh login did not
+/// produce a credential) degrades to [`ForgeAccess::Unavailable`].
+pub(crate) async fn forge_access(
+    state: &SharedState,
+    repo: &crate::config::RepoEntry,
+) -> Result<ForgeAccess, ApiError> {
+    let ctx = forge_ctx(state, repo, None).await;
+    if let Some(reason) = ctx.refused_reason() {
+        return Ok(ForgeAccess::Unavailable(reason));
+    }
+    match ctx.repo {
+        Some(r) => Ok(ForgeAccess::Ready {
+            repo: r,
+            client: ctx.client,
+        }),
+        None => Err(ApiError::bad_request("not a github origin")),
+    }
+}
+
+/// [`forge_pr_base_ref`] with the ambient credential ladder and the process
+/// `gh` — the form every caller outside this module uses.
+pub(crate) async fn forge_pr_base_ref_ambient(
+    state: &SharedState,
+    handle: &crate::review_store::StoreHandle,
+    repo_name: &str,
+    n: u32,
+) -> (Option<String>, Vec<BaseWarningOut>) {
+    forge_pr_base_ref(
+        state,
+        handle,
+        repo_name,
+        n,
+        ambient(state).with_cli_token(None),
+        crate::review_store::GhCli::from_process_env(),
+    )
+    .await
+}
+
 /// D12 — the store's credential binding could not be determined (a failed
 /// DB read or task), so the ambient token is NOT consulted. The code a
 /// caller sees on the envelope's `warnings[]`.
@@ -2134,7 +2198,7 @@ pub(crate) async fn forge_ctx_with_gh(
     gh_token: Option<String>,
     gh: crate::review_store::GhCli,
 ) -> ForgeCtx {
-    let client = state.github.with_cli_token(gh_token);
+    let client = ambient(state).with_cli_token(gh_token);
     let st = state.clone();
     let name = repo.name.clone();
     type Looked = Result<
@@ -2760,17 +2824,47 @@ pub(crate) async fn require_review(
     Ok((review, repo, repo_id))
 }
 
-/// `POST /api/reviews` — create + capture ps1. Loopback-only.
+/// `POST /api/reviews[?async=1]` — create + capture ps1. Loopback-only.
+/// `?async=1` runs the creation as a daemon job (X1/K3, the start-pr
+/// pattern): 202 + `job_id`, polled on `GET /api/reviews/jobs/{id}`; the job
+/// settles with the 201 body as its `result`. The job's number slot carries a
+/// stable hash of the head ref, so two different heads of one repo run
+/// concurrently while a repeated request for the same head attaches.
 pub async fn create_review(
     State(state): State<SharedState>,
+    Query(params): Query<crate::review_retrack::AsyncParams>,
     Json(body): Json<CreateReviewBody>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
+    if params.wants_async() {
+        find_repo(&state, &body.repo)?;
+        let key = format!(
+            "{}|{}",
+            body.head_ref,
+            body.base_ref.as_deref().unwrap_or("")
+        );
+        let (repo, slot) = (
+            body.repo.clone(),
+            crate::review_jobs::key_slot(&body.head_ref),
+        );
+        return crate::review_jobs::start_job(
+            state,
+            "start",
+            repo,
+            slot,
+            key,
+            move |st, _handle| async move {
+                Ok((StatusCode::CREATED, create_review_value(&st, body).await?))
+            },
+        )
+        .await;
+    }
     let value = create_review_value(&state, body).await?;
     Ok((
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
         Json(value),
-    ))
+    )
+        .into_response())
 }
 
 /// The body of [`create_review`], returning the JSON VALUE rather than a
@@ -3103,33 +3197,53 @@ pub struct SnapshotBody {
     pub fetch: Option<bool>,
 }
 
-/// `POST /api/reviews/{id}/snapshot` — explicit capture. Loopback-only.
+/// `POST /api/reviews/{id}/snapshot[?async=1]` — explicit capture.
+/// Loopback-only. `?async=1` runs it as a daemon job (X1/K3, the start-pr
+/// pattern): 202 + `job_id`, polled on `GET /api/reviews/jobs/{id}`; the job's
+/// number slot carries the REVIEW id.
 pub async fn snapshot_review(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
+    Query(params): Query<crate::review_retrack::AsyncParams>,
     raw: axum::body::Bytes,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let opts: SnapshotBody = if raw.iter().all(u8::is_ascii_whitespace) {
         SnapshotBody::default()
     } else {
         serde_json::from_slice(&raw)
             .map_err(|e| ApiError::bad_request(format!("invalid snapshot body: {e}")))?
     };
+    if params.wants_async() {
+        let (review, _, _) = require_review(&state, id).await?;
+        let key = format!("{}|{}", opts.force, opts.fetch.unwrap_or(true));
+        return crate::review_jobs::start_job(
+            state,
+            "snapshot",
+            review.repo,
+            u32::try_from(id).unwrap_or(0),
+            key,
+            move |st, _handle| async move {
+                Ok((StatusCode::OK, snapshot_value(&st, id, opts).await?))
+            },
+        )
+        .await;
+    }
+    let body = snapshot_value(&state, id, opts).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response())
+}
+
+/// The snapshot's body, shared by the synchronous route and the job.
+async fn snapshot_value(
+    state: &SharedState,
+    id: i64,
+    opts: SnapshotBody,
+) -> Result<serde_json::Value, ApiError> {
+    let state = state.clone();
     let (review, repo, _) = require_review(&state, id).await?;
     let body = if let Some(handle) = admit_store(&state, &review.repo).await? {
         let network = opts.fetch.unwrap_or(true);
         let (forge_base_ref, api_warnings) = match (network, pr_of_head(&review.head_ref)) {
-            (true, Some(n)) => {
-                forge_pr_base_ref(
-                    &state,
-                    &handle,
-                    &review.repo,
-                    n,
-                    state.github.with_cli_token(None),
-                    crate::review_store::GhCli::from_process_env(),
-                )
-                .await
-            }
+            (true, Some(n)) => forge_pr_base_ref_ambient(&state, &handle, &review.repo, n).await,
             _ => (None, vec![]),
         };
         let member = store_member(&state, &review.repo)?;
@@ -3181,7 +3295,7 @@ pub async fn snapshot_review(
                 .await;
         snapshot_json(id, &out, serde_json::json!(base), warnings)
     };
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
+    Ok(body)
 }
 
 fn snapshot_json(
@@ -3786,7 +3900,7 @@ pub async fn list_reviews(
     // (store batch fan-out + per-review git diff + CPU-only aggregation)
     // is now ONE blocking-pool trip, down from one initial fetch plus up
     // to three more PER REVIEW.
-    let has_creds = state.github.has_credentials();
+    let has_creds = forge_ctx(&state, repo, None).await.client.has_credentials();
     let mut out = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
@@ -3897,7 +4011,10 @@ pub async fn get_review(
         "verdict_scope_changed": verdict_scope_changed_val,
     });
     merge_pr_binding_and_report_fields(&mut body, &binding, &report);
-    attach_live_pr_meta_reason(&mut body, state.github.has_credentials());
+    attach_live_pr_meta_reason(
+        &mut body,
+        forge_ctx(&state, repo, None).await.client.has_credentials(),
+    );
     // RS-U6 — additive `base{…}` + `warnings[]` (README §12). Legacy rows
     // are classified on read, never rewritten.
     let latest_mb = patchsets
@@ -4955,7 +5072,7 @@ pub(crate) async fn create_review_pr_value_known(
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
     // V76-R1c — request-time credential ladder (file > env > the admitted
     // CLI token > none); the same client serves the sync and the job path.
-    let github = state.github.with_cli_token(body.gh_token.clone());
+    let github = ambient(state).with_cli_token(body.gh_token.clone());
     let (repo, _repo_id) = find_repo(state, &body.repo)?;
     let repo_root = repo.path.clone();
 
@@ -6392,6 +6509,50 @@ mod tests {
                 !code.contains("state.github") && !code.contains("github::github_repo("),
                 "{name} reads GitHub outside reviews::forge_ctx"
             );
+        }
+    }
+
+    /// K2 carry — the ambient GitHub client is unreachable outside
+    /// `reviews::forge_ctx`: `state.github` is an `AmbientGithub` whose only
+    /// non-test accessor takes a `ForgeKey`, and `ForgeKey` can be minted
+    /// only in this module. This scans EVERY source file for the two ways
+    /// around it (a bare origin parse, or minting/using the key elsewhere).
+    #[test]
+    fn the_ambient_github_client_and_origin_parse_live_only_in_forge_ctx() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&src, &mut files);
+        assert!(files.len() > 50, "walked the source tree");
+        for f in files {
+            let rel = f.strip_prefix(&src).unwrap().to_string_lossy().to_string();
+            // Definitions / the one sanctioned home.
+            if matches!(rel.as_str(), "reviews.rs" | "github.rs" | "state.rs")
+                || rel.ends_with("tests.rs")
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&f).unwrap();
+            let code: String = text
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for needle in ["github_repo(", "ForgeKey", ".with_key(", "state.github"] {
+                assert!(
+                    !code.contains(needle),
+                    "{rel} reaches GitHub outside reviews::forge_ctx ({needle})"
+                );
+            }
         }
     }
 

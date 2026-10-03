@@ -452,6 +452,34 @@ impl FetchReport {
     }
 }
 
+/// X1/K3 — a bulk run's memo of the base-branch fetches it already did, so
+/// `retrack-bulk` fetches each DISTINCT base ONCE per repo instead of once per
+/// candidate review (dry run) plus once more per applied row. A memo is
+/// per-run state (never persisted): later runs fetch afresh. The PR head is
+/// per-PR and is never memoised.
+#[derive(Debug, Default)]
+pub struct BaseFetchMemo {
+    done: parking_lot::Mutex<std::collections::HashMap<String, MemoEntry>>,
+}
+
+#[derive(Debug, Clone)]
+struct MemoEntry {
+    state: String,
+    code: Option<String>,
+    vanished: bool,
+}
+
+impl BaseFetchMemo {
+    /// How many distinct base branches this run has fetched.
+    pub fn len(&self) -> usize {
+        self.done.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// One member of a ready store — see the module doc.
 pub struct StoreCtx<'a> {
     pub rs: &'a ReviewStores,
@@ -514,6 +542,9 @@ pub struct Recapture {
     /// (e.g. `credential-account-mismatch`, D12) — carried onto the
     /// envelope and into `base_status.code`.
     pub api_warnings: Vec<BaseWarningOut>,
+    /// A bulk run's base-fetch memo (X1/K3): each distinct base branch is
+    /// fetched once per run. `None` = every recapture fetches its own.
+    pub base_memo: Option<std::sync::Arc<BaseFetchMemo>>,
     /// Test seam (A6-3): runs right after the network fetch, before the
     /// capture takes the ops lock — where a concurrent retrack lands.
     #[cfg(test)]
@@ -931,6 +962,67 @@ impl<'a> StoreCtx<'a> {
             report.pr_head = self.store_sha(&reviews::pr_ref(n));
         }
         report
+    }
+
+    /// [`Self::fetch_forge`] that fetches each base branch at most once per
+    /// `memo` (X1/K3 bulk retrack). Branches the memo already holds are not
+    /// fetched again — their recorded outcome (a vanished branch, a failed or
+    /// offline fetch) is folded into the report so the caller still sees it;
+    /// the PR head, when asked for, is always fetched fresh. `None` = exactly
+    /// [`Self::fetch_forge`].
+    pub fn fetch_forge_memo(
+        &self,
+        memo: Option<&BaseFetchMemo>,
+        access: Result<&Access, &str>,
+        branches: &[String],
+        pr: Option<u32>,
+    ) -> FetchReport {
+        let Some(memo) = memo else {
+            return self.fetch_forge(access, branches, pr);
+        };
+        if branches.is_empty() && pr.is_none() {
+            return self.fetch_forge(access, branches, pr);
+        }
+        let mut fresh: Vec<String> = Vec::new();
+        let mut seen: Vec<(String, MemoEntry)> = Vec::new();
+        {
+            let done = memo.done.lock();
+            for b in branches {
+                match done.get(b) {
+                    Some(e) => seen.push((b.clone(), e.clone())),
+                    None => fresh.push(b.clone()),
+                }
+            }
+        }
+        let mut rep = if fresh.is_empty() && pr.is_none() {
+            FetchReport {
+                state: "fetched".into(),
+                ..FetchReport::default()
+            }
+        } else {
+            self.fetch_forge(access, &fresh, pr)
+        };
+        {
+            let mut done = memo.done.lock();
+            for b in &fresh {
+                done.entry(b.clone()).or_insert_with(|| MemoEntry {
+                    state: rep.state.clone(),
+                    code: rep.code.clone(),
+                    vanished: rep.vanished.contains(b),
+                });
+            }
+        }
+        for (b, e) in seen {
+            if e.vanished {
+                if !rep.vanished.contains(&b) {
+                    rep.vanished.push(b);
+                }
+            } else if e.state != "fetched" && matches!(rep.state.as_str(), "fetched" | "skipped") {
+                rep.state = e.state;
+                rep.code = e.code;
+            }
+        }
+        rep
     }
 
     /// One LOCAL fetch from the member clone (`work-<id>`, `file` only)
@@ -1646,9 +1738,12 @@ impl<'a> StoreCtx<'a> {
                 .collect()
         };
         let mut fetch = match &access {
-            Some(a) => {
-                self.fetch_forge(a.as_ref().map_err(String::as_str), &tracked(&effective), pr)
-            }
+            Some(a) => self.fetch_forge_memo(
+                rc.base_memo.as_deref(),
+                a.as_ref().map_err(String::as_str),
+                &tracked(&effective),
+                pr,
+            ),
             None => FetchReport::cached(),
         };
         #[cfg(test)]

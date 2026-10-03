@@ -1914,7 +1914,7 @@ async fn forge_api_reads_the_store_project_with_the_gh_cli_token() {
     // Hermetic (A6.f7): whatever `KB_CODE_GITHUB_TOKEN` holds on the runner,
     // THIS client reads it as unset — the test used to `return` (pass
     // vacuously) when an ambient token was present.
-    let ambient_free = state.github.with_env_token_for_test(None);
+    let ambient_free = state.github.for_test().with_env_token_for_test(None);
     assert!(!ambient_free.has_ambient_token());
     let st = state.clone();
     let row = tokio::task::spawn_blocking(move || {
@@ -2098,7 +2098,10 @@ async fn sweep_reads_the_store_project_and_a_fork_pr_can_never_close_the_review(
     );
     let (github, seen) = fork_and_canonical_github().await;
     let state = unregistered_state_with(&fx, github).await;
-    let ambient = state.github.with_env_token_for_test(Some("ambient-token"));
+    let ambient = state
+        .github
+        .for_test()
+        .with_env_token_for_test(Some("ambient-token"));
     let st = state.clone();
     let row = tokio::task::spawn_blocking(move || {
         let reg = st.review_stores.register_repo(
@@ -2654,10 +2657,14 @@ async fn retrack_bulk_skips_closed_reviews() {
         legacy: false,
         dry_run: true,
     };
-    let resp = crate::review_retrack::retrack_all_route(State(state.clone()), axum::Json(body))
-        .await
-        .unwrap_or_else(|e| panic!("retrack-bulk: {e:?}"))
-        .into_response();
+    let resp = crate::review_retrack::retrack_all_route(
+        State(state.clone()),
+        axum::extract::Query(crate::review_retrack::AsyncParams::default()),
+        axum::Json(body),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("retrack-bulk: {e:?}"))
+    .into_response();
     let out = body_json(resp).await;
     let ids: Vec<i64> = out["rows"]
         .as_array()
@@ -2798,7 +2805,7 @@ async fn reuse_pr_review_refreshes_the_origin_base_before_capturing() {
         review,
         PR,
         false,
-        &state.github,
+        state.github.for_test(),
         Some(Some("main".into())),
     )
     .await
@@ -2833,7 +2840,7 @@ async fn reuse_pr_review_follows_a_forge_retarget_unless_the_base_was_explicit()
             review,
             PR,
             false,
-            &state.github,
+            state.github.for_test(),
             Some(Some("develop".into())),
         )
         .await
@@ -3036,7 +3043,7 @@ async fn a_forge_error_during_enrichment_degrades_pr_meta_and_cannot_fail_creati
         name: "widgets".into(),
     };
     let (meta, reason) = crate::reviews::pr_enrichment(
-        &state.github,
+        state.github.for_test(),
         Some(&gh),
         Some(Err(crate::github::GithubApiError::Unreachable(
             "https://api.invalid/x".into(),
@@ -3049,4 +3056,282 @@ async fn a_forge_error_during_enrichment_degrades_pr_meta_and_cannot_fail_creati
     .await;
     assert!(meta.is_none());
     assert!(reason.is_some(), "the degradation is named, not swallowed");
+}
+
+// =====================================================================
+// v0.44 K6 — retrack on a forge with NO API
+// =====================================================================
+
+/// K2 carry — a store whose forge has no API (here a local-path forge)
+/// cannot name a PR's target; retrack falls to the assumed default branch.
+/// That is a guess: it is reported `default-assumed` and recorded
+/// `set_by=auto`, never as a person's `user` decision (which would stop
+/// the review following the PR when the target becomes knowable).
+#[test]
+fn retrack_on_a_forge_with_no_api_records_a_default_assumed_auto_base() {
+    use crate::review_retrack::retrack_sync;
+    let fx = fixture();
+    fx.push_pr(&fx.m1, &["p1.rs"], "v1");
+    let policy = BasePolicy::pin(&fx.m1, SetBy::Legacy, BaseSource::Legacy);
+    let review = fx.pr_review(&fx.m1.clone(), Some(&policy));
+    let id = review.id;
+    recap(&fx, id, fetch());
+    let review = fx.refetch(id);
+    // No forge answer and no warnings: there was no API to ask.
+    let out = fx
+        .with(|c| retrack_sync(c, &review, None, true, None, vec![], false))
+        .expect("retrack applies");
+    assert_eq!(
+        out.base.source.as_deref(),
+        Some("default-assumed"),
+        "{:?}",
+        out.base
+    );
+    assert_eq!(out.base.set_by, "auto", "{:?}", out.base);
+    let stored = fx.store.get_review_base(id).unwrap().unwrap();
+    assert_eq!(stored.base_set_by, "auto", "never persisted as the user's");
+}
+
+// =====================================================================
+// v0.44 K6 — X1/K3: bulk retrack fetches each base once, holds no lock
+// across the scan; snapshot / retrack / retrack-bulk / start run as jobs
+// =====================================================================
+
+/// X1/K3 — a bulk run's memo fetches each distinct base branch ONCE: the
+/// forge's `main` moves between two memoised fetches, and the second one does
+/// not touch the store (while an un-memoised fetch does).
+#[test]
+fn a_base_fetch_memo_fetches_each_branch_once_per_run() {
+    let fx = fixture();
+    let memo = capture::BaseFetchMemo::default();
+    let branches = vec!["main".to_string()];
+    let base_ref = |fx: &Fx| git(&fx.store_dir(), &["rev-parse", "refs/remotes/base/main"]);
+    let first = fx.with(|c| {
+        let access = c.access();
+        c.fetch_forge_memo(
+            Some(&memo),
+            access.as_ref().map_err(String::as_str),
+            &branches,
+            None,
+        )
+    });
+    assert!(first.fetched(), "{first:?}");
+    let tip1 = base_ref(&fx);
+    let tip2 = fx.advance_main(1, "moved");
+    assert_ne!(tip1, tip2);
+
+    let second = fx.with(|c| {
+        let access = c.access();
+        c.fetch_forge_memo(
+            Some(&memo),
+            access.as_ref().map_err(String::as_str),
+            &branches,
+            None,
+        )
+    });
+    assert!(
+        second.fetched(),
+        "the memoised outcome is reported: {second:?}"
+    );
+    assert_eq!(
+        base_ref(&fx),
+        tip1,
+        "the memoised branch was NOT fetched again"
+    );
+    assert_eq!(memo.len(), 1);
+
+    // Without a memo (every other caller) the fetch is unchanged.
+    fx.with(|c| {
+        let access = c.access();
+        c.fetch_forge_memo(
+            None,
+            access.as_ref().map_err(String::as_str),
+            &branches,
+            None,
+        )
+    });
+    assert_eq!(base_ref(&fx), tip2);
+}
+
+/// X1/K3 — `retrack-bulk` applies must not hold the repo's sync lock across
+/// the scan's network fetches: with `repo_guard` held by someone else (a
+/// start-pr / sync in flight), a bulk run that has nothing to APPLY still
+/// completes. (It used to take the guard up front whenever `--yes` was
+/// passed, so `start-pr` and `sync` for that repo blocked for the whole run
+/// and the run blocked on them.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrack_bulk_apply_does_not_take_the_repo_guard_for_the_scan() {
+    use axum::extract::State;
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    commit(&fx.clone, "f.rs", "f");
+    let state = route_state(&fx).await;
+    let id = state
+        .store
+        .create_review(REPO, Some("t"), &fx.m1, "feature", None, 1)
+        .unwrap();
+    state
+        .store
+        .set_review_base(id, "pin", None, None, "legacy", None)
+        .unwrap();
+    // ps1 first, so the bulk classification is `equivalent` (nothing to
+    // apply) — an un-captured review would classify `stale-pin` and the
+    // apply would legitimately need the guard.
+    crate::reviews::snapshot_review(
+        State(state.clone()),
+        axum::extract::Path(id),
+        axum::extract::Query(crate::review_retrack::AsyncParams::default()),
+        axum::body::Bytes::from_static(b"{}"),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("snapshot: {e:?}"));
+    let held = crate::review_sync::repo_guard(&state, REPO)
+        .await
+        .expect("a known repo");
+    let body = crate::review_retrack::RetrackAllBody {
+        repo: Some(REPO.into()),
+        pinned: true,
+        legacy: false,
+        dry_run: false,
+    };
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        crate::review_retrack::retrack_all_route(
+            State(state.clone()),
+            axum::extract::Query(crate::review_retrack::AsyncParams::default()),
+            axum::Json(body),
+        ),
+    )
+    .await
+    .expect("the scan must not wait on the repo guard another request holds")
+    .unwrap_or_else(|e| panic!("retrack-bulk: {e:?}"));
+    use axum::response::IntoResponse;
+    let out = body_json(resp.into_response()).await;
+    let ids: Vec<i64> = out["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["id"].as_i64())
+        .collect();
+    assert!(ids.contains(&id), "{out}");
+    drop(held);
+}
+
+/// Poll `GET /api/reviews/jobs/{id}` until the job settles.
+async fn settle_job(state: &crate::state::SharedState, job_id: &str) -> serde_json::Value {
+    use axum::response::IntoResponse;
+    for _ in 0..600 {
+        let resp = crate::review_jobs::review_job_route(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(job_id.to_string()),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("job read: {e:?}"))
+        .into_response();
+        let body = body_json(resp).await;
+        if body["status"] != "running" {
+            return body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("job {job_id} never settled");
+}
+
+/// X1/K3 — snapshot, retrack and retrack-bulk answer `?async=1` with a 202 +
+/// `job_id` at once and settle with the same body the synchronous route
+/// returns, so a caller never holds one HTTP request open for the network
+/// work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_retrack_and_bulk_run_as_daemon_jobs() {
+    use axum::extract::{Path, Query, State};
+    use axum::response::IntoResponse;
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    commit(&fx.clone, "f.rs", "f");
+    let state = route_state(&fx).await;
+    let id = state
+        .store
+        .create_review(REPO, Some("t"), &fx.m1, "feature", None, 1)
+        .unwrap();
+    state
+        .store
+        .set_review_base(id, "pin", None, None, "legacy", None)
+        .unwrap();
+    let want_async = || {
+        Query(crate::review_retrack::AsyncParams {
+            async_: Some("1".into()),
+        })
+    };
+    let job_id = |resp: axum::response::Response| async move {
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+        let body = body_json(resp).await;
+        body["job_id"].as_str().expect("job_id").to_string()
+    };
+
+    // snapshot
+    let resp = crate::reviews::snapshot_review(
+        State(state.clone()),
+        Path(id),
+        want_async(),
+        axum::body::Bytes::from_static(b"{}"),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("snapshot: {e:?}"));
+    let jid = job_id(resp).await;
+    let job = settle_job(&state, &jid).await;
+    assert_eq!(job["kind"], "snapshot", "{job}");
+    assert_eq!(job["status"], "done", "{job}");
+    assert_eq!(job["result"]["review_id"], id, "{job}");
+
+    // retrack (dry run)
+    let resp = crate::review_retrack::retrack_route(
+        State(state.clone()),
+        Path(id),
+        want_async(),
+        axum::body::Bytes::from_static(br#"{"dry_run":true}"#),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("retrack: {e:?}"));
+    let jid = job_id(resp).await;
+    let job = settle_job(&state, &jid).await;
+    assert_eq!(job["kind"], "retrack", "{job}");
+    assert_ne!(job["status"], "running", "{job}");
+    if job["status"] == "done" {
+        assert_eq!(job["result"]["id"], id, "{job}");
+    }
+
+    // retrack-bulk (dry run)
+    let resp = crate::review_retrack::retrack_all_route(
+        State(state.clone()),
+        want_async(),
+        axum::Json(crate::review_retrack::RetrackAllBody {
+            repo: Some(REPO.into()),
+            pinned: true,
+            legacy: false,
+            dry_run: true,
+        }),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("retrack-bulk: {e:?}"));
+    let jid = job_id(resp).await;
+    let job = settle_job(&state, &jid).await;
+    assert_eq!(job["kind"], "retrack-bulk", "{job}");
+    assert_eq!(job["status"], "done", "{job}");
+    assert_eq!(
+        job["result"]["schema"],
+        crate::review_retrack::RETRACK_ALL_SCHEMA,
+        "{job}"
+    );
+
+    // The synchronous form is unchanged (200, the body itself).
+    let sync = crate::review_retrack::retrack_route(
+        State(state.clone()),
+        Path(id),
+        Query(crate::review_retrack::AsyncParams::default()),
+        axum::body::Bytes::from_static(br#"{"dry_run":true}"#),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("retrack: {e:?}"))
+    .into_response();
+    assert_eq!(sync.status(), axum::http::StatusCode::OK);
 }
