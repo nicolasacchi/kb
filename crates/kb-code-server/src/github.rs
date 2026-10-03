@@ -73,6 +73,14 @@
 //! server instead of the real network — no test in this crate ever
 //! reaches api.github.com.
 
+// v0.44 F1 (P2/K2 carry-over): no swallowed `Result` in a security-posture
+// module -- a failed check must be a named outcome, never a silent
+// fall-through. Test code is exempt; `cfg_attr(not(test), ..)` keeps
+// `--all-targets` clippy from judging fixture plumbing.
+// scripts/check-posture-swallow.sh ratchets the `.ok()` / `unwrap_or(` forms
+// this lint cannot see.
+#![cfg_attr(not(test), deny(clippy::let_underscore_must_use))]
+
 use crate::config::GithubSection;
 use serde::{Deserialize, Serialize};
 use std::path::Path;

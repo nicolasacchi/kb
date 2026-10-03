@@ -10,6 +10,13 @@ test-threads = 4
 retries = 0
 slow-timeout = { period = "120s", terminate-after = 3 }
 
+# v0.44 F1 -- machine-readable report for scripts/ci/witness.py: the lane is
+# decided from this file (failed == 0 and executed >= the nextest floor in
+# ci/test-floors.toml), not from nextest's exit code alone. Written to
+# target/nextest/ci/junit.xml.
+[profile.ci.junit]
+path = "junit.xml"
+
 [test-groups]
 lance-heavy = { max-threads = 1 }
 

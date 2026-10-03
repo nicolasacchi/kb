@@ -246,7 +246,7 @@ impl LipClient {
     /// been used yet (no resolve/hover/usages/diagnostics call has run
     /// against it since boot) reports `alive: false` until its first real
     /// request performs the lazy handshake — a documented trade-off, not a
-    /// bug (pinned by `lip_registry_status_reports_dead_until_first_real_use`).
+    /// bug (pinned by `registry_status_for_repo_is_dead_until_first_real_use`).
     fn snapshot(&self) -> ProviderSnapshot {
         match self.handshake.get() {
             Some(Handshake::Ok(id)) => ProviderSnapshot {

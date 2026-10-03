@@ -44,7 +44,7 @@ const CONTENT = "const x = 1;\n";
 const SMALL = "const y = 2;\n";
 
 /// One CJK scalar is 3 UTF-8 bytes and ONE UTF-16 unit, so this sits just
-/// OVER the server's per-item cap (`MAX_SNIPPET_BYTES`, `highlight.rs:424`)
+/// OVER the server's per-item cap, `MAX_SNIPPET_BYTES` (`crates/kb-code-server/src/highlight.rs:424`),
 /// while staying UNDER it as a `.length` — the case a UTF-16 comparison
 /// waves through and the server refuses, 400-ing the whole batch.
 const OVERSIZE = "漢".repeat(Math.floor(HIGHLIGHT_SNIPPET_MAX_BYTES / 3) + 1);

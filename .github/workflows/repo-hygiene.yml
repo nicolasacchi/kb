@@ -12,15 +12,26 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+# Least privilege: nothing by default; every job below declares its own grants
+# (v0.44 F1, review A12.f7).
+permissions: {}
+
+# `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
+# implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
+# tee's exit status and a failing `cmd` goes green (the e2e vacuous pass,
+# d4f3063d). Setting it once here covers every `run:` step in this file.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   public-gate:
+    permissions:
+      contents: read
     name: Public gate (whole tree)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Grep the tracked tree for the private pattern list
         env:
           PUBLIC_GATE_PATTERNS: ${{ secrets.PUBLIC_GATE_PATTERNS }}
@@ -28,9 +39,11 @@ jobs:
         run: scripts/ci/public-gate.sh
 
   review-store-selftest:
+    permissions:
+      contents: read
     name: Review-store driver self-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Prove the safety rails (path-independent, touches nothing; hosted python3 >= 3.11)
         run: python3 scripts/review-store/run_gates.py --self-test

@@ -53,8 +53,9 @@ env:
   RUSTFLAGS: "-D warnings"
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
-permissions:
-  contents: read
+# Least privilege: nothing by default; every job below declares its own grants
+# (v0.44 F1, review A12.f7).
+permissions: {}
 
 # `shell: bash` is GitHub's `bash --noprofile --norc -eo pipefail {0}`; the
 # implicit default (`bash -e {0}`) has NO pipefail, so `cmd | tee log` reports
@@ -66,6 +67,8 @@ defaults:
 
 jobs:
   bench-nightly:
+    permissions:
+      contents: read
     name: bench-nightly (kb bench, keyword/BM25-only)
     runs-on: ubuntu-latest
     # A fork inherits this file's `schedule`, so without the repository guard
@@ -80,7 +83,7 @@ jobs:
     timeout-minutes: 120
     continue-on-error: true
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
         # A runner starts with only ~14 GB free on /, and the lance/datafusion

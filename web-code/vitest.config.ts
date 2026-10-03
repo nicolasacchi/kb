@@ -19,8 +19,16 @@ process.env.TZ = "UTC";
 // opts a single file into `jsdom` via a `// @vitest-environment jsdom`
 // pragma comment for the rare case that needs real DOM events
 // (`components/hierarchy/HierarchyPanel.close.test.ts`).
+//
+// v0.44 F1 -- KB_WITNESS_DIR (set in CI) adds vitest's JSON reporter so
+// scripts/ci/witness.py can decide the lane from the report (failed == 0 and
+// executed >= the ci/test-floors.toml floor), not from the exit code alone.
+const witnessDir = process.env.KB_WITNESS_DIR;
 export default defineConfig({
   test: {
+    ...(witnessDir
+      ? { reporters: ["default", "json"], outputFile: { json: `${witnessDir}/vitest-web-code.json` } }
+      : {}),
     environment: "node",
     include: ["src/**/*.test.ts"],
     clearMocks: true,

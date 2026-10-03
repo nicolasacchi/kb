@@ -1,4 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
+import type { ReporterDescription } from "@playwright/test";
+
+// v0.44 F1 -- KB_WITNESS_DIR (set in CI) adds Playwright's JSON report for
+// scripts/ci/witness.py; see tests/e2e/playwright.config.ts.
+const reporters: ReporterDescription[] = [["list"]];
+if (process.env.KB_WITNESS_DIR) {
+  reporters.push(["json", { outputFile: `${process.env.KB_WITNESS_DIR}/pw-code-e2e.json` }]);
+}
 
 /**
  * Playwright config for the kb-code Search-Everywhere box smoke (W4.3).
@@ -14,7 +22,7 @@ export default defineConfig({
   timeout: 60_000,
   fullyParallel: false, // single daemon per run
   workers: 1,
-  reporter: [["list"]],
+  reporter: reporters,
   globalSetup: require.resolve("./global-setup.ts"),
   globalTeardown: require.resolve("./global-teardown.ts"),
   // V70-A0 — two independent snapshot homes, both explicit `pathTemplate`s

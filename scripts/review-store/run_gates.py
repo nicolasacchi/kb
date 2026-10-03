@@ -534,13 +534,13 @@ class Ctx:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.dry_run = bool(args.dry_run)
-        self.out = Path(args.out).resolve()
-        self.before_root = Path(args.before_root).resolve()
-        self.after_root = Path(args.after_root).resolve()
-        self.bundle = Path(args.bundle).resolve()
+        self.out = Path(args.out).expanduser().resolve()
+        self.before_root = Path(args.before_root).expanduser().resolve()
+        self.after_root = Path(args.after_root).expanduser().resolve()
+        self.bundle = Path(args.bundle).expanduser().resolve()
         self.before_port = int(args.before_port)
         self.after_port = int(args.after_port)
-        self.log_path = Path(args.build_log or (Path(args.out) / "BUILD-LOG.md")).resolve()
+        self.log_path = Path(args.build_log or (Path(args.out) / "BUILD-LOG.md")).expanduser().resolve()
         self.selected: list[int] = sorted(set(args.gate)) if args.gate else list(range(1, 8))
         self.template = False
         self.steps: list[Step] = []
@@ -3982,13 +3982,20 @@ def _self_test_body(args: argparse.Namespace) -> int:
     checks.append(
         (
             "no flag default hardcodes a host path (home-relative only)",
+            # v0.44 F1 (R1 carry-over): the old check rewrote $HOME to "~"
+            # BEFORE scanning, so on the author's own box (where a default
+            # built from Path.home() reads "/home/<author>/...") the
+            # offending prefix was rewritten away and the check was blind
+            # exactly where it matters. Scan the RAW default for ANY absolute
+            # /home/<user> or /Users/<user> prefix, independent of $HOME;
+            # home-relative defaults are spelled "~/..." and expanded at use.
             not any(
-                needle in str(a.default).replace(str(Path.home()), "~")
+                re.search(r"(^|[\s=:])/(home|Users)/[^/\s]+", str(a.default))
                 for a in build_parser()._actions
-                for needle in ("/home/", "/Users/")
                 if a.default is not None
-            ),
-            "scanned every argparse default",
+            )
+            and re.search(r"(^|[\s=:])/(home|Users)/[^/\s]+", "x /home/someone/y") is not None,
+            "scanned every raw argparse default for an absolute home prefix (and the matcher itself matches a sample)",
         )
     )
 
@@ -4999,13 +5006,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--after-server", default="", help="post-upgrade kb-code-server binary")
     p.add_argument("--before-cli", help="pre-upgrade kb-code CLI (default: kb-code beside --before-server)")
     p.add_argument("--after-cli", help="post-upgrade kb-code CLI (default: kb-code beside --after-server)")
-    p.add_argument("--before-root", default=str(Path.home() / "kbc-gates-state"), help="'before' KB_HOME root")
-    p.add_argument("--after-root", default=str(Path.home() / "kbc-gates-after"), help="'after' KB_HOME root")
+    p.add_argument("--before-root", default="~/kbc-gates-state", help="'before' KB_HOME root")
+    p.add_argument("--after-root", default="~/kbc-gates-after", help="'after' KB_HOME root")
     p.add_argument("--before-port", type=int, default=4790)
     p.add_argument("--after-port", type=int, default=4791)
-    p.add_argument("--out", default=str(Path.home() / "kbc-gates-out"), help="output dir (artefacts, logs, plan)")
+    p.add_argument("--out", default="~/kbc-gates-out", help="output dir (artefacts, logs, plan)")
     p.add_argument("--build-log", default=None, help="where to write BUILD-LOG.md (default: <--out>/BUILD-LOG.md; never inside the repo)")
-    p.add_argument("--bundle", default=str(Path.home() / "kbc-gates-bundle"))
+    p.add_argument("--bundle", default="~/kbc-gates-bundle")
     p.add_argument("--gate", type=int, action="append", choices=sorted(GATES),
                    help="run only this gate (repeatable); default: all seven")
     p.add_argument("--dry-run", action="store_true", help="print the full plan and execute nothing")

@@ -62,9 +62,10 @@ impl SlateRegistry {
         Self::default()
     }
 
-    /// Get-or-create the per-slug mutation lock — the `review_lock_for`
-    /// shape (`state.rs:969-990`), sharded per SLATE rather than per kb
-    /// because the slate store is daemon-wide (§7).
+    /// Get-or-create the per-slug mutation lock — the shape of
+    /// `review_lock_for` (`crates/kb-server/src/state.rs:1245-1252`), sharded
+    /// per SLATE rather than per kb because the slate store is daemon-wide
+    /// (§7).
     pub fn lock_for(&self, slug: &str) -> Arc<AsyncMutex<()>> {
         self.locks
             .lock()
