@@ -154,6 +154,33 @@ impl StoreLock {
     }
 }
 
+/// Take a BLOCKING exclusive `flock` on `path` (created if absent) and hold
+/// it until the returned file is dropped. For short cross-process
+/// read-merge-write critical sections (the shared gitconfig, the restore
+/// guard sentinel) where two daemons/CLIs on one host would otherwise lose
+/// each other's update. `flock` locks attach to the open file description,
+/// so two opens in ONE process also contend — which is what lets a test
+/// exercise the cross-process behaviour with threads.
+pub fn lock_blocking(path: &Path) -> std::io::Result<File> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    loop {
+        // SAFETY: `file` owns a valid descriptor for the whole call.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc == 0 {
+            return Ok(file);
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EINTR) {
+            return Err(err);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

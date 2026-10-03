@@ -205,7 +205,14 @@ impl axum::response::IntoResponse for StoreRefusal {
             ),
             StoreUnavailable::LockedElsewhere => (StatusCode::CONFLICT, None),
             StoreUnavailable::NotRegistered => (StatusCode::CONFLICT, None),
-            StoreUnavailable::Error { .. } => (StatusCode::INTERNAL_SERVER_ERROR, None),
+            // A5-5: "could not tell right now" (a git-version probe that
+            // could not run, a DB read that failed) is retryable, not a
+            // server bug: 503 + Retry-After. The write was REFUSED, not
+            // diverted to the user clone.
+            StoreUnavailable::Error { .. } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some(SEEDING_RETRY_AFTER_SECS),
+            ),
             StoreUnavailable::CredentialRefused { .. } => (StatusCode::FORBIDDEN, None),
             _ => (StatusCode::CONFLICT, None),
         };
@@ -701,6 +708,11 @@ impl ReviewStores {
         let (members, _) = self.members_of(store, store_id);
         let ops = self.ops_lock(store_id);
         let mut out = PendingImport::default();
+        let live: seed::LivePatchsets = store
+            .patchset_keys_for_store(store_id)
+            .map_err(db)?
+            .into_iter()
+            .collect();
         for (r, m) in members {
             let pending = store
                 .repo_store(r.id)
@@ -711,7 +723,7 @@ impl ReviewStores {
             }
             let fl = self.fetch_lock(store_id, &RemoteName::work(r.id));
             let _g = fl.blocking_lock();
-            let imp = match seed::import_member(git, &dir, &m, seed::SEED_FETCH_TIMEOUT) {
+            let imp = match seed::import_member(git, &dir, &m, seed::SEED_FETCH_TIMEOUT, &live) {
                 Ok(i) => i,
                 Err(e) => {
                     // This warn IS the reporting channel for the
@@ -1592,7 +1604,13 @@ impl ReviewStores {
                                 ("class", serde_json::Value::Null),
                                 ("detail", serde_json::Value::Null),
                                 ("stage", serde_json::Value::Null),
+                                ("error", serde_json::Value::Null),
                                 ("objects_missing", serde_json::json!(missing)),
+                                // This pass's own answer, so the previous
+                                // seed's list cannot outlive the member
+                                // problem it named (a present key is read
+                                // as a current signal).
+                                ("member_problems", serde_json::json!(problems)),
                             ],
                             Some("ready"),
                         )
@@ -1788,6 +1806,7 @@ impl ReviewStores {
                     ("last_work_fetch", now().into()),
                     ("objects_missing", serde_json::json!(report.objects_missing)),
                     ("member_problems", serde_json::json!(problems)),
+                    ("error", serde_json::Value::Null),
                     ("elapsed_ms", (report.elapsed_ms as u64).into()),
                 ];
                 store
@@ -1895,8 +1914,19 @@ impl ReviewStores {
             .map_err(|d| StoreUnavailable::Error { detail: d })?;
         let mut members = Vec::new();
         let mut member_errors = Vec::new();
+        let live: seed::LivePatchsets = plan
+            .patchsets
+            .iter()
+            .map(|p| (p.review_id, p.ps_number))
+            .collect();
         for m in &plan.members {
-            match seed::import_member(git, &handle.git_dir, m, super::git::WORK_FETCH_TIMEOUT) {
+            match seed::import_member(
+                git,
+                &handle.git_dir,
+                m,
+                super::git::WORK_FETCH_TIMEOUT,
+                &live,
+            ) {
                 Ok(i) => {
                     mark_imported(store, &i);
                     members.push(i)
@@ -1972,6 +2002,15 @@ impl ReviewStores {
                 "objects_missing",
                 serde_json::to_value(&missing).unwrap_or_default(),
             ),
+            // This pass's answers REPLACE the seed's: a key that is merely
+            // present is read as a current signal, so a `member_problems`
+            // list from the seed (or a failure's class/detail/stage/error)
+            // must not outlive the condition it described.
+            ("member_problems", serde_json::json!(problems)),
+            ("class", serde_json::Value::Null),
+            ("detail", serde_json::Value::Null),
+            ("stage", serde_json::Value::Null),
+            ("error", serde_json::Value::Null),
         ];
         if matches!(base, BaseFetch::Fetched { .. }) {
             sets.push(("last_base_fetch", now().into()));
@@ -2130,6 +2169,38 @@ mod tests {
         let good = StoreGit::new(td.path().join("gh2")).unwrap();
         let probed = seed::git_version_probe(&good, seed::MIN_GIT);
         assert_eq!(probed, Ok(None), "this box runs a new git");
+    }
+
+    /// A5-5 (K3 residual) — a git-version probe that cannot RUN must refuse
+    /// the write (`Err`, never `Ok(None)` = "no store, write the user
+    /// clone"), and the refusal is retryable: 503 + Retry-After, on both the
+    /// registry's own response and the review API's mapping.
+    #[test]
+    fn a_failed_probe_refuses_the_write_retryably_instead_of_diverting_it() {
+        use axum::response::IntoResponse;
+        let td = tempfile::tempdir().unwrap();
+        let empty_bin = td.path().join("no-git-here");
+        std::fs::create_dir_all(&empty_bin).unwrap();
+        let bad = StoreGit::with_env_fn(td.path().join("gh1"), |k| {
+            (k == "PATH").then(|| empty_bin.clone().into_os_string())
+        })
+        .unwrap();
+        let settings =
+            StoreSettings::resolve(&crate::config::ReviewSection::default(), td.path(), &[]);
+        let rs = ReviewStores::from_parts(settings, Some(bad), None, Vec::new());
+        let store = crate::store::Store::open(&td.path().join("index.db")).unwrap();
+        let refusal = rs
+            .admit_mutation(&store, "any-repo")
+            .expect_err("a probe that could not run must refuse, not return Ok(None)");
+        assert!(matches!(refusal.0, StoreUnavailable::Error { .. }));
+        let resp = StoreRefusal(refusal.0.clone()).into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert!(resp.headers().contains_key(axum::http::header::RETRY_AFTER));
+        let api = crate::reviews::store_refusal_error(StoreRefusal(refusal.0));
+        assert_eq!(
+            api.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     /// D12 — one member's entry drives a store-wide credential, and it is

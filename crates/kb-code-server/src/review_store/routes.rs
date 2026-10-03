@@ -692,15 +692,7 @@ async fn store_sync_route_inner(
         .collect();
     let st = state.clone();
     let network = !q.offline;
-    // The fetch locks are taken INSIDE the blocking closure (as
-    // `import_pending_members` and capture do), so their lifetime equals
-    // the work's: a dropped request future (client disconnect, CLI
-    // timeout) must not release them while `sync_ready` is still fetching.
-    let res = tokio::task::spawn_blocking(move || {
-        let _guards: Vec<_> = locks
-            .iter()
-            .map(|l| l.clone().blocking_lock_owned())
-            .collect();
+    let res = run_under_fetch_locks(locks, move || {
         st.review_stores.sync_ready(&st.store, &handle, network)
     })
     .await;
@@ -715,6 +707,36 @@ async fn store_sync_route_inner(
         Ok(Err(u)) => StoreRefusal(u).into_response(),
         Err(e) => internal(e),
     }
+}
+
+/// Run `work` on the blocking pool while holding every lock in `locks`
+/// (taken in the given order).
+///
+/// The locks are acquired INSIDE the blocking closure, so their lifetime
+/// equals the work's: a dropped request future (client disconnect, CLI
+/// timeout) abandons the `.await` but not the blocking task, and the guards
+/// are released only when `work` returns — never while it is still
+/// fetching. (Acquiring on the async side and moving the guards in would
+/// release them on drop of the future.)
+///
+/// Bound on the cost: the acquire is `blocking_lock_owned`, so while
+/// another holder has a lock this task PARKS one blocking-pool thread. The
+/// wait is at most the other holder's own work, which is itself bounded by
+/// the git deadlines (`WORK_FETCH_TIMEOUT` per local fetch, one
+/// `base_fetch_timeout` per base pass, `SEED_FETCH_TIMEOUT` per seed), and
+/// the number of parked threads by the number of concurrent requests for
+/// ONE store (the blocking pool's cap, 512 by default, is shared with every
+/// other `spawn_blocking` user; a try-lock-and-retry loop would trade the
+/// parked thread for a poll without shortening the wait).
+pub(crate) async fn run_under_fetch_locks<T: Send + 'static>(
+    locks: Vec<std::sync::Arc<tokio::sync::Mutex<()>>>,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    tokio::task::spawn_blocking(move || {
+        let _guards: Vec<_> = locks.into_iter().map(|l| l.blocking_lock_owned()).collect();
+        work()
+    })
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -907,5 +929,44 @@ mod card_wire_tests {
         assert_eq!(v["locked_elsewhere"], true);
         assert_eq!(v["git_fallbacks"]["unresolved"], 2);
         assert_eq!(v["git_fallbacks"]["odb_miss"], 3);
+    }
+
+    /// A5-6 — a dropped request future mid-sync must NOT release the fetch
+    /// locks while the work runs. The work blocks on a channel; the request
+    /// task is aborted (what a client disconnect does to the handler);
+    /// the lock must still be held until the work returns, and a second
+    /// request for the same lock must wait for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_request_future_keeps_the_fetch_locks_while_the_work_runs() {
+        use std::sync::Arc;
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let req = tokio::spawn(run_under_fetch_locks(vec![lock.clone()], move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            done_tx.send(()).unwrap();
+        }));
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+            .await
+            .unwrap();
+        assert!(lock.try_lock().is_err(), "held while the work runs");
+        // The client goes away: the handler future is dropped mid-work.
+        req.abort();
+        let _ = req.await;
+        assert!(
+            lock.try_lock().is_err(),
+            "dropping the request future released the fetch lock while the work was still running"
+        );
+        // A second request for the same lock waits for the first's work.
+        let l2 = lock.clone();
+        let second = tokio::spawn(run_under_fetch_locks(vec![l2], || ()));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(!second.is_finished(), "the second request must wait");
+        release_tx.send(()).unwrap();
+        second.await.unwrap().unwrap();
+        done_rx.recv().unwrap();
+        assert!(lock.try_lock().is_ok(), "released once the work returned");
     }
 }

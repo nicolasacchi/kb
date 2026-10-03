@@ -1514,3 +1514,152 @@ fn the_maintenance_lock_is_one_mutex_per_store() {
     assert!(!std::sync::Arc::ptr_eq(&a, &e.rs.maint_lock(2)));
     assert!(!std::sync::Arc::ptr_eq(&a, &e.rs.ops_lock(1)));
 }
+
+/// Wave-1 carry — the restore-guard sentinel's read-modify-write is
+/// serialised across processes by an flock. The test plays the other
+/// process by holding the lock file: `admit_new_store` must wait for it
+/// (without the flock it returned immediately and could clobber a
+/// concurrent acknowledgement).
+#[test]
+fn admit_new_store_waits_for_the_sentinel_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    restore_guard::observe_boot_epoch(&p, Some(45), 100);
+    restore_guard::observe_boot_epoch(&p, Some(40), 200); // flagged
+    let held =
+        crate::review_store::manifest::lock_blocking(&p.with_extension("json.lock")).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = {
+        let p = p.clone();
+        std::thread::spawn(move || {
+            restore_guard::admit_new_store(&p, "new-store");
+            tx.send(()).unwrap();
+        })
+    };
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "admit_new_store must wait for the sentinel lock"
+    );
+    drop(held);
+    rx.recv_timeout(Duration::from_secs(10)).expect("proceeds");
+    worker.join().unwrap();
+    assert!(!restore_guard::read(&p).blocks("new-store"));
+}
+
+/// Wave-1 carry — concurrent admissions and acknowledgements all land.
+#[test]
+fn concurrent_sentinel_updates_lose_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = restore_guard::path_for(tmp.path());
+    restore_guard::observe_boot_epoch(&p, Some(45), 100);
+    restore_guard::observe_boot_epoch(&p, Some(40), 200);
+    let handles: Vec<_> = (0..12)
+        .map(|i| {
+            let p = p.clone();
+            std::thread::spawn(move || {
+                if i % 2 == 0 {
+                    restore_guard::admit_new_store(&p, &format!("s{i}"));
+                } else {
+                    restore_guard::acknowledge(&p, &format!("s{i}"), 300).unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    let s = restore_guard::read(&p);
+    for i in 0..12 {
+        assert!(!s.blocks(&format!("s{i}")), "s{i} lost: {s:?}");
+    }
+}
+
+/// Wave-1 carry — two repacks on one store serialise on `maint_lock`: while
+/// one holder has it (a weekly/monthly repack in flight), a second weekly
+/// pass for the SAME store waits instead of racing `git repack`, and runs
+/// once released. A daily-only pass takes no repack lock and is not held
+/// up. Fails if `run_pass_for_store` stops taking the lock.
+#[test]
+fn two_repacks_on_one_store_serialise_on_the_maint_lock() {
+    let e = env();
+    review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    let held = e.rs.maint_lock(row.id).blocking_lock_owned();
+    std::thread::scope(|s| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (env, row_ref) = (&e, &row);
+        let weekly = s.spawn(move || {
+            let r = run_pass_for_store(&env.rs, &env.store, row_ref, &[MaintTask::Weekly], 1);
+            tx.send(()).unwrap();
+            r
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a second repack must wait for the in-flight one"
+        );
+        // A pass that does not repack is not serialised behind it.
+        let daily = run_pass_for_store(&e.rs, &e.store, &row, &[MaintTask::Daily], 2);
+        assert!(daily.tasks_run.contains(&"daily"), "{daily:?}");
+        drop(held);
+        rx.recv_timeout(Duration::from_secs(60))
+            .expect("the waiting repack proceeds once the lock is free");
+        let report = weekly.join().unwrap();
+        assert_eq!(report.tasks_run, vec!["weekly"], "{report:?}");
+    });
+}
+
+/// A5.f8 — `store restore --bundle`: a refs/kbc/* head the store lost is
+/// recreated from a bundle, an existing ref at another value is reported
+/// and NEVER overwritten (non-forced fetch), a second restore is a no-op,
+/// and a restore that wrote refs flags the restore guard.
+#[test]
+fn restore_bundle_recreates_lost_refs_never_overwrites_and_flags_the_guard() {
+    let e = env();
+    let r1 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let r2 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    let dir = Path::new(&row.git_dir);
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("out.bundle");
+    assert_eq!(
+        write_bundle(e.rs.git().unwrap(), dir, &dest).unwrap(),
+        BundleOutcome::Written
+    );
+    let (ref1, ref2) = (seed::patchset_ref(r1, 1), seed::patchset_ref(r2, 1));
+    // Damage: ref1 is lost; ref2 now points at an unrelated commit.
+    git(dir, &["update-ref", "-d", &ref1]);
+    let stranger = git(
+        dir,
+        &[
+            "commit-tree",
+            &format!("{}^{{tree}}", e.fx.feat_tip),
+            "-m",
+            "unrelated",
+        ],
+    );
+    git(dir, &["update-ref", &ref2, &stranger]);
+    let guard_path = &e.rs.settings().restore_guard_path;
+    assert!(!restore_guard::read(guard_path).flagged);
+
+    let rep = restore_bundle(&e.rs, &row, &dest, 500).unwrap();
+    assert_eq!(rep.heads, 2, "{rep:?}");
+    assert_eq!(rep.created, vec![ref1.clone()], "{rep:?}");
+    assert_eq!(rep.rejected, vec![ref2.clone()], "{rep:?}");
+    assert_eq!(git(dir, &["rev-parse", &ref1]), e.fx.feat_tip);
+    assert_eq!(
+        git(dir, &["rev-parse", &ref2]),
+        stranger,
+        "an existing ref at another value is never overwritten"
+    );
+    assert!(rep.guard_flagged);
+    assert!(restore_guard::read(guard_path).flagged);
+
+    // Idempotent: ref1 is now at the bundle's value.
+    let again = restore_bundle(&e.rs, &row, &dest, 600).unwrap();
+    assert!(again.created.is_empty(), "{again:?}");
+    assert_eq!(again.unchanged, vec![ref1], "{again:?}");
+    assert!(!again.guard_flagged);
+
+    // A relative or missing path is refused before git runs.
+    assert!(restore_bundle(&e.rs, &row, Path::new("nope.bundle"), 1).is_err());
+}

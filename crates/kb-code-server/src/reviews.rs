@@ -1592,6 +1592,17 @@ pub(crate) fn store_refusal_error(r: crate::review_store::StoreRefusal) -> ApiEr
             "the review store is held by another kb-code daemon",
         )
         .with_problem_type("urn:kb:errors:store-locked"),
+        // A5-5: a store that could not be classified right now (git probe
+        // could not run, DB read failed) refuses the write retryably; the
+        // write never falls through to the user clone.
+        U::Error { .. } => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "the review store could not be checked right now; retry in {}s",
+                crate::review_store::SEEDING_RETRY_AFTER_SECS
+            ),
+        )
+        .with_problem_type("urn:kb:errors:store-error"),
         other => ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("review store unavailable: {}", other.code()),
