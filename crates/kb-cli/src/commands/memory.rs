@@ -3136,8 +3136,19 @@ mod tests {
     #[tokio::test]
     async fn fetch_kbs_separates_slow_from_unreachable() {
         let (url, _rx) = stub_once(None);
-        let err = fetch_kbs_with_timeout(&url, None, 1).await.unwrap_err();
-        let msg = err.to_string();
+        // A bare client with its own timeout: `client_with_timeout_and_bearer`
+        // honours KB_TEST_HTTP_TIMEOUT_SECS (CI sets 120), which would turn
+        // this into a two-minute wait.
+        let e = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(300))
+            .build()
+            .unwrap()
+            .get(format!("{url}{KBS_CONFIG_PATH}"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(e.is_timeout());
+        let msg = kbs_request_error(&e, &url, 1).to_string();
         assert!(msg.contains("daemon slow"), "{msg}");
         assert!(!msg.contains("not reachable"), "{msg}");
 
