@@ -135,6 +135,34 @@ pub struct IngestBody {
     pub outcome: Option<String>,
 }
 
+/// `POST …/artifacts` body: the memory fields plus the optional idempotency key.
+/// (A wrapper rather than an `IngestBody` field so the two in-process callers —
+/// proposal approval and the keep path — are untouched: they never replay.)
+#[derive(Debug, Deserialize)]
+pub struct CreateBody {
+    #[serde(flatten)]
+    pub body: IngestBody,
+    /// v0.44 X3 — caller-minted idempotency key (`kb remember`'s outbox
+    /// replay). When present the artifact's filename is DERIVED from it
+    /// (`<slug>-<client_ref>.html`), so a second request carrying the same
+    /// key finds the file the first one wrote and answers `200` with the
+    /// original `{id, path}` instead of writing a duplicate memory — the
+    /// case a lost response or a slow daemon produces. The key is the
+    /// filesystem, so it survives a daemon restart and needs no schema.
+    /// 8-64 chars of `[A-Za-z0-9_-]` (it becomes part of a path): anything
+    /// else is a 400. Absent => the collision-resistant timestamp name, as
+    /// before.
+    #[serde(default)]
+    pub client_ref: Option<String>,
+}
+
+/// The accepted shape of [`CreateBody::client_ref`].
+pub(crate) fn valid_client_ref(s: &str) -> bool {
+    (8..=64).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 fn default_category() -> String {
     "memory-user".to_string()
 }
@@ -153,18 +181,23 @@ pub struct IngestResponse {
     pub id: String,
     /// Source-root-relative path of the written file.
     pub path: String,
+    /// `true` when a `client_ref` replay found the artifact the first
+    /// request already wrote (nothing was written this time).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub replayed: bool,
 }
 
 pub async fn create(
     State(state): State<Arc<KbHandles>>,
     Path(kb): Path<String>,
-    Json(body): Json<IngestBody>,
+    Json(CreateBody { body, client_ref }): Json<CreateBody>,
 ) -> Response<Body> {
     let (kb_name, ctx) = match crate::routes::resolve_kb(&state, &kb) {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    match ingest(&state, &kb_name, ctx, body) {
+    match ingest_keyed(&state, &kb_name, ctx, body, client_ref.as_deref()) {
+        Ok(resp) if resp.replayed => (StatusCode::OK, Json(resp)).into_response(),
         Ok(resp) => (StatusCode::CREATED, Json(resp)).into_response(),
         Err(resp) => resp,
     }
@@ -185,6 +218,18 @@ pub(crate) fn ingest(
     kb_name: &KbName,
     ctx: &crate::state::KbContext,
     body: IngestBody,
+) -> Result<IngestResponse, Response<Body>> {
+    ingest_keyed(state, kb_name, ctx, body, None)
+}
+
+/// [`ingest`] with an optional idempotency key (see [`CreateBody::client_ref`]).
+#[allow(clippy::result_large_err)]
+pub(crate) fn ingest_keyed(
+    state: &KbHandles,
+    kb_name: &KbName,
+    ctx: &crate::state::KbContext,
+    body: IngestBody,
+    client_ref: Option<&str>,
 ) -> Result<IngestResponse, Response<Body>> {
     let title = body.title.trim();
     if title.is_empty() {
@@ -340,11 +385,36 @@ pub(crate) fn ingest(
     // same-title remembers land on distinct paths → distinct ids → two
     // artifacts (no silent merge_insert overwrite).
     let base = kb_core::memory::memory_slug(title);
-    let mut filename = format!("{base}-{ts}.html");
-    let mut n = 1;
-    while ctx.source_path.join(&filename).exists() {
-        filename = format!("{base}-{ts}-{n}.html");
-        n += 1;
+    // v0.44 X3 — an idempotency key names the file, so a replay finds it.
+    let client_ref = client_ref.map(str::trim).filter(|r| !r.is_empty());
+    if let Some(r) = client_ref {
+        if !valid_client_ref(r) {
+            return Err(error_to_problem_json(&kb_core::Error::BadRequest(
+                "client_ref must be 8-64 chars of [A-Za-z0-9_-]".into(),
+            )));
+        }
+    }
+    let mut filename = match client_ref {
+        Some(r) => format!("{base}-{r}.html"),
+        None => format!("{base}-{ts}.html"),
+    };
+    if client_ref.is_some() {
+        let abs = ctx.source_path.join(&filename);
+        if abs.exists() {
+            let rel = kb_core::paths::doc_rel_path(&abs.to_string_lossy(), &ctx.source_path);
+            let id = ArtifactId::from_path(&rel).to_string();
+            return Ok(IngestResponse {
+                id,
+                path: rel,
+                replayed: true,
+            });
+        }
+    } else {
+        let mut n = 1;
+        while ctx.source_path.join(&filename).exists() {
+            filename = format!("{base}-{ts}-{n}.html");
+            n += 1;
+        }
     }
 
     let abs = ctx.source_path.join(&filename);
@@ -375,7 +445,11 @@ pub(crate) fn ingest(
         );
     }
 
-    Ok(IngestResponse { id, path: rel })
+    Ok(IngestResponse {
+        id,
+        path: rel,
+        replayed: false,
+    })
 }
 
 /// MI-W2.3 — `?purge=true` on `DELETE …/artifacts/{id}` bypasses the

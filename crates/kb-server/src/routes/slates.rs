@@ -791,6 +791,84 @@ pub async fn get(
     )
 }
 
+/// `/api/turn`'s slate lane: the SAME text the hook gets from
+/// `kb slate delta --since N --budget 1500` (when `since` is given) or
+/// `kb slate open --hybrid --budget 2000` (the seed, no cursor), plus the
+/// `head_seq` the caller advances its client-side cursor to. Composed from
+/// the exact projections `get` / `delta` use, so the lane can never render
+/// differently from the verbs it replaces. `Ok(None)` = no such slate (the
+/// verbs' 404: nothing has ever been posted, which is not a failure).
+pub(crate) struct TurnSlate {
+    pub text: String,
+    pub head_seq: u64,
+}
+
+pub(crate) async fn turn_slate(
+    state: &Arc<KbHandles>,
+    slug: &str,
+    session: Option<String>,
+    since: Option<u64>,
+    loopback: bool,
+) -> kb_core::Result<Option<TurnSlate>> {
+    let slug =
+        SlateSlug::new(slug).map_err(|e| kb_core::Error::BadRequest(format!("slate: {e}")))?;
+    let Some(loaded) = load_for_read_async(state.paths.clone(), slug.clone(), loopback).await?
+    else {
+        return Ok(None);
+    };
+    let now_unix = chrono::Utc::now().timestamp();
+    let policy = LivePolicy::default();
+    let presence = presence_slice(state, now_unix);
+    let Some(since) = since else {
+        let opts = read_opts(
+            &slug,
+            &loaded.posts,
+            Mode::Hybrid,
+            slate::BUDGET_HYBRID,
+            None,
+            false,
+            session,
+            None,
+            loaded.meta.cursors.clone(),
+        );
+        let digest = slate::project(&loaded.posts, now_unix, &policy, &presence, &opts);
+        return Ok(Some(TurnSlate {
+            text: digest.text,
+            head_seq: digest.head_seq,
+        }));
+    };
+    let opts = read_opts(
+        &slug,
+        &loaded.posts,
+        Mode::Full,
+        slate::BUDGET_DELTA,
+        None,
+        false,
+        session,
+        Some(since),
+        loaded.meta.cursors.clone(),
+    );
+    let split = loaded.posts.partition_point(|p| p.seq <= since);
+    let (seen, fresh) = loaded.posts.split_at(split);
+    let mut st = slate::ProjectState::new(now_unix, &policy, &presence, &opts);
+    if !seen.is_empty() {
+        let _ = slate::project_append(&mut st, seen);
+    }
+    let mut batch = slate::project_append(&mut st, fresh);
+    // The same safety cap `delta` applies before rendering.
+    batch.posts.truncate(READ_LIMIT_CAP);
+    let (text, _cut) = slate::render_delta_batch(
+        &batch.posts,
+        &batch.hides,
+        &loaded.posts,
+        slate::BUDGET_DELTA,
+    );
+    Ok(Some(TurnSlate {
+        text,
+        head_seq: loaded.meta.head_seq,
+    }))
+}
+
 fn board_sections(d: &SlateDigest, posts: &[Post]) -> BoardSections {
     let card = |p: &Projected| BoardCard {
         body: posts

@@ -1244,6 +1244,24 @@ struct PreparedDoc {
     /// quarantine gate skipped the embed). Recorded beside the vector only
     /// after the upsert commits — see `finish_indexed_doc`.
     embedding_model: Option<String>,
+    /// What `doc_embedding_model` held for this artifact when `prepare_doc`
+    /// looked (it reads it anyway, for the reuse decision). `None` = the
+    /// lookup FAILED (unknown: always write); `Some(None)` = no row;
+    /// `Some(Some(m))` = recorded model. `finish_indexed_doc` skips the
+    /// per-doc record/clear round trip when it would change nothing.
+    stored_embedding_model: Option<Option<String>>,
+}
+
+/// Does recording `new` over `stored` change anything? `stored == None` is
+/// "lookup failed" and always writes; otherwise an unchanged value (same
+/// model, or no model on both sides) needs no actor round trip. A reindex of
+/// a whole corpus used to pay one write-lock DELETE per doc for the
+/// no-embedder case.
+fn embedding_model_write_needed(new: Option<&str>, stored: Option<&Option<String>>) -> bool {
+    let Some(stored) = stored else {
+        return true;
+    };
+    new.map(str::trim).filter(|m| !m.is_empty()) != stored.as_deref().map(str::trim)
 }
 
 /// Per-file run-completion bookkeeping shared by every exit path (the
@@ -1326,6 +1344,58 @@ fn null_hash_error_ids_for_path<'a>(
         .collect()
 }
 
+/// A failed `record_edges` write: kind `"storage"`, no content hash, message
+/// prefixed with [`crate::enrich::EDGE_ERROR_PREFIX`]. Failed deletes share the
+/// kind and the NULL hash but not the prefix, so they are NOT matched here.
+fn is_edge_write_error(row: &crate::storage::sqlite::ErrorRow) -> bool {
+    row.content_hash.is_none()
+        && row.kind == "storage"
+        && row.message.starts_with(crate::enrich::EDGE_ERROR_PREFIX)
+}
+
+/// Open edge-write error ids for `path`.
+fn edge_error_ids_for_path<'a>(
+    path: &Path,
+    rows: &'a [crate::storage::sqlite::ErrorRow],
+) -> Vec<&'a str> {
+    rows.iter()
+        .filter(|row| row.path == path && is_edge_write_error(row))
+        .map(|row| row.id.as_str())
+        .collect()
+}
+
+/// How many times an unchanged reconcile re-runs a failed edge write before
+/// leaving the row open for `kb doctor`. Bounded so a persistently failing
+/// storage actor cannot stall the ingest loop.
+pub(crate) const EDGE_RETRY_ATTEMPTS: usize = 3;
+
+/// Run `attempt` up to `max` times, stopping at the first `Ok`. Returns the
+/// number of attempts made and the last result. `backoff` runs between
+/// attempts (a no-op closure in tests).
+pub(crate) async fn retry_bounded<F, Fut, B, BFut>(
+    max: usize,
+    mut attempt: F,
+    mut backoff: B,
+) -> (usize, Result<(), String>)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+    B: FnMut(usize) -> BFut,
+    BFut: std::future::Future<Output = ()>,
+{
+    let mut last = Err("no attempt made".to_string());
+    for n in 1..=max {
+        last = attempt().await;
+        if last.is_ok() {
+            return (n, last);
+        }
+        if n < max {
+            backoff(n).await;
+        }
+    }
+    (max, last)
+}
+
 /// `ErrorId`'s inner string is private. Stored ids round-trip through the
 /// transparent serde impl — the same reconstruction the dismiss route uses.
 fn error_id_from_stored(id: &str) -> Result<crate::ids::ErrorId, serde_json::Error> {
@@ -1341,6 +1411,7 @@ async fn load_null_hash_open_errors(
             .into_iter()
             .filter(|row| {
                 unchanged_pre_gate_dismisses(row.content_hash.as_deref(), row.kind.as_str())
+                    || is_edge_write_error(row)
             })
             .collect(),
         Err(e) => {
@@ -1376,6 +1447,29 @@ async fn dismiss_null_hash_open_errors(
         .into_iter()
         .map(str::to_string)
         .collect();
+    dismiss_error_ids(
+        storage,
+        bus,
+        kb_name,
+        path,
+        ids,
+        cached,
+        "auto-cleared NULL-hash error on unchanged reconcile",
+    )
+    .await;
+}
+
+/// Dismiss the given stored error ids, drop them from the batch cache and
+/// emit one `error.dismissed`.
+async fn dismiss_error_ids(
+    storage: &StorageHandle,
+    bus: &EventBus,
+    kb_name: &KbName,
+    path: &Path,
+    ids: Vec<String>,
+    cached: &mut Option<Vec<crate::storage::sqlite::ErrorRow>>,
+    reason: &str,
+) {
     if ids.is_empty() {
         return;
     }
@@ -1425,9 +1519,109 @@ async fn dismiss_null_hash_open_errors(
                 "kb": kb_name.as_str(),
                 "path": path.to_string_lossy(),
                 "count": dismissed,
-                "reason": "auto-cleared NULL-hash error on unchanged reconcile",
+                "reason": reason,
             }),
         );
+    }
+}
+
+/// Unchanged-reconcile retry of a failed edge write. `record_edges` failures
+/// leave a NULL-hash `"storage"` row that only a real index success clears;
+/// but an unchanged file never reaches that success tail, so before this the
+/// edges were lost until the file's bytes changed. Re-run the edge hook's work
+/// (bounded) and dismiss the row only on success; a still-failing write
+/// stays open and `kb doctor` names it.
+#[allow(clippy::too_many_arguments)]
+async fn retry_edge_errors_on_unchanged(
+    storage: &StorageHandle,
+    bus: &EventBus,
+    kb_name: &KbName,
+    source_slug: &SourceSlug,
+    source_root: &Path,
+    quarantine_dir: &Path,
+    path: &Path,
+    bytes: &[u8],
+    artifact_id: &ArtifactId,
+    rel_path: &str,
+    content_hash: &str,
+    artifact_host_suffix: &str,
+    extensions: &crate::extmap::ExtensionMap,
+    cached: &mut Option<Vec<crate::storage::sqlite::ErrorRow>>,
+) {
+    if cached.is_none() {
+        *cached = Some(load_null_hash_open_errors(storage, kb_name).await);
+    }
+    let Some(rows) = cached.as_ref() else {
+        return;
+    };
+    let ids: Vec<String> = edge_error_ids_for_path(path, rows)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let Ok(raw) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    let md_html_owned: String;
+    let html: &str = if matches!(
+        extensions.pipeline(path),
+        Some(crate::extmap::Pipeline::Markdown)
+    ) {
+        md_html_owned = parser::extract_markdown(raw).1;
+        md_html_owned.as_str()
+    } else {
+        raw
+    };
+    let ctx = crate::enrich::EnrichCtx {
+        kb_name,
+        source_slug,
+        storage,
+        bus,
+        quarantine_dir,
+        source_root,
+        path,
+        artifact_id,
+        rel_path,
+        html,
+        artifact_host_suffix,
+        kb_category: None,
+        mtime_unix: 0,
+        now_unix: unix_now(),
+        seed_global: false,
+        seed_linked_kbs: &[],
+        content_hash,
+        raw_source: raw,
+        versions_mode: crate::vcs::VersionsMode::Off,
+        session_parse: None,
+    };
+    let (attempts, result) = retry_bounded(
+        EDGE_RETRY_ATTEMPTS,
+        || crate::enrich::edge_record_run(&ctx),
+        |n| tokio::time::sleep(std::time::Duration::from_millis(50 * n as u64)),
+    )
+    .await;
+    match result {
+        Ok(()) => {
+            dismiss_error_ids(
+                storage,
+                bus,
+                kb_name,
+                path,
+                ids,
+                cached,
+                "edge write retried successfully on unchanged reconcile",
+            )
+            .await;
+        }
+        Err(e) => tracing::warn!(
+            kb = %kb_name,
+            path = %path.display(),
+            attempts,
+            error = %e,
+            "edge write still failing after unchanged-reconcile retry; error row stays open"
+        ),
     }
 }
 
@@ -1481,7 +1675,7 @@ async fn process_ingest_batch(
         // makes a no-op pass truly silent.
         if !work.force {
             if let Ok(bytes) = tokio::fs::read(&work.path).await {
-                let (artifact_id, content_hash, _rel_path) =
+                let (artifact_id, content_hash, rel_path) =
                     identity_for(&work.path, source_root, &bytes);
                 let (unchanged, stored_mtime) = {
                     let guard = indexed_hashes.lock().unwrap_or_else(|e| e.into_inner());
@@ -1551,6 +1745,25 @@ async fn process_ingest_batch(
                         bus,
                         kb_name,
                         &work.path,
+                        &mut null_hash_errors,
+                    )
+                    .await;
+                    // A failed edge write is retried here (bounded), not just
+                    // left for a content change that may never come.
+                    retry_edge_errors_on_unchanged(
+                        storage,
+                        bus,
+                        kb_name,
+                        source_slug,
+                        source_root,
+                        quarantine_dir,
+                        &work.path,
+                        &bytes,
+                        &artifact_id,
+                        &rel_path,
+                        &content_hash,
+                        artifact_host_suffix,
+                        extensions,
                         &mut null_hash_errors,
                     )
                     .await;
@@ -1935,17 +2148,31 @@ async fn ensure_embedding_sidecar_imported(storage: &StorageHandle, quarantine_d
 
 /// Stored producer of this artifact's vector. `None` when no name is
 /// recorded (or the lookup failed) — the caller keeps today's reuse rule.
+/// (Production code uses [`stored_embedding_model_checked`] directly; this
+/// flattened form is what the reuse tests read.)
+#[cfg(test)]
 async fn stored_embedding_model(
     storage: &StorageHandle,
     quarantine_dir: &Path,
     artifact_id: &str,
 ) -> Option<String> {
+    stored_embedding_model_checked(storage, quarantine_dir, artifact_id)
+        .await
+        .flatten()
+}
+
+/// Like [`stored_embedding_model`] but keeps "the lookup failed" (`None`)
+/// distinct from "no row" (`Some(None)`).
+async fn stored_embedding_model_checked(
+    storage: &StorageHandle,
+    quarantine_dir: &Path,
+    artifact_id: &str,
+) -> Option<Option<String>> {
     ensure_embedding_sidecar_imported(storage, quarantine_dir).await;
     storage
         .embedding_model_get(artifact_id.to_string())
         .await
         .ok()
-        .flatten()
 }
 
 async fn record_embedding_model(
@@ -2519,8 +2746,9 @@ async fn prepare_doc(
     // TUI sums — and does not record embed latency. Doc and chunk vectors
     // are lock-step: `try_preserve_embeddings` returns both or neither.
     let resolved = embedder.map(embedder_identity);
-    let stored_model_name =
-        stored_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await;
+    let stored_model_checked =
+        stored_embedding_model_checked(storage, quarantine_dir, artifact_id.as_str()).await;
+    let stored_model_name: Option<String> = stored_model_checked.clone().flatten();
     let preserved = match (force && !re_embed && hash_matches, resolved) {
         (true, Some((model, dim))) => {
             let parsed = if chunked {
@@ -2852,6 +3080,7 @@ async fn prepare_doc(
         seed_linked_kbs,
         embed_gated,
         embedding_model,
+        stored_embedding_model: stored_model_checked,
     }))
 }
 
@@ -2897,12 +3126,15 @@ async fn finish_indexed_doc(
         seed_linked_kbs,
         embed_gated,
         embedding_model,
+        stored_embedding_model,
     } = p;
-    match &embedding_model {
-        Some(model) => {
-            record_embedding_model(storage, quarantine_dir, artifact_id.as_str(), model).await
+    if embedding_model_write_needed(embedding_model.as_deref(), stored_embedding_model.as_ref()) {
+        match &embedding_model {
+            Some(model) => {
+                record_embedding_model(storage, quarantine_dir, artifact_id.as_str(), model).await
+            }
+            None => clear_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await,
         }
-        None => clear_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await,
     }
     let path = path.as_path();
     let html = html.as_str();
@@ -5846,7 +6078,7 @@ mod tests {
             .await
             .unwrap();
         // `record_error` dedups on (path, COALESCE(content_hash, '')), so the
-        // edge/delete NULL-hash row cannot be seeded through it beside the IO
+        // failed-delete NULL-hash row cannot be seeded through it beside the IO
         // row. Insert directly. A real ErrorId so a mistaken dismiss would
         // actually close the row and fail the assert below.
         let storage_id = crate::ids::ErrorId::new();
@@ -5861,7 +6093,7 @@ mod tests {
                     storage_id.as_str(),
                     slug.as_str(),
                     html_path.to_string_lossy().into_owned(),
-                    "record_edges: synthetic",
+                    "delete: synthetic",
                     unix_now(),
                 ],
             )
@@ -5948,6 +6180,202 @@ mod tests {
             "NULL-hash error for another path must survive, got {open:?}"
         );
         assert_eq!(storage.count_rows().await.unwrap(), 2);
+    }
+
+    /// v044-X3 (I1 NB) — a reindex writes `doc_embedding_model` only when the
+    /// record would change; an unknown stored state (failed lookup) writes.
+    #[test]
+    fn embedding_model_write_is_skipped_when_nothing_changes() {
+        let none: Option<String> = None;
+        let bge = Some("bge-small-en-v1.5".to_string());
+        // no embedder, no row: the per-doc DELETE round trip is skipped
+        assert!(!embedding_model_write_needed(None, Some(&none)));
+        // same model recorded: skipped
+        assert!(!embedding_model_write_needed(
+            Some("bge-small-en-v1.5"),
+            Some(&bge)
+        ));
+        assert!(!embedding_model_write_needed(
+            Some(" bge-small-en-v1.5 "),
+            Some(&bge)
+        ));
+        // a change in either direction writes
+        assert!(embedding_model_write_needed(Some("jina"), Some(&bge)));
+        assert!(embedding_model_write_needed(None, Some(&bge)));
+        assert!(embedding_model_write_needed(
+            Some("bge-small-en-v1.5"),
+            Some(&none)
+        ));
+        // lookup failed: unknown, so write
+        assert!(embedding_model_write_needed(None, None));
+    }
+
+    /// v044-X3 / A3.f10 — only a `record_edges:` NULL-hash storage row is an
+    /// edge-write error; a failed delete shares kind + NULL hash but not the
+    /// prefix and must never be selected for the retry.
+    #[test]
+    fn edge_write_error_selection_is_prefix_scoped() {
+        let path = std::path::PathBuf::from("/corpus/doc.html");
+        let row = |msg: &str, kind: &str, hash: Option<&str>| crate::storage::sqlite::ErrorRow {
+            id: msg.into(),
+            kind: kind.into(),
+            source_slug: "src".into(),
+            path: path.clone(),
+            message: msg.into(),
+            content_hash: hash.map(str::to_string),
+            retry_count: 0,
+            created_at_unix: 0,
+        };
+        let rows = vec![
+            row("record_edges: boom", "storage", None),
+            row("delete: boom", "storage", None),
+            row("record_edges: hashed", "storage", Some("h")),
+            row("record_edges: wrong kind", "io", None),
+        ];
+        assert_eq!(
+            edge_error_ids_for_path(&path, &rows),
+            vec!["record_edges: boom"]
+        );
+    }
+
+    /// v044-X3 / A3.f10 — the retry is bounded (never more than `max`
+    /// attempts), stops at the first success, and reports the last error.
+    #[tokio::test]
+    async fn retry_bounded_stops_at_first_success_and_caps_attempts() {
+        let calls = std::cell::Cell::new(0usize);
+        let (n, r) = retry_bounded(
+            3,
+            || {
+                calls.set(calls.get() + 1);
+                let ok = calls.get() == 2;
+                async move {
+                    if ok {
+                        Ok(())
+                    } else {
+                        Err("down".to_string())
+                    }
+                }
+            },
+            |_| async {},
+        )
+        .await;
+        assert_eq!((n, r), (2, Ok(())));
+
+        let calls = std::cell::Cell::new(0usize);
+        let (n, r) = retry_bounded(
+            EDGE_RETRY_ATTEMPTS,
+            || {
+                calls.set(calls.get() + 1);
+                async { Err("still down".to_string()) }
+            },
+            |_| async {},
+        )
+        .await;
+        assert_eq!(n, EDGE_RETRY_ATTEMPTS);
+        assert_eq!(calls.get(), EDGE_RETRY_ATTEMPTS);
+        assert_eq!(r, Err("still down".to_string()));
+    }
+
+    /// v044-X3 / A3.f10 — a failed edge write on a file whose bytes never
+    /// change used to stay open forever (the unchanged arm never reaches the
+    /// success tail). The unchanged reconcile must now re-run the edge write
+    /// and dismiss the `record_edges:` row, while leaving a failed-delete
+    /// storage row on the same path alone.
+    #[tokio::test]
+    async fn unchanged_reconcile_retries_edge_write_and_dismisses_row() {
+        let (bus, storage, kb, slug, tmp) = setup().await;
+        let quarantine = tmp.path().join("quarantine");
+        let indexer_rx = bus.subscribe();
+        let (b, st, k, sl, q) = (
+            bus.clone(),
+            storage.clone(),
+            kb.clone(),
+            slug.clone(),
+            quarantine.clone(),
+        );
+        let _indexer = tokio::spawn(async move {
+            run(
+                k,
+                sl,
+                st,
+                b,
+                q,
+                indexer_rx,
+                None,
+                None,
+                crate::iframe::DEFAULT_HOST_SUFFIX.to_string(),
+                crate::vcs::VersionsMode::Off,
+                0,
+                Vec::new(),
+            )
+            .await
+        });
+        let html_path = tmp.path().join("edgy.html");
+        let html = "<html><title>Edgy</title><body>same bytes forever</body></html>";
+        std::fs::write(&html_path, html).unwrap();
+        let mut rx = bus.subscribe();
+        bus.emit(
+            "watch.create",
+            json!({"kb": kb.as_str(), "path": html_path.to_string_lossy()}),
+        );
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(env) = rx.recv().await {
+                    if env.type_ == "index.complete" {
+                        return;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("create lifecycle timeout");
+
+        let edge_id = crate::ids::ErrorId::new();
+        let del_id = crate::ids::ErrorId::new();
+        {
+            let conn = rusqlite::Connection::open(tmp.path().join("index.db")).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            for (id, msg) in [
+                (edge_id.as_str(), "record_edges: synthetic"),
+                (del_id.as_str(), "delete: synthetic"),
+            ] {
+                conn.execute(
+                    "INSERT INTO errors (id, kind, source_slug, path, message, content_hash, created_at)
+                     VALUES (?1, 'storage', ?2, ?3, ?4, NULL, ?5)",
+                    rusqlite::params![
+                        id,
+                        slug.as_str(),
+                        html_path.to_string_lossy().into_owned(),
+                        msg,
+                        unix_now(),
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        std::fs::write(&html_path, html).unwrap();
+        bus.emit(
+            "watch.modify",
+            json!({"kb": kb.as_str(), "path": html_path.to_string_lossy()}),
+        );
+        // Poll: the retry is async behind the ingest loop.
+        let cleared = timeout(Duration::from_secs(10), async {
+            loop {
+                let open = storage.list_open_errors().await.unwrap();
+                if !open.iter().any(|r| r.message.starts_with("record_edges:")) {
+                    return open;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("edge-write error row must be dismissed by the unchanged retry");
+        assert!(
+            cleared.iter().any(|r| r.message == "delete: synthetic"),
+            "failed-delete row must survive the edge retry, got {cleared:?}"
+        );
     }
 
     /// perf-04 — `force` still re-parses, but the embedder runs only when

@@ -204,6 +204,88 @@ async fn remember_recall_forget_round_trip() {
         .success();
 }
 
+/// v044-X3 — a `kb remember` against a daemon that is not there is QUEUED
+/// (exit 0, `queued: true`, a client_ref) instead of lost; `kb outbox flush`
+/// against the live daemon replays it with the same client_ref, the memory is
+/// recallable exactly once, and the spool is empty afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_to_a_dead_daemon_is_queued_and_flush_replays_it_once() {
+    let (_tmp, addr) = boot_memory().await;
+    let url = format!("http://{addr}");
+    let cache = tempfile::tempdir().unwrap();
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", l.local_addr().unwrap())
+    };
+
+    let out = Command::cargo_bin("kb")
+        .unwrap()
+        .env("XDG_CACHE_HOME", cache.path())
+        .args([
+            "remember",
+            "the egret waits at the weir quillon",
+            "--kb",
+            "gmem",
+            "--no-session",
+            "--daemon",
+            &dead,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let queued: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(queued["queued"], true, "{queued}");
+    let client_ref = queued["client_ref"].as_str().unwrap().to_string();
+    let spool = cache.path().join("kb/outbox");
+    assert!(
+        spool.join(format!("{client_ref}.json")).is_file(),
+        "the intent must be on disk"
+    );
+
+    let flushed = Command::cargo_bin("kb")
+        .unwrap()
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["outbox", "flush", "--daemon", &url, "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let flushed: serde_json::Value = serde_json::from_slice(&flushed).unwrap();
+    assert_eq!(flushed["before"], 1, "{flushed}");
+    assert_eq!(flushed["after"], 0, "{flushed}");
+    assert!(
+        !spool.join(format!("{client_ref}.json")).exists(),
+        "a replayed entry leaves the spool"
+    );
+
+    // Recallable, and exactly once.
+    let client = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let v: serde_json::Value = client
+            .get(format!(
+                "http://{addr}/api/memory/recall?q=quillon&scope=all&limit=20"
+            ))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap_or_default();
+        let n = v["hits"].as_array().map(|a| a.len()).unwrap_or(0);
+        if n >= 1 {
+            assert_eq!(n, 1, "replay must not duplicate the memory: {v}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "replayed memory never recalled");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn recall_json_error_emits_envelope_on_stdout() {
     // Unreachable daemon → `--json` must still emit a {error, source}

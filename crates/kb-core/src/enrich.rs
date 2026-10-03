@@ -944,201 +944,221 @@ impl EnrichmentHook for EdgeRecordHook {
 
     fn enrich<'a>(&'a self, ctx: &'a EnrichCtx<'a>) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            let mut outbound: Vec<(String, String)> = Vec::new();
-            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            // One parse of the document's anchors for BOTH the artifact-id
-            // links and the relative-path hrefs.
-            let (artifact_links, relative_hrefs) =
-                crate::parser::extract_links_and_hrefs(ctx.html, ctx.artifact_host_suffix);
-            for to in artifact_links {
-                if seen.insert(to.clone()) {
-                    outbound.push((to, "link".to_string()));
+            match edge_record_run(ctx).await {
+                Ok(()) => Ok(()),
+                Err(msg) => {
+                    // v0.7.1 P4 — surface to the UI/TUI/error list. `content_hash
+                    // = None` keeps it out of the per-(path,hash) retry counter
+                    // (the artifact itself indexed fine; the edge write is a
+                    // separable follow-on). An unchanged reconcile retries the
+                    // write (`indexer::retry_edge_errors_on_unchanged`) and
+                    // dismisses the row on success; a real reindex success
+                    // clears it too. `record_failure` returns Err, but the doc
+                    // upsert already succeeded — keep going.
+                    let _ = crate::indexer::record_failure(
+                        ctx.kb_name,
+                        ctx.source_slug,
+                        ctx.storage,
+                        ctx.bus,
+                        ctx.quarantine_dir,
+                        ctx.path,
+                        "storage",
+                        msg,
+                        None,
+                    )
+                    .await;
+                    Ok(())
                 }
             }
-            let source_dir = ctx.path.parent().map(Path::to_path_buf);
-            if let Some(base_dir) = source_dir {
-                // Canonicalize the artifact's own path ONCE here, not per href.
-                let self_canon = tokio::fs::canonicalize(ctx.path).await.ok();
-                // Two phases so a link-heavy hub page costs ONE storage
-                // round-trip, not one per href: canonicalise + filter every
-                // candidate first (href order preserved — it decides edge
-                // order below), then resolve the whole set with a single
-                // `path IN (…)` lookup keyed back by stored path.
-                let mut candidates: Vec<String> = Vec::new();
-                let mut candidate_set: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
-                for href in relative_hrefs {
-                    // Strip query + fragment before filesystem resolution.
-                    let path_part = href.split(['?', '#']).next().unwrap_or(&href).trim();
-                    if path_part.is_empty() {
-                        continue;
-                    }
-                    // Root-anchored paths (`/foo`) are left alone — they can't
-                    // refer to a kb-source file, and probing them would leak
-                    // indexer state about the host filesystem.
-                    if path_part.starts_with('/') {
-                        continue;
-                    }
-                    let candidate = base_dir.join(path_part);
-                    let Ok(canon) = tokio::fs::canonicalize(&candidate).await else {
-                        continue;
-                    };
-                    // Self-edges are noise; skip when resolved == own file.
-                    if self_canon.as_ref() == Some(&canon) {
-                        continue;
-                    }
-                    let canon_str = canon.to_string_lossy().to_string();
-                    if candidate_set.insert(canon_str.clone()) {
-                        candidates.push(canon_str);
-                    }
-                }
-                if !candidates.is_empty() {
-                    match ctx.storage.get_by_source_paths(candidates.clone()).await {
-                        Ok(rows) => {
-                            let by_path: std::collections::HashMap<&str, &str> = rows
-                                .iter()
-                                .map(|d| (d.path.as_str(), d.id.as_str()))
-                                .collect();
-                            for canon_str in &candidates {
-                                let Some(&id) = by_path.get(canon_str.as_str()) else {
-                                    continue;
-                                };
-                                if id != ctx.artifact_id.as_str() && seen.insert(id.to_string()) {
-                                    outbound.push((id.to_string(), "link".to_string()));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                kb = %ctx.kb_name,
-                                path = %ctx.path.display(),
-                                hrefs = candidates.len(),
-                                error = %e,
-                                "cross-artifact link lookup failed"
-                            );
-                        }
-                    }
-                }
-            }
-            // Wikilinks (`[[target]]`) in Markdown sources — notes especially.
-            // The render path leaves `[[…]]` literal (resolution needs storage,
-            // render_fragment is pure), so the rendered HTML carries no wikilink
-            // anchors; parse them from the raw `.md` and resolve each target
-            // against the corpus. Resolved targets join the SAME `kind="link"`
-            // edge set, so a note's references become first-class citizens of
-            // the backlink/outlink counts, the atlas link-layer, and the graph
-            // route — the connective tissue the corpus previously only had for
-            // HTML `<a href>` links. Cheap-gated on a literal `[[` so the
-            // corpus-wide candidate fetch only runs for docs that link.
-            //
-            // RE-INVESTIGATED for memory artifacts (2026-08 close-out, Unit 4)
-            // and DECLINED AGAIN, with a sharper reason than "memories are
-            // HTML": widening this gate to admit memory HTML would not just
-            // fail to help, it would silently do NOTHING. `parse_wikilinks`
-            // (`crate::links`, comrak's CommonMark block parser) never finds
-            // a wikilink inside ANY `<p>...</p>`-wrapped content — proven by
-            // `links::tests::
-            // wikilinks_are_invisible_inside_any_p_wrapped_html_only_bare_text_works`,
-            // which round-trips a full memory HTML document, a single `<p>`
-            // fragment, and multiple blank-line-separated `<p>` blocks and
-            // gets `[]` every time; only genuinely tag-free plain text
-            // triggers the extension. `crate::memory::text_to_body_html`
-            // wraps EVERY memory body in `<p>…</p>` unconditionally, so this
-            // isn't an edge case — it's the universal case. Fixing it for
-            // real would mean feeding `parse_wikilinks` a de-HTML'd plain-
-            // text reconstruction of the body instead of the stored source,
-            // which (a) has no general inverse for a memory body that ISN'T
-            // `text_to_body_html`'s own output (`kb remember --source
-            // fetched-web`, SPA-authored bodies, anything with real markup)
-            // and (b) stands up a SECOND html→text extraction/sanitization
-            // pipeline whose entity-unescaping and tag-stripping edge cases
-            // would have to independently agree with what the corpus
-            // actually renders — the exact "two parsers drift apart" risk
-            // invariant #29 already manages for the Rust/comrak ↔ SPA/hast
-            // pair, now with a third. That's a rework of the note-only
-            // assumption, not a safe small widening — declined until there's
-            // an actual plan for that inverse-extraction step.
-            if crate::indexer::is_markdown(ctx.path) && ctx.raw_source.contains("[[") {
-                let links = crate::links::parse_wikilinks(ctx.raw_source);
-                if !links.is_empty() {
-                    match ctx.storage.list_docs(u32::MAX).await {
-                        Ok(rows) => {
-                            // Stored `Doc.path` is already canonical
-                            // (invariant #27), so canonicalise the root ONCE
-                            // and strip per row — the old per-row
-                            // `doc_rel_path` re-canonicalised BOTH sides,
-                            // 2×corpus syscalls per linked note.
-                            let canon_root = crate::paths::canonical_abs(ctx.source_root);
-                            let candidates: Vec<crate::links::DocLite> = rows
-                                .iter()
-                                .map(|d| crate::links::DocLite {
-                                    id: d.id.clone(),
-                                    rel_path: crate::paths::doc_rel_path_from_canonical(
-                                        &d.path,
-                                        &canon_root,
-                                    ),
-                                    title: d.title.clone(),
-                                })
-                                .collect();
-                            // One ResolveIndex per note: the lowercased
-                            // title/basename keys are built once, then every
-                            // target is hashmap work instead of an O(corpus)
-                            // re-lowercasing scan.
-                            let index = crate::links::ResolveIndex::new(&candidates);
-                            let mut targets_seen: std::collections::HashSet<String> =
-                                std::collections::HashSet::new();
-                            for link in &links {
-                                let t = crate::links::normalize_target(&link.target);
-                                if !targets_seen.insert(t.clone()) {
-                                    continue;
-                                }
-                                if let crate::links::Resolution::One(to) = index.resolve(&t) {
-                                    if to != ctx.artifact_id.as_str() && seen.insert(to.clone()) {
-                                        outbound.push((to, "link".to_string()));
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                kb = %ctx.kb_name,
-                                path = %ctx.path.display(),
-                                error = %e,
-                                "list_docs for wikilink resolution failed"
-                            );
-                        }
-                    }
-                }
-            }
-            if let Err(e) = ctx
-                .storage
-                .record_edges(ctx.artifact_id.as_str().to_string(), outbound)
-                .await
-            {
-                tracing::warn!(kb = %ctx.kb_name, path = %ctx.path.display(), error = %e, "record_edges failed");
-                // v0.7.1 P4 — surface to the UI/TUI/error list. `content_hash
-                // = None` keeps it out of the per-(path,hash) retry counter
-                // (the artifact itself indexed fine; the edge write is a
-                // separable follow-on); the next successful reindex's
-                // auto-dismiss clears this hashless row. `record_failure`
-                // returns Err, but the doc upsert already succeeded — keep
-                // going (don't propagate to the index).
-                let _ = crate::indexer::record_failure(
-                    ctx.kb_name,
-                    ctx.source_slug,
-                    ctx.storage,
-                    ctx.bus,
-                    ctx.quarantine_dir,
-                    ctx.path,
-                    "storage",
-                    format!("record_edges: {e}"),
-                    None,
-                )
-                .await;
-            }
-            Ok(())
         })
     }
+}
+
+/// Message prefix of the `"storage"` error row an edge-write failure leaves
+/// behind. The unchanged-reconcile retry (`indexer`) and `kb doctor` select
+/// those rows by it, so it is one constant, not three string literals.
+pub const EDGE_ERROR_PREFIX: &str = "record_edges:";
+
+/// The edge-recording work proper, shared by [`EdgeRecordHook`] (first index)
+/// and the indexer's unchanged-reconcile retry. `Err` is a failed
+/// `record_edges` write ONLY (link-lookup failures stay logged and degrade to
+/// a smaller edge set, as before); it does NOT record an error row itself, so
+/// a retry that fails again does not pile up duplicate rows.
+pub(crate) async fn edge_record_run(ctx: &EnrichCtx<'_>) -> Result<(), String> {
+    let mut outbound: Vec<(String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // One parse of the document's anchors for BOTH the artifact-id
+    // links and the relative-path hrefs.
+    let (artifact_links, relative_hrefs) =
+        crate::parser::extract_links_and_hrefs(ctx.html, ctx.artifact_host_suffix);
+    for to in artifact_links {
+        if seen.insert(to.clone()) {
+            outbound.push((to, "link".to_string()));
+        }
+    }
+    let source_dir = ctx.path.parent().map(Path::to_path_buf);
+    if let Some(base_dir) = source_dir {
+        // Canonicalize the artifact's own path ONCE here, not per href.
+        let self_canon = tokio::fs::canonicalize(ctx.path).await.ok();
+        // Two phases so a link-heavy hub page costs ONE storage
+        // round-trip, not one per href: canonicalise + filter every
+        // candidate first (href order preserved — it decides edge
+        // order below), then resolve the whole set with a single
+        // `path IN (…)` lookup keyed back by stored path.
+        let mut candidates: Vec<String> = Vec::new();
+        let mut candidate_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for href in relative_hrefs {
+            // Strip query + fragment before filesystem resolution.
+            let path_part = href.split(['?', '#']).next().unwrap_or(&href).trim();
+            if path_part.is_empty() {
+                continue;
+            }
+            // Root-anchored paths (`/foo`) are left alone — they can't
+            // refer to a kb-source file, and probing them would leak
+            // indexer state about the host filesystem.
+            if path_part.starts_with('/') {
+                continue;
+            }
+            let candidate = base_dir.join(path_part);
+            let Ok(canon) = tokio::fs::canonicalize(&candidate).await else {
+                continue;
+            };
+            // Self-edges are noise; skip when resolved == own file.
+            if self_canon.as_ref() == Some(&canon) {
+                continue;
+            }
+            let canon_str = canon.to_string_lossy().to_string();
+            if candidate_set.insert(canon_str.clone()) {
+                candidates.push(canon_str);
+            }
+        }
+        if !candidates.is_empty() {
+            match ctx.storage.get_by_source_paths(candidates.clone()).await {
+                Ok(rows) => {
+                    let by_path: std::collections::HashMap<&str, &str> = rows
+                        .iter()
+                        .map(|d| (d.path.as_str(), d.id.as_str()))
+                        .collect();
+                    for canon_str in &candidates {
+                        let Some(&id) = by_path.get(canon_str.as_str()) else {
+                            continue;
+                        };
+                        if id != ctx.artifact_id.as_str() && seen.insert(id.to_string()) {
+                            outbound.push((id.to_string(), "link".to_string()));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        kb = %ctx.kb_name,
+                        path = %ctx.path.display(),
+                        hrefs = candidates.len(),
+                        error = %e,
+                        "cross-artifact link lookup failed"
+                    );
+                }
+            }
+        }
+    }
+    // Wikilinks (`[[target]]`) in Markdown sources — notes especially.
+    // The render path leaves `[[…]]` literal (resolution needs storage,
+    // render_fragment is pure), so the rendered HTML carries no wikilink
+    // anchors; parse them from the raw `.md` and resolve each target
+    // against the corpus. Resolved targets join the SAME `kind="link"`
+    // edge set, so a note's references become first-class citizens of
+    // the backlink/outlink counts, the atlas link-layer, and the graph
+    // route — the connective tissue the corpus previously only had for
+    // HTML `<a href>` links. Cheap-gated on a literal `[[` so the
+    // corpus-wide candidate fetch only runs for docs that link.
+    //
+    // RE-INVESTIGATED for memory artifacts (2026-08 close-out, Unit 4)
+    // and DECLINED AGAIN, with a sharper reason than "memories are
+    // HTML": widening this gate to admit memory HTML would not just
+    // fail to help, it would silently do NOTHING. `parse_wikilinks`
+    // (`crate::links`, comrak's CommonMark block parser) never finds
+    // a wikilink inside ANY `<p>...</p>`-wrapped content — proven by
+    // `links::tests::
+    // wikilinks_are_invisible_inside_any_p_wrapped_html_only_bare_text_works`,
+    // which round-trips a full memory HTML document, a single `<p>`
+    // fragment, and multiple blank-line-separated `<p>` blocks and
+    // gets `[]` every time; only genuinely tag-free plain text
+    // triggers the extension. `crate::memory::text_to_body_html`
+    // wraps EVERY memory body in `<p>…</p>` unconditionally, so this
+    // isn't an edge case — it's the universal case. Fixing it for
+    // real would mean feeding `parse_wikilinks` a de-HTML'd plain-
+    // text reconstruction of the body instead of the stored source,
+    // which (a) has no general inverse for a memory body that ISN'T
+    // `text_to_body_html`'s own output (`kb remember --source
+    // fetched-web`, SPA-authored bodies, anything with real markup)
+    // and (b) stands up a SECOND html→text extraction/sanitization
+    // pipeline whose entity-unescaping and tag-stripping edge cases
+    // would have to independently agree with what the corpus
+    // actually renders — the exact "two parsers drift apart" risk
+    // invariant #29 already manages for the Rust/comrak ↔ SPA/hast
+    // pair, now with a third. That's a rework of the note-only
+    // assumption, not a safe small widening — declined until there's
+    // an actual plan for that inverse-extraction step.
+    if crate::indexer::is_markdown(ctx.path) && ctx.raw_source.contains("[[") {
+        let links = crate::links::parse_wikilinks(ctx.raw_source);
+        if !links.is_empty() {
+            match ctx.storage.list_docs(u32::MAX).await {
+                Ok(rows) => {
+                    // Stored `Doc.path` is already canonical
+                    // (invariant #27), so canonicalise the root ONCE
+                    // and strip per row — the old per-row
+                    // `doc_rel_path` re-canonicalised BOTH sides,
+                    // 2×corpus syscalls per linked note.
+                    let canon_root = crate::paths::canonical_abs(ctx.source_root);
+                    let candidates: Vec<crate::links::DocLite> = rows
+                        .iter()
+                        .map(|d| crate::links::DocLite {
+                            id: d.id.clone(),
+                            rel_path: crate::paths::doc_rel_path_from_canonical(
+                                &d.path,
+                                &canon_root,
+                            ),
+                            title: d.title.clone(),
+                        })
+                        .collect();
+                    // One ResolveIndex per note: the lowercased
+                    // title/basename keys are built once, then every
+                    // target is hashmap work instead of an O(corpus)
+                    // re-lowercasing scan.
+                    let index = crate::links::ResolveIndex::new(&candidates);
+                    let mut targets_seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for link in &links {
+                        let t = crate::links::normalize_target(&link.target);
+                        if !targets_seen.insert(t.clone()) {
+                            continue;
+                        }
+                        if let crate::links::Resolution::One(to) = index.resolve(&t) {
+                            if to != ctx.artifact_id.as_str() && seen.insert(to.clone()) {
+                                outbound.push((to, "link".to_string()));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        kb = %ctx.kb_name,
+                        path = %ctx.path.display(),
+                        error = %e,
+                        "list_docs for wikilink resolution failed"
+                    );
+                }
+            }
+        }
+    }
+    if let Err(e) = ctx
+        .storage
+        .record_edges(ctx.artifact_id.as_str().to_string(), outbound)
+        .await
+    {
+        tracing::warn!(kb = %ctx.kb_name, path = %ctx.path.display(), error = %e, "record_edges failed");
+        return Err(format!("{EDGE_ERROR_PREFIX} {e}"));
+    }
+    Ok(())
 }
 
 // --- 3b. Code-reference extraction (DCB W1.A) -------------------------------

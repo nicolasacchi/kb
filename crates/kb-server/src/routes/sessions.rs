@@ -3804,6 +3804,90 @@ fn since_window_secs(s: &str) -> Option<i64> {
     }
 }
 
+/// `POST /api/sessions/backfill-project-key[?apply=true]` — fill NULL
+/// `sessions.project_key` from the path already on each row, in every
+/// configured kb.
+///
+/// Dry-run unless `apply=true`. Every write goes through the kb's storage
+/// actor (`StorageHandle::sessions_backfill_project_key`), so the daemon
+/// stays the single writer of `index.db` and a run that changed rows bumps
+/// the index generation. The CLI used to open each `index.db` itself while
+/// the daemon was serving it; it now calls this route and keeps the direct
+/// open only for "no daemon running".
+#[derive(Debug, Deserialize, Default)]
+pub struct BackfillProjectKeyParams {
+    #[serde(default)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackfillProjectKeyKb {
+    pub kb: String,
+    pub would_change: u64,
+    pub changed: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackfillProjectKeyResponse {
+    pub apply: bool,
+    pub would_change: u64,
+    pub changed: u64,
+    pub kbs: Vec<BackfillProjectKeyKb>,
+    /// kbs whose backfill failed (closed error class, never the raw text).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<crate::routes::context::DegradedLane>,
+}
+
+pub async fn backfill_project_key(
+    State(state): State<Arc<KbHandles>>,
+    Query(params): Query<BackfillProjectKeyParams>,
+) -> impl IntoResponse {
+    let apply = params.apply;
+    type Part = (
+        String,
+        Result<(u64, u64), crate::routes::context::QueryErrorClass>,
+    );
+    let mut futs: Vec<super::CorpusFut<'_, Part>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            let r = match ctx.storage.sessions_backfill_project_key(apply).await {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    tracing::warn!(kb = %kb_name, error = %e, "backfill-project-key failed");
+                    Err(crate::routes::context::classify_query_error(&e.to_string()))
+                }
+            };
+            (kb_name.as_str().to_string(), r)
+        }));
+    }
+    let mut resp = BackfillProjectKeyResponse {
+        apply,
+        would_change: 0,
+        changed: 0,
+        kbs: Vec::new(),
+        degraded: Vec::new(),
+    };
+    for (kb, r) in super::buffered_join(futs, state.fanout_cap).await {
+        match r {
+            Ok((would, did)) => {
+                resp.would_change += would;
+                resp.changed += did;
+                resp.kbs.push(BackfillProjectKeyKb {
+                    kb,
+                    would_change: would,
+                    changed: did,
+                });
+            }
+            Err(class) => resp.degraded.push(crate::routes::context::degraded_of(
+                &kb,
+                "backfill-project-key",
+                class,
+            )),
+        }
+    }
+    Json(resp)
+}
+
 /// `GET /api/sessions/recollect?q=&folder=&since=&limit=` (R3) — semantic
 /// "has something like this been done?" over the R1 insight digests. Federated
 /// hybrid (or BM25) search restricted to session digests, re-ranked
@@ -3897,13 +3981,41 @@ pub(crate) async fn recollect_compose(
     // Embed the query once per distinct embedder model (mirrors recall).
     let mut vec_by_model: std::collections::HashMap<&'static str, Vec<f32>> =
         std::collections::HashMap::new();
+    // A3-5 — models whose query embed failed or missed `deadline_ms`; their
+    // corpora fall back to BM25 and are named (lane `recollect.vector`).
+    let mut embed_failures: std::collections::HashMap<
+        &'static str,
+        crate::routes::context::QueryErrorClass,
+    > = std::collections::HashMap::new();
     for (_, ctx) in state.kbs.iter() {
         if let Some(emb) = &ctx.embedder {
             let model = crate::embed_cache::embedder_model_name(emb);
+            if embed_failures.contains_key(model) {
+                continue;
+            }
             if let std::collections::hash_map::Entry::Vacant(slot) = vec_by_model.entry(model) {
-                if let Ok(out) = crate::embed_cache::embed_query(&state.embed_cache, emb, &q).await
+                match crate::routes::context::within_deadline(
+                    deadline,
+                    crate::embed_cache::embed_query(&state.embed_cache, emb, &q),
+                )
+                .await
                 {
-                    slot.insert(out.vec);
+                    Ok(Ok(out)) => {
+                        slot.insert(out.vec);
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(model, error = %e, "recollect: query embed failed; falling back to keyword");
+                        embed_failures
+                            .insert(model, crate::routes::context::QueryErrorClass::Embed);
+                    }
+                    Err(()) => {
+                        tracing::warn!(
+                            model,
+                            "recollect: query embed missed deadline_ms; falling back to keyword"
+                        );
+                        embed_failures
+                            .insert(model, crate::routes::context::QueryErrorClass::Timeout);
+                    }
                 }
             }
         }
@@ -3921,6 +4033,7 @@ pub(crate) async fn recollect_compose(
     }
     let q_ref = &q;
     let vbm = &vec_by_model;
+    let efm = &embed_failures;
     let mut futs: Vec<
         super::CorpusFut<'_, (Vec<Hit>, Option<crate::routes::context::DegradedLane>)>,
     > = Vec::new();
@@ -3951,6 +4064,20 @@ pub(crate) async fn recollect_compose(
                     let m = crate::embed_cache::embedder_model_name(emb);
                     vbm.get(m).cloned()
                 });
+                let embed_miss: Option<crate::routes::context::DegradedLane> =
+                    match (&ctx.embedder, &model_vec) {
+                        (Some(emb), None) => {
+                            let m = crate::embed_cache::embedder_model_name(emb);
+                            Some(crate::routes::context::degraded_of(
+                                kb_name.as_str(),
+                                "recollect.vector",
+                                efm.get(m)
+                                    .copied()
+                                    .unwrap_or(crate::routes::context::QueryErrorClass::Embed),
+                            ))
+                        }
+                        _ => None,
+                    };
                 let rows = match model_vec {
                     Some(v) => {
                         ctx.storage
@@ -3992,7 +4119,7 @@ pub(crate) async fn recollect_compose(
                     .map(|(rank, d)| (rank, d.id, d.summary))
                     .collect();
                 if cands.is_empty() {
-                    return (Vec::new(), None);
+                    return (Vec::new(), embed_miss);
                 }
                 let artifact_ids: Vec<String> = cands.iter().map(|(_, id, _)| id.clone()).collect();
                 let session_rows = match ctx.storage.sessions_get_by_artifact_ids(artifact_ids).await
@@ -4026,7 +4153,7 @@ pub(crate) async fn recollect_compose(
                         })
                     })
                     .collect::<Vec<_>>();
-                (hits, None)
+                (hits, embed_miss)
             };
             match crate::routes::context::within_deadline(deadline, work).await {
                 Ok(v) => v,

@@ -11,6 +11,7 @@
 
 mod commands;
 mod http;
+mod outbox;
 mod session_identity;
 mod session_marker;
 mod sse;
@@ -295,13 +296,30 @@ enum Cmd {
         /// Shared budget in ms for all lanes (default 9000).
         #[arg(long)]
         deadline_ms: Option<u64>,
-        /// csv subset of `recall,context` (default both).
+        /// csv subset of `recall,context,slate` (default recall + context,
+        /// plus slate when `--slate` is given).
         #[arg(long)]
         lanes: Option<String>,
+        /// Slate slug for the slate lane (the caller resolves cwd -> slug).
+        /// The reply's `head_seq` is what your cursor advances to.
+        #[arg(long)]
+        slate: Option<String>,
+        /// Your slate cursor: serve the delta since it (default: the hybrid
+        /// seed, as `kb slate open --hybrid`).
+        #[arg(long)]
+        slate_since: Option<u64>,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    /// v0.44 X3 — the `kb remember` outbox. A `kb remember` that hits a slow
+    /// or down daemon is spooled (under the cache dir) with an idempotency
+    /// `client_ref` instead of being lost; the next successful `kb
+    /// remember`, or `kb outbox flush`, replays it and the daemon dedupes.
+    Outbox {
+        #[command(subcommand)]
+        action: OutboxAction,
     },
     /// R2 — why is a file the way it is? Pulls the past sessions that touched
     /// it (episodic memory) and inlines the prompt / decisions / commits that
@@ -637,7 +655,9 @@ enum Cmd {
         fix: bool,
         /// Exit 1 when any check is WARN or FAIL (SKIP never trips it), so a
         /// script can gate on the report. Without it the exit code is 0
-        /// whatever the report says.
+        /// whatever the report says. `cli-skew` and the off-host-copy
+        /// finding are WARNs, so they trip it: a CLI pinned on purpose or a
+        /// local-only backup setup fails the gate until fixed.
         #[arg(long)]
         strict: bool,
     },
@@ -2663,11 +2683,36 @@ enum SessionsAction {
     /// Fill NULL session `project_key` values from `repo_root` or `cwd`
     /// already stored on the row. Dry-run by default (writes nothing,
     /// prints `would_change=<n> changed=<n>`); `--apply` writes. SQLite
-    /// only — no reindex.
+    /// only — no reindex. Runs through the daemon when one is up (its
+    /// storage actor stays the single writer); opens the index.db files
+    /// directly only when none answers.
     BackfillProjectKey {
         /// Write the keys. Absent = dry-run; nothing is written.
         #[arg(long)]
         apply: bool,
+        /// Daemon to run it through (default: the local one). With no
+        /// daemon reachable the index.db files are opened directly.
+        #[arg(long)]
+        daemon: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum OutboxAction {
+    /// Replay every queued write now, oldest first, with its original
+    /// client_ref. A permanently refused entry is parked as `.rejected`.
+    Flush {
+        /// Replay against this daemon instead of the one each entry was
+        /// queued for.
+        #[arg(long)]
+        daemon: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List what is waiting.
+    List {
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -4369,6 +4414,8 @@ async fn main() -> Result<()> {
             session,
             deadline_ms,
             lanes,
+            slate,
+            slate_since,
             daemon,
             json,
         } => {
@@ -4379,12 +4426,21 @@ async fn main() -> Result<()> {
                 session.as_deref(),
                 deadline_ms,
                 lanes.as_deref(),
+                slate.as_deref(),
+                slate_since,
                 daemon.as_deref(),
                 bearer.as_deref(),
                 json,
             )
             .await
         }
+        Cmd::Outbox { action } => match action {
+            OutboxAction::Flush { daemon, json } => {
+                let bearer = read_bearer();
+                commands::memory::outbox_flush(daemon.as_deref(), bearer.as_deref(), json).await
+            }
+            OutboxAction::List { json } => commands::memory::outbox_list(json),
+        },
         Cmd::Why { path, daemon, json } => {
             let bearer = read_bearer();
             commands::sessions::why(&path, daemon.as_deref(), bearer.as_deref(), json).await
@@ -5976,8 +6032,15 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
-            SessionsAction::BackfillProjectKey { apply } => {
-                commands::sessions::backfill_project_key(cli.config.as_ref(), apply)
+            SessionsAction::BackfillProjectKey { apply, daemon } => {
+                let bearer = read_bearer();
+                commands::sessions::backfill_project_key(
+                    cli.config.as_ref(),
+                    apply,
+                    daemon.as_deref(),
+                    bearer.as_deref(),
+                )
+                .await
             }
         },
         Cmd::Reading {
