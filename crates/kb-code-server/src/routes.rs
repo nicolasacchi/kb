@@ -2607,6 +2607,40 @@ pub(crate) fn annotation_view(
         });
     }
 
+    // A `whole_file` finding's `anchor` column is the bare PATH, not JSON
+    // (`annotations::ANCHOR_KIND_WHOLE_FILE`'s doc) — it must never reach
+    // the generic `Anchor` parse below, which answered a corrupt-anchor 500
+    // for it (and so for every REPLY under such a finding, since a reply's
+    // view recurses into its parent's). No line claim is ever made:
+    // `line: 0` is the same honest sentinel `review`/`set` use, and a client
+    // keys off `anchor_kind == "whole_file"`.
+    if row.anchor_kind == annotations::ANCHOR_KIND_WHOLE_FILE {
+        return Ok(AnnotationView {
+            id: row.id,
+            repo: repo_name.to_string(),
+            path: row.path,
+            anchor: None,
+            anchor_kind: row.anchor_kind,
+            intent: row.intent,
+            parent_id: row.parent_id,
+            body: row.body,
+            author: row.author,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            resolved: row.resolved,
+            line: 0,
+            stale: false,
+            line_end: None,
+            sha: None,
+            symbol: None,
+            review_id: row.review_id,
+            ps_number: row.ps_number,
+            side: row.side,
+            set_id: row.set_id,
+            trail_id: row.trail_id,
+        });
+    }
+
     let anchor: Anchor = serde_json::from_str(
         row.anchor
             .as_deref()
@@ -3969,6 +4003,13 @@ struct StoredAnchorLines {
 }
 
 fn stored_anchor_lines(row: &store::AnnotationRow) -> Result<StoredAnchorLines, ApiError> {
+    // `whole_file` stores a bare path (no line) — a suggestion has nothing
+    // to splice, so refuse 400 rather than a corrupt-anchor 500.
+    if row.anchor_kind == annotations::ANCHOR_KIND_WHOLE_FILE {
+        return Err(ApiError::bad_request(
+            "a whole-file annotation has no line to suggest against",
+        ));
+    }
     let raw = row
         .anchor
         .as_deref()

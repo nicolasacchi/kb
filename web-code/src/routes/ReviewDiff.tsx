@@ -15,6 +15,7 @@ import {
   useReviewFiles,
   useReviewFindings,
   useReviewInterdiff,
+  useReviewSince,
   useReviewPseudoList,
   useReviewReadingOrder,
 } from "../hooks/useReviews";
@@ -99,6 +100,7 @@ import ReviewDiffRail from "./reviewDiff/ReviewDiffRail";
 import ReviewDiffToolbar from "./reviewDiff/ReviewDiffToolbar";
 import { cssAttr, msg, orderedRows, splatPath } from "./reviewDiff/helpers";
 import { useReviewDiffState } from "./reviewDiff/useReviewDiffState";
+import { rangeFileRows } from "../lib/reviewSince";
 import type { ReviewFileTreeHandle } from "../components/reviews/ReviewFileTree";
 import type { ReviewMapSplitHandle } from "../components/reviews/ReviewMapSplit";
 
@@ -182,6 +184,17 @@ export default function ReviewDiff() {
   // `?ps=a..b` range; `useReviewInterdiff`'s own `enabled` gate keeps the
   // ordinary single-patchset page at exactly the request count it had.
   const interdiffQ = useReviewInterdiff(repo, idOk ? id : undefined, psRange?.from, psRange?.to, psRange !== null);
+  // v0.44 F9b — the rebase-aware author delta for the SAME pair, behind the
+  // toolbar's "Author changes only" switch (the InterdiffPanel's own switch,
+  // shared helpers). Component state: it is a view filter, not a location.
+  const sinceQ = useReviewSince(
+    repo,
+    idOk ? id : undefined,
+    psRange ? `ps${psRange.from}` : undefined,
+    psRange ? `ps${psRange.to}` : undefined,
+    psRange !== null,
+  );
+  const [authorOnly, setAuthorOnly] = useState(false);
   // PRR-F (design-addendum-2.md §A) — fetched ONCE here (the review's
   // `pr_number`, once known), then threaded down to every `FileDiffBody` —
   // one request for the whole page, not one per file.
@@ -231,7 +244,7 @@ export default function ReviewDiff() {
   // rendering a zeroed viewed column that would read as "nothing viewed."
   const files: ReviewFileRow[] = useMemo(() => {
     if (psRange) {
-      return (interdiffQ.data?.files ?? []).map((f) => ({
+      return rangeFileRows(interdiffQ.data?.files ?? [], sinceQ.data, authorOnly).map((f) => ({
         path: f.path,
         old_path: f.old_path,
         status: f.status,
@@ -244,7 +257,7 @@ export default function ReviewDiff() {
       }));
     }
     return filesQ.data?.files ?? [];
-  }, [psRange, interdiffQ.data, filesQ.data]);
+  }, [psRange, interdiffQ.data, sinceQ.data, authorOnly, filesQ.data]);
   const stops = orderQ.data === null || orderQ.data === undefined ? null : orderQ.data.stops;
   const ordered = useMemo(() => orderedRows(files, stops), [files, stops]);
   const paths = useMemo(() => ordered.map((f) => f.path), [ordered]);
@@ -1585,6 +1598,9 @@ export default function ReviewDiff() {
         patchsets={review?.patchsets ?? []}
         psSel={psSel}
         psRange={psRange}
+        since={sinceQ.data}
+        authorOnly={authorOnly}
+        onSetAuthorOnly={setAuthorOnly}
         psQuery={psQuery}
         activePsNum={activePsNum}
         onSetPs={setPs}
