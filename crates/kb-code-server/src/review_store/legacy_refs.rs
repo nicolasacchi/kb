@@ -93,22 +93,41 @@ pub struct LegacyRefStatus {
     pub refname: String,
     pub sha: String,
     pub deletable: bool,
-    /// `"sha-differs"` | `"absent-from-store"` — set iff `!deletable`.
+    /// `"sha-differs"` | `"absent-from-store"` | `"store-twin-not-kept"` —
+    /// set iff `!deletable`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
 }
 
 /// Pure classifier (D19: "ONLY when the store holds the SAME ref name at
 /// the SAME commit"). No git, no DB — a fixture-testable core.
+///
+/// A5.f4 — a store twin that is merely PRESENT is not enough: it must also
+/// be in the GC KEEP set (`keep`, the same store-wide set `store gc`
+/// attributes against). A twin the next GC pass would delete (a closed-PR
+/// `pr/<n>`, a ref of a deleted review) is a pin on its way out; removing
+/// the clone's copy as well would leave the commit unreferenced in BOTH
+/// repos, so such a ref is kept with reason `store-twin-not-kept`.
 pub fn classify(
     user_refs: &[(KbcRef, String, String)],
     store_refs: &BTreeMap<String, String>,
+    keep: &super::gc::GcKeepSet,
 ) -> Vec<LegacyRefStatus> {
     user_refs
         .iter()
         .map(|(parsed, name, sha)| {
             let (deletable, reason) = match store_refs.get(name) {
-                Some(s) if s == sha => (true, None),
+                Some(s) if s == sha => {
+                    let twin = [(s.clone(), name.clone())];
+                    let kept = super::gc::attribute(&twin, keep)
+                        .first()
+                        .is_some_and(|r| r.status == "bound");
+                    if kept {
+                        (true, None)
+                    } else {
+                        (false, Some("store-twin-not-kept"))
+                    }
+                }
                 Some(_) => (false, Some("sha-differs")),
                 None => (false, Some("absent-from-store")),
             };
@@ -220,7 +239,13 @@ fn legacy_refs_apply(
         store_kbc_map(git, &handle.git_dir).map_err(|e| ApplyErr::Internal(e.to_string()))?;
     let user_refs = reviews::list_kbc_refs(&WorkTreeRoot::user_clone(&repo.root))
         .map_err(|e| ApplyErr::Internal(e.to_string()))?;
-    let statuses = classify(&user_refs, &store_map);
+    let member_ids = state
+        .store
+        .store_members(handle.id)
+        .map_err(|e| ApplyErr::Internal(e.to_string()))?;
+    let keep = super::gc::keep_set(&state.store, handle.id, &member_ids)
+        .map_err(|e| ApplyErr::Internal(e.to_string()))?;
+    let statuses = classify(&user_refs, &store_map, &keep);
 
     let deletable: Vec<(String, String)> = statuses
         .iter()
@@ -362,12 +387,18 @@ mod tests {
         )
     }
 
+    fn keep_open_pr(n: u32) -> super::super::gc::GcKeepSet {
+        let mut k = super::super::gc::GcKeepSet::default();
+        k.open_pr_numbers.insert(n);
+        k
+    }
+
     #[test]
     fn same_name_same_sha_is_deletable() {
         let user = vec![kbc("refs/kbc/pr/42")];
         let mut store = BTreeMap::new();
         store.insert("refs/kbc/pr/42".to_string(), sha(1));
-        let out = classify(&user, &store);
+        let out = classify(&user, &store, &keep_open_pr(42));
         assert_eq!(out.len(), 1);
         assert!(out[0].deletable, "{out:?}");
         assert_eq!(out[0].reason, None);
@@ -378,7 +409,7 @@ mod tests {
         let user = vec![kbc("refs/kbc/pr/42")];
         let mut store = BTreeMap::new();
         store.insert("refs/kbc/pr/42".to_string(), sha(2));
-        let out = classify(&user, &store);
+        let out = classify(&user, &store, &keep_open_pr(42));
         assert!(!out[0].deletable);
         assert_eq!(out[0].reason, Some("sha-differs"));
     }
@@ -387,8 +418,32 @@ mod tests {
     fn absent_from_store_is_kept_and_reported() {
         let user = vec![kbc("refs/kbc/review/7/ps1")];
         let store = BTreeMap::new();
-        let out = classify(&user, &store);
+        let out = classify(&user, &store, &keep_open_pr(42));
         assert!(!out[0].deletable);
         assert_eq!(out[0].reason, Some("absent-from-store"));
+    }
+
+    /// A5.f4 — present-and-equal in the store is not enough: a twin GC
+    /// would delete (closed PR, unknown review) must not free the clone's
+    /// copy. Fails against the pre-fix classifier (which said deletable).
+    #[test]
+    fn a_store_twin_gc_would_delete_is_not_deletable() {
+        let mut store = BTreeMap::new();
+        store.insert("refs/kbc/pr/42".to_string(), sha(1));
+        store.insert("refs/kbc/review/7/ps1".to_string(), sha(1));
+        let user = vec![kbc("refs/kbc/pr/42"), kbc("refs/kbc/review/7/ps1")];
+        // Nothing kept: PR 42 has no open review, review 7 is not in the DB.
+        let none = super::super::gc::GcKeepSet::default();
+        let out = classify(&user, &store, &none);
+        assert!(out.iter().all(|s| !s.deletable), "{out:?}");
+        assert!(
+            out.iter().all(|s| s.reason == Some("store-twin-not-kept")),
+            "{out:?}"
+        );
+        // Keeping them flips both to deletable.
+        let mut keep = keep_open_pr(42);
+        keep.review_ids.insert(7);
+        let out = classify(&user, &store, &keep);
+        assert!(out.iter().all(|s| s.deletable), "{out:?}");
     }
 }

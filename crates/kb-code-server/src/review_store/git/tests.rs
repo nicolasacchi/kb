@@ -938,3 +938,68 @@ fn a_second_spawner_on_the_same_git_home_keeps_the_safe_directory_entries() {
         .unwrap()
         .contains("/srv/acme/widgets"));
 }
+
+/// Wave-1 carry — `allow_local_source`'s read-merge-write is serialised
+/// ACROSS spawners on one `git_home` by an flock, not only by the
+/// in-memory mutex. The test plays the "other process": it holds the lock
+/// file itself, and the call must wait for it (without the flock the call
+/// returned at once and a concurrent writer's entry could be overwritten).
+#[test]
+fn allow_local_source_waits_for_the_cross_process_gitconfig_lock() {
+    let t = tempfile::tempdir().unwrap();
+    let sg = std::sync::Arc::new(store_git(t.path()));
+    let held = crate::review_store::manifest::lock_blocking(&sg.git_home().join("gitconfig.lock"))
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let worker = {
+        let sg = sg.clone();
+        std::thread::spawn(move || {
+            sg.allow_local_source(Path::new("/srv/acme/locked"))
+                .unwrap();
+            tx.send(()).unwrap();
+        })
+    };
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "allow_local_source must block while another holder has the gitconfig lock"
+    );
+    drop(held);
+    rx.recv_timeout(Duration::from_secs(10))
+        .expect("proceeds once the lock is released");
+    worker.join().unwrap();
+    assert!(std::fs::read_to_string(sg.git_home().join("gitconfig"))
+        .unwrap()
+        .contains("/srv/acme/locked"));
+}
+
+/// Wave-1 carry — many spawners (separate in-memory sets, one `git_home`)
+/// adding distinct paths at once lose none of them, and leave no tmp files.
+#[test]
+fn concurrent_spawners_on_one_git_home_lose_no_safe_directory_entry() {
+    let t = tempfile::tempdir().unwrap();
+    let first = store_git(t.path());
+    let home = first.git_home().to_path_buf();
+    let handles: Vec<_> = (0..8)
+        .map(|i| {
+            let root = t.path().to_path_buf();
+            std::thread::spawn(move || {
+                let sg = store_git(&root);
+                sg.allow_local_source(Path::new(&format!("/srv/acme/repo-{i}")))
+                    .unwrap();
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    let cfg = std::fs::read_to_string(home.join("gitconfig")).unwrap();
+    for i in 0..8 {
+        assert!(cfg.contains(&format!("/srv/acme/repo-{i}\"")), "{cfg}");
+    }
+    let tmps: Vec<_> = std::fs::read_dir(&home)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(tmps.is_empty(), "{tmps:?}");
+}

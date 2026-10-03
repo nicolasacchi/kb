@@ -625,6 +625,25 @@ impl Store {
         Ok(out)
     }
 
+    /// `(review_id, ps_number)` of every patchset of every review of any
+    /// member of store `store_id` (same DB-only two-hop join as
+    /// [`Self::review_ids_for_store`]).
+    pub fn patchset_keys_for_store(&self, store_id: i64) -> Result<Vec<(i64, i64)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT p.review_id, p.ps_number FROM review_patchsets p
+             JOIN reviews r ON r.id = p.review_id
+             JOIN repos m ON m.name = r.repo
+             JOIN repo_stores rs ON rs.repo_id = m.id
+             WHERE rs.store_id = ?1
+             ORDER BY p.review_id, p.ps_number",
+        )?;
+        let rows = stmt
+            .query_map(params![store_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Every review id belonging to ANY member of store `store_id` — the
     /// two-hop join `repo_stores -> repos.name -> reviews.repo` (G2, DB
     /// only). RS-U5 review fix: this is deliberately independent of which

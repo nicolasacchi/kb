@@ -1659,3 +1659,165 @@ fn a_pass_deadline_hands_out_only_the_time_left() {
         "an exhausted budget is not zero-length time"
     );
 }
+
+/// A5.f5 — a member clone keeps its legacy `refs/kbc/review/*` pins after
+/// the store GC'd the patchset (and, separately, a whole review). A later
+/// `store sync` must not import them again: only patchsets the DB still
+/// lists come back. Fails against the pre-fix importer, which fetched every
+/// `refs/kbc/review/*` ref the clone carried.
+#[test]
+fn a_gcd_patchset_is_not_resurrected_by_the_next_sync() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(
+        &e.store,
+        "widgets-01",
+        Some("https://github.com/acme/widgets.git"),
+    ));
+    let kept = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    // A second patchset of the same review, and a second review entirely.
+    e.store
+        .insert_patchset(kept, 2, &e.fx.feat_tip, &e.fx.main_tip, 2)
+        .unwrap();
+    git(
+        &e.fx.one,
+        &["update-ref", &patchset_ref(kept, 2), &e.fx.feat_tip],
+    );
+    let gone = review_in(&e, "widgets-01", &e.fx.one, &e.fx.feat_tip, &e.fx.main_tip);
+    e.rs.seed(&e.store, id, false).unwrap();
+    let dir = PathBuf::from(&row_for(&e, "widgets-01").git_dir);
+    let refs = store_refs(&dir);
+    for r in [
+        patchset_ref(kept, 1),
+        patchset_ref(kept, 2),
+        patchset_ref(gone, 1),
+    ] {
+        assert!(
+            refs.contains(&r),
+            "seed imports live patchsets: {r} {refs:?}"
+        );
+    }
+
+    // The store GCs ps2 of `kept` and all of `gone`: DB rows and store refs
+    // go; the member clone's legacy pins stay (store GC never writes clones).
+    assert!(e.store.delete_patchset(kept, 2).unwrap());
+    e.store.delete_review(gone).unwrap();
+    git(&dir, &["update-ref", "-d", &patchset_ref(kept, 2)]);
+    git(&dir, &["update-ref", "-d", &patchset_ref(gone, 1)]);
+
+    let h = e.rs.handle_for_repo(&e.store, "widgets-01").unwrap();
+    let rep = e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(rep.member_errors.is_empty(), "{:?}", rep.member_errors);
+    let refs = store_refs(&dir);
+    assert!(refs.contains(&patchset_ref(kept, 1)), "{refs:?}");
+    assert!(
+        !refs.contains(&patchset_ref(kept, 2)),
+        "a GC'd patchset came back: {refs:?}"
+    );
+    assert!(
+        !refs.contains(&patchset_ref(gone, 1)),
+        "a GC'd review came back: {refs:?}"
+    );
+    assert!(
+        review_ref_key(&patchset_base_ref(kept, 2)) == Some((kept, 2)),
+        "-base refs key on their patchset"
+    );
+}
+
+/// M4 — a retry pass over N vanished specs cannot exceed ONE budget. Each
+/// fake fetch consumes everything it is handed (capped at 40 ms), like a
+/// SIGKILLed-at-its-deadline git; with a 100 ms pass budget and 10 specs the
+/// old per-spec fresh budget would run all 10 (~400 ms); the shared one runs
+/// ~3 and leaves the rest unrun.
+#[test]
+fn n_vanished_specs_cannot_exceed_the_pass_budget() {
+    let started = std::time::Instant::now();
+    let budget = Duration::from_millis(100);
+    let deadline = started + budget;
+    let mut handed = Vec::new();
+    let out = run_within_budget(deadline, 0..10, |_, left| {
+        handed.push(left);
+        std::thread::sleep(left.min(Duration::from_millis(40)));
+    });
+    let elapsed = started.elapsed();
+    let ran = out.iter().filter(|(_, r)| r.is_some()).count();
+    assert!((1..10).contains(&ran), "ran {ran} of 10");
+    assert!(
+        out.iter().skip(ran).all(|(_, r)| r.is_none()),
+        "once spent, every later item is unrun"
+    );
+    assert!(
+        elapsed < budget + Duration::from_millis(80),
+        "pass took {elapsed:?} for a {budget:?} budget"
+    );
+    assert!(
+        handed.windows(2).all(|w| w[1] < w[0]),
+        "each call gets strictly less than the one before: {handed:?}"
+    );
+    assert!(handed[0] <= budget);
+}
+
+/// M4 — one by-sha attempt is capped by what is left of the recovery pass.
+#[test]
+fn a_by_sha_attempt_never_outlives_the_pass() {
+    assert_eq!(
+        by_sha_attempt_timeout(Duration::from_secs(3)),
+        Duration::from_secs(3)
+    );
+    assert_eq!(
+        by_sha_attempt_timeout(Duration::from_secs(3600)),
+        crate::review_store::git::WORK_FETCH_TIMEOUT
+    );
+}
+
+/// Wave-1 carry — `state_json` keys are read as CURRENT signals when
+/// present, and seed paths MERGE keys, so a pass must overwrite what it owns.
+/// A dropped member recorded by a seed (or an adopt) must not stay in
+/// `member_problems` after a later pass found the member healthy. Fails
+/// against the old sync/adopt writes, which never touched the key.
+#[test]
+fn a_recovered_member_clears_member_problems_in_state_json() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    assert_eq!(
+        member_id(&e.rs.register_repo(&e.store, "widgets-01", None)),
+        id
+    );
+    let away = e.fx.two.with_extension("away");
+    let problems = |e: &Env| -> serde_json::Value {
+        let row = e.store.get_review_store(id).unwrap().unwrap();
+        let sj: serde_json::Value =
+            serde_json::from_str(row.state_json.as_deref().unwrap()).unwrap();
+        sj["member_problems"].clone()
+    };
+    std::fs::rename(&e.fx.two, &away).unwrap();
+    e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(
+        problems(&e).as_array().unwrap().len(),
+        1,
+        "{}",
+        problems(&e)
+    );
+
+    // The member comes back; a SYNC pass must replace the list.
+    std::fs::rename(&away, &e.fx.two).unwrap();
+    let h = e.rs.handle_for_repo(&e.store, "widgets-01").unwrap();
+    let rep = e.rs.sync_ready(&e.store, &h, false).unwrap();
+    assert!(rep.member_problems.is_empty(), "{:?}", rep.member_problems);
+    assert_eq!(
+        problems(&e),
+        serde_json::json!([]),
+        "sync left a stale list"
+    );
+
+    // Same for the adopt branch of a second seed.
+    std::fs::rename(&e.fx.two, &away).unwrap();
+    e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(problems(&e).as_array().unwrap().len(), 1);
+    std::fs::rename(&away, &e.fx.two).unwrap();
+    e.rs.seed(&e.store, id, false).unwrap();
+    assert_eq!(
+        problems(&e),
+        serde_json::json!([]),
+        "adopt left a stale list"
+    );
+}
