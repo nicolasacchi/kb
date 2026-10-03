@@ -303,7 +303,7 @@ cargo test -p kb-core <name>            # single-crate / single-test filter
 
 **Platforms** (Linux · WSL2): the embedder bundles ONNX Runtime
 statically (`ort-download-binaries`, fetched from CDN at build — for offline set
-`ORT_STRATEGY=system` + `ORT_LIB_LOCATION=<dir>`). `KB_HOME` (or `KB_STATE_DIR`/`KB_CONFIG_DIR`/
+`ORT_LIB_PATH=<dir>`; ort-sys has no `ORT_STRATEGY`). `KB_HOME` (or `KB_STATE_DIR`/`KB_CONFIG_DIR`/
 `KB_CACHE_DIR`) overrides paths — tests + containers use it since
 `directories` only honours `XDG_*` on Linux. `[indexer] watch_mode = "poll"` for
 WSL `/mnt/*` / network mounts. Native Windows is out of scope (WSL2 is the path).

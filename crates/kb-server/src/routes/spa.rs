@@ -403,26 +403,105 @@ fn spa_unavailable() -> Response<Body> {
 /// Resolve the SPA dist directory at startup. Order:
 ///   1. `KB_SPA_DIST` env var (absolute path)
 ///   2. `web/dist` relative to the current working directory
-///   3. None — daemon serves API only; SPA paths return 404.
+///   3. `<exe dir>/../share/kb/web/dist` — the layout the release tarball and
+///      the container image share (`$PREFIX/bin/kb` beside
+///      `$PREFIX/share/kb/web/dist`), so an installed binary finds its UI
+///      with no env var and no checkout
+///   4. None — daemon serves API only; SPA paths return 404.
 pub fn resolve_spa_dist() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("KB_SPA_DIST") {
+    resolve_spa_dist_from(
+        std::env::var("KB_SPA_DIST").ok(),
+        std::env::current_dir().ok(),
+        std::env::current_exe().ok(),
+    )
+}
+
+/// Pure core of [`resolve_spa_dist`]: every input explicit so the precedence
+/// is unit-testable without touching process-global state.
+pub(crate) fn resolve_spa_dist_from(
+    env: Option<String>,
+    cwd: Option<PathBuf>,
+    exe: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let has_index = |p: &PathBuf| p.join("index.html").is_file();
+    if let Some(p) = env {
         let pb = PathBuf::from(p);
-        if pb.join("index.html").is_file() {
+        if has_index(&pb) {
             return Some(pb);
         }
     }
-    let cwd = std::env::current_dir().ok()?;
-    let candidate = cwd.join("web").join("dist");
-    if candidate.join("index.html").is_file() {
-        Some(candidate)
-    } else {
-        None
+    if let Some(cwd) = cwd {
+        let candidate = cwd.join("web").join("dist");
+        if has_index(&candidate) {
+            return Some(candidate);
+        }
     }
+    if let Some(exe) = exe {
+        // Try the path as launched, then the symlink-resolved one (a
+        // `~/.local/bin/kb` symlink into `$PREFIX/bin`).
+        let mut exes = vec![exe.clone()];
+        if let Ok(real) = std::fs::canonicalize(&exe) {
+            if real != exe {
+                exes.push(real);
+            }
+        }
+        for e in exes {
+            if let Some(prefix) = e.parent().and_then(|bin| bin.parent()) {
+                let candidate = prefix.join("share").join("kb").join("web").join("dist");
+                if has_index(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // v044-F2: exe-relative SPA candidate (release tarball layout).
+    #[test]
+    fn spa_dist_resolves_next_to_the_executable_and_respects_precedence() {
+        let root = tempfile::tempdir().unwrap();
+        let dist = root.path().join("share/kb/web/dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<html></html>").unwrap();
+        let exe = root.path().join("bin/kb");
+        let empty_cwd = tempfile::tempdir().unwrap();
+
+        // No env, no ./web/dist: the share/ candidate next to bin/ wins.
+        assert_eq!(
+            resolve_spa_dist_from(None, Some(empty_cwd.path().into()), Some(exe.clone())),
+            Some(dist.clone())
+        );
+        // An env var that points at a real dist beats it...
+        let env_dist = tempfile::tempdir().unwrap();
+        std::fs::write(env_dist.path().join("index.html"), "x").unwrap();
+        assert_eq!(
+            resolve_spa_dist_from(
+                Some(env_dist.path().display().to_string()),
+                Some(empty_cwd.path().into()),
+                Some(exe.clone())
+            ),
+            Some(env_dist.path().to_path_buf())
+        );
+        // ...and so does ./web/dist.
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cwd.path().join("web/dist")).unwrap();
+        std::fs::write(cwd.path().join("web/dist/index.html"), "x").unwrap();
+        assert_eq!(
+            resolve_spa_dist_from(None, Some(cwd.path().into()), Some(exe.clone())),
+            Some(cwd.path().join("web/dist"))
+        );
+        // A share/ dir without index.html is not a dist.
+        std::fs::remove_file(dist.join("index.html")).unwrap();
+        assert_eq!(
+            resolve_spa_dist_from(None, Some(empty_cwd.path().into()), Some(exe)),
+            None
+        );
+    }
 
     const SHELL: &str =
         "<html><head><title>kb</title></head><body><div id=\"root\"></div></body></html>";

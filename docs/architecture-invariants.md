@@ -2037,8 +2037,8 @@ every binary (the `justfile` `ci-workspace` does this; `ci-embedder` covers the
 ORT surface); (c) every match on `EmbedderBackend` needs the `Local` arm gated, or
 it's non-exhaustive with the feature off; (d) `kb model download` shells out to
 `kb-embedder --download-only` (kb-cli links no ORT); (e) ORT binaries are fetched
-from a CDN at build — for offline builds set BOTH `ORT_STRATEGY=system` and
-`ORT_LIB_LOCATION=<dir>` to link a local ONNX Runtime instead.
+from a CDN at build — for offline builds set `ORT_LIB_PATH=<dir>`
+(`ORT_LIB_LOCATION` is the deprecated alias; `ORT_STRATEGY` does not exist in ort-sys 2.x) to link a local ONNX Runtime instead.
 
 ### 27. Stored `Doc.path` is canonical; artifact IDs are source-relative
 
