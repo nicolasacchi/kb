@@ -84,7 +84,11 @@ pub type PathHunks = BTreeMap<String, Vec<HunkRef>>;
 /// same file in both patchsets, which is all a key needs.
 pub fn split_file_diffs(text: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    for line in text.split('\n') {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    for line in lines {
         if let Some(rest) = line.strip_prefix("diff --git ") {
             let n = rest.len();
             let path = match rest.strip_prefix("a/") {
@@ -239,8 +243,9 @@ pub fn author_new_ranges(from: &PathHunks, to: &PathHunks) -> HashMap<String, Ve
 
 const MEMO_CAP: usize = 256;
 
-static MEMO: LazyLock<Mutex<HashMap<(String, String), Arc<PathHunks>>>> =
-    LazyLock::new(Default::default);
+type Memo = HashMap<(String, String), Arc<PathHunks>>;
+
+static MEMO: LazyLock<Mutex<Memo>> = LazyLock::new(Default::default);
 
 /// One patchset's `-U0` hunks against its own base. BLOCKING (a git
 /// subprocess); callers run it inside `spawn_blocking`. Only successful
