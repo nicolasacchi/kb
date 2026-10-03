@@ -111,6 +111,13 @@ pub struct Proposal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub note: Option<String>,
+    /// v0.44 X8 — when the FACT was written (unix seconds), for candidates
+    /// that were imported rather than composed now. Becomes the approved
+    /// memory's `kb-created`. Not part of the generated SPA type: the SPA
+    /// neither reads nor writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(skip))]
+    pub memory_created_at: Option<i64>,
 }
 
 pub(crate) fn default_category() -> String {
@@ -140,6 +147,8 @@ pub struct NewProposalBody {
     pub supersedes: Option<String>,
     pub session_id: Option<String>,
     pub note: Option<String>,
+    /// v0.44 X8 — see [`Proposal::memory_created_at`]. Must be positive.
+    pub memory_created_at: Option<i64>,
 }
 
 /// One row of the fleet-wide `GET /api/proposals` list — a [`Proposal`]
@@ -213,6 +222,12 @@ pub async fn submit(
         }
     }
 
+    if body.memory_created_at.is_some_and(|c| c <= 0) {
+        return error_to_problem_json(&kb_core::Error::BadRequest(
+            "memory_created_at must be a positive unix timestamp".into(),
+        ));
+    }
+
     let global = body.global.unwrap_or(body.linked_kbs.is_empty());
     let salience = body.salience.map(|s| s.clamp(0.0, 1.0));
     let spec = EnqueueProposal {
@@ -232,7 +247,7 @@ pub async fn submit(
     let dir = state.paths.kb_proposals_dir(&kb_name);
     let lock = state.proposal_lock_for(&kb_name);
     let guard = lock.lock().await;
-    let saved = enqueue_proposal(&dir, spec);
+    let saved = enqueue_proposal_at(&dir, spec, body.memory_created_at);
     drop(guard);
     let proposal = match saved {
         Ok(p) => p,
@@ -412,6 +427,7 @@ pub async fn approve(
         // failed-approach candidate is written directly via `kb remember
         // --failed`, never inferred at approval time.
         outcome: None,
+        created_at: proposal.memory_created_at,
     };
     let ingested = match crate::routes::artifacts::ingest(&state, &kb_name, ctx, ingest_body) {
         Ok(r) => r,
@@ -589,6 +605,15 @@ pub(crate) fn enqueue_proposal(
     dir: &std::path::Path,
     spec: EnqueueProposal,
 ) -> kb_core::Result<Proposal> {
+    enqueue_proposal_at(dir, spec, None)
+}
+
+/// [`enqueue_proposal`] plus the imported fact's own creation time.
+pub(crate) fn enqueue_proposal_at(
+    dir: &std::path::Path,
+    spec: EnqueueProposal,
+    memory_created_at: Option<i64>,
+) -> kb_core::Result<Proposal> {
     let proposal = Proposal {
         id: new_proposal_id(),
         schema: SCHEMA.to_string(),
@@ -604,6 +629,7 @@ pub(crate) fn enqueue_proposal(
         supersedes: spec.supersedes,
         source: spec.source,
         note: spec.note,
+        memory_created_at,
     };
     let path = dir.join(format!("{}.json", proposal.id));
     save_proposal_atomic(&path, &proposal)?;
@@ -630,6 +656,7 @@ mod tests {
             supersedes: None,
             source: ProposalSource::Agent,
             note: None,
+            memory_created_at: None,
         }
     }
 
@@ -668,6 +695,42 @@ mod tests {
             leftovers,
             vec![std::ffi::OsString::from("p_deadbeef0001.json")]
         );
+    }
+
+    #[test]
+    fn memory_created_at_is_stored_and_old_files_still_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = EnqueueProposal {
+            title: "t".into(),
+            body: "b".into(),
+            category: default_category(),
+            tags: vec![],
+            global: true,
+            linked_kbs: vec![],
+            salience: None,
+            supersedes: None,
+            session_id: None,
+            source: ProposalSource::Agent,
+            note: None,
+        };
+        let p = enqueue_proposal_at(tmp.path(), spec, Some(1_650_000_000)).unwrap();
+        let loaded = load_proposal(&tmp.path().join(format!("{}.json", p.id)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.memory_created_at, Some(1_650_000_000));
+        // A pre-X8 file has no such key and must still load, as "now".
+        let mut legacy = serde_json::to_value(sample("p_legacy")).unwrap();
+        legacy.as_object_mut().unwrap().remove("memory_created_at");
+        let path = tmp.path().join("p_legacy.json");
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(
+            load_proposal(&path).unwrap().unwrap().memory_created_at,
+            None
+        );
+        // And the plain enqueue (comment keep path) writes none.
+        assert!(!serde_json::to_string(&sample("p_x"))
+            .unwrap()
+            .contains("memory_created_at"));
     }
 
     #[test]

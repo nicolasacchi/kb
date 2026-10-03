@@ -169,7 +169,12 @@ past eight undropped `found`/`idea` posts by the SAME session on the
 SAME slate — a nudge, never a refusal (D18). `kb slate doctor` runs the
 daemon's own structural lint (contested takes, stale hands,
 answered-but-open asks, caps near their limit, token-shaped lines) —
-run it before hand-auditing a slate yourself.
+run it before hand-auditing a slate yourself. `kb slate stats
+--design-checks` appends the measurable dry-run conditions from the
+design (posts from sessions other than the busiest one, posts from
+non-Claude harnesses, open takes older than two hours that still block
+on post-only liveness) as counts beside their thresholds; the verdict
+stays with the operator.
 
 ## The board (SPA)
 
