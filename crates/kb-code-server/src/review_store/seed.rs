@@ -73,6 +73,27 @@ pub fn budget_left(deadline: std::time::Instant) -> Option<Duration> {
         .filter(|d| !d.is_zero())
 }
 
+/// M4 — run `f` over `items` against ONE pass-wide `deadline`: every call
+/// gets only the time LEFT (never a fresh budget), and once the budget is
+/// spent the remaining items are returned unrun (`None`) instead of each
+/// costing another full timeout. This is the single shape both base-fetch
+/// retry loops (`fetch_base_branches`, the capture-side base fetch) go
+/// through, so "N vanished specs cannot exceed the bound" is a property of
+/// ONE function, pinned by its own test.
+pub fn run_within_budget<T, R>(
+    deadline: std::time::Instant,
+    items: impl IntoIterator<Item = T>,
+    mut f: impl FnMut(&T, Duration) -> R,
+) -> Vec<(T, Option<R>)> {
+    items
+        .into_iter()
+        .map(|item| {
+            let r = budget_left(deadline).map(|left| f(&item, left));
+            (item, r)
+        })
+        .collect()
+}
+
 /// `objects_state` for a review whose commits exist nowhere reachable.
 pub const OBJECTS_MISSING: &str = "objects-missing";
 
@@ -410,6 +431,22 @@ pub fn is_review_ref(name: &str) -> bool {
     digits(id) && ps.strip_prefix("ps").is_some_and(digits)
 }
 
+/// `(review_id, ps_number)` of a `refs/kbc/review/<id>/ps<n>[-base]` name.
+pub fn review_ref_key(name: &str) -> Option<(i64, i64)> {
+    if !is_review_ref(name) {
+        return None;
+    }
+    let rest = name.strip_prefix("refs/kbc/review/")?;
+    let (id, ps) = rest.split_once('/')?;
+    let ps = ps.strip_suffix("-base").unwrap_or(ps);
+    Some((id.parse().ok()?, ps.strip_prefix("ps")?.parse().ok()?))
+}
+
+/// The `(review_id, ps_number)` pairs the DB still holds — the oracle
+/// [`import_member`] consults before re-importing a member clone's legacy
+/// `refs/kbc/review/*` pin (A5.f5).
+pub type LivePatchsets = BTreeSet<(i64, i64)>;
+
 /// `refs/kbc/review/<id>/ps<n>`.
 pub fn patchset_ref(review_id: i64, ps_number: i64) -> String {
     format!("refs/kbc/review/{review_id}/ps{ps_number}")
@@ -523,6 +560,7 @@ pub fn import_member(
     git_dir: &Path,
     member: &SeedMember,
     timeout: Duration,
+    live: &LivePatchsets,
 ) -> Result<MemberImport, StoreGitError> {
     git.allow_local_source(&member.common_dir)
         .map_err(|e| StoreGitError {
@@ -565,6 +603,15 @@ pub fn import_member(
                     _ => skipped += 1,
                 }
             } else if is_review_ref(name) {
+                // A5.f5 — a member clone keeps its legacy review pins after
+                // the store GC'd the patchset (or the whole review); the
+                // DB no longer lists it, so importing the pin again would
+                // resurrect a GC'd ref on every sync. Only patchsets the DB
+                // still holds are imported; the rest are counted skipped.
+                if !review_ref_key(name).is_some_and(|k| live.contains(&k)) {
+                    skipped += 1;
+                    continue;
+                }
                 match RefName::parse(name) {
                     Ok(r) => {
                         specs.push(FetchRefspec::new(false, RefSource::Ref(r.clone()), r));
@@ -678,17 +725,20 @@ pub fn fetch_base_branches(
         Err(e) if e.class == FailureClass::Vanished => {
             // One by one, so a deleted base branch does not block the rest.
             let (mut ok, mut gone) = (Vec::new(), Vec::new());
-            for (spec, name) in specs.iter().zip(names) {
-                let Some(left) = budget_left(deadline) else {
-                    return BaseFetch::Failed {
-                        code: "timeout".into(),
-                        detail: "the base fetch pass ran out of its single deadline".into(),
-                    };
-                };
-                match git.fetch(git_dir, &base, std::slice::from_ref(spec), auth, left) {
-                    Ok(_) => ok.push(name),
-                    Err(e) if e.class == FailureClass::Vanished => gone.push(name),
-                    Err(e) => {
+            let pairs: Vec<_> = specs.iter().zip(names).collect();
+            for ((_, name), res) in run_within_budget(deadline, pairs, |(spec, _), left| {
+                git.fetch(git_dir, &base, std::slice::from_ref(*spec), auth, left)
+            }) {
+                match res {
+                    None => {
+                        return BaseFetch::Failed {
+                            code: "timeout".into(),
+                            detail: "the base fetch pass ran out of its single deadline".into(),
+                        }
+                    }
+                    Some(Ok(_)) => ok.push(name),
+                    Some(Err(e)) if e.class == FailureClass::Vanished => gone.push(name),
+                    Some(Err(e)) => {
                         return BaseFetch::Failed {
                             code: e.class.slug().into(),
                             detail: e.detail,
@@ -735,8 +785,22 @@ pub fn missing_objects(
         .collect())
 }
 
+/// M4 — one by-sha attempt gets the work-fetch deadline OR what is left of
+/// the recovery pass, whichever is smaller (a single attempt used to be able
+/// to run its full 120 s past an exhausted pass deadline).
+pub fn by_sha_attempt_timeout(left: Duration) -> Duration {
+    left.min(super::git::WORK_FETCH_TIMEOUT)
+}
+
 /// Try to fetch `sha` from a member BY OBJECT ID into `dst` (create-only).
-fn fetch_by_sha(git: &StoreGit, git_dir: &Path, member: &SeedMember, sha: &str, dst: &str) -> bool {
+fn fetch_by_sha(
+    git: &StoreGit,
+    git_dir: &Path,
+    member: &SeedMember,
+    sha: &str,
+    dst: &str,
+    left: Duration,
+) -> bool {
     let (Ok(src), Ok(dst)) = (RefSource::oid(sha), RefName::parse(dst)) else {
         return false;
     };
@@ -756,7 +820,7 @@ fn fetch_by_sha(git: &StoreGit, git_dir: &Path, member: &SeedMember, sha: &str, 
     git.run(
         GitCall::new("fetch", args)
             .git_dir(git_dir)
-            .timeout(super::git::WORK_FETCH_TIMEOUT),
+            .timeout(by_sha_attempt_timeout(left)),
     )
     .is_ok()
 }
@@ -793,9 +857,9 @@ pub fn verify_connectivity(
             continue;
         }
         for m in members {
-            if budget_left(deadline).is_none() {
+            let Some(left) = budget_left(deadline) else {
                 break;
-            }
+            };
             attempts += 1;
             if fetch_by_sha(
                 git,
@@ -803,6 +867,7 @@ pub fn verify_connectivity(
                 m,
                 &p.tip_sha,
                 &patchset_ref(p.review_id, p.ps_number),
+                left,
             ) {
                 recovered += 1;
                 break;
@@ -938,12 +1003,17 @@ fn seed_into(
         git.configure_remote(tmp, &RemoteName::base(), url)
             .map_err(|e| SeedError::git("config", e))?;
     }
+    let live: LivePatchsets = plan
+        .patchsets
+        .iter()
+        .map(|p| (p.review_id, p.ps_number))
+        .collect();
     let mut members = Vec::with_capacity(plan.members.len());
     for (i, m) in plan.members.iter().enumerate() {
         if plan.fail_after_members == Some(i) {
             return Err(SeedError::other("member-fetch", "injected failure"));
         }
-        let imp = import_member(git, tmp, m, SEED_FETCH_TIMEOUT)
+        let imp = import_member(git, tmp, m, SEED_FETCH_TIMEOUT, &live)
             .map_err(|e| SeedError::git("member-fetch", e))?;
         members.push(imp);
     }

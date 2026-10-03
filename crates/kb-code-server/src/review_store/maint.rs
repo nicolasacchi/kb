@@ -432,6 +432,20 @@ pub mod restore_guard {
         state
     }
 
+    /// Exclusive cross-process lock for a read-modify-write of the sentinel.
+    /// `read` + mutate + `write` was unserialised: the daemon's boot pass,
+    /// a CLI `store gc --yes` acknowledgement and a new store's
+    /// `admit_new_store` could interleave and the last writer silently
+    /// dropped the others' change (a lost `acknowledged_stores` entry
+    /// leaves a store blocked; a lost `flagged` unblocks one). Held until
+    /// the returned guard drops.
+    fn lock(guard_path: &Path) -> std::io::Result<std::fs::File> {
+        if let Some(parent) = guard_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        super::super::manifest::lock_blocking(&guard_path.with_extension("json.lock"))
+    }
+
     fn write(guard_path: &Path, state: &RestoreGuardState) -> std::io::Result<()> {
         let attempt = || -> std::io::Result<()> {
             if let Some(parent) = guard_path.parent() {
@@ -473,6 +487,10 @@ pub mod restore_guard {
         current_epoch: Option<u32>,
         now: i64,
     ) -> RestoreGuardState {
+        // Boot must proceed; an unlockable sentinel degrades to the old
+        // unserialised behaviour (and `write` below fails closed if the
+        // directory really is unwritable).
+        let _lock = lock(guard_path).ok();
         let mut state = read(guard_path);
         state.just_flagged = false;
         if let Some(cur) = current_epoch {
@@ -507,15 +525,15 @@ pub mod restore_guard {
     /// The extensibility point named in the design text's "or a restore
     /// flag": anything that knows a restore just happened by some means
     /// OTHER than an epoch rollback can flag the guard directly (always a
-    /// NEW incident — clears `acknowledged_stores`). Not wired to any
-    /// route or CLI verb in RS-U9 (no restore-bundle verb ships yet — see
-    /// the unit's hand-off note); exists so a later unit can call it
-    /// without touching this module.
+    /// NEW incident — clears `acknowledged_stores`). Called by
+    /// [`super::restore_bundle`] (`kb-code store restore --bundle`) when a restore
+    /// wrote refs.
     pub fn flag_manual(
         guard_path: &Path,
         reason: &str,
         now: i64,
     ) -> std::io::Result<RestoreGuardState> {
+        let _lock = lock(guard_path)?;
         let mut state = read(guard_path);
         state.flagged = true;
         state.flagged_at = Some(now);
@@ -535,6 +553,13 @@ pub mod restore_guard {
     /// a manual `gc --yes`. A no-op when nothing is flagged; best-effort
     /// (a failure leaves the store blocked, the safe direction).
     pub fn admit_new_store(guard_path: &Path, store_uuid: &str) {
+        let _lock = match lock(guard_path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, store = store_uuid, "kb-code: could not lock the restore guard; the new store stays blocked");
+                return;
+            }
+        };
         let mut state = read(guard_path);
         if !state.flagged || !state.acknowledged_stores.insert(store_uuid.to_string()) {
             return;
@@ -554,6 +579,7 @@ pub mod restore_guard {
         store_uuid: &str,
         now: i64,
     ) -> std::io::Result<RestoreGuardState> {
+        let _lock = lock(guard_path)?;
         let mut state = read(guard_path);
         if state.flagged {
             state.acknowledged_stores.insert(store_uuid.to_string());
@@ -2055,6 +2081,174 @@ pub fn spawn_maintenance_worker(state: SharedState) -> tokio::task::JoinHandle<(
     })
 }
 
+// ── restore from a bundle ───────────────────────────────────────────────
+
+/// What [`restore_bundle`] did.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RestoreReport {
+    /// `refs/kbc/*` heads the bundle carries.
+    pub heads: usize,
+    /// Bundle heads outside `refs/kbc/*` (or not a ref name kb mints): not
+    /// restored, counted.
+    pub skipped: usize,
+    /// Refs that did not exist in the store and now do.
+    pub created: Vec<String>,
+    /// Refs the bundle fast-forwarded.
+    pub updated: Vec<String>,
+    /// Refs already at the bundle's value.
+    pub unchanged: Vec<String>,
+    /// Refs the store holds at ANOTHER value that the bundle could not
+    /// fast-forward: never overwritten (the fetch is non-forced).
+    pub rejected: Vec<String>,
+    /// Whether the restore guard was flagged (a restore that wrote refs is
+    /// a new incident: scheduled GC stays dry-run until `store gc --yes`).
+    pub guard_flagged: bool,
+}
+
+/// Restore the `refs/kbc/*` heads of a store bundle (the `.bundle` files
+/// `kb-code backup` / the GC pre-apply pass write) into the store at
+/// `git_dir`, CREATE-OR-FAST-FORWARD ONLY (no `+`: an existing ref at
+/// another value is reported in `rejected`, never overwritten).
+///
+/// `git bundle verify` runs first, in the store, so a thin bundle whose
+/// prerequisites (objects reachable from `refs/remotes/base/*`) are absent
+/// fails with git's own message instead of half-restoring — run `store
+/// sync` first. A restore that wrote anything flags the restore guard
+/// ([`restore_guard::flag_manual`], a NEW incident that clears prior
+/// acknowledgements): restored refs may belong to reviews this database no
+/// longer lists, which store-wide GC would delete as orphans, so the guard
+/// keeps scheduled GC dry-run-only until the operator looks (`store gc`
+/// dry run) and acknowledges (`store gc --yes`).
+///
+/// The caller must hold NEITHER the ops lock (taken here) nor the guard.
+pub fn restore_bundle(
+    rs: &ReviewStores,
+    row: &ReviewStoreRow,
+    bundle: &Path,
+    now: i64,
+) -> Result<RestoreReport, MaintError> {
+    let git_dir = Path::new(&row.git_dir);
+    let uuid = row.uuid.as_str();
+    let git = rs
+        .git()
+        .ok_or_else(|| MaintError::Other("store git spawner unavailable".into()))?;
+    if !bundle.is_absolute() || !bundle.is_file() {
+        return Err(MaintError::Other(format!(
+            "bundle must be an existing absolute file path: {}",
+            bundle.display()
+        )));
+    }
+    let abs = |a: GitArgs| {
+        a.abs_path(bundle)
+            .map_err(|e| MaintError::Other(e.to_string()))
+    };
+    git.run(
+        GitCall::new(
+            "bundle-verify",
+            abs(GitArgs::new("bundle").flag("verify").flag("--quiet"))?,
+        )
+        .git_dir(git_dir)
+        .timeout(MAINT_TIMEOUT),
+    )?;
+    let listed = git.run(
+        GitCall::new(
+            "bundle-list-heads",
+            abs(GitArgs::new("bundle").flag("list-heads"))?,
+        )
+        .git_dir(git_dir)
+        .timeout(MAINT_TIMEOUT),
+    )?;
+    let mut report = RestoreReport::default();
+    let mut specs = String::new();
+    let mut wanted: Vec<(String, String)> = Vec::new();
+    for line in listed.stdout_str().lines() {
+        let Some((oid, name)) = line.split_once(' ') else {
+            continue;
+        };
+        let ok = name.starts_with("refs/kbc/")
+            && crate::reviews::parse_kbc_ref(name).is_some()
+            && super::url::RefName::parse(name).is_ok();
+        if !ok {
+            report.skipped += 1;
+            continue;
+        }
+        report.heads += 1;
+        specs.push_str(name);
+        specs.push(':');
+        specs.push_str(name);
+        specs.push('\n');
+        wanted.push((oid.to_string(), name.to_string()));
+    }
+    if wanted.is_empty() {
+        return Ok(report);
+    }
+    // Same lock a capture/GC takes around this ref family.
+    let ops = rs.ops_lock(row.id);
+    let _ops = ops.blocking_lock();
+    let before: std::collections::BTreeMap<String, String> =
+        super::seed::list_refs(git, git_dir, &["refs/kbc/"])?
+            .into_iter()
+            .map(|(o, n)| (n, o))
+            .collect();
+    let out = git.run(
+        GitCall::new(
+            "bundle-fetch",
+            abs(GitArgs::new("fetch")
+                .flag("--no-tags")
+                .flag("--no-write-fetch-head")
+                .flag("--no-auto-gc")
+                .flag("--no-auto-maintenance")
+                .flag("--porcelain")
+                .flag("--stdin")
+                .end_of_options())?,
+        )
+        .git_dir(git_dir)
+        .stdin(specs.into_bytes())
+        .timeout(MAINT_TIMEOUT)
+        .allow_nonzero(),
+    )?;
+    if out.exit_code != Some(0) && !out.stdout_str().lines().any(|l| l.starts_with('!')) {
+        return Err(MaintError::Other(format!(
+            "git fetch from the bundle failed (exit {:?}): {}",
+            out.exit_code,
+            out.stderr.trim()
+        )));
+    }
+    report.rejected = out
+        .stdout_str()
+        .lines()
+        .filter(|l| l.starts_with('!'))
+        .filter_map(|l| l.rsplit(' ').next().map(str::to_string))
+        .collect();
+    let after: std::collections::BTreeMap<String, String> =
+        super::seed::list_refs(git, git_dir, &["refs/kbc/"])?
+            .into_iter()
+            .map(|(o, n)| (n, o))
+            .collect();
+    for (oid, name) in &wanted {
+        match (before.get(name), after.get(name)) {
+            (None, Some(_)) => report.created.push(name.clone()),
+            (Some(b), Some(a)) if a == oid && b == oid => report.unchanged.push(name.clone()),
+            (Some(b), Some(a)) if a != b => report.updated.push(name.clone()),
+            _ => {}
+        }
+    }
+    report.created.sort();
+    report.updated.sort();
+    report.unchanged.sort();
+    report.rejected.sort();
+    let written = report.created.len() + report.updated.len();
+    if written > 0 {
+        restore_guard::flag_manual(
+            &rs.settings().restore_guard_path,
+            &format!("bundle restored into store {uuid} ({written} ref(s) written)"),
+            now,
+        )?;
+        report.guard_flagged = true;
+    }
+    Ok(report)
+}
+
 // ── HTTP routes (loopback-only; registered in router.rs) ───────────────
 
 fn not_found(name: &str) -> Response {
@@ -2227,6 +2421,85 @@ async fn store_maintain_route_inner(
             "repo": name,
             "report": report,
         }))
+        .into_response(),
+        Ok(Err(resp)) => *resp,
+        Err(e) => internal(e),
+    }
+}
+
+/// `POST …/store/restore` success body (typed: the wire ratchet counts
+/// untyped json-macro response bodies).
+#[derive(Debug, Serialize)]
+pub struct RestoreEnvelope {
+    pub schema: &'static str,
+    pub repo: String,
+    pub report: RestoreReport,
+}
+
+#[derive(Debug, Serialize)]
+struct RestoreProblem {
+    error: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+fn restore_problem(status: StatusCode, error: String, kind: &'static str) -> Response {
+    (status, Json(RestoreProblem { error, kind })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreBody {
+    /// Absolute path of a store bundle file on the daemon's host.
+    pub bundle: String,
+}
+
+/// `POST /api/repos/{name}/store/restore` (loopback-only, audited).
+pub async fn store_restore_route(
+    State(state): State<SharedState>,
+    AxumPath(name): AxumPath<String>,
+    Json(body): Json<RestoreBody>,
+) -> Response {
+    let resp = store_restore_route_inner(state.clone(), name.clone(), body).await;
+    audit("store_restore_route", &name, resp.status());
+    resp
+}
+
+async fn store_restore_route_inner(
+    state: SharedState,
+    name: String,
+    body: RestoreBody,
+) -> Response {
+    if state.review_stores.repo(&name).is_none() {
+        return not_found(&name);
+    }
+    let bundle = PathBuf::from(&body.bundle);
+    if !bundle.is_absolute() || !bundle.is_file() {
+        return restore_problem(
+            StatusCode::BAD_REQUEST,
+            "bundle must be an existing absolute file path on the daemon host".into(),
+            "urn:kb:errors:bad-request",
+        );
+    }
+    let st = state.clone();
+    let n = name.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let row = store_row_for(&st, &n)?;
+        let now = chrono::Utc::now().timestamp();
+        restore_bundle(&st.review_stores, &row, &bundle, now).map_err(|e| {
+            Box::new(restore_problem(
+                StatusCode::CONFLICT,
+                e.to_string(),
+                "urn:kb:errors:store-restore-failed",
+            ))
+        })
+    })
+    .await;
+    match res {
+        Ok(Ok(report)) => Json(RestoreEnvelope {
+            schema: "kbc-store-restore/1",
+            repo: name,
+            report,
+        })
         .into_response(),
         Ok(Err(resp)) => *resp,
         Err(e) => internal(e),
