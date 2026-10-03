@@ -62,8 +62,8 @@ def measure(root=ROOT, files=FILES):
 
 
 def compare(now, base):
-    """(errors, notes) for measured counts `now` against `base`. Exact both ways."""
-    errors, notes = [], []
+    """Errors for measured counts `now` against `base`. Exact both ways."""
+    errors = []
     for f, n in now.items():
         b = base.get(f)
         if b is None:
@@ -76,7 +76,7 @@ def compare(now, base):
                           "so a later regrowth up to the old number cannot pass silently.")
     for f in set(base) - set(now):
         errors.append(f"POSTURE RATCHET: baseline lists {f}, which is not in FILES")
-    return errors, notes
+    return errors
 
 
 def main():
@@ -85,22 +85,20 @@ def main():
         assert count("// x.ok()\nfn a(){}") == 0
         assert count("fn a(){ q.unwrap_or_default(); }") == 1
         # the ratchet is exact in both directions (F1 carry)
-        assert compare({"a": 3}, {"a": 3}) == ([], [])
-        assert len(compare({"a": 4}, {"a": 3})[0]) == 1, "growth must fail"
-        down = compare({"a": 2}, {"a": 3})[0]
+        assert compare({"a": 3}, {"a": 3}) == []
+        assert len(compare({"a": 4}, {"a": 3})) == 1, "growth must fail"
+        down = compare({"a": 2}, {"a": 3})
         assert len(down) == 1 and "Lower its entry" in down[0], "a drop below the baseline must fail"
-        assert len(compare({"a": 1}, {})[0]) == 1, "missing baseline must fail"
-        assert len(compare({}, {"a": 1})[0]) == 1, "stale baseline entry must fail"
+        assert len(compare({"a": 1}, {})) == 1, "missing baseline must fail"
+        assert len(compare({}, {"a": 1})) == 1, "stale baseline entry must fail"
         print("check-posture-swallow self-test ok")
         return 0
     with open(BASELINE, "rb") as fh:
         base = tomllib.load(fh).get("files", {})
     now = measure()
-    errors, notes = compare(now, base)
+    errors = compare(now, base)
     for e in errors:
         print(e, file=sys.stderr)
-    for n in notes:
-        print(n)
     bad = len(errors)
     print(f"posture-swallow ratchet: {sum(now.values())} form(s) across {len(now)} module(s)")
     return 1 if bad else 0

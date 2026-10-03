@@ -8,23 +8,13 @@
 //! [`assert_default_is_restrictive`] (called from a per-type test) turns that
 //! statement into a failing test when `Default` drifts.
 //!
-//! INVENTORY of defaulted enums reviewed for this (every `#[default]` enum in
-//! the workspace, 2026-10):
-//!
-//! * `review::Visibility` -- implements `Posture` (`Public`, never `All`).
-//! * `slate::Origin` (`Agent`) -- not a restrictive/permissive axis; the
-//!   property that matters is "the default is not `Human`" (the only value that
-//!   earns the `[you]` rendering and the pin check), pinned in slate's tests.
-//! * `review_store::cred::CredentialPin` (`Auto`) -- the permissive credential
-//!   modes (`Inherit`) are additionally gated by the separate
-//!   `allow_inherited_credentials` bool, whose `false` default is pinned in
-//!   kb-code-server's config tests; `Auto` is a selector, not a grant.
-//! * `ForgeKind`, `LinksMode`, `Mode`, `BranchSort`, `AtlasLayoutChoice`,
-//!   `DecayPolicy`, the `docs_query`/`lists`/`parser`/`vcs`/`watcher` enums --
-//!   selectors with no access-control meaning; not security-relevant.
-//!
-//! A NEW defaulted enum that gates access (who may see, write or reach
-//! something) implements `Posture` and adds its test here or next to it.
+//! The INVENTORY of defaulted enums is code, not prose:
+//! `crates/kb-core/tests/posture_inventory.rs` walks every workspace
+//! `#[default]` enum and fails when one is neither a `Posture` implementor
+//! (with `assert_default_is_restrictive` pinning it) nor listed there with
+//! the reason it is not an access-control axis. A NEW defaulted enum that
+//! gates access (who may see, write or reach something) implements
+//! `Posture`, adds its pinning test, and is listed `Posture` in that table.
 
 use std::fmt::Debug;
 

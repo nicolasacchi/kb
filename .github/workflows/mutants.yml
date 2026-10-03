@@ -6,9 +6,14 @@
 # changed -- and uploads the surviving ("missed") mutants as an artifact and a
 # job summary.
 #
-# ADVISORY: it is opt-in (the `mutants` PR label), `continue-on-error`, and
-# never a required check. A survivor is a question for the reviewer ("what
-# test should have noticed this?"), not a gate: some mutants are equivalent.
+# ADVISORY: it is opt-in (the `mutants` PR label) and never a required check.
+# A survivor is a question for the reviewer ("what test should have noticed
+# this?"), not a gate: some mutants are equivalent. Survivors (cargo-mutants
+# exit 2) and timeouts (exit 3) therefore end the step green and are reported
+# in the job summary. Everything else -- a broken toolchain, a baseline that
+# does not build or pass (exit 4), a usage error -- FAILS the job: the lane
+# used to sit behind a job-level `continue-on-error`, which turned a mutation
+# run that never ran into a green tick.
 # It is label-triggered, not on every push, because a mutation run recompiles
 # and re-tests per mutant and costs far more than the PR lanes.
 name: Mutants (advisory)
@@ -31,7 +36,6 @@ jobs:
     if: contains(github.event.pull_request.labels.*.name, 'mutants')
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,11 +67,21 @@ jobs:
       - name: cargo mutants --in-diff
         # No kb-embedder (static ONNX Runtime: CLAUDE.md invariant 26). An
         # empty diff makes cargo-mutants exit 0 with "no mutants".
-        run: >-
-          cargo mutants --locked --in-diff "$RUNNER_TEMP/pr.diff"
-          --package kb-core --package kb-server --package kb-cli
-          --package kb-code-server --package kb-code-cli --package kb-lip
-          --jobs 2 --timeout 300 --output "$RUNNER_TEMP/mutants"
+        # Exit codes (cargo-mutants): 0 all caught, 2 missed mutants,
+        # 3 timeouts, 4 the unmutated baseline failed. 2 and 3 are the
+        # advisory findings; any other code fails this step.
+        run: |
+          set +e
+          cargo mutants --locked --in-diff "$RUNNER_TEMP/pr.diff" \
+            --package kb-core --package kb-server --package kb-cli \
+            --package kb-code-server --package kb-code-cli --package kb-lip \
+            --jobs 2 --timeout 300 --output "$RUNNER_TEMP/mutants"
+          rc=$?
+          echo "$rc" > "$RUNNER_TEMP/mutants.rc"
+          case "$rc" in
+            0|2|3) exit 0 ;;
+            *) echo "::error::cargo-mutants failed to run (exit $rc)"; exit "$rc" ;;
+          esac
 
       - name: Summarise surviving mutants
         if: ${{ !cancelled() }}
@@ -75,6 +89,14 @@ jobs:
           out="$RUNNER_TEMP/mutants/mutants.out"
           {
             echo "### cargo-mutants (advisory)"
+            rc="$(cat "$RUNNER_TEMP/mutants.rc" 2>/dev/null || echo none)"
+            case "$rc" in
+              0) echo "Exit 0: every mutant in the diff was caught (or the diff had none)." ;;
+              2) echo "Exit 2: some mutants in the diff SURVIVED -- see below. Advisory, not a gate." ;;
+              3) echo "Exit 3: some mutants TIMED OUT -- see the artifact. Advisory, not a gate." ;;
+              none) echo "**The mutation run did not complete** (no exit code recorded): the job is red for that reason, not for a survivor." ;;
+              *) echo "**cargo-mutants itself failed (exit $rc)**: no mutation result exists for this PR." ;;
+            esac
             if [ -f "$out/missed.txt" ]; then
               echo "Surviving mutants: $(wc -l < "$out/missed.txt")"
               echo '```'
