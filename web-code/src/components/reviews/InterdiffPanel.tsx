@@ -6,7 +6,7 @@ import { statusGlyph } from "./ReviewFileItem";
 import { useDiff } from "../../hooks/useDiff";
 import { useDiffHighlights } from "../../hooks/useDiffHighlights";
 import { parseUnifiedDiff } from "../../lib/diff";
-import { authorChangeCount, filterAuthorFiles } from "../../lib/reviewSince";
+import { authorOnlyCaption, filterAuthorFiles } from "../../lib/reviewSince";
 import { loadDiffMode, saveDiffMode } from "../../lib/prefs";
 import type { DiffMode } from "../../lib/prefs";
 
@@ -50,8 +50,7 @@ export default function InterdiffPanel({
           />
           Author changes only
           <span className="kbc-review__since" data-kbc-interdiff-author-count>
-            {authorChangeCount(since)} author change{authorChangeCount(since) === 1 ? "" : "s"}
-            {since.bases.moved ? " · base moved" : ""}
+            {authorOnlyCaption(since)}
           </span>
         </label>
       )}
