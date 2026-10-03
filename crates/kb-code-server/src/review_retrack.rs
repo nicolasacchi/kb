@@ -276,13 +276,24 @@ pub(crate) fn retrack_sync(
         }
         let eff = EffectiveBase::Policy(policy.clone());
         ctx.import_base(&eff)?;
-        let target_tip = ctx.base_tip(&eff)?;
+        let mut target_tip = ctx.base_tip(&eff)?;
         let head_tip = ctx.head_tip(&review.head_ref)?;
-        let merge_base =
+        let mut merge_base =
             reviews::merge_base_sha(&ctx.root(), &target_tip, &head_tip).map_err(git_err)?;
-        // A6-1 twin: apply refuses a head the target already contains.
+        // A6-1 twin: the apply pins a head the target already contains to
+        // its merge-time base (or refuses when no merge names one); the dry
+        // run predicts exactly that.
         if is_pr {
-            crate::review_base::capture::refuse_merged_head(&head_tip, &merge_base)?;
+            if let Some(pin) = crate::review_base::capture::merged_pin(
+                &ctx.root(),
+                &head_tip,
+                &merge_base,
+                &target_tip,
+            )? {
+                merge_base =
+                    reviews::merge_base_sha(&ctx.root(), &pin, &head_tip).map_err(git_err)?;
+                target_tip = pin;
+            }
         }
         let latest = ctx.store.latest_patchset(review.id).ok().flatten();
         let would_mint = decide_kind(

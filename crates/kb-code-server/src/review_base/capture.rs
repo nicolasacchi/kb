@@ -111,13 +111,29 @@ pub fn capture_at(
     opts: &CaptureOpts,
     max_patchsets: u32,
 ) -> Result<CaptureOutcome, ReviewGitError> {
-    let merge_base = reviews::merge_base_sha(root, base_tip, tip)?;
+    let mut base_tip = base_tip;
+    let mut merge_base = reviews::merge_base_sha(root, base_tip, tip)?;
     // A6-1 — the shared choke point: the store paths, the no-store
-    // creation/reuse and the snapshot all mint through here.
+    // creation/reuse and the snapshot all mint through here. A PR whose head
+    // the target already contains was MERGED: capturing it against the live
+    // target would mint an empty patchset, so the base is pinned to the
+    // merge-time target tip (`M^1` of the merge commit that brought the head
+    // in) — the merged PR stays reviewable. With no merge commit to name
+    // (fast-forward / unreachable) it is refused honestly.
+    let merged_base;
     if pr_of_head(&review.head_ref).is_some() && tip == merge_base {
-        return Err(ReviewGitError::PrAlreadyMerged(
-            tip[..tip.len().min(12)].to_string(),
-        ));
+        match reviews::merged_pr_base_sha(root, base_tip, tip)? {
+            Some(b) => {
+                merged_base = b;
+                base_tip = merged_base.as_str();
+                merge_base = reviews::merge_base_sha(root, base_tip, tip)?;
+            }
+            None => {
+                return Err(ReviewGitError::PrAlreadyMerged(
+                    tip[..tip.len().min(12)].to_string(),
+                ));
+            }
+        }
     }
     let latest = store.latest_patchset(review.id).map_err(db_err)?;
     let kind = decide_kind(
@@ -207,12 +223,31 @@ pub(crate) fn refuse_merged_head(head: &str, merge_base: &str) -> Result<(), Bas
             409,
             URN_PR_ALREADY_MERGED,
             format!(
-                "the PR head {} is already contained in the target tip (the PR was merged): capturing against the live target would mint an empty patchset — pin the merge-time base with --base <sha> to review what landed",
+                "the PR head {} is already contained in the target tip (the PR was merged): no merge commit on the target's first-parent history names the base it was merged into (a fast-forward or rebase merge), so capturing against the live target would mint an empty patchset — pin the base explicitly with --base <sha> to review what landed",
                 &head[..head.len().min(12)]
             ),
         ));
     }
     Ok(())
+}
+
+/// A6-1 — for a PR whose head the target tip already contains
+/// (`head == merge_base`): the merge-time base to pin
+/// ([`reviews::merged_pr_base_sha`]), or the typed 409 `pr-already-merged`
+/// when no merge commit names it. `Ok(None)` = the PR is not merged.
+pub(crate) fn merged_pin(
+    root: &dyn GitRoot,
+    head: &str,
+    merge_base: &str,
+    target_tip: &str,
+) -> Result<Option<String>, BaseError> {
+    if head != merge_base {
+        return Ok(None);
+    }
+    match reviews::merged_pr_base_sha(root, target_tip, head).map_err(capture_error)? {
+        Some(b) => Ok(Some(b)),
+        None => refuse_merged_head(head, merge_base).map(|_| None),
+    }
 }
 
 /// The message of a review-row write that did not land (the DB, not the
@@ -1274,11 +1309,9 @@ impl<'a> StoreCtx<'a> {
                 "the review's base changed while this capture was waiting; retry",
             ));
         }
+        // A merged PR (the target contains the head) is pinned to its
+        // merge-time base INSIDE `capture_at`, or refused there.
         let t = self.base_tip(eff)?;
-        if pr_of_head(&review.head_ref).is_some() {
-            let mb = reviews::merge_base_sha(&self.root(), &t, &head).map_err(capture_error)?;
-            refuse_merged_head(&head, &mb)?;
-        }
         let out = capture_at(
             self.store,
             self.bus,
@@ -1383,11 +1416,21 @@ impl<'a> StoreCtx<'a> {
         } else {
             self.import_base(&eff)?;
         }
-        let base_tip = self.base_tip(&eff)?;
+        let mut base_tip = self.base_tip(&eff)?;
         let merge_base =
             reviews::merge_base_sha(&self.root(), &base_tip, &head_sha).map_err(capture_error)?;
+        let mut policy = policy;
+        let mut eff = eff;
         if nr.pr.is_some() {
-            refuse_merged_head(&head_sha, &merge_base)?;
+            // A6-1 — a merged PR is reviewed against the base it was merged
+            // INTO: the policy becomes `pin(M^1)` (auto-set, so the review
+            // never follows the live target again), or the creation is
+            // refused when no merge commit names that base.
+            if let Some(pin) = merged_pin(&self.root(), &head_sha, &merge_base, &base_tip)? {
+                policy = BasePolicy::pin(&pin, SetBy::Auto, policy.source);
+                eff = EffectiveBase::Policy(policy.clone());
+                base_tip = pin;
+            }
         }
         let status = status_after(&fetch, &eff, &BaseStatus::default());
         Ok(Prepared {

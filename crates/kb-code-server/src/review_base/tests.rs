@@ -2398,16 +2398,18 @@ fn merge_pr_into_main(fx: &Fx) {
 }
 
 /// A6-1 — after a merge-commit merge the target tip CONTAINS the PR head,
-/// so `merge-base(target, head) == head` and the patchset was
-/// (tip=head, base=head): zero files. Creation, snapshot/sync reuse and
-/// retrack (dry run AND apply) now refuse with the typed
-/// `pr-already-merged` instead of minting the empty patchset (which also
-/// orphaned every finding of an already-reviewed PR).
+/// so `merge-base(target, head) == head` and a naive capture is
+/// (tip=head, base=head): zero files. The merge-time base (`M^1` of the
+/// merge commit that brought the head in) is pinned instead, so the merged
+/// PR stays reviewable with its real two-file diff: creation pins it,
+/// snapshot/sync reuse keeps the existing patchset, and retrack (dry run
+/// AND apply) agree.
 #[test]
-fn a_pr_merged_into_its_target_is_refused_not_captured_as_an_empty_patchset() {
+fn a_pr_merged_into_its_target_is_pinned_to_its_merge_time_base() {
     use crate::review_retrack::retrack_sync;
     let fx = fixture();
     fx.push_pr(&fx.m1, &["a.rs", "b.rs"], "v1");
+    let merge_time_target = git(&fx.author, &["rev-parse", "main"]);
     let nr = || NewReview {
         pr: Some(PR),
         forge_base_ref: Some("main".into()),
@@ -2419,42 +2421,93 @@ fn a_pr_merged_into_its_target_is_refused_not_captured_as_an_empty_patchset() {
     let id = review.id;
     let ps1 = recap(&fx, id, fetch()).outcome.ps;
     assert_eq!(fx.diff_names(&ps1.base_sha, &ps1.tip_sha).len(), 2);
-    let before_ps = fx.store.list_patchsets(id).unwrap().len();
 
     merge_pr_into_main(&fx);
 
-    // Creation (sync --merged-since, start-pr for a merged PR).
+    // Creation (sync --merged-since, start-pr for a merged PR): pinned to
+    // the target tip the PR was merged INTO, not refused.
+    let merged = fx
+        .with(|c| c.prepare_new(&nr()))
+        .expect("a merged PR is reviewable");
+    assert_eq!(merged.policy.mode, BaseMode::Pin, "{:?}", merged.policy);
+    assert_eq!(
+        merged.policy.pin.as_deref(),
+        Some(merge_time_target.as_str())
+    );
+    assert_eq!(merged.base_tip, merge_time_target);
+
+    // Reuse / snapshot of the existing review: still the real diff.
+    let review = fx.refetch(id);
+    let again = recap(&fx, id, fetch()).outcome.ps;
+    assert_eq!(again.tip_sha, ps1.tip_sha);
+    assert_eq!(
+        fx.diff_names(&again.base_sha, &again.tip_sha).len(),
+        2,
+        "the merged PR's patchset is not empty"
+    );
+
+    // Retrack: the dry run predicts what the apply does, and neither
+    // refuses nor mints an empty patchset.
+    let dry = fx
+        .with(|c| retrack_sync(c, &review, None, true, Some("main"), vec![], true))
+        .expect("dry run");
+    assert!(!dry.minted);
+    let applied = fx
+        .with(|c| retrack_sync(c, &review, None, true, Some("main"), vec![], false))
+        .expect("apply");
+    let latest = fx.store.latest_patchset(id).unwrap().unwrap();
+    assert_eq!(
+        fx.diff_names(&latest.base_sha, &latest.tip_sha).len(),
+        2,
+        "retrack of a merged PR keeps the real diff: {:?}",
+        applied.kind
+    );
+}
+
+/// A6-1 — with NO merge commit to name the base (a fast-forward merge puts
+/// the PR commits straight on the target) the refusal stays, typed and
+/// honest, on creation, snapshot and retrack — and nothing empty is minted.
+#[test]
+fn a_fast_forward_merged_pr_is_still_refused_with_the_typed_conflict() {
+    use crate::review_retrack::retrack_sync;
+    let fx = fixture();
+    fx.push_pr(&fx.m1, &["a.rs", "b.rs"], "v1");
+    let nr = || NewReview {
+        pr: Some(PR),
+        forge_base_ref: Some("main".into()),
+        ..NewReview::default()
+    };
+    let prepared = fx.with(|c| c.prepare_new(&nr())).unwrap();
+    let review = fx.pr_review(&prepared.base_ref, Some(&prepared.policy));
+    let id = review.id;
+    recap(&fx, id, fetch());
+    let before_ps = fx.store.list_patchsets(id).unwrap().len();
+
+    git(&fx.author, &["checkout", "-q", "main"]);
+    git(&fx.author, &["merge", "--ff-only", "-q", "pr"]);
+    git(&fx.author, &["push", "-q", "origin", "main"]);
+
     let err = fx
         .with(|c| c.prepare_new(&nr()))
-        .expect_err("a merged PR must not be prepared against the live target");
+        .expect_err("no merge commit names the base");
     assert_eq!(err.urn, URN_PR_ALREADY_MERGED, "{err}");
     assert_eq!(err.status, 409);
-
-    // Reuse / snapshot of the existing review.
     let review = fx.refetch(id);
     let err = fx
         .with(|c| c.recapture(&review, &fetch()))
         .expect_err("a snapshot must not mint an empty patchset");
     assert_eq!(err.urn, URN_PR_ALREADY_MERGED, "{err}");
-
-    // Retrack: the dry run predicts what the apply does.
-    let unread = vec![];
     let dry = fx
-        .with(|c| retrack_sync(c, &review, None, true, Some("main"), unread.clone(), true))
+        .with(|c| retrack_sync(c, &review, None, true, Some("main"), vec![], true))
         .err()
         .expect("dry run");
     assert_eq!(dry.urn, URN_PR_ALREADY_MERGED, "{dry}");
     let applied = fx
-        .with(|c| retrack_sync(c, &review, None, true, Some("main"), unread, false))
+        .with(|c| retrack_sync(c, &review, None, true, Some("main"), vec![], false))
         .err()
         .expect("apply");
     assert_eq!(applied.urn, URN_PR_ALREADY_MERGED, "{applied}");
-
-    assert_eq!(
-        fx.store.list_patchsets(id).unwrap().len(),
-        before_ps,
-        "no empty patchset was minted"
-    );
+    assert_eq!(fx.store.list_patchsets(id).unwrap().len(), before_ps);
 }
 
 /// A6-3 — the policy check runs UNDER the ops lock, before minting: a
@@ -2668,4 +2721,332 @@ async fn a_failed_creation_step_discards_the_half_created_review() {
         .await
         .is_err());
     assert!(state.store.get_review(gone).unwrap().is_none());
+}
+
+// =====================================================================
+// v0.44 K6 — the no-store reuse path (A6-5): base refresh + D15 follow
+// =====================================================================
+
+/// Author a `develop` branch on the forge (one commit off `m1`).
+fn push_develop(fx: &Fx) -> String {
+    git(&fx.author, &["checkout", "-q", "-B", "develop", &fx.m1]);
+    let tip = commit(&fx.author, "dev.txt", "dev");
+    git(&fx.author, &["push", "-q", "-f", "origin", "develop"]);
+    git(&fx.author, &["checkout", "-q", "main"]);
+    tip
+}
+
+/// A no-store PR review row (the pre-store fallback shape): the stored
+/// `base_ref` is `refs/remotes/origin/<b>` and the recorded ladder answer
+/// rides `pr_meta_json.base_source`.
+fn no_store_pr_review(state: &crate::state::SharedState, base_ref: &str, source: &str) -> i64 {
+    let id = state
+        .store
+        .create_review(
+            REPO,
+            Some("t"),
+            base_ref,
+            &crate::reviews::pr_ref(PR),
+            None,
+            1,
+        )
+        .unwrap();
+    let meta = serde_json::json!({ "base_source": source }).to_string();
+    state
+        .store
+        .set_review_pr_binding(id, PR as i64, "acme/widgets", None, Some(&meta), Some(1))
+        .unwrap();
+    id
+}
+
+fn warning_codes(body: &serde_json::Value) -> Vec<String> {
+    body["warnings"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|w| w["code"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A6-5 WIRING — `reuse_pr_review` on a repo with no ready store really
+/// refreshes the remote-tracking base before measuring: the forge's `main`
+/// moved after the clone's last fetch, and the clone's
+/// `refs/remotes/origin/main` must follow it (the helper alone was tested;
+/// nothing proved the route called it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reuse_pr_review_refreshes_the_origin_base_before_capturing() {
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    fx.push_pr(&fx.m1, &["a.rs"], "v1");
+    let state = unregistered_state_with(&fx, crate::config::GithubSection::default()).await;
+    let id = no_store_pr_review(&state, "refs/remotes/origin/main", "merge-base");
+    let new_main = fx.advance_main(2, "adv");
+    assert_ne!(
+        git(&fx.clone, &["rev-parse", "refs/remotes/origin/main"]),
+        new_main,
+        "precondition: the clone's origin/main is stale"
+    );
+    let repo = RepoEntry {
+        name: REPO.into(),
+        path: fx.clone.clone(),
+    };
+    let review = state.store.get_review(id).unwrap().unwrap();
+    let (status, body) = crate::reviews::reuse_pr_review(
+        &state,
+        &repo,
+        review,
+        PR,
+        false,
+        &state.github,
+        Some(Some("main".into())),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("reuse: {e:?}"));
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(
+        git(&fx.clone, &["rev-parse", "refs/remotes/origin/main"]),
+        new_main,
+        "reuse refreshed the remote-tracking base"
+    );
+}
+
+/// D15 (no-store path) — a PR retargeted on the forge is followed when kb
+/// chose the base (`base_source` merge-base), never when a person did
+/// (`explicit`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reuse_pr_review_follows_a_forge_retarget_unless_the_base_was_explicit() {
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    fx.push_pr(&fx.m1, &["a.rs"], "v1");
+    push_develop(&fx);
+    let state = unregistered_state_with(&fx, crate::config::GithubSection::default()).await;
+    let repo = RepoEntry {
+        name: REPO.into(),
+        path: fx.clone.clone(),
+    };
+    let id = no_store_pr_review(&state, "refs/remotes/origin/main", "explicit");
+    let reuse = |state: crate::state::SharedState, repo: RepoEntry, id: i64| async move {
+        let review = state.store.get_review(id).unwrap().unwrap();
+        crate::reviews::reuse_pr_review(
+            &state,
+            &repo,
+            review,
+            PR,
+            false,
+            &state.github,
+            Some(Some("develop".into())),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("reuse: {e:?}"))
+    };
+
+    // A person's base never moves; the divergence is a warning.
+    let (_, kept) = reuse(state.clone(), repo.clone(), id).await;
+    assert_eq!(kept["base_ref"], "refs/remotes/origin/main", "{kept}");
+    assert!(!warning_codes(&kept).contains(&"retargeted".to_string()));
+
+    // kb's own base follows the retarget and says so.
+    let meta = serde_json::json!({ "base_source": "merge-base" }).to_string();
+    state
+        .store
+        .set_review_pr_meta(id, None, Some(&meta), 2)
+        .unwrap();
+    let (_, followed) = reuse(state.clone(), repo.clone(), id).await;
+    assert_eq!(
+        followed["base_ref"], "refs/remotes/origin/develop",
+        "{followed}"
+    );
+    assert!(
+        warning_codes(&followed).contains(&"retargeted".to_string()),
+        "{followed}"
+    );
+    assert_eq!(
+        state.store.get_review(id).unwrap().unwrap().base_ref,
+        "refs/remotes/origin/develop"
+    );
+}
+
+/// The pure follow rule: only a daemon-chosen `refs/remotes/origin/<b>`
+/// base moves, and only to a valid, different branch.
+#[test]
+fn retarget_follow_ref_only_moves_a_daemon_chosen_origin_base() {
+    use crate::reviews::retarget_follow_ref;
+    assert_eq!(
+        retarget_follow_ref("refs/remotes/origin/main", Some("merge-base"), "develop").as_deref(),
+        Some("refs/remotes/origin/develop")
+    );
+    assert_eq!(
+        retarget_follow_ref("refs/remotes/origin/main", None, "develop").as_deref(),
+        Some("refs/remotes/origin/develop")
+    );
+    for (base, src, forge) in [
+        ("refs/remotes/origin/main", Some("explicit"), "develop"),
+        ("refs/remotes/origin/main", Some("merge-base"), "main"),
+        ("main", Some("merge-base"), "develop"),
+        ("0123456789012345678901234567890123456789", None, "develop"),
+        ("refs/remotes/origin/main", None, "bad:name"),
+    ] {
+        assert_eq!(
+            retarget_follow_ref(base, src, forge),
+            None,
+            "{base} {forge}"
+        );
+    }
+}
+
+// =====================================================================
+// v0.44 K6 — A6.f4: atomic creation + the call-site discard
+// =====================================================================
+
+async fn prepared_for_head(
+    state: &crate::state::SharedState,
+    head: &str,
+) -> (crate::review_store::StoreHandle, Member, capture::Prepared) {
+    let handle = state
+        .review_stores
+        .handle_for_repo(&state.store, REPO)
+        .expect("the store is ready");
+    let member = crate::reviews::store_member(state, REPO).unwrap();
+    let nr = NewReview {
+        head_ref: head.to_string(),
+        ..NewReview::default()
+    };
+    let prepared =
+        crate::reviews::with_store_ctx(state, handle.clone(), member.clone(), move |c| {
+            c.prepare_new(&nr)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    (handle, member, prepared)
+}
+
+/// A6.f4 — the row and its base policy land in ONE transaction, and the
+/// real call site (`capture_new_in_store`) removes the row again when the
+/// first capture fails: a head that vanished between resolution and
+/// capture leaves no patchset-less orphan for the next sync to duplicate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_first_capture_removes_the_atomically_created_row_at_the_call_site() {
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    commit(&fx.clone, "f.rs", "f");
+    git(&fx.clone, &["checkout", "-q", "main"]);
+    let state = route_state(&fx).await;
+
+    // Success keeps the row, with its base policy already written.
+    let (handle, member, prepared) = prepared_for_head(&state, "feature").await;
+    let kept = crate::reviews::insert_store_review(
+        &state,
+        REPO,
+        Some("t".into()),
+        &prepared,
+        "feature".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let base = state.store.get_review_base(kept.id).unwrap().unwrap();
+    assert!(base.base_mode.is_some(), "the policy rode the insert tx");
+    crate::reviews::capture_new_in_store(&state, handle, member, &kept, &prepared)
+        .await
+        .unwrap();
+    assert!(state.store.get_review(kept.id).unwrap().is_some());
+    assert_eq!(state.store.list_patchsets(kept.id).unwrap().len(), 1);
+
+    // The head disappears after the row was inserted: the capture fails and
+    // the row goes with it.
+    let (handle, member, prepared) = prepared_for_head(&state, "feature").await;
+    let doomed = crate::reviews::insert_store_review(
+        &state,
+        REPO,
+        Some("t".into()),
+        &prepared,
+        "feature".into(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    git(&fx.clone, &["branch", "-q", "-D", "feature"]);
+    crate::reviews::capture_new_in_store(&state, handle, member, &doomed, &prepared)
+        .await
+        .expect_err("the head no longer exists");
+    assert!(
+        state.store.get_review(doomed.id).unwrap().is_none(),
+        "the half-created review was discarded"
+    );
+}
+
+/// A6.f4 — a PR binding that cannot be written (an OPEN review already
+/// binds the PR) fails the WHOLE creation: no row survives, so a policy-less,
+/// unbound orphan never reaches the next sync.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_binding_collision_rolls_the_whole_creation_back() {
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    commit(&fx.clone, "f.rs", "f");
+    git(&fx.clone, &["checkout", "-q", "main"]);
+    let state = route_state(&fx).await;
+    let (_h, _m, prepared) = prepared_for_head(&state, "feature").await;
+    let bind = || crate::reviews::PrBindingInput {
+        number: PR as i64,
+        repo_slug: "acme/widgets".into(),
+        head_sha: "a".repeat(40),
+        meta_json: None,
+    };
+    let first = crate::reviews::insert_store_review(
+        &state,
+        REPO,
+        None,
+        &prepared,
+        "feature".into(),
+        None,
+        Some(bind()),
+    )
+    .await
+    .unwrap();
+    crate::reviews::insert_store_review(
+        &state,
+        REPO,
+        None,
+        &prepared,
+        "feature".into(),
+        None,
+        Some(bind()),
+    )
+    .await
+    .expect_err("an open review already binds PR 7");
+    assert!(
+        state.store.get_review(first.id + 1).unwrap().is_none(),
+        "the failed creation left no row behind"
+    );
+}
+
+/// K3 regression — a transient forge error while enriching must degrade
+/// `pr_meta` (a reason on the envelope), never fail the creation: it used
+/// to be a fallible step AFTER the capture, and `discard_on_err` deleted the
+/// freshly minted good patchset with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forge_error_during_enrichment_degrades_pr_meta_and_cannot_fail_creation() {
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    let state = route_state(&fx).await;
+    let gh = crate::github::GithubRepo {
+        owner: "acme".into(),
+        name: "widgets".into(),
+    };
+    let (meta, reason) = crate::reviews::pr_enrichment(
+        &state.github,
+        Some(&gh),
+        Some(Err(crate::github::GithubApiError::Unreachable(
+            "https://api.invalid/x".into(),
+            "connection reset".into(),
+        ))),
+        PR,
+        false,
+        "merge-base",
+    )
+    .await;
+    assert!(meta.is_none());
+    assert!(reason.is_some(), "the degradation is named, not swallowed");
 }
