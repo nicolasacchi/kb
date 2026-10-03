@@ -363,23 +363,26 @@ pub(crate) fn ingest_keyed(
         source: trust_source,
     };
 
-    let html = kb_core::memory::render_artifact(
-        title,
-        &body_html,
-        &body.category,
-        &tags,
-        salience,
-        body.decay.as_deref(),
-        body.supersedes.as_deref(),
-        body.session_id.as_deref(),
-        global,
-        &body.linked_kbs,
-        Some(ts as i64),
-        body.summary.as_deref(),
-        (!provenance.is_empty()).then_some(&provenance),
-        memory_type,
-        outcome,
-    );
+    let render_with_created = |created: i64| {
+        kb_core::memory::render_artifact(
+            title,
+            &body_html,
+            &body.category,
+            &tags,
+            salience,
+            body.decay.as_deref(),
+            body.supersedes.as_deref(),
+            body.session_id.as_deref(),
+            global,
+            &body.linked_kbs,
+            Some(created),
+            body.summary.as_deref(),
+            (!provenance.is_empty()).then_some(&provenance),
+            memory_type,
+            outcome,
+        )
+    };
+    let html = render_with_created(ts as i64);
 
     // Collision-resistant filename: `<slug>-<unix_secs>[-n].html`. Two
     // same-title remembers land on distinct paths → distinct ids → two
@@ -398,9 +401,48 @@ pub(crate) fn ingest_keyed(
         Some(r) => format!("{base}-{r}.html"),
         None => format!("{base}-{ts}.html"),
     };
-    if client_ref.is_some() {
+    if let Some(r) = client_ref {
         let abs = ctx.source_path.join(&filename);
+        // A key is bound to ONE memory. The same key arriving with a
+        // different title names a different file, so look for any file the
+        // key already owns before writing a second memory under it.
+        let suffix = format!("-{r}.html");
+        let owned_elsewhere = std::fs::read_dir(&ctx.source_path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.ends_with(&suffix) && n != filename
+            });
+        if owned_elsewhere {
+            return Err(error_to_problem_json(&kb_core::Error::Conflict(format!(
+                "client_ref {r} was already used for a different memory; \
+                 a retry must resend the identical content, a new memory needs a new key"
+            ))));
+        }
         if abs.exists() {
+            // Same key, same filename: it is a replay ONLY if the content is
+            // the same. Re-render with the stored creation stamp (the one
+            // field that legitimately differs) and compare bytes; anything
+            // else is a reuse of the key for different text and must be an
+            // error, not a silent drop of the new text.
+            let stored = std::fs::read_to_string(&abs).unwrap_or_default();
+            let created = stored
+                .split("<meta name=\"kb-created\" content=\"")
+                .nth(1)
+                .and_then(|t| t.split('"').next())
+                .and_then(|n| n.parse::<i64>().ok());
+            let same = match created {
+                Some(c) => render_with_created(c) == stored,
+                None => false,
+            };
+            if !same {
+                return Err(error_to_problem_json(&kb_core::Error::Conflict(format!(
+                    "client_ref {r} was already used for different content; \
+                     a retry must resend the identical memory, a new memory needs a new key"
+                ))));
+            }
             let rel = kb_core::paths::doc_rel_path(&abs.to_string_lossy(), &ctx.source_path);
             let id = ArtifactId::from_path(&rel).to_string();
             return Ok(IngestResponse {

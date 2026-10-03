@@ -79,7 +79,7 @@ if grep -q -- '--deadline-ms' "$LOG"; then ok "a deadline is passed to the daemo
 n=$((n + 1)); : >"$LOG"
 printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
 printf '%s' '{"session_id":"s-turn-repeat","cwd":"/tmp","prompt":"q2"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$text_json" "$RECALL" >/dev/null 2>&1
-if [ "$(grep -c -- '--lanes recall$' "$LOG" || true)" -ge 1 ] || grep -qE -- '--lanes recall --' "$LOG"; then ok "turn 2+ asks for lanes recall only"; else bad "later-turn lanes wrong: $(cat "$LOG")"; fi
+if grep -E -- '^turn q2 ' "$LOG" | grep -qE -- '--lanes recall,slate --'; then ok "turn 2+ asks for lanes recall,slate (no context scent)"; else bad "later-turn lanes wrong: $(cat "$LOG")"; fi
 
 # --- 2. a degraded lane is named -----------------------------------------
 deg_json="$(jq -n --arg t "$gold" '{text:$t, recalled:[], degraded:[{kb:"turn",lane:"recall",error_class:"timeout"}], degraded_note:"kb: recall skipped (timeout)"}')"
@@ -110,6 +110,49 @@ if ! grep -q '^turn ' "$LOG"; then ok "without KB_TURN=1, kb turn is never calle
 case "$out" in *"OLD"*) ok "default path output unchanged" ;; *) bad "default path changed: $out" ;; esac
 out="$(hook KB_TURN=1 KB_RECALL_LAYOUT=v1 TURN_JSON="$text_json")"
 if ! grep -q '^turn ' "$LOG"; then ok "KB_RECALL_LAYOUT=v1 bypasses kb turn"; else bad "kb turn used under layout v1"; fi
+
+# --- 6. the slate lane rides the turn call (v0.44 X6) ----------------------
+# Golden: with the same slate text, KB_TURN=1 and the legacy two-lane path
+# inject byte-identical output; the cursor advances from the turn's head_seq;
+# `kb slate` is never spawned when the turn served the lane.
+SLATE_TXT="slate: now pruning the north rows"
+cat >"$TMPROOT/bin/kb" <<'EOF2'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$LOG"
+case "$1" in
+  turn)
+    [ -n "${TURN_JSON:-}" ] && { printf '%s' "$TURN_JSON"; exit 0; }
+    exit 1
+    ;;
+  recall) printf '%s' "$RECALL_PACK"; exit 0 ;;
+  context) printf '%s' '{"scent":"no prior context"}'; exit 0 ;;
+  slate) printf '%s' "$SLATE_RESP"; exit 0 ;;
+esac
+exit 0
+EOF2
+chmod +x "$TMPROOT/bin/kb"
+export RECALL_PACK
+RECALL_PACK="$(cat "$SCRIPT_DIR/fixtures/recall-pack-5.json")"
+export SLATE_RESP
+SLATE_RESP="$(jq -n --arg t "$SLATE_TXT" '{text:$t, head_seq:7}')"
+slate_turn_json="$(jq -n --arg t "$gold"$'\n\n'"$SLATE_TXT" '{text:$t, recalled:[], head_seq:7}')"
+
+legacy="$(hook TURN_JSON="$slate_turn_json")"
+legacy_log="$(cat "$LOG")"
+turned="$(hook KB_TURN=1 TURN_JSON="$slate_turn_json")"
+turn_log="$(cat "$LOG")"
+if [ "$legacy" = "$turned" ]; then ok "KB_TURN=1 with a slate lane is byte-identical to the legacy path"; else bad "slate golden differs"; diff <(printf '%s' "$legacy") <(printf '%s' "$turned") | head; fi
+case "$legacy_log" in *"slate open"*) ok "legacy path spawned kb slate" ;; *) bad "legacy path never called kb slate: $legacy_log" ;; esac
+case "$turn_log" in *"slate"*"--lanes"*|*"--lanes"*"slate"*) ok "the turn call asked for the slate lane" ;; *) bad "no slate lane in: $turn_log" ;; esac
+if ! printf '%s\n' "$turn_log" | grep -q '^slate '; then ok "no separate kb slate spawn when the turn served the lane"; else bad "kb slate spawned despite the turn lane: $turn_log"; fi
+cf="$(ls "$XDG_CACHE_HOME"/kb/slate-cursor-s-turn-* 2>/dev/null | tail -1)"
+if [ -n "$cf" ] && [ "$(cat "$cf")" = "7" ]; then ok "the cursor advances to the turn's head_seq"; else bad "cursor not advanced (file: ${cf:-none})"; fi
+# A following prompt of the SAME session sends the cursor as --slate-since.
+: >"$LOG"
+printf '%s' '{"session_id":"s-slate-cursor","cwd":"/tmp","prompt":"q"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$slate_turn_json" "$RECALL" >/dev/null 2>&1
+: >"$LOG"
+printf '%s' '{"session_id":"s-slate-cursor","cwd":"/tmp","prompt":"q2"}' | KB_HOOK_FMT=kimi KB_TURN=1 TURN_JSON="$slate_turn_json" "$RECALL" >/dev/null 2>&1
+if grep -q -- '--slate-since 7' "$LOG"; then ok "the second prompt sends --slate-since <cursor>"; else bad "no --slate-since: $(cat "$LOG")"; fi
 
 echo
 echo "passed=$PASS failed=$FAIL"

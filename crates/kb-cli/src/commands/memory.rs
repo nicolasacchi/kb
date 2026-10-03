@@ -30,6 +30,7 @@ pub async fn remember(
     link: Option<&str>,
     daemon: Option<&str>,
     bearer: Option<&str>,
+    wait: bool,
     json: bool,
 ) -> Result<()> {
     // MI-W3.3a / MI-W3.4 — validate the closed sets BEFORE any network
@@ -112,7 +113,9 @@ pub async fn remember(
             }
             Ok(())
         }
-        Err(e) if crate::outbox::is_transient(&e) => {
+        // `--wait`: a transient failure is a plain failure (non-zero, nothing
+        // spooled) - the caller asked for the id, not a promise.
+        Err(e) if !wait && crate::outbox::is_transient(&e) => {
             let spooled = crate::outbox::Spooled {
                 client_ref: client_ref.clone(),
                 queued_at: chrono::Utc::now().timestamp(),

@@ -30,6 +30,11 @@ bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
 echo "== kb-omp.ts slate surface (SL7c) =="
 
 if ! command -v bun >/dev/null 2>&1; then
+  # CI sets KB_REQUIRE_BUN=1: a lane that installs bun must not skip silently.
+  if [ "${KB_REQUIRE_BUN:-}" = "1" ]; then
+    echo "not ok  - bun is required (KB_REQUIRE_BUN=1) but is not installed"
+    exit 1
+  fi
   echo "SKIP: bun is not installed — kb-omp.ts is a bun/TS extension."
   echo "passed=0 failed=0 skipped=1"
   exit 0
