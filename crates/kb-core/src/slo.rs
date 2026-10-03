@@ -51,7 +51,7 @@ pub const SLO_GRAMMAR: &str = "kb-slo/1";
 /// forces a decision here rather than silently skewing the ratio.
 pub const CODEREF_PATH_SHAPED_KINDS: [&str; 4] = ["path", "path_line", "path_range", "path_list"];
 
-/// The four operator-seeded indicators. A CLOSED set in code; stored as TEXT
+/// The five operator-seeded indicators. A CLOSED set in code; stored as TEXT
 /// on the wire and in `slo_snapshots.indicator` so a row written by a newer
 /// binary still reads on an older one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -151,6 +151,23 @@ pub enum SloKey {
     /// corpus has no `sessions` rows (a non-sessions corpus is not stale, it
     /// simply has no capture pipeline).
     CaptureFreshnessHours,
+
+    /// **Definition (v0.44 F10).** Of the memory-injection turns the harness
+    /// answered in the trailing window, the percentage whose injection LANDED
+    /// in a capture: `landed / (landed + lost) * 100`, summed over the newest
+    /// capture per session, with sessions the live registry still tracks
+    /// excluded (capture lag is not loss).
+    ///
+    /// `landed` = distinct turns on which the capture parse found a memory
+    /// injection; `lost` = distinct serve instants of live-serve rows that no
+    /// landed capture row covers. A turn with no relevant memory legitimately
+    /// serves nothing and is in neither half, which is why user turns are NOT
+    /// the denominator.
+    ///
+    /// Higher is better; a configured target is a MINIMUM. `unknown` when no
+    /// injection was served or landed in the window (an empty denominator is
+    /// not 0%, and not 100%).
+    RecallCoveragePct,
 }
 
 /// Which way a target reads. Not a policy — purely how [`SloStatus`] is
@@ -176,11 +193,12 @@ impl SloDirection {
 impl SloKey {
     /// Every indicator, in the canonical order every surface renders them:
     /// the doc↔code lane, then the sessions lane's three.
-    pub const ALL: [SloKey; 4] = [
+    pub const ALL: [SloKey; 5] = [
         SloKey::CoderefResolutionPct,
         SloKey::OrphanKbSessions,
         SloKey::LedgerParseFailurePct,
         SloKey::CaptureFreshnessHours,
+        SloKey::RecallCoveragePct,
     ];
 
     /// Wire/DB/config spelling. ONE name per indicator: the `[kb.*.slo]`
@@ -192,6 +210,7 @@ impl SloKey {
             SloKey::OrphanKbSessions => "orphan_kb_sessions",
             SloKey::LedgerParseFailurePct => "ledger_parse_failure_pct",
             SloKey::CaptureFreshnessHours => "capture_freshness_hours",
+            SloKey::RecallCoveragePct => "recall_coverage_pct",
         }
     }
 
@@ -202,6 +221,7 @@ impl SloKey {
             "orphan_kb_sessions" => SloKey::OrphanKbSessions,
             "ledger_parse_failure_pct" => SloKey::LedgerParseFailurePct,
             "capture_freshness_hours" => SloKey::CaptureFreshnessHours,
+            "recall_coverage_pct" => SloKey::RecallCoveragePct,
             _ => return None,
         })
     }
@@ -213,13 +233,16 @@ impl SloKey {
             SloKey::OrphanKbSessions => "orphan kb_session docs",
             SloKey::LedgerParseFailurePct => "recall ledger parse failures",
             SloKey::CaptureFreshnessHours => "capture freshness",
+            SloKey::RecallCoveragePct => "recall injections landed",
         }
     }
 
     /// Unit of `value`: `percent` | `count` | `hours`.
     pub fn unit(&self) -> &'static str {
         match self {
-            SloKey::CoderefResolutionPct | SloKey::LedgerParseFailurePct => "percent",
+            SloKey::CoderefResolutionPct
+            | SloKey::LedgerParseFailurePct
+            | SloKey::RecallCoveragePct => "percent",
             SloKey::OrphanKbSessions => "count",
             SloKey::CaptureFreshnessHours => "hours",
         }
@@ -228,7 +251,9 @@ impl SloKey {
     /// How a configured target reads for this indicator.
     pub fn direction(&self) -> SloDirection {
         match self {
-            SloKey::CoderefResolutionPct => SloDirection::HigherIsBetter,
+            SloKey::CoderefResolutionPct | SloKey::RecallCoveragePct => {
+                SloDirection::HigherIsBetter
+            }
             SloKey::OrphanKbSessions
             | SloKey::LedgerParseFailurePct
             | SloKey::CaptureFreshnessHours => SloDirection::LowerIsBetter,
@@ -308,7 +333,7 @@ pub struct SloReport {
     /// Wall clock (unix seconds) the caller measured at — passed in, never
     /// read from a clock here.
     pub computed_at_unix: i64,
-    /// Always all four of [`SloKey::ALL`], in that order. An indicator is
+    /// Always all five of [`SloKey::ALL`], in that order. An indicator is
     /// never omitted: "we could not measure this" is itself a reading, and
     /// dropping the row would make a broken input look like a missing
     /// feature.
@@ -319,7 +344,7 @@ pub struct SloReport {
     pub warn_count: usize,
 }
 
-/// The four optional targets, resolved from `[kb.<name>.slo]`. `None`
+/// The five optional targets, resolved from `[kb.<name>.slo]`. `None`
 /// everywhere (a kb with no `[slo]` section) still produces a full report —
 /// every indicator measured, every status `unknown` for want of a target.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -332,6 +357,8 @@ pub struct SloTargets {
     pub ledger_parse_failure_pct: Option<f64>,
     /// Maximum acceptable [`SloKey::CaptureFreshnessHours`].
     pub capture_freshness_hours: Option<f64>,
+    /// Minimum acceptable [`SloKey::RecallCoveragePct`].
+    pub recall_coverage_pct: Option<f64>,
 }
 
 impl SloTargets {
@@ -342,11 +369,12 @@ impl SloTargets {
             SloKey::OrphanKbSessions => self.orphan_kb_sessions,
             SloKey::LedgerParseFailurePct => self.ledger_parse_failure_pct,
             SloKey::CaptureFreshnessHours => self.capture_freshness_hours,
+            SloKey::RecallCoveragePct => self.recall_coverage_pct,
         }
     }
 }
 
-/// Every raw count the four indicators need, read from EXISTING tables by the
+/// Every raw count the five indicators need, read from EXISTING tables by the
 /// caller. Nothing here is derived — this struct is the seam that keeps the
 /// computation pure and every `unknown` path fixture-testable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -373,6 +401,11 @@ pub struct SloInputs {
     /// Newest `sessions.started_at` in this kb, or `None` when the table is
     /// empty.
     pub newest_session_started_at: Option<i64>,
+    /// v0.44 F10 recall-coverage sums (newest captures in the trailing
+    /// window, live sessions excluded): turns whose injection landed...
+    pub recall_landed_turns: u64,
+    /// ...and served turns no capture covers.
+    pub recall_lost_turns: u64,
 }
 
 /// Round to two decimals, half-away-from-zero. Applied to every non-integer
@@ -427,6 +460,7 @@ pub fn build(kb: &str, inputs: &SloInputs, targets: &SloTargets, now_unix: i64) 
         orphan_indicator(inputs, targets),
         ledger_indicator(inputs, targets),
         freshness_indicator(inputs, targets, now_unix),
+        recall_coverage_indicator(inputs, targets),
     ];
     let warn_count = indicators
         .iter()
@@ -549,6 +583,32 @@ fn freshness_indicator(inputs: &SloInputs, targets: &SloTargets, now_unix: i64) 
     )
 }
 
+fn recall_coverage_indicator(inputs: &SloInputs, targets: &SloTargets) -> SloIndicator {
+    let key = SloKey::RecallCoveragePct;
+    let served = inputs.recall_landed_turns + inputs.recall_lost_turns;
+    if served == 0 {
+        return indicator(
+            key,
+            None,
+            targets,
+            "no memory injection was served or captured in the window — \
+             an empty denominator is not 0%"
+                .to_string(),
+        );
+    }
+    let pct = round2((inputs.recall_landed_turns as f64 / served as f64) * 100.0);
+    indicator(
+        key,
+        Some(pct),
+        targets,
+        format!(
+            "{} of {} served memory injections landed in a capture ({} lost: the hook \
+             answered but no capture saw the injection; live sessions are excluded)",
+            inputs.recall_landed_turns, served, inputs.recall_lost_turns,
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +637,7 @@ mod tests {
                 "orphan_kb_sessions",
                 "ledger_parse_failure_pct",
                 "capture_freshness_hours",
+                "recall_coverage_pct",
             ],
             "the indicator key set is the config key set, the wire key set AND the \
              slo_snapshots.indicator vocabulary — changing it is a four-surface break"
@@ -630,9 +691,10 @@ mod tests {
     }
 
     #[test]
-    fn a_report_always_carries_all_four_indicators_even_with_no_inputs() {
+    fn a_report_always_carries_every_indicator_even_with_no_inputs() {
         let r = build("k", &SloInputs::default(), &no_targets(), 1_000);
-        assert_eq!(r.indicators.len(), 4);
+        assert_eq!(r.indicators.len(), SloKey::ALL.len());
+        assert_eq!(r.indicators.len(), 5);
         assert_eq!(r.grammar, SLO_GRAMMAR);
         assert_eq!(r.kb, "k");
         assert_eq!(r.computed_at_unix, 1_000);
@@ -871,6 +933,7 @@ mod tests {
             orphan_kb_sessions: Some(0.0),
             ledger_parse_failure_pct: Some(1.0),
             capture_freshness_hours: Some(1.0),
+            recall_coverage_pct: None,
         };
         let r = build("k", &inputs, &targets, 3_600 * 3);
         // coderef 10% < 90 → warn; orphans 5 > 0 → warn; ledger 0% ≤ 1 → ok;
@@ -880,6 +943,27 @@ mod tests {
             SloStatus::Ok
         );
         assert_eq!(r.warn_count, 3);
+    }
+
+    #[test]
+    fn recall_coverage_is_landed_over_served_and_unknown_when_nothing_was_served() {
+        let none = build("k", &SloInputs::default(), &no_targets(), 0);
+        assert_eq!(find(&none, SloKey::RecallCoveragePct).value, None);
+        let inputs = SloInputs {
+            recall_landed_turns: 3,
+            recall_lost_turns: 1,
+            ..Default::default()
+        };
+        let targets = SloTargets {
+            recall_coverage_pct: Some(90.0),
+            ..Default::default()
+        };
+        let r = build("k", &inputs, &targets, 0);
+        let i = find(&r, SloKey::RecallCoveragePct);
+        assert_eq!(i.value, Some(75.0));
+        assert_eq!(i.status, SloStatus::Warn, "a MINIMUM target: 75 < 90");
+        assert_eq!(i.direction, "higher_is_better");
+        assert_eq!(i.unit, "percent");
     }
 
     #[test]

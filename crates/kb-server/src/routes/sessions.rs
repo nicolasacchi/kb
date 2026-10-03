@@ -598,6 +598,7 @@ pub async fn list(
             params.cursor,
             params.cursor_id.clone(),
             limit,
+            false,
         )
         .await;
         let next = had_more
@@ -630,6 +631,7 @@ pub async fn list(
             cursor,
             cursor_id.clone(),
             limit,
+            undistilled,
         )
         .await;
         next = None;
@@ -681,6 +683,19 @@ fn finish_list(out: Vec<SessionOut>, next: Option<(i64, String)>) -> Response {
     .into_response()
 }
 
+/// Session ids whose `memory_count` the page must fetch. The count is a
+/// cross-kb lance scan (the page's dominant cost on an IO-bound host), so
+/// under `?undistilled=1` a row with no commits is skipped: the walk's keep
+/// rule is `commit_count > 0 && memory_count == 0`, so such a row can never
+/// survive and its count could not change the response. Every other listing
+/// renders `memory_count` on each row and counts them all.
+fn ids_needing_memory_count(rows: &[SessionOut], undistilled: bool) -> Vec<String> {
+    rows.iter()
+        .filter(|s| !undistilled || s.commit_count > 0)
+        .map(|s| s.session_id.clone())
+        .collect()
+}
+
 /// One keyset page of the sessions list, cross-kb merged, truncated to
 /// `limit`, with `memory_count` filled for the surviving rows. Returns
 /// `(rows, had_more)`.
@@ -694,6 +709,7 @@ async fn list_page(
     cursor: Option<i64>,
     cursor_id: Option<String>,
     limit: u32,
+    undistilled: bool,
 ) -> (Vec<SessionOut>, bool) {
     // T5 — over-fetch per kb so the cross-kb merge can still serve a
     // full page even when one corpus dominates. Each per-kb fetch
@@ -767,7 +783,7 @@ async fn list_page(
     // column, not a capture row). `title` no longer needs a per-row lance
     // read: it's the persisted V0017 column, projected by
     // `SessionOut::from_row` above (S4).
-    let page_ids: Vec<String> = out.iter().map(|s| s.session_id.clone()).collect();
+    let page_ids = ids_needing_memory_count(&out, undistilled);
     let page_ids = &page_ids;
     let mut count_futs: Vec<super::CorpusFut<'_, HashMap<String, u64>>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
@@ -797,7 +813,7 @@ async fn list_page(
 // v0.44 F10 — recall-hook coverage
 // ---------------------------------------------------------------------------
 
-const COVERAGE_DEFAULT_DAYS: u32 = 7;
+pub(crate) const COVERAGE_DEFAULT_DAYS: u32 = 7;
 const COVERAGE_MAX_DAYS: u32 = 365;
 
 #[derive(Debug, Deserialize, Default)]
@@ -896,6 +912,22 @@ pub fn aggregate_recall_coverage(
     (harnesses, total, excluded)
 }
 
+/// Session ids the live registry still tracks (not finished, not presumed
+/// ended): their capture may simply not have landed yet, so recall-coverage
+/// surfaces (the route and the `recall_coverage_pct` SLO) exclude them.
+pub(crate) fn live_session_ids(
+    state: &KbHandles,
+    now_unix: i64,
+) -> std::collections::HashSet<String> {
+    state
+        .live_registry
+        .snapshot(now_unix)
+        .into_iter()
+        .filter(|(_, st, _)| !matches!(st, LiveState::Finished | LiveState::PresumedEnded))
+        .map(|(r, _, _)| r.session_id)
+        .collect()
+}
+
 /// `GET /api/sessions/recall-coverage?days=7` — per harness, over the
 /// trailing window and NEWEST captures only: user turns vs turns where a
 /// memory injection landed vs serves that never landed. Derived per request
@@ -932,13 +964,7 @@ pub async fn recall_coverage(
         .into_iter()
         .flatten()
         .collect();
-    let live: std::collections::HashSet<String> = state
-        .live_registry
-        .snapshot(now_unix)
-        .into_iter()
-        .filter(|(_, st, _)| !matches!(st, LiveState::Finished | LiveState::PresumedEnded))
-        .map(|(r, _, _)| r.session_id)
-        .collect();
+    let live = live_session_ids(&state, now_unix);
     let (harnesses, total, excluded_live) = aggregate_recall_coverage(&rows, &live);
     Json(RecallCoverageResponse {
         days,
@@ -964,6 +990,32 @@ mod f10_tests {
             landed_turns: l,
             lost_turns: x,
         }
+    }
+
+    /// The memory_count scan is skipped for rows the undistilled filter
+    /// would drop on `commit_count` alone; ordinary listings count all rows.
+    #[test]
+    fn undistilled_counts_memories_only_for_rows_that_can_survive() {
+        let out = |sid: &str, commits: u32| {
+            SessionOut::from_row(
+                "k",
+                kb_core::storage::sqlite::SessionRow {
+                    session_id: sid.into(),
+                    commit_count: commits,
+                    ..Default::default()
+                },
+            )
+        };
+        let rows = vec![out("with-commits", 2), out("no-commits", 0)];
+        assert_eq!(
+            ids_needing_memory_count(&rows, true),
+            vec!["with-commits".to_string()]
+        );
+        assert_eq!(
+            ids_needing_memory_count(&rows, false),
+            vec!["with-commits".to_string(), "no-commits".to_string()],
+            "a plain listing renders memory_count on every row"
+        );
     }
 
     #[test]

@@ -133,24 +133,25 @@ fn indicator<'a>(report: &'a serde_json::Value, key: &str) -> &'a serde_json::Va
         .unwrap_or_else(|| panic!("indicator {key} missing"))
 }
 
-/// A corpus with nothing to measure must still answer a FULL report — four
+/// A corpus with nothing to measure must still answer a FULL report — five
 /// indicators, all present. Dropping an unmeasurable row would make a broken
 /// input look like a missing feature.
 #[tokio::test]
-async fn an_empty_corpus_reports_four_honest_unknowns() {
+async fn an_empty_corpus_reports_five_honest_unknowns() {
     let (_tmp, addr) = boot(&[], None).await;
     let client = reqwest::Client::new();
     let body = get_json(&client, addr, "/api/kb/smoke/slo").await;
 
     assert_eq!(body["grammar"], "kb-slo/1");
     assert_eq!(body["kb"], "smoke");
-    assert_eq!(body["indicators"].as_array().unwrap().len(), 4);
+    assert_eq!(body["indicators"].as_array().unwrap().len(), 5);
     assert_eq!(body["warn_count"], 0);
 
     for key in [
         "coderef_resolution_pct",
         "ledger_parse_failure_pct",
         "capture_freshness_hours",
+        "recall_coverage_pct",
     ] {
         let i = indicator(&body, key);
         assert!(i["value"].is_null(), "{key} must be null, not 0: {i}");
@@ -241,17 +242,17 @@ async fn snapshots_append_every_run_and_read_back_newest_first() {
             .json()
             .await
             .unwrap();
-        assert_eq!(r["appended"], 4);
+        assert_eq!(r["appended"], 5);
         // The route echoes what it stored, so a caller renders the same
         // reading it recorded rather than a second, slightly-later read.
-        assert_eq!(r["report"]["indicators"].as_array().unwrap().len(), 4);
+        assert_eq!(r["report"]["indicators"].as_array().unwrap().len(), 5);
         assert_eq!(r["report"]["computed_at_unix"], r["taken_at_unix"]);
         tokio::time::sleep(Duration::from_millis(1_100)).await;
     }
 
     let log = get_json(&client, addr, "/api/kb/smoke/slo/snapshots?limit=100").await;
     let rows = log["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 8, "identical readings are NOT deduped away");
+    assert_eq!(rows.len(), 10, "identical readings are NOT deduped away");
     let ts: Vec<i64> = rows
         .iter()
         .map(|r| r["taken_at_unix"].as_i64().unwrap())

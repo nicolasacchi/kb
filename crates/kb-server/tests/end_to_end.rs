@@ -13795,6 +13795,103 @@ async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
     assert_eq!(ids_of(&plain).len(), 5, "{plain}");
 }
 
+/// v0.44 F10 — `?since=` cutting the undistilled walk MID-WAY. With three
+/// committed sessions at 10:00 / 11:00 / 12:00 (the newest already has a
+/// memory) and `limit=2`, the first fetched page is [12:00, 11:00] with more
+/// behind it, so round one keeps only 11:00 and sets a resume cursor; round
+/// two reaches 10:00, which is older than `since`, and must stop the walk AND
+/// clear that cursor. A stale `next_cursor` here would send a client round
+/// again forever over rows it was told to ignore.
+#[tokio::test]
+async fn sessions_undistilled_since_cuts_the_walk_midway_and_clears_next_cursor() {
+    let mk = |sid: &str, ts: &str, iso: &str, sha_char: &str| {
+        let jsonl = format!(
+            concat!(
+                r#"{{"type":"user","promptSource":"typed","timestamp":"{iso}","message":{{"role":"user","content":"ship the thing"}}}}"#,
+                "\n",
+                r#"{{"type":"assistant","timestamp":"{iso}","message":{{"role":"assistant","model":"claude","content":[{{"type":"text","text":"Shipped the thing and it is verified."}}]}}}}"#,
+                "\n",
+            ),
+            iso = iso
+        );
+        let commits = vec![resolved_commit_fixture(&sha_char.repeat(40), vec![])];
+        (
+            format!("session-{ts}-{sid}.html"),
+            session_transcript_html_with_commits(sid, ts, &jsonl, &commits),
+        )
+    };
+    let sessions = [
+        mk("sid-cut-1", "20260601T100000Z", "2026-06-01T10:00:00Z", "1"),
+        mk("sid-cut-2", "20260601T110000Z", "2026-06-01T11:00:00Z", "2"),
+        mk("sid-cut-3", "20260601T120000Z", "2026-06-01T12:00:00Z", "3"),
+    ];
+    let mut global: Vec<(&str, String)> = sessions
+        .iter()
+        .map(|(n, h)| (n.as_str(), h.clone()))
+        .collect();
+    global.push((
+        "mem-for-3.html",
+        memory_with_session_html("Mem For 3", "sid-cut-3"),
+    ));
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    let get = |path: String| {
+        let client = client.clone();
+        async move {
+            client
+                .get(url(addr, &path))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let all = get("/api/sessions?limit=50".into()).await;
+        let rows = all["sessions"].as_array().cloned().unwrap_or_default();
+        let ready = rows.len() == 3
+            && rows
+                .iter()
+                .any(|r| r["session_id"] == "sid-cut-3" && r["memory_count"] == 1)
+            && rows.iter().all(|r| r["commit_count"] == 1);
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the three sessions: {all}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // 2026-06-01T10:30:00Z
+    let since = 1_780_309_800_i64;
+    let ids = |body: &serde_json::Value| -> Vec<String> {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["session_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let cut = get(format!("/api/sessions?undistilled=1&limit=2&since={since}")).await;
+    assert_eq!(
+        ids(&cut),
+        vec!["sid-cut-2".to_string()],
+        "10:00 is older than since, 12:00 has a memory: {cut}"
+    );
+    assert!(
+        cut["next_cursor"].is_null() && cut["next_cursor_id"].is_null(),
+        "the cut must clear the resume cursor round one set: {cut}"
+    );
+    // Without the cut the same query keeps 10:00 as well (the cursor test
+    // above covers paging; this pins that `since` is what dropped it).
+    let uncut = get("/api/sessions?undistilled=1&limit=50".into()).await;
+    assert_eq!(ids(&uncut).len(), 2, "{uncut}");
+}
+
 // P1 — A1/A2/A3: aiTitle → title → display_name, cwd → folder, file counts,
 // the /folders facet, and the ?folder= filter.
 #[tokio::test]

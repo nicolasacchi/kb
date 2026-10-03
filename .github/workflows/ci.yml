@@ -994,8 +994,8 @@ jobs:
     # and then had its POST-JOB cache save (a `tar` of target/ + the cargo
     # registry) hard-cancelled at 60m, reporting a green job as a failure —
     # this is the job that inherited that save, so it keeps the headroom.
-    # `cargo nextest` here runs the same crates as `just ci-code`'s `cargo test`
-    # line (plus a --doc step, since nextest skips doctests) — keep the two
+    # `cargo nextest` here is the same command as `just ci-code`'s nextest line,
+    # followed by the same --doc step (nextest skips doctests) — keep the two
     # in lock-step (the sibling `code-lint` job runs its first).
     #
     # V70-A5 — this lane is ALSO the kbc-cmd/1 registry gate: `kb-code
