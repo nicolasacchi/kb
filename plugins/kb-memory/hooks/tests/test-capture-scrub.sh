@@ -128,6 +128,32 @@ else
   done
 fi
 
+echo "== kb resolution when the hook PATH lacks it =="
+# A minimal PATH (jq + coreutils only) with `kb` installed under $HOME/.local/bin:
+# the adapter must find it there instead of silently skipping the capture. With
+# no kb anywhere it must skip (fail closed) AND say so on stderr.
+if [ -n "$REAL_KB" ] && command -v jq >/dev/null 2>&1; then
+  MINPATH="/usr/bin:/bin:$(dirname "$(command -v jq)")"
+  skip_min=0
+  PATH="$MINPATH" command -v kb >/dev/null 2>&1 && skip_min=1
+  HOME1="$TMPROOT/home-with-kb"; mkdir -p "$HOME1/.local/bin"; cp "$TMPROOT/fbbin/kb" "$HOME1/.local/bin/kb" 2>/dev/null
+  # the copied wrapper keeps `sessions capture` failing, which this adapter never calls
+  DR="$TMPROOT/r-codex"; mkdir -p "$DR"
+  if [ "$skip_min" = 1 ]; then
+    ok "kb-on-minimal-PATH check skipped (kb already lives on /usr/bin)"
+  else
+    env -i PATH="$MINPATH" HOME="$HOME1" KB_SESSIONS_DIR="$DR" bash "$HOOKS_DIR/kb-capture-codex.sh" "$ROLLOUT" >/dev/null 2>&1
+    check_scrubbed "codex (kb found via ~/.local/bin)" "$DR" codex
+    DR2="$TMPROOT/r-oc"; mkdir -p "$DR2"
+    env -i PATH="$MINPATH" HOME="$HOME1" KB_SESSIONS_DIR="$DR2" bash "$HOOKS_DIR/kb-capture-opencode.sh" "$EXPORT" >/dev/null 2>&1
+    check_scrubbed "opencode (kb found via ~/.local/bin)" "$DR2" opencode
+    DR3="$TMPROOT/r-none"; mkdir -p "$DR3" "$TMPROOT/home-empty"
+    err="$(env -i PATH="$MINPATH" HOME="$TMPROOT/home-empty" KB_SESSIONS_DIR="$DR3" bash "$HOOKS_DIR/kb-capture-codex.sh" "$ROLLOUT" 2>&1 >/dev/null)"
+    if ls "$DR3"/session-*.html >/dev/null 2>&1; then bad "codex: no kb anywhere writes nothing"; else ok "codex: no kb anywhere writes nothing"; fi
+    case "$err" in *"not capturing session"*) ok "codex: the skip is named on stderr" ;; *) bad "codex: the skip is named on stderr ($err)" ;; esac
+  fi
+fi
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

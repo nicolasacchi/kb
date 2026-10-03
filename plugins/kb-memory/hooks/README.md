@@ -85,6 +85,25 @@ registering anywhere `kb-memory` is already installed. Design:
   ladder above), for invoking a hook outside its normal harness payload
   (e.g. a manual `KB_SESSION_ID=abc123 kb-wake.sh </dev/null` sanity
   check) where no payload session id exists to read.
+- **Identity export (v0.44)** — the other direction: the hooks now
+  *publish* the identity. `kb-wake.sh`, `kb-wake-kimi.sh` and `kb-recall.sh`
+  export `KB_SESSION_ID` (+ `KB_HARNESS` when knowable) for the `kb` they
+  spawn; on Claude's SessionStart they also append the same two lines to
+  `$CLAUDE_ENV_FILE`, the one channel that reaches the agent's later Bash
+  tool calls, so a shell `kb remember`/`kb slate …` is attributed to the
+  session instead of the last-writer-wins marker. The omp extensions set
+  `process.env` the same way (omp spawns its bash tool from it). Other
+  harnesses have no such channel: their shell writes still fall back to
+  the repo marker (flagged on stderr).
+- **Capture needs `kb` on the hook PATH** — `kb-capture-codex.sh` and
+  `kb-capture-opencode.sh` fail closed without `kb sessions scrub`: with no
+  `kb` the session is *skipped* (one stderr line, exit 0), not captured
+  unscrubbed. They probe `$KB_BIN_DIR`, `~/.local/bin`, `~/.cargo/bin`,
+  `/usr/local/bin` and `/opt/homebrew/bin` before giving up, so a minimal
+  hook PATH is usually fine; if your harness strips even `$HOME`, export
+  `KB_BIN_DIR`. The kimi/omp/grok adapters prefer `kb sessions capture` and,
+  when that fails, scrub their bash-fallback output the same way (and write
+  nothing if the scrubber is missing).
 
 Per-harness recipes — the slate rides the same two lanes as memory, so
 nothing new needs registering where `kb-memory` is already wired:

@@ -34,10 +34,29 @@
 # JSONL is piped through `kb sessions scrub` — the same secrets-only scrubber
 # every other lane uses — BEFORE it is embedded. FAIL CLOSED: with no `kb`
 # on PATH (or a `kb` too old to have the verb) the session is NOT captured;
-# an unscrubbed capture is never written.
+# an unscrubbed capture is never written. That means the capture is SKIPPED
+# (stderr message only, exit 0 — a hook must never fail the session) when `kb`
+# cannot be found; the adapter probes KB_BIN_DIR, ~/.local/bin, ~/.cargo/bin,
+# /usr/local/bin and /opt/homebrew/bin before concluding that.
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
+
+# Resolve `kb` robustly (v0.44 X4). Harness hooks routinely run with a minimal
+# PATH (a GUI-launched harness, a service manager, a sandboxed `env -i`) that
+# lacks ~/.local/bin, so `command -v kb` failed and the capture was silently
+# skipped (this adapter fails closed without the scrubber — see above).
+# Probe the usual install locations before giving up, and say so on stderr when
+# `kb` truly cannot be found: the session is then NOT captured by this hook.
+if ! command -v kb >/dev/null 2>&1; then
+  for _kb_dir in "${KB_BIN_DIR:-}" "${HOME:-}/.local/bin" "${HOME:-}/.cargo/bin" /usr/local/bin /opt/homebrew/bin; do
+    if [ -n "$_kb_dir" ] && [ -x "$_kb_dir/kb" ]; then
+      PATH="$_kb_dir:$PATH"
+      break
+    fi
+  done
+  unset _kb_dir
+fi
 
 TRANSLATE='
   .timestamp as $ts | .payload as $p |
