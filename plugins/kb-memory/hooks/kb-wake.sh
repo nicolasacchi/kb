@@ -90,7 +90,7 @@ recall_args=()
 [ -n "$cwd" ] && recall_args+=(--cwd "$cwd")
 # Deadline: hooks.json gives this hook 15s and everything (protocol, pending
 # block, slate digest) is emitted at the END, so one hung call must not eat
-# the whole budget. recall 5s + slate 4s + skew probe 2s = 11s worst case; a recall timeout
+# the whole budget. recall 5s + slate 4s + skew probe 2s + chores 3s = 14s worst case, capped by the shared 13s budget; a recall timeout
 # degrades to protocol-only output (index stays empty), never to no output.
 # `timeout` is guarded: without coreutils the call runs unwrapped.
 # Shared deadline helpers (kb-hook-lib.sh): every call is capped at
@@ -226,11 +226,25 @@ if [ "${KB_SKEW_NOTICE:-1}" != "0" ] && command -v kb >/dev/null 2>&1; then
   fi
 fi
 
+# v0.44 F10 — the chores line. `kb chores --line` prints ONE counts-only
+# line when agent-layer upkeep is due (distill debt, slate tidy/rotate,
+# triage, resurface, stale markers, weekly note, CLI skew), at most once per
+# UTC day (the CLI keeps the stamp), and exits 0 printing nothing when
+# nothing is due or the daemon is down. An old CLI without the verb fails;
+# that is swallowed. The hook adds no logic of its own.
+chores_block=""
+if command -v kb >/dev/null 2>&1; then
+  chores_block="$(run_to 3 kb chores --line "${extra[@]}" 2>/dev/null)" || chores_block=""
+  # Counts only, one line: never let a misbehaving CLI inject more.
+  chores_block="$(printf '%s\n' "$chores_block" | head -n 1)"
+fi
+
 ctx="$protocol"
 [ -n "${index:-}" ] && ctx="$ctx"$'\n\n'"$index"
 [ -n "${pending_block:-}" ] && ctx="$ctx"$'\n\n'"$pending_block"
 [ -n "${slate_text:-}" ] && ctx="$ctx"$'\n\n'"$slate_text"
 [ -n "${skew_block:-}" ] && ctx="$ctx"$'\n\n'"$skew_block"
+[ -n "${chores_block:-}" ] && ctx="$ctx"$'\n\n'"$chores_block"
 
 jq -n --arg ctx "$ctx" \
   '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}' \

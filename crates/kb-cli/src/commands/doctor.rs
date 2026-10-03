@@ -2096,7 +2096,7 @@ async fn fetch_identity(client: &reqwest::Client, base: &str) -> Result<DaemonSt
         .with_context(|| format!("parse JSON from {url}"))
 }
 
-fn sha_unknown(s: &str) -> bool {
+pub(crate) fn sha_unknown(s: &str) -> bool {
     let b = s.strip_suffix("-dirty").unwrap_or(s);
     b.is_empty() || b == "unknown"
 }

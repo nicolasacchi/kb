@@ -72,6 +72,12 @@ fn wake_hook_names_cli_skew_once_a_day() {
     run("test-wake-skew.sh");
 }
 
+/// v0.44 F10 — the once-a-day `kb chores --line` rides the wake context.
+#[test]
+fn wake_hook_appends_the_chores_line() {
+    run("test-wake-chores.sh");
+}
+
 /// The four distill nudges share `post_distill_ask` from `kb-hook-lib.sh`
 /// (previously four hand-copied definitions); these run each end to end.
 #[test]
