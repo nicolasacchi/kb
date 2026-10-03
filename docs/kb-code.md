@@ -1696,7 +1696,7 @@ Every verb that creates a row sends an `author`, resolved once
 (`kb-code-cli/src/author.rs`): `--author X` > `--as you` > `$KB_CODE_AUTHOR` >
 `$KB_HARNESS` > `claude`. It covers `annotate` (create form, `reply`, and the
 `add_comment` ops of `annotate batch` that name no author), `review findings
-add` and `import`, and `review compose`. `--as you` is the human opt-out. Before
+add` and `import`, `review compose`, and `code-actions --suggest`. `--as you` is the human opt-out. Before
 this, none of these sent an author and the daemon saved every agent reply as the
 human `you`, so the Room's awaiting-agent chip never flipped and `annotate watch
 --ignore-author claude` showed the agent its own replies.

@@ -1236,6 +1236,9 @@ enum Cmd {
         /// Convert the 1-based action at this index into a suggestion.
         #[arg(long)]
         suggest: Option<usize>,
+        /// v0.44 F5 — who the `--suggest` annotations are saved as.
+        #[command(flatten)]
+        who: AuthorArgs,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -2823,7 +2826,7 @@ enum AnnotateCmd {
     /// from the current open set (no surface unless `--backlog`);
     /// subsequent `annotation.changed` / `suggestion.applied` /
     /// `review.changed{reason=verdict}` events refetch and print
-    /// NEW/CHANGED items. Recommend `--ignore-author claude` so an
+    /// NEW/CHANGED items. Recommend `--ignore-agents` so an
     /// agent loop does not re-triage its own writes.
     Watch {
         #[arg(long)]
@@ -6807,6 +6810,7 @@ async fn run(cli: Cli) -> Result<()> {
             repo,
             kinds,
             suggest,
+            who,
             daemon,
             json,
         } => {
@@ -6827,6 +6831,7 @@ async fn run(cli: Cli) -> Result<()> {
                 end_pos,
                 kinds_vec.as_deref(),
                 suggest,
+                &who,
                 json,
             )
             .await
@@ -7787,6 +7792,23 @@ fn splice_full_lines(file_content: &str, edit: &CodeActionEdit) -> Result<String
 /// carry every path the action's edits touch (the caller fetches them via
 /// `GET /api/file` before calling this) — a missing entry is a caller
 /// bug, reported rather than silently skipped.
+/// v0.44 F5 — [`code_action_to_batch_ops`] with every `add_comment` op
+/// stamped with the resolved author (the daemon would default it to `you`).
+fn code_action_to_authored_batch_ops(
+    action: &CodeAction,
+    provider: &str,
+    file_contents: &std::collections::HashMap<String, String>,
+    author: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let mut ops =
+        serde_json::Value::Array(code_action_to_batch_ops(action, provider, file_contents)?);
+    stamp_batch_authors(&mut ops, author);
+    Ok(match ops {
+        serde_json::Value::Array(a) => a,
+        _ => Vec::new(),
+    })
+}
+
 fn code_action_to_batch_ops(
     action: &CodeAction,
     provider: &str,
@@ -22755,6 +22777,7 @@ async fn code_actions_cmd(
     end: Option<(u32, u32)>,
     kinds: Option<&[String]>,
     suggest: Option<usize>,
+    who: &AuthorArgs,
     json: bool,
 ) -> Result<()> {
     let client = http_client()?;
@@ -22793,7 +22816,11 @@ async fn code_actions_cmd(
     let provider = resp["provider"].as_str().unwrap_or("?").to_string();
 
     if let Some(n) = suggest {
-        return code_actions_suggest_cmd(&client, daemon, repo, &actions, &provider, n, json).await;
+        let author = who.resolve()?;
+        return code_actions_suggest_cmd(
+            &client, daemon, repo, &actions, &provider, n, &author, json,
+        )
+        .await;
     }
 
     if json {
@@ -22844,6 +22871,7 @@ async fn code_actions_suggest_cmd(
     actions: &[CodeAction],
     provider: &str,
     n: usize,
+    author: &str,
     json: bool,
 ) -> Result<()> {
     if n == 0 || n > actions.len() {
@@ -22872,7 +22900,7 @@ async fn code_actions_suggest_cmd(
         file_contents.insert(p.to_string(), text);
     }
 
-    let ops = code_action_to_batch_ops(action, provider, &file_contents)?;
+    let ops = code_action_to_authored_batch_ops(action, provider, &file_contents, author)?;
     if ops.is_empty() {
         anyhow::bail!("action {n} has no usable edits to convert into a suggestion");
     }
@@ -27033,6 +27061,27 @@ mod tests {
         assert_eq!(ops[0]["author"], "omp");
         assert_eq!(ops[1]["author"], "you");
         assert!(ops[2].get("author").is_none());
+    }
+
+    /// v0.44 F5 — `code-actions --suggest` ops carry the resolved author.
+    #[test]
+    fn code_action_suggest_ops_are_stamped_with_the_author() {
+        let action = CodeAction {
+            title: "Fix".to_string(),
+            kind: "quickfix".to_string(),
+            is_preferred: false,
+            edits: vec![CodeActionFileEditFixture::single(
+                "a.rs",
+                edit(1, 0, 1, 0, "// a\n"),
+            )],
+        };
+        let mut files = std::collections::HashMap::new();
+        files.insert("a.rs".to_string(), "fn a() {}\n".to_string());
+        let ops = code_action_to_authored_batch_ops(&action, "lip", &files, "omp").unwrap();
+        assert!(!ops.is_empty());
+        for op in &ops {
+            assert_eq!(op["author"], "omp", "{op}");
+        }
     }
 
     #[test]
