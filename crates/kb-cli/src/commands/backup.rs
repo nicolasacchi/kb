@@ -281,7 +281,7 @@ fn remote_daemon_refusal(daemon: &str) -> String {
 
 async fn list_kb_names(daemon: Option<&str>, bearer: Option<&str>) -> Result<Vec<String>> {
     let base = daemon.unwrap_or(DEFAULT_DAEMON).trim_end_matches('/');
-    let url = format!("{base}/api/kbs");
+    let url = format!("{base}{}", crate::commands::memory::KBS_CONFIG_PATH);
     let client = client_with_timeout_and_bearer(5, bearer)?;
     let body: Value = client
         .get(&url)
@@ -351,6 +351,17 @@ fn aggregate_backup_failures(outcomes: &[KbBackupOutcome<'_>]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    /// v044-X3 — `backup --all` needs the corpus NAMES only; it must ask for
+    /// the config-only listing, not the per-corpus row-count fan-out.
+    #[tokio::test]
+    async fn list_kb_names_asks_for_the_config_only_listing() {
+        let (url, rx) = crate::http::tests::recording_stub(r#"[{"name":"a"},{"name":"b"}]"#);
+        let names = list_kb_names(Some(&url), None).await.unwrap();
+        assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
+        let line = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(line, "GET /api/kbs?counts=false HTTP/1.1");
+    }
     use super::*;
     use serde_json::json;
 

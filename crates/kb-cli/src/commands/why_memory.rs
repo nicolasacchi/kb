@@ -213,7 +213,7 @@ async fn resolve_memory_doc(
 async fn memory_scoped_kbs(url: &str, bearer: Option<&str>) -> Result<Vec<String>> {
     let client = http::client_with_timeout_and_bearer(5, bearer)?;
     let kbs: serde_json::Value = client
-        .get(format!("{url}/api/kbs"))
+        .get(format!("{url}{}", crate::commands::memory::KBS_CONFIG_PATH))
         .send()
         .await?
         .error_for_status()?
@@ -565,6 +565,19 @@ fn emit_json_error(e: &anyhow::Error, daemon: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// v044-X3 — `why-memory`'s kb discovery reads `memory_scope` only, so it
+    /// asks for the config-only listing.
+    #[tokio::test]
+    async fn memory_scoped_kbs_asks_for_the_config_only_listing() {
+        let (url, rx) = crate::http::tests::recording_stub(
+            r#"[{"name":"mem","memory_scope":"global"},{"name":"docs"}]"#,
+        );
+        let kbs = memory_scoped_kbs(&url, None).await.unwrap();
+        assert_eq!(kbs, vec!["mem".to_string()]);
+        let line = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(line, "GET /api/kbs?counts=false HTTP/1.1");
+    }
     use super::*;
 
     fn base_memory() -> serde_json::Value {

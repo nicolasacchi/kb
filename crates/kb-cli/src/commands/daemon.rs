@@ -345,7 +345,8 @@ async fn run_doctor_once(endpoint: Option<&str>, bearer: Option<&str>) -> Result
 
     // 2) kbs configured
     if report.last_status_is_ok() {
-        let kbs_url = format!("{base}/api/kbs");
+        // Names only (the loops below read `name`): config-only listing.
+        let kbs_url = format!("{base}/api/kbs?counts=false");
         let kbs: Vec<serde_json::Value> = match client.get(&kbs_url).send().await {
             Ok(r) => match r.error_for_status() {
                 Ok(r) => r.json().await.unwrap_or_default(),

@@ -177,7 +177,9 @@ pub async fn resolve_default_kb(
         return Ok(k.to_string());
     }
     let base = daemon.unwrap_or(DEFAULT_DAEMON).trim_end_matches('/');
-    let url = format!("{base}/api/kbs");
+    // Only the NAME of the single configured kb is read: the config-only
+    // listing, not the per-corpus row-count fan-out.
+    let url = format!("{base}/api/kbs?counts=false");
     let client = client_with_timeout_and_bearer(5, bearer)?;
     let resp = client
         .get(&url)
@@ -357,7 +359,54 @@ pub async fn send_json(req: reqwest::RequestBuilder, what: &str) -> Result<serde
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+
+    /// Test-only daemon stub: answers EVERY request with `body` and records
+    /// each request line, so a test can assert what a verb asked for.
+    pub(crate) fn recording_stub(
+        body: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { continue };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = tx.send(line.trim().to_string());
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    /// Every name-only `GET /api/kbs` caller asks for the config-only
+    /// listing (`counts=false`), never the per-corpus row-count fan-out.
+    #[tokio::test]
+    async fn resolve_default_kb_asks_for_the_config_only_listing() {
+        let (url, rx) = recording_stub(r#"[{"name":"only"}]"#);
+        let kb = resolve_default_kb(None, Some(&url), None).await.unwrap();
+        assert_eq!(kb, "only");
+        let line = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(line, "GET /api/kbs?counts=false HTTP/1.1");
+    }
     use super::*;
 
     #[test]
