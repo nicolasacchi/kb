@@ -481,6 +481,7 @@ queue_distill_pending() {
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
 }
@@ -548,7 +549,7 @@ capture_one() {
     mkdir -p "$KB_SESSIONS_DIR" || { rm -f "$tmpjsonl"; return 1; }
     local ts safe_sid out f esc tmp scrubbed
     ts="$(date -u +%Y%m%dT%H%M%SZ)"
-    safe_sid="$(printf '%s' "$gid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+    safe_sid="$(hook_sid_key "$gid")"
     out=""
     for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
       [ -f "$f" ] && out="$f"
