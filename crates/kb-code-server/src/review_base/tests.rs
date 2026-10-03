@@ -1423,10 +1423,15 @@ async fn start_pr_and_snapshot_routes_capture_in_the_store_not_the_clone() {
             } else {
                 axum::body::Bytes::new()
             };
-            let resp = crate::reviews::snapshot_review(State(state), AxumPath(id), raw)
-                .await
-                .unwrap_or_else(|e| panic!("snapshot: {e:?}"))
-                .into_response();
+            let resp = crate::reviews::snapshot_review(
+                State(state),
+                AxumPath(id),
+                axum::extract::Query(crate::review_retrack::AsyncParams::default()),
+                raw,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("snapshot: {e:?}"))
+            .into_response();
             body_json(resp).await
         }
     };
