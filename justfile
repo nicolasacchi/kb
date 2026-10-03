@@ -25,12 +25,18 @@ ci: ci-workspace ci-embedder types-check api-docs-check doc-anchors toolchain-pi
 #   code-spa → ci-code-spa
 #   code-e2e → ci-code-e2e
 #   web-unit → test-spa
+#   hook-omp → test-hook-omp
 #   supply-chain → deny, plus its three compile-free steps
 #     (NOTICE drift → licenses-set-check, doc anchors → doc-anchors,
 #      toolchain pins → toolchain-pin-check)
 # Not mirrored (no recipe, so not run here): web-unit's `npm audit
 # --omit=dev`, and e2e's Firefox install + annotator size guard.
-ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check ci-e2e ci-embedder ci-code ci-code-spa ci-code-e2e test-spa deny licenses-set-check doc-anchors toolchain-pin-check ci-selfcheck
+ci-all: ci-workspace ci-invariants api-docs-check types-check gen-ts-code-check ci-e2e ci-embedder ci-code ci-code-spa ci-code-e2e test-spa test-hook-omp deny licenses-set-check doc-anchors toolchain-pin-check ci-selfcheck
+
+# kb-omp.ts's bun tests (ci.yml's hook-omp job). Requires bun on PATH - a
+# missing bun FAILS here (KB_REQUIRE_BUN=1) instead of skipping.
+test-hook-omp:
+    KB_REQUIRE_BUN=1 bash plugins/kb-memory/hooks/tests/test-omp-slate.sh
 
 # Invariant-to-test coverage table (GC-C2). A step of ci.yml's
 # workspace-lint job, not of `just ci`. Always exits 0 — a signal, not a gate.

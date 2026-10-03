@@ -286,6 +286,35 @@ async fn remember_to_a_dead_daemon_is_queued_and_flush_replays_it_once() {
     }
 }
 
+/// v0.44 X6 - `kb remember --wait` against a dead daemon exits non-zero and
+/// spools NOTHING (the default exits 0 with `queued`, which carries no id).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remember_wait_against_a_dead_daemon_fails_and_spools_nothing() {
+    let cache = tempfile::tempdir().unwrap();
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", l.local_addr().unwrap())
+    };
+    Command::cargo_bin("kb")
+        .unwrap()
+        .env("XDG_CACHE_HOME", cache.path())
+        .args([
+            "remember",
+            "the bittern holds still among the reeds",
+            "--kb",
+            "gmem",
+            "--no-session",
+            "--wait",
+            "--daemon",
+            &dead,
+        ])
+        .assert()
+        .failure();
+    let spool = cache.path().join("kb/outbox");
+    let n = std::fs::read_dir(&spool).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(n, 0, "--wait must not queue anything");
+}
+
 #[tokio::test]
 async fn recall_json_error_emits_envelope_on_stdout() {
     // Unreachable daemon → `--json` must still emit a {error, source}

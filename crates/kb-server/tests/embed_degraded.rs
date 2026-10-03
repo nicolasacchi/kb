@@ -243,6 +243,31 @@ async fn dead_query_embedder_is_named_in_degraded_for_search_and_recall() {
         "a keyword-only corpus is not a degraded one: {search}"
     );
 
+    // v0.44 X6 - the single-kb (scope=one) path used to answer a dead query
+    // embedder with a hard problem+json. It must degrade to BM25 and name the
+    // lane, like the federated path above.
+    let one = reqwest::Client::new()
+        .get(format!(
+            "http://{addr}/api/search?q=zigzag%20reeds&scope=one&kb=mem&mode=hybrid"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        one.status().is_success(),
+        "scope=one with a dead embedder must not be a hard error: {}",
+        one.status()
+    );
+    let one: serde_json::Value = one.json().await.unwrap();
+    assert!(
+        one["hits"].as_array().is_some_and(|h| !h.is_empty()),
+        "scope=one keyword fallback must still return hits: {one}"
+    );
+    assert!(
+        has_lane(&one, "search.vector", "embed"),
+        "scope=one with a dead embedder must name search.vector: {one}"
+    );
+
     let recall = get_json(addr, "/api/memory/recall?q=marmot&scope=all").await;
     assert!(
         recall["hits"].as_array().is_some_and(|h| !h.is_empty()),

@@ -476,7 +476,18 @@ queue_distill_pending() {
 # --- one capture -----------------------------------------------------------
 
 # capture_one session_dir gid job_dir job_ulid job_type round cwd dry_run with_report
+# v0.44 X6 (INT4) - every `kb` call is bounded by the shared hook deadline
+# (kb-hook-lib.sh run_to), so a hung daemon/CLI can never hang the session
+# end; the harness timeout is the last resort, not the design. A standalone
+# copy without the lib runs its calls unbounded, as before.
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  run_to() { shift; "$@"; }
+  hook_deadline_init() { :; }
+}
+KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
+
 capture_one() {
+  hook_deadline_init # per-session budget (a backfill runs many)
   local dir="$1" gid="$2" job_dir="$3" job_ulid="$4" job_type="$5" round="$6" cwd="$7" dry_run="$8" with_report="$9"
 
   read -r ucount acount <<<"$(substance_counts "$dir")"
@@ -507,7 +518,7 @@ capture_one() {
 
   local wrote=0
   if command -v kb >/dev/null 2>&1; then
-    if kb sessions capture \
+    if run_to 20 kb sessions capture \
          --transcript "$tmpjsonl" \
          --session-id "$gid" \
          ${cwd:+--cwd "$cwd"} \
@@ -549,7 +560,7 @@ capture_one() {
     # embedded. FAIL CLOSED: no `kb`, or a `kb` too old for the verb, means this
     # session is not captured here rather than captured unscrubbed.
     scrubbed="$(mktemp)" || { rm -f "$tmpjsonl"; return 1; }
-    if command -v kb >/dev/null 2>&1 && kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
+    if command -v kb >/dev/null 2>&1 && run_to 15 kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
        && [ -s "$scrubbed" ]; then
       mv -f "$scrubbed" "$tmpjsonl"
     else
