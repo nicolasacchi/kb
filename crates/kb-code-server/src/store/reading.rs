@@ -451,3 +451,114 @@ impl Store {
         Ok(n > 0)
     }
 }
+
+/// Phase E3 — reads the 14-column order `list_reading_sets`/`get_reading_set`
+/// both SELECT in (DCB-W3.C widened this from 6 to 10 — the four
+/// `source_*` provenance columns appended after `updated_at`; V70-A10
+/// widens it again from 10 to 14 — `kind`/`desk_json`/`ref`/
+/// `description_md`, `V0028__workspaces.sql`, appended LAST after the
+/// `source_*` four). Positional, not by name, so `list_reading_sets` can
+/// SELECT further trailing computed columns (`span_count`/`note_count`) of
+/// its own without disturbing this read.
+fn reading_set_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReadingSetRow> {
+    Ok(ReadingSetRow {
+        id: r.get(0)?,
+        repo_id: r.get(1)?,
+        name: r.get(2)?,
+        description: r.get(3)?,
+        created_at: r.get(4)?,
+        updated_at: r.get(5)?,
+        source_kb: r.get(6)?,
+        source_doc_id: r.get(7)?,
+        source_doc_path: r.get(8)?,
+        source_doc_hash: r.get(9)?,
+        kind: r.get(10)?,
+        desk_json: r.get(11)?,
+        ref_label: r.get(12)?,
+        description_md: r.get(13)?,
+        workspace_id: r.get(14)?,
+    })
+}
+
+/// Phase E3 — reads the 6-column order `reading_set_spans` SELECTs in.
+fn reading_set_span_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReadingSetSpanRow> {
+    Ok(ReadingSetSpanRow {
+        ordinal: r.get(0)?,
+        path: r.get(1)?,
+        line_start: r.get(2)?,
+        line_end: r.get(3)?,
+        git_ref: r.get(4)?,
+        note: r.get(5)?,
+    })
+}
+
+/// One `reading_sets` row (Phase E3) — see the migration's doc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadingSetRow {
+    pub id: String,
+    pub repo_id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// DCB-W3.C — doc-materialization provenance
+    /// (`V0022__reading_sets_doc_provenance.sql`). All four `None` on every
+    /// set NOT created via `POST /api/sets/from-doc`.
+    pub source_kb: Option<String>,
+    pub source_doc_id: Option<String>,
+    pub source_doc_path: Option<String>,
+    pub source_doc_hash: Option<String>,
+    /// V70-A10 — `"set"` (the pre-existing default) | `"workspace"`.
+    /// Validated at the route boundary (`reading_sets::is_valid_set_kind`),
+    /// never here.
+    pub kind: String,
+    /// V70-A10 — the workspace's opaque `DeskState` snapshot (JSON, ≤ 64
+    /// KiB, `V0028__workspaces.sql`). `None` on a plain `'set'` row and on
+    /// a `'workspace'` row saved before a client sent one. Stored VERBATIM
+    /// — never parsed server-side.
+    pub desk_json: Option<String>,
+    /// V70-A10 — the SQL column is literally `ref` (same unquoted-keyword
+    /// precedent `reading_set_spans.ref`/`SpanOut::git_ref` already use);
+    /// named `ref_label` here since `ref` is a Rust keyword. An optional
+    /// branch/ref label a workspace groups under (`GET /api/sets?kind=
+    /// workspace&group=ref`) — shape-validated only
+    /// (`reviews::reject_user_ref`), never checked for existence.
+    pub ref_label: Option<String>,
+    /// V70-A10 — free-text Markdown description (≤ 64 KiB), separate from
+    /// the pre-existing short `description` column.
+    pub description_md: Option<String>,
+    /// V71-G0 (D26) — the kbc-seq/1 workspace this projection is bound to
+    /// (another `reading_sets.id`, of kind `'workspace'`), or `None` when
+    /// it is unbound. Written only by [`Store::set_reading_set_workspace`]
+    /// (a direct assignment, so unbinding is expressible — see that
+    /// method's doc).
+    pub workspace_id: Option<String>,
+}
+
+/// One `reading_set_spans` row, as read back (already carries its
+/// `ordinal`) — contrast [`NewReadingSetSpan`], the caller-supplied shape
+/// with no ordinal yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadingSetSpanRow {
+    pub ordinal: i64,
+    pub path: String,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
+    pub git_ref: Option<String>,
+    pub note: Option<String>,
+}
+
+/// One span as supplied by a caller, BEFORE the store assigns its
+/// `ordinal` — slice POSITION for `create_reading_set`/
+/// `replace_reading_set_spans`, `MAX(ordinal) + 1` for
+/// `append_reading_set_span`. `reading_sets::validate_span` is what
+/// produces these from the wire `SpanInput` shape (route-boundary
+/// validation happens there, never in this store-layer type).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NewReadingSetSpan {
+    pub path: String,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
+    pub git_ref: Option<String>,
+    pub note: Option<String>,
+}

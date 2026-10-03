@@ -140,3 +140,33 @@ impl Store {
         Ok(rows)
     }
 }
+
+/// V71-G0 — one `entity_defs` row as READ, joined against the live
+/// `files` row for the same path so the caller can tell a fresh claim from
+/// a stale one. Carries no trust class: that is computed per request by
+/// `crate::entities::class_for` and is never stored (root invariant #2's
+/// posture, and design §P8's).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityDefRow {
+    pub worktree: String,
+    pub path: String,
+    /// The FQN the tree proved (literal `class`/`module` nesting, plus any
+    /// compact scope recovered from the source line).
+    pub fqn: String,
+    pub kind: String,
+    /// `lexical` | `ambiguous` — how completely the tree determines `fqn`
+    /// (`crate::entities::NESTING_*`). An input to `class_for`, not a
+    /// class.
+    pub nesting: String,
+    pub line_start: i64,
+    pub line_end: i64,
+    /// The constant the path convention derives, when this row carries one.
+    pub zeitwerk_fqn: Option<String>,
+    /// What the Zeitwerk read was worth when the claim was made.
+    pub zeitwerk_state: String,
+    /// The blob the claim was derived from.
+    pub blob_hash: String,
+    /// The blob currently at this path, or `None` when no `files` row
+    /// exists any more. `!= blob_hash` ⇒ the claim is stale.
+    pub live_blob_hash: Option<String>,
+}

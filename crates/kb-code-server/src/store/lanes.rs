@@ -280,3 +280,107 @@ impl Store {
         )? as u64)
     }
 }
+
+// --- aug-lane/1 fact store (V72-H4a) -------------------------------------
+
+/// One `lane_runs` row, as the ingest route (or a derived lane) writes it.
+#[derive(Debug, Clone)]
+pub struct LaneRunIn {
+    pub run_id: String,
+    pub lane: String,
+    pub repo_id: i64,
+    pub tool: String,
+    pub tool_version: Option<String>,
+    pub argv_redacted: Option<String>,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    /// `"cli"` | `"daemon"` — the migration's CHECK constraint owns the
+    /// vocabulary; a bad value fails the INSERT loudly rather than
+    /// silently mislabelling provenance.
+    pub origin: &'static str,
+    pub ingested_at: i64,
+}
+
+/// One `lane_facts` row on the way in. `sha_source` is `"tool"` or
+/// `"mirror_at_ingest"` (see the migration header for why that distinction
+/// is what makes `exact` reachable at all).
+#[derive(Debug, Clone)]
+pub struct LaneFactIn {
+    pub path: String,
+    pub blob_sha: String,
+    pub sha_source: &'static str,
+    pub range_start: Option<u32>,
+    pub range_end: Option<u32>,
+    pub snippet: Option<String>,
+    pub kind: String,
+    pub value_json: String,
+    pub severity: Option<String>,
+    pub produced_at: i64,
+}
+
+/// One stored fact, joined to its run's provenance. Deliberately carries
+/// NO trust class — that is computed per request by
+/// `lanes::classing::class_for` and is never persisted.
+#[derive(Debug, Clone)]
+pub struct LaneFactRow {
+    pub id: i64,
+    pub lane: String,
+    pub path: String,
+    pub blob_sha: String,
+    pub sha_source: String,
+    pub range_start: Option<u32>,
+    pub range_end: Option<u32>,
+    pub snippet: Option<String>,
+    pub kind: String,
+    pub value_json: String,
+    pub severity: Option<String>,
+    pub produced_at: i64,
+    pub ingested_at: i64,
+    pub run_id: String,
+    pub tool: String,
+    pub tool_version: Option<String>,
+    pub origin: String,
+}
+
+/// Per-lane rollup for `GET /api/lanes`.
+#[derive(Debug, Clone, Default)]
+pub struct LaneStatRow {
+    pub lane: String,
+    pub facts: i64,
+    pub runs: i64,
+    pub last_ingest_at: Option<i64>,
+}
+
+/// One `(lane, kind, severity)` bucket for `GET /api/lanes/summary`.
+#[derive(Debug, Clone)]
+pub struct LaneSummaryRow {
+    pub lane: String,
+    pub kind: String,
+    pub severity: Option<String>,
+    pub count: i64,
+}
+
+/// Rows removed by one [`Store::sweep_lane_retention_page`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LaneGcCounts {
+    pub runs: u64,
+    pub facts: u64,
+}
+
+impl LaneGcCounts {
+    pub fn is_empty(&self) -> bool {
+        self.runs == 0 && self.facts == 0
+    }
+}
+
+/// How many expired `lane_runs` one [`Store::sweep_lane_retention_page`]
+/// covers. Small for the reason [`STALE_SALT_SWEEP_PAGE`] is small: this
+/// is the unit of write-mutex hold time on an IO-bound host, and a run can
+/// own thousands of facts (V72-B0 rule (b) — a background pass that takes
+/// one long transaction has only moved the outage, not fixed it).
+pub const LANE_GC_PAGE: usize = 32;
+
+/// Hard bound on the rows `GET /api/lanes/summary` groups over. The route
+/// STATES this number and whether it was hit — a summary that silently
+/// capped would be a count nobody can trust.
+pub const LANE_SUMMARY_SCAN_CAP: usize = 50_000;

@@ -275,3 +275,75 @@ impl Store {
         Ok(rows)
     }
 }
+
+/// One `comments` row (V72-J1, migration V0032).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentRow {
+    pub path: String,
+    pub blob_sha: String,
+    pub comments_version: String,
+    pub ordinal: i64,
+    pub kind: String,
+    pub keyword: Option<String>,
+    pub keyword_text: Option<String>,
+    /// `keywords::SmartTodoFields` as JSON, or `None`.
+    pub fields_json: Option<String>,
+    pub line_start: i64,
+    pub line_end: i64,
+    pub text: String,
+    pub text_truncated: bool,
+    pub symbol_name: Option<String>,
+    pub symbol_kind: Option<String>,
+    pub symbol_line_start: Option<i64>,
+    pub symbol_line_end: Option<i64>,
+    pub directive_tool: Option<String>,
+    /// `None` for a magic comment / build tag (nothing to justify);
+    /// `Some` only for a suppression directive.
+    pub directive_has_reason: Option<bool>,
+}
+
+/// One comment block to write via [`Store::replace_comments`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewComment {
+    pub ordinal: i64,
+    pub kind: String,
+    pub keyword: Option<String>,
+    pub keyword_text: Option<String>,
+    pub fields_json: Option<String>,
+    pub line_start: i64,
+    pub line_end: i64,
+    pub text: String,
+    pub text_truncated: bool,
+    pub symbol_name: Option<String>,
+    pub symbol_kind: Option<String>,
+    pub symbol_line_start: Option<i64>,
+    pub symbol_line_end: Option<i64>,
+    pub directive_tool: Option<String>,
+    pub directive_has_reason: Option<bool>,
+}
+
+/// The ONE row mapper every `comments` SELECT shares — the column list is
+/// identical across four queries, so a reordering can never desync one of
+/// them from the others.
+fn comment_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<CommentRow> {
+    Ok(CommentRow {
+        path: r.get(0)?,
+        blob_sha: r.get(1)?,
+        comments_version: r.get(2)?,
+        ordinal: r.get(3)?,
+        kind: r.get(4)?,
+        keyword: r.get(5)?,
+        keyword_text: r.get(6)?,
+        fields_json: r.get(7)?,
+        line_start: r.get(8)?,
+        line_end: r.get(9)?,
+        text: r.get(10)?,
+        text_truncated: r.get::<_, i64>(11)? != 0,
+        symbol_name: r.get(12)?,
+        symbol_kind: r.get(13)?,
+        symbol_line_start: r.get(14)?,
+        symbol_line_end: r.get(15)?,
+        directive_tool: r.get(16)?,
+        directive_has_reason: r.get::<_, Option<i64>>(17)?.map(|v| v != 0),
+    })
+}
