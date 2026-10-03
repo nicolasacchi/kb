@@ -123,17 +123,8 @@ fn binary_id(path: &str, preamble: &[String]) -> String {
 
 /// Every hunk of a whole-patchset diff, addressed. Pure.
 pub fn hunks_by_path(diff_text: &str) -> PathHunks {
-    hunks_by_path_mapped(diff_text, &|p| p.to_string())
-}
-
-/// [`hunks_by_path`] with every file path passed through `map` before it keys
-/// the entry AND seeds the hunk ids (an id hashes its path). Lets a caller
-/// read a later patchset's change set under the EARLIER patchset's name for a
-/// renamed file, so unchanged hunks of the renamed file still match. Pure.
-pub fn hunks_by_path_mapped(diff_text: &str, map: &dyn Fn(&str) -> String) -> PathHunks {
     let mut out: PathHunks = BTreeMap::new();
     for (path, body) in split_file_diffs(diff_text) {
-        let path = map(&path);
         let parsed = review_hunks::parse_unified_diff(&body);
         let entry = out.entry(path.clone()).or_default();
         if parsed.binary {
@@ -363,51 +354,15 @@ pub fn author_gone_ranges(from: &PathHunks, to: &PathHunks) -> HashMap<String, V
 /// The author's hunks between `own` and `later` (added and removed). `None`
 /// when either patchset's change set cannot be read — the caller then keeps
 /// its honest "cannot attribute" fallback.
-///
-/// `rename` is `(path in own, path in later)` for ONE file the caller follows
-/// across the pair. Patchset change sets are read without rename detection,
-/// so a file renamed between the patchsets would otherwise look wholly
-/// removed under its old name and wholly added under its new one - every
-/// tip-to-tip hunk in it (including pure upstream movement) would then count
-/// as authored. With `rename` the later change set is read under the OLD
-/// name for that file (ids included), the comparison is like-for-like, and
-/// `added` is keyed back by the NEW path.
 pub fn author_ranges_between(
     ctx: &GitCtx,
     own: &ReviewPatchsetRow,
     later: &ReviewPatchsetRow,
-    rename: Option<(&str, &str)>,
 ) -> Option<AuthorRanges> {
     let from = patchset_hunks(ctx, &own.base_sha, &own.tip_sha).ok()?;
-    let renamed = rename.filter(|(old, new)| old != new);
-    let to = match renamed {
-        None => patchset_hunks(ctx, &later.base_sha, &later.tip_sha).ok()?,
-        Some((old, new)) => {
-            if !is_full_sha(&later.base_sha) || !is_full_sha(&later.tip_sha) {
-                return None;
-            }
-            let text = ctx
-                .read_with_fallback(|root| {
-                    crate::diff::diff_range_u0(root.git_path(), &later.base_sha, &later.tip_sha)
-                })
-                .ok()?;
-            Arc::new(hunks_by_path_mapped(&text, &|p| {
-                if p == new {
-                    old.to_string()
-                } else {
-                    p.to_string()
-                }
-            }))
-        }
-    };
-    let mut added = author_new_ranges(&from, &to);
-    if let Some((old, new)) = renamed {
-        if let Some(v) = added.remove(old) {
-            added.insert(new.to_string(), v);
-        }
-    }
+    let to = patchset_hunks(ctx, &later.base_sha, &later.tip_sha).ok()?;
     Some(AuthorRanges {
-        added,
+        added: author_new_ranges(&from, &to),
         removed: author_gone_ranges(&from, &to),
     })
 }

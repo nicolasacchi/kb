@@ -371,13 +371,18 @@ pub fn compute_touched_in(
             // lies on lines the author's own change set (patchset vs ITS
             // base, `review_since`) newly touches; upstream-only hunks are
             // not evidence and produce no entry.
-            if ps.base_sha != own_row.base_sha {
-                if let Some(ranges) = review_since::author_ranges_between(
-                    ctx,
-                    own_row,
-                    ps,
-                    Some((q.path.as_str(), resolved_path.as_str())),
-                ) {
+            //
+            // A file RENAMED between the two patchsets (`resolved_path !=
+            // q.path`) is excluded: the patchset change sets are read with
+            // `--no-renames`, so against a base that still has the old name
+            // the file looks wholly deleted under it and wholly added under
+            // the new one, and nothing in `ranges` lines up with the tip-to-
+            // tip hunks. Attributing from that would call upstream movement
+            // (or nothing at all) an author edit. It takes the honest
+            // fallback below instead: reported as `rebased`, which the wire
+            // already says is NOT evidence the author acted.
+            if ps.base_sha != own_row.base_sha && resolved_path == q.path {
+                if let Some(ranges) = review_since::author_ranges_between(ctx, own_row, ps) {
                     let hunks = parsed_hunks(
                         ctx,
                         &mut hunk_cache,
@@ -1015,12 +1020,14 @@ mod tests {
     }
 
     /// F9b/X9 - a file RENAMED between patchsets across a base move: the
-    /// change sets are read without rename detection, so the old name looked
-    /// wholly removed and the new one wholly added, and an upstream-only hunk
-    /// near the finding (line 6, finding on line 3) was attributed to the
-    /// author. Following the rename compares like for like.
+    /// patchset change sets are read with `--no-renames`, so the old name
+    /// looks wholly removed and the new one wholly added, and an upstream-only
+    /// hunk near the finding (line 6, finding on line 3) used to be attributed
+    /// to the author as `adjacent`. It is now reported as `rebased` (not
+    /// evidence the author acted) - the same honest label every unattributable
+    /// rebased pair gets.
     #[test]
-    fn upstream_movement_in_a_renamed_file_is_not_an_author_touch() {
+    fn upstream_movement_in_a_renamed_file_is_never_claimed_as_an_author_touch() {
         let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
         let d = tmp.path();
         git(d, &["checkout", "-q", "feature2"]);
@@ -1040,16 +1047,19 @@ mod tests {
         let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(d));
         let out = compute_touched_in(&ctx, &patchsets, &queries);
         assert!(
-            out[&73].entries.is_empty(),
+            out[&73]
+                .entries
+                .iter()
+                .all(|e| e.overlap == OVERLAP_REBASED),
             "a rename plus upstream movement is not an author edit: {:?}",
             out[&73].entries
         );
     }
 
-    /// ...while a real author edit of the finding's line in the renamed file
-    /// is still reported.
+    /// ...and a real author edit in the renamed file is also only `rebased`:
+    /// the pair cannot be attributed, so the entry never claims `exact`.
     #[test]
-    fn an_author_edit_in_a_renamed_file_after_a_rebase_is_still_reported() {
+    fn an_author_edit_in_a_renamed_file_after_a_rebase_is_reported_as_rebased() {
         let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
         let d = tmp.path();
         git(d, &["checkout", "-q", "feature2"]);
@@ -1077,7 +1087,7 @@ mod tests {
         let out = compute_touched_in(&ctx, &patchsets, &queries);
         let e = &out[&74].entries;
         assert_eq!(e.len(), 1, "{e:?}");
-        assert_eq!(e[0].overlap, OVERLAP_EXACT);
+        assert_eq!(e[0].overlap, OVERLAP_REBASED);
     }
 
     #[test]
