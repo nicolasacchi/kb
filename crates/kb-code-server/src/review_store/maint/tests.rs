@@ -1573,3 +1573,36 @@ fn concurrent_sentinel_updates_lose_nothing() {
         assert!(!s.blocks(&format!("s{i}")), "s{i} lost: {s:?}");
     }
 }
+
+/// Wave-1 carry — two repacks on one store serialise on `maint_lock`: while
+/// one holder has it (a weekly/monthly repack in flight), a second weekly
+/// pass for the SAME store waits instead of racing `git repack`, and runs
+/// once released. A daily-only pass takes no repack lock and is not held
+/// up. Fails if `run_pass_for_store` stops taking the lock.
+#[test]
+fn two_repacks_on_one_store_serialise_on_the_maint_lock() {
+    let e = env();
+    review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    let held = e.rs.maint_lock(row.id).blocking_lock_owned();
+    std::thread::scope(|s| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let weekly = s.spawn(|| {
+            let r = run_pass_for_store(&e.rs, &e.store, &row, &[MaintTask::Weekly], 1);
+            tx.send(()).unwrap();
+            r
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a second repack must wait for the in-flight one"
+        );
+        // A pass that does not repack is not serialised behind it.
+        let daily = run_pass_for_store(&e.rs, &e.store, &row, &[MaintTask::Daily], 2);
+        assert!(daily.tasks_run.contains(&"daily"), "{daily:?}");
+        drop(held);
+        rx.recv_timeout(Duration::from_secs(60))
+            .expect("the waiting repack proceeds once the lock is free");
+        let report = weekly.join().unwrap();
+        assert_eq!(report.tasks_run, vec!["weekly"], "{report:?}");
+    });
+}
