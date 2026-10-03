@@ -542,7 +542,14 @@ pub fn merged_pr_base_sha(
     if shas.len() < 3 {
         return Ok(None);
     }
-    Ok(is_full_sha(shas[1]).then(|| shas[1].to_string()))
+    // The merge must have brought the head IN through its second parent: a
+    // fast-forwarded PR followed by an unrelated merge on the target would
+    // otherwise pin the base to the head itself (an empty diff).
+    if !is_full_sha(shas[1]) || !is_full_sha(shas[2]) || !is_ancestor(repo_root, head_sha, shas[2])?
+    {
+        return Ok(None);
+    }
+    Ok(Some(shas[1].to_string()))
 }
 
 /// RS-U7 — `git merge-base --is-ancestor <a> <b>`: does `a` (a candidate
@@ -7211,6 +7218,79 @@ mod tests {
             merged.ps.base_sha, merged.ps.tip_sha,
             "not an empty patchset"
         );
+    }
+
+    /// A6-1 — a SQUASH merge never reaches the pr-already-merged refusal: the
+    /// squash commit is new, so the PR head is NOT contained in the target
+    /// and the ordinary merge-base capture yields a real, non-empty diff.
+    /// This pins that, so no forge `merge_commit_sha` lookup is needed.
+    #[test]
+    fn a_squash_merged_pr_is_not_refused_and_captures_a_non_empty_diff() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        lgit(dir, &["init", "-q", "-b", "main"]);
+        lgit(dir, &["config", "user.email", "t@e.com"]);
+        lgit(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c1"]);
+        lgit(dir, &["checkout", "-q", "-b", "pr-branch"]);
+        std::fs::write(dir.join("b.txt"), "two\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c2"]);
+        let head = lgit_out(dir, &["rev-parse", "HEAD"]);
+        lgit(dir, &["update-ref", &pr_ref(7), &head]);
+        lgit(dir, &["checkout", "-q", "main"]);
+        lgit(dir, &["merge", "--squash", "-q", "pr-branch"]);
+        lgit(dir, &["commit", "-q", "-m", "squash PR 7"]);
+
+        let db = tempfile::tempdir().unwrap();
+        let store = Store::open(&db.path().join("i.db")).unwrap();
+        let bus = EventBus::default();
+        let id = store
+            .create_review("r", Some("t"), "main", &pr_ref(7), None, 1)
+            .unwrap();
+        let review = store.get_review(id).unwrap().unwrap();
+        let root = WorkTreeRoot::user_clone(dir);
+        let ps = capture_patchset_outcome(&store, &bus, &root, &review, 50, true)
+            .expect("a squash-merged PR is not refused");
+        assert_eq!(ps.ps.tip_sha, head);
+        assert_ne!(ps.ps.base_sha, ps.ps.tip_sha, "not an empty patchset");
+    }
+
+    /// A6-1 — a PR fast-forwarded into the target and then followed by an
+    /// UNRELATED merge: that merge's second parent does not contain the
+    /// head, so it must not be taken as the PR's merge (base == head, an
+    /// empty diff); the typed 409 stands.
+    #[test]
+    fn an_unrelated_later_merge_is_not_taken_as_the_prs_merge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        lgit(dir, &["init", "-q", "-b", "main"]);
+        lgit(dir, &["config", "user.email", "t@e.com"]);
+        lgit(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c1"]);
+        lgit(dir, &["checkout", "-q", "-b", "pr-branch"]);
+        std::fs::write(dir.join("b.txt"), "two\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c2"]);
+        let head = lgit_out(dir, &["rev-parse", "HEAD"]);
+        lgit(dir, &["checkout", "-q", "main"]);
+        lgit(dir, &["merge", "--ff-only", "-q", "pr-branch"]);
+        lgit(dir, &["checkout", "-q", "-b", "other", "HEAD~1"]);
+        std::fs::write(dir.join("c.txt"), "three\n").unwrap();
+        lgit(dir, &["add", "-A"]);
+        lgit(dir, &["commit", "-q", "-m", "c3"]);
+        lgit(dir, &["checkout", "-q", "main"]);
+        lgit(
+            dir,
+            &["merge", "--no-ff", "-q", "-m", "Merge other", "other"],
+        );
+        let tip = lgit_out(dir, &["rev-parse", "HEAD"]);
+        let root = WorkTreeRoot::user_clone(dir);
+        assert_eq!(merged_pr_base_sha(&root, &tip, &head).unwrap(), None);
     }
 
     /// A6-1 — the refusal that remains: a fast-forward merge leaves no merge

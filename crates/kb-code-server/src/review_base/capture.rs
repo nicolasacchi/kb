@@ -223,7 +223,7 @@ pub(crate) fn refuse_merged_head(head: &str, merge_base: &str) -> Result<(), Bas
             409,
             URN_PR_ALREADY_MERGED,
             format!(
-                "the PR head {} is already contained in the target tip (the PR was merged): no merge commit on the target's first-parent history names the base it was merged into (a fast-forward or rebase merge), so capturing against the live target would mint an empty patchset — pin the base explicitly with --base <sha> to review what landed",
+                "the PR head {} is already contained in the target tip (the PR was merged): no merge commit on the target's first-parent history names the base it was merged into (a fast-forward merge), so capturing against the live target would mint an empty patchset — pin the base explicitly with --base <sha> to review what landed",
                 &head[..head.len().min(12)]
             ),
         ));

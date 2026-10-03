@@ -228,13 +228,16 @@ pub(crate) type SharedRepoGuard = Arc<tokio::sync::OwnedMutexGuard<()>>;
 tokio::task_local! {
     /// The repo guard the running job body took, if any (set by
     /// [`register_repo_guard`], read by [`spawn_blocking_tracked`]).
-    static CURRENT_REPO_GUARD: parking_lot::Mutex<Option<SharedRepoGuard>>;
+    static CURRENT_REPO_GUARD: parking_lot::Mutex<Option<std::sync::Weak<tokio::sync::OwnedMutexGuard<()>>>>;
 }
 
 /// Record `guard` as the running job's repo guard, so every blocking closure
-/// the job starts from now on keeps it alive. A no-op outside a job.
+/// the job starts WHILE the body still holds it keeps it alive. The slot is
+/// a `Weak`: it must never extend the guard's life past the body's own scope
+/// (a strong clone parked here made a bulk job's second `repo_guard` wait on
+/// its own first one forever). A no-op outside a job.
 pub(crate) fn register_repo_guard(guard: &SharedRepoGuard) {
-    let _ = CURRENT_REPO_GUARD.try_with(|slot| *slot.lock() = Some(guard.clone()));
+    let _ = CURRENT_REPO_GUARD.try_with(|slot| *slot.lock() = Some(Arc::downgrade(guard)));
 }
 
 /// Held by a `spawn_blocking` closure for exactly as long as the closure
@@ -251,7 +254,7 @@ impl BlockingGuard {
             .try_with(|c| {
                 c.fetch_add(1, Ordering::SeqCst);
                 let repo_guard = CURRENT_REPO_GUARD
-                    .try_with(|slot| slot.lock().clone())
+                    .try_with(|slot| slot.lock().as_ref().and_then(std::sync::Weak::upgrade))
                     .ok()
                     .flatten();
                 BlockingGuard(c.clone(), repo_guard)
@@ -1214,5 +1217,33 @@ mod tests {
             freed,
             "the guard is released once the blocking work returns"
         );
+    }
+
+    /// A job that takes `repo_guard` once per item (retrack-bulk's apply
+    /// pass) must find the lock FREE between items: the task-local slot
+    /// may not keep the first guard alive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_job_can_retake_the_repo_guard_for_every_row() {
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        let counter = Arc::new(AtomicUsize::new(0));
+        let l2 = lock.clone();
+        let task = tokio::spawn(CURRENT_BLOCKING.scope(
+            counter,
+            CURRENT_REPO_GUARD.scope(parking_lot::Mutex::new(None), async move {
+                for _ in 0..3 {
+                    let guard: SharedRepoGuard =
+                        tokio::time::timeout(Duration::from_secs(5), async {
+                            Arc::new(l2.clone().lock_owned().await)
+                        })
+                        .await
+                        .expect("the previous row's guard must be released");
+                    register_repo_guard(&guard);
+                    let _ = spawn_blocking_tracked(|| ()).await;
+                    drop(guard);
+                    assert!(l2.try_lock().is_ok(), "lock is free between rows");
+                }
+            }),
+        ));
+        task.await.expect("the job body finished without deadlock");
     }
 }
