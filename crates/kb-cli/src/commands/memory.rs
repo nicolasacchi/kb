@@ -158,7 +158,10 @@ pub(crate) async fn remember_inner(
     } else {
         // v0.44 F5 — the shared identity ladder (flag > KB_SESSION_ID >
         // harness env > fresh repo marker > flagged legacy file).
-        crate::session_identity::session_for_write(session_id)
+        crate::session_identity::session_for_write(
+            session_id,
+            "`kb remember` will write no kb-session",
+        )
     };
 
     // L8 — visibility flags, now composed with MI-W0.2's auto-link and
