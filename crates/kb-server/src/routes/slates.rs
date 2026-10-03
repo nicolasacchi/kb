@@ -1945,6 +1945,22 @@ fn close_asks_locked(
     now_unix: i64,
     presence: &[Presence],
 ) -> Result<AsksClosed, AppendFail> {
+    close_asks_locked_with(paths, slug, body, user, now_unix, presence, &mut |p, s| {
+        load_posts(p, s)
+    })
+}
+
+/// [`close_asks_locked`] with the ledger reader injected, so a test can make
+/// the between-appends re-read fail.
+fn close_asks_locked_with(
+    paths: &KbPaths,
+    slug: &SlateSlug,
+    body: AsksCloseBody,
+    user: String,
+    now_unix: i64,
+    presence: &[Presence],
+    reload: &mut dyn FnMut(&KbPaths, &SlateSlug) -> kb_core::Result<Vec<Post>>,
+) -> Result<AsksClosed, AppendFail> {
     let none = |head_seq| AsksClosed {
         response: AsksCloseResponse {
             closed: Vec::new(),
@@ -1974,7 +1990,16 @@ fn close_asks_locked(
         .into());
     }
     let policy = LivePolicy::default();
+    // The re-read that validates each `done` against the board it will land
+    // on happens at the START of the next step, BEFORE its append: a read
+    // failure then stops the batch with every earlier `done` still in
+    // `closed` (a `?` after the commit used to drop that done's result and
+    // its SSE).
+    let mut first = true;
     let (closed, events, head, failure) = close_each(open, |ask_seq| {
+        if !std::mem::replace(&mut first, false) {
+            posts = reload(paths, slug)?;
+        }
         let mut done = PostBody {
             kind: Kind::Done,
             line: body.line.clone(),
@@ -2004,18 +2029,14 @@ fn close_asks_locked(
             &policy,
             presence,
         )?;
-        let step = (
+        Ok((
             ClosedAsk {
                 ask_seq,
                 done_seq: appended.response.post.seq,
             },
             appended.event,
             appended.head,
-        );
-        // Re-read so the NEXT done is validated against the board it will
-        // actually land on.
-        posts = load_posts(paths, slug)?;
-        Ok(step)
+        ))
     });
     let mut response = AsksCloseResponse {
         closed,
@@ -2466,6 +2487,46 @@ mod tests {
         });
         assert_eq!((closed.len(), events.len()), (2, 0));
         assert!(failure.is_none());
+    }
+
+    /// v044-X10 - handler-level partial path: the ledger re-read between two
+    /// `done`s fails after the first `done` committed. The first must stay in
+    /// `closed`, with its SSE event and head handed back, and the failure
+    /// reported alongside (not a bare error that drops the committed done).
+    #[test]
+    fn a_reload_failure_after_a_committed_done_keeps_that_done() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "smoke".to_string());
+        let slug = SlateSlug::new("orchard").unwrap();
+        for seq in [1, 2] {
+            let mut ask = post(seq, Kind::Ask, "Distill session abc?", Some("abc"));
+            ask.refs = vec!["session:abc".to_string()];
+            append_line(&paths, &slug, &ask).unwrap();
+        }
+        let mut meta = SlateMeta::new(&slug, 1_767_225_600);
+        meta.head_seq = 2;
+        save_meta(&paths, &slug, &meta).unwrap();
+        let body = AsksCloseBody {
+            reference: "session:abc".to_string(),
+            line: "distilled".to_string(),
+            prov: prov(Some("abc")),
+        };
+        let out = close_asks_locked_with(
+            &paths,
+            &slug,
+            body,
+            "tester".to_string(),
+            1_767_225_700,
+            &[],
+            &mut |_, _| Err(kb_core::Error::Storage("read failed".into())),
+        )
+        .expect("a partial close is Ok, not a bare error");
+        assert_eq!(out.response.closed.len(), 1, "the committed done is kept");
+        assert_eq!(out.response.closed[0].ask_seq, 1);
+        assert!(out.head.is_some(), "its head is cached");
+        assert_eq!(out.events.len(), 1, "its SSE payload is handed back");
+        assert!(out.failure.is_some());
+        assert!(out.response.error.is_some());
     }
 
     fn prov(session: Option<&str>) -> Prov {
