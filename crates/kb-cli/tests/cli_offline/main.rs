@@ -21,3 +21,4 @@ mod sessions_scrub;
 mod status;
 mod status_watch;
 mod token;
+mod version;
