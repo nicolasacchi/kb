@@ -35,6 +35,7 @@ import { canEditComment } from "../lib/canEditComment";
 import { fetchArtifactHtml, importReview } from "../api/client";
 import {
   patchCommentMeta,
+  tagDelta,
   type CommentMetaResult,
 } from "../api/reviewNotes";
 import { currentDaemonBase } from "../api/base";
@@ -759,7 +760,9 @@ export default function CommentsPanel({
                 onHover={(on) => onHoverComment?.(on ? c.id : null)}
                 onToggleResolved={() => toggleResolved(c.id, c.status)}
                 onTogglePrivate={() => setPrivate(c.id, c.private !== true)}
-                onSaveTags={(tags) => patchCommentMeta(kb, artifactId, c.id, { tags })}
+                onSaveTags={(tags) =>
+                  patchCommentMeta(kb, artifactId, c.id, tagDelta(c.tags ?? [], tags))
+                }
                 onDelete={() => removeComment(c.id)}
                 onReply={(author, body, attachmentIds) =>
                   addReply(c.id, author, body, attachmentIds)

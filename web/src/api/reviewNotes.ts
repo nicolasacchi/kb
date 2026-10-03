@@ -52,9 +52,42 @@ export type ReviewNotesQuery = {
 };
 
 export type CommentMetaPatch = {
+  /// FULL replace. Read-merge-write clients race every other writer, so the
+  /// tag editor sends the deltas below instead (like the CLI).
   tags?: string[];
+  /// DELTA: union into the comment's CURRENT tags, server-side, under the lock.
+  add_tags?: string[];
+  /// DELTA: drop these (slug-matched) from the CURRENT tags.
+  remove_tags?: string[];
   private?: boolean;
 };
+
+/// The tag-editor delta between a comment's current tags and the edited
+/// list: `add_tags` = typed tags the comment lacks, `remove_tags` = current
+/// tags no longer typed. Matching is case-insensitive on the raw strings
+/// (the daemon's `normalize_comment_tags` stays the one slugifier; this only
+/// avoids sending a remove+add pair for a tag that merely changed case).
+/// `add_tags` is always present (possibly empty) so an unchanged editor is
+/// still a valid, no-op PATCH rather than the daemon's "set at least one" 400.
+export function tagDelta(
+  current: readonly string[],
+  draft: readonly string[],
+): { add_tags: string[]; remove_tags?: string[] } {
+  const key = (t: string) => t.trim().toLowerCase();
+  const have = new Set(current.map(key));
+  const want = new Set(draft.map(key));
+  const seen = new Set<string>();
+  const add_tags: string[] = [];
+  for (const t of draft) {
+    const k = key(t);
+    if (!have.has(k) && !seen.has(k)) {
+      seen.add(k);
+      add_tags.push(t);
+    }
+  }
+  const remove_tags = current.filter((t) => !want.has(key(t)));
+  return remove_tags.length > 0 ? { add_tags, remove_tags } : { add_tags };
+}
 
 /// The EFFECTIVE values after normalisation (`{"ok":true,"changed":bool,
 /// "tags":[…],"private":bool}`). The SPA never re-derives slug/dedupe/sort
