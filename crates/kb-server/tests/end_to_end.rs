@@ -11448,6 +11448,78 @@ async fn memory_ingest_client_ref_reuse_with_different_content_is_409() {
     assert_eq!(n, 1, "the conflicting writes must not create files");
 }
 
+/// v044-X9 - the "key owned by another file" probe matches the exact keyed
+/// filename shape (a memory_slug stem + `-<ref>.html`), not any file that
+/// happens to end in `-<ref>.html`.
+#[tokio::test]
+async fn memory_ingest_client_ref_owner_probe_ignores_unrelated_file_names() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    // Not a keyed-memory name (uppercase + underscore stem).
+    std::fs::write(
+        tmp.path()
+            .join("globalmem")
+            .join("Some_Note-aaaabbbbccccdddd.html"),
+        "<html><body>unrelated</body></html>",
+    )
+    .unwrap();
+    let r = reqwest::Client::new()
+        .post(url(addr, "/api/kb/globalmem/artifacts"))
+        .json(&serde_json::json!({
+            "title": "Owner Probe Heron",
+            "body": "a fresh memory",
+            "category": "memory-project",
+            "client_ref": "aaaabbbbccccdddd",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201, "an unrelated file must not own the key");
+}
+
+/// v044-X9 - a replay after the stored memory was pinned / re-tagged between
+/// the write and the replay is still idempotent (the INGESTED content is
+/// compared, not the whole file); new text under the key is still a 409.
+#[tokio::test]
+async fn memory_ingest_client_ref_replay_survives_a_meta_edit() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let post = |text: &str| {
+        client
+            .post(url(addr, "/api/kb/globalmem/artifacts"))
+            .json(&serde_json::json!({
+                "title": "Meta Edit Heron",
+                "body": text,
+                "category": "memory-project",
+                "tags": ["one"],
+                "client_ref": "1111222233334444",
+            }))
+            .send()
+    };
+    let first: serde_json::Value = post("same text").await.unwrap().json().await.unwrap();
+    let path = tmp
+        .path()
+        .join("globalmem")
+        .join(first["path"].as_str().unwrap());
+    let stored = std::fs::read_to_string(&path).unwrap();
+    let edited = stored.replace(
+        "<meta name=\"kb-tags\" content=\"one\">",
+        "<meta name=\"kb-tags\" content=\"one, two\">\n<meta name=\"kb-pinned\" content=\"true\">",
+    );
+    assert_ne!(edited, stored, "the fixture must actually change the metas");
+    std::fs::write(&path, edited).unwrap();
+
+    let again = post("same text").await.unwrap();
+    assert_eq!(
+        again.status(),
+        200,
+        "a replay after a pin/tag is idempotent"
+    );
+    let again: serde_json::Value = again.json().await.unwrap();
+    assert_eq!(again["replayed"], true);
+    let changed = post("different text").await.unwrap();
+    assert_eq!(changed.status(), 409);
+}
+
 /// Every `.html` file name under `root`, for the replay test's on-disk count.
 fn walkdir_html(root: &std::path::Path) -> Vec<String> {
     let mut out = Vec::new();
