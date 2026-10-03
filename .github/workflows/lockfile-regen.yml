@@ -4,7 +4,7 @@
 # runs npm on the shared dev host, and a package.json edit without its
 # package-lock.json leaves `npm ci` red on every lane. This workflow is the one
 # sanctioned place a lockfile is (re)generated: `npm install --package-lock-only`
-# in the four package dirs, on the same Node major CI and the Dockerfiles use.
+# in the four package dirs, on node 24 / npm 11 (the lock shape this repo already has; see the step).
 #
 # HOW TO USE: either dispatch it on the branch (`gh workflow run
 # lockfile-regen.yml --ref <branch>`; GitHub only lists a dispatchable workflow
@@ -48,10 +48,15 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
-      - name: Setup Node.js (the CI / Dockerfile major)
+      - name: Setup Node.js 24 (npm 11)
+        # npm 11 writes the lockfile shape this repo already has (it records
+        # each native optional dependency's `libc`; npm 10 strips those fields
+        # and churns every lock). The lock content does not depend on the
+        # node that ran npm, and 24 is inside the engines range
+        # (^22.22.2 || >=24.15.0).
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: npm install --package-lock-only in each package dir
         run: |
