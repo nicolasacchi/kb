@@ -77,10 +77,14 @@ The older verbs (`show`, `comments`, `findings list`, `timeline`,
    refused here, as everywhere.
 4. **Drain questions** — threads awaiting the agent:
    `kb-code review comments <id> --json` (or live:
-   `kb-code annotate watch --review <id> --ignore-author claude`). For each
+   `kb-code annotate watch --review <id> --ignore-agents`; `--ignore-agents`
+   skips every agent author name, not just `claude`). For each
    open question whose last voice is the human: verify against the checkout
    (`kb-code hover/usages/framework/resolve-symbol/diagnostics …`), then
-   `kb-code annotate reply <annotation-id> -m "<evidenced answer>"` and
+   `kb-code annotate reply <annotation-id> -m "<evidenced answer>"` — the
+   reply is saved under `--author` > `$KB_CODE_AUTHOR` > `$KB_HARNESS` >
+   `claude` (never the human `you`; export `KB_HARNESS` for your harness or
+   pass `--author`) — and
    `annotate resolve` only when genuinely settled — an open question you
    answered but that awaits the human's read stays open.
 5. **Honor dispositions.**

@@ -70,6 +70,8 @@ pub struct IdentitySchema {
     pub rekey: String,
     /// V80-F2 — see [`crate::routes::IdentityResponse::review_mutations_admitted`].
     pub review_mutations_admitted: bool,
+    /// v0.44 F5 — see [`crate::routes::IdentityResponse::caller_loopback`].
+    pub caller_loopback: bool,
     pub repos: Vec<RepoSummarySchema>,
 }
 
@@ -156,6 +158,7 @@ fn example_json(name: &str) -> Option<serde_json::Value> {
             "schema_epoch": 38,
             "rekey": "done",
             "review_mutations_admitted": true,
+            "caller_loopback": true,
             "repos": [{
                 "name": "kb",
                 "path": "/home/user/project/kb",

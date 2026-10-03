@@ -164,6 +164,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod author;
 mod bench;
 // Named `scip_map`, NOT `scip` — a local module named `scip` would collide
 // with the `scip` crate itself in this binary's root namespace (a local
@@ -760,6 +761,9 @@ enum Cmd {
         /// The daemon's configured repo NAME (create form only).
         #[arg(long)]
         repo: Option<String>,
+        /// Create form only — who is speaking (v0.44 F5).
+        #[command(flatten)]
+        who: AuthorArgs,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -1817,6 +1821,9 @@ enum Cmd {
         /// --ignore-author`.
         #[arg(long = "ignore-author")]
         ignore_author: Vec<String>,
+        /// Ignore EVERY agent author name the daemon recognises (v0.44 F5).
+        #[arg(long = "ignore-agents")]
+        ignore_agents: bool,
         /// `inbox` lane poll interval — same meaning as `inbox --watch
         /// --interval`.
         #[arg(long, default_value_t = 30)]
@@ -2701,6 +2708,8 @@ enum AnnotateCmd {
         /// note (default) | question | todo | flag-for-agent | tour-stop.
         #[arg(long)]
         intent: Option<String>,
+        #[command(flatten)]
+        who: AuthorArgs,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -2799,6 +2808,11 @@ enum AnnotateCmd {
         file: Option<PathBuf>,
         #[arg(long)]
         repo: String,
+        /// v0.44 F5 — author stamped on every `add_comment` op that names
+        /// none (an op's own `author` always wins). `add_reply` ops carry no
+        /// author on the wire (the daemon stamps them).
+        #[command(flatten)]
+        who: AuthorArgs,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -2825,10 +2839,14 @@ enum AnnotateCmd {
         /// Exit 0 after this many idle seconds (resets on a surface).
         #[arg(long)]
         timeout: Option<u64>,
-        /// Skip items whose author matches (repeatable). Recommend
-        /// `--ignore-author claude`.
+        /// Skip items whose author matches (repeatable).
         #[arg(long = "ignore-author")]
         ignore_author: Vec<String>,
+        /// Skip items authored by ANY agent name the daemon recognises
+        /// (claude, codex, opencode, grok, kimi, omp, agent) — the form to
+        /// use now that agent replies carry the harness name (v0.44 F5).
+        #[arg(long = "ignore-agents")]
+        ignore_agents: bool,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4585,6 +4603,8 @@ pub struct ReviewComposeArgs {
     /// Read the V0 JSON body from stdin.
     #[arg(long)]
     pub stdin: bool,
+    #[command(flatten)]
+    pub who: AuthorArgs,
     #[arg(long, default_value = "http://127.0.0.1:4747")]
     pub daemon: String,
     #[arg(long)]
@@ -4618,6 +4638,53 @@ enum ReviewRefsCmd {
     },
 }
 
+/// v0.44 F5 — the ONE author rule every row-creating verb shares
+/// (`--author` > `--as you` > `$KB_CODE_AUTHOR` > `$KB_HARNESS` > `claude`;
+/// see `author.rs`). `claude` is a flagged last guess: a HUMAN scripting
+/// the CLI without `--as you` is saved as an agent. Attribution only.
+#[derive(Args, Debug, Clone, Default)]
+pub struct AuthorArgs {
+    /// Who is speaking (agent name, e.g. `omp`). Default: `$KB_CODE_AUTHOR`,
+    /// else `$KB_HARNESS`, else `claude`.
+    #[arg(long)]
+    pub author: Option<String>,
+    /// `--as you`: a human at the terminal (the opt-out from the agent
+    /// default).
+    #[arg(long = "as")]
+    pub as_who: Option<String>,
+}
+
+impl AuthorArgs {
+    fn resolve(&self) -> Result<String> {
+        author::author_for_write(self.author.as_deref(), self.as_who.as_deref())
+    }
+}
+
+/// Set `author` on a JSON object body unless the body already names one
+/// (a payload file's own `author` is the caller's explicit choice).
+fn set_author_if_absent(payload: &mut serde_json::Value, author: &str) {
+    if let Some(o) = payload.as_object_mut() {
+        let present = o
+            .get("author")
+            .and_then(|v| v.as_str())
+            .is_some_and(|a| !a.trim().is_empty());
+        if !present {
+            o.insert("author".to_string(), serde_json::json!(author));
+        }
+    }
+}
+
+/// Stamp `author` on every `add_comment` batch op that names none.
+fn stamp_batch_authors(ops: &mut serde_json::Value, author: &str) {
+    if let Some(arr) = ops.as_array_mut() {
+        for op in arr {
+            if op.get("op").and_then(|v| v.as_str()) == Some("add_comment") {
+                set_author_if_absent(op, author);
+            }
+        }
+    }
+}
+
 /// PRR-R3 — `kb-code review findings <SUBCOMMAND> ID …`.
 #[derive(Subcommand, Debug)]
 enum ReviewFindingsCmd {
@@ -4633,6 +4700,8 @@ enum ReviewFindingsCmd {
         /// `full` (default) | `additive`.
         #[arg(long)]
         mode: Option<String>,
+        #[command(flatten)]
+        who: AuthorArgs,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -4707,6 +4776,8 @@ enum ReviewFindingsCmd {
 /// from the adopted comment (see [`ReviewFindingsCmd::Add`]'s own doc).
 #[derive(Args, Debug)]
 pub(crate) struct ReviewFindingsAddArgs {
+    #[command(flatten)]
+    pub who: AuthorArgs,
     pub id: i64,
     #[arg(long)]
     pub severity: String,
@@ -5463,6 +5534,7 @@ async fn run(cli: Cli) -> Result<()> {
             ps,
             side,
             repo,
+            who,
             daemon,
             json,
             cmd,
@@ -5473,6 +5545,7 @@ async fn run(cli: Cli) -> Result<()> {
                 repo,
                 path,
                 intent,
+                who: reply_who,
                 daemon,
                 json,
             }) => {
@@ -5483,6 +5556,7 @@ async fn run(cli: Cli) -> Result<()> {
                     &path,
                     &message,
                     intent.as_deref(),
+                    &reply_who.resolve()?,
                     json,
                 )
                 .await
@@ -5534,9 +5608,10 @@ async fn run(cli: Cli) -> Result<()> {
             Some(AnnotateCmd::Batch {
                 file,
                 repo,
+                who,
                 daemon,
                 json,
-            }) => annotate_batch_cmd(&daemon, &repo, file.as_deref(), json).await,
+            }) => annotate_batch_cmd(&daemon, &repo, file.as_deref(), &who.resolve()?, json).await,
             Some(AnnotateCmd::Watch {
                 repo,
                 review,
@@ -5544,9 +5619,11 @@ async fn run(cli: Cli) -> Result<()> {
                 once,
                 timeout,
                 ignore_author,
+                ignore_agents,
                 daemon,
                 json,
             }) => {
+                let ignore_author = author::expand_ignore(ignore_author, ignore_agents);
                 let scope = watch::WatchScope::new(repo, review)?;
                 watch::run(watch::WatchArgs {
                     daemon,
@@ -5599,6 +5676,7 @@ async fn run(cli: Cli) -> Result<()> {
                     review,
                     ps,
                     side.as_deref(),
+                    &who.resolve()?,
                     json,
                 )
                 .await
@@ -6223,6 +6301,7 @@ async fn run(cli: Cli) -> Result<()> {
                     from_file,
                     stdin,
                     mode,
+                    who,
                     daemon,
                     json,
                 } => {
@@ -6232,6 +6311,7 @@ async fn run(cli: Cli) -> Result<()> {
                         from_file.as_deref(),
                         stdin,
                         mode.as_deref(),
+                        &who.resolve()?,
                         json,
                     )
                     .await
@@ -6256,6 +6336,7 @@ async fn run(cli: Cli) -> Result<()> {
                 }
                 ReviewFindingsCmd::Add(args) => {
                     let ReviewFindingsAddArgs {
+                        who,
                         id,
                         severity,
                         category,
@@ -6279,6 +6360,7 @@ async fn run(cli: Cli) -> Result<()> {
                     review_findings_add_cmd(
                         &daemon,
                         id,
+                        &who.resolve()?,
                         &severity,
                         category.as_deref(),
                         path.as_deref(),
@@ -7268,10 +7350,12 @@ async fn run(cli: Cli) -> Result<()> {
             once,
             timeout,
             ignore_author,
+            ignore_agents,
             interval,
             daemon,
             json,
         } => {
+            let ignore_author = author::expand_ignore(ignore_author, ignore_agents);
             watch_unified_cmd(
                 &lanes,
                 since,
@@ -7423,8 +7507,42 @@ async fn main() {
     let cli = Cli::parse();
     if let Err(err) = run(cli).await {
         eprintln!("Error: {err:?}");
+        // v0.44 F5 — a LOOPBACK-ONLY route's bodiless 404 is ambiguous
+        // (gate vs real not-found). Ask the daemon how it classifies THIS
+        // caller; "not loopback" is a refusal to run off-host
+        // (`needs-daemon-host`, exit 4), not a not-found. Any probe failure
+        // keeps the documented 404 -> 8 mapping.
+        if let Some(daemon) = envelope::loopback_gate_daemon(&err) {
+            if probe_caller_loopback(&daemon).await == Some(false) {
+                envelope::print_err(
+                    "needs-daemon-host",
+                    &format!(
+                        "this verb only runs on the daemon host: {daemon} classified this \
+                         caller as non-loopback"
+                    ),
+                    Some("run it on the machine the daemon runs on (or over an SSH session there)"),
+                );
+                std::process::exit(envelope::EXIT_REFUSED);
+            }
+        }
         std::process::exit(envelope::exit_code_for(&err));
     }
+}
+
+/// `GET {daemon}/api/identity` -> `caller_loopback`. Short timeout; every
+/// failure (unreachable, non-200, older daemon without the field) is `None`.
+async fn probe_caller_loopback(daemon: &str) -> Option<bool> {
+    let client = client_builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let url = format!("{}/api/identity", daemon.trim_end_matches('/'));
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    envelope::caller_loopback_from_identity(&body)
 }
 
 /// Parse a `kb-code set create --span PATH[:START[-END]]`/`kb-code set add
@@ -14419,13 +14537,16 @@ fn loopback_or_api_error(
     if status == reqwest::StatusCode::NOT_FOUND
         && body.get("error").and_then(|v| v.as_str()).is_none()
     {
-        return anyhow::Error::new(envelope::StatusError::new(
-            404,
-            format!(
-                "{what} requires loopback — {daemon} answered 404 \
-                 (this route is LOOPBACK-ONLY)"
-            ),
-        ));
+        return anyhow::Error::new(
+            envelope::StatusError::new(
+                404,
+                format!(
+                    "{what} requires loopback — {daemon} answered 404 \
+                     (this route is LOOPBACK-ONLY)"
+                ),
+            )
+            .with_loopback_gate(daemon),
+        );
     }
     annotation_api_error(what, status, body)
 }
@@ -14655,6 +14776,7 @@ async fn annotate_create_cmd(
     review: Option<i64>,
     ps: Option<i64>,
     side: Option<&str>,
+    author: &str,
     json: bool,
 ) -> Result<()> {
     if let Some(i) = intent {
@@ -14666,6 +14788,7 @@ async fn annotate_create_cmd(
         "path": path,
         "line": line,
         "body": message,
+        "author": author,
     });
     if let Some(end) = to {
         payload["anchor_kind"] = serde_json::json!(kb_code_server::annotations::ANCHOR_KIND_RANGE);
@@ -14722,6 +14845,7 @@ async fn annotate_reply_cmd(
     path: &str,
     message: &str,
     intent: Option<&str>,
+    author: &str,
     json: bool,
 ) -> Result<()> {
     if let Some(i) = intent {
@@ -14732,6 +14856,7 @@ async fn annotate_reply_cmd(
         "path": path,
         "body": message,
         "parent_id": id,
+        "author": author,
     });
     if let Some(i) = intent {
         payload["intent"] = serde_json::json!(i);
@@ -16687,15 +16812,21 @@ async fn review_comments_cmd(
     Ok(())
 }
 
-/// V80-M0 — pure partition into (general, in_diff, outside) groups —
+/// V80-M0 — pure partition into (general, in_diff, outside, unknown) groups —
 /// `general` is the path-less `anchor_kind: "review"` group (if any); the
 /// server's own `in_diff` caption (`review_comments::build_comment_
 /// groups`) partitions every OTHER group, never a client-side re-derive.
+/// `in_diff: null` (or absent) means the daemon could not compute the
+/// caption - the diff was unavailable - so the group is `unknown`, NOT
+/// "outside the diff" (v0.44 K4 carry-over: collapsing null into `false`
+/// told a reader a comment was off the diff when nothing was known).
 /// Split out from [`print_review_comments_human`] so the derivation is
 /// unit-testable without capturing stdout.
+#[allow(clippy::type_complexity)]
 fn partition_review_comment_groups(
     groups: &[serde_json::Value],
 ) -> (
+    Vec<serde_json::Value>,
     Vec<serde_json::Value>,
     Vec<serde_json::Value>,
     Vec<serde_json::Value>,
@@ -16703,16 +16834,19 @@ fn partition_review_comment_groups(
     let mut general = Vec::new();
     let mut in_diff = Vec::new();
     let mut outside = Vec::new();
+    let mut unknown = Vec::new();
     for g in groups {
         if g["path"].as_str().unwrap_or("").is_empty() {
             general.push(g.clone());
-        } else if g["in_diff"].as_bool().unwrap_or(false) {
-            in_diff.push(g.clone());
         } else {
-            outside.push(g.clone());
+            match g["in_diff"].as_bool() {
+                Some(true) => in_diff.push(g.clone()),
+                Some(false) => outside.push(g.clone()),
+                None => unknown.push(g.clone()),
+            }
         }
     }
-    (general, in_diff, outside)
+    (general, in_diff, outside, unknown)
 }
 
 /// Three headings: `general`, `in the diff`, `outside the diff` (only the
@@ -16723,7 +16857,7 @@ fn print_review_comments_human(body: &serde_json::Value) {
         println!("(no comments)");
         return;
     }
-    let (general, in_diff, outside) = partition_review_comment_groups(&groups);
+    let (general, in_diff, outside, unknown) = partition_review_comment_groups(&groups);
     let print_group = |g: &serde_json::Value| {
         println!("  {}", g["path"].as_str().unwrap_or("?"));
         for c in g["comments"].as_array().cloned().unwrap_or_default() {
@@ -16748,6 +16882,12 @@ fn print_review_comments_human(body: &serde_json::Value) {
     if !outside.is_empty() {
         println!("outside the diff");
         for g in &outside {
+            print_group(g);
+        }
+    }
+    if !unknown.is_empty() {
+        println!("unknown (diff unavailable)");
+        for g in &unknown {
             print_group(g);
         }
     }
@@ -17868,6 +18008,7 @@ async fn review_findings_import_cmd(
     from_file: Option<&Path>,
     stdin: bool,
     mode: Option<&str>,
+    author: &str,
     json: bool,
 ) -> Result<()> {
     if from_file.is_some() == stdin {
@@ -17890,6 +18031,7 @@ async fn review_findings_import_cmd(
         }
         payload["mode"] = serde_json::json!(m);
     }
+    set_author_if_absent(&mut payload, author);
     let client = http_client()?;
     let path = format!("/api/reviews/{id}/findings/import");
     let (status, body) = post_json_raw(&client, daemon, &path, &payload).await?;
@@ -17915,6 +18057,40 @@ async fn review_findings_import_cmd(
         );
     }
     Ok(())
+}
+
+/// `(fingerprint, slug)` of every live finding the review already stores,
+/// for `compose --slugify`'s adoption step. Best-effort: when the list
+/// cannot be fetched a note goes to stderr and slugifying proceeds blind
+/// (derivation is still content-based, but a lone finding then cannot be
+/// protected from a newly appearing twin).
+async fn fetch_existing_finding_slugs(
+    client: &reqwest::Client,
+    daemon: &str,
+    id: i64,
+) -> Vec<review_agent::ExistingFinding> {
+    match get_json(client, daemon, &format!("/api/reviews/{id}/findings"), &[]).await {
+        Ok(body) => body["findings"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|f| {
+                        Some((
+                            f["fingerprint"].as_str()?.to_string(),
+                            f["slug"].as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Err(e) => {
+            eprintln!(
+                "slugify: could not read the review's stored findings ({e:#}); slugs are derived \
+                 without adopting existing ones"
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// `kb-code review compose ID …` — `POST /api/reviews/{id}/compose`.
@@ -17951,9 +18127,11 @@ async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
         slugify,
         from_file,
         stdin,
+        who,
         daemon,
         json,
     } = args;
+    let author = who.resolve()?;
 
     let forms = usize::from(doc.is_some()) + usize::from(from_file.is_some()) + usize::from(stdin);
     if forms != 1 {
@@ -18007,6 +18185,8 @@ async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
         serde_json::from_str(&text).context("parse compose payload as JSON")?
     };
     let mut payload = payload;
+    set_author_if_absent(&mut payload, &author);
+    let client0 = http_client()?;
     if slugify {
         // RS-U10a — the doc form's sidecar rides under `findings_v2`; the
         // V0 body carries `findings.findings[]`.
@@ -18015,7 +18195,11 @@ async fn review_compose_cmd(args: ReviewComposeArgs) -> Result<()> {
         } else {
             &mut payload
         };
-        let changes = review_agent::slugify_findings(target);
+        // Adopt the slugs the review ALREADY stores for the same content so a
+        // lone finding is never re-slugged when a same-titled twin appears.
+        let existing = fetch_existing_finding_slugs(&client0, &daemon, id).await;
+        let changes = review_agent::slugify_findings(target, &existing)
+            .map_err(|msg| anyhow::Error::new(envelope::StatusError::new(400, msg)))?;
         for (i, old, new) in &changes {
             eprintln!(
                 "slugify: finding #{i}: {} -> {new}",
@@ -18481,6 +18665,7 @@ fn format_touched_in(f: &serde_json::Value) -> String {
 async fn review_findings_add_cmd(
     daemon: &str,
     id: i64,
+    author: &str,
     severity: &str,
     category: Option<&str>,
     path: Option<&str>,
@@ -18499,7 +18684,7 @@ async fn review_findings_add_cmd(
     blocking: bool,
     json: bool,
 ) -> Result<()> {
-    let mut payload = serde_json::json!({ "severity": severity });
+    let mut payload = serde_json::json!({ "severity": severity, "author": author });
     if let Some(from_comment) = from_comment {
         payload["from_annotation_id"] = serde_json::json!(from_comment);
     } else {
@@ -20200,6 +20385,7 @@ async fn annotate_batch_cmd(
     daemon: &str,
     repo: &str,
     file: Option<&Path>,
+    author: &str,
     json: bool,
 ) -> Result<()> {
     let raw = match file {
@@ -20214,13 +20400,14 @@ async fn annotate_batch_cmd(
         }
     };
     let parsed: serde_json::Value = serde_json::from_str(&raw).context("parse batch ops JSON")?;
-    let ops = if parsed.is_array() {
+    let mut ops = if parsed.is_array() {
         parsed
     } else if parsed.get("ops").map(|v| v.is_array()).unwrap_or(false) {
         parsed["ops"].clone()
     } else {
         anyhow::bail!("batch file must be a JSON array of ops or {{\"ops\": […]}}");
     };
+    stamp_batch_authors(&mut ops, author);
     let client = http_client()?;
     let (status, body) = post_json_raw(
         &client,
@@ -26833,6 +27020,78 @@ mod tests {
         }
     }
 
+    /// v0.44 F5 — batch `add_comment` ops without an author get the rule's
+    /// author; an op's own author and non-comment ops are left alone.
+    #[test]
+    fn batch_ops_are_stamped_with_the_resolved_author_unless_they_name_one() {
+        let mut ops = serde_json::json!([
+            {"op": "add_comment", "path": "a.rs", "line": 1, "body": "x"},
+            {"op": "add_comment", "path": "a.rs", "line": 2, "body": "y", "author": "you"},
+            {"op": "add_reply", "parent_id": "p", "body": "z"},
+        ]);
+        stamp_batch_authors(&mut ops, "omp");
+        assert_eq!(ops[0]["author"], "omp");
+        assert_eq!(ops[1]["author"], "you");
+        assert!(ops[2].get("author").is_none());
+    }
+
+    #[test]
+    fn set_author_if_absent_respects_an_authors_own_value() {
+        let mut v = serde_json::json!({"author": "grok"});
+        set_author_if_absent(&mut v, "omp");
+        assert_eq!(v["author"], "grok");
+        let mut v = serde_json::json!({"author": "  "});
+        set_author_if_absent(&mut v, "omp");
+        assert_eq!(v["author"], "omp");
+    }
+
+    #[test]
+    fn author_and_as_flags_parse_on_every_creating_verb_and_ignore_agents_on_watch() {
+        match parse_annotate(&["a.rs:1", "-m", "x", "--repo", "r", "--author", "omp"]).unwrap() {
+            Cmd::Annotate { who, .. } => assert_eq!(who.author.as_deref(), Some("omp")),
+            other => panic!("{other:?}"),
+        }
+        match parse_annotate(&[
+            "reply", "ann_1", "-m", "x", "--repo", "r", "--path", "p", "--as", "you",
+        ])
+        .unwrap()
+        {
+            Cmd::Annotate {
+                cmd: Some(AnnotateCmd::Reply { who, .. }),
+                ..
+            } => assert_eq!(who.as_who.as_deref(), Some("you")),
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&["annotate", "watch", "--repo", "r", "--ignore-agents"]).unwrap() {
+            Cmd::Annotate {
+                cmd:
+                    Some(AnnotateCmd::Watch {
+                        ignore_agents,
+                        ignore_author,
+                        ..
+                    }),
+                ..
+            } => {
+                assert!(ignore_agents);
+                assert!(ignore_author.is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse_cli(&[
+            "review", "findings", "import", "4", "--stdin", "--author", "omp",
+        ])
+        .unwrap()
+        {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Findings {
+                        cmd: ReviewFindingsCmd::Import { who, .. },
+                    },
+            } => assert_eq!(who.author.as_deref(), Some("omp")),
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn annotate_set_intent_and_delete_subcommands_parse() {
         let cmd = parse_annotate(&["set-intent", "ann_1", "todo"]).unwrap();
@@ -27192,8 +27451,14 @@ mod tests {
             serde_json::json!({"path": "", "in_diff": false, "comments": [{"id": "g1"}]}),
             serde_json::json!({"path": "a.rs", "in_diff": true, "comments": [{"id": "a1"}]}),
             serde_json::json!({"path": "b.rs", "in_diff": false, "comments": [{"id": "b1"}]}),
+            serde_json::json!({"path": "c.rs", "in_diff": null, "comments": [{"id": "c1"}]}),
+            serde_json::json!({"path": "d.rs", "comments": [{"id": "d1"}]}),
         ];
-        let (general, in_diff, outside) = partition_review_comment_groups(&groups);
+        let (general, in_diff, outside, unknown) = partition_review_comment_groups(&groups);
+        // null/absent is UNKNOWN, never silently "outside the diff".
+        assert_eq!(unknown.len(), 2);
+        assert_eq!(unknown[0]["path"], "c.rs");
+        assert_eq!(unknown[1]["path"], "d.rs");
         assert_eq!(general.len(), 1);
         assert_eq!(general[0]["comments"][0]["id"], "g1");
         assert_eq!(in_diff.len(), 1);

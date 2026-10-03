@@ -10,20 +10,25 @@ pub struct StatusStub {
 
 impl StatusStub {
     pub fn new(status: u16, body: &str) -> StatusStub {
+        Self::with_identity(status, body, None)
+    }
+
+    pub fn with_identity(status: u16, body: &str, identity: Option<&str>) -> StatusStub {
+        let identity = identity.map(str::to_string);
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub");
         let url = format!("http://{}", listener.local_addr().unwrap());
         let body = body.to_string();
         std::thread::spawn(move || {
             // Serve until the test process exits.
             for sock in listener.incoming().flatten() {
-                serve(sock, status, &body);
+                serve(sock, status, &body, identity.as_deref());
             }
         });
         StatusStub { url }
     }
 }
 
-fn serve(mut sock: TcpStream, status: u16, body: &str) {
+fn serve(mut sock: TcpStream, status: u16, body: &str, identity: Option<&str>) {
     let _ = sock.set_read_timeout(Some(Duration::from_secs(10)));
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -43,6 +48,11 @@ fn serve(mut sock: TcpStream, status: u16, body: &str) {
             }
         }
     }
+    let is_identity = buf.starts_with(b"GET /api/identity");
+    let (status, body) = match (is_identity, identity) {
+        (true, Some(id)) => (200, id),
+        _ => (status, body),
+    };
     let resp = format!(
         "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
          Connection: close\r\n\r\n{body}",
