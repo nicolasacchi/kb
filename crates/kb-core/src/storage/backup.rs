@@ -58,6 +58,10 @@ pub enum RemoteCopyOutcome {
     Failed { message: String },
 }
 
+/// How long [`run_remote_copy`] waits, per pipe, for its output drain to finish
+/// after the uploader has exited.
+const REMOTE_COPY_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Best-effort off-host copy of a completed local backup (GC-B4).
 ///
 /// Runs `cfg.remote_cmd` (argv, `{src}`/`{dest}` substituted) via
@@ -100,6 +104,7 @@ pub fn run_remote_copy(cfg: &BackupSection, src: &Path) -> Option<RemoteCopyOutc
     };
     let pgid = child.id() as libc::pid_t;
     let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
         std::thread::spawn(move || {
             let mut kept = Vec::new();
             if let Some(mut pipe) = pipe {
@@ -115,8 +120,9 @@ pub fn run_remote_copy(cfg: &BackupSection, src: &Path) -> Option<RemoteCopyOutc
                     }
                 }
             }
-            kept
-        })
+            let _ = tx.send(kept);
+        });
+        rx
     };
     let out_t = drain(
         child
@@ -149,9 +155,14 @@ pub fn run_remote_copy(cfg: &BackupSection, src: &Path) -> Option<RemoteCopyOutc
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    // The group is dead (or exited), so the pipes close and the drains end.
-    let _ = out_t.join();
-    let stderr_bytes = err_t.join().unwrap_or_default();
+    // Normally the group is dead (or exited), so the pipes close and the
+    // drains end at once. A child that daemonised and kept the pipes open
+    // would hold a plain `join` forever (and with it the scheduler), so the
+    // wait is bounded; a straggling drain thread is left to die with its pipe.
+    let _ = out_t.recv_timeout(REMOTE_COPY_DRAIN_GRACE);
+    let stderr_bytes = err_t
+        .recv_timeout(REMOTE_COPY_DRAIN_GRACE)
+        .unwrap_or_default();
     Some(match status {
         _ if timed_out => {
             let message = format!(
@@ -498,6 +509,9 @@ async fn export_inner(
         store.count_rows().await.map_err(|e| {
             crate::Error::Storage(format!("lance snapshot failed validation ({e})"))
         })?;
+        // `open` + `count_rows` answer from manifest metadata alone, so they
+        // cannot notice a manifest that names a data file the copy missed.
+        verify_staged_lance_data_files(&staged_lance).await?;
     }
 
     let tar_staging = staging.to_path_buf();
@@ -694,6 +708,47 @@ pub fn lance_copy_order(src: &Path) -> Result<Vec<PathBuf>> {
     Ok(entries)
 }
 
+/// Check that every data file named by the NEWEST staged manifest of every
+/// lance table under `lance_root` exists in the staging copy.
+///
+/// Metadata-first copy order narrows the race with a committing daemon but
+/// does not prove it; `Storage::open` + `count_rows` never touch data files.
+/// This is the proof. A missing file fails the export (retry, or stop the
+/// daemon) rather than shipping a tarball that cannot be read back.
+pub async fn verify_staged_lance_data_files(lance_root: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(lance_root)? {
+        let table_dir = entry?.path();
+        if !table_dir.is_dir() || table_dir.extension().and_then(|e| e.to_str()) != Some("lance") {
+            continue;
+        }
+        let uri = table_dir.to_string_lossy().into_owned();
+        let ds = lance::Dataset::open(&uri).await.map_err(|e| {
+            crate::Error::Storage(format!(
+                "lance snapshot table {} failed to open ({e})",
+                table_dir.display()
+            ))
+        })?;
+        let data_dir = table_dir.join("data");
+        for frag in ds.fragments().iter() {
+            for f in &frag.files {
+                if !data_dir.join(&f.path).is_file() {
+                    return Err(crate::Error::Storage(format!(
+                        "lance snapshot is inconsistent: manifest of {} names data file {} \
+                         that is missing from the copy; a commit may have landed mid-copy — \
+                         retry, or stop the daemon for a guaranteed snapshot",
+                        table_dir
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("?"),
+                        f.path
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn copy_lance_dir(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in lance_copy_order(src)? {
@@ -840,6 +895,32 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn run_remote_copy_does_not_hang_on_a_daemonised_child_holding_the_pipes() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("kb.tar.gz");
+        std::fs::write(&src, b"tarball bytes").unwrap();
+        let script = tmp.path().join("daemonising-uploader.sh");
+        // Exits 0 at once, but leaves a background child that inherited (and
+        // keeps open) the stdout/stderr pipes for far longer than the test.
+        std::fs::write(&script, "#!/bin/sh\nsleep 25 &\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = BackupSection {
+            remote_cmd: Some(vec![script.to_string_lossy().into_owned(), "{src}".into()]),
+            remote_dest: Some("remote:bucket/path".into()),
+            ..Default::default()
+        };
+        let t0 = std::time::Instant::now();
+        let outcome = run_remote_copy(&cfg, &src);
+        let took = t0.elapsed();
+        assert_eq!(outcome, Some(RemoteCopyOutcome::Ok));
+        assert!(
+            took < std::time::Duration::from_secs(10),
+            "drain join must be bounded after a normal exit, took {took:?}"
+        );
     }
 
     #[test]
@@ -1508,6 +1589,42 @@ mod tests {
         let versions = names.iter().position(|n| n == "_versions").unwrap();
         let data = names.iter().position(|n| n == "data").unwrap();
         assert!(versions < data, "{names:?}");
+    }
+
+    /// A3-8 — a staged manifest naming a data file the copy missed fails the
+    /// export check (open + count_rows alone would pass it).
+    #[tokio::test]
+    async fn staged_lance_with_a_missing_data_file_is_rejected() {
+        use arrow::record_batch::RecordBatchIterator;
+        use arrow_array::{Int32Array, RecordBatch};
+        use arrow_schema::{DataType, Field, Schema};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lance");
+        std::fs::create_dir_all(&root).unwrap();
+        let table = root.join("t.lance");
+        let schema =
+            std::sync::Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![std::sync::Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        lance::Dataset::write(reader, table.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        verify_staged_lance_data_files(&root)
+            .await
+            .expect("an intact copy verifies");
+        let data = table.join("data");
+        let mut removed = 0;
+        for e in std::fs::read_dir(&data).unwrap() {
+            std::fs::remove_file(e.unwrap().path()).unwrap();
+            removed += 1;
+        }
+        assert!(removed > 0, "the fixture must have written a data file");
+        let err = verify_staged_lance_data_files(&root).await.unwrap_err();
+        assert!(err.to_string().contains("missing from the copy"), "{err}");
     }
 
     /// A3-3 — retention keeps the newest K per kb and touches nothing else.
