@@ -1704,7 +1704,16 @@ GET    /api/memory/tombstone-era           MI-W2.4c — EPOCH HONESTY marker:
                                             starts before it.
 POST   /api/kb/{kb}/artifacts               write a memory artifact (write-only;
                                             the watcher indexes it once). Returns
-                                            {id, path}. U3: four ADDITIVE optional
+                                            {id, path}. v0.44 X3: optional
+                                            `client_ref` (8-64 of [A-Za-z0-9_-],
+                                            else 400) is an IDEMPOTENCY KEY — it
+                                            names the file (<slug>-<ref>.html), so
+                                            a second POST with the same key answers
+                                            200 {id, path, replayed:true} and
+                                            writes nothing (a lost response, or
+                                            `kb remember`'s outbox replay). Absent
+                                            => the timestamp name, 201, as before.
+                                            U3: four ADDITIVE optional
                                             provenance fields — author ("you" |
                                             "claude", the ROLE split, not an
                                             identity), source_kb, source_artifact,

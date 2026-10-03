@@ -55,6 +55,15 @@ pub async fn remember(
             return Err(err);
         }
     }
+    // The session id is resolved ONCE, here: the write below and a possible
+    // spooled replay must carry the same one (and the identity ladder prints
+    // its caveat once, not twice).
+    let session_resolved = if no_session {
+        None
+    } else {
+        crate::session_identity::session_for_write(session_id)
+    };
+    let client_ref = crate::outbox::new_client_ref()?;
     let res = remember_inner(
         text,
         title,
@@ -69,12 +78,13 @@ pub async fn remember(
         memory_type,
         source,
         failed,
-        session_id,
-        no_session,
+        session_resolved.as_deref(),
+        session_resolved.is_none(),
         global,
         link,
         daemon,
         bearer,
+        Some(&client_ref),
     )
     .await;
     match res {
@@ -88,7 +98,72 @@ pub async fn remember(
                     body["path"].as_str().unwrap_or("?")
                 );
             }
+            // The daemon just answered: replay anything an earlier outage
+            // spooled. Best effort, one stderr line per entry; never fails
+            // THIS write.
+            if let Some(dir) = crate::outbox::outbox_dir() {
+                let report = drain_outbox(&dir, bearer, None).await;
+                for line in report.lines() {
+                    eprintln!("{line}");
+                }
+            }
             Ok(())
+        }
+        Err(e) if crate::outbox::is_transient(&e) => {
+            let spooled = crate::outbox::Spooled {
+                client_ref: client_ref.clone(),
+                queued_at: chrono::Utc::now().timestamp(),
+                text: text.to_string(),
+                title: title.map(str::to_string),
+                summary: summary.map(str::to_string),
+                kb: kb.map(str::to_string),
+                scope: scope.map(str::to_string),
+                category: category.to_string(),
+                tags: tags.map(str::to_string),
+                salience,
+                decay: decay.map(str::to_string),
+                supersedes: supersedes.map(str::to_string),
+                memory_type: memory_type.map(str::to_string),
+                source: source.map(str::to_string),
+                failed,
+                session_id: session_resolved.clone(),
+                no_session: session_resolved.is_none(),
+                global,
+                link: link.map(str::to_string),
+                daemon: daemon.map(str::to_string),
+            };
+            let queued = crate::outbox::outbox_dir()
+                .ok_or_else(|| anyhow!("no cache dir to spool into"))
+                .and_then(|dir| crate::outbox::spool(&dir, &spooled));
+            match queued {
+                Ok(path) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "queued": true,
+                                "id": null,
+                                "client_ref": client_ref,
+                                "spool": path.to_string_lossy(),
+                                "reason": e.to_string(),
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "queued (client_ref {client_ref}): {e}\n  \
+                             the write replays on the next `kb remember` or `kb outbox flush`"
+                        );
+                    }
+                    Ok(())
+                }
+                Err(spool_err) => {
+                    let err = anyhow!("{e} (and the outbox could not spool it: {spool_err})");
+                    if json {
+                        emit_json_error(&err, daemon);
+                    }
+                    Err(err)
+                }
+            }
         }
         Err(e) => {
             if json {
@@ -97,6 +172,130 @@ pub async fn remember(
             Err(e)
         }
     }
+}
+
+/// Replay every spooled `kb remember`, oldest first, with its ORIGINAL
+/// `client_ref`. Stops at the first transient failure (the daemon is still
+/// down; the rest would only fail the same way) and parks a permanently
+/// refused entry as `.rejected` so it cannot block the queue. Returns one
+/// human line per outcome, plus a trailing count when anything is left.
+pub(crate) async fn drain_outbox(
+    dir: &std::path::Path,
+    bearer: Option<&str>,
+    daemon_override: Option<&str>,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let entries = crate::outbox::pending(dir);
+    let total = entries.len();
+    let mut done = 0usize;
+    for (path, e) in entries {
+        let res = remember_inner(
+            &e.text,
+            e.title.as_deref(),
+            e.summary.as_deref(),
+            e.kb.as_deref(),
+            e.scope.as_deref(),
+            &e.category,
+            e.tags.as_deref(),
+            e.salience,
+            e.decay.as_deref(),
+            e.supersedes.as_deref(),
+            e.memory_type.as_deref(),
+            e.source.as_deref(),
+            e.failed,
+            e.session_id.as_deref(),
+            e.no_session,
+            e.global,
+            e.link.as_deref(),
+            daemon_override.or(e.daemon.as_deref()),
+            bearer,
+            Some(&e.client_ref),
+        )
+        .await;
+        match res {
+            Ok(body) => {
+                crate::outbox::complete(&path);
+                done += 1;
+                lines.push(format!(
+                    "outbox: replayed {} ({})",
+                    body["id"].as_str().unwrap_or("?"),
+                    e.client_ref
+                ));
+            }
+            Err(err) if crate::outbox::is_transient(&err) => {
+                lines.push(format!("outbox: still unreachable ({err}); stopping"));
+                break;
+            }
+            Err(err) => {
+                crate::outbox::reject(&path);
+                lines.push(format!(
+                    "outbox: {} refused ({err}); parked as .rejected",
+                    e.client_ref
+                ));
+            }
+        }
+    }
+    if total > 0 && done < total {
+        let left = crate::outbox::pending(dir).len();
+        if left > 0 {
+            lines.push(format!("outbox: {left} queued write(s) remain"));
+        }
+    }
+    lines.join("\n")
+}
+
+/// `kb outbox flush [--daemon URL]` — replay the spool now (`--daemon`
+/// overrides the daemon each entry was queued for).
+pub async fn outbox_flush(daemon: Option<&str>, bearer: Option<&str>, json: bool) -> Result<()> {
+    let Some(dir) = crate::outbox::outbox_dir() else {
+        return Err(anyhow!("no cache dir to read the outbox from"));
+    };
+    let before = crate::outbox::pending(&dir).len();
+    let report = drain_outbox(&dir, bearer, daemon).await;
+    let left = crate::outbox::pending(&dir).len();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "before": before, "after": left, "report": report,
+            }))?
+        );
+    } else if before == 0 {
+        println!("outbox: empty");
+    } else {
+        println!("{report}\noutbox: {before} -> {left} queued");
+    }
+    Ok(())
+}
+
+/// `kb outbox list` — what is waiting.
+pub fn outbox_list(json: bool) -> Result<()> {
+    let Some(dir) = crate::outbox::outbox_dir() else {
+        return Err(anyhow!("no cache dir to read the outbox from"));
+    };
+    let entries = crate::outbox::pending(&dir);
+    if json {
+        let rows: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(_, e)| {
+                serde_json::json!({
+                    "client_ref": e.client_ref,
+                    "queued_at": e.queued_at,
+                    "title": e.title,
+                    "text": e.text,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else if entries.is_empty() {
+        println!("outbox: empty");
+    } else {
+        for (_, e) in &entries {
+            let head: String = e.text.chars().take(60).collect();
+            println!("{}  {}  {head}", e.client_ref, e.queued_at);
+        }
+    }
+    Ok(())
 }
 
 /// SL3 — `pub(crate)` so `kb slate promote #n --to memory` composes the
@@ -124,6 +323,7 @@ pub(crate) async fn remember_inner(
     link: Option<&str>,
     daemon: Option<&str>,
     bearer: Option<&str>,
+    client_ref: Option<&str>,
 ) -> Result<serde_json::Value> {
     let url = require_daemon(daemon, bearer).await?;
     let (kb, auto_link) = match resolve_memory_kb(&url, kb, scope, bearer).await? {
@@ -199,6 +399,12 @@ pub(crate) async fn remember_inner(
     if let Some(sid) = resolved_session {
         payload["session_id"] = serde_json::json!(sid);
     }
+    // v0.44 X3 — the idempotency key: the daemon names the file after it, so
+    // an outbox replay of a write that already landed answers 200 with the
+    // original id instead of writing a second memory.
+    if let Some(r) = client_ref {
+        payload["client_ref"] = serde_json::json!(r);
+    }
 
     let client = http::client_with_timeout_and_bearer(10, bearer)?;
     let resp = client
@@ -208,11 +414,28 @@ pub(crate) async fn remember_inner(
         ))
         .json(&payload)
         .send()
-        .await?;
+        .await
+        .map_err(|e| {
+            // A timeout may mean the daemon DID write it and the answer was
+            // lost; a connect error means nothing was sent. Both are worth
+            // spooling — the client_ref makes the replay safe either way.
+            if e.is_timeout() || e.is_connect() {
+                anyhow::Error::new(crate::outbox::Transient(format!(
+                    "POST {url}/api/kb/{kb}/artifacts failed: {e}"
+                )))
+            } else {
+                anyhow::Error::new(e)
+            }
+        })?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("daemon returned {status}: {body}"));
+        let msg = format!("daemon returned {status}: {body}");
+        return Err(if status.is_server_error() {
+            anyhow::Error::new(crate::outbox::Transient(msg))
+        } else {
+            anyhow!(msg)
+        });
     }
     Ok(resp.json().await?)
 }
@@ -511,11 +734,13 @@ pub(crate) const KBS_CONFIG_PATH: &str = "/api/kbs?counts=false";
 /// not conclude "kb is down" from a loaded host.
 pub(crate) fn kbs_request_error(e: &reqwest::Error, daemon: &str, secs: u64) -> anyhow::Error {
     if e.is_timeout() {
-        anyhow!(
+        anyhow::Error::new(crate::outbox::Transient(format!(
             "daemon slow (GET {daemon}{KBS_CONFIG_PATH} > {secs}s) — it is up but busy, not down"
-        )
+        )))
     } else if e.is_connect() {
-        anyhow!("daemon not reachable at {daemon} — start it with `kb daemon`")
+        anyhow::Error::new(crate::outbox::Transient(format!(
+            "daemon not reachable at {daemon} — start it with `kb daemon`"
+        )))
     } else {
         anyhow!("GET {daemon}{KBS_CONFIG_PATH} failed: {e}")
     }
@@ -1644,10 +1869,16 @@ const IDENTITY_REPROBE_SECS: u64 = 3;
 /// socket was open and the daemon did not answer in time; a connect error
 /// means nothing is listening.
 pub(crate) fn daemon_probe_error(e: &reqwest::Error, base: &str, secs: u64) -> anyhow::Error {
+    // Transient: nothing was sent, a later attempt may succeed (the `kb
+    // remember` outbox keys on this).
     if e.is_timeout() {
-        anyhow!("daemon slow (no answer from {base} in {secs}s) — it is up but busy; retry, nothing was sent")
+        anyhow::Error::new(crate::outbox::Transient(format!(
+            "daemon slow (no answer from {base} in {secs}s) — it is up but busy; retry, nothing was sent"
+        )))
     } else {
-        anyhow!("daemon not reachable at {base} — start it with `kb daemon`")
+        anyhow::Error::new(crate::outbox::Transient(format!(
+            "daemon not reachable at {base} — start it with `kb daemon`"
+        )))
     }
 }
 

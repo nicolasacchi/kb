@@ -11,6 +11,7 @@
 
 mod commands;
 mod http;
+mod outbox;
 mod session_identity;
 mod session_marker;
 mod sse;
@@ -311,6 +312,14 @@ enum Cmd {
         daemon: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    /// v0.44 X3 — the `kb remember` outbox. A `kb remember` that hits a slow
+    /// or down daemon is spooled (under the cache dir) with an idempotency
+    /// `client_ref` instead of being lost; the next successful `kb
+    /// remember`, or `kb outbox flush`, replays it and the daemon dedupes.
+    Outbox {
+        #[command(subcommand)]
+        action: OutboxAction,
     },
     /// R2 — why is a file the way it is? Pulls the past sessions that touched
     /// it (episodic memory) and inlines the prompt / decisions / commits that
@@ -2687,6 +2696,25 @@ enum SessionsAction {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+enum OutboxAction {
+    /// Replay every queued write now, oldest first, with its original
+    /// client_ref. A permanently refused entry is parked as `.rejected`.
+    Flush {
+        /// Replay against this daemon instead of the one each entry was
+        /// queued for.
+        #[arg(long)]
+        daemon: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List what is waiting.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
 enum ImportAction {
     /// Retroactive backfill of historical Claude Code session transcripts.
     /// Walks `--dir` (default `~/.claude/projects`) for every `*.jsonl`
@@ -4404,6 +4432,13 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Cmd::Outbox { action } => match action {
+            OutboxAction::Flush { daemon, json } => {
+                let bearer = read_bearer();
+                commands::memory::outbox_flush(daemon.as_deref(), bearer.as_deref(), json).await
+            }
+            OutboxAction::List { json } => commands::memory::outbox_list(json),
+        },
         Cmd::Why { path, daemon, json } => {
             let bearer = read_bearer();
             commands::sessions::why(&path, daemon.as_deref(), bearer.as_deref(), json).await

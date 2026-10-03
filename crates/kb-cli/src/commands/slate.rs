@@ -1272,6 +1272,7 @@ pub async fn promote(
                 None,
                 Some(&ctx.base),
                 ctx.bearer.as_deref(),
+                None,
             )
             .await?;
             let id = written

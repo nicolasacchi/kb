@@ -630,7 +630,26 @@ kb remember <text> [--title T] [--summary S]
                                     carrier, stored/filterable as
                                     ?tags=outcome-failed). SURFACED, NEVER
                                     SCORED — a failed memory ranks exactly
-                                    like an ordinary one.
+                                    like an ordinary one. v0.44 X3: every
+                                    write carries a client_ref (an
+                                    idempotency key the daemon turns into
+                                    the file name). A slow, down or 5xx
+                                    daemon does not lose the write: it is
+                                    SPOOLED under
+                                    ${XDG_CACHE_HOME:-~/.cache}/kb/outbox
+                                    (exit 0, `queued: true` in --json) and
+                                    replayed with the SAME client_ref by the
+                                    next successful `kb remember` or `kb
+                                    outbox flush`; the daemon answers a
+                                    replay of a write that already landed
+                                    with 200 and the original id, so nothing
+                                    is written twice. A 4xx is never spooled.
+kb outbox flush [--daemon URL] [--json]
+kb outbox list [--json]
+                                    v0.44 X3: replay / show the `kb remember`
+                                    spool. An entry the daemon refuses for
+                                    good (4xx) is parked as <ref>.rejected so
+                                    it cannot block the queue.
 kb propose --title T --body TEXT|-
    [--kb NAME] [--tags T,T]
    [--global | --link KB,KB]
