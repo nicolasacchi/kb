@@ -83,15 +83,76 @@ pub fn budget_left(deadline: std::time::Instant) -> Option<Duration> {
 pub fn run_within_budget<T, R>(
     deadline: std::time::Instant,
     items: impl IntoIterator<Item = T>,
-    mut f: impl FnMut(&T, Duration) -> R,
+    f: impl FnMut(&T, Duration) -> R,
 ) -> Vec<(T, Option<R>)> {
+    run_within_budget_until(deadline, items, f, |_| false)
+}
+
+/// [`run_within_budget`] that also STOPS at the first result `stop` accepts:
+/// that result is returned, and every later item comes back unrun (`None`)
+/// without `f` being called. A retry pass uses it to give up on the first
+/// failure that is not the one it is retrying (an auth failure on spec 1
+/// must not be re-asked for specs 2..N, each burning budget).
+pub fn run_within_budget_until<T, R>(
+    deadline: std::time::Instant,
+    items: impl IntoIterator<Item = T>,
+    mut f: impl FnMut(&T, Duration) -> R,
+    stop: impl Fn(&R) -> bool,
+) -> Vec<(T, Option<R>)> {
+    let mut stopped = false;
     items
         .into_iter()
         .map(|item| {
+            if stopped {
+                return (item, None);
+            }
             let r = budget_left(deadline).map(|left| f(&item, left));
+            if r.as_ref().is_some_and(&stop) {
+                stopped = true;
+            }
             (item, r)
         })
         .collect()
+}
+
+/// The base-fetch Vanished retry: fetch each `(spec, name)` on its own
+/// against ONE `deadline`, so a deleted base branch does not block the
+/// rest. Stops at the FIRST failure that is not `Vanished` (the pass
+/// returns `Failed` with that class) and reports `timeout` once the single
+/// budget is spent. `fetch` is the one-spec fetch (the real one wraps
+/// `StoreGit::fetch`; a test passes a counting fake).
+pub fn retry_vanished_base<S>(
+    deadline: std::time::Instant,
+    pairs: Vec<(S, String)>,
+    fetch: impl FnMut(&(S, String), Duration) -> Result<(), StoreGitError>,
+) -> BaseFetch {
+    let (mut ok, mut gone) = (Vec::new(), Vec::new());
+    for ((_, name), res) in run_within_budget_until(deadline, pairs, fetch, |r| {
+        r.as_ref()
+            .err()
+            .is_some_and(|e| e.class != FailureClass::Vanished)
+    }) {
+        match res {
+            None => {
+                return BaseFetch::Failed {
+                    code: "timeout".into(),
+                    detail: "the base fetch pass ran out of its single deadline".into(),
+                }
+            }
+            Some(Ok(())) => ok.push(name),
+            Some(Err(e)) if e.class == FailureClass::Vanished => gone.push(name),
+            Some(Err(e)) => {
+                return BaseFetch::Failed {
+                    code: e.class.slug().into(),
+                    detail: e.detail,
+                }
+            }
+        }
+    }
+    BaseFetch::Fetched {
+        branches: ok,
+        vanished: gone,
+    }
 }
 
 /// `objects_state` for a review whose commits exist nowhere reachable.
@@ -724,32 +785,11 @@ pub fn fetch_base_branches(
         },
         Err(e) if e.class == FailureClass::Vanished => {
             // One by one, so a deleted base branch does not block the rest.
-            let (mut ok, mut gone) = (Vec::new(), Vec::new());
-            let pairs: Vec<_> = specs.iter().zip(names).collect();
-            for ((_, name), res) in run_within_budget(deadline, pairs, |(spec, _), left| {
-                git.fetch(git_dir, &base, std::slice::from_ref(*spec), auth, left)
-            }) {
-                match res {
-                    None => {
-                        return BaseFetch::Failed {
-                            code: "timeout".into(),
-                            detail: "the base fetch pass ran out of its single deadline".into(),
-                        }
-                    }
-                    Some(Ok(_)) => ok.push(name),
-                    Some(Err(e)) if e.class == FailureClass::Vanished => gone.push(name),
-                    Some(Err(e)) => {
-                        return BaseFetch::Failed {
-                            code: e.class.slug().into(),
-                            detail: e.detail,
-                        }
-                    }
-                }
-            }
-            BaseFetch::Fetched {
-                branches: ok,
-                vanished: gone,
-            }
+            let pairs: Vec<_> = specs.into_iter().zip(names).collect();
+            retry_vanished_base(deadline, pairs, |(spec, _), left| {
+                git.fetch(git_dir, &base, std::slice::from_ref(spec), auth, left)
+                    .map(|_| ())
+            })
         }
         Err(e) => BaseFetch::Failed {
             code: e.class.slug().into(),

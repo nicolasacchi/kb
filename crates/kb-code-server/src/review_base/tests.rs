@@ -3097,6 +3097,67 @@ fn retrack_on_a_forge_with_no_api_records_a_default_assumed_auto_base() {
     assert_eq!(stored.base_set_by, "auto", "never persisted as the user's");
 }
 
+/// K7 — the capture-side Vanished retry shares the pass budget: N vanished
+/// specs (branches plus the PR head) against a 100 ms budget run a handful,
+/// the rest are reported `offline`/`timeout` (and the PR head's error says
+/// so), never ten full budgets.
+#[test]
+fn n_vanished_capture_specs_stay_within_one_base_fetch_timeout() {
+    use crate::review_store::url::{FetchRefspec, RefSource};
+    use crate::review_store::{FailureClass, StoreGitError};
+    let started = std::time::Instant::now();
+    let budget = std::time::Duration::from_millis(100);
+    let mut specs: Vec<(FetchRefspec, Option<String>)> = (0..9)
+        .map(|i| {
+            let b = format!("b{i}");
+            (
+                FetchRefspec::new(
+                    true,
+                    RefSource::Ref(RefName::branch(&b).unwrap()),
+                    RefName::parse(&format!("refs/remotes/base/{b}")).unwrap(),
+                ),
+                Some(b),
+            )
+        })
+        .collect();
+    specs.push((
+        FetchRefspec::new(
+            true,
+            RefSource::Ref(RefName::parse("refs/pull/9/head").unwrap()),
+            RefName::parse("refs/kbc/pr/9").unwrap(),
+        ),
+        None,
+    ));
+    let mut report = capture::FetchReport::default();
+    let mut calls = 0;
+    let pr_fetched =
+        capture::retry_vanished_specs(&mut report, &specs, started + budget, |_, left| {
+            calls += 1;
+            std::thread::sleep(left.min(std::time::Duration::from_millis(40)));
+            Err(StoreGitError {
+                op: "fetch",
+                class: FailureClass::Vanished,
+                exit_code: Some(128),
+                detail: "gone".into(),
+            })
+        });
+    assert!((1..10).contains(&calls), "ran {calls} of 10");
+    assert!(
+        started.elapsed() < budget + std::time::Duration::from_millis(80),
+        "pass took {:?} for a {budget:?} budget",
+        started.elapsed()
+    );
+    assert!(!pr_fetched);
+    assert_eq!(report.state, "offline", "{report:?}");
+    assert_eq!(report.code.as_deref(), Some("timeout"), "{report:?}");
+    assert_eq!(report.pr_error.as_deref(), Some("timeout"), "{report:?}");
+    assert_eq!(
+        report.vanished.len(),
+        calls,
+        "ran specs are reported vanished"
+    );
+}
+
 // =====================================================================
 // v0.44 K6 — X1/K3: bulk retrack fetches each base once, holds no lock
 // across the scan; snapshot / retrack / retrack-bulk / start run as jobs

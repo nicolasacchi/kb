@@ -389,6 +389,62 @@ impl Access {
     }
 }
 
+/// The capture-side Vanished retry: fetch each `(refspec, Some(branch) |
+/// None for the PR head)` on its own against ONE `deadline` (every call gets
+/// only the time left, via [`seed::run_within_budget`]), folding each outcome
+/// into `report`. Returns whether the PR head's own fetch succeeded. `fetch`
+/// is the one-spec fetch; a test passes a fake that burns the time it is
+/// handed to prove N vanished specs stay within one budget.
+pub(crate) fn retry_vanished_specs(
+    report: &mut FetchReport,
+    specs: &[(FetchRefspec, Option<String>)],
+    deadline: std::time::Instant,
+    fetch: impl FnMut(
+        &FetchRefspec,
+        std::time::Duration,
+    ) -> Result<(), crate::review_store::StoreGitError>,
+) -> bool {
+    use crate::review_store::FailureClass;
+    let mut fetch = fetch;
+    let mut pr_fetched = false;
+    report.state = "fetched".into();
+    for ((_, label), res) in
+        seed::run_within_budget(deadline, specs.iter(), |(spec, _), left| fetch(spec, left))
+    {
+        let Some(res) = res else {
+            report.state = "offline".into();
+            report.code = Some("timeout".into());
+            if label.is_none() {
+                report.pr_error = Some("timeout".into());
+            }
+            continue;
+        };
+        match (res, label) {
+            (Ok(_), None) => pr_fetched = true,
+            (Ok(_), Some(_)) => {}
+            (Err(e), Some(b)) if e.class == FailureClass::Vanished => {
+                report.vanished.push(b.clone())
+            }
+            (Err(e), None) if e.class == FailureClass::Vanished => {
+                report.pr_error = Some("pr-not-found".into())
+            }
+            (Err(e), label) => {
+                report.state = if e.class.is_transient() {
+                    "offline"
+                } else {
+                    "failed"
+                }
+                .into();
+                report.code = Some(e.slug().into());
+                if label.is_none() {
+                    report.pr_error = Some(e.slug().into());
+                }
+            }
+        }
+    }
+    pr_fetched
+}
+
 /// What a `base` fetch did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FetchReport {
@@ -914,42 +970,10 @@ impl<'a> StoreCtx<'a> {
             }
             Err(e) if e.class == crate::review_store::FailureClass::Vanished => {
                 // One by one, so a missing ref never blocks the rest.
-                report.state = "fetched".into();
-                for ((_, label), res) in crate::review_store::seed::run_within_budget(
-                    deadline,
-                    specs.iter(),
-                    |(spec, _), left| git.fetch(dir, &base, std::slice::from_ref(spec), auth, left),
-                ) {
-                    let Some(res) = res else {
-                        report.state = "offline".into();
-                        report.code = Some("timeout".into());
-                        if label.is_none() {
-                            report.pr_error = Some("timeout".into());
-                        }
-                        continue;
-                    };
-                    match (res, label) {
-                        (Ok(_), None) => pr_fetched = true,
-                        (Ok(_), Some(_)) => {}
-                        (Err(e), Some(b))
-                            if e.class == crate::review_store::FailureClass::Vanished =>
-                        {
-                            report.vanished.push(b.clone())
-                        }
-                        (Err(e), None)
-                            if e.class == crate::review_store::FailureClass::Vanished =>
-                        {
-                            report.pr_error = Some("pr-not-found".into())
-                        }
-                        (Err(e), label) => {
-                            report.state = fail_state(&e).into();
-                            report.code = Some(e.slug().into());
-                            if label.is_none() {
-                                report.pr_error = Some(e.slug().into());
-                            }
-                        }
-                    }
-                }
+                pr_fetched = retry_vanished_specs(&mut report, &specs, deadline, |spec, left| {
+                    git.fetch(dir, &base, std::slice::from_ref(spec), auth, left)
+                        .map(|_| ())
+                });
             }
             Err(e) => {
                 report.state = fail_state(&e).into();

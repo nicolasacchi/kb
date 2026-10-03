@@ -515,6 +515,81 @@ async fn retrack_all_pinned_applies_only_stale_pin() {
     assert_eq!(after_custom["base_ref"], unrelated);
 }
 
+/// v0.44 K7 — the apply-mode bulk retrack end to end THROUGH `?async=1`:
+/// two stale pins, one job. The 202 + `job_id` answers at once; the job
+/// settles `done` with the same body the synchronous route returns; BOTH
+/// stale pins were minted as `base-corrected` (a second patchset each), and
+/// the summary counts exactly two applied rows. Complements the guard-layer
+/// unit test (`retrack_bulk_apply_does_not_take_the_repo_guard_for_the_scan`),
+/// which never reaches an applied row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrack_bulk_apply_of_two_stale_pins_runs_as_one_job() {
+    let _guard = SERIAL.lock().await;
+    let (repo, m1) = fixture_repo();
+    let m0 = git_out(&repo.author, &["rev-list", "--max-parents=0", "main"]);
+    let (gh_addr, _gh) = mock_github_server(Router::new()).await;
+    let (_tmp, base) = boot(cfg_for(&repo.clone, gh_addr)).await;
+    let client = reqwest::Client::new();
+    sync_store(&client, &base, "fixture").await;
+
+    repo.push_pr(&m1, 21, &["a.rs"], "v1");
+    let first = create_pr_review(&client, &base, "fixture", 21, Some(&m0)).await;
+    repo.push_pr(&m1, 22, &["b.rs"], "v1");
+    let second = create_pr_review(&client, &base, "fixture", 22, Some(&m0)).await;
+    for id in [first, second] {
+        let show = get_review(&client, &base, id).await;
+        assert_eq!(show["patchsets"].as_array().unwrap().len(), 1, "{show}");
+    }
+
+    let resp = client
+        .post(format!("{base}/api/reviews/retrack-bulk?async=1"))
+        .json(&serde_json::json!({ "repo": "fixture", "pinned": true, "dry_run": false }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202);
+    let accepted: serde_json::Value = resp.json().await.unwrap();
+    let job_id = accepted["job_id"].as_str().expect("job_id").to_string();
+
+    let mut job = serde_json::Value::Null;
+    for _ in 0..1200 {
+        job = client
+            .get(format!("{base}/api/reviews/jobs/{job_id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if job["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(job["kind"], "retrack-bulk", "{job}");
+    assert_eq!(job["status"], "done", "{job}");
+    let result = &job["result"];
+    assert_eq!(result["summary"]["applied"], 2, "{job}");
+    assert_eq!(result["summary"]["stale_pin"], 2, "{job}");
+    assert_eq!(result["degraded"], false, "{job}");
+    for id in [first, second] {
+        let row = result["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("no row for {id}: {job}"));
+        assert_eq!(row["minted"], true, "{row}");
+        assert_eq!(row["kind"], "base-corrected", "{row}");
+        let show = get_review(&client, &base, id).await;
+        assert_eq!(
+            show["patchsets"].as_array().unwrap().len(),
+            2,
+            "review {id} gained its base-corrected patchset: {show}"
+        );
+    }
+}
+
 // --- D19: `store legacy-refs` / `store export-legacy` -----------------------
 
 async fn create_review(
