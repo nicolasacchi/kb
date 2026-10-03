@@ -42,9 +42,9 @@ use crate::storage::sqlite::{
     FolderStats, FunnelCounts, HistoryRow, ListEntryRow, ListRow, MemoryCommitRow,
     MemoryRecallCount, MemoryRecallRow, MemoryRecallWeeklyRow, MemoryRecalledByRow, MoveRow,
     NewAtlasFrame, OpenResult, ProjectHarnessRow, ProjectStatsRow, ReadingResume,
-    ResearchRollupRow, RunRow, SectionDwell, ServedRecallRow, SessionCommitMatch, SessionCommitRow,
-    SessionDecisionRow, SessionFileRow, SessionResearchRow, SessionRow, ShareRow, SloSnapshotRow,
-    SnapshotMeta, SourceRow, SweepOutcome,
+    RecallCoverageRow, ResearchRollupRow, RunRow, SectionDwell, ServedRecallRow,
+    SessionCommitMatch, SessionCommitRow, SessionDecisionRow, SessionFileRow, SessionResearchRow,
+    SessionRow, ShareRow, SloSnapshotRow, SnapshotMeta, SourceRow, SweepOutcome,
 };
 use crate::{Error, Result};
 use futures::FutureExt;
@@ -1122,6 +1122,11 @@ pub enum StorageMsg {
     SessionsFolders {
         reply: oneshot::Sender<Result<Vec<FolderStats>>>,
     },
+    /// v0.44 F10 — per-session recall-coverage inputs (derived, read-only).
+    SessionsRecallCoverage {
+        since_unix: i64,
+        reply: oneshot::Sender<Result<Vec<RecallCoverageRow>>>,
+    },
     /// W3.A/P4 — the `/api/sessions/projects` facet's per-project rollup,
     /// PRE-registry-merge.
     SessionsProjectsStats {
@@ -1588,6 +1593,7 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             // Sessions READS.
             | StorageMsg::SessionsList { .. }
             | StorageMsg::SessionsFolders { .. }
+            | StorageMsg::SessionsRecallCoverage { .. }
             | StorageMsg::SessionsProjectsStats { .. }
             | StorageMsg::SessionsProjectsHarnessMix { .. }
             | StorageMsg::SessionsResearchRollup { .. }
@@ -3387,6 +3393,9 @@ impl StorageActor {
             }
             StorageMsg::SessionsFolders { reply } => {
                 let _ = reply.send(self.db.sessions_folders());
+            }
+            StorageMsg::SessionsRecallCoverage { since_unix, reply } => {
+                let _ = reply.send(self.db.sessions_recall_coverage(since_unix));
             }
             StorageMsg::SessionsProjectsStats { reply } => {
                 let _ = reply.send(self.db.sessions_projects_stats());
@@ -5348,6 +5357,16 @@ impl StorageHandle {
     /// per distinct working directory, newest-active first.
     pub async fn sessions_folders(&self) -> Result<Vec<FolderStats>> {
         self.send_and_await(|reply| StorageMsg::SessionsFolders { reply })
+            .await
+    }
+
+    /// v0.44 F10 — per-session recall-coverage inputs for sessions whose
+    /// newest capture started at or after `since_unix`.
+    pub async fn sessions_recall_coverage(
+        &self,
+        since_unix: i64,
+    ) -> Result<Vec<RecallCoverageRow>> {
+        self.send_and_await(|reply| StorageMsg::SessionsRecallCoverage { since_unix, reply })
             .await
     }
 

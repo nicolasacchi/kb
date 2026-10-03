@@ -514,6 +514,12 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
             get(routes::sessions::research_rollup),
         )
         .route("/sessions/funnel", get(routes::sessions::funnel))
+        // v0.44 F10 — recall-hook coverage (landed vs lost per harness).
+        // Static segment, registered before `/{session_id}`.
+        .route(
+            "/sessions/recall-coverage",
+            get(routes::sessions::recall_coverage),
+        )
         // W6 — the project ledger (moonshots M4): a view over existing
         // primitives grouped by UTC day. Static, before `/{session_id}`.
         .route("/sessions/ledger", get(routes::sessions::ledger))

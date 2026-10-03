@@ -294,6 +294,27 @@ pub struct ListParams {
     /// this build doesn't know about yet) deserves an honest error, not a
     /// query that quietly matched fewer harnesses than it asked for.
     pub harness: Option<String>,
+    /// v0.44 F10 — `?undistilled=1`: the distill-debt queue. Newest capture
+    /// (always), `commit_count > 0`, `memory_count = 0` and a non-`trivial`
+    /// substance (a `NULL` substance passes, as under `?substance=`). A
+    /// derived read over the fields this list already returns — nothing is
+    /// stored and the daemon distils nothing (#10/#26). Composes (AND) with
+    /// every other filter; an explicit `?substance=` is intersected with
+    /// `routine,substantive` rather than overridden. Accepts `1|true|yes`.
+    pub undistilled: Option<String>,
+    /// v0.44 F10 — only sessions that STARTED at or after this unix second.
+    /// The list is newest-first, so this is a stop condition for the keyset
+    /// walk, not a post-filter: `next_cursor` is `None` once it is reached.
+    pub since: Option<i64>,
+}
+
+/// `?undistilled=` truthiness: `1|true|yes` (case-insensitive) is on;
+/// absent or anything else is off.
+fn flag_on(raw: Option<&str>) -> bool {
+    matches!(
+        raw.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "yes")
+    )
 }
 
 /// W5/I — parse a csv `?harness=` value into the set to filter by.
@@ -527,10 +548,6 @@ pub async fn list(
     Query(params): Query<ListParams>,
 ) -> Response {
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    // T5 — over-fetch per kb so the cross-kb merge can still serve a
-    // full page even when one corpus dominates. Each per-kb fetch
-    // honours the same `before` cursor so older pages stay coherent.
-    let per_kb = limit.saturating_mul(2);
     // W3.A — resolve `?project=` once (registry lookup or raw-key literal)
     // and parse `?substance=` once; both are threaded per-kb into SQL WHERE
     // (`sessions_list`) so the keyset cursor stays coherent (S-S1(b)).
@@ -539,26 +556,156 @@ pub async fn list(
         .as_deref()
         .map(kb_core::sessions::resolve_project_filter)
         .unwrap_or_default();
-    let substance: Vec<String> = params
+    let mut substance: Vec<String> = params
         .substance
         .as_deref()
         .map(parse_substance_csv)
         .unwrap_or_default();
+    let undistilled = flag_on(params.undistilled.as_deref());
+    if undistilled {
+        // Non-trivial in SQL (before LIMIT) so the keyset cursor stays
+        // coherent; a NULL substance passes the non-empty filter (R4).
+        substance = if substance.is_empty() {
+            vec!["routine".to_string(), "substantive".to_string()]
+        } else {
+            substance
+                .into_iter()
+                .filter(|s| s != "trivial")
+                .collect::<Vec<_>>()
+        };
+        if substance.is_empty() {
+            // `?substance=trivial&undistilled=1` is the empty intersection.
+            return Json(SessionsListResponse {
+                sessions: Vec::new(),
+                next_cursor: None,
+                next_cursor_id: None,
+            })
+            .into_response();
+        }
+    }
     let harness: Vec<String> = match params.harness.as_deref().map(parse_harness_csv) {
         Some(Ok(h)) => h,
         Some(Err(resp)) => return resp,
         None => Vec::new(),
     };
+    if !undistilled && params.since.is_none() {
+        let (out, had_more) = list_page(
+            &state,
+            &params,
+            &project_filter,
+            &substance,
+            &harness,
+            params.cursor,
+            params.cursor_id.clone(),
+            limit,
+        )
+        .await;
+        let next = had_more
+            .then(|| out.last().map(|s| (s.started_at, s.artifact_id.clone())))
+            .flatten();
+        return finish_list(out, next);
+    }
+
+    // v0.44 F10 — filtered walk. `commit_count > 0` and `memory_count = 0`
+    // cannot be SQL WHEREs here (memory_count is a cross-kb lance count), so
+    // walk the keyset pages and keep what passes until the page is full or
+    // the walk is exhausted. The cursor handed back is the last row KEPT when
+    // the page filled (rows after it in the same fetched page are rescanned
+    // by the next call), or the last row SCANNED when the round budget ran
+    // out first, so the next call never skips a row and never loops on a
+    // run of dropped ones.
+    const MAX_ROUNDS: usize = 40;
+    let mut kept: Vec<SessionOut> = Vec::new();
+    let mut cursor = params.cursor;
+    let mut cursor_id = params.cursor_id.clone();
+    let mut next: Option<(i64, String)> = None;
+    let mut last_scanned: Option<(i64, String)> = None;
+    'walk: for _ in 0..MAX_ROUNDS {
+        let (page, had_more) = list_page(
+            &state,
+            &params,
+            &project_filter,
+            &substance,
+            &harness,
+            cursor,
+            cursor_id.clone(),
+            limit,
+        )
+        .await;
+        next = None;
+        if page.is_empty() {
+            break;
+        }
+        for s in page {
+            last_scanned = Some((s.started_at, s.artifact_id.clone()));
+            if params.since.is_some_and(|since| s.started_at < since) {
+                next = None;
+                break 'walk;
+            }
+            let keep = !undistilled || (s.commit_count > 0 && s.memory_count == 0);
+            if keep {
+                let key = (s.started_at, s.artifact_id.clone());
+                kept.push(s);
+                if kept.len() >= limit as usize {
+                    // Unscanned rows of this page (if any) are re-served by
+                    // the next call, which resumes after the last KEPT row.
+                    next = Some(key);
+                    break 'walk;
+                }
+            }
+        }
+        match &last_scanned {
+            Some((at, id)) if had_more => {
+                cursor = Some(*at);
+                cursor_id = Some(id.clone());
+                // Round budget spent before the page filled: resume after
+                // the last row SCANNED so dropped rows are never rescanned.
+                next = last_scanned.clone();
+            }
+            _ => break,
+        }
+    }
+    finish_list(kept, next)
+}
+
+fn finish_list(out: Vec<SessionOut>, next: Option<(i64, String)>) -> Response {
+    let (next_cursor, next_cursor_id) = match next {
+        Some((at, id)) => (Some(at), Some(id)),
+        None => (None, None),
+    };
+    Json(SessionsListResponse {
+        sessions: out,
+        next_cursor,
+        next_cursor_id,
+    })
+    .into_response()
+}
+
+/// One keyset page of the sessions list, cross-kb merged, truncated to
+/// `limit`, with `memory_count` filled for the surviving rows. Returns
+/// `(rows, had_more)`.
+#[allow(clippy::too_many_arguments)]
+async fn list_page(
+    state: &Arc<KbHandles>,
+    params: &ListParams,
+    project_filter: &kb_core::sessions::ProjectFilter,
+    substance: &[String],
+    harness: &[String],
+    cursor: Option<i64>,
+    cursor_id: Option<String>,
+    limit: u32,
+) -> (Vec<SessionOut>, bool) {
+    // T5 — over-fetch per kb so the cross-kb merge can still serve a
+    // full page even when one corpus dominates. Each per-kb fetch
+    // honours the same `before` cursor so older pages stay coherent.
+    let per_kb = limit.saturating_mul(2);
     // FF-D — fan out each kb's sessions_list concurrently (bounded,
     // submission-ordered), then flatten in BTreeMap order. Pure reads; the
     // deferred title/memory_count enrichment + final sort below are unchanged.
     // `title`/`memory_count` are display-only (NOT the cross-kb sort key
     // started_at/artifact_id) so they are deferred until after sort+truncate —
     // only the surviving page rows need them.
-    let params = &params;
-    let project_filter = &project_filter;
-    let substance = &substance;
-    let harness = &harness;
+    let cursor_id = &cursor_id;
     let mut futs: Vec<super::CorpusFut<'_, Vec<SessionOut>>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {
@@ -566,13 +713,13 @@ pub async fn list(
                 .storage
                 .sessions_list(
                     per_kb,
-                    params.cursor,
-                    params.cursor_id.clone(),
+                    cursor,
+                    cursor_id.clone(),
                     params.folder.clone(),
                     params.q.clone(),
                     project_filter.clone(),
-                    substance.clone(),
-                    harness.clone(),
+                    substance.to_vec(),
+                    harness.to_vec(),
                 )
                 .await
             {
@@ -635,8 +782,6 @@ pub async fn list(
         }));
     }
     let mut counts: HashMap<String, u64> = HashMap::new();
-    // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
-    // byte-identical to the old hardcoded `super::FANOUT_CAP`).
     for per_kb in super::buffered_join(count_futs, state.fanout_cap).await {
         for (sid, n) in per_kb {
             *counts.entry(sid).or_insert(0) += n;
@@ -645,20 +790,227 @@ pub async fn list(
     for s in out.iter_mut() {
         s.memory_count = counts.get(&s.session_id).copied().unwrap_or(0);
     }
-    let (next_cursor, next_cursor_id) = if had_more {
-        (
-            out.last().map(|s| s.started_at),
-            out.last().map(|s| s.artifact_id.clone()),
-        )
-    } else {
-        (None, None)
-    };
-    Json(SessionsListResponse {
-        sessions: out,
-        next_cursor,
-        next_cursor_id,
+    (out, had_more)
+}
+
+// ---------------------------------------------------------------------------
+// v0.44 F10 — recall-hook coverage
+// ---------------------------------------------------------------------------
+
+const COVERAGE_DEFAULT_DAYS: u32 = 7;
+const COVERAGE_MAX_DAYS: u32 = 365;
+
+#[derive(Debug, Deserialize, Default)]
+pub struct RecallCoverageParams {
+    /// Trailing window in days over the newest capture's `started_at`
+    /// (default 7, clamped to 1..=365).
+    pub days: Option<u32>,
+}
+
+/// One harness's (or the grand total's) recall-coverage tally.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct RecallCoverageHarness {
+    pub harness: String,
+    /// Newest-capture sessions in the window.
+    pub sessions: u64,
+    /// `sessions.user_turns` summed.
+    pub user_turns: u64,
+    /// Distinct turns a capture parse found a memory injection on — the
+    /// canonical "a recall happened" fact (M7).
+    pub landed_turns: u64,
+    /// Distinct live-serve instants no landed capture row covers: the hook
+    /// answered but the harness's transcript never showed an injection.
+    pub lost_turns: u64,
+    /// `landed_turns / user_turns`, percent to one decimal; `null` when the
+    /// window has no user turns. A FLOOR-style health read, not a target of
+    /// 100: a turn with nothing relevant legitimately lands nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landed_pct: Option<f64>,
+    /// `lost_turns / (landed_turns + lost_turns)`, percent to one decimal;
+    /// `null` when nothing was served or landed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lost_pct: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecallCoverageResponse {
+    pub days: u32,
+    pub since_unix: i64,
+    /// Sessions skipped because the live registry still tracks them (not
+    /// ended): capture lag would make their landed count read low.
+    pub excluded_live: u64,
+    pub harnesses: Vec<RecallCoverageHarness>,
+    pub total: RecallCoverageHarness,
+    /// Surfaced-never-scored: this read has no effect on recall ranking.
+    pub note: &'static str,
+}
+
+fn pct1(num: u64, den: u64) -> Option<f64> {
+    (den > 0).then(|| ((num as f64 / den as f64) * 1000.0).round() / 10.0)
+}
+
+fn coverage_entry(harness: &str, sessions: u64, u: u64, l: u64, x: u64) -> RecallCoverageHarness {
+    RecallCoverageHarness {
+        harness: harness.to_string(),
+        sessions,
+        user_turns: u,
+        landed_turns: l,
+        lost_turns: x,
+        landed_pct: pct1(l, u),
+        lost_pct: pct1(x, l + x),
+    }
+}
+
+/// Fold per-session rows into per-harness tallies (sorted by harness) plus a
+/// grand total, skipping `live` sessions. Pure so the arithmetic is pinned
+/// without a daemon. A session can appear in two kbs' rows only if both hold
+/// a capture; the per-(harness) sums are then additive by design.
+pub fn aggregate_recall_coverage(
+    rows: &[kb_core::storage::sqlite::RecallCoverageRow],
+    live: &std::collections::HashSet<String>,
+) -> (Vec<RecallCoverageHarness>, RecallCoverageHarness, u64) {
+    let mut by: std::collections::BTreeMap<String, [u64; 4]> = std::collections::BTreeMap::new();
+    let mut excluded = 0u64;
+    for r in rows {
+        if live.contains(&r.session_id) {
+            excluded += 1;
+            continue;
+        }
+        let e = by.entry(r.harness.clone()).or_insert([0; 4]);
+        e[0] += 1;
+        e[1] += r.user_turns;
+        e[2] += r.landed_turns;
+        e[3] += r.lost_turns;
+    }
+    let mut tot = [0u64; 4];
+    let harnesses: Vec<RecallCoverageHarness> = by
+        .iter()
+        .map(|(h, e)| {
+            for (t, v) in tot.iter_mut().zip(e) {
+                *t += v;
+            }
+            coverage_entry(h, e[0], e[1], e[2], e[3])
+        })
+        .collect();
+    let total = coverage_entry("all", tot[0], tot[1], tot[2], tot[3]);
+    (harnesses, total, excluded)
+}
+
+/// `GET /api/sessions/recall-coverage?days=7` — per harness, over the
+/// trailing window and NEWEST captures only: user turns vs turns where a
+/// memory injection landed vs serves that never landed. Derived per request
+/// from V0035/V0042 columns (no new table); sessions the live registry still
+/// tracks are excluded (capture lag). Surfaced, never scored (#10).
+pub async fn recall_coverage(
+    State(state): State<Arc<KbHandles>>,
+    Query(p): Query<RecallCoverageParams>,
+) -> Response {
+    let days = p
+        .days
+        .unwrap_or(COVERAGE_DEFAULT_DAYS)
+        .clamp(1, COVERAGE_MAX_DAYS);
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let since_unix = now_unix - i64::from(days) * 86_400;
+    let mut futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::RecallCoverageRow>>> =
+        Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            ctx.storage
+                .sessions_recall_coverage(since_unix)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_recall_coverage failed");
+                    Vec::new()
+                })
+        }));
+    }
+    let rows: Vec<_> = super::buffered_join(futs, state.fanout_cap)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+    let live: std::collections::HashSet<String> = state
+        .live_registry
+        .snapshot(now_unix)
+        .into_iter()
+        .filter(|(_, st, _)| !matches!(st, LiveState::Finished | LiveState::PresumedEnded))
+        .map(|(r, _, _)| r.session_id)
+        .collect();
+    let (harnesses, total, excluded_live) = aggregate_recall_coverage(&rows, &live);
+    Json(RecallCoverageResponse {
+        days,
+        since_unix,
+        excluded_live,
+        harnesses,
+        total,
+        note: "landed = turns with a captured memory injection; lost = serves no capture covers; a turn with no relevant memory legitimately lands nothing",
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod f10_tests {
+    use super::*;
+    use kb_core::storage::sqlite::RecallCoverageRow;
+
+    fn row(sid: &str, h: &str, u: u64, l: u64, x: u64) -> RecallCoverageRow {
+        RecallCoverageRow {
+            session_id: sid.into(),
+            harness: h.into(),
+            user_turns: u,
+            landed_turns: l,
+            lost_turns: x,
+        }
+    }
+
+    #[test]
+    fn flag_on_accepts_only_truthy_spellings() {
+        for on in ["1", "true", "TRUE", " yes "] {
+            assert!(flag_on(Some(on)), "{on}");
+        }
+        for off in ["0", "false", "", "no", "undistilled"] {
+            assert!(!flag_on(Some(off)), "{off}");
+        }
+        assert!(!flag_on(None));
+    }
+
+    /// Per-harness tallies and the total add up, percentages are computed
+    /// from the summed counts (not averaged), and a live session is excluded
+    /// from every number and counted in `excluded_live`.
+    #[test]
+    fn recall_coverage_aggregates_per_harness_and_skips_live() {
+        let rows = vec![
+            row("s1", "claude", 10, 6, 1),
+            row("s2", "claude", 10, 2, 0),
+            row("s3", "codex", 5, 0, 3),
+            row("live", "claude", 100, 0, 0),
+        ];
+        let live: std::collections::HashSet<String> = ["live".to_string()].into();
+        let (hs, total, excluded) = aggregate_recall_coverage(&rows, &live);
+        assert_eq!(excluded, 1);
+        assert_eq!(hs.len(), 2);
+        assert_eq!(hs[0], coverage_entry("claude", 2, 20, 8, 1));
+        assert_eq!(hs[0].landed_pct, Some(40.0));
+        assert_eq!(hs[1].harness, "codex");
+        assert_eq!(hs[1].landed_pct, Some(0.0));
+        assert_eq!(hs[1].lost_pct, Some(100.0));
+        assert_eq!(total, coverage_entry("all", 3, 25, 8, 4));
+        assert_eq!(total.landed_pct, Some(32.0));
+    }
+
+    #[test]
+    fn recall_coverage_percentages_are_null_without_a_denominator() {
+        let (hs, total, _) = aggregate_recall_coverage(
+            &[row("s", "claude", 0, 0, 0)],
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(hs[0].landed_pct, None);
+        assert_eq!(hs[0].lost_pct, None);
+        assert_eq!(total.landed_pct, None);
+    }
 }
 
 /// One entry in the A1 folder facet.

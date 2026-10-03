@@ -13488,6 +13488,156 @@ async fn sessions_list_returns_indexed_session_with_memory_count() {
     assert_eq!(row["display_name"], "first prompt of the session");
 }
 
+/// v0.44 F10 — `GET /api/sessions?undistilled=1` is the distill-debt queue:
+/// newest capture with `commit_count > 0`, `memory_count = 0` and a
+/// non-trivial substance. A session with a memory, one without a commit and
+/// a trivial husk with a commit are all excluded; the keyset cursor walks the
+/// remainder without duplicates; `?since=` past every start empties it.
+#[tokio::test]
+async fn sessions_undistilled_filter_is_the_distill_debt_queue() {
+    let work = concat!(
+        r#"{"type":"user","promptSource":"typed","message":{"role":"user","content":"ship the thing"}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"role":"assistant","model":"claude","content":[{"type":"text","text":"Shipped the thing and it is verified."}]}}"#,
+        "\n",
+    );
+    let mk = |sid: &str, ts: &str, jsonl: &str, sha: Option<&str>| {
+        let commits: Vec<_> = sha
+            .map(|s| resolved_commit_fixture(s, vec![]))
+            .into_iter()
+            .collect();
+        (
+            format!("session-{ts}-{sid}.html"),
+            session_transcript_html_with_commits(sid, ts, jsonl, &commits),
+        )
+    };
+    let sessions = [
+        mk(
+            "sid-und-a",
+            "20260601T100000Z",
+            work,
+            Some(&"a".repeat(40)[..]),
+        ),
+        mk(
+            "sid-und-b",
+            "20260601T110000Z",
+            work,
+            Some(&"b".repeat(40)[..]),
+        ),
+        mk("sid-und-c", "20260601T120000Z", work, None),
+        mk(
+            "sid-und-d",
+            "20260601T130000Z",
+            &minimal_jsonl(),
+            Some(&"d".repeat(40)[..]),
+        ),
+        mk(
+            "sid-und-e",
+            "20260601T140000Z",
+            work,
+            Some(&"e".repeat(40)[..]),
+        ),
+    ];
+    let mut global: Vec<(&str, String)> = sessions
+        .iter()
+        .map(|(n, h)| (n.as_str(), h.clone()))
+        .collect();
+    // sid-und-b already has a curated memory stamped to it.
+    global.push((
+        "mem-for-b.html",
+        memory_with_session_html("Mem For B", "sid-und-b"),
+    ));
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    let get = |path: String| {
+        let client = client.clone();
+        async move {
+            client
+                .get(url(addr, &path))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+    // Wait for enrichment: every session listed and the memory counted.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let all = get("/api/sessions?limit=50".into()).await;
+        let rows = all["sessions"].as_array().cloned().unwrap_or_default();
+        let b_counted = rows
+            .iter()
+            .any(|r| r["session_id"] == "sid-und-b" && r["memory_count"] == 1);
+        let a_has_commit = rows
+            .iter()
+            .any(|r| r["session_id"] == "sid-und-a" && r["commit_count"] == 1);
+        if rows.len() == 5 && b_counted && a_has_commit {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the five sessions + b's memory: {all}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let ids_of = |body: &serde_json::Value| -> Vec<String> {
+        let mut v: Vec<String> = body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["session_id"].as_str().unwrap().to_string())
+            .collect();
+        v.sort();
+        v
+    };
+    let queue = get("/api/sessions?undistilled=1&limit=50".into()).await;
+    assert_eq!(
+        ids_of(&queue),
+        vec!["sid-und-a".to_string(), "sid-und-e".to_string()],
+        "only committed, memory-less, non-trivial sessions are debt: {queue}"
+    );
+    assert!(queue["next_cursor"].is_null(), "walk exhausted: {queue}");
+
+    // Page through one at a time: the cursor never skips or repeats a row.
+    let mut seen: Vec<String> = Vec::new();
+    let mut path = "/api/sessions?undistilled=1&limit=1".to_string();
+    for _ in 0..5 {
+        let page = get(path.clone()).await;
+        let page_ids = ids_of(&page);
+        if page_ids.is_empty() {
+            break;
+        }
+        assert_eq!(page_ids.len(), 1, "{page}");
+        seen.extend(page_ids);
+        let (Some(c), Some(cid)) = (
+            page["next_cursor"].as_i64(),
+            page["next_cursor_id"].as_str(),
+        ) else {
+            break;
+        };
+        path = format!("/api/sessions?undistilled=1&limit=1&cursor={c}&cursor_id={cid}");
+    }
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec!["sid-und-a".to_string(), "sid-und-e".to_string()],
+        "cursor walk covers the queue exactly once"
+    );
+
+    // `since` past every start is the empty queue, and `substance=trivial`
+    // intersected with the non-trivial rule is empty too.
+    let future = get("/api/sessions?undistilled=1&since=4102444800".into()).await;
+    assert!(ids_of(&future).is_empty(), "{future}");
+    let triv = get("/api/sessions?undistilled=1&substance=trivial".into()).await;
+    assert!(ids_of(&triv).is_empty(), "{triv}");
+    // Without the flag nothing is filtered.
+    let plain = get("/api/sessions?limit=50".into()).await;
+    assert_eq!(ids_of(&plain).len(), 5, "{plain}");
+}
+
 // P1 — A1/A2/A3: aiTitle → title → display_name, cwd → folder, file counts,
 // the /folders facet, and the ?folder= filter.
 #[tokio::test]

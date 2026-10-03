@@ -590,7 +590,7 @@ GET  /api/anchors/stale                     Q1: fleet-wide cold load for the
 # v0.14 — sessions (track S)
 GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
      &folder=&q=&project=&substance=         Code transcripts (memory-session
-     &harness=]                              artifacts), newest-first. Cursor
+     &harness=&undistilled=1&since=]         artifacts), newest-first. Cursor
                                             paginated; default limit 50, cap
                                             1000. Response carries
                                             `next_cursor` (omitted at EOL).
@@ -612,13 +612,54 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             is a csv over the closed set
                                             `claude|codex|opencode|grok|kimi`
                                             (`kb_core::sessions::HARNESSES`),
-                                            closed-set validated (unknown
-                                            tokens dropped, never a 400);
-                                            absent/empty = no filter. CLI:
-                                            `kb sessions list`/`kb sessions
-                                            search <q>` (`--folder`/
-                                            `--project`/`--substance`/
-                                            `--harness`/`--limit`).
+                                            closed-set validated (an unknown
+                                            token is a 400, OK1); absent/empty
+                                            = no filter. v0.44 F10 —
+                                            `undistilled=1` (`1|true|yes`) is
+                                            the distill-debt queue: newest
+                                            capture, `commit_count > 0`,
+                                            `memory_count = 0`, substance not
+                                            `trivial` (NULL passes); an
+                                            explicit `substance=` is
+                                            intersected with that, never
+                                            overridden. Derived per request,
+                                            nothing stored; the walk fills a
+                                            page from successive keyset pages
+                                            and `next_cursor` is the last row
+                                            returned (or, if the round budget
+                                            ran out, the last row scanned) so
+                                            no row is skipped or repeated.
+                                            `since=<unix>` stops the walk at
+                                            the first session that started
+                                            earlier. CLI: `kb sessions list`/
+                                            `kb sessions search <q>`
+                                            (`--folder`/`--project`/
+                                            `--substance`/`--harness`/
+                                            `--limit`/`--undistilled`/
+                                            `--since`).
+GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
+                                            per harness over the trailing
+                                            window (default 7, clamp 1-365),
+                                            newest captures only:
+                                            `user_turns`, `landed_turns`
+                                            (distinct turns a capture parse
+                                            found an injection on — the
+                                            canonical "a recall happened"),
+                                            `lost_turns` (distinct serve
+                                            instants of V0042 `served-*` rows
+                                            that NO landed capture row covers,
+                                            same rule as every counting
+                                            reader), `landed_pct`, `lost_pct`
+                                            (null without a denominator),
+                                            plus a `total` row. Sessions the
+                                            live registry still tracks are
+                                            excluded (`excluded_live`):
+                                            capture lag reads low. A FLOOR,
+                                            not a target — a turn with no
+                                            relevant memory lands nothing.
+                                            Surfaced, never scored (#10);
+                                            no new table. CLI: `kb sessions
+                                            coverage [--days]`.
 GET  /api/sessions/projects                 W3.A/P4 — one card per
                                             `[projects.*]` registry entry or
                                             auto-project (`source:
