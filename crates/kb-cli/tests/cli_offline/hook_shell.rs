@@ -64,3 +64,9 @@ fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// v0.44 F8 — the once-a-day CLI/hook skew notice.
+#[test]
+fn wake_hook_names_cli_skew_once_a_day() {
+    run("test-wake-skew.sh");
+}

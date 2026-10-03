@@ -1442,13 +1442,22 @@ fn spawn_backup_schedule(
                 _ = ticker.tick() => {}
             }
             let names: Vec<KbName> = handles.kbs.keys().cloned().collect();
-            for (i, kb_name) in names.iter().enumerate() {
+            let daemon_scope =
+                kb_core::storage::backup::daemon_scope_kb(names.iter().map(KbName::as_str));
+            for kb_name in names.iter() {
                 if *shutdown.borrow() {
                     return;
                 }
                 // Daemon-scope state (slates, daemon JSON) rides in ONE
                 // kb's tarball: the first in name order.
-                match backup_one_kb(&handles.paths, kb_name, &backup, i == 0).await {
+                match backup_one_kb(
+                    &handles.paths,
+                    kb_name,
+                    &backup,
+                    daemon_scope == Some(kb_name.as_str()),
+                )
+                .await
+                {
                     Ok(ScheduledBackup::Skipped) => {
                         tracing::debug!(
                             kb = %kb_name,

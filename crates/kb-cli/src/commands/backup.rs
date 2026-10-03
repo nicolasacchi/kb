@@ -182,12 +182,23 @@ pub async fn run_all(
         ));
     }
     let mut outcomes = Vec::with_capacity(names.len());
-    for (i, kb) in names.iter().enumerate() {
+    // The same kb the daemon schedule picks (first in NAME order, not in
+    // `GET /api/kbs` response order).
+    let daemon_scope = kb_core::storage::backup::daemon_scope_kb(names.iter().map(String::as_str));
+    for kb in names.iter() {
         // Do not `?` here. A failed kb must be recorded, and every later kb
         // must still be backed up.
         // Daemon-scope state (slates, daemon JSON) rides in the FIRST kb's
         // tarball only, as in the daemon's schedule.
-        let error = match snapshot(config_path, kb, None, OffHostDest::PerCorpus, i == 0).await {
+        let error = match snapshot(
+            config_path,
+            kb,
+            None,
+            OffHostDest::PerCorpus,
+            daemon_scope == Some(kb.as_str()),
+        )
+        .await
+        {
             Ok(()) => None,
             Err(e) => {
                 let msg = format!("{e:#}");
