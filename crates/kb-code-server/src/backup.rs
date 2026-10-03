@@ -739,6 +739,42 @@ mod tests {
         assert_eq!(read_receipt(&path).unwrap(), second);
     }
 
+    /// Wave-1 carry — a WAL-only stale snapshot: the main database file has
+    /// NOT been touched since the receipt but `index.db-wal` is newer (a
+    /// WAL-mode write lands in the -wal first). `db_written_since` must see
+    /// it; a main-file-only check would call the snapshot fresh and reuse a
+    /// stale rollback target.
+    #[test]
+    fn a_wal_only_write_makes_the_snapshot_stale() {
+        let dir = tmp();
+        let db = dir.path().join("index.db");
+        let wal = PathBuf::from(format!("{}-wal", db.display()));
+        std::fs::write(&db, b"main").unwrap();
+        let set_mtime = |p: &Path, secs_ago: u64| {
+            let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago))
+                .unwrap();
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let taken_at = now - 1000;
+        // Main db untouched for a day, no WAL: quiescent, snapshot fresh.
+        set_mtime(&db, 86_400);
+        assert!(!db_written_since(&db, taken_at), "quiescent db is fresh");
+        // A WAL older than the receipt changes nothing.
+        std::fs::write(&wal, b"wal").unwrap();
+        set_mtime(&wal, 86_400);
+        assert!(!db_written_since(&db, taken_at), "an old WAL is fresh");
+        // The WAL alone is newer: stale, though the main file is untouched.
+        set_mtime(&wal, 10);
+        assert!(
+            db_written_since(&db, taken_at),
+            "a WAL-only write must invalidate the snapshot"
+        );
+    }
+
     #[test]
     fn a_receipt_whose_snapshot_was_deleted_is_not_fresh() {
         let dir = tmp();
