@@ -94,9 +94,6 @@ impl HookCheck {
     fn skip(id: impl Into<String>, detail: impl Into<String>) -> Self {
         Self::new(id, CheckStatus::Skip, detail)
     }
-    fn fail(id: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self::new(id, CheckStatus::Fail, detail)
-    }
     fn with_fix(mut self, fix: impl Into<String>) -> Self {
         self.fix = Some(fix.into());
         self
@@ -3229,7 +3226,7 @@ mod tests {
         let pass = HookCheck::pass("a", "x");
         let skip = HookCheck::skip("b", "x");
         let warn = HookCheck::warn("c", "x");
-        let fail = HookCheck::fail("d", "x");
+        let fail = HookCheck::new("d", CheckStatus::Fail, "x");
         assert_eq!(strict_exit_code(&[pass.clone(), skip.clone()], true), 0);
         assert_eq!(strict_exit_code(&[pass.clone(), warn.clone()], true), 1);
         assert_eq!(strict_exit_code(&[pass, fail.clone()], true), 1);
