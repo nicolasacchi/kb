@@ -4,7 +4,6 @@
 web:ArtifactRef:web/src/lib/registers.ts
 web:BeliefOut:web/src/api/client.ts
 web:BeliefStatus:web/src/api/client.ts
-web-code:ClaimOut:web-code/src/api/types.ts
 web:CodeRevOut:web/src/api/doclens.ts
 web:CommitRef:web/src/lib/registers.ts
 web:DeskItem:web/src/api/desk.ts
