@@ -151,7 +151,7 @@ translate_export() {
 
   # Secrets floor — fail closed (see the header).
   if command -v kb >/dev/null 2>&1; then
-    jsonl="$(printf '%s\n' "$jsonl" | kb sessions scrub 2>/dev/null)" || jsonl=""
+    jsonl="$(printf '%s\n' "$jsonl" | run_to 15 kb sessions scrub 2>/dev/null)" || jsonl=""
   else
     jsonl=""
   fi
@@ -180,7 +180,18 @@ translate_export() {
   mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"
 }
 
+# v0.44 X6 (INT4) - every `kb` call is bounded by the shared hook deadline
+# (kb-hook-lib.sh run_to), so a hung daemon/CLI can never hang the session
+# end; the harness timeout is the last resort, not the design. A standalone
+# copy without the lib runs its calls unbounded, as before.
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  run_to() { shift; "$@"; }
+  hook_deadline_init() { :; }
+}
+KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
+
 capture_one() {
+  hook_deadline_init # per-session budget (a backfill runs many)
   local arg="$1"
   local tmp
   if [ -f "$arg" ]; then

@@ -86,5 +86,28 @@ PATH="$REAL_PATH" kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR" >/
 [ "$(corpus_files)" = 1 ] && ok "--replay-spool: capture landed" || bad "--replay-spool: capture landed"
 if grep -rq "$GH" "$KB_SESSIONS_DIR" 2>/dev/null; then bad "--replay-spool: scrubbed"; else ok "--replay-spool: scrubbed"; fi
 
+echo "== a hung kb is bounded by the shared deadline (INT4) =="
+mkdir -p "$TMPROOT/hangbin"
+printf '#!/usr/bin/env bash\nexec sleep 30\n' >"$TMPROOT/hangbin/kb"
+chmod +x "$TMPROOT/hangbin/kb"
+rm -rf "$KB_SESSIONS_DIR" "$KB_CAPTURE_SPOOL"; mkdir -p "$KB_SESSIONS_DIR"
+t0=$(date +%s)
+printf '%s' "$PAYLOAD" | KB_CAPTURE_BUDGET_SECS=2 PATH="$TMPROOT/hangbin:$PATH" bash "$HOOKS_DIR/kb-capture.sh" >/dev/null 2>&1
+el=$(( $(date +%s) - t0 ))
+[ "$el" -lt 12 ] && ok "kb-capture.sh returns at its budget, not the 30s hang (${el}s)" || bad "kb-capture.sh waited out the hang (${el}s)"
+[ -f "$KB_CAPTURE_SPOOL/$SID.jsonl" ] && ok "the hung capture is spooled, not lost" || bad "the hung capture is spooled, not lost"
+[ "$(corpus_files)" = 0 ] && ok "nothing raw reached the corpus" || bad "nothing raw reached the corpus"
+
+ROLLOUT="$TMPROOT/rollout.jsonl"
+cat >"$ROLLOUT" <<JSONL
+{"timestamp":"2026-03-01T09:00:00.000Z","type":"session_meta","payload":{"id":"codex-sess-0001","timestamp":"2026-03-01T09:00:00.000Z","cwd":"/tmp/x","originator":"codex","cli_version":"0"}}
+{"timestamp":"2026-03-01T09:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+JSONL
+t0=$(date +%s)
+PATH="$TMPROOT/hangbin:$PATH" KB_CAPTURE_BUDGET_SECS=2 bash "$HOOKS_DIR/kb-capture-codex.sh" "$ROLLOUT" >/dev/null 2>&1
+el=$(( $(date +%s) - t0 ))
+[ "$el" -lt 12 ] && ok "kb-capture-codex.sh returns at its budget (${el}s)" || bad "kb-capture-codex.sh waited out the hang (${el}s)"
+[ "$(corpus_files)" = 0 ] && ok "codex: a hung scrubber fails closed (nothing written)" || bad "codex: a hung scrubber fails closed"
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
