@@ -14,6 +14,7 @@ import {
   fetchReviewFiles,
   fetchReviewFindings,
   fetchReviewInterdiff,
+  fetchReviewSince,
   fetchReviewDoc,
   fetchReviewDocLint,
   fetchReviewMap,
@@ -72,6 +73,15 @@ export function reviewInterdiffKey(
   return ["reviews", repo, "interdiff", id, from, to] as const;
 }
 
+export function reviewSinceKey(
+  repo: string | undefined,
+  id: number | undefined,
+  from: string | undefined,
+  to: string | undefined,
+) {
+  return ["reviews", repo, "since", id, from, to] as const;
+}
+
 function invalidateReviewSurface(qc: ReturnType<typeof useQueryClient>, repo: string) {
   return qc.invalidateQueries({ queryKey: ["reviews", repo] });
 }
@@ -123,6 +133,23 @@ export function useReviewInterdiff(
   return useQuery({
     queryKey: reviewInterdiffKey(repo, id, from, to),
     queryFn: () => fetchReviewInterdiff(id as number, from as number, to as number),
+    enabled: enabled && repo !== undefined && id !== undefined && from !== undefined && to !== undefined,
+  });
+}
+
+/// v0.44 F9 — the author's changes between two patchsets (rebase-aware).
+/// Keyed under the `["reviews", repo]` prefix, so the `review.changed` SSE
+/// bridge refreshes it with the rest of the Room.
+export function useReviewSince(
+  repo: string | undefined,
+  id: number | undefined,
+  from: string | undefined,
+  to: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: reviewSinceKey(repo, id, from, to),
+    queryFn: () => fetchReviewSince(id as number, from as string, to as string),
     enabled: enabled && repo !== undefined && id !== undefined && from !== undefined && to !== undefined,
   });
 }

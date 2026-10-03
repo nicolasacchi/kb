@@ -385,6 +385,23 @@
   margin: 0 0 8px;
 }
 
+/* v0.44 F9 - the rebase-aware "since your verdict" line + the interdiff's
+   "author changes only" switch. Same quiet voice as the compare hint: it
+   states what changed, it is never a verdict. */
+.kbc-review__since {
+  font-size: 12px;
+  color: var(--ink-mute);
+  margin: 0 0 8px;
+}
+.kbc-review__since-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
 /* Files table */
 .kbc-review__filter {
   width: 100%;
