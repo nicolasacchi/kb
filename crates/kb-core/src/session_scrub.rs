@@ -132,6 +132,7 @@ fn token_rules() -> &'static [TokenRule] {
             mk("slack-token", r"xox[baprs]-[A-Za-z0-9-]{10,}"),
             mk("google-api-key", r"AIza[0-9A-Za-z_\-]{35}"),
             mk("api-key", r"sk-[A-Za-z0-9_\-]{20,}"),
+            mk("authelia-token", r"authelia_at_[A-Za-z0-9_\-.]{20,}"),
             mk(
                 "jwt",
                 r"eyJ[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}",
@@ -141,24 +142,27 @@ fn token_rules() -> &'static [TokenRule] {
 }
 
 /// The kind of the first HIGH-PRECISION credential token in `s`, or `None`.
-/// Built on the same `secrets` table the transcript scrub redacts with, with
-/// two deliberate lint-side differences: the GitHub body floor is 20 (the
-/// dispatcher's own scan floor, so the lint is never LESS sensitive than the
-/// gate it predicts) and `sk-` must start at a word boundary (`desk-`,
-/// `disk-` are prose). Bare prefixes in prose (a mention of `ghp_`) never
-/// match: every rule requires a credential-length body.
+/// Built on the same `secrets` table the transcript scrub redacts with. The
+/// lint predicts the dispatcher's secret gate, so it must never be LESS
+/// sensitive than it: the GitHub-family bodies (classic and fine-grained PAT)
+/// floor at 20 — the dispatcher's own scan floor — instead of the scrub's
+/// stricter 36/60, and `sk-` has NO word-boundary requirement (the dispatcher
+/// scans `sk-[A-Za-z0-9]{20,}` anywhere, so `desk-` followed by a 20-char
+/// body is flagged by the gate and therefore here). Short prose such as
+/// `desk-shell`, or a bare prefix (a mention of `ghp_`), never matches: every
+/// rule requires a credential-length body.
 pub fn first_secret_token_kind(s: &str) -> Option<&'static str> {
-    static LINT: OnceLock<[TokenRule; 2]> = OnceLock::new();
+    const OVERRIDDEN: [&str; 3] = ["github-token", "github-pat", "api-key"];
+    static LINT: OnceLock<[TokenRule; 3]> = OnceLock::new();
     let lint = LINT.get_or_init(|| {
+        let mk = |kind, pat: &str| TokenRule {
+            kind,
+            re: Regex::new(pat).expect("valid regex"),
+        };
         [
-            TokenRule {
-                kind: "github-token",
-                re: Regex::new(r"gh[pousr]_[A-Za-z0-9]{20,}").expect("valid regex"),
-            },
-            TokenRule {
-                kind: "api-key",
-                re: Regex::new(r"(?:^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{20,}").expect("valid regex"),
-            },
+            mk("github-token", r"gh[pousr]_[A-Za-z0-9]{20,}"),
+            mk("github-pat", r"github_pat_[A-Za-z0-9_]{20,}"),
+            mk("api-key", r"sk-[A-Za-z0-9_\-]{20,}"),
         ]
     });
     if let Some(r) = lint.iter().find(|r| r.re.is_match(s)) {
@@ -166,7 +170,7 @@ pub fn first_secret_token_kind(s: &str) -> Option<&'static str> {
     }
     token_rules()
         .iter()
-        .filter(|r| r.kind != "github-token" && r.kind != "api-key")
+        .filter(|r| !OVERRIDDEN.contains(&r.kind))
         .find(|r| r.re.is_match(s))
         .map(|r| r.kind)
 }
@@ -324,12 +328,26 @@ mod tests {
             first_secret_token_kind(&format!("{}{}", "AKIA", "ABCDEFGHIJKLMNOP")),
             Some("aws-access-key-id")
         );
-        for prose in [
-            "desk-shell",
-            "disk-bound-and-everything-else-too",
-            "ghp_ in prose",
-            "sk-",
-        ] {
+        // The dispatcher scans `sk-` anywhere: a >=20-char body after `desk-`
+        // is flagged by the gate, so the lint must flag it too.
+        assert_eq!(
+            first_secret_token_kind("disk-bound-and-everything-else-too"),
+            Some("api-key")
+        );
+        assert_eq!(
+            first_secret_token_kind("x-sk-abcdefghij0123456789"),
+            Some("api-key")
+        );
+        // Floors: short fine-grained PAT bodies and authelia tokens are covered.
+        assert_eq!(
+            first_secret_token_kind("github_pat_11ABCDEFG0abcdefghij_xyz"),
+            Some("github-pat")
+        );
+        assert_eq!(
+            first_secret_token_kind("authelia_at_abcdefghij0123456789ABCDEF"),
+            Some("authelia-token")
+        );
+        for prose in ["desk-shell", "disk-bound-and-so-on", "ghp_ in prose", "sk-"] {
             assert_eq!(first_secret_token_kind(prose), None, "{prose}");
         }
     }
@@ -360,6 +378,19 @@ mod tests {
             assert!(out.contains(&format!("[redacted:{kind}]")), "{kind}: {out}");
             assert_eq!(rep.by_kind.get(kind), Some(&1), "{kind} counted once");
         }
+    }
+
+    #[test]
+    fn scrub_redacts_authelia_access_tokens() {
+        let (out, rep) = scrub_transcript(
+            "bearer-less leak authelia_at_abcdefghij0123456789ABCDEFGHIJ-_. end",
+            &secrets(),
+        );
+        assert!(out.contains("[redacted:authelia-token]"), "{out}");
+        assert!(!out.contains("abcdefghij0123456789"), "{out}");
+        assert_eq!(rep.by_kind.get("authelia-token"), Some(&1));
+        let (prose, _) = scrub_transcript("the authelia_at_ prefix is documented", &secrets());
+        assert!(prose.contains("authelia_at_ prefix"), "{prose}");
     }
 
     #[test]

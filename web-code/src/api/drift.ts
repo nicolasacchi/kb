@@ -17,6 +17,26 @@ import type { ClaimOut, FramesResponse } from "./types";
 
 type Satisfies<Wire, Hand> = [Wire] extends [Hand] ? true : false;
 type Assert<T extends true> = T;
+// Key-level two-way check: every key either side declares, the other
+// declares too, and the required/optional split agrees. `Satisfies` alone is
+// one-directional, so a wire field the hand type omits (when optional on the
+// wire) would pass it silently.
+type RequiredKeys<T> = { [K in keyof T]-?: {} extends Pick<T, K> ? never : K }[keyof T];
+type SameKeys<A, B> = [keyof A] extends [keyof B]
+  ? [keyof B] extends [keyof A]
+    ? [RequiredKeys<A>] extends [RequiredKeys<B>]
+      ? [RequiredKeys<B>] extends [RequiredKeys<A>]
+        ? true
+        : false
+      : false
+    : false
+  : false;
+
+// The machinery itself can fail: the second assertion must NOT hold, and the
+// directive below makes `tsc` reject this file if it ever did.
+export type _SameKeysFailsOnAnOmittedWireField = SameKeys<{ a: 1; b?: 2 }, { a: 1 }>;
+// @ts-expect-error — `b` is declared by one side only
+export type _SameKeysNegative = Assert<_SameKeysFailsOnAnOmittedWireField>;
 
 // `FramesResponse` stays hand-written and WIDER: its `frames[].source` /
 // `off_head` are plain strings here but closed unions (`FrameSource`,
@@ -31,6 +51,12 @@ export type _FramesResponse = Assert<Satisfies<FramesResponseWire, FramesRespons
 // hand ⊆ wire: every hand value must be a valid wire value, field for field,
 // with `refs` compared on its own below.
 export type _ClaimOut = Assert<Satisfies<Omit<ClaimOut, "refs">, Omit<ClaimOutWire, "refs">>>;
+// … and the other direction: no wire field the hand type omits, none it adds.
+// `refs` differs only in optionality (see above), so it is checked by itself.
+export type _ClaimOutKeys = Assert<SameKeys<Omit<ClaimOut, "refs">, Omit<ClaimOutWire, "refs">>>;
+export type _ClaimOutRefsKey = Assert<
+  "refs" extends keyof ClaimOut ? ("refs" extends keyof ClaimOutWire ? true : false) : false
+>;
 export type _ClaimOutRefs = Assert<
   Satisfies<NonNullable<ClaimOut["refs"]>, ClaimOutWire["refs"]>
 >;

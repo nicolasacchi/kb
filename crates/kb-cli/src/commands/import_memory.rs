@@ -13,8 +13,13 @@
 //! file mtime + project-relative source path → a provenance footer appended
 //! to the verbatim body · tags `imported-claude-memory`,
 //! `claude-type-<type>`, `cm-<hash12>` (the dedupe key, a hash of the
-//! parsed content so an edited file re-proposes and an unchanged one never
-//! does). `MEMORY.md` (the index) is skipped.
+//! parsed content AND the target corpus, so an edited file re-proposes, an
+//! unchanged one never does, and the same text in two projects stays two
+//! candidates). The file mtime also rides the proposal as the memory's
+//! creation date, so recall decay ages an imported fact by when it was
+//! written, not by when it was imported. The footer names the decoded
+//! project slug, never the encoded home-path directory. `MEMORY.md` (the
+//! index) is skipped.
 //!
 //! The project directory name (`-home-user-project-my-app`) is a lossy
 //! encoding of a path (dashes vs slashes), so the derived slug is a
@@ -81,7 +86,8 @@ pub struct Candidate {
     pub mtime_unix: Option<i64>,
     /// The full proposal body (verbatim body + provenance footer).
     pub body: String,
-    /// `new` | `duplicate` (already in the queue / corpus).
+    /// `new` | `duplicate` (already in the queue / corpus) | `unknown`
+    /// (dry-run with no reachable daemon) | `over-limit` (past `--limit`).
     pub status: String,
 }
 
@@ -220,10 +226,11 @@ pub fn project_slug(dirname: &str, home: Option<&str>) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-fn content_hash(p: &Parsed, title: &str) -> String {
+fn content_hash(p: &Parsed, title: &str, target: Option<&str>) -> String {
     let mut h = Sha256::new();
     for part in [
         title,
+        target.unwrap_or(""),
         p.description.as_deref().unwrap_or(""),
         p.mem_type.as_deref().unwrap_or(""),
         p.body.as_str(),
@@ -245,6 +252,7 @@ fn fmt_date(mtime: Option<i64>) -> String {
 /// Map one parsed file to a candidate. Pure.
 pub fn map_candidate(
     source: &str,
+    project: &str,
     file_stem: &str,
     p: &Parsed,
     mtime_unix: Option<i64>,
@@ -255,7 +263,7 @@ pub fn map_candidate(
         .clone()
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| file_stem.to_string());
-    let key = format!("cm-{}", content_hash(p, &title));
+    let key = format!("cm-{}", content_hash(p, &title, target.as_deref()));
     let mut tags = vec![IMPORT_TAG.to_string()];
     if let Some(t) = p.mem_type.as_deref().map(slugify).filter(|t| !t.is_empty()) {
         tags.push(format!("claude-type-{t}"));
@@ -267,8 +275,12 @@ pub fn map_candidate(
     if let Some(d) = &p.description {
         body.push_str(&format!("_{d}_\n\n"));
     }
+    // The decoded project slug + file name only: `source` starts with the
+    // ENCODED project dir (`-home-user-project-x`), a mangled absolute path
+    // that must not be stored in a memory.
+    let fname = source.rsplit('/').next().unwrap_or(source);
     body.push_str(&format!(
-        "Imported from Claude Code auto-memory `{source}` (file modified {}); \
+        "Imported from Claude Code auto-memory `{project}/memory/{fname}` (file modified {}); \
          an older note may no longer be true — review before approving.\n",
         fmt_date(mtime_unix)
     ));
@@ -349,7 +361,15 @@ pub fn build_plan(root: &Path, home: Option<&str>, link: Option<&str>) -> Result
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64);
             let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("memory");
-            candidates.push(map_candidate(&source, stem, &parsed, mtime, target.clone()));
+            let project = project_slug(dirname, home).unwrap_or_else(|| "home".to_string());
+            candidates.push(map_candidate(
+                &source,
+                &project,
+                stem,
+                &parsed,
+                mtime,
+                target.clone(),
+            ));
         }
     }
     Ok(Plan {
@@ -365,6 +385,25 @@ pub fn mark_duplicates(plan: &mut Plan, known: &BTreeSet<String>) {
     for c in &mut plan.candidates {
         if !seen.insert(c.dedupe_key.clone()) {
             c.status = "duplicate".to_string();
+        }
+    }
+}
+
+/// Relabel every non-duplicate candidate past the first `limit` as
+/// `over-limit`, so the table (dry-run AND apply) shows exactly what `--apply`
+/// would queue. Pure.
+pub fn apply_limit(plan: &mut Plan, limit: Option<usize>) {
+    let Some(limit) = limit else {
+        return;
+    };
+    let mut kept = 0usize;
+    for c in &mut plan.candidates {
+        if c.status == "new" || c.status == "unknown" {
+            if kept < limit {
+                kept += 1;
+            } else {
+                c.status = "over-limit".to_string();
+            }
         }
     }
 }
@@ -419,6 +458,32 @@ async fn known_keys(
         }
     }
     Ok(known)
+}
+
+/// Dry-run duplicate detection: READ-ONLY (two GETs, never a write). `None`
+/// when the daemon is unreachable, no corpus can be resolved, or the queue is
+/// only partially visible — the caller then reports `unknown`, not `new`.
+async fn dry_run_known(
+    daemon: Option<&str>,
+    kb: Option<&str>,
+    keys: &[String],
+    bearer: Option<&str>,
+) -> Option<BTreeSet<String>> {
+    let url = http::detect_daemon(daemon, bearer).await?;
+    let kb = match http::resolve_default_kb(kb, Some(&url), bearer).await {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("note: duplicate check skipped ({e}); pass --kb to enable it");
+            return None;
+        }
+    };
+    match known_keys(&url, &kb, keys, bearer).await {
+        Ok(k) => Some(k),
+        Err(e) => {
+            eprintln!("note: duplicate check skipped ({e})");
+            None
+        }
+    }
 }
 
 /// Fold the `cm-*` keys of a `GET /api/proposals` response into `into`.
@@ -521,6 +586,23 @@ pub async fn run(
     let mut submitted: Vec<serde_json::Value> = Vec::new();
     let mut global_fallbacks = 0usize;
 
+    if !apply {
+        let keys: Vec<String> = plan
+            .candidates
+            .iter()
+            .map(|c| c.dedupe_key.clone())
+            .collect();
+        match dry_run_known(daemon.as_deref(), kb.as_deref(), &keys, bearer.as_deref()).await {
+            Some(known) => mark_duplicates(&mut plan, &known),
+            None => {
+                for c in &mut plan.candidates {
+                    c.status = "unknown".to_string();
+                }
+            }
+        }
+        apply_limit(&mut plan, limit.map(|n| n as usize));
+    }
+
     if apply {
         let url = http::detect_daemon(daemon.as_deref(), bearer.as_deref())
             .await
@@ -534,6 +616,7 @@ pub async fn run(
             .collect();
         let known = known_keys(&url, &kb, &keys, bearer.as_deref()).await?;
         mark_duplicates(&mut plan, &known);
+        apply_limit(&mut plan, limit.map(|n| n as usize));
         // Resolve every target BEFORE queueing anything so a bad explicit
         // --link fails the whole run instead of half-applying.
         let explicit = link.is_some();
@@ -562,6 +645,7 @@ pub async fn run(
                 link.as_deref(),
                 None,
                 None,
+                c.mtime_unix,
                 Some(&url),
                 bearer.as_deref(),
             )
@@ -613,7 +697,9 @@ pub async fn run(
             "dry-run: {} candidate(s), nothing written. Re-run with --apply to queue them \
              in the proposal inbox (a human approves with `kb proposals approve`). \
              Targets are a best-effort guess from the lossy project dir name; \
-             --link overrides (comma-separated, must be configured), and an unconfigured derived corpus falls back to global at --apply. Status is always `new` here: duplicates are only detected at --apply; --limit applies only at --apply.",
+             --link overrides (comma-separated, must be configured), and an unconfigured derived corpus falls back to global at --apply. \
+             Status: `duplicate` = already queued/approved (checked read-only against a reachable daemon), \
+             `unknown` = no daemon to ask, `over-limit` = past --limit.",
             plan.candidates.len()
         );
     }
@@ -668,6 +754,7 @@ mod tests {
         let p = parse_frontmatter(SAMPLE).unwrap();
         let c = map_candidate(
             "-home-alice-project-kb/memory/fast.md",
+            "kb",
             "fast",
             &p,
             Some(1_700_000_000),
@@ -682,14 +769,25 @@ mod tests {
             .body
             .starts_with("Body line one.\n\nLine two.\n\n---\n_use --profile fast_"));
         assert!(c.body.contains("file modified 2023-11-14"));
-        assert!(c.body.contains("-home-alice-project-kb/memory/fast.md"));
+        // The footer names the decoded project slug, never the encoded
+        // home-path directory.
+        assert!(c.body.contains("`kb/memory/fast.md`"), "{}", c.body);
+        assert!(!c.body.contains("-home-alice"), "{}", c.body);
+        assert_eq!(c.mtime_unix, Some(1_700_000_000));
         // same content → same key; edited body → different key
-        let again = map_candidate("x/memory/y.md", "fast", &p, None, None);
+        let again = map_candidate(
+            "x/memory/y.md",
+            "kb",
+            "fast",
+            &p,
+            None,
+            Some("memory-kb".into()),
+        );
         assert_eq!(again.dedupe_key, c.dedupe_key);
         let mut edited = p.clone();
         edited.body.push_str(" more");
         assert_ne!(
-            map_candidate("x", "fast", &edited, None, None).dedupe_key,
+            map_candidate("x", "kb", "fast", &edited, None, Some("memory-kb".into())).dedupe_key,
             c.dedupe_key
         );
     }
@@ -698,7 +796,7 @@ mod tests {
     fn missing_name_falls_back_to_file_stem() {
         let p = parse_frontmatter("---\ndescription: d\n---\nbody").unwrap();
         assert_eq!(
-            map_candidate("s", "my_note", &p, None, None).title,
+            map_candidate("s", "p", "my_note", &p, None, None).title,
             "my_note"
         );
     }
@@ -741,7 +839,7 @@ mod tests {
                 mem_type: None,
                 body: body.into(),
             };
-            map_candidate(name, name, &p, None, None)
+            map_candidate(name, "p", name, &p, None, None)
         };
         let known_one = mk("a", "1");
         let mut plan = Plan {
@@ -803,5 +901,48 @@ mod tests {
         let capped = serde_json::json!({"items":[{"tags":["cm-a"]}],"total":201});
         let e = queue_keys(&capped, &mut BTreeSet::new()).unwrap_err();
         assert!(e.to_string().contains("201"));
+    }
+
+    #[test]
+    fn the_target_corpus_is_part_of_the_dedupe_key() {
+        let p = parse_frontmatter(SAMPLE).unwrap();
+        let key = |t: Option<&str>| {
+            map_candidate("a/memory/f.md", "kb", "f", &p, None, t.map(str::to_string)).dedupe_key
+        };
+        assert_ne!(key(Some("memory-a")), key(Some("memory-b")));
+        assert_ne!(key(Some("memory-a")), key(None));
+        assert_eq!(key(Some("memory-a")), key(Some("memory-a")));
+        // Same text in two projects is two candidates, not a duplicate.
+        let mut plan = Plan {
+            candidates: vec![
+                map_candidate("a/memory/f.md", "a", "f", &p, None, Some("memory-a".into())),
+                map_candidate("b/memory/f.md", "b", "f", &p, None, Some("memory-b".into())),
+            ],
+            skipped: vec![],
+        };
+        mark_duplicates(&mut plan, &BTreeSet::new());
+        assert!(plan.candidates.iter().all(|c| c.status == "new"));
+    }
+
+    #[test]
+    fn limit_is_reflected_in_the_plan_statuses() {
+        let p = parse_frontmatter(SAMPLE).unwrap();
+        let mk = |n: &str| map_candidate(n, "p", n, &p, None, Some(format!("memory-{n}")));
+        let mut plan = Plan {
+            candidates: vec![mk("a"), mk("b"), mk("c")],
+            skipped: vec![],
+        };
+        plan.candidates[0].status = "duplicate".into();
+        apply_limit(&mut plan, Some(1));
+        let st: Vec<_> = plan.candidates.iter().map(|c| c.status.as_str()).collect();
+        // the duplicate does not consume the budget; the 2nd new is over it
+        assert_eq!(st, ["duplicate", "new", "over-limit"]);
+        assert_eq!(select_to_apply(&plan, Some(1)).len(), 1);
+        let mut unlimited = Plan {
+            candidates: vec![mk("a")],
+            skipped: vec![],
+        };
+        apply_limit(&mut unlimited, None);
+        assert_eq!(unlimited.candidates[0].status, "new");
     }
 }

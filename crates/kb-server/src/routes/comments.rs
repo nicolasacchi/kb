@@ -1249,6 +1249,7 @@ fn keep_ingest_body(spec: &KeepInsert, source_kb: &str) -> crate::routes::artifa
         source: None,
         memory_type: None,
         outcome: None,
+        created_at: None,
     }
 }
 
