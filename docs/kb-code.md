@@ -805,8 +805,12 @@ Error URNs (`BaseError`, rendered RFC 7807 through `ApiError`):
 | `urn:kb:errors:base-unavailable` | 409 | the policy's base tip is not in the store (never fetched, or gone from the forge) |
 | `urn:kb:errors:no-merge-base` | 400 | head and base share no history |
 | `urn:kb:errors:base-vanished` | 409 | a user-set (or legacy) base branch no longer exists on the forge and no replacement could be resolved |
+| `urn:kb:errors:pr-already-merged` | 409 | the PR head is already an ancestor of the target tip (a merge-commit merge), so a capture against the live target would mint an EMPTY patchset; creation, snapshot/sync reuse and `retrack` (dry run and apply) refuse, on the store path AND on a repo with no ready store (the shared capture refuses). `review sync --merged-since` therefore reports such a PR as a failed item, and creates no review for it. Pin the merge-time base with `--base <sha>` to review what landed |
+| `urn:kb:errors:base-changed` | 409 | the review's base policy changed (a concurrent retrack/retarget) while a capture waited on the fetch; nothing was minted, retry |
 | `urn:kb:errors:capture-failed` | 500 | the capture itself failed (git or DB) |
 | `urn:kb:errors:store-disabled` | 503 | the store's git spawner is unavailable |
+
+Operator notes for the base model: a creation that fails after the review row exists (PR enrichment, binding, a failed first capture) deletes the whole just-created review, so a retry recreates it and a `review.created` event already emitted names a deleted id; `retrack --all --yes` holds the repo's sync guard for the whole bulk run (network fetches included), so `start-pr` and `sync` for that repo wait until it ends; a retrack of a merged PR answers `pr-already-merged` and the merge-time base is not pinned automatically (use `--base <sha>`).
 
 `urn:kb:errors:stale-mirror` and `ERR_STALE_MIRROR` are GONE: RS-U6
 removed the refusal and the constants together, and neither string exists

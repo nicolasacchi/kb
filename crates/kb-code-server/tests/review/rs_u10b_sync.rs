@@ -516,6 +516,15 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
     let t2 = fx.push_pr(2, &m, &["two-a.txt", "two-b.txt"]);
     let t4 = fx.push_pr(4, &m, &["four.txt"]);
     let t6 = fx.push_pr(6, &m, &["six.txt"]);
+    // PR 4 is REALLY merged (GitHub's default "Create a merge commit"): the
+    // target tip now contains its head, so the old fixture's unmerged head
+    // could not expose an empty capture (A6-1).
+    git(&fx.repo, &["checkout", "-q", "main"]);
+    git(
+        &fx.repo,
+        &["merge", "--no-ff", "-q", "-m", "Merge PR 4", &t4],
+    );
+    git(&fx.repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     let pulls: Pulls = Arc::new(Mutex::new(HashMap::new()));
     {
         let mut p = pulls.lock().unwrap();
@@ -547,7 +556,9 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
     assert_eq!(st, 200, "{v:#}");
     assert_eq!(v["schema"], "kbc-review-sync-open/1");
     assert_eq!(v["count"], 4, "{v:#}");
-    assert_eq!(v["failed"], 1, "{v:#}");
+    // PR 3 (no head ref) and PR 4 (merged into the target: refused, not
+    // captured as an empty patchset).
+    assert_eq!(v["failed"], 2, "{v:#}");
     // The truncation flags are part of the `kbc-review-sync-open/1`
     // contract and nothing else pins them: this mock answers ONE page
     // with no `Link` header and stays under `MAX_SYNC_PULLS`, so all
@@ -565,14 +576,21 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
         .map(|i| (i["pr_number"].as_u64().unwrap(), i))
         .collect();
     assert!(!by_pr.contains_key(&5), "merged before the window");
-    for n in [1u64, 2, 4] {
+    let merged = by_pr[&4];
+    assert_eq!(merged["ok"], false, "{merged:#}");
+    assert_eq!(merged["listed_as"], "merged");
+    assert_eq!(merged["error"]["status"], 409, "{merged:#}");
+    assert_eq!(
+        merged["error"]["code"], "urn:kb:errors:pr-already-merged",
+        "{merged:#}"
+    );
+    for n in [1u64, 2] {
         let it = by_pr[&n];
         assert_eq!(it["ok"], true, "{it:#}");
         assert_sync_shape(it);
         assert_eq!(it["reason"], "created");
         assert_eq!(it["files_equal"], true, "{it:#}");
     }
-    assert_eq!(by_pr[&4]["listed_as"], "merged");
     assert_eq!(by_pr[&1]["listed_as"], "open");
     let bad = by_pr[&3];
     assert_eq!(bad["ok"], false);
@@ -616,7 +634,10 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
         .collect();
     assert_eq!(reasons[&1], "unchanged");
     assert_eq!(reasons[&2], "unchanged");
-    assert_eq!(reasons[&4], "merged-final");
+    assert!(
+        !reasons.contains_key(&4),
+        "the merged PR still has no (empty) review"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -63,6 +63,16 @@ pub const SEED_FETCH_TIMEOUT: Duration = Duration::from_secs(SEED_FETCH_TIMEOUT_
 /// Cap on by-sha recovery attempts per seed (each is one local fetch).
 const MAX_SHA_RECOVERY: usize = 64;
 
+/// M4 — the time left on a pass-wide deadline, `None` once it has passed.
+/// A fetch pass that retries ref by ref after a `Vanished` failure gives
+/// each retry only what is LEFT of ONE budget, so the pass costs at most
+/// `budget`, never `(1 + refs) x budget`.
+pub fn budget_left(deadline: std::time::Instant) -> Option<Duration> {
+    deadline
+        .checked_duration_since(std::time::Instant::now())
+        .filter(|d| !d.is_zero())
+}
+
 /// `objects_state` for a review whose commits exist nowhere reachable.
 pub const OBJECTS_MISSING: &str = "objects-missing";
 
@@ -236,17 +246,27 @@ pub fn parse_git_version(s: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
+/// Probe the installed git. `Ok(Some(found))` = it ran and is older than
+/// `min` (or printed something unparseable); `Ok(None)` = new enough;
+/// `Err(detail)` = the probe itself could not run (timeout, spawn
+/// failure) — a TRANSIENT condition the caller must not cache.
+pub fn git_version_probe(git: &StoreGit, min: (u32, u32)) -> Result<Option<String>, String> {
+    let out = git
+        .run(GitCall::new("version", GitArgs::new("version")))
+        .map_err(|e| format!("git version probe failed ({})", e.slug()))?;
+    let text = out.stdout_str().trim().to_string();
+    Ok(match parse_git_version(&text) {
+        Some(v) if v >= min => None,
+        _ => Some(text.chars().take(64).collect()),
+    })
+}
+
 /// `Some(found)` when the store's git is older than `min` (or its version
 /// cannot be read); `None` when it is new enough.
 pub fn git_too_old(git: &StoreGit, min: (u32, u32)) -> Option<String> {
-    let out = match git.run(GitCall::new("version", GitArgs::new("version"))) {
-        Ok(o) => o,
-        Err(e) => return Some(format!("unknown ({})", e.slug())),
-    };
-    let text = out.stdout_str().trim().to_string();
-    match parse_git_version(&text) {
-        Some(v) if v >= min => None,
-        _ => Some(text.chars().take(64).collect()),
+    match git_version_probe(git, min) {
+        Ok(v) => v,
+        Err(e) => Some(format!("unknown ({e})")),
     }
 }
 
@@ -648,6 +668,8 @@ pub fn fetch_base_branches(
         };
     }
     let base = RemoteName::base();
+    // M4 — ONE deadline for the whole pass (first fetch + per-ref retries).
+    let deadline = std::time::Instant::now() + git.base_fetch_timeout();
     match git.fetch(git_dir, &base, &specs, auth, git.base_fetch_timeout()) {
         Ok(_) => BaseFetch::Fetched {
             branches: names,
@@ -657,13 +679,13 @@ pub fn fetch_base_branches(
             // One by one, so a deleted base branch does not block the rest.
             let (mut ok, mut gone) = (Vec::new(), Vec::new());
             for (spec, name) in specs.iter().zip(names) {
-                match git.fetch(
-                    git_dir,
-                    &base,
-                    std::slice::from_ref(spec),
-                    auth,
-                    git.base_fetch_timeout(),
-                ) {
+                let Some(left) = budget_left(deadline) else {
+                    return BaseFetch::Failed {
+                        code: "timeout".into(),
+                        detail: "the base fetch pass ran out of its single deadline".into(),
+                    };
+                };
+                match git.fetch(git_dir, &base, std::slice::from_ref(spec), auth, left) {
                     Ok(_) => ok.push(name),
                     Err(e) if e.class == FailureClass::Vanished => gone.push(name),
                     Err(e) => {
@@ -763,11 +785,17 @@ pub fn verify_connectivity(
     let mut missing = missing_objects(git, git_dir, &shas)?;
     let mut recovered = 0;
     let mut attempts = 0;
+    // M4 — the by-sha recovery as a whole is capped at one seed deadline
+    // (64 attempts x 120 s used to be ~2 h).
+    let deadline = std::time::Instant::now() + SEED_FETCH_TIMEOUT;
     for p in patchsets {
         if !missing.contains(&p.tip_sha) || attempts >= MAX_SHA_RECOVERY {
             continue;
         }
         for m in members {
+            if budget_left(deadline).is_none() {
+                break;
+            }
             attempts += 1;
             if fetch_by_sha(
                 git,

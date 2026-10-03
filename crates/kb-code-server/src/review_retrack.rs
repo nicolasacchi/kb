@@ -251,6 +251,19 @@ pub(crate) fn retrack_sync(
                 pr_number,
             );
             warnings.extend(fetch.warnings());
+            // A6-7 — the apply path (`recapture`) answers 409 `base-vanished`
+            // for a tracked branch the forge no longer has; the dry run must
+            // say the same instead of classifying against the stale
+            // `refs/remotes/base/<branch>` the failed fetch left behind.
+            if let Some(b) = branches.first().filter(|b| fetch.vanished.contains(*b)) {
+                return Err(BaseError::new(
+                    409,
+                    crate::review_base::URN_BASE_VANISHED,
+                    format!(
+                        "the base branch {b:?} no longer exists on the forge — retrack the review with --base <branch>"
+                    ),
+                ));
+            }
         }
         // Mirrors `StoreCtx::capture_with`'s own two import calls (the
         // ONLY other path that resolves `base_tip`/`head_tip`), since a
@@ -267,6 +280,10 @@ pub(crate) fn retrack_sync(
         let head_tip = ctx.head_tip(&review.head_ref)?;
         let merge_base =
             reviews::merge_base_sha(&ctx.root(), &target_tip, &head_tip).map_err(git_err)?;
+        // A6-1 twin: apply refuses a head the target already contains.
+        if is_pr {
+            crate::review_base::capture::refuse_merged_head(&head_tip, &merge_base)?;
+        }
         let latest = ctx.store.latest_patchset(review.id).ok().flatten();
         let would_mint = decide_kind(
             latest
@@ -324,6 +341,8 @@ pub(crate) fn retrack_sync(
         // which is for legacy auto-upgrades, not a deliberate retrack).
         policy_override: Some(policy.clone()),
         api_warnings,
+        #[cfg(test)]
+        after_fetch: None,
     };
     let r = ctx.recapture(review, &rc)?;
     warnings.extend(r.warnings.clone());
@@ -367,9 +386,10 @@ pub(crate) fn retrack_sync(
         &r.status,
         Some(&r.outcome.ps.base_sha),
     );
-    // `policy_override` above means `recapture` ALWAYS persisted the new
-    // policy (`set_review_base`/`set_review_base_ref`), whether or not a
-    // patchset minted — so this is a real change worth a `review.changed`
+    // `policy_override` above means `recapture` persisted the new policy
+    // (`set_review_base`/`set_review_base_ref`), whether or not a patchset
+    // minted (a concurrent policy change instead fails the whole call with
+    // 409 `base-changed` before anything is minted or written) — so this is a real change worth a `review.changed`
     // every time the apply branch runs (capture's own `patchset` emit,
     // inside `capture_at`, only fires when something minted).
     reviews::emit_review_changed(ctx.bus, review.id, &review.repo, "meta", false);
@@ -420,6 +440,13 @@ async fn retrack_one(
     base_input: Option<String>,
     dry_run: bool,
 ) -> Result<RetrackOutcome, ApiError> {
+    // A6-3 — an applying retrack serialises with start-pr/sync on the repo
+    // (a dry run writes nothing and stays lock-free).
+    let _serial = if dry_run {
+        None
+    } else {
+        crate::review_sync::repo_guard(state, &review.repo).await
+    };
     let handle = admit_store(state, &review.repo)
         .await?
         .ok_or_else(|| store_required(&review.repo))?;
@@ -538,6 +565,11 @@ async fn retrack_all_for_repo(
     legacy: bool,
     apply: bool,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
+    let _serial = if apply {
+        crate::review_sync::repo_guard(state, &repo.name).await
+    } else {
+        None
+    };
     let handle = match admit_store(state, &repo.name).await {
         Ok(Some(h)) => h,
         Ok(None) => return Ok(Vec::new()),
@@ -550,7 +582,10 @@ async fn retrack_all_for_repo(
     let candidates: Vec<(ReviewRow, SetBy)> = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
-            let reviews = store.list_reviews(&repo_name, None)?;
+            // Only OPEN reviews: a closed review's verdict and findings are
+            // final, and re-basing one mints a `base-corrected` patchset that
+            // orphans them against whatever the target is today.
+            let reviews = store.list_reviews(&repo_name, Some("open"))?;
             let mapped = read_mapped_remotes(store, &repo_name, &root);
             Ok(reviews
                 .into_iter()
