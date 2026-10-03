@@ -201,8 +201,12 @@ pub fn db_written_since(db_path: &Path, taken_at: i64) -> bool {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64 > taken_at.saturating_add(MTIME_SLACK_SECS))
                 .unwrap_or(true),
-            // No WAL file is the normal, quiescent case.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => p.as_path() != db_path,
+            // No WAL file is the normal, quiescent case (not written); a
+            // MISSING main database is unknowable, so it reads as written.
+            // (This arm used to say `!=`, i.e. the inverse: every cleanly
+            // closed database, which has no -wal, read as "written since"
+            // and was re-snapshotted on every crossing boot.)
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => p.as_path() == db_path,
             Err(_) => true,
         }
     })
