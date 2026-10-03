@@ -42,12 +42,14 @@
 //!
 //! **Pinned presence-only (the committed golden leaf is `null`, or an empty
 //! array with no element shape), so a retype of these is NOT caught:**
-//! review `title`, `session_id`, `artifact_hint_id`, `artifact_hint_kb`
-//! (no fixture sets them), `pr_meta_unavailable_reason`, `unavailable_reason`,
-//! the async job's `error`/`error_type`, `review_files[].old_path` (no
-//! fixture file is renamed) and `review_files[].hunks_viewed` (no hunk is
-//! marked viewed, so the element shape is unpinned). Pinning them needs
-//! fixtures that set them plus re-minted goldens.
+//! `pr_meta_unavailable_reason`, `unavailable_reason` (both only appear when
+//! the forge is unreachable), the async job's `error`/`error_type` (a failed
+//! job), `review_files[].old_path` (no fixture file is renamed) and
+//! `review_files[].hunks_viewed` (no hunk is marked viewed, so the element
+//! shape is unpinned). Review `title`, `session_id`, `artifact_hint_id` and
+//! `artifact_hint_kb` ARE pinned non-null (v0.44 X2): every fixture below
+//! sets them. Pinning the rest needs fixtures that set them plus re-minted
+//! goldens.
 //!
 //! # Regenerating (this crate builds with NO local cargo — see
 //! `BUILDER-RULES.md`; every golden here was minted on GitHub CI)
@@ -398,6 +400,8 @@ async fn create_review_golden_envelope_shape() {
             "head_ref": "feature",
             "base_ref": "main",
             "title": "widgets: spin faster",
+            // X2: non-null, so the golden pins a TYPE for it, not mere presence.
+            "session_id": "sess-fixture",
         }))
         .send()
         .await
@@ -435,7 +439,13 @@ async fn create_review_pr_sync_snapshot_list_show_files_and_pr_status_golden_env
     // --- bind (sync start-pr) --------------------------------------------
     let resp = client
         .post(format!("{base}/api/reviews/pr"))
-        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 100 }))
+        .json(&serde_json::json!({
+            "repo": "fixture",
+            "pr_number": 100,
+            // X2: non-null title + session_id (goldens pin their TYPE).
+            "title": "widgets: spin faster",
+            "session_id": "sess-fixture",
+        }))
         .send()
         .await
         .unwrap();
@@ -487,6 +497,23 @@ async fn create_review_pr_sync_snapshot_list_show_files_and_pr_status_golden_env
             "schema": "kbc-review-report/1",
             "summary": "Looks good, one nit",
             "risk_score": 2,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+
+    // --- artifact hint pair (non-null in list + show goldens) -------------
+    let resp = client
+        .patch(format!("{base}/api/reviews/{id}"))
+        .json(&serde_json::json!({
+            "artifact_hint_kb": "research",
+            "artifact_hint_id": "0123456789ab",
         }))
         .send()
         .await
@@ -581,7 +608,12 @@ async fn create_review_pr_async_job_golden_envelope_shape() {
 
     let resp = client
         .post(format!("{base}/api/reviews/pr?async=1"))
-        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 101 }))
+        .json(&serde_json::json!({
+            "repo": "fixture",
+            "pr_number": 101,
+            "title": "widgets: spin faster",
+            "session_id": "sess-fixture",
+        }))
         .send()
         .await
         .unwrap();
