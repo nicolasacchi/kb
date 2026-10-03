@@ -107,12 +107,16 @@ fn served_artifact_pred(artifact_col: &str) -> String {
 /// capture's rows are invisible to readers and must not hide a serve.
 ///
 /// `outer` is the range variable (or table name) of the `memory_recalls`
-/// row being tested; the inner scan is aliased `cap`/`s9`.
+/// row being tested; the inner scan is aliased `cap`/`s9`. Coverage matches
+/// on `(memory_kb, memory_id)`, never `memory_id` alone: ids are a hash of the
+/// source-relative path, so two corpora can mint the same id (invariant #7 v2)
+/// and a capture row for one must not hide the other corpus's serve.
 fn served_uncovered_pred(outer: &str) -> String {
     format!(
         "({outer}.artifact_id LIKE 'served-%' AND NOT EXISTS (\
             SELECT 1 FROM memory_recalls cap \
             WHERE cap.session_id = {outer}.session_id \
+              AND cap.memory_kb = {outer}.memory_kb \
               AND cap.memory_id = {outer}.memory_id \
               AND cap.artifact_id NOT LIKE 'served-%' \
               AND cap.artifact_id = (SELECT s9.artifact_id FROM sessions s9 \
@@ -4668,7 +4672,7 @@ impl Db {
             let mut retire = tx.prepare_cached(
                 "DELETE FROM memory_recalls
                  WHERE artifact_id LIKE 'served-%'
-                   AND session_id = ?1 AND memory_id = ?2
+                   AND session_id = ?1 AND memory_kb = ?6 AND memory_id = ?2
                    AND (?3 IS NULL OR pos = ?3)
                    AND (?4 IS NULL OR recalled_at IS NULL
                         OR ABS(recalled_at - ?4) <= ?5)",
@@ -4680,6 +4684,7 @@ impl Db {
                     r.pos,
                     r.recalled_at,
                     SERVE_CAPTURE_SLACK_SECS,
+                    r.memory_kb,
                 ])?;
                 stmt.execute(params![
                     r.memory_kb,
@@ -12399,6 +12404,84 @@ mod tests {
         assert_eq!(counts(&db, "aaaaaaaaaaaa"), 2);
     }
 
+    /// v044-X3 — ids collide across corpora (invariant #7 v2: the id hashes the
+    /// source-relative path), so a capture row for `notes`/X must neither hide
+    /// nor retire a live serve of `other`/X in the same session at the same
+    /// pos and time. Covers BOTH the read-side predicate and the write-side
+    /// retire rule, which must agree.
+    #[test]
+    fn served_coverage_and_retire_key_on_memory_kb_as_well_as_id() {
+        let served = |kb: &str, id: &str, at: i64| ServedRecallRow {
+            memory_kb: kb.into(),
+            memory_id: id.into(),
+            pos: 1,
+            title: "t".into(),
+            injected_chars: 1,
+            served_at: at,
+        };
+        let capture = |db: &mut Db| {
+            let mut c = memory_recall_row(
+                "notes",
+                "aaaaaaaaaaaa",
+                "sid-a",
+                "t-1",
+                Some(1_700_000_100),
+                "cap-1",
+            );
+            c.pos = Some(1);
+            db.memory_recalls_replace("cap-1", &[c]).unwrap();
+        };
+        // Read side: serve appended AFTER the capture landed.
+        let mut db_r = db();
+        db_r.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        capture(&mut db_r);
+        db_r.memory_recalls_append(
+            "sid-a",
+            &[
+                served("notes", "aaaaaaaaaaaa", 1_700_000_130),
+                served("other", "aaaaaaaaaaaa", 1_700_000_130),
+            ],
+        )
+        .unwrap();
+        let kbs: Vec<String> = db_r
+            .memory_recalls_for_session("sid-a")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.memory_kb)
+            .collect();
+        assert_eq!(
+            kbs,
+            vec!["notes".to_string(), "other".to_string()],
+            "the capture covers notes/X only; other/X's serve is a different memory"
+        );
+
+        // Write side: serves appended BEFORE the capture replace.
+        let mut db_w = db();
+        db_w.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        db_w.memory_recalls_append(
+            "sid-a",
+            &[
+                served("notes", "aaaaaaaaaaaa", 1_700_000_130),
+                served("other", "aaaaaaaaaaaa", 1_700_000_130),
+            ],
+        )
+        .unwrap();
+        capture(&mut db_w);
+        let raw: Vec<String> = db_w
+            .memory_recalls_for_session("sid-a")
+            .unwrap()
+            .into_iter()
+            .map(|r| format!("{}:{}", r.memory_kb, r.artifact_id.starts_with("served-")))
+            .collect();
+        assert_eq!(
+            raw,
+            vec!["notes:false".to_string(), "other:true".to_string()],
+            "replace retires notes/X's serve only; other/X's serve survives"
+        );
+    }
+
     /// v0.44 H1/I1 (A3.f9) — deleting a session's LAST capture drops its
     /// live-serve rows (tied to no artifact, so neither the cascade nor the
     /// sweep reached them); deleting one of several captures keeps them.
@@ -15712,6 +15795,24 @@ mod tests {
                     )
                 });
             assert_eq!(count_where(&db, table, col, OLD), 1, "{table}.{col} seed");
+            // Live-serve ledger rows (`served-%`) are tied to NO artifact: a
+            // relocate must neither rekey nor drop them. Seed one beside the
+            // generic row (the PK / uniqueness shape is the same, only the id
+            // differs) and assert it is untouched below.
+            const SERVED_ID: &str = "served-sid-1-1";
+            let seeds_served = table == "memory_recalls" && col == "artifact_id";
+            if seeds_served {
+                let idx = info
+                    .iter()
+                    .filter(|(n, _, nn, d)| n == col || (*nn && !*d))
+                    .position(|(n, _, _, _)| n == col)
+                    .expect("target column is in the synthesised row");
+                let mut served_values = values.clone();
+                served_values[idx] = Value::Text(SERVED_ID.to_string());
+                db.conn
+                    .execute(&sql, rusqlite::params_from_iter(served_values.iter()))
+                    .expect("seed a served-% ledger row");
+            }
 
             let mid = db
                 .moves_insert_intent(OLD, NEW, "old.html", "new.html", 1000)
@@ -15728,6 +15829,13 @@ mod tests {
                 1,
                 "invariant #2: a relocate dropped `{table}.{col}` instead of rekeying it"
             );
+            if seeds_served {
+                assert_eq!(
+                    count_where(&db, table, col, SERVED_ID),
+                    1,
+                    "a relocate must leave live-serve (`served-%`) ledger rows untouched"
+                );
+            }
 
             if *col == "target_artifact_id" || DELETE_EXEMPT.contains(&table.as_str()) {
                 continue;

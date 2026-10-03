@@ -14,10 +14,16 @@
 //! fan-out). An unknown project fails open to unscoped recall. `lanes=`
 //! (csv of `recall`, `context`) skips lanes the caller does not want.
 //!
-//! `head_seq` is omitted. The slate open helper is not callable from this
-//! crate without editing another file: `load_meta` in
-//! `crates/kb-server/src/routes/slates.rs` is private, and `slates::get`
-//! needs a slug this query does not carry (cwd → slug lives in the CLI).
+//! The `slate` lane (`lanes=slate`, or implied by `slate=<slug>` when
+//! `lanes` is absent) is the hook's slate step in-process: with
+//! `slate_since=<seq>` the delta since that cursor
+//! (`kb slate delta --since N --budget 1500`), without it the hybrid seed
+//! (`kb slate open --hybrid --budget 2000`) — both through
+//! `slates::turn_slate`, the same projections the verbs call. Its text is
+//! appended after the recall/scent block with a blank line between, as the
+//! hook does, and `head_seq` is returned so the CLIENT advances its own
+//! cursor file (the cursor stays client-side state; this route never writes
+//! one). cwd -> slug resolution lives in the CLI, so the slug is a parameter.
 
 use crate::middleware::error_to_problem_json;
 use crate::routes::context::{
@@ -27,8 +33,8 @@ use crate::routes::context::{
 use crate::routes::memory::{self, Params as RecallParams, RecallResult};
 use crate::state::KbHandles;
 use axum::body::to_bytes;
-use axum::extract::{Extension, Query, State};
-use axum::http::{header, StatusCode};
+use axum::extract::{ConnectInfo, Extension, Query, State};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kb_core::storage::sqlite::ServedRecallRow;
@@ -61,24 +67,47 @@ pub struct TurnParams {
     /// csv of slugs/corpus names always visible to this project's recall.
     /// Only honoured together with a confirmed `project`.
     pub visible_to: Option<String>,
-    /// csv subset of `recall,context`. Absent/blank ⇒ both.
+    /// csv subset of `recall,context,slate`. Absent/blank ⇒ recall + context,
+    /// plus slate when `slate=` is given.
     pub lanes: Option<String>,
+    /// Slate slug for the slate lane (the CLI resolves cwd -> slug).
+    pub slate: Option<String>,
+    /// The caller's slate cursor: given ⇒ the delta since it, absent ⇒ the
+    /// hybrid seed.
+    pub slate_since: Option<u64>,
 }
 
-/// Which lanes a request wants. `Err` carries the offending token.
-fn parse_lanes(raw: Option<&str>) -> Result<(bool, bool), String> {
+/// Which lanes a request wants. `slate` is `None` when `lanes` did not say
+/// (the caller's `slate=` then decides). `Err` carries the offending token.
+#[derive(Debug, PartialEq, Eq)]
+struct Lanes {
+    recall: bool,
+    context: bool,
+    slate: Option<bool>,
+}
+
+fn parse_lanes(raw: Option<&str>) -> Result<Lanes, String> {
     let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok((true, true));
+        return Ok(Lanes {
+            recall: true,
+            context: true,
+            slate: None,
+        });
     };
-    let (mut recall, mut context) = (false, false);
+    let (mut recall, mut context, mut slate) = (false, false, false);
     for tok in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
         match tok {
             "recall" => recall = true,
             "context" => context = true,
+            "slate" => slate = true,
             other => return Err(other.to_string()),
         }
     }
-    Ok((recall, context))
+    Ok(Lanes {
+        recall,
+        context,
+        slate: Some(slate),
+    })
 }
 
 /// Project/visible_to as they go onto `RecallParams`: the project only when
@@ -98,17 +127,24 @@ fn confirmed_scope(
 }
 
 /// Pure core of [`confirmed_scope`]: `known` answers "is this a configured kb".
+/// `project` is a csv of CANDIDATES, first match wins: `kb turn` sends both
+/// the `project_slugs` alias and `memory-<slug>`, mirroring `kb recall`'s
+/// `confirm_derived_project`, so an alias that is not a corpus on THIS daemon
+/// still narrows to the derived one instead of failing open to everything.
 fn scope_of(
     known: impl Fn(&str) -> bool,
     project: Option<&str>,
     visible_to: Option<&str>,
 ) -> (Option<String>, Option<String>) {
-    let Some(project) = project.map(str::trim).filter(|p| !p.is_empty()) else {
+    let Some(project) = project
+        .into_iter()
+        .flat_map(|p| p.split(','))
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .find(|p| known(p))
+    else {
         return (None, None);
     };
-    if !known(project) {
-        return (None, None);
-    }
     (
         Some(project.to_string()),
         visible_to
@@ -131,14 +167,21 @@ pub struct TurnResponse {
     /// The additionalContext string, recall markers included.
     pub text: String,
     pub recalled: Vec<RecalledHit>,
+    /// The slate head the slate lane served up to (what the caller's cursor
+    /// advances to). Absent when the lane did not run or the slate does not
+    /// exist yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_seq: Option<u64>,
     /// Swallowed lane failures. Absent when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub degraded: Vec<DegradedLane>,
 }
 
-/// `GET /api/turn?q=&prompt=&session=&cwd=&deadline_ms=&project=&visible_to=&lanes=`
+/// `GET /api/turn?q=&prompt=&session=&cwd=&deadline_ms=&project=&visible_to=&lanes=&slate=&slate_since=`
 pub async fn get(
     State(state): State<Arc<KbHandles>>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Extension(identity): Extension<crate::middleware::Identity>,
     Query(params): Query<TurnParams>,
 ) -> Response {
@@ -149,14 +192,17 @@ pub async fn get(
             "q or prompt is required".into(),
         ));
     }
-    let (want_recall, want_context) = match parse_lanes(params.lanes.as_deref()) {
+    let lanes = match parse_lanes(params.lanes.as_deref()) {
         Ok(l) => l,
         Err(bad) => {
             return error_to_problem_json(&kb_core::Error::BadRequest(format!(
-                "unknown lane {bad:?}; expected a csv of: recall, context"
+                "unknown lane {bad:?}; expected a csv of: recall, context, slate"
             )));
         }
     };
+    let (want_recall, want_context) = (lanes.recall, lanes.context);
+    let slate_slug = params.slate.as_deref().and_then(non_empty);
+    let want_slate = lanes.slate.unwrap_or(slate_slug.is_some());
     let (project, visible_to) = confirmed_scope(
         &state,
         params.project.as_deref(),
@@ -218,6 +264,54 @@ pub async fn get(
             }
         }
     };
+    // The slate lane runs last: its text rides after the recall/scent block.
+    let mut slate_text = String::new();
+    let mut head_seq: Option<u64> = None;
+    if want_slate {
+        match slate_slug.as_deref() {
+            None => push_degraded(
+                &mut degraded,
+                degraded_of("turn", "slate", QueryErrorClass::Other),
+            ),
+            Some(slug) => {
+                let loopback = crate::middleware::is_loopback_origin(
+                    Some(peer.ip()),
+                    &headers,
+                    &state.origin.trusted_proxies.load(),
+                );
+                match within_deadline(
+                    deadline,
+                    crate::routes::slates::turn_slate(
+                        &state,
+                        slug,
+                        session.clone(),
+                        params.slate_since,
+                        loopback,
+                    ),
+                )
+                .await
+                {
+                    Ok(Ok(Some(t))) => {
+                        slate_text = t.text;
+                        head_seq = Some(t.head_seq);
+                    }
+                    // No ledger yet: nothing to say, and not a failure.
+                    Ok(Ok(None)) => {}
+                    Ok(Err(e)) => {
+                        tracing::warn!(slate = slug, error = %e, "turn: slate lane failed");
+                        push_degraded(
+                            &mut degraded,
+                            degraded_of("turn", "slate", QueryErrorClass::Other),
+                        );
+                    }
+                    Err(()) => push_degraded(
+                        &mut degraded,
+                        degraded_of("turn", "slate", QueryErrorClass::Timeout),
+                    ),
+                }
+            }
+        }
+    }
     // Same served-recall rows as GET /api/memory/recall?session=.
     // routes::memory::record_served_recalls is private; this is the
     // smallest append. A write failure must not 500 the turn or drop
@@ -227,12 +321,13 @@ pub async fn get(
     }
 
     let recalled = recalled_of(&hits);
-    let text = compose_text(&hits, &scent);
+    let text = append_slate(compose_text(&hits, &scent), &slate_text);
     (
         [(header::CACHE_CONTROL, "no-store")],
         Json(TurnResponse {
             text,
             recalled,
+            head_seq,
             degraded,
         }),
     )
@@ -401,6 +496,18 @@ fn recalled_of(hits: &[RecallResult]) -> Vec<RecalledHit> {
             title: h.title.clone(),
         })
         .collect()
+}
+
+/// The hook joins the slate text to whatever block precedes it with ONE
+/// blank line, and uses it bare when nothing precedes it.
+fn append_slate(block: String, slate: &str) -> String {
+    if slate.is_empty() {
+        block
+    } else if block.is_empty() {
+        slate.to_string()
+    } else {
+        format!("{block}\n\n{slate}")
+    }
 }
 
 /// Hook v2 block (the default layout) plus the scent line the hook appends.
@@ -626,6 +733,25 @@ mod scope_tests {
         );
     }
 
+    /// `kb turn` sends the alias AND `memory-<slug>`; the first KNOWN
+    /// candidate wins, so an alias missing on this daemon still narrows to
+    /// the derived corpus (fails open only when NEITHER exists).
+    #[test]
+    fn first_known_project_candidate_wins() {
+        assert_eq!(
+            scope_of(known, Some("memory-alias,memory-a"), Some("a,memory-a")),
+            (Some("memory-a".into()), Some("a,memory-a".into()))
+        );
+        assert_eq!(
+            scope_of(known, Some("memory-a,memory-b"), None),
+            (Some("memory-a".into()), None)
+        );
+        assert_eq!(
+            scope_of(known, Some("memory-x, memory-y"), Some("a")),
+            (None, None)
+        );
+    }
+
     #[test]
     fn unknown_project_yields_no_scope_at_all() {
         assert_eq!(scope_of(known, Some("memory-z"), Some("a")), (None, None));
@@ -640,22 +766,54 @@ mod scope_tests {
 
 #[cfg(test)]
 mod lanes_tests {
-    use super::parse_lanes;
+    use super::{append_slate, parse_lanes, Lanes};
+
+    fn l(recall: bool, context: bool, slate: Option<bool>) -> Lanes {
+        Lanes {
+            recall,
+            context,
+            slate,
+        }
+    }
 
     #[test]
     fn lanes_default_to_both_and_parse_subsets() {
-        assert_eq!(parse_lanes(None), Ok((true, true)));
-        assert_eq!(parse_lanes(Some("  ")), Ok((true, true)));
-        assert_eq!(parse_lanes(Some("recall")), Ok((true, false)));
-        assert_eq!(parse_lanes(Some("context, recall")), Ok((true, true)));
-        assert_eq!(parse_lanes(Some("context")), Ok((false, true)));
+        assert_eq!(parse_lanes(None), Ok(l(true, true, None)));
+        assert_eq!(parse_lanes(Some("  ")), Ok(l(true, true, None)));
+        assert_eq!(parse_lanes(Some("recall")), Ok(l(true, false, Some(false))));
+        assert_eq!(
+            parse_lanes(Some("context, recall")),
+            Ok(l(true, true, Some(false)))
+        );
+        assert_eq!(
+            parse_lanes(Some("context")),
+            Ok(l(false, true, Some(false)))
+        );
     }
 
-    /// `slate` is not a lane of this route yet; naming it is an error, not a
-    /// silent no-op that would let a caller believe it got a slate head.
+    /// v044-X3: `slate` is a lane now; `lanes=slate` alone must parse.
+    #[test]
+    fn slate_is_a_lane() {
+        assert_eq!(parse_lanes(Some("slate")), Ok(l(false, false, Some(true))));
+        assert_eq!(
+            parse_lanes(Some("recall,slate")),
+            Ok(l(true, false, Some(true)))
+        );
+    }
+
+    /// A word that is no lane is still an error, not a silent no-op.
     #[test]
     fn unknown_lane_is_refused() {
-        assert_eq!(parse_lanes(Some("recall,slate")), Err("slate".to_string()));
+        assert_eq!(parse_lanes(Some("recall,bogus")), Err("bogus".to_string()));
+    }
+
+    /// The hook's join: one blank line after a preceding block, bare when
+    /// alone, a no-op when the lane produced nothing.
+    #[test]
+    fn slate_text_joins_like_the_hook() {
+        assert_eq!(append_slate("a".into(), "s"), "a\n\ns");
+        assert_eq!(append_slate(String::new(), "s"), "s");
+        assert_eq!(append_slate("a".into(), ""), "a");
     }
 }
 
