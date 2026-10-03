@@ -100,8 +100,12 @@ recall_args=()
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
   hook_deadline_init() { :; }
   run_to() { shift; "$@"; }
+  hook_export_identity() { :; }
 }
 hook_deadline_init
+# v0.44 X4 — attribute every shell `kb` write of this session (also lands in
+# $CLAUDE_ENV_FILE so the agent's own Bash tool calls inherit it).
+hook_export_identity "$sid" claude
 index="$(run_to 5 kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
   | jq -r '(.hits // [])
       | map("- \(.title)  [\(.kb)]"
