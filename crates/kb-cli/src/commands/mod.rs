@@ -66,6 +66,7 @@ pub mod timeline;
 pub mod token;
 pub mod tools;
 pub mod users;
+pub mod version;
 pub mod versions;
 pub mod whoami;
 pub mod why_memory;

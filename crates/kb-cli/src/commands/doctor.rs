@@ -13,6 +13,10 @@
 //!   4. the V0035 `memory_recalls` ledger fed by capture;
 //!   5. kb-code's why-hook (`plugins/kb-code/hooks/kb-code-why.sh`).
 //!
+//! v0.44 F8 adds `cli-skew` (this binary's build stamp vs the daemon's
+//! `build_sha`; a missing stamp is a WARN), per-kb `backup-age:<kb>` ids,
+//! an off-host-copy finding, and `--strict`.
+//!
 //! v0.42 (D30) folds in one more check that ISN'T about provenance: session
 //! marker files under `~/.cache/kb` never expire on their own
 //! (`slate-cursor-`/`slate-topic-`, plus `context-scent-`, `beat-heartbeat-`,
@@ -23,7 +27,8 @@
 //! Every check below prints PASS/WARN/SKIP/FAIL + a one-line fix, and is
 //! explicit about what it couldn't verify (a SKIP is never silently
 //! upgraded to a PASS — "detection is best-effort" means saying so, not
-//! guessing). FAIL is a report status, not a process exit. HTTP-backed
+//! guessing). FAIL is a report status, not a process exit — unless `--strict`,
+//! which exits 1 on any WARN or FAIL (SKIP never trips it). HTTP-backed
 //! checks are split into a thin async fetch + a
 //! pure decision fn (`decide_*`) so the interesting logic is unit-tested
 //! without a live daemon.
@@ -65,32 +70,29 @@ impl CheckStatus {
 
 #[derive(Debug, Clone)]
 struct HookCheck {
-    id: &'static str,
+    id: String,
     status: CheckStatus,
     detail: String,
     fix: Option<String>,
 }
 
 impl HookCheck {
-    fn new(id: &'static str, status: CheckStatus, detail: impl Into<String>) -> Self {
+    fn new(id: impl Into<String>, status: CheckStatus, detail: impl Into<String>) -> Self {
         Self {
-            id,
+            id: id.into(),
             status,
             detail: detail.into(),
             fix: None,
         }
     }
-    fn pass(id: &'static str, detail: impl Into<String>) -> Self {
+    fn pass(id: impl Into<String>, detail: impl Into<String>) -> Self {
         Self::new(id, CheckStatus::Pass, detail)
     }
-    fn warn(id: &'static str, detail: impl Into<String>) -> Self {
+    fn warn(id: impl Into<String>, detail: impl Into<String>) -> Self {
         Self::new(id, CheckStatus::Warn, detail)
     }
-    fn skip(id: &'static str, detail: impl Into<String>) -> Self {
+    fn skip(id: impl Into<String>, detail: impl Into<String>) -> Self {
         Self::new(id, CheckStatus::Skip, detail)
-    }
-    fn fail(id: &'static str, detail: impl Into<String>) -> Self {
-        Self::new(id, CheckStatus::Fail, detail)
     }
     fn with_fix(mut self, fix: impl Into<String>) -> Self {
         self.fix = Some(fix.into());
@@ -1839,12 +1841,22 @@ enum KbExport {
 struct KbExportRow {
     kb: String,
     export: KbExport,
+    /// The newest tarball has its `.uploaded` marker (the off-host copy
+    /// landed). Meaningless for `KbExport::None`.
+    uploaded: bool,
 }
 
 /// One row per kb with state, sorted by name. `Err` is an unreadable
-/// state dir. The first kb carries the daemon-scope members, as in the
-/// schedule and `kb backup --all`.
-fn scan_kb_exports(paths: &kb_core::paths::KbPaths, now: i64) -> Result<Vec<KbExportRow>, String> {
+/// state dir. `configured` (the daemon's own kb list, when reachable)
+/// restricts the scan to the kbs the schedule actually backs up, so the
+/// kb that carries the daemon-scope members is chosen from the same set,
+/// through the same helper (`daemon_scope_kb`), as the schedule and
+/// `kb backup --all`.
+fn scan_kb_exports(
+    paths: &kb_core::paths::KbPaths,
+    now: i64,
+    configured: Option<&[String]>,
+) -> Result<Vec<KbExportRow>, String> {
     let entries = match std::fs::read_dir(&paths.state) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -1858,10 +1870,15 @@ fn scan_kb_exports(paths: &kb_core::paths::KbPaths, now: i64) -> Result<Vec<KbEx
                 .to_str()
                 .and_then(|n| kb_core::types::KbName::new(n).ok())
         })
+        .filter(|k| configured.is_none_or(|c| c.iter().any(|n| n == k.as_str())))
         .collect();
     kbs.sort();
+    let daemon_scope = kb_core::storage::backup::daemon_scope_kb(kbs.iter().map(|k| k.as_str()))
+        .map(str::to_string);
     let mut rows = Vec::with_capacity(kbs.len());
-    for (i, kb) in kbs.iter().enumerate() {
+    for kb in kbs.iter() {
+        let carries_daemon = daemon_scope.as_deref() == Some(kb.as_str());
+        let mut uploaded = false;
         let export =
             match kb_core::storage::backup::newest_scheduled_tarball(&paths.exports, kb.as_str()) {
                 None => KbExport::None,
@@ -1872,6 +1889,7 @@ fn scan_kb_exports(paths: &kb_core::paths::KbPaths, now: i64) -> Result<Vec<KbEx
                         .unwrap_or_default()
                         .to_string();
                     let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    uploaded = kb_core::storage::backup::is_uploaded(&path);
                     let age_secs = mtime
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| now - d.as_secs() as i64)
@@ -1881,7 +1899,7 @@ fn scan_kb_exports(paths: &kb_core::paths::KbPaths, now: i64) -> Result<Vec<KbEx
                     } else if kb_core::storage::backup::should_skip_scheduled_backup(
                         paths,
                         kb,
-                        i == 0,
+                        carries_daemon,
                     ) {
                         KbExport::Idle { age_secs, name }
                     } else {
@@ -1892,83 +1910,251 @@ fn scan_kb_exports(paths: &kb_core::paths::KbPaths, now: i64) -> Result<Vec<KbEx
         rows.push(KbExportRow {
             kb: kb.as_str().to_string(),
             export,
+            uploaded,
         });
     }
     Ok(rows)
 }
 
 const BACKUP_FIX: &str = "kb backup --all";
+const OFFHOST_FIX: &str =
+    "check [backup] remote_cmd/remote_dest; the daemon schedule retries an un-uploaded tarball each tick";
 
-fn decide_backup_age(view: Result<Vec<KbExportRow>, String>) -> HookCheck {
+fn worse(a: CheckStatus, b: CheckStatus) -> CheckStatus {
+    match (a, b) {
+        (CheckStatus::Fail, _) | (_, CheckStatus::Fail) => CheckStatus::Fail,
+        (CheckStatus::Warn, _) | (_, CheckStatus::Warn) => CheckStatus::Warn,
+        _ => CheckStatus::Pass,
+    }
+}
+
+/// One check per kb, id `backup-age:<kb>` (stable, so a script can key on
+/// it). `offhost_expected` is `[backup]` having a complete remote copy
+/// configured: only then does a tarball without its `.uploaded` marker mean
+/// "never made it off the host" — otherwise local-only is the operator's
+/// choice and not a finding.
+fn decide_backup_age(
+    view: Result<Vec<KbExportRow>, String>,
+    offhost_expected: bool,
+) -> Vec<HookCheck> {
     let rows = match view {
         Err(err) => {
-            return HookCheck::warn("backup-age", format!("could not read <state>/: {err}"))
-                .with_fix(BACKUP_FIX)
+            return vec![
+                HookCheck::warn("backup-age", format!("could not read <state>/: {err}"))
+                    .with_fix(BACKUP_FIX),
+            ]
         }
         Ok(rows) => rows,
     };
     if rows.is_empty() {
-        return HookCheck::skip(
+        return vec![HookCheck::skip(
             "backup-age",
             "no kb state under <state>/ — nothing to back up",
-        );
+        )];
     }
-    let mut worst = CheckStatus::Pass;
-    let mut parts = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let (status, part) = match &row.export {
-            KbExport::None => (
-                CheckStatus::Fail,
-                format!("{}: no <state>/exports/{}-<stamp>.tar.gz", row.kb, row.kb),
-            ),
-            KbExport::Empty { name } => (
-                CheckStatus::Fail,
-                format!("{}: newest tarball {name} is empty", row.kb),
-            ),
-            KbExport::Idle { age_secs, name } => (
-                CheckStatus::Pass,
-                format!(
-                    "{}: idle, {name} ({} old) still covers it",
-                    row.kb,
-                    fmt_age((*age_secs).max(0))
+    rows.iter()
+        .map(|row| {
+            let id = format!("backup-age:{}", row.kb);
+            let (age_status, mut detail) = match &row.export {
+                KbExport::None => (
+                    CheckStatus::Fail,
+                    format!("no <state>/exports/{}-<stamp>.tar.gz", row.kb),
                 ),
-            ),
-            KbExport::Newest { age_secs, name } => {
-                let status = classify_backup_age(Some(*age_secs));
-                let what = if status == CheckStatus::Pass {
-                    format!("{name} is {} old", fmt_age((*age_secs).max(0)))
-                } else {
+                KbExport::Empty { name } => {
+                    (CheckStatus::Fail, format!("newest tarball {name} is empty"))
+                }
+                KbExport::Idle { age_secs, name } => (
+                    CheckStatus::Pass,
                     format!(
-                        "STALE, {name} is {} old (older than 48h) and the kb changed since",
+                        "idle, {name} ({} old) still covers it",
                         fmt_age((*age_secs).max(0))
-                    )
-                };
-                (status, format!("{}: {what}", row.kb))
+                    ),
+                ),
+                KbExport::Newest { age_secs, name } => {
+                    let status = classify_backup_age(Some(*age_secs));
+                    let what = if status == CheckStatus::Pass {
+                        format!("{name} is {} old", fmt_age((*age_secs).max(0)))
+                    } else {
+                        format!(
+                            "STALE, {name} is {} old (older than 48h) and the kb changed since",
+                            fmt_age((*age_secs).max(0))
+                        )
+                    };
+                    (status, what)
+                }
+            };
+            let have_tarball =
+                matches!(row.export, KbExport::Idle { .. } | KbExport::Newest { .. });
+            let not_offhost = offhost_expected && have_tarball && !row.uploaded;
+            let mut status = age_status;
+            if not_offhost {
+                status = worse(status, CheckStatus::Warn);
+                detail.push_str("; the newest tarball never reached the off-host target");
             }
-        };
-        worst = match (worst, status) {
-            (CheckStatus::Fail, _) | (_, CheckStatus::Fail) => CheckStatus::Fail,
-            (CheckStatus::Warn, _) | (_, CheckStatus::Warn) => CheckStatus::Warn,
-            _ => CheckStatus::Pass,
-        };
-        parts.push(part);
-    }
-    let detail = parts.join("; ");
-    match worst {
-        CheckStatus::Pass => HookCheck::pass("backup-age", detail),
-        CheckStatus::Warn => HookCheck::warn("backup-age", detail).with_fix(BACKUP_FIX),
-        _ => HookCheck::fail("backup-age", detail).with_fix(BACKUP_FIX),
-    }
+            let check = HookCheck::new(id, status, detail);
+            match (age_status != CheckStatus::Pass, not_offhost) {
+                (true, true) => check.with_fix(format!("{BACKUP_FIX}; {OFFHOST_FIX}")),
+                (true, false) => check.with_fix(BACKUP_FIX),
+                (false, true) => check.with_fix(OFFHOST_FIX),
+                (false, false) => check,
+            }
+        })
+        .collect()
 }
 
-fn backup_age_check(now: i64) -> HookCheck {
+fn backup_age_checks(
+    now: i64,
+    config: Option<&PathBuf>,
+    configured: Option<&[String]>,
+) -> Vec<HookCheck> {
     let Some(paths) = resolve_kb_paths() else {
-        return HookCheck::skip(
+        return vec![HookCheck::skip(
             "backup-age",
             "could not resolve the state dir — not checking <state>/exports/",
-        );
+        )];
     };
-    decide_backup_age(scan_kb_exports(&paths, now))
+    let offhost_expected = crate::commands::resolve_config_path(config)
+        .and_then(|p| crate::commands::load_config_or_default(&p))
+        .map(|c| c.backup.is_configured())
+        .unwrap_or(false);
+    decide_backup_age(scan_kb_exports(&paths, now, configured), offhost_expected)
+}
+
+// ============================================================ l) cli skew
+//
+// The CLI's identity is its kb-buildstamp; the daemon's is `build_sha` on
+// `GET /api/identity`. Hooks run from the repo and the daemon is redeployed
+// from images, so the host binary drifts silently and hook features that
+// need newer CLI code do nothing. This names it. A missing stamp is a WARN
+// ("stamp missing"), never a quiet pass: a binary that cannot say what it
+// is cannot be compared. Detection only; nothing is updated.
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct DaemonStamp {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    build_sha: Option<String>,
+}
+
+async fn fetch_identity(client: &reqwest::Client, base: &str) -> Result<DaemonStamp> {
+    let url = format!("{base}/api/identity");
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("GET {url}"))?;
+    resp.json::<DaemonStamp>()
+        .await
+        .with_context(|| format!("parse JSON from {url}"))
+}
+
+fn sha_unknown(s: &str) -> bool {
+    let b = s.strip_suffix("-dirty").unwrap_or(s);
+    b.is_empty() || b == "unknown"
+}
+
+/// Commits the daemon has that the CLI lacks, and the reverse, when `git`
+/// can resolve both stamps in the checkout. `None` otherwise.
+fn commit_divergence(repo: &Path, cli_sha: &str, daemon_sha: &str) -> Option<(usize, usize)> {
+    let cli = cli_sha.strip_suffix("-dirty").unwrap_or(cli_sha);
+    let daemon = daemon_sha.strip_suffix("-dirty").unwrap_or(daemon_sha);
+    let count = |range: String| -> Option<usize> {
+        run_git(repo, &["rev-list", "--count", &range])?
+            .parse()
+            .ok()
+    };
+    Some((
+        count(format!("{cli}..{daemon}"))?,
+        count(format!("{daemon}..{cli}"))?,
+    ))
+}
+
+const CLI_SKEW_FIX: &str = "install the daemon's build (e.g. copy the kb binary out of the daemon image, or run scripts/install.sh); a CLI pinned on purpose can ignore this";
+
+fn decide_cli_skew(
+    cli_describe: &str,
+    cli_sha: &str,
+    daemon: Result<DaemonStamp, String>,
+    divergence: Option<(usize, usize)>,
+) -> HookCheck {
+    const ID: &str = "cli-skew";
+    if crate::commands::version::stamp_missing(cli_describe, cli_sha) {
+        return HookCheck::warn(
+            ID,
+            format!(
+                "stamp missing: this kb binary ({cli_describe}) carries no build stamp, so it cannot be compared with the daemon"
+            ),
+        )
+        .with_fix(CLI_SKEW_FIX);
+    }
+    let daemon = match daemon {
+        Ok(d) => d,
+        Err(e) => {
+            return HookCheck::skip(
+                ID,
+                format!("kb daemon unreachable — cannot read its build_sha: {e}"),
+            )
+        }
+    };
+    let daemon_sha = daemon.build_sha.unwrap_or_default();
+    let daemon_version = daemon.version.unwrap_or_default();
+    if sha_unknown(&daemon_sha) {
+        return HookCheck::warn(
+            ID,
+            format!(
+                "stamp missing: the daemon ({}) reports no build_sha, so the CLI ({cli_describe}) cannot be compared with it",
+                if daemon_version.is_empty() { "version unknown" } else { daemon_version.as_str() }
+            ),
+        );
+    }
+    let c = cli_sha.strip_suffix("-dirty").unwrap_or(cli_sha);
+    let d = daemon_sha.strip_suffix("-dirty").unwrap_or(&daemon_sha);
+    let same = c.starts_with(d) || d.starts_with(c);
+    let dirty = cli_sha.ends_with("-dirty") || daemon_sha.ends_with("-dirty");
+    if same && !dirty {
+        return HookCheck::pass(ID, format!("CLI and daemon are the same build ({c})"));
+    }
+    if same {
+        return HookCheck::warn(
+            ID,
+            format!(
+                "CLI ({cli_sha}) and daemon ({daemon_sha}) share a commit but at least one was built from a dirty tree"
+            ),
+        )
+        .with_fix(CLI_SKEW_FIX);
+    }
+    let how = match divergence {
+        Some((behind, 0)) if behind > 0 => format!(", the CLI is {behind} commit(s) behind"),
+        Some((0, ahead)) if ahead > 0 => format!(", the CLI is {ahead} commit(s) ahead"),
+        Some((behind, ahead)) => format!(", {behind} commit(s) behind and {ahead} ahead"),
+        None => String::new(),
+    };
+    HookCheck::warn(
+        ID,
+        format!(
+            "CLI {cli_describe} ({cli_sha}) differs from daemon {daemon_version} ({daemon_sha}){how}; hook features that need newer CLI code are inert"
+        ),
+    )
+    .with_fix(CLI_SKEW_FIX)
+}
+
+async fn cli_skew_check(client: &reqwest::Client, base: &str, repo: &Path) -> HookCheck {
+    let (describe, sha) = crate::commands::version::stamp();
+    let daemon = fetch_identity(client, base)
+        .await
+        .map_err(|e| format!("{e:#}"));
+    let divergence = match &daemon {
+        Ok(d) => d
+            .build_sha
+            .as_deref()
+            .filter(|s| !sha_unknown(s) && !crate::commands::version::stamp_missing(describe, sha))
+            .and_then(|ds| commit_divergence(repo, sha, ds)),
+        Err(_) => None,
+    };
+    decide_cli_skew(describe, sha, daemon, divergence)
 }
 
 /// v0.44 F7b — data-at-rest audit of the local sessions corpus: how many
@@ -2034,7 +2220,9 @@ pub async fn hooks(
     json_out: bool,
     bearer: Option<&str>,
     fix: bool,
-) -> Result<()> {
+    strict: bool,
+    config: Option<&PathBuf>,
+) -> Result<i32> {
     let repo_path = match repo {
         Some(p) => p,
         None => std::env::current_dir().context("resolve current directory")?,
@@ -2154,7 +2342,14 @@ pub async fn hooks(
 
     // Backup age. Filesystem, not daemon-gated. Skip only when the state
     // dir itself cannot be resolved.
-    checks.push(backup_age_check(now));
+    let configured: Option<Vec<String>> = kbs
+        .as_ref()
+        .ok()
+        .map(|l| l.iter().map(|k| k.name.clone()).collect());
+    checks.extend(backup_age_checks(now, config, configured.as_deref()));
+
+    // CLI vs daemon build skew (v0.44 F8).
+    checks.push(cli_skew_check(&client, &base, &repo_path).await);
 
     // f) kb-code why-hook.
     checks.push(kb_code_why_hook_check());
@@ -2177,7 +2372,16 @@ pub async fn hooks(
     } else {
         print!("{}", render_human(&checks));
     }
-    Ok(())
+    Ok(strict_exit_code(&checks, strict))
+}
+
+/// `--strict`: 1 when any check is WARN or FAIL, else 0. A SKIP (could not
+/// verify) never trips it, and without `--strict` the report is exit 0.
+fn strict_exit_code(checks: &[HookCheck], strict: bool) -> i32 {
+    let bad = checks
+        .iter()
+        .any(|c| matches!(c.status, CheckStatus::Warn | CheckStatus::Fail));
+    i32::from(strict && bad)
 }
 
 #[cfg(test)]
@@ -2986,60 +3190,230 @@ mod tests {
         KbExportRow {
             kb: kb.into(),
             export,
+            uploaded: true,
         }
     }
 
+    fn by_id<'a>(checks: &'a [HookCheck], id: &str) -> &'a HookCheck {
+        checks
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("no check {id} in {checks:?}"))
+    }
+
     /// v0.44 B1 / A4-2(a) — a fresh tarball of ONE kb used to make the
-    /// whole check PASS while another kb had none for months.
+    /// whole check PASS while another kb had none for months. F8 (A4.f4):
+    /// each kb is its own check with a stable `backup-age:<kb>` id.
     #[test]
     fn one_fresh_kb_does_not_hide_a_stale_one() {
-        let c = decide_backup_age(Ok(vec![
-            row(
-                "memory",
-                KbExport::Newest {
-                    age_secs: 60,
-                    name: "memory-x.tar.gz".into(),
-                },
-            ),
-            row(
-                "sessions",
-                KbExport::Newest {
-                    age_secs: BACKUP_FRESH_MAX_SECS,
-                    name: "sessions-old.tar.gz".into(),
-                },
-            ),
-        ]));
+        let checks = decide_backup_age(
+            Ok(vec![
+                row(
+                    "memory",
+                    KbExport::Newest {
+                        age_secs: 60,
+                        name: "memory-x.tar.gz".into(),
+                    },
+                ),
+                row(
+                    "sessions",
+                    KbExport::Newest {
+                        age_secs: BACKUP_FRESH_MAX_SECS,
+                        name: "sessions-old.tar.gz".into(),
+                    },
+                ),
+            ]),
+            false,
+        );
+        assert_eq!(checks.len(), 2);
+        assert_eq!(
+            by_id(&checks, "backup-age:memory").status,
+            CheckStatus::Pass
+        );
+        let c = by_id(&checks, "backup-age:sessions");
         assert_eq!(c.status, CheckStatus::Warn);
-        assert!(c.detail.contains("sessions"), "{}", c.detail);
         assert!(c.detail.contains("STALE"), "{}", c.detail);
         assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
     }
 
     #[test]
-    fn a_kb_with_no_tarball_fails_and_names_it() {
-        let c = decide_backup_age(Ok(vec![row("docs", KbExport::None)]));
+    fn a_kb_with_no_tarball_fails_under_its_own_id() {
+        let checks = decide_backup_age(Ok(vec![row("docs", KbExport::None)]), false);
+        let c = by_id(&checks, "backup-age:docs");
         assert_eq!(c.status, CheckStatus::Fail);
-        assert!(c.detail.contains("docs"), "{}", c.detail);
         assert_eq!(c.fix.as_deref(), Some("kb backup --all"));
     }
 
     /// A4-2(c) — an idle kb is skipped on purpose; its old tarball is not stale.
     #[test]
     fn an_idle_kb_with_an_old_tarball_passes() {
-        let c = decide_backup_age(Ok(vec![row(
-            "archive",
-            KbExport::Idle {
-                age_secs: BACKUP_FRESH_MAX_SECS * 10,
-                name: "archive-x.tar.gz".into(),
-            },
-        )]));
+        let checks = decide_backup_age(
+            Ok(vec![row(
+                "archive",
+                KbExport::Idle {
+                    age_secs: BACKUP_FRESH_MAX_SECS * 10,
+                    name: "archive-x.tar.gz".into(),
+                },
+            )]),
+            false,
+        );
+        let c = by_id(&checks, "backup-age:archive");
         assert_eq!(c.status, CheckStatus::Pass, "{}", c.detail);
         assert!(c.detail.contains("idle"), "{}", c.detail);
     }
 
     #[test]
     fn no_kb_state_is_a_skip_not_a_pass() {
-        assert_eq!(decide_backup_age(Ok(vec![])).status, CheckStatus::Skip);
+        let checks = decide_backup_age(Ok(vec![]), false);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].id, "backup-age");
+        assert_eq!(checks[0].status, CheckStatus::Skip);
+    }
+
+    /// A13.f11 — with a complete `[backup]` remote configured, a tarball
+    /// whose `.uploaded` marker is missing never left the host. Without the
+    /// remote configured, local-only is a choice and not a finding.
+    #[test]
+    fn a_tarball_that_never_reached_the_offhost_target_is_named() {
+        let mut r = row(
+            "docs",
+            KbExport::Newest {
+                age_secs: 60,
+                name: "docs-x.tar.gz".into(),
+            },
+        );
+        r.uploaded = false;
+        let checks = decide_backup_age(Ok(vec![r]), true);
+        let c = by_id(&checks, "backup-age:docs");
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("off-host"), "{}", c.detail);
+        assert!(c.fix.as_deref().unwrap().contains("remote_cmd"));
+
+        let mut local_only = row(
+            "docs",
+            KbExport::Newest {
+                age_secs: 60,
+                name: "docs-x.tar.gz".into(),
+            },
+        );
+        local_only.uploaded = false;
+        let checks = decide_backup_age(Ok(vec![local_only]), false);
+        assert_eq!(
+            by_id(&checks, "backup-age:docs").status,
+            CheckStatus::Pass,
+            "no remote configured: local-only is not a finding"
+        );
+    }
+
+    /// F8 — `--strict` is a gate: WARN and FAIL trip it, SKIP does not, and
+    /// without the flag the exit code is always 0.
+    #[test]
+    fn strict_exit_code_trips_on_warn_and_fail_only() {
+        let pass = HookCheck::pass("a", "x");
+        let skip = HookCheck::skip("b", "x");
+        let warn = HookCheck::warn("c", "x");
+        let fail = HookCheck::new("d", CheckStatus::Fail, "x");
+        assert_eq!(strict_exit_code(&[pass.clone(), skip.clone()], true), 0);
+        assert_eq!(strict_exit_code(&[pass.clone(), warn.clone()], true), 1);
+        assert_eq!(strict_exit_code(&[pass, fail.clone()], true), 1);
+        assert_eq!(strict_exit_code(&[warn, fail], false), 0);
+    }
+
+    fn daemon_stamp(sha: &str) -> Result<DaemonStamp, String> {
+        Ok(DaemonStamp {
+            version: Some("0.43-193-g9e1ac65".into()),
+            build_sha: Some(sha.into()),
+        })
+    }
+
+    #[test]
+    fn cli_skew_missing_cli_stamp_is_a_warn_not_a_pass() {
+        let c = decide_cli_skew("0.0.0-dev", "unknown", daemon_stamp("9e1ac65aaaaa"), None);
+        assert_eq!(c.id, "cli-skew");
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("stamp missing"), "{}", c.detail);
+        // Even with the daemon down: the CLI's own stamp is checkable.
+        let c = decide_cli_skew("0.0.0-dev", "unknown", Err("down".into()), None);
+        assert_eq!(c.status, CheckStatus::Warn);
+    }
+
+    #[test]
+    fn cli_skew_same_build_passes_and_a_different_one_warns_with_distance() {
+        let same = decide_cli_skew(
+            "0.44-1-gabc",
+            "9e1ac65aaaaa",
+            daemon_stamp("9e1ac65aaaaa"),
+            None,
+        );
+        assert_eq!(same.status, CheckStatus::Pass, "{}", same.detail);
+
+        let behind = decide_cli_skew(
+            "0.43-1-g111",
+            "111111111111",
+            daemon_stamp("9e1ac65aaaaa"),
+            Some((193, 0)),
+        );
+        assert_eq!(behind.status, CheckStatus::Warn);
+        assert!(
+            behind.detail.contains("193 commit(s) behind"),
+            "{}",
+            behind.detail
+        );
+        assert!(behind.fix.is_some());
+
+        let no_git = decide_cli_skew(
+            "0.43-1-g111",
+            "111111111111",
+            daemon_stamp("9e1ac65aaaaa"),
+            None,
+        );
+        assert_eq!(no_git.status, CheckStatus::Warn);
+        assert!(!no_git.detail.contains("behind"), "{}", no_git.detail);
+    }
+
+    #[test]
+    fn cli_skew_dirty_or_unstamped_daemon_and_down_daemon() {
+        let dirty = decide_cli_skew(
+            "0.44-1-gabc",
+            "9e1ac65aaaaa-dirty",
+            daemon_stamp("9e1ac65aaaaa"),
+            None,
+        );
+        assert_eq!(dirty.status, CheckStatus::Warn);
+        assert!(dirty.detail.contains("dirty"), "{}", dirty.detail);
+
+        let unstamped =
+            decide_cli_skew("0.44-1-gabc", "9e1ac65aaaaa", daemon_stamp("unknown"), None);
+        assert_eq!(unstamped.status, CheckStatus::Warn);
+        assert!(
+            unstamped.detail.contains("stamp missing"),
+            "{}",
+            unstamped.detail
+        );
+
+        let down = decide_cli_skew("0.44-1-gabc", "9e1ac65aaaaa", Err("refused".into()), None);
+        assert_eq!(down.status, CheckStatus::Skip);
+    }
+
+    /// F8 / A13.f11 — the scan covers exactly the kbs the daemon serves (the
+    /// set the schedule backs up), so the kb chosen to carry the daemon-scope
+    /// members (`daemon_scope_kb`, shared with the schedule) is chosen from
+    /// the same set. An unconfigured state dir is not scanned.
+    #[test]
+    fn doctor_scan_restricts_to_the_configured_kbs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = kb_core::paths::KbPaths::rooted_at(tmp.path(), "d");
+        for kb in ["aaa-unconfigured", "docs", "memory"] {
+            let dir = paths.state.join(kb);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("index.db"), b"db").unwrap();
+        }
+        let configured = vec!["memory".to_string(), "docs".to_string()];
+        let rows = scan_kb_exports(&paths, 1_800_000_000, Some(&configured)).unwrap();
+        let names: Vec<&str> = rows.iter().map(|r| r.kb.as_str()).collect();
+        assert_eq!(names, ["docs", "memory"]);
+        let all = scan_kb_exports(&paths, 1_800_000_000, None).unwrap();
+        assert_eq!(all.len(), 3);
     }
 
     fn set_mtime(path: &Path, secs: u64) {
@@ -3076,7 +3450,7 @@ mod tests {
         std::fs::write(&empty, b"").unwrap();
         set_mtime(&empty, now as u64 - 60);
 
-        let rows = scan_kb_exports(&paths, now).unwrap();
+        let rows = scan_kb_exports(&paths, now, None).unwrap();
         let by_kb = |k: &str| &rows.iter().find(|r| r.kb == k).unwrap().export;
         assert_eq!(
             by_kb("docs"),
@@ -3093,10 +3467,12 @@ mod tests {
                 name: "sessions-20260101-000000.tar.gz".into()
             }
         );
-        let c = decide_backup_age(Ok(rows));
-        assert_eq!(c.status, CheckStatus::Fail);
-        assert!(c.detail.contains("docs"), "{}", c.detail);
-        assert!(c.detail.contains("sessions"), "{}", c.detail);
+        let checks = decide_backup_age(Ok(rows), false);
+        assert_eq!(by_id(&checks, "backup-age:docs").status, CheckStatus::Fail);
+        assert_eq!(
+            by_id(&checks, "backup-age:sessions").status,
+            CheckStatus::Fail
+        );
     }
 
     fn capture(harness: &str, started_at: i64, memories: u64) -> SessionCaptureLite {

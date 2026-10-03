@@ -231,6 +231,16 @@ enum TreeProbe {
     Unknown,
 }
 
+/// The ONE kb whose tarball carries the daemon-scope members (`slates/`,
+/// the daemon JSON files): the first in NAME order among `kbs`, whatever
+/// order the caller holds them in. The daemon schedule, `kb backup --all`
+/// and `kb doctor --hooks` all choose through this, so they cannot disagree
+/// about which tarball a slate append makes "changed" (`kb backup --all`
+/// once took the first kb in `GET /api/kbs` response order instead).
+pub fn daemon_scope_kb<'a>(kbs: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    kbs.into_iter().min()
+}
+
 /// `true` when a scheduled export of `kb` should not write a tarball.
 ///
 /// Skip when the index is missing (nothing to snapshot), or when
@@ -757,7 +767,18 @@ fn tar_tree(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[test]
+    fn daemon_scope_kb_is_the_first_in_name_order_not_input_order() {
+        assert_eq!(
+            daemon_scope_kb(["sessions", "docs", "memory"]),
+            Some("docs")
+        );
+        assert_eq!(daemon_scope_kb(["docs", "memory"]), Some("docs"));
+        assert_eq!(daemon_scope_kb(std::iter::empty::<&str>()), None);
+    }
 
     #[test]
     fn vacuum_into_produces_a_consistent_openable_copy() {
