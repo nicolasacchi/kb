@@ -586,6 +586,23 @@ kb sessions save-thread <project> [--narrative]
                                     the list description
 kb sessions watch --path <artifact|folder>
                                     SSE monitor for new session comments
+kb import claude-memory [--dir PATH] [--limit N] [--apply] [--link KBS]
+   [--kb NAME] [--json]
+                                    bring Claude Code's native auto-memory
+                                    (<dir>/<project>/memory/*.md) into the
+                                    HUMAN-GATED proposal inbox. Dry-run by
+                                    default (prints title/tags/target corpus/
+                                    dedupe key; touches no daemon); --apply
+                                    queues via the `kb propose` route, a human
+                                    approves with `kb proposals approve`.
+                                    MEMORY.md is skipped; idempotent via a
+                                    cm-<hash> tag (--apply refuses when the
+                                    proposal queue exceeds the daemon's 200-item
+                                    listing cap; identical content in two
+                                    projects dedupes to one); the target corpus is a
+                                    best-effort guess from the lossy project dir
+                                    name (--link a,b overrides; an unconfigured
+                                    --link is an error).
 kb import claude-history [--dir PATH] [--into DIR] [--dry-run]
    [--limit N] [--json] [--quiet]
                                     Z5: retroactive backfill — wrap every

@@ -55,7 +55,7 @@ pub async fn propose(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn propose_inner(
+pub(crate) async fn propose_inner(
     title: &str,
     body: &str,
     kb: Option<&str>,
