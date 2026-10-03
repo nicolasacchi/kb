@@ -2336,6 +2336,12 @@ async fn cors_layer_route_set_is_pinned() {
             true,
             "RS-U9 — loopback-only, never CORS'd",
         ),
+        (
+            "/api/repos/alpha/store/restore",
+            false,
+            true,
+            "v0.44 K5 — loopback-only, never CORS'd",
+        ),
         ("/api/file?repo=alpha&path=a.rb", false, true, "never"),
         ("/api/search/transcripts?q=x", false, true, "never"),
         ("/api/repos", false, true, "never"),
@@ -2420,6 +2426,7 @@ async fn store_card_route_gate_is_pinned() {
         ),
         ("/api/repos/alpha/store/gc", "RS-U9 store gc"),
         ("/api/repos/alpha/store/maintain", "RS-U9 maintain"),
+        ("/api/repos/alpha/store/restore", "K5 bundle restore"),
     ];
     for (path, note) in probes {
         let url = format!("{}{path}", boot.base);

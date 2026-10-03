@@ -19,6 +19,10 @@
 //! * `store maintain --repo R [--task daily|weekly|monthly]` — run the
 //!   git-housekeeping cadences now: the named one, or whatever is due
 //!   (RS-U9, loopback-only).
+//! * `store restore --repo R --bundle FILE` — recreate the `refs/kbc/*`
+//!   heads of a store bundle (the `.bundle` files `kb-code backup` and the
+//!   GC pre-apply pass write), create-or-fast-forward only; flags the
+//!   restore guard when it wrote anything (loopback-only).
 //!
 //! `--json` prints the D20 envelope (`envelope::print_ok`/`print_err`).
 //! Exit codes: the shipped table (1 generic, 3 conflict — incl. a store
@@ -139,6 +143,24 @@ pub enum StoreCmd {
     ExportLegacy {
         #[arg(long)]
         repo: String,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore the `refs/kbc/*` heads of a store bundle into the repo's
+    /// review store. Create-or-fast-forward only: a ref the store holds at
+    /// another value is reported as rejected and never overwritten. A
+    /// restore that wrote refs flags the restore guard, so scheduled GC
+    /// stays dry-run until `store gc --yes`. Run `store sync` first (thin
+    /// bundles need the base objects). Loopback-only.
+    Restore {
+        #[arg(long)]
+        repo: String,
+        /// The bundle file (resolved to an absolute path here; the daemon
+        /// must run on this host).
+        #[arg(long)]
+        bundle: std::path::PathBuf,
         #[arg(long, default_value = "http://127.0.0.1:4747")]
         daemon: String,
         #[arg(long)]
@@ -862,6 +884,52 @@ pub async fn run(cmd: StoreCmd) -> Result<()> {
                 }
             }
             if errors > 0 {
+                std::process::exit(envelope::EXIT_PARTIAL);
+            }
+        }
+        StoreCmd::Restore {
+            repo,
+            bundle,
+            daemon,
+            json,
+        } => {
+            let abs = std::fs::canonicalize(&bundle)
+                .with_context(|| format!("bundle {}", bundle.display()))?;
+            let (st, body) = post(
+                &daemon,
+                &format!("/api/repos/{}/store/restore", enc(&repo)),
+                &serde_json::json!({ "bundle": abs.to_string_lossy() }),
+                Duration::from_secs(30 * 60),
+            )
+            .await?;
+            if !st.is_success() {
+                fail(json, st, &body);
+            }
+            let report = &body["report"];
+            let rejected = report["rejected"].as_array().map(Vec::len).unwrap_or(0);
+            if json {
+                envelope::print_ok("kbc-store-restore/1", &body, vec![], rejected > 0, None);
+            } else {
+                let n = |k: &str| report[k].as_array().map(Vec::len).unwrap_or(0);
+                println!(
+                    "{}: {} head(s) in the bundle — {} created, {} updated, {} unchanged, {} rejected",
+                    repo,
+                    s(&report["heads"]),
+                    n("created"),
+                    n("updated"),
+                    n("unchanged"),
+                    rejected,
+                );
+                for r in report["rejected"].as_array().into_iter().flatten() {
+                    println!("  rejected (store holds another value): {}", s(r));
+                }
+                if report["guard_flagged"] == true {
+                    println!(
+                        "  restore guard flagged: scheduled GC is dry-run until `store gc --repo {repo} --yes`"
+                    );
+                }
+            }
+            if rejected > 0 {
                 std::process::exit(envelope::EXIT_PARTIAL);
             }
         }

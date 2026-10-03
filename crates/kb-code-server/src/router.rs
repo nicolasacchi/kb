@@ -1566,6 +1566,12 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             "/repos/{name}/store/maintain",
             post(crate::review_store::maint::store_maintain_route),
         )
+        // v0.44 K5 — restore the refs/kbc/* heads of a store bundle
+        // (create-or-fast-forward only; flags the restore guard).
+        .route(
+            "/repos/{name}/store/restore",
+            post(crate::review_store::maint::store_restore_route),
+        )
         .layer(from_fn_with_state(
             auth.clone(),
             transcripts::search::loopback_only,

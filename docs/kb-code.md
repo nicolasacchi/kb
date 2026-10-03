@@ -1226,20 +1226,28 @@ ever need a `--yes`. (`gc --yes` acknowledges; it does not "clear the flag". Cru
 
 Note: a monthly pass that may expire cruft holds the store's ops lock for the whole repack, so review create/snapshot/capture on that store wait for it. That happens at most about once per cooldown period; weekly repacks do not hold the lock.
 
-**Restoring a store from a bundle** has no verb yet (nothing calls
-`restore_guard::flag_manual`); the manual procedure is:
+**Restoring a store from a bundle** is `kb-code store restore --repo R
+--bundle <file>` (loopback-only; `POST …/store/restore`):
 
 1. With the daemon running, re-fetch the base into the store so its objects
    exist: bundles exclude everything reachable from `refs/remotes/base/*`,
    so they are *thin* — `kb-code store sync --repo R` (online) does it.
-2. Stop the daemon (or do nothing in that store meanwhile).
-3. `git -C <store root>/<uuid>.git bundle verify <bundle>`; if it
-   reports missing prerequisites, step 1 was not enough.
-4. `git -C <store root>/<uuid>.git fetch <bundle> 'refs/kbc/*:refs/kbc/*'`
-   (add `'refs/remotes/*:refs/remotes/*'` to restore a de-registered
-   member's mirror refs). The `.refs` manifest beside each bundle lists every
-   ref and oid it was taken over.
-5. Start the daemon and run `kb-code store doctor --repo R`.
+   The verb runs `git bundle verify` in the store first and refuses with
+   git's own message (naming the missing prerequisites) if step 1 was not
+   enough; nothing is written then.
+2. `kb-code store restore --repo R --bundle <backups dir>/store-<uuid>-<ts>.bundle`.
+   Only the bundle's `refs/kbc/*` heads are restored, **create or
+   fast-forward only**: a ref the store holds at another value is listed as
+   `rejected` (exit 7) and is never overwritten. Mirror refs
+   (`refs/remotes/work-<id>/*`) are not restored — `store sync` re-imports
+   them from the member clones.
+3. A restore that wrote any ref flags the restore guard
+   (`restore_guard::flag_manual`, a new incident): restored refs can belong
+   to reviews this database no longer lists, which store-wide GC would
+   delete as orphans, so scheduled GC stays dry-run until you look at
+   `kb-code store gc --repo R` (dry run) and acknowledge with `--yes`.
+4. `kb-code store doctor --repo R`. The `.refs` manifest beside each bundle
+   lists every ref and oid it was taken over.
 
 **Store-level gitconfig.** `<state>/git-home/gitconfig` (the `safe.directory`
 entries for member clones owned by another uid) is shared by every
@@ -1303,6 +1311,7 @@ prints the D20 envelope; exit codes are the shipped table below.
 | `gc [--dry-run\|--yes]` | the store-wide ref GC; dry run by default, `--yes` applies and acknowledges the restore guard (loopback-only) |
 | `export-legacy` | write the store's `refs/kbc/{pr,review}/*` back into the clone, CREATE-ONLY (loopback-only) |
 | `maintain [--task daily\|weekly\|monthly]` | run the housekeeping cadences now, or whatever is due (loopback-only) |
+| `restore --bundle <file>` | recreate a store bundle's `refs/kbc/*` heads, create-or-fast-forward only; flags the restore guard when it wrote anything (loopback-only) |
 
 Every verb above needs the daemon's host EXCEPT the bare `credentials` READ,
 and each verb is one row of the gate table below: `show`, `members` and
@@ -1333,6 +1342,7 @@ map of that gate: one bearer route, every other row loopback.
 | `POST …/store/export-legacy` | loopback | the same clone-write family, writing the store's refs back |
 | `POST …/store/gc` | loopback | the store-wide ref GC deletes; it also applies and acknowledges the restore guard |
 | `POST …/store/maintain` | loopback | the manual housekeeping-cadence trigger |
+| `POST …/store/restore` | loopback | reads a bundle by host path and writes `refs/kbc/*` into the store; flags the restore guard |
 
 No bearer route in this crate hands out a kb-internal path. Everything
 secret-adjacent — `cred_reason`, `cred_account`, `key_fingerprint`,
