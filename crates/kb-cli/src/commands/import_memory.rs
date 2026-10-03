@@ -395,7 +395,7 @@ async fn known_keys(
         .error_for_status()?
         .json()
         .await?;
-    collect_keys(q["items"].as_array(), &mut known);
+    queue_keys(&q, &mut known)?;
     if !keys.is_empty() {
         let resp = client
             .get(format!(
@@ -419,6 +419,63 @@ async fn known_keys(
         }
     }
     Ok(known)
+}
+
+/// Fold the `cm-*` keys of a `GET /api/proposals` response into `into`.
+/// The route truncates to a fleet-wide cap and reports the pre-truncation
+/// `total`; when `total` exceeds the items returned the queue is only
+/// partially visible, so dedupe cannot be trusted and `--apply` refuses
+/// rather than risk re-queueing already-proposed memories.
+fn queue_keys(resp: &serde_json::Value, into: &mut BTreeSet<String>) -> Result<()> {
+    let items = resp["items"].as_array();
+    let shown = items.map_or(0, |a| a.len() as u64);
+    if let Some(total) = resp["total"].as_u64().filter(|t| *t > shown) {
+        return Err(anyhow!(
+            "the proposal queue holds {total} items but the daemon listed only {shown}; \
+             duplicate detection would be blind to the rest — triage the queue \
+             (`kb proposals`) below the cap and re-run --apply"
+        ));
+    }
+    collect_keys(items, into);
+    Ok(())
+}
+
+/// Resolve the target corpus list for one candidate. An EXPLICIT `--link`
+/// (comma-separated) must name only configured kbs — anything else is an
+/// error, never a silent downgrade to global scope (global memories are
+/// visible to every project). A DERIVED guess falls back to global when its
+/// corpus is not configured; the `bool` flags that fallback so the caller can
+/// warn.
+pub fn resolve_link(
+    target: Option<&str>,
+    explicit: bool,
+    kbs: &BTreeSet<String>,
+) -> Result<(Option<String>, bool)> {
+    let Some(t) = target else {
+        return Ok((None, false));
+    };
+    let parts: Vec<&str> = t
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    if explicit {
+        if parts.is_empty() {
+            return Err(anyhow!("--link is empty"));
+        }
+        if let Some(bad) = parts.iter().find(|p| !kbs.contains(**p)) {
+            return Err(anyhow!(
+                "--link names unconfigured kb `{bad}` (configured: {})",
+                kbs.iter().cloned().collect::<Vec<_>>().join(", ")
+            ));
+        }
+        return Ok((Some(parts.join(",")), false));
+    }
+    if !parts.is_empty() && parts.iter().all(|p| kbs.contains(*p)) {
+        Ok((Some(parts.join(",")), false))
+    } else {
+        Ok((None, true))
+    }
 }
 
 fn collect_keys(items: Option<&Vec<serde_json::Value>>, into: &mut BTreeSet<String>) {
@@ -462,6 +519,7 @@ pub async fn run(
     let home = std::env::var("HOME").ok();
     let mut plan = build_plan(&root, home.as_deref(), link.as_deref())?;
     let mut submitted: Vec<serde_json::Value> = Vec::new();
+    let mut global_fallbacks = 0usize;
 
     if apply {
         let url = http::detect_daemon(daemon.as_deref(), bearer.as_deref())
@@ -476,10 +534,24 @@ pub async fn run(
             .collect();
         let known = known_keys(&url, &kb, &keys, bearer.as_deref()).await?;
         mark_duplicates(&mut plan, &known);
+        // Resolve every target BEFORE queueing anything so a bad explicit
+        // --link fails the whole run instead of half-applying.
+        let explicit = link.is_some();
+        let mut resolved = Vec::new();
         for c in select_to_apply(&plan, limit.map(|n| n as usize)) {
-            // A derived corpus that is not configured falls back to global
-            // (the proposals route would 400 on an unknown linked kb).
-            let link = c.target.as_deref().filter(|t| kbs.contains(*t));
+            let (l, fell_back) = resolve_link(c.target.as_deref(), explicit, &kbs)?;
+            if fell_back {
+                eprintln!(
+                    "warn: {} -> corpus {} is not configured; queued as GLOBAL \
+                     (visible to every project)",
+                    c.source,
+                    c.target.as_deref().unwrap_or("?")
+                );
+                global_fallbacks += 1;
+            }
+            resolved.push((c, l));
+        }
+        for (c, link) in resolved {
             let tags = c.tags.join(",");
             let out = crate::commands::proposals::propose_inner(
                 &c.title,
@@ -487,7 +559,7 @@ pub async fn run(
                 Some(&kb),
                 Some(&tags),
                 link.is_none(),
-                link,
+                link.as_deref(),
                 None,
                 None,
                 Some(&url),
@@ -508,6 +580,7 @@ pub async fn run(
         v["dry_run"] = serde_json::json!(!apply);
         v["dir"] = serde_json::json!(root.display().to_string());
         v["submitted"] = serde_json::json!(submitted);
+        v["global_fallbacks"] = serde_json::json!(global_fallbacks);
         println!("{}", serde_json::to_string_pretty(&v)?);
         return Ok(());
     }
@@ -531,15 +604,16 @@ pub async fn run(
     }
     if apply {
         println!(
-            "queued {} proposal(s); review with `kb proposals`",
-            submitted.len()
+            "queued {} proposal(s) ({} as GLOBAL scope via fallback); review with `kb proposals`",
+            submitted.len(),
+            global_fallbacks
         );
     } else {
         println!(
             "dry-run: {} candidate(s), nothing written. Re-run with --apply to queue them \
              in the proposal inbox (a human approves with `kb proposals approve`). \
              Targets are a best-effort guess from the lossy project dir name; \
-             --link overrides, and an unconfigured corpus falls back to global at --apply.",
+             --link overrides (comma-separated, must be configured), and an unconfigured derived corpus falls back to global at --apply. Status is always `new` here: duplicates are only detected at --apply; --limit applies only at --apply.",
             plan.candidates.len()
         );
     }
@@ -690,5 +764,44 @@ mod tests {
         let mut s = BTreeSet::new();
         collect_keys(v.as_array(), &mut s);
         assert_eq!(s.into_iter().collect::<Vec<_>>(), ["cm-abc", "cm-def"]);
+    }
+
+    fn kbset(v: &[&str]) -> BTreeSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn explicit_multi_link_survives_and_unknown_errors() {
+        let kbs = kbset(&["memory-a", "memory-b", "memory-kb"]);
+        let (l, fb) = resolve_link(Some("memory-a, memory-b"), true, &kbs).unwrap();
+        assert_eq!(l.as_deref(), Some("memory-a,memory-b"));
+        assert!(!fb);
+        assert!(resolve_link(Some("memory-a,nope"), true, &kbs).is_err());
+        assert!(resolve_link(Some("nope"), true, &kbs).is_err());
+    }
+
+    #[test]
+    fn derived_unconfigured_target_falls_back_to_global_flagged() {
+        let kbs = kbset(&["memory-kb"]);
+        assert_eq!(
+            resolve_link(Some("memory-kb"), false, &kbs).unwrap(),
+            (Some("memory-kb".to_string()), false)
+        );
+        assert_eq!(
+            resolve_link(Some("memory-zzz"), false, &kbs).unwrap(),
+            (None, true)
+        );
+        assert_eq!(resolve_link(None, false, &kbs).unwrap(), (None, false));
+    }
+
+    #[test]
+    fn queue_keys_refuses_a_truncated_queue() {
+        let mut s = BTreeSet::new();
+        let ok = serde_json::json!({"items":[{"tags":["cm-a"]}],"total":1});
+        queue_keys(&ok, &mut s).unwrap();
+        assert!(s.contains("cm-a"));
+        let capped = serde_json::json!({"items":[{"tags":["cm-a"]}],"total":201});
+        let e = queue_keys(&capped, &mut BTreeSet::new()).unwrap_err();
+        assert!(e.to_string().contains("201"));
     }
 }

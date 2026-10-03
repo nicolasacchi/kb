@@ -578,9 +578,13 @@ kb import claude-memory [--dir PATH] [--limit N] [--apply] [--link KBS]
                                     queues via the `kb propose` route, a human
                                     approves with `kb proposals approve`.
                                     MEMORY.md is skipped; idempotent via a
-                                    cm-<hash> tag; the target corpus is a
+                                    cm-<hash> tag (--apply refuses when the
+                                    proposal queue exceeds the daemon's 200-item
+                                    listing cap; identical content in two
+                                    projects dedupes to one); the target corpus is a
                                     best-effort guess from the lossy project dir
-                                    name (--link overrides).
+                                    name (--link a,b overrides; an unconfigured
+                                    --link is an error).
 kb import claude-history [--dir PATH] [--into DIR] [--dry-run]
    [--limit N] [--json] [--quiet]
                                     Z5: retroactive backfill — wrap every
