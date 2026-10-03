@@ -86,6 +86,11 @@ describe("isAgentAuthorName", () => {
     expect(isAgentAuthorName("Claude")).toBe(true);
     expect(isAgentAuthorName("  claude  ")).toBe(true);
   });
+  it("matches every harness name the daemon reads as an agent (omp included)", () => {
+    for (const n of ["codex", "opencode", "grok", "kimi", "omp", "agent", "OMP"]) {
+      expect(isAgentAuthorName(n)).toBe(true);
+    }
+  });
   it("rejects everything else", () => {
     expect(isAgentAuthorName("you")).toBe(false);
     expect(isAgentAuthorName("claude-3")).toBe(false);

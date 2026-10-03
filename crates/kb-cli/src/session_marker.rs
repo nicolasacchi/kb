@@ -6,19 +6,7 @@
 
 use std::path::Path;
 
-/// v0.14 S1 — read the current Claude Code session id from the marker file
-/// the SessionStart / UserPromptSubmit hooks maintain at
-/// `${XDG_CACHE_HOME:-$HOME/.cache}/kb/current-session`. Any failure (file
-/// missing, unreadable, empty) returns `None` — session stamping is
-/// best-effort, never blocks the caller.
-pub fn read_session_marker() -> Option<String> {
-    let cache_dir = std::env::var_os("XDG_CACHE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))?;
-    read_session_marker_at(&cache_dir)
-}
-
-/// Pure helper for `read_session_marker`: takes the resolved cache
+/// Read the legacy global marker: takes the resolved cache
 /// directory so tests can run in parallel without racing on
 /// `XDG_CACHE_HOME`. Trims whitespace (the marker is a single-line
 /// write so a trailing newline always exists).

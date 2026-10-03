@@ -68,3 +68,75 @@ fn suggest_apply_drift_409_exits_3() {
         .assert()
         .code(EXIT_CONFLICT);
 }
+
+/// v0.44 F5 - a LOOPBACK-ONLY route's bodiless 404 from a daemon that
+/// classifies this caller as non-loopback is `needs-daemon-host` (exit 4),
+/// not a not-found (8). The stub plays that daemon via `/api/identity`.
+#[test]
+fn bodiless_404_from_a_daemon_that_calls_us_non_loopback_exits_4_needs_daemon_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let payload = dir.path().join("body.json");
+    std::fs::write(&payload, r#"{"summary":"s"}"#).unwrap();
+    let d = StatusStub::with_identity(
+        404,
+        "",
+        Some(r#"{"name":"kb-code","caller_loopback":false}"#),
+    );
+    let out = kb()
+        .args(["review", "compose", "12", "--from-file"])
+        .arg(&payload)
+        .args(["--daemon", &d.url])
+        .assert()
+        .code(EXIT_REFUSED);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).to_string();
+    assert!(stderr.contains("needs-daemon-host"), "{stderr}");
+}
+
+/// ... and when the daemon says the caller IS loopback (a real not-found
+/// behind the gate), or does not know the field (older daemon), the
+/// documented 404 -> 8 mapping stands.
+#[test]
+fn bodiless_404_from_a_loopback_or_older_daemon_keeps_exit_8() {
+    for identity in [
+        r#"{"name":"kb-code","caller_loopback":true}"#,
+        r#"{"name":"kb-code"}"#,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = dir.path().join("body.json");
+        std::fs::write(&payload, r#"{"summary":"s"}"#).unwrap();
+        let d = StatusStub::with_identity(404, "", Some(identity));
+        kb().args(["review", "compose", "12", "--from-file"])
+            .arg(&payload)
+            .args(["--daemon", &d.url])
+            .assert()
+            .code(EXIT_NOT_FOUND);
+    }
+}
+
+/// The constants above are COPIES (the binary has no lib target). Parse
+/// `src/envelope.rs` and fail on any drift, so the copies cannot silently
+/// diverge from the table the docs and the agent skill promise.
+#[test]
+fn the_copied_exit_constants_match_envelope_rs() {
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/envelope.rs"),
+    )
+    .expect("read src/envelope.rs");
+    let parse = |name: &str| -> i32 {
+        let needle = format!("pub const {name}: i32 = ");
+        let rest = src
+            .split(&needle)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} not found in envelope.rs"));
+        rest.split(';').next().unwrap().trim().parse().unwrap()
+    };
+    for (name, copy) in [
+        ("EXIT_USAGE", EXIT_USAGE),
+        ("EXIT_CONFLICT", EXIT_CONFLICT),
+        ("EXIT_REFUSED", EXIT_REFUSED),
+        ("EXIT_NOT_FOUND", EXIT_NOT_FOUND),
+        ("EXIT_GENERIC", EXIT_GENERIC),
+    ] {
+        assert_eq!(parse(name), copy, "{name} drifted from src/envelope.rs");
+    }
+}

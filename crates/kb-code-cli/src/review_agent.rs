@@ -1139,27 +1139,41 @@ async fn verify_run(a: &VerifyArgs) -> Result<bool, AgentError> {
 
 // --- compose --slugify --------------------------------------------------------------
 
-/// `compose --slugify`: give every finding WITHOUT a valid slug the one kb
-/// itself derives from its title (`kb_code_server::review_findings::
-/// slug_from_title` — ASCII `f-…`, non-ASCII-safe). A valid slug the author
-/// wrote is never touched.
+/// A finding the review already stores: `(fingerprint, slug)`, read from
+/// `GET /api/reviews/{id}/findings` before slugifying.
+pub type ExistingFinding = (String, String);
+
+/// `compose --slugify`: give every finding WITHOUT a valid slug a stable one.
+/// A valid slug the author wrote is never touched.
 ///
-/// Collisions are resolved by CONTENT, not by encounter order: when two
-/// findings share a base slug (or the base is the no-ASCII fallback
-/// `f-finding`, or an author slug already owns it), every slug-less member
-/// gets `<base>-<6 hex>` from the daemon's own finding fingerprint (act,
-/// category, normalised title, path), so reordering the list or inserting a
-/// new finding in front never moves a slug — and so never moves a human's
-/// disposition — onto different text. Two findings with an identical
-/// fingerprint (same title, path, category, act) cannot be told apart by
-/// content and fall back to `-2`, `-3` in list order. Limit: a finding that
-/// was alone under its base slug keeps the plain slug until a same-titled
-/// twin first appears, at which point it is re-slugged to the hashed form.
+/// Order of resolution for each slug-less finding:
+///
+/// 1. **Adopt**: the review already stores a live finding with the same
+///    content fingerprint (act, category, normalised title, path) - reuse
+///    ITS slug. This is what keeps a lone finding's slug (and the human
+///    disposition riding it) fixed when a same-titled twin first appears:
+///    the lone one re-adopts its stored slug, only the newcomer is derived.
+/// 2. **Derive**: kb's own `slug_from_title` (ASCII `f-...`, non-ASCII-safe);
+///    when the base is contested (two slug-less members share it, an
+///    existing/author slug owns it, or it is the no-ASCII fallback
+///    `f-finding`) it becomes `<base>-<6 hex>` from the finding's
+///    fingerprint, so reordering or growing the list never moves a slug.
+///
+/// Two slug-less findings with an IDENTICAL fingerprint cannot be told
+/// apart by content, and a positional `-2`/`-3` would move a disposition
+/// onto different text the day the list is reordered - so that is REFUSED
+/// (`Err`, exit 2) and the caller must give those findings explicit slugs.
+/// A derived slug that collides with an already-taken one is refused the
+/// same way.
+///
 /// Accepts every shape compose takes: a bare findings array,
 /// `{"findings": [...]}` (the sidecar), and the V0 body's
 /// `{"findings": {"findings": [...]}}`. Returns `(index, old, new)` for each
-/// rewrite.
-pub fn slugify_findings(payload: &mut Value) -> Vec<(usize, Option<String>, String)> {
+/// rewrite. On `Err` the payload is left untouched.
+pub fn slugify_findings(
+    payload: &mut Value,
+    existing: &[ExistingFinding],
+) -> Result<Vec<(usize, Option<String>, String)>, String> {
     use kb_code_server::review_findings::{is_valid_finding_slug, slug_from_title};
     let list = if payload.is_array() {
         payload.as_array_mut()
@@ -1171,7 +1185,16 @@ pub fn slugify_findings(payload: &mut Value) -> Vec<(usize, Option<String>, Stri
         None
     };
     let Some(list) = list else {
-        return Vec::new();
+        return Ok(Vec::new());
+    };
+    let needs_slug = |f: &Value| !f["slug"].as_str().is_some_and(is_valid_finding_slug);
+    let fp_of = |f: &Value| {
+        kb_code_server::review_doc::fingerprint(
+            f["act"].as_str().unwrap_or(""),
+            f["category"].as_str().unwrap_or(""),
+            f["title"].as_str().unwrap_or(""),
+            f["location"]["path"].as_str().unwrap_or(""),
+        )
     };
     let mut taken: std::collections::HashSet<String> = list
         .iter()
@@ -1179,52 +1202,86 @@ pub fn slugify_findings(payload: &mut Value) -> Vec<(usize, Option<String>, Stri
         .filter(|s| is_valid_finding_slug(s))
         .map(str::to_string)
         .collect();
-    let needs_slug = |f: &Value| !f["slug"].as_str().is_some_and(is_valid_finding_slug);
-    // How many slug-less findings want each base.
-    let mut demand: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for f in list.iter().filter(|f| needs_slug(f)) {
-        *demand
-            .entry(slug_from_title(f["title"].as_str().unwrap_or("")))
-            .or_default() += 1;
+    // Refuse identical-fingerprint slug-less members up front (no partial
+    // rewrite): content cannot order them, so only explicit slugs can.
+    let mut seen: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    for (i, f) in list.iter().enumerate().filter(|(_, f)| needs_slug(f)) {
+        let key = (slug_from_title(f["title"].as_str().unwrap_or("")), fp_of(f));
+        if let Some(first) = seen.insert(key, i) {
+            return Err(format!(
+                "compose --slugify: findings #{first} and #{i} are indistinguishable by content \
+                 (same act, category, title and path), so no stable slug can be derived - give \
+                 them explicit `slug` values"
+            ));
+        }
     }
-    let mut changes = Vec::new();
-    for (i, f) in list.iter_mut().enumerate() {
+    // Adoption: a stored live finding with the same fingerprint lends its slug.
+    let mut adopted: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    for (i, f) in list.iter().enumerate().filter(|(_, f)| needs_slug(f)) {
+        let fp = fp_of(f);
+        if let Some((_, slug)) = existing
+            .iter()
+            .find(|(efp, es)| *efp == fp && is_valid_finding_slug(es) && !taken.contains(es))
+        {
+            taken.insert(slug.clone());
+            adopted.insert(i, slug.clone());
+        }
+    }
+    // Slugs the review already stores are taken too (a derived plain slug
+    // must not land on a different stored finding).
+    for (_, es) in existing {
+        taken.insert(es.clone());
+    }
+    // How many un-adopted slug-less findings want each base.
+    let mut demand: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, f) in list.iter().enumerate() {
+        if needs_slug(f) && !adopted.contains_key(&i) {
+            *demand
+                .entry(slug_from_title(f["title"].as_str().unwrap_or("")))
+                .or_default() += 1;
+        }
+    }
+    let mut assigned: Vec<(usize, String)> = Vec::new();
+    for (i, f) in list.iter().enumerate() {
         if !needs_slug(f) {
             continue;
         }
-        let old = f["slug"].as_str().map(str::to_string);
-        let title = f["title"].as_str().unwrap_or("");
-        let base = slug_from_title(title);
-        let contested = demand.get(&base).copied().unwrap_or(0) > 1
-            || taken.contains(&base)
-            || base == "f-finding";
-        let mut slug = if contested {
-            let fp = kb_code_server::review_doc::fingerprint(
-                f["act"].as_str().unwrap_or(""),
-                f["category"].as_str().unwrap_or(""),
-                title,
-                f["location"]["path"].as_str().unwrap_or(""),
-            );
-            format!("{base}-{}", &fp[..6])
+        let slug = if let Some(a) = adopted.remove(&i) {
+            a
         } else {
-            base.clone()
-        };
-        if taken.contains(&slug) {
-            // Identical fingerprint: only list order can separate them.
-            let root = slug.clone();
-            let mut n = 2;
-            while taken.contains(&slug) {
-                slug = format!("{root}-{n}");
-                n += 1;
+            let base = slug_from_title(f["title"].as_str().unwrap_or(""));
+            let contested = demand.get(&base).copied().unwrap_or(0) > 1
+                || taken.contains(&base)
+                || base == "f-finding";
+            let slug = if contested {
+                format!("{base}-{}", &fp_of(f)[..6])
+            } else {
+                base
+            };
+            if taken.contains(&slug) {
+                return Err(format!(
+                    "compose --slugify: the derived slug {slug:?} for finding #{i} is already \
+                     taken by another finding - give it an explicit `slug`"
+                ));
             }
-        }
-        taken.insert(slug.clone());
+            taken.insert(slug.clone());
+            slug
+        };
+        assigned.push((i, slug));
+    }
+    // Apply only once every slug resolved, so an `Err` never leaves a
+    // half-rewritten payload.
+    let mut changes = Vec::new();
+    for (i, slug) in assigned {
+        let f = &mut list[i];
+        let old = f["slug"].as_str().map(str::to_string);
         if let Some(obj) = f.as_object_mut() {
             obj.insert("slug".into(), Value::String(slug.clone()));
             changes.push((i, old, slug));
         }
     }
-    changes
+    Ok(changes)
 }
 
 // --- start-pr / snapshot envelopes -------------------------------------------------
@@ -1986,33 +2043,32 @@ mod tests {
             {"title": "Größe über alles", "slug": ""},
             {"title": "🔥🔥"},
             {"title": "数据库 查询"},
-            {"title": "Perché à rotto"},
+            {"title": "Perché à rotto", "location": {"path": "b.rs"}},
             {"title": "kept", "slug": "f-kept"},
         ]});
-        let changes = slugify_findings(&mut sidecar);
+        let changes = slugify_findings(&mut sidecar, &[]).unwrap();
         let slugs: Vec<&str> = sidecar["findings"]
             .as_array()
             .unwrap()
             .iter()
             .map(|f| f["slug"].as_str().unwrap())
             .collect();
-        let fp = |title: &str| {
+        let fp = |title: &str, path: &str| {
             format!(
                 "-{}",
-                &kb_code_server::review_doc::fingerprint("", "", title, "")[..6]
+                &kb_code_server::review_doc::fingerprint("", "", title, path)[..6]
             )
         };
         assert_eq!(
             slugs,
             vec![
-                // the duplicated title is contested -> content-hashed, twice
-                // the same (identical fingerprint -> list-order `-2`)
-                format!("f-perch-rotto{}", fp("Perché à rotto")).as_str(),
+                // the duplicated title is contested -> content-hashed
+                format!("f-perch-rotto{}", fp("Perché à rotto", "")).as_str(),
                 "f-caf-d-j-vu",
                 "f-gr-e-ber-alles",
-                format!("f-finding{}", fp("🔥🔥")).as_str(),
-                format!("f-finding{}", fp("数据库 查询")).as_str(),
-                format!("f-perch-rotto{}-2", fp("Perché à rotto")).as_str(),
+                format!("f-finding{}", fp("🔥🔥", "")).as_str(),
+                format!("f-finding{}", fp("数据库 查询", "")).as_str(),
+                format!("f-perch-rotto{}", fp("Perché à rotto", "b.rs")).as_str(),
                 "f-kept",
             ]
         );
@@ -2034,7 +2090,7 @@ mod tests {
         let mk = |path: &str| json!({"title": "Missing null check", "location": {"path": path}});
         let slug_of = |list: Vec<Value>, path: &str| -> String {
             let mut p = json!({ "findings": list });
-            slugify_findings(&mut p);
+            slugify_findings(&mut p, &[]).unwrap();
             p["findings"]
                 .as_array()
                 .unwrap()
@@ -2063,7 +2119,7 @@ mod tests {
 
     fn slug_of_title(list: Vec<Value>, title: &str) -> String {
         let mut p = json!(list);
-        slugify_findings(&mut p);
+        slugify_findings(&mut p, &[]).unwrap();
         p.as_array()
             .unwrap()
             .iter()
@@ -2074,14 +2130,73 @@ mod tests {
             .to_string()
     }
 
+    /// v0.44 F5 (A8-4 residual): a lone finding composed once keeps its
+    /// plain slug; when a same-titled twin first appears the lone one must
+    /// re-adopt the stored slug instead of being re-slugged to a hashed form
+    /// (which would orphan the human disposition riding it).
+    #[test]
+    fn slugify_a_lone_finding_keeps_its_stored_slug_when_a_twin_first_appears() {
+        let lone = json!({"title": "Missing null check", "location": {"path": "a.rs"}});
+        let mut first = json!({"findings": [lone.clone()]});
+        slugify_findings(&mut first, &[]).unwrap();
+        let stored_slug = first["findings"][0]["slug"].as_str().unwrap().to_string();
+        assert_eq!(stored_slug, "f-missing-null-check");
+        let stored_fp =
+            kb_code_server::review_doc::fingerprint("", "", "Missing null check", "a.rs");
+
+        // The twin appears (in front, to prove order is irrelevant).
+        let twin = json!({"title": "Missing null check", "location": {"path": "b.rs"}});
+        let mut second = json!({"findings": [twin, lone]});
+        slugify_findings(&mut second, &[(stored_fp, stored_slug.clone())]).unwrap();
+        assert_eq!(second["findings"][1]["slug"], stored_slug.as_str());
+        let twin_slug = second["findings"][0]["slug"].as_str().unwrap();
+        assert_ne!(twin_slug, stored_slug);
+        assert!(
+            twin_slug.starts_with("f-missing-null-check-"),
+            "{twin_slug}"
+        );
+
+        // Without the stored state the lone one WOULD have moved - the
+        // behaviour this test exists to pin down.
+        let mut blind = json!({"findings": [
+            {"title": "Missing null check", "location": {"path": "b.rs"}},
+            {"title": "Missing null check", "location": {"path": "a.rs"}},
+        ]});
+        slugify_findings(&mut blind, &[]).unwrap();
+        assert_ne!(blind["findings"][1]["slug"], stored_slug.as_str());
+    }
+
+    /// v0.44 F5 (A8-4 residual): identical-fingerprint findings used to fall
+    /// back to positional `-2`/`-3`; now they are refused and nothing is
+    /// rewritten.
+    #[test]
+    fn slugify_refuses_identical_fingerprints_instead_of_numbering_by_position() {
+        let mut p = json!({"findings": [
+            {"title": "Same thing", "location": {"path": "a.rs"}},
+            {"title": "Unrelated"},
+            {"title": "Same thing", "location": {"path": "a.rs"}},
+        ]});
+        let before = p.clone();
+        let err = slugify_findings(&mut p, &[]).unwrap_err();
+        assert!(err.contains("#0") && err.contains("#2"), "{err}");
+        assert!(err.contains("explicit"), "{err}");
+        assert_eq!(p, before, "an Err must leave the payload untouched");
+        // Explicit slugs on the twins make the same input acceptable.
+        let mut ok = json!({"findings": [
+            {"title": "Same thing", "location": {"path": "a.rs"}, "slug": "f-one"},
+            {"title": "Same thing", "location": {"path": "a.rs"}, "slug": "f-two"},
+        ]});
+        assert!(slugify_findings(&mut ok, &[]).unwrap().is_empty());
+    }
+
     #[test]
     fn slugify_reaches_the_v0_body_and_ignores_other_shapes() {
         let mut v0 = json!({"summary": "s", "findings": {"schema": "kbc-findings/1",
                              "findings": [{"title": "Ünïcödé"}]}});
-        assert_eq!(slugify_findings(&mut v0).len(), 1);
+        assert_eq!(slugify_findings(&mut v0, &[]).unwrap().len(), 1);
         assert_eq!(v0["findings"]["findings"][0]["slug"], "f-n-c-d");
         let mut other = json!({"summary": "no findings here"});
-        assert!(slugify_findings(&mut other).is_empty());
+        assert!(slugify_findings(&mut other, &[]).unwrap().is_empty());
     }
 
     #[test]

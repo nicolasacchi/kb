@@ -667,6 +667,7 @@ async fn identity_review_mutations_admitted_is_true_for_a_loopback_caller_regard
         body["review_mutations_admitted"], true,
         "loopback + gate OFF must still admit, no token needed: {body}"
     );
+    assert_eq!(body["caller_loopback"], true, "{body}");
 
     let repo_tmp_on = fixture_feature_branch();
     let review_on = ReviewSection {
@@ -727,6 +728,7 @@ async fn identity_review_mutations_admitted_matches_the_gate_for_a_non_loopback_
         body["remote_mutations"], false,
         "the raw config flag must also read false: {body}"
     );
+    assert_eq!(body["caller_loopback"], false, "{body}");
 
     // Gate ON — the field must flip to true for the same non-loopback
     // caller, matching `remote_mutations` = true.
@@ -751,6 +753,9 @@ async fn identity_review_mutations_admitted_matches_the_gate_for_a_non_loopback_
         body["review_mutations_admitted"], true,
         "non-loopback + gate ON must read true: {body}"
     );
+    // v0.44 F5 — `caller_loopback` is the peer class alone: still false with
+    // the gate ON (it is what lets the CLI say `needs-daemon-host`).
+    assert_eq!(body["caller_loopback"], false, "{body}");
 }
 
 // --- the working-tree mutation lane NEVER moves (one test per route) -------

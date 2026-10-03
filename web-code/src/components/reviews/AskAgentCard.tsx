@@ -46,7 +46,7 @@ function useAskAgentLoopbackLatched(): boolean {
 /// their own small pure helpers (e.g. `StalenessBanner.tsx`'s
 /// `stalenessMessage`).
 export function agentWatchCommand(reviewId: number): string {
-  return `kb-code annotate watch --review ${reviewId} --ignore-author claude`;
+  return `kb-code annotate watch --review ${reviewId} --ignore-agents`;
 }
 
 export interface AskAgentCardProps {
