@@ -239,7 +239,7 @@ ci-workspace:
 # WITH `local-embedder` (the in-process backend + the name→fastembed-enum maps).
 # This is the slow path (static ONNX Runtime link), kept separate so the rest of
 # CI stays fast. Needs network on a cold build (ORT binaries fetched from CDN;
-# for offline/air-gapped builds set ORT_STRATEGY=system + ORT_LIB_LOCATION=<dir>).
+# for offline/air-gapped builds set ORT_LIB_PATH=<dir with libonnxruntime>; ort-sys has no ORT_STRATEGY).
 ci-embedder:
     cargo clippy -p kb-embedder --all-targets -- -D warnings
     cargo clippy -p kb-core --features local-embedder --all-targets -- -D warnings
