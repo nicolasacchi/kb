@@ -762,8 +762,7 @@ jobs:
       # ONNX Runtime is fetched from a CDN at build time by `ort-sys`
       # (fastembed's `ort-download-binaries`) and statically linked — no system
       # onnxruntime install needed, and this proves the SAME static-ORT path the
-      # Docker image ships. (Air-gapped runners: set ORT_STRATEGY=system +
-      # ORT_LIB_LOCATION=<dir>.) This is the slow path; the `workspace-*` jobs stay
+      # Docker image ships. (Air-gapped runners: set ORT_LIB_PATH=<dir>.) This is the slow path; the `workspace-*` jobs stay
       # ORT-free and fast.
       - name: cargo clippy (embedder + kb-core/local-embedder)
         run: |
@@ -821,8 +820,7 @@ jobs:
       # ONNX Runtime is fetched from a CDN at build time by `ort-sys`
       # (fastembed's `ort-download-binaries`) and statically linked — no system
       # onnxruntime install needed, and this proves the SAME static-ORT path the
-      # Docker image ships. (Air-gapped runners: set ORT_STRATEGY=system +
-      # ORT_LIB_LOCATION=<dir>.) This is the slow path; the `workspace-*` jobs stay
+      # Docker image ships. (Air-gapped runners: set ORT_LIB_PATH=<dir>.) This is the slow path; the `workspace-*` jobs stay
       # ORT-free and fast.
       - name: cargo test (embedder + kb-core/local-embedder)
         run: |

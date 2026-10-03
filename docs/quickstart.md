@@ -14,7 +14,7 @@ bind a public address, jump to [Going beyond loopback](#going-beyond-loopback)
 
 Pick one of three channels — this guide uses the **tarball** for steps
 1–5 and calls out the one place the **Docker** image differs (it also
-bundles the web UI, which the tarball doesn't).
+bakes in an embedding model).
 
 **Prebuilt tarball** (needs glibc ≥ 2.39 — Debian 13+, Ubuntu 24.04+,
 Fedora 40+; see the alternatives below if you're on an older distro):
@@ -24,15 +24,17 @@ curl -fsSL https://raw.githubusercontent.com/nicolasacchi/kb/main/scripts/instal
 ```
 
 This detects your OS/arch, downloads the matching `kb-<version>-<target>.tar.gz`
-release asset, verifies its checksum, and installs **both** binaries —
+release asset, verifies its checksum (a missing checksum aborts the install;
+`KB_INSECURE_SKIP_VERIFY=1` overrides), and installs **both** binaries —
 `kb` (the CLI + daemon) and `kb-embedder` (the embedding sidecar) — into
-`~/.local/bin` (override with `PREFIX=`). The two binaries must stay
+`~/.local/bin` (override with `PREFIX=`), plus the web reader and a sample
+corpus into `~/.local/share/kb`. The two binaries must stay
 **side by side**: `kb` finds `kb-embedder` as a sibling of itself. Add
 `~/.local/bin` to your `PATH` if the installer says to.
 
-> The tarball does **not** include the web UI (step 5 covers this). If
-> you want the daemon + CLI + web UI in one step with zero build tools,
-> skip ahead to **Option B: Docker** below and come back to step 3.
+> The tarball carries the web reader (`share/kb/web/dist`), which the daemon
+> finds next to its own binary. Platforms: Linux x86_64/aarch64 and WSL2;
+> macOS and native Windows are unsupported.
 
 **Option B: Docker** (binaries + web UI + a baked-in embedding model, all
 in one image — no separate SPA build step):
@@ -40,12 +42,20 @@ in one image — no separate SPA build step):
 ```bash
 docker pull ghcr.io/nicolasacchi/kb
 mkdir -p ~/kb-config ~/kb-state
-docker run -d --name kb -p 4000:4000 \
+docker run -d --name kb --network host \
   -v ~/kb-config:/var/lib/kb/config \
   -v ~/kb-state:/var/lib/kb/state \
   -v ~/notes:/corpus:ro \
   ghcr.io/nicolasacchi/kb
 ```
+
+(`--network host` is Linux-only and deliberate. The daemon's default bind is
+`127.0.0.1:4000` *inside* the container, which `-p 4000:4000` cannot reach;
+host networking puts it on the host's loopback, so it stays loopback-first,
+needs no token, and passes the `Host` guard. Do not reach for
+`KB_ALLOW_NO_AUTH` to make a port publish work. On Docker Desktop, or to
+publish a port, bind a non-loopback address with a token instead: see
+[Going beyond loopback](#going-beyond-loopback).)
 
 (The config volume is writable here so `kb add` — next step — can create
 `kb.toml` inside it; [self-host.md](self-host.md)'s production recipe
@@ -164,14 +174,13 @@ Open **<http://127.0.0.1:4000/>** in your browser. You get the gallery,
 faceted search, the per-artifact reader (sandboxed iframe), the atlas
 view, reading lists, and inline comments.
 
-**If you installed via the Docker image, it's already there** — the
-image bakes in the built SPA. **If you installed via the tarball**, the
-archive ships binaries only (no `web/dist`); you'll see a plain 404 at
-`/` until you either build the bundle from a source checkout
-(`git clone` + `just ci-spa`, then point the daemon at it with
-`KB_SPA_DIST=/path/to/web/dist`) or switch to the Docker image. The CLI
-and HTTP API work identically either way — nothing above this step
-needed the web UI.
+**If you installed via the Docker image or the tarball, it's already there**
+— the image bakes in the built SPA and the tarball ships it under
+`share/kb/web/dist`, which the daemon finds relative to its own binary
+(`<prefix>/bin/kb` beside `<prefix>/share/kb/web/dist`). **If you built from
+source**, build the bundle once (`just ci-spa`) and run from the checkout, or
+point the daemon at it with `KB_SPA_DIST=/path/to/web/dist`. The CLI and HTTP
+API work identically either way — nothing above this step needed the web UI.
 
 That's the loop. From here: register more corpora with `kb add`, scaffold
 new artifacts with `kb new`, watch the fleet with `kb fleet status` +
@@ -185,7 +194,7 @@ indexes cleanly.
 
 The default `127.0.0.1` bind is the safe one: loopback clients bypass
 auth because nothing else can reach the socket. **The moment you bind a
-reachable address (`0.0.0.0:PORT` or a LAN IP), do all three of these:**
+reachable address (`0.0.0.0:PORT` or a LAN IP), do all four of these:**
 
 1. **Generate a bearer token.** Every non-loopback `/api/*` request must
    then send `Authorization: Bearer <token>` or get a `401` — and the
@@ -215,14 +224,26 @@ reachable address (`0.0.0.0:PORT` or a LAN IP), do all three of these:**
    artifact_host_suffix = ".artifacts.example.com"    # your wildcard
    parent_origin        = "https://kb.example.com"    # your SPA origin (locks down artifact framing)
    trusted_proxies      = ["172.17.0.1"]              # only if the proxy reaches the daemon off-loopback (e.g. dockerised)
-   # hostnames          = ["kb.internal"]             # only for EXTRA names; parent_origin's host is always admitted
+   hostnames            = ["kb.example.com"]          # the names the proxy publishes: THIS is what turns the DNS-rebinding Host check on for proxied peers
    ```
+
+   `hostnames` matters even though `parent_origin`'s host is admitted
+   automatically: a peer that is neither loopback nor in `trusted_proxies` is
+   `Host`-checked **only once this list is non-empty**, so an unset list leaves
+   a reverse-proxied deployment unchecked. Set it to the names you publish.
 
    The proxy must pass the browser's `Host` header through unchanged
    (Caddy does by default; Traefik `passHostHeader: true`; nginx
    `proxy_set_header Host $host`). Requests from loopback and from
    `trusted_proxies` peers are `Host`-checked, and `parent_origin`'s host
    passes automatically; any other name needs a `hostnames` entry.
+
+4. **Gate the artifact hosts at the edge.** `*.artifacts.example.com` serves
+   sandboxed artifacts **without any daemon auth**, by design, and an artifact
+   id is an unkeyed hash of its path (`index.html`'s id is computable by
+   anyone). Put the same identity-aware proxy or network allowlist in front of
+   the artifact hosts as in front of `kb.example.com`. See
+   [SECURITY.md](../SECURITY.md).
 
 > **Why this matters.** A loopback bind needs no token because the kernel
 > won't route remote traffic to it. A *public* bind with no token is wide

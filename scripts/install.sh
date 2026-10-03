@@ -13,6 +13,11 @@
 #                CI smoke test). Requires KB_VERSION (a bare mirror has no
 #                "latest" concept). The archive + its .sha256 must live directly
 #                under this URL, named exactly as the GitHub assets are.
+#   KB_INSECURE_SKIP_VERIFY=1
+#                proceed WITHOUT checksum verification when the .sha256 sidecar
+#                or a sha256 tool is missing, and when `gh attestation verify`
+#                cannot confirm the build provenance. Default: any of those is
+#                a hard error (the daemon fails closed; so does its installer).
 #
 # SAFETY: every action runs inside main(), which is called ONLY on the final
 # line of this file. A truncated download (curl|sh cut mid-stream) therefore
@@ -100,21 +105,58 @@ resolve_version() {
   VERSION="${TAG#v}"
 }
 
-# ---- checksum (best-effort) -------------------------------------------------
+# ---- integrity (fail closed) -------------------------------------------------
 sha256_of() {
   if have sha256sum; then sha256sum "$1" | awk '{print $1}'
   elif have shasum;    then shasum -a 256 "$1" | awk '{print $1}'
   else echo ""; fi
 }
 
+# A verification we cannot perform is a failure, not a pass — unless the
+# operator says so explicitly. $1 = what could not be verified.
+cannot_verify() {
+  if [ "${KB_INSECURE_SKIP_VERIFY:-}" = "1" ]; then
+    info "WARNING: $1 — continuing because KB_INSECURE_SKIP_VERIFY=1"
+    return 0
+  fi
+  err "$1 — refusing to install an unverified binary (set KB_INSECURE_SKIP_VERIFY=1 to override at your own risk)"
+}
+
 verify_checksum() {
   # $1 file   $2 url of the .sha256 sidecar
   want=$(fetch "$2" 2>/dev/null | awk '{print $1}') || want=""
-  [ -n "$want" ] || { info "checksum sidecar unavailable — skipping verification"; return 0; }
+  if [ -z "$want" ]; then
+    cannot_verify "checksum sidecar unavailable ($2)"
+    return 0
+  fi
   got=$(sha256_of "$1")
-  [ -n "$got" ] || { info "no sha256 tool found — skipping verification"; return 0; }
+  if [ -z "$got" ]; then
+    cannot_verify "no sha256 tool found (need sha256sum or shasum)"
+    return 0
+  fi
   [ "$want" = "$got" ] || err "checksum mismatch (want $want, got $got)"
   info "checksum OK"
+}
+
+# The checksum sits beside the artifact on the same release, so it proves
+# integrity, not authenticity. When `gh` is present and signed in, also verify
+# the SLSA build provenance the release workflow attests for every tarball.
+verify_attestation() {
+  # $1 file
+  if ! have gh; then
+    info "gh not found — provenance not checked (checksum only); install gh to verify"
+    return 0
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    info "gh is not signed in — provenance not checked (checksum only)"
+    return 0
+  fi
+  if out=$(gh attestation verify "$1" -R "$REPO" 2>&1); then
+    info "provenance OK (gh attestation verify -R $REPO)"
+  else
+    info "$out"
+    cannot_verify "gh attestation verify could not confirm the build provenance of $(basename "$1")"
+  fi
 }
 
 # ---- main -------------------------------------------------------------------
@@ -146,6 +188,7 @@ main() {
     || err "download failed — does the release asset ${archive} exist for ${TAG}?"
 
   verify_checksum "$tmp/$archive" "${url}.sha256"
+  verify_attestation "$tmp/$archive"
 
   step "extracting"
   tar -xzf "$tmp/$archive" -C "$tmp" || err "extract failed"
@@ -164,6 +207,17 @@ main() {
   chmod 0755 "$bindir/kb" "$bindir/kb-embedder"
   info "${bindir}/kb"
   info "${bindir}/kb-embedder"
+
+  # The web reader + a sample corpus ride in the archive's share/ tree; the
+  # daemon finds them at <bin>/../share/kb/web/dist with no configuration.
+  prefix="${PREFIX:-$HOME/.local}"
+  share_src=$(find "$tmp" -type d -path '*/share/kb' 2>/dev/null | head -n1)
+  if [ -n "$share_src" ]; then
+    mkdir -p "$prefix/share/kb" || err "could not create ${prefix}/share/kb"
+    rm -rf "$prefix/share/kb/web" "$prefix/share/kb/sample-corpus"
+    cp -R "$share_src/." "$prefix/share/kb/" || err "install share/kb failed"
+    info "${prefix}/share/kb (web reader + sample corpus)"
+  fi
 
   step "verifying"
   if "$bindir/kb" --version >/dev/null 2>&1; then
@@ -197,8 +251,14 @@ main() {
   say "  1. Start a daemon:  kb daemon      (→ http://127.0.0.1:4000/)"
   say "  2. Or, inside Claude Code, bootstrap memory + sessions corpora:  /kb-setup"
   say ""
-  say "The web UI is not bundled in the binary archive — build it once with"
-  say "'just ci-spa', or run the all-in-one image: ghcr.io/${REPO}:${VERSION}"
+  if [ -d "$prefix/share/kb/web/dist" ]; then
+    say "The web reader was installed to ${prefix}/share/kb/web/dist and is served"
+    say "automatically. A sample corpus is in ${prefix}/share/kb/sample-corpus:"
+    say "  kb add ${prefix}/share/kb/sample-corpus --kb canon"
+  else
+    say "This archive carries no web reader — build it once with 'just ci-spa',"
+    say "or run the all-in-one image: ghcr.io/${REPO}:${VERSION}"
+  fi
   say "Docs: https://github.com/${REPO}#readme"
 }
 

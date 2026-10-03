@@ -16,8 +16,8 @@ is not supported — use WSL2.
 - **ONNX Runtime is statically bundled** into `kb-embedder` (no system
   onnxruntime needed at runtime — the binary is self-contained, no
   `ORT_DYLIB_PATH`). Binaries are fetched from a CDN at build time; for
-  offline/air-gapped builds set **both** `ORT_STRATEGY=system` and
-  `ORT_LIB_LOCATION=<dir>` to link a local ONNX Runtime. Only `kb-embedder`
+  offline/air-gapped builds set `ORT_LIB_PATH=<dir>`
+  (`ORT_LIB_LOCATION` is the deprecated alias; `ORT_STRATEGY` does not exist) to link a local ONNX Runtime. Only `kb-embedder`
   links it; `kb` and `kb-server` carry no ORT.
 - **Paths** default to platform-native dirs. Override on any OS with `KB_HOME`
   (→ `<home>/{state,config,cache}`) or the per-dir `KB_STATE_DIR`/`KB_CONFIG_DIR`/
@@ -56,13 +56,21 @@ is not supported — use WSL2.
   proxy can reach (the docker bridge `172.17.0.1:4000` for a
   Dockerised Traefik on the same host, or `127.0.0.1` for a
   host-installed proxy). Traefik terminates TLS on the public IP and
-  every `/api/*` request needs `Authorization: Bearer <token>` (one
-  shared token in v0.4; per-kb ACLs ship later). Comments, atlas
-  recompute, and search are rate-limited per token.
+  every `/api/*` request needs `Authorization: Bearer <token>` (a shared
+  token or a registry token; every admitted identity is a full
+  co-operator - kb has no per-kb ACLs and none are planned, the corpus
+  mount is the access boundary). Comments, atlas
+  recompute, and search are rate-limited per token. Set `[server]
+  hostnames` to the names the proxy publishes: that is what makes the
+  DNS-rebinding `Host` check apply to proxied peers (see
+  [SECURITY.md](../SECURITY.md)).
 
 The artifact subdomains (`<id>.artifacts.<domain>`) intentionally stay
 auth-free — they serve sandboxed HTML that is meant to be embedded in
-iframes by the SPA. The `outbound` scrubbing layer (v0.3 G3) runs on
+iframes by the SPA. An artifact id is an unkeyed `sha256(source-relative
+path)[:12]`, so the id of any common path (`index.html`, `README.md`) is
+computable by anyone: **gate `*.artifacts.<domain>` at your edge** with the
+same access control as the SPA host. The `outbound` scrubbing layer (v0.3 G3) runs on
 non-loopback requests to those subdomains, so any prompt or PII can be
 stripped before bytes leave the box.
 
@@ -285,7 +293,7 @@ during `cargo build`), so the runtime stage carries no `libonnxruntime`
 and sets no `ORT_DYLIB_PATH` — it ships only `libgomp1` (ONNX Runtime's
 CPU provider links OpenMP). The builder pre-fetches the model into the
 image cache. For an offline/air-gapped Docker build, pass
-`ORT_STRATEGY=system` + `ORT_LIB_LOCATION=<dir>` into the builder so
+`ORT_LIB_PATH=<dir>` into the builder so
 `ort-sys` links a local ONNX Runtime instead of reaching the CDN. Cost:
 the image is ~1.7 GB (mostly the ~1.34 GB bge-large model). To bake a smaller model instead —
 e.g. ship a bge-small image for a memory-constrained deployment —
@@ -308,6 +316,13 @@ docker run -d --name kb \
   -v /srv/artifacts:/corpus:ro \
   kb:latest
 ```
+
+The image's default config binds `127.0.0.1:4000` inside the container,
+which `-p` cannot reach. For a published port, set `[server] addr =
+"0.0.0.0:4000"` in the mounted `kb.toml` **and** generate a token (the daemon
+refuses a token-less non-loopback bind); for a local, token-less try-out on
+Linux use `--network host` instead of `-p` (see the
+[quickstart](quickstart.md)).
 
 Mount a `kb.toml` under `/var/lib/kb/config/kb/` whose `[kb.<name>]`
 sections point at corpus paths visible inside the container (e.g.
@@ -1049,9 +1064,16 @@ in-app capture sheet there instead.
 
 ## Hardening checklist
 
-- Bind kb-server to `127.0.0.1` only; let Caddy own the public IP.
+- Bind kb-server to `127.0.0.1` only (or the docker bridge address a
+  dockerised proxy reaches); let the reverse proxy (Traefik in this guide)
+  own the public IP.
+- Set `[server] hostnames` to the names your proxy publishes, and keep
+  `trusted_proxies` to exactly the proxy peers. Without `hostnames`, a
+  non-loopback peer is not `Host`-checked.
+- Gate `*.artifacts.<domain>` at the edge (artifact hosts have no daemon
+  auth).
 - Set `KB_DEV_ORIGIN_ANY=0` (the default) — only the production
-  Caddy host(s) should pass the Origin allowlist.
+  proxy host(s) should pass the Origin allowlist.
 - `kb token generate` and verify `stat -c %a $(kb token path)` is
   `600`.
 - Enable systemd `ProtectSystem=strict` + `PrivateTmp=true`.

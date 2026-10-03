@@ -16,7 +16,7 @@
 # known-good ONNX Runtime from a CDN at BUILD time and links it, so the binary
 # is self-contained (no `libonnxruntime.so` at runtime, no `ORT_DYLIB_PATH`).
 # `kb`/`kb-server` link no ORT at all. For an offline/air-gapped build,
-# set `ORT_STRATEGY=system` + `ORT_LIB_LOCATION=<dir>` to link a local copy.
+# set `ORT_LIB_PATH=<dir>` (ort-sys has no ORT_STRATEGY) to link a local copy.
 #
 # Both stages are on Debian TRIXIE (glibc 2.41), not bookworm (2.36): the
 # prebuilt ORT 1.24.2 archive ort-sys links (ort 2.0.0-rc.x) references the C23
