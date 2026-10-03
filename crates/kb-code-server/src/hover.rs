@@ -117,7 +117,7 @@ pub async fn hover_route(
     let line = params.line;
     let col = params.col;
     let rev = params.rev.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the sync
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the sync
     // store-backed compose on the blocking pool; `overlay_hover` below is
     // the async (lip HTTP) leg and stays outside.
     let state_bg = state.clone();

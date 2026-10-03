@@ -118,7 +118,7 @@ pub async fn resolve_symbol_route(
 ) -> Result<impl IntoResponse, ApiError> {
     let (_repo, repo_id) = find_repo(&state, &params.repo)?;
     let sym = params.sym.clone();
-    // 2026-08-31 incident (store.rs module doc): coarse-wrap the whole
+    // 2026-08-31 incident (store/mod.rs module doc): coarse-wrap the whole
     // sync symbol-address resolution on the blocking pool.
     let out = state
         .store

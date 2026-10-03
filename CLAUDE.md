@@ -193,6 +193,20 @@ crates/
                        consumers (kb-cli); kb-server takes the stamp at
                        runtime via `set_build_stamp` (unset ⇒ 0.0.0-dev/
                        unknown; the SPA names that "stamp missing", not a silent no-op).
+                       **v0.44 stabilisation** (no new surface; record in
+                       docs/spike-findings.md): kb-code-server's store moved to
+                       `store/` (the 2026-08-31 starvation rationale is the
+                       `store/mod.rs` module doc); kb-code's review-store forge
+                       fetches are fail-closed (`forge_ctx`; deployed policy in
+                       docs/configuration.md); `kb doctor --hooks --strict`
+                       exits 1 on WARN/FAIL (default exit stays 0); a bare
+                       `kb search` on a multi-kb daemon is federated but keeps
+                       R0's transcript exclusion. Guards an agent will meet in
+                       CI: the doc-anchor gate (`scripts/check-doc-anchors.sh`),
+                       the whole-tree public gate, two-way ratchets with
+                       witness counts, and docs tests that every `[backup]`/
+                       `[server]`/`[review.store]` key is documented and that
+                       the published `[server]` block passes its own Host guard.
 web/               React 18 + Vite + TypeScript SPA
   src/             routes, components, hooks, api, styles
   dist/            vite output (gitignored; daemon serves via ServeDir)

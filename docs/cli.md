@@ -64,8 +64,18 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     half was not verified) rather than
                                     silently assuming none is expected.
                                     Read-only,
-                                    PASS/WARN/SKIP + a one-line fix per
-                                    link: session marker files, the git
+                                    PASS/WARN/FAIL/SKIP + a one-line fix per
+                                    link (FAIL = a configured invariant is
+                                    broken, e.g. `backup-age:<kb>` with no
+                                    tarball at all; it is a report status:
+                                    the process exits 0 unless --strict,
+                                    which exits 1 on any WARN/FAIL; for a
+                                    finer gate read the --json `status` of
+                                    the ids you care about). Also checks
+                                    `recall-outcomes`, `harness-memories`,
+                                    `doclens-consumer` and
+                                    `memory-project-corpus` (see the id
+                                    list in --json). Links: session marker files, the git
                                     Kb-Session trailer hook, the
                                     memory_recalls ledger, the provenance
                                     lint (orphaned origin sessions +
@@ -144,10 +154,19 @@ kb search <q> [--mode hybrid|keyword|semantic] [--kb NAME]
                                     serving more than one kb is searched
                                     across all of them (one-line stderr
                                     note; hits print [kb/category], --json
-                                    hits carry "kb"). --kb pins one corpus;
-                                    --scope one keeps the strict form (400
-                                    when ambiguous); --scope all needs the
-                                    daemon (not --offline).
+                                    hits carry "kb"). The federated path
+                                    KEEPS R0's default exclusion of
+                                    memory-session transcripts: use --kb
+                                    <sessions kb> or --category
+                                    memory-session for transcript hits (the
+                                    stderr note says so). --kb pins one
+                                    corpus; --scope one keeps the strict
+                                    form (400 when ambiguous). Behaviour
+                                    change: a script that relied on the old
+                                    400 for an ambiguous bare search must
+                                    now pass --scope one explicitly.
+                                    --scope all needs the daemon (not
+                                    --offline).
                                     hybrid (default) = BM25 + vector (RRF
                                     k=60); --offline reads lance directly
                                     (keyword-only); --json for parseable

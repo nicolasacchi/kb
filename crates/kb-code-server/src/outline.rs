@@ -333,7 +333,7 @@ pub async fn outline_route(
     let symbols = match row.and_then(|r| r.info) {
         Some(li) => {
             let blob_hash = read.blob_hash.clone();
-            // 2026-08-31 incident (store.rs module doc): single store call,
+            // 2026-08-31 incident (store/mod.rs module doc): single store call,
             // still wrapped so it can never park this async worker.
             state
                 .store

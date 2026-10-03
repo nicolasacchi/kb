@@ -95,7 +95,7 @@ pub async fn unified_inbox_route(
 ) -> Result<impl IntoResponse, ApiError> {
     let repo_names: Vec<String> = state.repos.iter().map(|r| r.name.clone()).collect();
 
-    // 2026-08-31 incident (store.rs module doc): reviews-lane compose +
+    // 2026-08-31 incident (store/mod.rs module doc): reviews-lane compose +
     // annotations-lane compose are both pure store-backed reads — each
     // gets its own blocking-pool trip (the kb-lane's async KbClient pulls
     // below stay OUTSIDE any closure, per the brief).

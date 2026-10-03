@@ -337,7 +337,7 @@ pub async fn review_comments(
     let ps_param = params.ps.clone();
     let all = params.all;
     let repo_name = review.repo.clone();
-    // 2026-08-31 incident (store.rs module doc): ps-resolve + annotations
+    // 2026-08-31 incident (store/mod.rs module doc): ps-resolve + annotations
     // list + the per-comment suggestion lookups inside `build_comment_
     // groups` are all synchronous store work — one blocking-pool trip.
     let body = state

@@ -1122,6 +1122,23 @@ written after one of those headers is read as a key of that subtable and the
   see `review_store/maint.rs`'s `restore_guard`) (`review_store/settings.rs:42-48`). There
   is no key that moves any of them.
 
+#### Deployment decision: forge features stay local-only until the store is pinned
+
+This is an operator policy for a deployed kb-code, not a new code path. On a
+deployed daemon, leave the review-store **forge features** (PR fetch,
+`start-pr`, PR drift probes, a PR-based `retrack`) switched off for a repo —
+use local review only (snapshot, diff, comments, findings on a local branch) —
+until BOTH of these are configured for it: an `https://` remote (`base_url`),
+and a pinned, owner-only `token_file` (mode `0600`/`0400`) selected with
+`credential = "token"`. Leave `allow_inherited_credentials` at `false`.
+
+Why: a deployed daemon's ambient credentials are whatever its service account
+happens to hold; an `ssh`/`git@` remote cannot use a token at all; and the
+`auto` ladder described above can read `token_file` or fall to other rungs
+without the operator having chosen an identity. A pinned `https` remote plus a
+pinned token file is the one shape where the identity a fetch runs as is
+written down in config rather than inferred.
+
 ### `[[intel.providers]]`
 
 PRR-L2's lip/1 provider registry (`crate::lip`) — the live-LSP overlay

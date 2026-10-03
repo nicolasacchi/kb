@@ -118,7 +118,7 @@ pub async fn list_canvas(
 ) -> Result<impl IntoResponse, ApiError> {
     let (_repo, repo_id) = find_repo(&state, &params.repo)?;
     let repo_name = params.repo.clone();
-    // 2026-08-31 incident (store.rs module doc): the list + JSON compose
+    // 2026-08-31 incident (store/mod.rs module doc): the list + JSON compose
     // has no `.await` in it — one closure on the blocking pool.
     let out = state
         .store
@@ -163,7 +163,7 @@ pub async fn get_canvas(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 2026-08-31 incident (store.rs module doc): the store read runs on
+    // 2026-08-31 incident (store/mod.rs module doc): the store read runs on
     // the blocking pool; `find_repo_by_id` below is a cheap in-memory
     // lookup over `state.repos`, not a store call, so it stays outside.
     let row = state
@@ -223,7 +223,7 @@ pub async fn create_canvas(
     let now = now_unix();
     let name = body.name.clone();
     let review_id = body.review_id;
-    // 2026-08-31 incident (store.rs module doc): the two sequential store
+    // 2026-08-31 incident (store/mod.rs module doc): the two sequential store
     // calls (create then re-fetch) run as one closure on the blocking pool.
     let row = state
         .store
@@ -286,7 +286,7 @@ pub async fn update_canvas(
     let payload_text = encode_payload(&body.payload)?;
     let now = now_unix();
     let name = body.name.clone();
-    // 2026-08-31 incident (store.rs module doc): existence check, update,
+    // 2026-08-31 incident (store/mod.rs module doc): existence check, update,
     // and re-fetch are three sequential store calls with no async work
     // between them — one closure, one hop to the blocking pool.
     let row = state
@@ -334,7 +334,7 @@ pub async fn delete_canvas(
     State(state): State<SharedState>,
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 2026-08-31 incident (store.rs module doc): single store call, still
+    // 2026-08-31 incident (store/mod.rs module doc): single store call, still
     // wrapped so it can never park this async worker on the mutex wait.
     let ok = state
         .store

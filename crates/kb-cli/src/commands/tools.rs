@@ -326,25 +326,120 @@ mod tests {
         }
     }
 
+    /// The first phase-ID-shaped token in `text`, if any: a whole
+    /// alphanumeric run of 1-3 capitals then digits (`R0`, `SL3`, `W4`), a
+    /// `-X9` suffix form (`CT-C3` is caught by its `C3` run), `Proposal N`,
+    /// `Wave N`, or a `v0.N` release tag. Legit acronyms with digits are
+    /// allow-listed by name.
+    fn phase_id_in(text: &str) -> Option<String> {
+        const ALLOW: &[&str] = &[
+            "BM25", "SHA1", "SHA256", "SHA512", "UTF8", "MD5", "IPV4", "IPV6",
+        ];
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i].is_ascii_alphanumeric() {
+                let start = i;
+                while i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
+                    i += 1;
+                }
+                let run = &text[start..i];
+                let caps = run.bytes().take_while(|b| b.is_ascii_uppercase()).count();
+                let rest = &run[caps..];
+                if (1..=3).contains(&caps)
+                    && !rest.is_empty()
+                    && rest.bytes().all(|b| b.is_ascii_digit())
+                    && !ALLOW.contains(&run)
+                {
+                    return Some(run.to_string());
+                }
+                if run == "v0" && text[i..].starts_with('.') {
+                    return Some(format!(
+                        "v0{}",
+                        text[i..].chars().take(3).collect::<String>()
+                    ));
+                }
+                if (run == "Proposal" || run == "Wave")
+                    && text[i..]
+                        .trim_start_matches([' ', '-'])
+                        .starts_with(|c: char| c.is_ascii_digit())
+                {
+                    return Some(format!("{run} N"));
+                }
+            } else {
+                i += 1;
+            }
+        }
+        None
+    }
+
     #[test]
-    fn top_level_help_has_start_here_and_no_phase_ids() {
+    fn phase_id_detector_flags_the_shapes_and_spares_acronyms() {
+        for bad in [
+            "R0",
+            "SL3",
+            "W4/W3.A",
+            "CT-C3",
+            "v0.44",
+            "Proposal 2",
+            "Wave 0",
+            "(D26)",
+        ] {
+            assert!(phase_id_in(bad).is_some(), "{bad} should be flagged");
+        }
+        for ok in [
+            "BM25 + vector",
+            "SHA256",
+            "plain prose",
+            "R",
+            "ascii",
+            "x86",
+            "k=60",
+        ] {
+            assert!(phase_id_in(ok).is_none(), "{ok} should pass");
+        }
+    }
+
+    /// Walk the WHOLE rendered help tree (every command's about/long_about
+    /// and every argument's help/long_help), not a hand-picked list of
+    /// banned strings: provenance belongs in an adjacent `// Provenance:`
+    /// source comment, never in what an operator reads in `--help`.
+    #[test]
+    fn whole_help_tree_has_no_phase_ids() {
+        fn walk(cmd: &clap::Command, path: &str, bad: &mut Vec<String>) {
+            let mut texts: Vec<(String, String)> = Vec::new();
+            for t in [cmd.get_about(), cmd.get_long_about()]
+                .into_iter()
+                .flatten()
+            {
+                texts.push((format!("`{path}` about"), t.to_string()));
+            }
+            for a in cmd.get_arguments() {
+                for t in [a.get_help(), a.get_long_help()].into_iter().flatten() {
+                    texts.push((format!("`{path} --{}`", a.get_id()), t.to_string()));
+                }
+            }
+            for (where_, text) in texts {
+                if let Some(hit) = phase_id_in(&text) {
+                    bad.push(format!(
+                        "{where_} leaks `{hit}`: {}",
+                        text.lines().next().unwrap_or("")
+                    ));
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                walk(sub, &format!("{path} {}", sub.get_name()), bad);
+            }
+        }
+        let mut bad = Vec::new();
+        walk(&crate::Cli::command(), "kb", &mut bad);
+        assert!(bad.is_empty(), "phase IDs in --help:\n{}", bad.join("\n"));
+    }
+
+    #[test]
+    fn top_level_help_has_start_here() {
         let cli = crate::Cli::command();
         let help = cli.clone().render_help().to_string();
         assert!(help.contains("Start here:"), "{help}");
-        // Phase-ID shapes that used to lead the verb summaries.
-        let banned = [
-            "v0.", "CT-", "MI-W", "W2.", "GC-B", "TM-track", "M5 ", "SL3",
-        ];
-        for sub in cli.get_subcommands() {
-            let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
-            let first = about.as_str();
-            for b in banned {
-                assert!(
-                    !first.contains(b),
-                    "`kb {}` summary leaks a phase ID ({b}): {first}",
-                    sub.get_name()
-                );
-            }
-        }
     }
 }

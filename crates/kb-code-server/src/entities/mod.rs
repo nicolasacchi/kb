@@ -587,7 +587,7 @@ pub async fn entity_route(
     let worktree = params.worktree.clone();
 
     let ent_q = ent.clone();
-    // 2026-08-31 incident (store.rs module doc): ONE hop to the blocking
+    // 2026-08-31 incident (store/mod.rs module doc): ONE hop to the blocking
     // pool. The Zeitwerk read belongs inside it too — it is cached, but a
     // cold call `stat`s four paths and reads up to three files, which is
     // filesystem work that must never happen on an async worker.

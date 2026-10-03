@@ -1521,3 +1521,72 @@ Findings worth keeping:
   content — the same "no in-daemon LLM, tidy is a skill" refusal the
   design already states, just easy to violate by accident in the
   reporting step rather than the decision step.
+
+## v0.44 — stabilisation: review, seven waves, and the guards that make the defect classes structural
+
+v0.44 added no product surface on purpose. It started from a fortnight review
+of the previous two weeks of features (every claim in a comment, doc, test name
+or CLAUDE.md read against the code it described), and ran seven waves of
+builder units against the verified findings. Nothing here is a new subsystem;
+what changed is that the properties earlier milestones asserted are now either
+true and tested, or no longer claimed.
+
+**What shipped, by wave.**
+
+- *Hygiene, CI and the boundary* — R1 (public-repo scrub and a whole-tree public
+  gate), C1 (CI and release integrity), S1/S2 (the Host guard repaired on both
+  daemons and shared; `trusted_proxies` by DNS name; a safe dev artifact
+  posture), P1/P2 (private notes never cross the operator boundary; the
+  twin-path matrix for comment writes).
+- *Data and storage* — B1 (one state registry and one writer for backups,
+  per-kb off-host destinations, atomic tarballs), I1 (search/indexer honesty,
+  relocate conformance), H1 (hook deadlines add up; one count per recall
+  injection).
+- *kb-code review stack* — K1-K7 (review-store gitconfig and state hygiene,
+  `forge_ctx` everywhere, fail-closed credentials, merged-PR pinning, atomic
+  review creation, store `restore`, cross-process locks, Margin thread
+  integrity) and F9/F9b (rebase-aware `since`, `touched_in` from author hunks,
+  review context and queue lanes).
+- *Agent and operator CLI* — X1-X9 (one exit-code mapping, stable slugs, one
+  identity ladder, capture spool and scrub leftovers), F5-F8/F10 (version skew
+  named, `doctor --strict`, deadline-bounded hot path, secrets floor on the
+  remaining capture lanes, undistilled queue and chores), W5a-W5f (slate, harvest,
+  wire-type drift, federated search default, clean help, second store split).
+- *Release* — F1 (green means proven) and F2 (channels, build-provenance
+  attestations, SPA in the tarball, `SECURITY.md`).
+- *Docs and comments (D1)* — the `store.rs` pointers re-pointed after the
+  split, the doctor/search/route-gate docs brought to what the code does, a
+  test that every config key is documented, one that the published `[server]`
+  block passes its own Host guard, and this record.
+
+**The recurring defect classes, and the guard that now pins each one.**
+
+1. *A documented property the code did not have* (docs, comments and test names
+   outliving the behaviour). Guards: the doc-anchor gate (symbol-paired
+   citations, a WEAK ceiling that may only go down), the config-key docs test,
+   the self-host `[server]` block test, and the rule that a fix names the test
+   that fails without it.
+2. *Counts that can only drift one way.* Guards: two-way ratchets (a count
+   fails when it goes UP or DOWN, so a deletion is a decision, not an
+   accident), plus **witness counts** so a gate cannot pass because its input
+   was empty.
+3. *Gates that pass vacuously.* Guards: **canaries** (a deliberately bad input
+   each gate must reject, run in CI) and self-tests for the gate scripts.
+4. *Twin paths that disagree* (PATCH vs batch vs import; kb-server vs kb-code;
+   CLI vs scheduler). Guards: the **twin-path matrix** (every write route
+   enumerated against the rule it must enforce) and one **shared Host gate** —
+   kb-code takes kb-server's parsers instead of copying them.
+5. *Private context in a public tree.* Guard: the **public gate** runs in CI
+   over the whole tree, not only the diff.
+6. *Fail-open defaults.* Guard: the restrictive-Default posture inventory; a new
+   defaulted enum fails the inventory test until it carries an explicit
+   restrictive impl (implemented for `Visibility`; the rest are inventoried).
+
+**Lessons.** (a) A gate is only as honest as its worst input: three required
+checks could pass vacuously before the witness counts existed. (b) A fix that
+moves a number by hand ("12 fixed, 1 broken") is the symptom of a missing gate,
+not a repair — the doc-anchor gate exists because of exactly that. (c) Shared
+code beats a copied parser: the DNS-rebinding bypass lived in the copy.
+(d) Deferred is a state, not a verdict: the deliberately deferred items are
+listed under "Known issues" in `packaging/release-notes/v0.44.md` and none of
+them is scheduled.

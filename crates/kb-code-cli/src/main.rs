@@ -27521,40 +27521,73 @@ mod tests {
         assert!(!rendered.contains("requires loopback"));
     }
 
-    /// v044-X1 A8.f4 — the kb-review-work skill tells agents which `kb-code
-    /// review <verb>` to type; a verb or `--flag` renamed in clap must fail
-    /// here instead of silently leaving the skill lying.
+    /// v044-X1 A8.f4 / v044-D1 — the kb-review-work skill tells agents which
+    /// `kb-code ...` command to type; a verb or `--flag` renamed in clap must
+    /// fail here instead of silently leaving the skill lying. EVERY inline
+    /// code span (spans may wrap lines) that names `kb-code` is walked: the
+    /// verb path must resolve in the clap tree, and every `--flag` in the span
+    /// piece after it must exist on the resolved command or one of its
+    /// ancestors (a flag is checked against the command it is typed on, not
+    /// merely against some other span's verb).
     #[test]
     fn review_work_skill_commands_exist_in_clap() {
         use clap::CommandFactory;
         let skill = include_str!("../../../plugins/kb-code/skills/kb-review-work/SKILL.md");
-        let cli = Cli::command();
-        let review = cli
-            .get_subcommands()
-            .find(|c| c.get_name() == "review")
-            .expect("`kb-code review` exists");
+        let root = Cli::command();
         let mut checked = 0usize;
-        for line in skill.lines() {
-            let mut rest = line;
-            while let Some(i) = rest.find("kb-code review ") {
-                rest = &rest[i + "kb-code review ".len()..];
-                let verb: String = rest
-                    .chars()
-                    .take_while(|c| c.is_ascii_lowercase() || *c == '-')
-                    .collect();
-                if verb.is_empty() {
+        for (i, span) in skill.split('`').enumerate() {
+            if i % 2 == 0 {
+                continue; // prose between code spans
+            }
+            for piece in span.split("kb-code ").skip(1) {
+                let mut tokens = piece.split_whitespace().peekable();
+                // `kb-code hover/usages/...` names several top-level verbs.
+                let first = match tokens.peek() {
+                    Some(t) => (*t).to_string(),
+                    None => continue,
+                };
+                if first.contains('/') {
+                    for v in first.split('/') {
+                        assert!(
+                            root.get_subcommands().any(|c| c.get_name() == v),
+                            "SKILL.md names `kb-code {v}`: no such verb"
+                        );
+                    }
+                    checked += 1;
                     continue;
                 }
-                let sub = review
-                    .get_subcommands()
-                    .find(|c| c.get_name() == verb || c.get_all_aliases().any(|a| a == verb))
-                    .unwrap_or_else(|| {
-                        panic!("SKILL.md names `kb-code review {verb}`: no such verb")
-                    });
-                checked += 1;
-                // Every `--flag` on the SAME inline-code span must exist on the verb.
-                let span_end = rest.find('`').unwrap_or(rest.len());
-                for tok in rest[..span_end].split_whitespace() {
+                let mut path: Vec<&clap::Command> = vec![&root];
+                while let Some(tok) = tokens.peek() {
+                    let word = !tok.is_empty()
+                        && tok.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                        && !tok.starts_with('-');
+                    if !word {
+                        break;
+                    }
+                    let cur = *path.last().unwrap();
+                    let found = cur
+                        .get_subcommands()
+                        .find(|c| c.get_name() == *tok || c.get_all_aliases().any(|a| a == *tok));
+                    match found {
+                        Some(sub) => {
+                            path.push(sub);
+                            tokens.next();
+                        }
+                        None if cur.has_subcommands() && path.len() == 1 => {
+                            panic!("SKILL.md names `kb-code {tok}`: no such verb")
+                        }
+                        None if cur.has_subcommands() && cur.is_subcommand_required_set() => {
+                            panic!(
+                                "SKILL.md names `kb-code ... {} {tok}`: no such verb",
+                                cur.get_name()
+                            )
+                        }
+                        None => break, // a positional value, e.g. `fix.txt`
+                    }
+                }
+                assert!(path.len() > 1, "SKILL.md: `kb-code {piece}` names no verb");
+                for tok in tokens {
+                    let tok = tok.trim_start_matches('[');
                     if let Some(flag) = tok.strip_prefix("--") {
                         let name: String = flag
                             .chars()
@@ -27563,16 +27596,19 @@ mod tests {
                         if name.is_empty() {
                             continue;
                         }
-                        let known = sub
-                            .get_arguments()
-                            .any(|a| a.get_long() == Some(name.as_str()))
-                            || name == "json";
-                        assert!(known, "SKILL.md: `review {verb}` has no --{name}");
+                        let known = name == "json"
+                            || path.iter().any(|c| {
+                                c.get_arguments()
+                                    .any(|a| a.get_long() == Some(name.as_str()))
+                            });
+                        let verbs: Vec<&str> = path.iter().skip(1).map(|c| c.get_name()).collect();
+                        assert!(known, "SKILL.md: `{}` has no --{name}", verbs.join(" "));
                     }
                 }
+                checked += 1;
             }
         }
-        assert!(checked >= 8, "only {checked} skill commands checked");
+        assert!(checked >= 15, "only {checked} skill commands checked");
     }
 
     #[test]
