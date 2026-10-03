@@ -2393,26 +2393,26 @@ fn backfill_project_key_offline(config: Option<&PathBuf>, apply: bool) -> Result
 }
 
 #[cfg(test)]
-
-/// v044-X3 (A4.f6): the CLI no longer writes `index.db` behind a running
-/// daemon's back — it names the route, the dry-run default is explicit
-/// on the wire, and the reply's counts are what gets printed.
-#[test]
-fn backfill_goes_through_the_daemon_route_dry_run_by_default() {
-    assert_eq!(
-        backfill_project_key_path(false),
-        "/api/sessions/backfill-project-key?apply=false"
-    );
-    assert_eq!(
-        backfill_project_key_path(true),
-        "/api/sessions/backfill-project-key?apply=true"
-    );
-    let body = serde_json::json!({"apply": true, "would_change": 3, "changed": 2, "kbs": []});
-    assert_eq!(backfill_totals(&body).unwrap(), (3, 2));
-    assert!(backfill_totals(&serde_json::json!({})).is_err());
-}
 mod tests {
     use super::*;
+
+    /// v044-X3 (A4.f6): the CLI no longer writes `index.db` behind a running
+    /// daemon's back — it names the route, the dry-run default is explicit
+    /// on the wire, and the reply's counts are what gets printed.
+    #[test]
+    fn backfill_goes_through_the_daemon_route_dry_run_by_default() {
+        assert_eq!(
+            backfill_project_key_path(false),
+            "/api/sessions/backfill-project-key?apply=false"
+        );
+        assert_eq!(
+            backfill_project_key_path(true),
+            "/api/sessions/backfill-project-key?apply=true"
+        );
+        let body = serde_json::json!({"apply": true, "would_change": 3, "changed": 2, "kbs": []});
+        assert_eq!(backfill_totals(&body).unwrap(), (3, 2));
+        assert!(backfill_totals(&serde_json::json!({})).is_err());
+    }
 
     #[test]
     fn truncate_caps_at_n_with_ellipsis() {
