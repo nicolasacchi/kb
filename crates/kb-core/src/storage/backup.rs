@@ -715,6 +715,9 @@ pub fn lance_copy_order(src: &Path) -> Result<Vec<PathBuf>> {
 /// does not prove it; `Storage::open` + `count_rows` never touch data files.
 /// This is the proof. A missing file fails the export (retry, or stop the
 /// daemon) rather than shipping a tarball that cannot be read back.
+///
+/// Scope: only data files named by the manifest are checked; deletion files
+/// and index files the manifest references are not.
 pub async fn verify_staged_lance_data_files(lance_root: &Path) -> Result<()> {
     for entry in std::fs::read_dir(lance_root)? {
         let table_dir = entry?.path();
@@ -1518,6 +1521,21 @@ mod tests {
                     .await
                     .is_err(),
                 "the export finished while the blocking pool was saturated: it ran on the async worker"
+            );
+            // The tar hop alone would keep the future pending, so pin the
+            // staging step itself: its closure creates the staging dir, and
+            // while the pool is held that closure cannot have started. An
+            // inline staging walk would already have created (and filled) it.
+            let staged_now: Vec<_> = std::fs::read_dir(&paths.exports)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| e.file_name().to_string_lossy().starts_with(".staging-"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(
+                staged_now.is_empty(),
+                "staging began while the blocking pool was saturated: the copy walk ran on the async worker"
             );
             release_tx.send(()).unwrap();
             let out = tokio::time::timeout(std::time::Duration::from_secs(30), &mut fut)

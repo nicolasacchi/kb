@@ -480,7 +480,14 @@ mod backup_written_schema {
         let at = lib
             .find("\"maintenance.backup.written\",")
             .expect("scheduler emits maintenance.backup.written");
-        let emit = &lib[at..at + 900];
+        // Window = from the event name to the end of this `emit(` call
+        // (first `);` after it), so it neither panics on a char boundary nor
+        // silently stops covering the payload when it grows.
+        let end = lib[at..]
+            .find(");")
+            .map(|i| at + i)
+            .expect("emit call is terminated");
+        let emit = &lib[at..end];
         for key in ["\"kb\":", "\"path\":", "\"remote\":"] {
             assert!(emit.contains(key), "emit site is missing {key}");
         }

@@ -120,8 +120,9 @@ export default defineConfig({
         // `import "./mermaid-*.js"`. Left to the default algorithm mermaid is
         // reachable ONLY from `src/sketch/main.ts` (the second HTML entry).
         // That used to be a comment; `scripts/check-main-chunk.mjs` (run by
-        // `npm run build`) now fails the build if a large sketch-graph chunk
-        // appears in the shell's static import closure.
+        // `npm run build`) now fails the build if the mermaid chunk (found
+        // by its mermaidAPI export, not by size) is in the shell's static
+        // import closure.
         codeSplitting: {
           groups: [
             {
