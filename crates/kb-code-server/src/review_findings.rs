@@ -682,7 +682,10 @@ fn orphaned_resolution(target_ps: &ReviewPatchsetRow) -> ResolvedForPs {
 /// location whose `location_lines` failed to parse — the SAME degrade
 /// `finding_json`'s own `lines_json` uses for a malformed blob, never a
 /// guess).
-fn touched_in_query_for(f: &ReviewFindingRow, own_ps: Option<i64>) -> Option<TouchedInQuery> {
+pub(crate) fn touched_in_query_for(
+    f: &ReviewFindingRow,
+    own_ps: Option<i64>,
+) -> Option<TouchedInQuery> {
     let own_ps = own_ps?;
     let lines: Vec<i64> = f
         .location_lines

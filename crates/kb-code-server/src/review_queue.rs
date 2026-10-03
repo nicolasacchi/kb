@@ -15,7 +15,20 @@
 //!      module's test and by `questionState.golden.test.ts`);
 //!   2. `dispute` — a finding the human DISPUTED (and which is neither
 //!      superseded nor resolved) with no agent reply on its thread at or
-//!      after `disposition_at`.
+//!      after `disposition_at`;
+//!   3. `follow-up` — a finding the human AGREED with (or marked fix-later)
+//!      whose thread is still open and which has neither a stored
+//!      suggestion nor a later patchset hunk by the author near its lines
+//!      (`touched_in`, rebase-aware, `rebased` not counted);
+//!   4. `pr-drift` — an open PR-bound review whose stored PR head differs
+//!      from its latest patchset tip (the local half of `review status`; no
+//!      network);
+//!   5. `flag` — an open `flag-for-agent` thread whose latest voice is not
+//!      an agent.
+//!
+//! A thread appears at most ONCE: lanes are claimed in order by
+//! `annotation_id`, so a disputed finding whose thread is also an open
+//! question is a `question` row only.
 //!
 //! Rows sort by lane, then oldest-waiting first, then `(review_id,
 //! annotation_id)` — a total order, so repeated reads over unchanged state
@@ -35,9 +48,9 @@
 //!     authenticates nobody, so a reply under the human's own name keeps a
 //!     row on the queue (that is why the CLI's author ladder defaults
 //!     replies to `claude`, never `you`).
-//!   * Lanes 3-5 of the design (agree/fix-later findings with no suggestion,
-//!     PR head drift, flag-for-agent annotations) are not built; see the
-//!     PR that introduced this module.
+//!   * `follow-up` findings are matched on stored suggestions and on
+//!     `touched_in` author hunks; a `whole_file`/line-less finding has no
+//!     lines to match, so it stays queued until resolved or superseded.
 //!
 //! The annotation load is the inbox's: ONE batched query per repo
 //! (`list_review_annotations_batch`, `list_review_findings_batch`), never a
@@ -52,11 +65,14 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const QUEUE_SCHEMA: &str = "kbc-agent-queue/1";
 pub const LANE_QUESTION: &str = "question";
 pub const LANE_DISPUTE: &str = "dispute";
+pub const LANE_FOLLOW_UP: &str = "follow-up";
+pub const LANE_PR_DRIFT: &str = "pr-drift";
+pub const LANE_FLAG: &str = "flag";
 
 /// One voice on a thread (opener or reply).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,10 +110,61 @@ pub fn awaiting_agent(
     replies: &[Voice<'_>],
     finding_origin: Option<&str>,
 ) -> bool {
-    if resolved || intent != crate::annotations::INTENT_QUESTION {
+    thread_awaits_agent(
+        intent,
+        crate::annotations::INTENT_QUESTION,
+        resolved,
+        opener,
+        replies,
+        finding_origin,
+    )
+}
+
+/// The shared turn-taking rule: an unresolved thread of `want` intent whose
+/// latest voice is not an agent. Lane 1 asks it of `question`, lane 5 of
+/// `flag-for-agent`. Pure.
+pub fn thread_awaits_agent(
+    intent: &str,
+    want: &str,
+    resolved: bool,
+    opener: Voice<'_>,
+    replies: &[Voice<'_>],
+    finding_origin: Option<&str>,
+) -> bool {
+    if resolved || intent != want {
         return false;
     }
     !latest_is_agent(opener, replies, finding_origin)
+}
+
+/// Findings the human agreed with (or deferred as fix-later) that are still
+/// open and carry no stored suggestion: the candidates for the `follow-up`
+/// lane before the author-hunk check. Pure.
+pub fn followup_candidates<'a>(
+    annotations: &'a [AnnotationRow],
+    findings: &'a [ReviewFindingRow],
+    suggested: &HashSet<String>,
+) -> Vec<(&'a ReviewFindingRow, &'a AnnotationRow)> {
+    let threads: HashMap<&str, &AnnotationRow> = annotations
+        .iter()
+        .filter(|a| a.parent_id.is_none())
+        .map(|a| (a.id.as_str(), a))
+        .collect();
+    findings
+        .iter()
+        .filter(|f| {
+            !f.superseded
+                && matches!(
+                    f.disposition.as_deref(),
+                    Some(store::DISPOSITION_AGREE) | Some(store::DISPOSITION_FIX_LATER)
+                )
+                && !suggested.contains(&f.annotation_id)
+        })
+        .filter_map(|f| {
+            let t = threads.get(f.annotation_id.as_str())?;
+            (!t.resolved).then_some((f, *t))
+        })
+        .collect()
 }
 
 /// A disputed finding the agent has not answered: disposition `dispute`,
@@ -180,13 +247,33 @@ fn voices_of<'a>(
         .unwrap_or_default()
 }
 
-/// One review's queue rows from its already-loaded rows. Pure.
+/// Facts about one review that its annotation/finding rows cannot give.
+#[derive(Debug, Clone, Default)]
+pub struct ReviewFacts {
+    /// The review is open (lane 4 never fires on a closed one).
+    pub open: bool,
+    /// Annotation ids carrying a stored suggestion.
+    pub suggested: HashSet<String>,
+    /// Finding annotation ids with an author hunk near their lines in a
+    /// later patchset (`touched_in`, not `rebased`).
+    pub authored: HashSet<String>,
+    /// The stored PR head the review was last synced against.
+    pub pr_head_sha: Option<String>,
+    /// The latest patchset's tip and capture time.
+    pub latest_tip: Option<String>,
+    pub latest_captured_at: Option<i64>,
+}
+
+/// One review's queue rows from its already-loaded rows. Pure. A thread is
+/// claimed by the first lane that wants it (lane order), so no
+/// `annotation_id` appears twice.
 pub fn rows_for_review(
     review_id: i64,
     repo: &str,
     pr_number: Option<i64>,
     annotations: &[AnnotationRow],
     findings: &[ReviewFindingRow],
+    facts: &ReviewFacts,
 ) -> Vec<QueueRow> {
     let mut threads: HashMap<&str, &AnnotationRow> = HashMap::new();
     let mut replies_by_parent: HashMap<&str, Vec<&AnnotationRow>> = HashMap::new();
@@ -209,13 +296,18 @@ pub fn rows_for_review(
     let id_s = review_id.to_string();
 
     let mut out: Vec<QueueRow> = Vec::new();
-    for (aid, t) in &threads {
+    let mut claimed: HashSet<String> = HashSet::new();
+    // Deterministic claim order inside a lane: HashMap iteration is not.
+    let mut thread_ids: Vec<&&str> = threads.keys().collect();
+    thread_ids.sort();
+    for aid in thread_ids {
+        let t = threads[*aid];
         let replies = voices_of(&replies_by_parent, aid);
         let opener = Voice {
             author: t.author.as_str(),
             at: t.created_at,
         };
-        let origin = finding_by_ann.get(aid).map(|f| f.origin.as_str());
+        let origin = finding_by_ann.get(*aid).map(|f| f.origin.as_str());
         if awaiting_agent(&t.intent, t.resolved, opener, &replies, origin) {
             // Waiting since the last human voice (the opener or the latest
             // reply), which is when the agent's turn began.
@@ -225,6 +317,7 @@ pub fn rows_for_review(
                 .chain(std::iter::once(opener.at))
                 .max()
                 .unwrap_or(opener.at);
+            claimed.insert(t.id.clone());
             out.push(QueueRow {
                 lane: LANE_QUESTION.to_string(),
                 lane_order: 1,
@@ -234,7 +327,7 @@ pub fn rows_for_review(
                 annotation_id: t.id.clone(),
                 path: t.path.clone(),
                 ps_number: t.ps_number,
-                finding_slug: finding_by_ann.get(aid).map(|f| f.slug.clone()),
+                finding_slug: finding_by_ann.get(*aid).map(|f| f.slug.clone()),
                 waiting_since: since,
                 from: t.author.clone(),
                 next: vec![argv(&["kb-code", "review", "comments", &id_s, "--json"])],
@@ -242,7 +335,7 @@ pub fn rows_for_review(
         }
     }
     for f in findings {
-        if f.superseded {
+        if f.superseded || claimed.contains(&f.annotation_id) {
             continue;
         }
         let Some(t) = threads.get(f.annotation_id.as_str()) else {
@@ -256,6 +349,7 @@ pub fn rows_for_review(
             t.resolved,
             &replies,
         ) {
+            claimed.insert(f.annotation_id.clone());
             out.push(QueueRow {
                 lane: LANE_DISPUTE.to_string(),
                 lane_order: 2,
@@ -274,6 +368,100 @@ pub fn rows_for_review(
             });
         }
     }
+    // Lane 3 — agreed/fix-later, still open, nothing done about it yet.
+    for (f, t) in followup_candidates(annotations, findings, &facts.suggested) {
+        if claimed.contains(&f.annotation_id) || facts.authored.contains(&f.annotation_id) {
+            continue;
+        }
+        claimed.insert(f.annotation_id.clone());
+        out.push(QueueRow {
+            lane: LANE_FOLLOW_UP.to_string(),
+            lane_order: 3,
+            review_id,
+            repo: repo.to_string(),
+            pr_number,
+            annotation_id: f.annotation_id.clone(),
+            path: f.location_path.clone(),
+            ps_number: t.ps_number,
+            finding_slug: Some(f.slug.clone()),
+            waiting_since: f.disposition_at.unwrap_or(t.created_at),
+            from: f.disposition_by.clone().unwrap_or_default(),
+            next: vec![argv(&[
+                "kb-code", "review", "findings", "list", &id_s, "--json",
+            ])],
+        });
+    }
+    // Lane 4 — the PR moved under the review (local comparison only).
+    if let (true, Some(_), Some(head), Some(tip)) = (
+        facts.open,
+        pr_number,
+        facts.pr_head_sha.as_deref(),
+        facts.latest_tip.as_deref(),
+    ) {
+        if head != tip {
+            out.push(QueueRow {
+                lane: LANE_PR_DRIFT.to_string(),
+                lane_order: 4,
+                review_id,
+                repo: repo.to_string(),
+                pr_number,
+                annotation_id: String::new(),
+                path: String::new(),
+                ps_number: None,
+                finding_slug: None,
+                waiting_since: facts.latest_captured_at.unwrap_or(0),
+                from: String::new(),
+                next: vec![
+                    argv(&["kb-code", "review", "status", &id_s, "--json"]),
+                    argv(&["kb-code", "review", "sync", "--repo", repo, "--json"]),
+                ],
+            });
+        }
+    }
+    // Lane 5 — flag-for-agent threads nobody on the agent side answered.
+    let mut flag_ids: Vec<&&str> = threads.keys().collect();
+    flag_ids.sort();
+    for aid in flag_ids {
+        let t = threads[*aid];
+        if claimed.contains(&t.id) {
+            continue;
+        }
+        let replies = voices_of(&replies_by_parent, aid);
+        let opener = Voice {
+            author: t.author.as_str(),
+            at: t.created_at,
+        };
+        if thread_awaits_agent(
+            &t.intent,
+            crate::annotations::INTENT_FLAG_FOR_AGENT,
+            t.resolved,
+            opener,
+            &replies,
+            None,
+        ) {
+            let since = replies
+                .iter()
+                .map(|r| r.at)
+                .chain(std::iter::once(opener.at))
+                .max()
+                .unwrap_or(opener.at);
+            claimed.insert(t.id.clone());
+            out.push(QueueRow {
+                lane: LANE_FLAG.to_string(),
+                lane_order: 5,
+                review_id,
+                repo: repo.to_string(),
+                pr_number,
+                annotation_id: t.id.clone(),
+                path: t.path.clone(),
+                ps_number: t.ps_number,
+                finding_slug: None,
+                waiting_since: since,
+                from: t.author.clone(),
+                next: vec![argv(&["kb-code", "review", "comments", &id_s, "--json"])],
+            });
+        }
+    }
     out
 }
 
@@ -289,13 +477,28 @@ pub fn sort_queue(rows: &mut [QueueRow]) {
     });
 }
 
-/// The batched composition: the inbox's loads, once per repo. BLOCKING
-/// (run inside `run_blocking`).
-pub fn compose_queue(
+/// One review's loaded inputs. The store half of the composition; the git
+/// half (`authored`) is filled by [`attach_authored`].
+#[derive(Debug, Clone)]
+pub struct ReviewInput {
+    pub review_id: i64,
+    pub repo: String,
+    pub pr_number: Option<i64>,
+    pub annotations: Vec<AnnotationRow>,
+    pub findings: Vec<ReviewFindingRow>,
+    pub facts: ReviewFacts,
+    /// Loaded only when the review has `follow-up` candidates.
+    pub patchsets: Vec<store::ReviewPatchsetRow>,
+}
+
+/// The batched store loads, once per repo (the inbox's loads plus one
+/// suggestions join and one latest-patchset read). BLOCKING (run inside
+/// `run_blocking`).
+pub fn load_inputs(
     store: &store::Store,
     repo_names: &[String],
     state_filter: Option<&str>,
-) -> Result<Vec<QueueRow>, ApiError> {
+) -> Result<Vec<ReviewInput>, ApiError> {
     let mut reviews = Vec::new();
     for repo_name in repo_names {
         reviews.extend(store.list_reviews(repo_name, state_filter)?);
@@ -305,17 +508,93 @@ pub fn compose_queue(
     }
     let ids: Vec<i64> = reviews.iter().map(|r| r.id).collect();
     let binding_map = store.get_review_pr_bindings(&ids)?;
-    let findings_map = store.list_review_findings_batch(&ids, None, false)?;
-    let ann_map = store.list_review_annotations_batch(&ids, true)?;
-    let mut rows = Vec::new();
+    let mut findings_map = store.list_review_findings_batch(&ids, None, false)?;
+    let mut ann_map = store.list_review_annotations_batch(&ids, true)?;
+    let latest = store.latest_patchsets(&ids)?;
+    let suggested = store.review_suggestion_annotation_ids(&ids)?;
+    let mut out = Vec::new();
     for r in &reviews {
-        let pr = binding_map.get(&r.id).and_then(|b| b.pr_number);
-        let anns = ann_map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]);
-        let fs = findings_map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]);
-        rows.extend(rows_for_review(r.id, &r.repo, pr, anns, fs));
+        let binding = binding_map.get(&r.id);
+        let annotations = ann_map.remove(&r.id).unwrap_or_default();
+        let findings = findings_map.remove(&r.id).unwrap_or_default();
+        let facts = ReviewFacts {
+            open: r.state == "open",
+            suggested: annotations
+                .iter()
+                .filter(|a| suggested.contains(&a.id))
+                .map(|a| a.id.clone())
+                .collect(),
+            authored: HashSet::new(),
+            pr_head_sha: binding.and_then(|b| b.pr_head_sha.clone()),
+            latest_tip: latest.get(&r.id).map(|p| p.tip_sha.clone()),
+            latest_captured_at: latest.get(&r.id).map(|p| p.captured_at),
+        };
+        let patchsets = if followup_candidates(&annotations, &findings, &facts.suggested).is_empty()
+        {
+            Vec::new()
+        } else {
+            store.list_patchsets(r.id)?
+        };
+        out.push(ReviewInput {
+            review_id: r.id,
+            repo: r.repo.clone(),
+            pr_number: binding.and_then(|b| b.pr_number),
+            annotations,
+            findings,
+            facts,
+            patchsets,
+        });
+    }
+    Ok(out)
+}
+
+/// Fill `facts.authored`: which `follow-up` candidates already have an
+/// author hunk near their lines in a later patchset. BLOCKING (git).
+/// `rebased` entries are not evidence and do not count.
+pub fn attach_authored(ctx: &crate::git::roots::GitCtx, input: &mut ReviewInput) {
+    let candidates =
+        followup_candidates(&input.annotations, &input.findings, &input.facts.suggested);
+    let mut queries = Vec::new();
+    let mut ann_of: HashMap<i64, String> = HashMap::new();
+    for (f, t) in candidates {
+        if let Some(q) = crate::review_findings::touched_in_query_for(f, t.ps_number) {
+            ann_of.insert(f.id, f.annotation_id.clone());
+            queries.push(q);
+        }
+    }
+    if queries.is_empty() {
+        return;
+    }
+    let touched =
+        crate::review_finding_touches::compute_touched_in(ctx, &input.patchsets, &queries);
+    for (fid, res) in touched {
+        let acted = res
+            .entries
+            .iter()
+            .any(|e| e.overlap != crate::review_finding_touches::OVERLAP_REBASED);
+        if acted {
+            if let Some(aid) = ann_of.get(&fid) {
+                input.facts.authored.insert(aid.clone());
+            }
+        }
+    }
+}
+
+/// Rows for every loaded review, sorted. Pure.
+pub fn compose_rows(inputs: &[ReviewInput]) -> Vec<QueueRow> {
+    let mut rows = Vec::new();
+    for i in inputs {
+        rows.extend(rows_for_review(
+            i.review_id,
+            &i.repo,
+            i.pr_number,
+            &i.annotations,
+            &i.findings,
+            &i.facts,
+        ));
     }
     sort_queue(&mut rows);
-    Ok(rows)
+    rows
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -350,10 +629,32 @@ pub async fn agent_queue_route(
         }
         None => state.repos.iter().map(|r| r.name.clone()).collect(),
     };
-    let rows = state
+    let mut inputs = state
         .store
-        .run_blocking(move |store| compose_queue(store, &repo_names, state_filter.as_deref()))
+        .run_blocking(move |store| load_inputs(store, &repo_names, state_filter.as_deref()))
         .await?;
+    // The git half (lane 3's author-hunk check), only for reviews that have
+    // `follow-up` candidates, one repo context per repo.
+    let mut ctxs: HashMap<String, crate::git::roots::GitCtx> = HashMap::new();
+    for i in inputs.iter().filter(|i| !i.patchsets.is_empty()) {
+        if ctxs.contains_key(&i.repo) {
+            continue;
+        }
+        if let Some(entry) = state.repos.iter().find(|r| r.name == i.repo) {
+            let ctx = crate::git::roots::GitCtx::resolve_entry(&state.store, entry).await;
+            ctxs.insert(i.repo.clone(), ctx);
+        }
+    }
+    let rows = tokio::task::spawn_blocking(move || {
+        for i in inputs.iter_mut().filter(|i| !i.patchsets.is_empty()) {
+            if let Some(ctx) = ctxs.get(&i.repo) {
+                attach_authored(ctx, i);
+            }
+        }
+        compose_rows(&inputs)
+    })
+    .await
+    .map_err(|e| ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let body = AgentQueue {
         schema: QUEUE_SCHEMA.to_string(),
         count: rows.len(),
@@ -526,7 +827,14 @@ mod tests {
     #[test]
     fn a_human_question_with_no_reply_is_queued_and_an_agent_reply_clears_it() {
         let q = ann("q1", None, "you", 100, "question");
-        let rows = rows_for_review(1, "r", None, std::slice::from_ref(&q), &[]);
+        let rows = rows_for_review(
+            1,
+            "r",
+            None,
+            std::slice::from_ref(&q),
+            &[],
+            &ReviewFacts::default(),
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(
             (
@@ -537,12 +845,27 @@ mod tests {
             ("question", 1, 100)
         );
         let reply = ann("r1", Some("q1"), "claude", 200, "note");
-        assert!(rows_for_review(1, "r", None, &[q.clone(), reply], &[]).is_empty());
+        assert!(rows_for_review(
+            1,
+            "r",
+            None,
+            &[q.clone(), reply],
+            &[],
+            &ReviewFacts::default()
+        )
+        .is_empty());
         // a human follow-up AFTER the agent's reply puts it back, waiting
         // since the follow-up
         let reply = ann("r1", Some("q1"), "claude", 200, "note");
         let again = ann("r2", Some("q1"), "you", 300, "note");
-        let rows = rows_for_review(1, "r", None, &[q, reply, again], &[]);
+        let rows = rows_for_review(
+            1,
+            "r",
+            None,
+            &[q, reply, again],
+            &[],
+            &ReviewFacts::default(),
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].waiting_since, 300);
     }
@@ -552,7 +875,7 @@ mod tests {
         // The inbox counts this as "unanswered" (asker spoke last); the
         // queue must not: the agent is the asker.
         let q = ann("q1", None, "claude", 100, "question");
-        assert!(rows_for_review(1, "r", None, &[q], &[]).is_empty());
+        assert!(rows_for_review(1, "r", None, &[q], &[], &ReviewFacts::default()).is_empty());
     }
 
     #[test]
@@ -560,7 +883,7 @@ mod tests {
         let mut q = ann("q1", None, "you", 100, "question");
         q.resolved = true;
         let note = ann("n1", None, "you", 100, "note");
-        assert!(rows_for_review(1, "r", None, &[q, note], &[]).is_empty());
+        assert!(rows_for_review(1, "r", None, &[q, note], &[], &ReviewFacts::default()).is_empty());
     }
 
     #[test]
@@ -569,7 +892,14 @@ mod tests {
         // intent "finding": it is NOT a lane-1 row, only a lane-2 one.
         let opener = ann("f1", None, "claude", 100, "finding");
         let fs = [finding("f-x", "f1", Some("dispute"), 500)];
-        let rows = rows_for_review(1, "r", Some(7), std::slice::from_ref(&opener), &fs);
+        let rows = rows_for_review(
+            1,
+            "r",
+            Some(7),
+            std::slice::from_ref(&opener),
+            &fs,
+            &ReviewFacts::default(),
+        );
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(
             (
@@ -584,16 +914,37 @@ mod tests {
         assert_eq!(rows[0].next[0][..3], ["kb-code", "review", "findings"]);
         // an agent reply after the dispute clears it
         let reply = ann("r1", Some("f1"), "claude", 600, "note");
-        assert!(rows_for_review(1, "r", None, &[opener.clone(), reply], &fs).is_empty());
+        assert!(rows_for_review(
+            1,
+            "r",
+            None,
+            &[opener.clone(), reply],
+            &fs,
+            &ReviewFacts::default()
+        )
+        .is_empty());
         // an agent reply BEFORE the dispute does not
         let early = ann("r0", Some("f1"), "claude", 400, "note");
         assert_eq!(
-            rows_for_review(1, "r", None, &[opener.clone(), early], &fs).len(),
+            rows_for_review(
+                1,
+                "r",
+                None,
+                &[opener.clone(), early],
+                &fs,
+                &ReviewFacts::default()
+            )
+            .len(),
             1
         );
         // other dispositions are not this lane
         let agree = [finding("f-x", "f1", Some("agree"), 500)];
-        assert!(rows_for_review(1, "r", None, &[opener], &agree).is_empty());
+        // (it IS a lane-3 `follow-up` row, but not a `dispute` one)
+        assert!(
+            rows_for_review(1, "r", None, &[opener], &agree, &ReviewFacts::default())
+                .iter()
+                .all(|r| r.lane != LANE_DISPUTE)
+        );
     }
 
     #[test]
@@ -636,6 +987,138 @@ mod tests {
             &[]
         ));
         assert!(!dispute_unanswered(None, false, None, false, &[]));
+    }
+
+    fn facts() -> ReviewFacts {
+        ReviewFacts::default()
+    }
+
+    fn lanes(rows: &[QueueRow]) -> Vec<(&str, &str)> {
+        rows.iter()
+            .map(|r| (r.lane.as_str(), r.annotation_id.as_str()))
+            .collect()
+    }
+
+    /// F9b — a disputed finding whose thread is ALSO an open question used
+    /// to be listed twice (lane 1 and lane 2). Fails without the claim set.
+    #[test]
+    fn a_disputed_question_thread_is_one_row_not_two() {
+        let mut opener = ann("q1", None, "you", 100, "question");
+        opener.intent = "question".into();
+        let mut f = finding("f-q", "q1", Some("dispute"), 500);
+        // a human-promoted finding: its opener is the human's voice
+        f.origin = "manual".into();
+        let rows = rows_for_review(1, "r", None, std::slice::from_ref(&opener), &[f], &facts());
+        assert_eq!(lanes(&rows), vec![("question", "q1")], "{rows:?}");
+    }
+
+    /// F9b lane 3 — agree / fix-later with nothing done yet.
+    #[test]
+    fn an_agreed_finding_with_no_suggestion_or_author_hunk_is_a_follow_up() {
+        let opener = ann("f1", None, "claude", 100, "finding");
+        let fs = [finding("f-a", "f1", Some("agree"), 500)];
+        let rows = rows_for_review(1, "r", None, std::slice::from_ref(&opener), &fs, &facts());
+        assert_eq!(lanes(&rows), vec![("follow-up", "f1")]);
+        assert_eq!((rows[0].lane_order, rows[0].waiting_since), (3, 500));
+        // fix-later is the same lane
+        let fl = [finding("f-a", "f1", Some("fix-later"), 600)];
+        assert_eq!(
+            rows_for_review(1, "r", None, std::slice::from_ref(&opener), &fl, &facts()).len(),
+            1
+        );
+        // a stored suggestion, an author hunk, a resolved thread, a waive
+        // or a superseded finding each take it off the queue
+        let mut with_suggestion = facts();
+        with_suggestion.suggested.insert("f1".into());
+        assert!(rows_for_review(
+            1,
+            "r",
+            None,
+            std::slice::from_ref(&opener),
+            &fs,
+            &with_suggestion
+        )
+        .is_empty());
+        let mut with_hunk = facts();
+        with_hunk.authored.insert("f1".into());
+        assert!(
+            rows_for_review(1, "r", None, std::slice::from_ref(&opener), &fs, &with_hunk)
+                .is_empty()
+        );
+        let mut resolved = opener.clone();
+        resolved.resolved = true;
+        assert!(rows_for_review(1, "r", None, &[resolved], &fs, &facts()).is_empty());
+        let waive = [finding("f-a", "f1", Some("waive"), 500)];
+        assert!(rows_for_review(
+            1,
+            "r",
+            None,
+            std::slice::from_ref(&opener),
+            &waive,
+            &facts()
+        )
+        .is_empty());
+        let mut sup = finding("f-a", "f1", Some("agree"), 500);
+        sup.superseded = true;
+        assert!(rows_for_review(
+            1,
+            "r",
+            None,
+            std::slice::from_ref(&opener),
+            &[sup],
+            &facts()
+        )
+        .is_empty());
+    }
+
+    /// F9b lane 4 — the stored PR head differs from the latest tip.
+    #[test]
+    fn pr_head_drift_is_a_review_level_row_only_for_an_open_pr_bound_review() {
+        let drift = ReviewFacts {
+            open: true,
+            pr_head_sha: Some("aaa".into()),
+            latest_tip: Some("bbb".into()),
+            latest_captured_at: Some(42),
+            ..ReviewFacts::default()
+        };
+        let rows = rows_for_review(3, "r", Some(9), &[], &[], &drift);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(
+            (
+                rows[0].lane.as_str(),
+                rows[0].lane_order,
+                rows[0].waiting_since
+            ),
+            ("pr-drift", 4, 42)
+        );
+        assert_eq!(rows[0].annotation_id, "");
+        assert_eq!(rows[0].next[0][2], "status");
+        // same head: nothing; not PR-bound: nothing; closed: nothing
+        let same = ReviewFacts {
+            latest_tip: Some("aaa".into()),
+            ..drift.clone()
+        };
+        assert!(rows_for_review(3, "r", Some(9), &[], &[], &same).is_empty());
+        assert!(rows_for_review(3, "r", None, &[], &[], &drift).is_empty());
+        let closed = ReviewFacts {
+            open: false,
+            ..drift
+        };
+        assert!(rows_for_review(3, "r", Some(9), &[], &[], &closed).is_empty());
+    }
+
+    /// F9b lane 5 — an open flag-for-agent thread awaiting the agent.
+    #[test]
+    fn a_flag_for_agent_thread_is_queued_until_an_agent_replies() {
+        let flag = ann("g1", None, "you", 100, "flag-for-agent");
+        let rows = rows_for_review(1, "r", None, std::slice::from_ref(&flag), &[], &facts());
+        assert_eq!(lanes(&rows), vec![("flag", "g1")]);
+        assert_eq!(rows[0].lane_order, 5);
+        let reply = ann("r1", Some("g1"), "claude", 200, "note");
+        assert!(rows_for_review(1, "r", None, &[flag.clone(), reply], &[], &facts()).is_empty());
+        let mut resolved = flag;
+        resolved.resolved = true;
+        assert!(rows_for_review(1, "r", None, &[resolved], &[], &facts()).is_empty());
     }
 
     #[test]

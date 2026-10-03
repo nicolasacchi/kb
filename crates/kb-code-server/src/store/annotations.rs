@@ -437,6 +437,39 @@ impl Store {
         Ok(out)
     }
 
+    /// v0.44 F9b — the annotation ids, among those bound to any of
+    /// `review_ids`, that carry a stored suggestion (applied or not). One
+    /// join instead of a `get_annotation_suggestion` per finding; the agent
+    /// queue's "agreed but no suggestion yet" lane reads it.
+    pub fn review_suggestion_annotation_ids(
+        &self,
+        review_ids: &[i64],
+    ) -> Result<std::collections::HashSet<String>> {
+        let mut out = std::collections::HashSet::new();
+        if review_ids.is_empty() {
+            return Ok(out);
+        }
+        let conn = self.lock();
+        let placeholders = (0..review_ids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT s.annotation_id
+             FROM annotation_suggestions s
+             JOIN annotations a ON a.id = s.annotation_id
+             WHERE a.review_id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let ids = stmt
+            .query_map(rusqlite::params_from_iter(review_ids.iter()), |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        out.extend(ids);
+        Ok(out)
+    }
+
     /// V4.C1/C2 — lookup of a suggestion row.
     pub fn get_annotation_suggestion(
         &self,

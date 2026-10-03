@@ -56,7 +56,10 @@ The older verbs (`show`, `comments`, `findings list`, `timeline`,
    `kb-code review queue --json` — what is waiting for YOU, the agent: an
    open question whose latest voice is not an agent (lane `question`), then a
    disputed finding with no agent reply since the dispute (lane `dispute`),
-   oldest first. Take the top row; it carries the `next` command to run. An
+   an agreed/fix-later finding with no suggestion or author hunk yet (lane
+   `follow-up`), a PR whose head moved past the latest patchset (lane
+   `pr-drift`), then an open `flag-for-agent` thread (lane `flag`), oldest
+   first within a lane. `--watch` keeps polling and prints only new rows. Take the top row; it carries the `next` command to run. An
    empty queue is a real answer. (`review inbox --all-repos --json` is the
    HUMAN-ordered view of the same reviews; use it to see what the human has
    outstanding, not to pick your next task.)
