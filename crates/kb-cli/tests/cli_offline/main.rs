@@ -17,6 +17,7 @@ mod lookup;
 mod pull;
 mod push;
 mod reindex;
+mod sessions_scrub;
 mod status;
 mod status_watch;
 mod token;

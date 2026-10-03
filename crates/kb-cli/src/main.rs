@@ -2170,6 +2170,25 @@ enum SessionsAction {
         #[arg(long)]
         allow_oversized: bool,
     },
+    /// Secrets-only scrub filter: JSONL on stdin, redacted JSONL on stdout
+    /// (the same floor `kb sessions capture` applies). The codex/opencode
+    /// capture adapters pipe their translated transcript through this before
+    /// embedding it. Filesystem/stdio only.
+    Scrub,
+    /// Re-scrub captures already on disk (every lane: transcript, structured
+    /// digest blocks, sidecar text). Dry run by default — reports per-lane
+    /// counts and writes nothing; `--apply` rewrites only the captures that
+    /// still carry a secret, atomically. Idempotent.
+    Rescrub {
+        /// Sessions-corpus source dir. Defaults to `$KB_SESSIONS_DIR`.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Rewrite affected captures in place (default: report only).
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// List captured sessions newest-first.
     List {
         #[arg(long)]
@@ -5520,6 +5539,10 @@ async fn main() -> Result<()> {
                     allow_oversized,
                 )
                 .await
+            }
+            SessionsAction::Scrub => commands::sessions_scrub::run_filter(),
+            SessionsAction::Rescrub { dir, apply, json } => {
+                commands::sessions_scrub::run_rescrub(dir, apply, json)
             }
             SessionsAction::List {
                 daemon,
