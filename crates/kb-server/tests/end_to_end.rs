@@ -489,7 +489,15 @@ async fn turn_route_known_project_narrows_recall() {
             kbs
         }
     };
-    let all = kbs_of("/api/turn?q=zirconium&lanes=recall".to_string()).await;
+    // Listing precedes search-index visibility; poll until both corpora answer.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let all = loop {
+        let got = kbs_of("/api/turn?q=zirconium&lanes=recall".to_string()).await;
+        if got.len() == 2 || std::time::Instant::now() > deadline {
+            break got;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
     assert_eq!(all, vec!["memory-a", "memory-b"], "unscoped sees both");
     let scoped = kbs_of("/api/turn?q=zirconium&lanes=recall&project=memory-a".to_string()).await;
     assert_eq!(scoped, vec!["memory-a"], "known project must narrow recall");
