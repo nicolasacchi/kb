@@ -239,7 +239,7 @@ pub async fn review_impact_route(
     };
 
     let changed_lines = changed_new_lines(&diff_text);
-    // 2026-08-31 incident (store.rs module doc): the whole
+    // 2026-08-31 incident (store/mod.rs module doc): the whole
     // symbols_for_blob + per-symbol callers_at fan-out is pure store work
     // (plus CPU-only filtering/sorting/aggregation between calls) — one
     // blocking-pool trip instead of up to MAX_CHANGED_SYMBOLS+1 round trips.

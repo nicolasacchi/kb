@@ -164,7 +164,7 @@ pub async fn impact_analysis_at(
         return Err(ApiError::bad_request("line must be >= 1 (1-based)"));
     }
 
-    // 2026-08-31 incident (store.rs module doc): the whole sync
+    // 2026-08-31 incident (store/mod.rs module doc): the whole sync
     // anchor/usages/callers/types/BFS/imports composition below (every
     // store call this function makes) runs on the blocking pool in one
     // hop; `provenance_for_bucket` further down is the async (blame +
@@ -235,7 +235,7 @@ pub async fn impact_analysis_at(
 /// The sync half of [`impact_analysis_at`] — everything that touches the
 /// store, composed into one struct so it can run as a single
 /// `run_blocking` closure. Split out at the 2026-08-31 incident fix
-/// (store.rs module doc) rather than wrapped in place: the original body
+/// (store/mod.rs module doc) rather than wrapped in place: the original body
 /// interleaved store calls with the async `provenance_for_bucket` calls,
 /// and a coarse closure can't itself `.await`.
 struct ComposedImpact {

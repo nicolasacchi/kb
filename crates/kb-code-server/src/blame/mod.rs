@@ -31,7 +31,7 @@
 //! comparison against `HEAD`'s committed blob oid — deliberately NOT a
 //! `store::Store` lookup. An earlier version of this fn preferred the
 //! `files` table's live-mirror-maintained `blob_hash` (kept current by the
-//! W1.4/W1.6 watcher, see `store.rs`'s module doc) as a fast path, on the
+//! W1.4/W1.6 watcher, see `store/mod.rs`'s module doc) as a fast path, on the
 //! theory that a live daemon's store is "usually" fresh. That theory was
 //! wrong in a way a fixture test caught directly: the store is only as
 //! fresh as the watcher's last DEBOUNCED flush, so a request landing in the

@@ -25,7 +25,7 @@ use std::time::Duration;
 ///
 /// `store`/`repo_ids` are W1.5 additions: `store` is opened once at boot
 /// (`bind_and_spawn`) and shared read-only from here on (its own internal
-/// `Mutex` serializes writes — see `store.rs`'s module doc); `repo_ids`
+/// `Mutex` serializes writes — see `store/mod.rs`'s module doc); `repo_ids`
 /// maps each configured repo's `name` (from `repos`) to the `repos.id` row
 /// `bind_and_spawn` registered for it at boot, so route handlers never
 /// re-derive or re-query it per request.

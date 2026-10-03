@@ -24,7 +24,7 @@ impl Store {
     /// `None`s — every caller of THIS function (`create_set`,
     /// `from_session_route`) stays byte-identical (DCB-W3.C) — plus
     /// V70-A10's `kind = "set"` (the pre-existing default, a literal here
-    /// rather than importing `reading_sets::SET_KIND_SET`: store.rs never
+    /// rather than importing `reading_sets::SET_KIND_SET`: store/mod.rs never
     /// depends on that module's vocab constants, the same "plain data
     /// plumbing, validation lives above" posture `insert_annotation`
     /// already takes with `anchor_kind`) and three more `None`s for

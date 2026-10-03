@@ -47,7 +47,7 @@ enum Cmd {
         /// Name the kb (defaults to "default").
         #[arg(long, default_value = "default")]
         kb: String,
-        /// D3 — embedding model to write to the new `[kb.*]` section's
+        /// Embedding model to write to the new `[kb.*]` section's
         /// `embedding_model` field. Must match an entry from
         /// `kb model list` (e.g. `bge-small-en-v1.5`, `bge-base-en-v1.5`,
         /// `bge-large-en-v1.5`). Omit to leave the field unset — the
@@ -55,6 +55,7 @@ enum Cmd {
         /// (`bge-small-en-v1.5`) fills in at startup. See
         /// docs/research/foundation/14-embedding-bakeoff-2026-05-19.html
         /// for which model to pick.
+        // Provenance: D3
         #[arg(long = "embedding-model", value_name = "NAME")]
         embedding_model: Option<String>,
     },
@@ -76,7 +77,7 @@ enum Cmd {
         mode: String,
         #[arg(long, default_value_t = 20)]
         limit: u32,
-        /// Filter to an exact `kb-category` (R0 escape hatch). Search
+        /// Filter to an exact `kb-category` (escape hatch for the default exclusion). Search
         /// excludes `memory-session` docs by default — pass
         /// `--category memory-session` to surface captured session
         /// transcripts, otherwise invisible to `kb search`.
@@ -89,14 +90,16 @@ enum Cmd {
         /// Force HTTP against this daemon URL.
         #[arg(long)]
         daemon: Option<String>,
-        /// v0.4 D1 — emit pretty-printed JSON instead of the
+        /// Emit pretty-printed JSON instead of the
         /// human-readable two-line per-hit format.
+        // Provenance: v0.4 D1
         #[arg(long)]
         json: bool,
-        /// Q-track (board B1) — read-during window: keep only hits whose
+        /// Read-during window: keep only hits whose
         /// artifact was opened (a reading-history 'open' visit) on or
         /// after this bound. Accepts `YYYY-MM-DD` or bare unix seconds.
         /// Requires the daemon (no reading history in `--offline` reads).
+        // Provenance: Q-track (board B1)
         #[arg(long)]
         read_from: Option<String>,
         /// Read-during window upper bound — same accepted formats as
@@ -108,7 +111,7 @@ enum Cmd {
     /// Store a memory the agent wants to keep (agent-explicit
     /// capture). Renders an HTML artifact and POSTs it to a memory corpus.
     ///
-    /// MI-W3.4 threat model: a memory written from untrusted fetched
+    /// Threat model: a memory written from untrusted fetched
     /// content (`--source fetched-web`) persists indefinitely and, once
     /// global, is recallable from every project on this daemon by default.
     /// Passing `--source fetched-web` without an explicit `--global` flips
@@ -116,13 +119,15 @@ enum Cmd {
     /// marks it whenever it fires) — narrowing the blast radius without
     /// adding a new trust tier (kb still has exactly one: identity is
     /// attribution, not authorization). `--global` always wins when passed.
+    // Provenance: MI-W3.4
     Remember {
         /// The memory text (plain). `--title` overrides the derived heading.
         text: String,
         #[arg(long)]
         title: Option<String>,
-        /// RA4 — a one-line summary distinct from the title, surfaced on
+        /// A one-line summary distinct from the title, surfaced on
         /// recall hits and the SPA /memory view as a clean gloss.
+        // Provenance: RA4
         #[arg(long)]
         summary: Option<String>,
         /// Target a memory corpus by name. Overrides `--scope`.
@@ -145,53 +150,60 @@ enum Cmd {
         /// Artifact id this memory replaces (drops it from recall).
         #[arg(long)]
         supersedes: Option<String>,
-        /// MI-W3.3a — optional CoALA-minimal classification: episodic |
+        /// Optional CoALA-minimal classification: episodic |
         /// semantic | procedural. Absent (the default) leaves the memory
         /// untyped — kb never infers or backfills a type later.
+        // Provenance: MI-W3.3a
         #[arg(long)]
         r#type: Option<String>,
-        /// MI-W3.4 — where the CONTENT originally came from: fetched-web |
+        /// Where the CONTENT originally came from: fetched-web |
         /// user-dictated | agent-inference. SURFACED, NEVER SCORED.
         /// Passing `--source fetched-web` without an explicit `--global`
         /// flips the write's default scope from global to non-global — see
         /// the module docs for the threat model this narrows.
+        // Provenance: MI-W3.4
         #[arg(long)]
         source: Option<String>,
-        /// CT-C3 — record an approach that was tried and did NOT work — it
+        /// Record an approach that was tried and did NOT work — it
         /// will surface on recall with an explicit warning. Writes the
         /// `kb-outcome: failed` meta AND the paired `outcome:failed` tag
         /// (the indexed carrier); the recall hook renders such hits as
         /// "✗ didn't work: <title>". SURFACED, NEVER SCORED — a failed
         /// memory ranks exactly like an ordinary one.
+        // Provenance: CT-C3
         #[arg(long)]
         failed: bool,
-        /// v0.14 S1 — Claude Code session id to stamp on the memory.
+        /// Claude Code session id to stamp on the memory.
         /// Overrides the auto-detected id read from
         /// `~/.cache/kb/current-session` (written by the SessionStart /
         /// UserPromptSubmit hooks). Use this when scripting `kb
         /// remember` outside an agent session.
+        // Provenance: v0.14 S1
         #[arg(long)]
         session_id: Option<String>,
-        /// v0.14 S1 — opt out of session-id stamping. Skips the
+        /// Opt out of session-id stamping. Skips the
         /// marker-file read AND ignores any `--session-id` override.
+        // Provenance: v0.14 S1
         #[arg(long)]
         no_session: bool,
-        /// L8 — make the memory recallable from every kb (the V0010
+        /// Make the memory recallable from every kb (the
         /// `*` sentinel). Default when neither `--global` nor `--link`
         /// is set, matching the "global by default" CLI ergonomic.
         /// Mutually exclusive with `--link`.
+        // Provenance: L8
         #[arg(long, conflicts_with = "link")]
         global: bool,
-        /// L8 — scope the memory to an explicit comma-separated kb
+        /// Scope the memory to an explicit comma-separated kb
         /// list. Each name must exist on the daemon (validated server-
         /// side); the resulting memory is NOT global unless you also
         /// pass `--global` (which conflicts and would error). Empty
         /// list = memory invisible to recall (rarely useful).
+        // Provenance: L8
         #[arg(long, conflicts_with = "global")]
         link: Option<String>,
         #[arg(long)]
         daemon: Option<String>,
-        /// v0.44 X6 - deliver synchronously or fail. Without it a slow, down
+        /// Deliver synchronously or fail. Without it a slow, down
         /// or 5xx daemon makes `kb remember` exit 0 with `queued` (the write
         /// is spooled and replays later, so there is NO id yet). With
         /// `--wait` nothing is spooled: the command only succeeds, printing
@@ -207,7 +219,7 @@ enum Cmd {
     /// across the in-scope memory corpora).
     Recall {
         query: String,
-        /// "auto" (default) | "all" | "global" | "project". B1: `auto`
+        /// "auto" (default) | "all" | "global" | "project". `auto`
         /// narrows the daemon-wide fan-out to global corpora + the current
         /// repo's own `memory-<slug>` project corpus (derived from the git
         /// main checkout root's basename — `--cwd` if given, else the
@@ -223,16 +235,18 @@ enum Cmd {
         /// --project <p>`) to a named corpus.
         #[arg(long)]
         project: Option<String>,
-        /// B1 — derive the `--scope auto` project corpus from this
+        /// Derive the `--scope auto` project corpus from this
         /// directory instead of the process cwd. Ignored by every other
         /// scope value.
+        // Provenance: B1
         #[arg(long)]
         cwd: Option<String>,
         #[arg(long, default_value_t = 5)]
         limit: usize,
-        /// L8 — return only memories visible to this kb (global or
+        /// Return only memories visible to this kb (global or
         /// explicitly linked). Use to scope recall to a single kb's
         /// view, e.g. for testing a per-kb /memory page.
+        // Provenance: L8
         #[arg(long)]
         for_kb: Option<String>,
         /// Bypass the salience/decay floor so low-salience and decayed
@@ -381,15 +395,17 @@ enum Cmd {
     Recollect {
         /// Free-text query. Omit when using --similar-to.
         query: Option<String>,
-        /// R7 — find sessions similar to THIS session id (its digest is the
+        /// Find sessions similar to THIS session id (its digest is the
         /// query). Mutually exclusive with the positional query.
+        // Provenance: R7
         #[arg(long, conflicts_with = "query")]
         similar_to: Option<String>,
         /// Restrict to one project folder (basename or full cwd).
         #[arg(long)]
         folder: Option<String>,
-        /// W4/W3.A — restrict to one project (a registered `[projects.*]` id,
+        /// Restrict to one project (a registered `[projects.*]` id,
         /// or a raw project_key). Composes (AND) with --folder.
+        // Provenance: W4/W3.A
         #[arg(long)]
         project: Option<String>,
         /// Recency window: day | week | month | year.
@@ -401,8 +417,9 @@ enum Cmd {
         daemon: Option<String>,
         #[arg(long)]
         json: bool,
-        /// W4/R13/Proposal-3 — print the digest excerpt that actually
-        /// matched, per hit (the true rank surface, R1).
+        /// Print the digest excerpt that actually
+        /// matched, per hit (the true rank surface).
+        // Provenance: W4/R13/Proposal-3
         #[arg(long)]
         raw: bool,
     },
@@ -416,9 +433,10 @@ enum Cmd {
         /// The memory corpus the id lives in (else the sole configured kb).
         #[arg(long)]
         kb: Option<String>,
-        /// MI-W2.3 — hard-delete instead of soft-forgetting: removes the
+        /// Hard-delete instead of soft-forgetting: removes the
         /// source file + drops the index row immediately, with no trace
         /// anywhere in kb. Irreversible.
+        // Provenance: MI-W2.3
         #[arg(long)]
         purge: bool,
         #[arg(long)]
@@ -567,7 +585,8 @@ enum Cmd {
         #[arg(long)]
         tags: Option<String>,
         /// Opt-in HTML sanitize (ammonia) at capture time. No-op for
-        /// Markdown captures (U1: sanitize is HTML-pipeline-only, v1).
+        /// Markdown captures (sanitize is HTML-pipeline-only, v1).
+        // Provenance: U1
         #[arg(long)]
         sanitize: bool,
         /// Shared/saved-page URL. With no FILES, writes a url-stub `.md`
@@ -641,7 +660,8 @@ enum Cmd {
     /// reachable, lists its kbs from `/api/stats` even if this host has
     /// no local kb.toml (docker / remote daemon).
     Status {
-        /// v0.4 D1 — emit JSON instead of the human-readable layout.
+        /// Emit JSON instead of the human-readable layout.
+        // Provenance: v0.4 D1
         #[arg(long)]
         json: bool,
         /// Repeat the sweep every N seconds (clears the screen between
@@ -678,9 +698,10 @@ enum Cmd {
         /// human-readable PASS/WARN/SKIP report.
         #[arg(long)]
         json: bool,
-        /// D30 (v0.42) — remove `~/.cache/kb/slate-cursor-*` and
+        /// Remove `~/.cache/kb/slate-cursor-*` and
         /// `slate-topic-*` markers older than 30 days. Scoped to that ONE
         /// check; every other `--hooks` check stays read-only.
+        // Provenance: D30 (v0.42)
         #[arg(long)]
         fix: bool,
         /// Exit 1 when any check is WARN or FAIL (SKIP never trips it), so a
@@ -870,9 +891,10 @@ enum Cmd {
         /// `--since`.
         #[arg(long, conflicts_with = "since")]
         day: Option<String>,
-        /// CT-E1 — "what happened while I was away": unix seconds or a bare
+        /// "what happened while I was away": unix seconds or a bare
         /// `YYYY-MM-DD` UTC date. No relative forms (`3d`/`12h`) yet —
         /// mutually exclusive with `--day`.
+        // Provenance: CT-E1
         #[arg(long, conflicts_with = "day")]
         since: Option<String>,
         /// Print the raw HTML+inline-SVG document instead of the text digest.
@@ -947,7 +969,7 @@ enum Cmd {
     /// With no <TARGET>, walks the whole corpus feed (requires --kb).
     ///
     /// `--by-target <PATH>` flips to the reverse lookup instead: every doc
-    /// citing that exact path (`?by_target=` on the feed route, CT-B3) —
+    /// citing that exact path (`?by_target=` on the feed route) —
     /// "who cites config/importmap.rb". Conflicts with <TARGET>.
     Refs {
         /// Artifact: 12-hex id, source-relative path, or unique filename.
@@ -968,11 +990,12 @@ enum Cmd {
         /// Corpus-walk page size (server clamps to 1..=100).
         #[arg(long, default_value_t = 25)]
         limit: u32,
-        /// CT-B3 — print a ready `?ids=` gallery URL (invariant #35) over
+        /// Print a ready `?ids=` gallery URL (invariant #35) over
         /// the resolved doc-id set instead of (or alongside, with --json)
         /// the normal report. Degrades LOUDLY over the 500-id cap: prints
         /// a warning to stderr and omits the URL rather than emitting a
         /// link the gallery would 400 on.
+        // Provenance: CT-B3
         #[arg(long)]
         gallery: bool,
         #[arg(long)]
@@ -984,7 +1007,7 @@ enum Cmd {
     Versions {
         /// Artifact: 12-hex id, source-relative path, or unique filename.
         target: String,
-        /// CT-F6 (RFC 7089 Memento) — resolve the timeline AT an instant:
+        /// Resolve the timeline AT an instant:
         /// which version of THIS artifact stood at that moment. Same date
         /// grammar as `kb diff --between` (`YYYY-MM-DD` = end of that day
         /// UTC; a full RFC 3339 timestamp is exact). The answer is the
@@ -993,6 +1016,7 @@ enum Cmd {
         /// merely nearest-prior. A date older than the oldest known version
         /// says so and names that floor; it NEVER falls back to the oldest
         /// version. Per-artifact only — not a corpus timeline.
+        // Provenance: CT-F6 (RFC 7089 Memento)
         #[arg(long, value_name = "DATE")]
         at: Option<String>,
         #[arg(long)]
@@ -1016,7 +1040,7 @@ enum Cmd {
         /// Conflicts with `--between`.
         #[arg(long, conflicts_with = "between")]
         to: Option<String>,
-        /// MI-W2.4b (2026-07 temporal-query design) — resolve BOTH sides
+        /// Resolve BOTH sides
         /// from calendar dates / RFC 3339 instants instead of explicit
         /// refs: for each date, the nearest version AT OR BEFORE it (a
         /// pure `kb_core::versions::resolve_as_of` walk over the same
@@ -1025,6 +1049,7 @@ enum Cmd {
         /// June 5's changes); a full RFC 3339 timestamp is exact. A date
         /// older than the oldest known version is a hard error naming the
         /// oldest version's own date — never a silent empty diff.
+        // Provenance: MI-W2.4b (2026-07 temporal-query design)
         #[arg(long, num_args = 2, value_names = ["FROM_DATE", "TO_DATE"])]
         between: Option<Vec<String>>,
         /// Diff the raw source bytes instead of rendered prose.
@@ -1220,7 +1245,7 @@ enum Cmd {
     /// counts). `--scope one` (default) reads this kb's ring
     /// (`--kb` required unless the daemon serves exactly one);
     /// `--scope all` fans out server-side across every kb on the
-    /// daemon (invariant #28). W3 C-c: `list`/`save`/`rm` close the CLI
+    /// daemon (invariant #28). `list`/`save`/`rm` close the CLI
     /// parity gap on the daemon-wide `/api/saved-queries` store (the same
     /// store the SPA's saved-query ribbon and the reflection canvas's
     /// "save as scene" chip both write to — a scene IS a saved query,
@@ -1228,6 +1253,7 @@ enum Cmd {
     /// the bare zero-hit report has no positional, so `action` is a plain
     /// `Option<_>` living beside it — no `external_subcommand` catch-all
     /// needed.
+    // Provenance: W3 C-c
     Queries {
         #[command(subcommand)]
         action: Option<QueriesAction>,
@@ -1518,7 +1544,7 @@ enum Cmd {
         force: bool,
     },
     /// Generate a directory of synthetic HTML artifacts for
-    /// stress-testing the daemon at scale (S-milestone S8). Output is
+    /// stress-testing the daemon at scale. Output is
     /// a corpus-shaped tree (changelog/, ideas/, incidents/, ...) the
     /// indexer can ingest as-is. Determinism: identical `--seed`
     /// values produce byte-identical corpora.
@@ -1536,7 +1562,7 @@ enum Cmd {
     },
     /// Retrieval-quality bake-off across embedding models.
     /// Scaffolds query sets, discovers candidate-relevant artifact ids,
-    /// and (in C2) drives the daemon to compute Recall@k / MRR / nDCG
+    /// and drives the daemon to compute Recall@k / MRR / nDCG
     /// per (corpus, model, mode). One subcommand per stage.
     Bench {
         #[command(subcommand)]
@@ -1552,12 +1578,13 @@ enum DaemonAction {
     /// non-zero if no pid file is found, the pid is stale, or the
     /// daemon doesn't exit in time.
     Stop,
-    /// P5: pokes the daemon's HTTP API and prints a green/yellow/red
+    /// Pokes the daemon's HTTP API and prints a green/yellow/red
     /// health report. Checks identity reachability, kb configuration,
     /// open errors per kb, stats responsiveness, the embedder/semantic
     /// path (one tiny semantic search per kb — catches a wedged or
     /// missing onnxruntime), and the event bus. Exits 0 if HEALTHY,
     /// 1 if any check failed.
+    // Provenance: P5
     Doctor {
         /// Daemon endpoint to check. Defaults to http://127.0.0.1:4000.
         #[arg(long)]
@@ -1571,11 +1598,12 @@ enum DaemonAction {
         #[arg(long, value_name = "SECS")]
         watch: Option<u64>,
     },
-    /// L2 — read or set the daemon's FILE log level (the ndjson layer's
+    /// Read or set the daemon's FILE log level (the ndjson layer's
     /// EnvFilter) at runtime via GET/PUT /api/log-level. No FILTER reads
     /// the current one; with FILTER (`debug`, `info,kb_core=debug`, …)
     /// the flip is live — no restart. The stderr layer (RUST_LOG) is
     /// untouched; the boot default comes from KB_LOG_FILE_LEVEL.
+    // Provenance: L2
     LogLevel {
         /// EnvFilter directives to set (omit to read the current filter).
         filter: Option<String>,
@@ -2013,10 +2041,10 @@ enum AtlasFieldAction {
 }
 
 /// `kb queries list|save|rm` — daemon-wide saved-query store
-/// (`/api/saved-queries`, v0.13 Q4). Distinct from the bare `kb queries
+/// (`/api/saved-queries`). Distinct from the bare `kb queries
 /// --zero-hit` report on the parent `Cmd::Queries` variant, which reads a
 /// different in-memory ring; these subcommands are the CLI's other half of
-/// the SPA's saved-query ribbon (and, as of W3 C-c, the reflection canvas's
+/// the SPA's saved-query ribbon (and the reflection canvas's
 /// "save as scene" chip — a scene is nothing but a name plus a stored
 /// `path`/`search`, so it rides this same store rather than inventing a
 /// fourth one).
@@ -2057,9 +2085,10 @@ enum QueriesAction {
     },
 }
 
-/// CT-F3 — `kb links` verbs. Read the queue, then apply one row at a time;
+/// `kb links` verbs. Read the queue, then apply one row at a time;
 /// there is deliberately no "apply all" (a suggestion is a claim, and a
 /// human decides which claims become edges).
+// Provenance: CT-F3
 #[derive(Subcommand, Debug, Clone)]
 enum LinksAction {
     /// List unlinked mentions: docs whose prose names another artifact with
@@ -2146,10 +2175,11 @@ enum NotesAction {
         /// Write/return the scope's canonical `_notepad.md`.
         #[arg(long)]
         notepad: bool,
-        /// CT-A4 — opt out of auto-stamping `kb-session` from the current
+        /// Opt out of auto-stamping `kb-session` from the current
         /// Claude Code session marker (`~/.cache/kb/current-session`,
         /// written by the SessionStart / UserPromptSubmit hooks). Skips the
         /// marker-file read entirely, mirroring `kb remember --no-session`.
+        // Provenance: CT-A4
         #[arg(long)]
         no_session: bool,
         #[arg(long)]
@@ -2249,7 +2279,7 @@ enum NotesAction {
 #[derive(Subcommand, Debug, Clone)]
 enum SessionsAction {
     /// Build a session capture artifact from a transcript file — the Rust
-    /// engine `kb-capture.sh` shells out to (W0.4). Resolves each detected
+    /// engine `kb-capture.sh` shells out to. Resolves each detected
     /// git commit sha (one `git show -s` per sha) against the session's
     /// recorded cwd before writing, something the bash heredoc fallback
     /// can't do. Filesystem-only: never talks to the daemon (the watcher
@@ -2260,11 +2290,12 @@ enum SessionsAction {
         /// `transcript_path`). Required unless `--replay-spool`.
         #[arg(long, required_unless_present = "replay_spool")]
         transcript: Option<PathBuf>,
-        /// v0.44 X6 — push every transcript the capture hooks spooled (a
+        /// Push every transcript the capture hooks spooled (a
         /// private dir outside every corpus, written when a capture failed)
         /// through the normal scrubbed capture path, deleting each on success.
         /// A failed item stays spooled for the next run. Exit non-zero when
         /// any item could not be replayed.
+        // Provenance: v0.44 X6
         #[arg(long = "replay-spool", conflicts_with_all = ["transcript", "session_id", "cwd"])]
         replay_spool: bool,
         /// The hook's own `.session_id` — used ONLY when the transcript
@@ -2323,35 +2354,42 @@ enum SessionsAction {
         /// Cap on rows returned (default 50).
         #[arg(long, default_value_t = 50)]
         limit: usize,
-        /// A1 — restrict to one working directory (full cwd path, as shown
+        /// Restrict to one working directory (full cwd path, as shown
         /// by `kb sessions folders`).
+        // Provenance: A1
         #[arg(long)]
         folder: Option<String>,
-        /// W4/W3.A — restrict to one project (a registered `[projects.*]` id,
+        /// Restrict to one project (a registered `[projects.*]` id,
         /// or a raw project_key). Composes (AND) with --folder.
+        // Provenance: W4/W3.A
         #[arg(long)]
         project: Option<String>,
-        /// W4/W3.A/S1 — csv over the triage enum (trivial|routine|substantive).
+        /// Csv over the triage enum (trivial|routine|substantive).
+        // Provenance: W4/W3.A/S1
         #[arg(long)]
         substance: Option<String>,
-        /// W5/I — csv over the closed harness set
+        /// Csv over the closed harness set
         /// (claude|codex|opencode|grok|kimi|omp).
+        // Provenance: W5/I
         #[arg(long)]
         harness: Option<String>,
-        /// v0.44 F10 — the distill-debt queue: newest captures that
+        /// The distill-debt queue: newest captures that
         /// committed work (`commit_count > 0`), have no memory stamped to
         /// them and are not trivial. Derived read; /kb-distill --pending
         /// works through it.
+        // Provenance: v0.44 F10
         #[arg(long)]
         undistilled: bool,
-        /// v0.44 F10 — only sessions started at or after this bound: unix
+        /// Only sessions started at or after this bound: unix
         /// seconds, `YYYY-MM-DD` (UTC), or relative `<N>d` / `<N>h`.
+        // Provenance: v0.44 F10
         #[arg(long)]
         since: Option<String>,
     },
-    /// v0.44 F10 — recall-hook coverage per harness over a trailing window:
+    /// Recall-hook coverage per harness over a trailing window:
     /// user turns vs turns where a memory injection landed vs serves that
     /// never landed. A health read (a floor, not a target); never scored.
+    // Provenance: v0.44 F10
     Coverage {
         /// Trailing window in days (default 7).
         #[arg(long)]
@@ -2361,9 +2399,10 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// v0.44 F10 — close a session's slate distill ask (`Distill session
+    /// Close a session's slate distill ask (`Distill session
     /// <sid>?`, ref `session:<sid>`) once it has been handled. Idempotent:
     /// no open ask is a no-op, never an error.
+    // Provenance: v0.44 F10
     Distilled {
         /// The session id the distill ask is about.
         session_id: String,
@@ -2386,14 +2425,17 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// R9 — top research queries per project folder (or overall).
+    /// Top research queries per project folder (or overall).
+    // Provenance: R9
     Rollup {
         #[arg(long)]
         folder: Option<String>,
-        /// W4/W3.A — restrict to one project (registered id or raw project_key).
+        /// Restrict to one project (registered id or raw project_key).
+        // Provenance: W4/W3.A
         #[arg(long)]
         project: Option<String>,
-        /// L1/F1 — csv over the triage enum (trivial|routine|substantive).
+        /// Csv over the triage enum (trivial|routine|substantive).
+        // Provenance: L1/F1
         #[arg(long)]
         substance: Option<String>,
         #[arg(long, default_value_t = 5)]
@@ -2403,14 +2445,17 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// R9 — the activity funnel: searched → opened → edited → committed → commented.
+    /// The activity funnel: searched → opened → edited → committed → commented.
+    // Provenance: R9
     Funnel {
         #[arg(long)]
         folder: Option<String>,
-        /// W4/W3.A — restrict to one project (registered id or raw project_key).
+        /// Restrict to one project (registered id or raw project_key).
+        // Provenance: W4/W3.A
         #[arg(long)]
         project: Option<String>,
-        /// L1/F1 — csv over the triage enum (trivial|routine|substantive).
+        /// Csv over the triage enum (trivial|routine|substantive).
+        // Provenance: L1/F1
         #[arg(long)]
         substance: Option<String>,
         #[arg(long)]
@@ -2418,8 +2463,9 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// W6 (moonshots M4) — the project ledger: sessions/commits/decisions/
+    /// The project ledger: sessions/commits/decisions/
     /// research for a project, grouped by UTC day over a trailing window.
+    // Provenance: W6 (moonshots M4)
     Ledger {
         /// Restrict to one project (registered id or raw project_key).
         /// Absent = every project in the window.
@@ -2438,14 +2484,17 @@ enum SessionsAction {
         query: String,
         #[arg(long)]
         folder: Option<String>,
-        /// W4/W3.A — restrict to one project (registered id or raw project_key).
+        /// Restrict to one project (registered id or raw project_key).
+        // Provenance: W4/W3.A
         #[arg(long)]
         project: Option<String>,
-        /// W4/W3.A/S1 — csv over the triage enum (trivial|routine|substantive).
+        /// Csv over the triage enum (trivial|routine|substantive).
+        // Provenance: W4/W3.A/S1
         #[arg(long)]
         substance: Option<String>,
-        /// W5/I — csv over the closed harness set
+        /// Csv over the closed harness set
         /// (claude|codex|opencode|grok|kimi|omp).
+        // Provenance: W5/I
         #[arg(long)]
         harness: Option<String>,
         #[arg(long, default_value_t = 50)]
@@ -2455,8 +2504,9 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// cli-grok Proposal 2 #2 — which session(s) touched this artifact, and
+    /// Which session(s) touched this artifact, and
     /// how (reverse link, `GET /artifacts/{kb}/{artifact_id}/sessions`).
+    // Provenance: cli-grok Proposal 2 #2
     Of {
         /// A 12-hex artifact id, or a source-relative path (fuzzy-resolved).
         target: String,
@@ -2467,9 +2517,10 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// cli-grok Proposal 2 #3 — the flat bulk commit↔session feed
+    /// The flat bulk commit↔session feed
     /// (`GET /sessions/commit-map`), previously reachable only as an
     /// internal paging helper for `provenance-report`.
+    // Provenance: cli-grok Proposal 2 #3
     CommitMap {
         /// Floor on the owning session's `started_at` (unix seconds).
         #[arg(long)]
@@ -2483,8 +2534,9 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// memo R8/ADD-2 — the grokclaude job join: every Claude Code session
-    /// whose transcript invoked (or, from W5, IS) this grokclaude job ulid.
+    /// The grokclaude job join: every Claude Code session
+    /// whose transcript invoked (or IS) this grokclaude job ulid.
+    // Provenance: memo R8/ADD-2
     ByJob {
         ulid: String,
         #[arg(long)]
@@ -2492,8 +2544,7 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// cli-grok Proposal 1 / memo R13, windowed default per PF-R1 — the
-    /// interpreted terminal transcript reader: header (title/harness/
+    /// The interpreted terminal transcript reader (windowed by default): header (title/harness/
     /// project/asked/closed/honest metrics) + the last `--tail` turns + an
     /// outcome footer, over the SAME `session-view/1` engine the HTML
     /// renderer and the wire consume (ONE interpretation, three
@@ -2503,14 +2554,16 @@ enum SessionsAction {
     Read {
         session_id: String,
         /// Fetch and render the WHOLE transcript instead of the default
-        /// tail window (PF-R1: the default now asks the server for only
+        /// tail window (the default asks the server for only
         /// the last `--tail` turns, not the full session).
+        // Provenance: PF-R1
         #[arg(long)]
         full: bool,
-        /// PF-R1 — the tail window's turn count, both on the wire
+        /// The tail window's turn count, both on the wire
         /// (`?turns=<n>`, so the default read no longer over-fetches) and
         /// in the render (default 10). Ignored by `--full`/`--turn`/
         /// `--grep`, which always fetch everything for correctness.
+        // Provenance: PF-R1
         #[arg(long)]
         tail: Option<u32>,
         /// An explicit turn ordinal window: `N` or `A..B` (inclusive).
@@ -2526,17 +2579,19 @@ enum SessionsAction {
         /// The decoded transcript JSONL, verbatim (`GET /{sid}/raw`).
         #[arg(long)]
         raw: bool,
-        /// W7 (R15/LF-6) — render the LIVE transcript (`[sessions]
+        /// Render the LIVE transcript (`[sessions]
         /// live_transcripts_dir`), direct-disk via the shared
         /// `resolve_live_transcript` resolver — zero daemon required. Exits
         /// 2 with an honest hint if the session isn't resolvably live.
         /// Implied by `--follow`.
+        // Provenance: W7 (R15/LF-6)
         #[arg(long)]
         live: bool,
-        /// W7 (R15/LF-6) — `tail -f`: after the one-shot `--live` render,
+        /// `tail -f`: after the one-shot `--live` render,
         /// poll the file (750ms) and print interpreted turns as they
         /// complete; a live-header line refreshes in place on a TTY.
         /// Ctrl-C exits. Implies `--live`.
+        // Provenance: W7 (R15/LF-6)
         #[arg(long)]
         follow: bool,
         #[arg(long)]
@@ -2602,9 +2657,10 @@ enum SessionsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// kb-code Wave 0 (W0.6) — the sha→session reverse lookup: which
+    /// The sha→session reverse lookup: which
     /// session(s) recorded a commit matching this full or short sha
     /// (>=7 hex chars).
+    // Provenance: kb-code Wave 0 (W0.6)
     ByCommit {
         sha: String,
         #[arg(long)]
@@ -2612,11 +2668,12 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// kb-code Wave 0 (W0.6) — the WEDGE INSTRUMENT: classify every commit in
+    /// The WEDGE INSTRUMENT: classify every commit in
     /// `--repo`'s history (from HEAD) into trailer / recorded / pre-capture /
     /// non-session, plus an orphan (rebased-or-squashed) pass. Probe-grade
     /// measurement of how much of a repo's history kb-memory can join to a
     /// session — not the final wave-3 join ladder.
+    // Provenance: kb-code Wave 0 (W0.6)
     ProvenanceReport {
         #[arg(long)]
         repo: PathBuf,
@@ -2625,9 +2682,10 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// kb-code Wave 0 (W0.6) — a THIN probe (not the final wave-3 ladder):
+    /// A THIN probe (not the final wave-3 ladder):
     /// `git blame <file>:<line>` → the blamed commit's `Kb-Session` trailer,
     /// else the daemon's `by-commit` lookup → confidence + session, if any.
+    // Provenance: kb-code Wave 0 (W0.6)
     WhyLine {
         /// `<file>:<line>`, e.g. `crates/kb-core/src/sessions.rs:120`.
         file_line: String,
@@ -2652,11 +2710,12 @@ enum SessionsAction {
         folder: String,
         #[arg(long)]
         title: Option<String>,
-        /// CT-E5 — order the list as each session's STORY (capture, files
+        /// Order the list as each session's STORY (capture, files
         /// touched, memories produced, memories recalled) instead of one
         /// entry per transcript; the description carries the session ids,
         /// capture dates and — when the kb has a `code_url` — the kb-code
         /// session-diff links.
+        // Provenance: CT-E5
         #[arg(long)]
         narrative: bool,
         #[arg(long)]
@@ -2670,9 +2729,10 @@ enum SessionsAction {
         daemon: Option<String>,
         #[arg(long)]
         json: bool,
-        /// cli-grok Proposal 2 #4 — csv, repeatable: fetch ONLY these
+        /// Csv, repeatable: fetch ONLY these
         /// sections (files,decisions,commits,research,memories,touches,
         /// comments,readings,outcome). Absent = every section (unchanged).
+        // Provenance: cli-grok Proposal 2 #4
         #[arg(long, value_delimiter = ',')]
         section: Vec<String>,
     },
@@ -2686,10 +2746,11 @@ enum SessionsAction {
         /// Keep only beats that resolved to this artifact id.
         #[arg(long)]
         artifact: Option<String>,
-        /// R7/S6 — serve-window offset (the daemon computes the FULL
+        /// Serve-window offset (the daemon computes the FULL
         /// timeline; this slices it), applied after `--artifact` and before
         /// `--limit`. Reach the tail of a long session with e.g.
         /// `--from-seq 4000`.
+        // Provenance: R7/S6
         #[arg(long)]
         from_seq: Option<usize>,
         /// Cap the beats printed (applied after `--artifact`/`--from-seq`).
@@ -2706,8 +2767,9 @@ enum SessionsAction {
         session_id: String,
         #[arg(long)]
         daemon: Option<String>,
-        /// cli-grok Proposal 2 #5 — emit the combined resume payload as JSON
+        /// Emit the combined resume payload as JSON
         /// (the one sessions verb that previously had no `--json` at all).
+        // Provenance: cli-grok Proposal 2 #5
         #[arg(long)]
         json: bool,
     },
@@ -3129,8 +3191,9 @@ enum CommentsAction {
         /// 12-hex artifact id (flag form). Wins over the positional.
         #[arg(long = "artifact-id")]
         artifact_id_flag: Option<String>,
-        /// L1 — alternative to <artifact_id>. Resolved via /lookup;
+        /// Alternative to <artifact_id>. Resolved via /lookup;
         /// ambiguous matches exit non-zero.
+        // Provenance: L1
         #[arg(long, conflicts_with_all = ["artifact_id", "artifact_id_flag"])]
         path: Option<String>,
         /// Output format: claude (default) | json | md.
@@ -3142,9 +3205,10 @@ enum CommentsAction {
         /// streaming to stdout.
         #[arg(long = "out-dir")]
         out_dir: Option<String>,
-        /// v0.19 — bake the review state into a standalone copy of the
+        /// Bake the review state into a standalone copy of the
         /// artifact HTML (an inert `kb-review-state` block), so the file
         /// travels with its comments. Read back with `kb comments import`.
+        // Provenance: v0.19
         #[arg(long)]
         embed: bool,
         /// Destination file for `--embed` (defaults to stdout).
@@ -3153,12 +3217,13 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// v0.19 — apply an ordered batch of comment mutations atomically
+    /// Apply an ordered batch of comment mutations atomically
     /// (one daemon round-trip, all-or-nothing). The payload is a JSON
     /// array of ops — each `{"op":"add_comment"|"add_reply"|"resolve"|
     /// "unresolve"|"resolve_all"|"unresolve_all"|"edit_comment"|
     /// "edit_reply"|"set_anchor"|"delete_comment"|"delete_reply", …}` — or
     /// an object `{"ops":[…]}`. Mirrors redline's `apply`.
+    // Provenance: v0.19
     Apply {
         /// kb name (positional). Optional when `--path` is supplied.
         kb: Option<String>,
@@ -3170,7 +3235,8 @@ enum CommentsAction {
         /// 12-hex artifact id (flag form). Wins over the positional.
         #[arg(long = "artifact-id")]
         artifact_id_flag: Option<String>,
-        /// L1 — alternative to <artifact_id>.
+        /// Alternative to <artifact_id>.
+        // Provenance: L1
         #[arg(long, conflicts_with_all = ["artifact_id", "artifact_id_flag"])]
         path: Option<String>,
         /// Read the ops JSON from this file (`-` is not special; use
@@ -3184,10 +3250,11 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// v0.19 — import comments embedded in an HTML file (produced by
+    /// Import comments embedded in an HTML file (produced by
     /// `export --embed`) back into the daemon's sidecar, restoring ids /
     /// statuses / replies. Refuses to overwrite existing non-empty comments
     /// unless `--force`.
+    // Provenance: v0.19
     Import {
         /// The HTML file carrying an embedded `kb-review-state` block.
         file: String,
@@ -3202,7 +3269,8 @@ enum CommentsAction {
         /// 12-hex artifact id (flag form). Wins over the positional.
         #[arg(long = "artifact-id")]
         artifact_id_flag: Option<String>,
-        /// L1 — alternative to <artifact_id>.
+        /// Alternative to <artifact_id>.
+        // Provenance: L1
         #[arg(long, conflicts_with_all = ["artifact_id", "artifact_id_flag"])]
         path: Option<String>,
         /// Overwrite existing non-empty comments on the target.
@@ -3211,8 +3279,9 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// v0.3 — flip a comment's status to "resolved" via the daemon.
+    /// Flip a comment's status to "resolved" via the daemon.
     /// Uses If-Match for safe concurrent updates.
+    // Provenance: v0.3
     Resolve {
         /// kb name (positional). Optional when `--path` is supplied.
         kb: Option<String>,
@@ -3227,12 +3296,14 @@ enum CommentsAction {
         /// 12-hex artifact id (flag form). Wins over the positional.
         #[arg(long = "artifact-id")]
         artifact_id_flag: Option<String>,
-        /// L1 — alternative to <artifact_id>.
+        /// Alternative to <artifact_id>.
+        // Provenance: L1
         #[arg(long, conflicts_with_all = ["artifact_id", "artifact_id_flag"])]
         path: Option<String>,
-        /// L1 — flip every open comment on this artifact to resolved
+        /// Flip every open comment on this artifact to resolved
         /// in one daemon roundtrip. Useful after Claude Code applies
         /// every fix.
+        // Provenance: L1
         #[arg(long, conflicts_with = "comment_id")]
         all: bool,
         /// Force HTTP against this daemon URL (defaults to
@@ -3275,9 +3346,10 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// v0.4 D3 — append a new comment to an artifact via the daemon.
+    /// Append a new comment to an artifact via the daemon.
     /// Defaults to --author claude (this verb is the Claude-Code
     /// path; humans use the SPA annotator).
+    // Provenance: v0.4 D3
     Add {
         /// kb name (positional). Optional when `--path` is supplied.
         kb: Option<String>,
@@ -3289,7 +3361,8 @@ enum CommentsAction {
         /// 12-hex artifact id (flag form). Wins over the positional.
         #[arg(long = "artifact-id")]
         artifact_id_flag: Option<String>,
-        /// L1 — alternative to <artifact_id>.
+        /// Alternative to <artifact_id>.
+        // Provenance: L1
         #[arg(long, conflicts_with_all = ["artifact_id", "artifact_id_flag"])]
         path: Option<String>,
         #[arg(long)]
@@ -3401,12 +3474,13 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// W2.15a — set (or `--clear`) the artifact's three-state review-pass
+    /// Set (or `--clear`) the artifact's three-state review-pass
     /// verdict: comment | approve | request-changes. Distinct from any
     /// individual comment's open/resolved status — this is the review-
     /// pass-level signal (`ReviewFile.verdict`). The daemon also mirrors it
     /// onto the artifact's own kb-tags as a `status-approved` /
     /// `status-changes-requested` display shortcut.
+    // Provenance: W2.15a
     Verdict {
         /// comment | approve | request-changes. Required unless `--clear`.
         #[arg(required_unless_present = "clear")]
@@ -3450,11 +3524,12 @@ enum CommentsAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// R9 — re-point a comment's anchor after the anchored element moved
+    /// Re-point a comment's anchor after the anchored element moved
     /// or was renamed during an edit. An explicit, ground-truth override
     /// of the frozen original anchor (the indexer's fuzzy resolver is left
     /// untouched). Use after editing the HTML when an open comment's target
     /// moved — distinct from `resolve`, which marks a comment addressed.
+    // Provenance: R9
     Reanchor {
         /// The comment id to re-point (from `kb comments list`/`watch`).
         comment_id: String,
@@ -3591,12 +3666,13 @@ enum CommentsAction {
 
 #[derive(Subcommand, Debug, Clone)]
 enum MemoryAction {
-    /// MI-W2.4a — walk one supersede chain, both directions, with
+    /// Walk one supersede chain, both directions, with
     /// timestamps and forgotten-state. The endorsed salvage from the
     /// 2026-07 temporal-query design in place of a rejected `recall
-    /// --as-of` (kb forget's pre-W2.3 hard delete made that answer
+    /// --as-of` (kb forget's earlier hard delete made that answer
     /// undetectably incomplete — see the EPOCH HONESTY caveat this prints
     /// when the chain predates the tombstone era).
+    // Provenance: MI-W2.4a
     Log {
         /// Artifact id (the 12-hex canonical id `kb docs`/`kb search` print).
         id: String,
@@ -3607,10 +3683,11 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
-    /// CT-B2 — every session that recalled this memory: the memory-side
+    /// Every session that recalled this memory: the memory-side
     /// reverse of the `memory_recalls` ledger. Fans out across the whole
     /// daemon (the ledger lives with the RECALLING session's kb, not
     /// necessarily this memory's own). Read-only.
+    // Provenance: CT-B2
     RecalledBy {
         /// Memory (artifact) id.
         id: String,
@@ -3621,12 +3698,13 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
-    /// MI-W3.1 — on-demand cross-corpus duplicate report: likely-redundant
+    /// On-demand cross-corpus duplicate report: likely-redundant
     /// memory PAIRS (high embedding similarity, not already linked by
     /// `kb-supersedes`, neither forgotten), fanned out across every memory
     /// corpus on the daemon. NOT a contradiction detector (see the route's
     /// doc comment for why) and NEVER mutates anything — resolve a real
     /// duplicate with `kb remember --supersedes` or `kb forget`.
+    // Provenance: MI-W3.1
     Dupes {
         /// Cosine similarity floor. Default 0.90 — see the route doc
         /// comment (`kb_core::memory::find_duplicate_pairs`) for why.
@@ -3643,10 +3721,11 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
-    /// MI-W4.4 — the bounded, DERIVED hygiene queue: the memories most
+    /// The bounded, DERIVED hygiene queue: the memories most
     /// worth 90 seconds right now, each with a one-line justification.
     /// Read-only; never mutates anything (act on an item with `pin`,
     /// `salience`, `remember --supersedes`, or `forget`).
+    // Provenance: MI-W4.4
     Triage {
         /// Restrict the scan to ONE memory corpus.
         #[arg(long)]
@@ -3659,12 +3738,13 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
-    /// CT-B4 — from a highlight-born memory's one-liner back to the origin
+    /// From a highlight-born memory's one-liner back to the origin
     /// passage it was lifted from. Reuses kb-comments/1's EXISTING anchor
     /// resolution ladder (never a second heuristic) against the origin
     /// artifact's CURRENT source; a memory with no recorded origin, a gone
     /// origin artifact, or a stale anchor each render an honest line —
     /// never a guessed passage.
+    // Provenance: CT-B4
     Expand {
         /// The memory's artifact id (the 12-hex id `kb recall`/`kb memory
         /// census` print).
@@ -3678,11 +3758,12 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
-    /// CT-C1 — the missing in-session correction verb: an agent that
+    /// The missing in-session correction verb: an agent that
     /// discovers a recalled memory is WRONG posts an ordinary `[kb-flag]`
     /// comment (kb-comments/1, invariant #6) rather than silently ignoring
     /// it or reaching for a full `remember --supersedes`/`forget`. Refuses
     /// when an OPEN flag already exists on this memory (resolve it first).
+    // Provenance: CT-C1
     Flag {
         /// Memory (artifact) id.
         id: String,
@@ -3702,7 +3783,7 @@ enum MemoryAction {
 
 #[derive(Subcommand, Debug, Clone)]
 enum FleetAction {
-    /// Status — health sweep across every daemons.toml entry (v0.24 T1):
+    /// Status — health sweep across every daemons.toml entry:
     /// identity (version/build/uptime) + per-kb docs and open errors.
     /// Unreachable daemons are report rows, not failures.
     Status {
@@ -3746,8 +3827,9 @@ enum FleetAction {
     Doctor,
 }
 
-/// CT-F5 — the three SLO verbs. `--kb` is optional everywhere: it resolves
+/// The three SLO verbs. `--kb` is optional everywhere: it resolves
 /// through `http::resolve_default_kb`, so a single-kb daemon needs no flag.
+// Provenance: CT-F5
 #[derive(Subcommand, Debug, Clone)]
 enum SloAction {
     /// Current indicators for one corpus (`GET /api/kb/{kb}/slo`). Reads
@@ -3813,7 +3895,7 @@ enum AtlasAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Labels — deterministic c-TF-IDF top terms per atlas cluster (W1.B),
+    /// Labels — deterministic c-TF-IDF top terms per atlas cluster,
     /// last refreshed at the most recent recompute/recluster.
     Labels {
         #[arg(long)]
@@ -3838,7 +3920,7 @@ enum AtlasAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// History — the corpus time-lapse frame list (W3 T-b, V0028), newest
+    /// History — the corpus time-lapse frame list, newest
     /// first. Frames start EMPTY: nothing in kb retains a past layout or a
     /// past embedding, so there is nothing to show until recomputes
     /// accumulate going forward.
@@ -3870,7 +3952,7 @@ enum AtlasAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Backfill — seed the time-lapse with RECONSTRUCTED frames (W3 T-d):
+    /// Backfill — seed the time-lapse with RECONSTRUCTED frames:
     /// for each of `--frames` evenly-spaced mtime cut points, today's
     /// embeddings laid out over the docs that existed then. Prints the plan
     /// (each cut point + its doc count) BEFORE any work runs, then the
@@ -3908,7 +3990,7 @@ enum AtlasAction {
         #[arg(long)]
         daemon: Option<String>,
     },
-    /// Field — the dual-field atlas's operator half (W3 F-b): a JSON
+    /// Field — the dual-field atlas's operator half: a JSON
     /// Canvas overlay the operator hand-positions, sitting alongside the
     /// machine layout above. `kb atlas field` prints the raw canvas;
     /// `kb atlas field set --file <path|->` replaces it; `kb atlas field
@@ -4032,7 +4114,7 @@ enum ModelAction {
     /// pull on first call (~130 MB for bge-small).
     Download {
         name: String,
-        /// Air-gapped install from a pre-downloaded tarball. v0.2.
+        /// Air-gapped install from a pre-downloaded tarball.
         #[arg(long)]
         from: Option<PathBuf>,
     },
@@ -4041,7 +4123,7 @@ enum ModelAction {
         name: String,
         #[arg(long)]
         kb: Option<String>,
-        /// v0.3 G4 — when the new model has the SAME embedding
+        /// When the new model has the SAME embedding
         /// dimension as the old one, prime the lance table by NULLing
         /// the embedding column (per-row UPDATE, no table drop). The
         /// indexer's next pass repopulates them. Different-dim swaps
@@ -4050,6 +4132,7 @@ enum ModelAction {
         /// model, so a different-dim swap would refuse to open the
         /// kb until either the dataset is dropped or the config is
         /// reverted. The CLI surfaces a clear error.
+        // Provenance: v0.3 G4
         #[arg(long)]
         in_place: bool,
     },
@@ -4062,8 +4145,9 @@ enum ModelAction {
     },
 }
 
-/// W2.15b — `kb proposals` subcommands. Bare `kb proposals` (no
+/// `kb proposals` subcommands. Bare `kb proposals` (no
 /// subcommand) defaults to `list`, mirroring `kb daemon`/`kb config`.
+// Provenance: W2.15b
 #[derive(Subcommand, Debug)]
 enum ProposalsAction {
     /// List queued proposals (`GET /api/proposals`), fleet-wide unless
@@ -4099,11 +4183,12 @@ enum ProposalsAction {
     },
 }
 
-/// SL3 — the flags every `kb slate` verb shares (design §9 "CLI (the
+/// The flags every `kb slate` verb shares (design §9 "CLI (the
 /// protocol)"). `global = true` so they may be written before OR after the
 /// verb: the hooks call `kb slate open --hybrid --budget 2000
 /// --session-id … --cwd … --json`, and an agent typing
 /// `kb slate found "…" --ref path:x` must work the same way.
+// Provenance: SL3
 #[derive(Args, Debug)]
 pub(crate) struct SlateCommon {
     /// The slate's slug. Default: the git MAIN checkout's basename for
@@ -4129,7 +4214,7 @@ pub(crate) struct SlateCommon {
     session_id: Option<String>,
     /// claude | codex | opencode | grok | kimi | omp. Default `$KB_HARNESS`,
     /// else the harness of the session env var that supplied the id, else a
-    /// flagged `claude` guess; an unknown value is SL2's 400.
+    /// flagged `claude` guess; an unknown value is a 400.
     #[arg(long, global = true)]
     harness: Option<String>,
     /// Model id to record on the post's provenance.
@@ -4193,9 +4278,10 @@ enum SlateAction {
         limit: Option<usize>,
         #[arg(long)]
         budget: Option<usize>,
-        /// D26 (v0.42) — narrow to these kinds, csv (e.g.
+        /// Narrow to these kinds, csv (e.g.
         /// `now,warn,hand,ask,answer`, the push adapters' hybrid subset).
         /// An unknown word is the server's 400 `bad-kind`.
+        // Provenance: D26 (v0.42)
         #[arg(long)]
         kinds: Option<String>,
     },
@@ -4206,9 +4292,10 @@ enum SlateAction {
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// D27 (v0.42) — explicitly report a cursor for adapters that don't
+    /// Explicitly report a cursor for adapters that don't
     /// route through `open`/`delta`. Defaults `--seq` to the local cursor
     /// marker's value.
+    // Provenance: D27 (v0.42)
     Cursor {
         #[arg(long)]
         seq: Option<u64>,

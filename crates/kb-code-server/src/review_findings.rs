@@ -2,7 +2,7 @@
 //! disposition, plus human-authored ("manual") findings (design doc
 //! §2 rows 8-11 + §3.1 `kbc-findings/1` + §4.3 reconciliation;
 //! design-addendum-2 §E). This module is a thin ROUTE layer over the
-//! reconciliation core R1 already shipped in `store.rs` (search that file
+//! reconciliation core R1 already shipped in `store/findings.rs` (search that file
 //! for its own `PRR-R1` block) — every write here funnels through
 //! `Store::reconcile_findings_import` / `Store::insert_review_finding` /
 //! `Store::set_finding_disposition` / `Store::clear_finding_disposition`;
@@ -40,7 +40,7 @@
 //! existing `origin="manual"` finding would silently overwrite it. This
 //! module closes that at the ROUTE boundary ([`validate_import_batch`]'s
 //! `slug_conflict_manual` check, whole-batch 400, nothing written); the
-//! DATA-layer defense-in-depth fix lives in `store.rs`'s
+//! DATA-layer defense-in-depth fix lives in `store/findings.rs`'s
 //! `reconcile_findings_import` (see that function's own doc + the pinning
 //! test `reconcile_findings_import_refresh_never_overwrites_a_manual_
 //! finding_even_on_slug_collision`).
@@ -126,7 +126,7 @@ fn now_unix() -> i64 {
 
 // --- wire shapes -------------------------------------------------------
 
-// 2026-08-31 incident (store.rs module doc): `Clone` is additive — needed
+// 2026-08-31 incident (store/mod.rs module doc): `Clone` is additive — needed
 // so `import_findings_route` can move an owned copy of the batch into a
 // `run_blocking` closure (validation is a store read) while the original
 // `body.findings` stays available for the anchor-derivation loop after.
@@ -826,7 +826,7 @@ fn finding_json(
 /// own single-finding response (post-publish-record view), rather than a
 /// second near-identical builder.
 ///
-/// 2026-08-31 incident (store.rs module doc): takes `&Store` (not
+/// 2026-08-31 incident (store/mod.rs module doc): takes `&Store` (not
 /// `&SharedState`) so every async caller wraps the whole thing in ONE
 /// `run_blocking` closure — this fn makes no other use of `state`.
 pub(crate) fn compose_finding_view(
@@ -1672,7 +1672,7 @@ pub async fn create_manual_finding_route(
         }
     }
 
-    // 2026-08-31 incident (store.rs module doc): latest_patchset + the
+    // 2026-08-31 incident (store/mod.rs module doc): latest_patchset + the
     // slug lookup/derivation (+ V80-M5's adoption lookup/validation) are
     // contiguous store work — one blocking-pool trip. `SlugOutcome` carries
     // the 409-conflict branch back out since a closure can't early-return
@@ -1916,7 +1916,7 @@ pub(crate) async fn compose_findings_list(
     params: &ListFindingsParams,
 ) -> Result<serde_json::Value, ApiError> {
     let (review, repo, repo_id) = require_review(state, id).await?;
-    // 2026-08-31 incident (store.rs module doc): the four sequential reads
+    // 2026-08-31 incident (store/mod.rs module doc): the four sequential reads
     // below (ps resolve, findings, annotations, patchsets — the last one
     // V80-F3's `touched_in` needs) are contiguous store work — one
     // blocking-pool trip.
@@ -2322,7 +2322,7 @@ pub async fn findings_recurrence_route(
     AxumPath(id): AxumPath<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (review, _repo, _repo_id) = require_review(&state, id).await?;
-    // 2026-08-31 incident (store.rs module doc): the whole recurrence
+    // 2026-08-31 incident (store/mod.rs module doc): the whole recurrence
     // compose (findings + pairs + the batched prior-review fan-out) is
     // pure store + CPU work — one blocking-pool trip.
     let repo_name = review.repo.clone();

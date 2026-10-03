@@ -2630,3 +2630,67 @@ mod tests {
         assert_eq!(cfg.intel.provider_for("a", "ruby").unwrap().name, "first");
     }
 }
+
+#[cfg(test)]
+mod docs_coverage_tests {
+    //! v044-D1 (A14.f3) — every `pub` key of the kb-code config tables
+    //! must be documented in docs/configuration.md, so the next
+    //! undocumented key fails here instead of shipping silently.
+
+    /// The `pub` field names of `struct <name>` in this file's own source.
+    fn pub_fields(name: &str) -> Vec<String> {
+        let src = include_str!("config.rs");
+        let head = format!("pub struct {name} {{");
+        let start = src
+            .find(&head)
+            .unwrap_or_else(|| panic!("struct {name} not found in config.rs"));
+        let body = &src[start + head.len()..];
+        let end = body.find("\n}\n").expect("struct end");
+        body[..end]
+            .lines()
+            .filter_map(|l| l.strip_prefix("    pub "))
+            .filter_map(|l| l.split(':').next())
+            .map(|f| f.trim().to_string())
+            .collect()
+    }
+
+    fn assert_documented(section: &str, structs: &[&str]) {
+        let doc = include_str!("../../../docs/configuration.md");
+        for st in structs {
+            let fields = pub_fields(st);
+            assert!(!fields.is_empty(), "{st}: no pub fields parsed");
+            for f in fields {
+                let as_key = format!("`{f}`");
+                let as_table = format!("[{section}.{f}]");
+                assert!(
+                    doc.contains(&as_key) || doc.contains(&as_table),
+                    "docs/configuration.md does not document `{st}.{f}` \
+                     (expected `{f}` in a table or a [{section}.{f}] heading)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_review_store_key_is_documented() {
+        assert_documented("review_store", &["ReviewStoreSection"]);
+    }
+
+    #[test]
+    fn every_kb_code_server_key_is_documented() {
+        assert_documented("server", &["ServerSection"]);
+    }
+
+    #[test]
+    fn the_field_scanner_sees_the_known_keys() {
+        // Guards the scanner itself: a refactor that makes it parse nothing
+        // (or the wrong struct) must not turn the two tests above vacuous.
+        let rs = pub_fields("ReviewStoreSection");
+        for k in ["root", "seed_on_boot", "allow_inherited_credentials"] {
+            assert!(rs.iter().any(|f| f == k), "{rs:?} lacks {k}");
+        }
+        assert!(pub_fields("ServerSection")
+            .iter()
+            .any(|f| f == "git_fanout"));
+    }
+}

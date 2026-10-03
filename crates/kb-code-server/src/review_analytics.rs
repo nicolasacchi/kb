@@ -364,7 +364,7 @@ pub async fn analytics_route(
     if let Some(r) = params.repo.as_deref() {
         find_repo(&state, r)?;
     }
-    // 2026-08-31 incident (store.rs module doc): the findings scan +
+    // 2026-08-31 incident (store/mod.rs module doc): the findings scan +
     // recurrence-pairs query are contiguous store work — one blocking-pool
     // trip; `compute_analytics` is pure CPU, folded in between.
     let repo_param = params.repo.clone();

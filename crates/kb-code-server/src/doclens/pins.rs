@@ -139,7 +139,7 @@ pub async fn delete_pin_route(
     // orphans — no future sync pass ever revisits an unpinned doc to correct
     // them. Idempotent like the pin delete (a doc with no claims costs one
     // harmless no-op DELETE). Both writes share one blocking-pool round trip
-    // (store.rs's 2026-08-31 incident note).
+    // (store/mod.rs's 2026-08-31 incident note).
     let kb = p.kb.clone();
     let doc = p.doc.clone();
     let (removed, claims_dropped) = state
