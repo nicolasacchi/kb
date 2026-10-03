@@ -61,7 +61,10 @@ pub async fn remember(
     let session_resolved = if no_session {
         None
     } else {
-        crate::session_identity::session_for_write(session_id)
+        crate::session_identity::session_for_write(
+            session_id,
+            "`kb remember` will write no kb-session",
+        )
     };
     let client_ref = crate::outbox::new_client_ref()?;
     let res = remember_inner(
