@@ -7,7 +7,7 @@
   "latest_ps": "number",
   "repo": "string",
   "schema": "string",
-  "session_id": "null",
+  "session_id": "string",
   "state": "string",
   "tip_sha": "string",
   "title": "string",

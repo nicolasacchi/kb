@@ -177,6 +177,13 @@ function snapshotFor(repo: string): CurrentReview | null {
   return cache.get(repo) ?? null;
 }
 
+/// The current marker right now, from the SAME cache the hook reads (not the
+/// storage, which a quota failure leaves empty). For effects that must act
+/// only while the marker is still set.
+export function peekCurrentReview(repo: string): CurrentReview | null {
+  return snapshotFor(repo);
+}
+
 /// Subscribe to the current review for `repo` — `null` when unset. Any
 /// component under the SPA root that needs to know or react: the TopBar
 /// chip, the reader's rail gate + URL sync, the search results chip.

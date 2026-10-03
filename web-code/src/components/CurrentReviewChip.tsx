@@ -1,7 +1,8 @@
 import { Link, useNavigate } from "react-router";
 import { useExplicitRepo } from "../hooks/useActiveRepo";
 import { mergeCurrentSearch, reviewUrl } from "../lib/codeUrl";
-import { clearCurrentReview, useCurrentReview } from "../lib/currentReview";
+import { clearCurrentReview } from "../lib/currentReview";
+import { useValidatedCurrentReview } from "../hooks/useValidatedCurrentReview";
 import { Icon } from "./icons";
 
 export interface CurrentReviewChipProps {
@@ -26,7 +27,7 @@ export interface CurrentReviewChipProps {
 export default function CurrentReviewChip({ variant = "bar", onNavigate }: CurrentReviewChipProps) {
   const repo = useExplicitRepo();
   const navigate = useNavigate();
-  const currentReview = useCurrentReview(repo ?? "");
+  const { current: currentReview } = useValidatedCurrentReview(repo ?? "");
 
   if (!repo || !currentReview) return null;
   // Re-bound so the nested `onClear` closure below sees the narrowed

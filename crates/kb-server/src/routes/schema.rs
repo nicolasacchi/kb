@@ -454,6 +454,47 @@ pub async fn per_type(Path((kind, version)): Path<(String, String)>) -> Response
 }
 
 #[cfg(test)]
+mod backup_written_schema {
+    use super::*;
+
+    /// A3-14 — the schema route declares the `remote` field of
+    /// `maintenance.backup.written`, and the scheduler really emits it
+    /// (a subscriber cannot tell a local-only write from an off-host copy
+    /// without it).
+    #[tokio::test]
+    async fn backup_written_schema_declares_remote_and_the_emitter_sends_it() {
+        let resp = per_type(Path((
+            "maintenance.backup.written".to_string(),
+            "v1".to_string(),
+        )))
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["payload"], json!(["kb", "path", "remote"]));
+
+        // The producer side: the emit site in lib.rs carries every declared key.
+        let lib = include_str!("../lib.rs");
+        let at = lib
+            .find("\"maintenance.backup.written\",")
+            .expect("scheduler emits maintenance.backup.written");
+        // Window = from the event name to the end of this `emit(` call
+        // (first `);` after it), so it neither panics on a char boundary nor
+        // silently stops covering the payload when it grows.
+        let end = lib[at..]
+            .find(");")
+            .map(|i| at + i)
+            .expect("emit call is terminated");
+        let emit = &lib[at..end];
+        for key in ["\"kb\":", "\"path\":", "\"remote\":"] {
+            assert!(emit.contains(key), "emit site is missing {key}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod drift {
     //! Drift guard (2026-08-16): regex-scans BOTH this crate's own `src/`
     //! (`CARGO_MANIFEST_DIR`) and the sibling `kb-core/src`
