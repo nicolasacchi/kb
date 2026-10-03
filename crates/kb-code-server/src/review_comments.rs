@@ -333,63 +333,80 @@ pub async fn review_comments(
     Query(params): Query<ReviewCommentsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (review, repo, repo_id) = require_review(&state, id).await?;
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
+    let ps_param = params.ps.clone();
+    let all = params.all;
+    let repo_name = review.repo.clone();
     // 2026-08-31 incident (store.rs module doc): ps-resolve + annotations
     // list + the per-comment suggestion lookups inside `build_comment_
     // groups` are all synchronous store work — one blocking-pool trip.
-    let ps_param = params.ps.clone();
-    let all = params.all;
-    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
-    let (target_ps, groups_out) = state
+    let body = state
         .store
-        .run_blocking(move |store| -> Result<_, ApiError> {
-            let target_ps = resolve_ps(store, id, ps_param.as_deref())?;
-            let rows = store.list_review_annotations(id, all)?;
-            let ctx = crate::prose_refs::RefCtx {
-                repo_id,
-                review_id: Some(id),
-                ps_number: Some(target_ps.ps_number),
-            };
-            // V80-M0 — the `in_diff` caption's data source, ONE call
-            // (`crate::reviews::files_changed`, the same fn `review_
-            // distill`'s own `files_out` and every diff-listing route
-            // already shares — never a second `git diff` shell-out).
-            //
-            // A7-4 — the caption is cosmetic: a git failure here (unreadable
-            // or missing base/tip object) degrades every group's `in_diff`
-            // to `null` (= unknown) and logs, it NEVER fails the read.
-            let changed_paths = match changed_path_set(
-                &repo_root,
-                &target_ps.base_sha,
-                &target_ps.tip_sha,
-            ) {
-                Ok(set) => Some(set),
-                Err(e) => {
-                    tracing::warn!(review_id = id, error = %e, "in_diff caption unavailable; degrading to null");
-                    None
-                }
-            };
-            let groups_out = build_comment_groups(
+        .run_blocking(move |store| {
+            compose_comments(
                 store,
                 &repo_root,
-                &target_ps,
-                rows,
-                &ctx,
-                changed_paths.as_ref(),
-            )?;
-            Ok((target_ps, groups_out))
+                &repo_name,
+                repo_id,
+                id,
+                ps_param.as_deref(),
+                all,
+            )
         })
         .await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
+}
 
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
-            "schema": SCHEMA,
-            "review_id": id,
-            "repo": review.repo,
-            "ps": target_ps.ps_number,
-            "groups": groups_out,
-        })),
-    ))
+/// The `GET /api/reviews/{id}/comments` body, lifted out of the handler so
+/// the `review context` bundle composes the SAME threads the route returns
+/// (identical bytes by construction, not by two compositions agreeing).
+/// BLOCKING (store + git blob reads).
+pub(crate) fn compose_comments(
+    store: &Store,
+    repo_root: &GitCtx,
+    repo_name: &str,
+    repo_id: i64,
+    id: i64,
+    ps: Option<&str>,
+    all: bool,
+) -> Result<serde_json::Value, ApiError> {
+    let target_ps = resolve_ps(store, id, ps)?;
+    let rows = store.list_review_annotations(id, all)?;
+    let ctx = crate::prose_refs::RefCtx {
+        repo_id,
+        review_id: Some(id),
+        ps_number: Some(target_ps.ps_number),
+    };
+    // V80-M0 — the `in_diff` caption's data source, ONE call
+    // (`crate::reviews::files_changed`, the same fn `review_
+    // distill`'s own `files_out` and every diff-listing route
+    // already shares — never a second `git diff` shell-out).
+    //
+    // A7-4 — the caption is cosmetic: a git failure here (unreadable
+    // or missing base/tip object) degrades every group's `in_diff`
+    // to `null` (= unknown) and logs, it NEVER fails the read.
+    let changed_paths = match changed_path_set(repo_root, &target_ps.base_sha, &target_ps.tip_sha) {
+        Ok(set) => Some(set),
+        Err(e) => {
+            tracing::warn!(review_id = id, error = %e, "in_diff caption unavailable; degrading to null");
+            None
+        }
+    };
+    let groups_out = build_comment_groups(
+        store,
+        repo_root,
+        &target_ps,
+        rows,
+        &ctx,
+        changed_paths.as_ref(),
+    )?;
+    Ok(serde_json::json!({
+        "schema": SCHEMA,
+        "review_id": id,
+        "repo": repo_name,
+        "ps": target_ps.ps_number,
+        "groups": groups_out,
+    }))
 }
 
 /// Group already-fetched annotation rows (parents + replies, per

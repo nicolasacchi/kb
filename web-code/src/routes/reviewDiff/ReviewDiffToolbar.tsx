@@ -33,7 +33,8 @@ import type { TourStop } from "../../lib/reviewTour";
 import type { SpeedFilterHit } from "../../lib/speedSearch";
 import { highlightSegments } from "../../lib/speedSearch";
 import type { DiffMode } from "../../lib/prefs";
-import type { ReviewFileRow } from "../../api/types";
+import type { ReviewFileRow, SinceReport } from "../../api/types";
+import { authorOnlyCaption } from "../../lib/reviewSince";
 
 export interface ReviewDiffToolbarProps {
   repo: string;
@@ -42,6 +43,10 @@ export interface ReviewDiffToolbarProps {
   patchsets: ReviewPatchset[];
   psSel: DiffPsSelection | null;
   psRange: { from: number; to: number } | null;
+  /// v0.44 F9b — the author delta for the `?ps=a..b` pair + its switch.
+  since?: SinceReport;
+  authorOnly: boolean;
+  onSetAuthorOnly: (next: boolean) => void;
   psQuery: string;
   activePsNum: number | null | undefined;
   onSetPs: (next: DiffPsSelection | null) => void;
@@ -156,6 +161,9 @@ export default function ReviewDiffToolbar({
   patchsets,
   psSel,
   psRange,
+  since,
+  authorOnly,
+  onSetAuthorOnly,
   psQuery,
   activePsNum,
   onSetPs: setPs,
@@ -261,6 +269,19 @@ export default function ReviewDiffToolbar({
             latestPs={activePsNum ?? null}
             onChange={setPs}
           />
+          {psRange && since && (
+            <label className="kbc-review__since-toggle" data-kbc-rdiff-author-only>
+              <input
+                type="checkbox"
+                checked={authorOnly}
+                onChange={(e) => onSetAuthorOnly(e.target.checked)}
+              />
+              Author changes only
+              <span className="kbc-review__since" data-kbc-rdiff-author-count>
+                {authorOnlyCaption(since)}
+              </span>
+            </label>
+          )}
           {psRange && (
             <span
               className="kbc-rdiff__ps-note"

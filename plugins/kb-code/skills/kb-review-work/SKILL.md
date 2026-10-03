@@ -56,11 +56,21 @@ The older verbs (`show`, `comments`, `findings list`, `timeline`,
    `kb-code review queue --json` — what is waiting for YOU, the agent: an
    open question whose latest voice is not an agent (lane `question`), then a
    disputed finding with no agent reply since the dispute (lane `dispute`),
-   oldest first. Take the top row; it carries the `next` command to run. An
+   an agreed/fix-later finding with no suggestion or author hunk yet (lane
+   `follow-up`), a PR whose head moved past the latest patchset (lane
+   `pr-drift`), then an open `flag-for-agent` thread (lane `flag`), oldest
+   first within a lane. `--watch` keeps polling and prints only new rows. Take the top row; it carries the `next` command to run. An
    empty queue is a real answer. (`review inbox --all-repos --json` is the
    HUMAN-ordered view of the same reviews; use it to see what the human has
    outstanding, not to pick your next task.)
-2. **Situational awareness** (all `--json`): `review status <id>` is THE drift
+2. **Situational awareness.** One call first: `kb-code review context <ref>
+   --budget 20000 --json` returns the budgeted bundle (header with how the base
+   was resolved, open human threads, findings, other reviews' disputes on the
+   same paths, the author's changes since the verdict, reading order, change
+   set, and the patch in reading order). A cut is never silent: read
+   `omitted[]` and re-run with a bigger `--budget` or take the narrower read
+   it points to. `kb-code review explain-base <ref>` says how the base was
+   chosen. The finer reads (all `--json`): `review status <id>` is THE drift
    answer — `head_moved` against the LATEST patchset tip, base state, the
    file-count drift vs. the forge, verdict staleness, open findings. Also
    `review show <id>` · `review findings list <id>` (dispositions + resolution

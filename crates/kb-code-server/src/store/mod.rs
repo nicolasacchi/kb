@@ -3843,6 +3843,22 @@ pub struct ReviewBaseRow {
     pub objects_state: Option<String>,
 }
 
+/// One finding from ANOTHER review that a human disputed or waived, on a
+/// path the current review also changes (`Store::other_review_judgements`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtherReviewJudgement {
+    pub review_id: i64,
+    pub review_state: String,
+    pub slug: String,
+    pub severity: String,
+    pub title: String,
+    pub path: String,
+    pub disposition: String,
+    pub note: Option<String>,
+    pub by: Option<String>,
+    pub at: Option<i64>,
+}
+
 /// The two new `review_patchsets` columns (V0045 / RS-U1).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PatchsetBaseFields {

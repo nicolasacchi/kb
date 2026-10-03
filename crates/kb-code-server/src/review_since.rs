@@ -242,22 +242,65 @@ pub fn author_new_ranges(from: &PathHunks, to: &PathHunks) -> HashMap<String, Ve
 // --- the git read, memoised ---------------------------------------------------
 
 const MEMO_CAP: usize = 256;
+/// A single cached map above this many bytes (estimated by [`weigh`]) is
+/// returned to its caller but never remembered: one giant patchset must
+/// not be able to pin memory for the life of the process.
+const MEMO_ENTRY_MAX_BYTES: usize = 2 * 1024 * 1024;
+/// Total estimated bytes held; past it the memo is cleared (a memo, not a
+/// store) — the entry-count cap alone bounded nothing about SIZE.
+const MEMO_TOTAL_MAX_BYTES: usize = 32 * 1024 * 1024;
 
-type Memo = HashMap<(String, String), Arc<PathHunks>>;
+#[derive(Default)]
+struct Memo {
+    map: HashMap<(String, String), Arc<PathHunks>>,
+    bytes: usize,
+}
 
 static MEMO: LazyLock<Mutex<Memo>> = LazyLock::new(Default::default);
+
+/// Estimated heap bytes of a hunk map: path strings, hunk ids and the fixed
+/// per-hunk fields. An estimate, deliberately a little generous.
+fn weigh(m: &PathHunks) -> usize {
+    m.iter()
+        .map(|(p, hs)| {
+            p.len()
+                + 48
+                + hs.iter()
+                    .map(|h| h.id.len() + std::mem::size_of::<HunkRef>())
+                    .sum::<usize>()
+        })
+        .sum()
+}
+
+/// Remember `hunks` under `key` if it fits the per-entry budget, evicting
+/// everything first when the count or total-bytes cap would be exceeded.
+/// Returns whether it was cached.
+fn memo_put(memo: &mut Memo, key: (String, String), hunks: Arc<PathHunks>) -> bool {
+    let w = weigh(&hunks);
+    if w > MEMO_ENTRY_MAX_BYTES {
+        return false;
+    }
+    if memo.map.len() >= MEMO_CAP || memo.bytes + w > MEMO_TOTAL_MAX_BYTES {
+        memo.map.clear();
+        memo.bytes = 0;
+    }
+    if memo.map.insert(key, hunks).is_none() {
+        memo.bytes += w;
+    }
+    true
+}
 
 /// One patchset's `-U0` hunks against its own base. BLOCKING (a git
 /// subprocess); callers run it inside `spawn_blocking`. Only successful
 /// reads are remembered, and the memo is keyed on two immutable shas, so a
-/// stale answer is impossible; past [`MEMO_CAP`] entries it is cleared (a
-/// memo, not a store). No guard is held across the git call.
+/// stale answer is impossible; it is bounded in entries AND bytes (see
+/// [`memo_put`]). No guard is held across the git call.
 pub fn patchset_hunks(ctx: &GitCtx, base: &str, tip: &str) -> Result<Arc<PathHunks>, String> {
     if !is_full_sha(base) || !is_full_sha(tip) {
         return Err(format!("not a full sha: {base}..{tip}"));
     }
     let key = (base.to_string(), tip.to_string());
-    if let Some(hit) = MEMO.lock().ok().and_then(|m| m.get(&key).cloned()) {
+    if let Some(hit) = MEMO.lock().ok().and_then(|m| m.map.get(&key).cloned()) {
         return Ok(hit);
     }
     let text = ctx
@@ -265,25 +308,63 @@ pub fn patchset_hunks(ctx: &GitCtx, base: &str, tip: &str) -> Result<Arc<PathHun
         .map_err(|e| e.to_string())?;
     let hunks = Arc::new(hunks_by_path(&text));
     if let Ok(mut m) = MEMO.lock() {
-        if m.len() >= MEMO_CAP {
-            m.clear();
-        }
-        m.insert(key, hunks.clone());
+        memo_put(&mut m, key, hunks.clone());
     }
     Ok(hunks)
 }
 
-/// The later patchset's NEW author hunks (tip-side ranges per path) as seen
-/// from `own`. `None` when either patchset's change set cannot be read —
-/// the caller then keeps its honest "cannot attribute" fallback.
+/// What the author did between two patchsets, as line ranges in the two
+/// tips' own coordinates: the hunks the later patchset ADDED (later-tip
+/// coordinates) and the hunks it REMOVED/reverted (earlier-tip
+/// coordinates). `touched_in` needs both: an author who reverts or drops a
+/// change over a finding's lines acted on them just as surely as one who
+/// edits them, and that act leaves no new hunk behind.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuthorRanges {
+    pub added: HashMap<String, Vec<(u32, u32)>>,
+    pub removed: HashMap<String, Vec<(u32, u32)>>,
+}
+
+/// Per path, the EARLIER-tip `(first, last)` line range of every hunk the
+/// earlier patchset's change set has and the later one does not (the
+/// author reverted or dropped it). Same multiset matching as
+/// [`author_new_ranges`]; the mirror image. Pure.
+pub fn author_gone_ranges(from: &PathHunks, to: &PathHunks) -> HashMap<String, Vec<(u32, u32)>> {
+    let empty: Vec<HunkRef> = Vec::new();
+    let mut out: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+    for (path, f) in from {
+        let t = to.get(path).unwrap_or(&empty);
+        // `classify(to, from)` yields the hunks of `from` that `to` lacks.
+        let (_, gone, _) = classify(t, f);
+        let ranges: Vec<(u32, u32)> = gone
+            .iter()
+            .filter(|h| !h.binary)
+            .map(|h| {
+                let hi = h.new_start + h.new_lines.saturating_sub(1);
+                (h.new_start, hi.max(h.new_start))
+            })
+            .collect();
+        if !ranges.is_empty() {
+            out.insert(path.clone(), ranges);
+        }
+    }
+    out
+}
+
+/// The author's hunks between `own` and `later` (added and removed). `None`
+/// when either patchset's change set cannot be read — the caller then keeps
+/// its honest "cannot attribute" fallback.
 pub fn author_ranges_between(
     ctx: &GitCtx,
     own: &ReviewPatchsetRow,
     later: &ReviewPatchsetRow,
-) -> Option<HashMap<String, Vec<(u32, u32)>>> {
+) -> Option<AuthorRanges> {
     let from = patchset_hunks(ctx, &own.base_sha, &own.tip_sha).ok()?;
     let to = patchset_hunks(ctx, &later.base_sha, &later.tip_sha).ok()?;
-    Some(author_new_ranges(&from, &to))
+    Some(AuthorRanges {
+        added: author_new_ranges(&from, &to),
+        removed: author_gone_ranges(&from, &to),
+    })
 }
 
 // --- the report ---------------------------------------------------------------
@@ -664,6 +745,68 @@ mod tests {
                 gone: 0
             }]
         );
+    }
+
+    fn big_map(hunks: usize) -> PathHunks {
+        let mut m = PathHunks::new();
+        m.insert(
+            "a".into(),
+            (0..hunks)
+                .map(|i| HunkRef {
+                    id: format!("{i:016x}"),
+                    new_start: 1,
+                    new_lines: 1,
+                    binary: false,
+                })
+                .collect(),
+        );
+        m
+    }
+
+    /// F9b — the memo was bounded by entry COUNT only, so a handful of
+    /// enormous patchsets could pin unbounded memory. A map over the
+    /// per-entry byte budget is not remembered; the total byte budget
+    /// evicts. Fails without the byte bounds (the 256-entry count never
+    /// trips here).
+    #[test]
+    fn the_memo_is_bounded_in_bytes_not_only_in_entries() {
+        let mut memo = Memo::default();
+        let huge = Arc::new(big_map(MEMO_ENTRY_MAX_BYTES / 32));
+        assert!(weigh(&huge) > MEMO_ENTRY_MAX_BYTES);
+        assert!(!memo_put(&mut memo, ("b".into(), "t".into()), huge));
+        assert!(memo.map.is_empty() && memo.bytes == 0);
+
+        // Many individually-acceptable maps never exceed the total budget.
+        let mid = big_map(MEMO_ENTRY_MAX_BYTES / 80);
+        let w = weigh(&mid);
+        assert!(w <= MEMO_ENTRY_MAX_BYTES);
+        for i in 0..64 {
+            assert!(memo_put(
+                &mut memo,
+                (format!("b{i}"), "t".into()),
+                Arc::new(mid.clone())
+            ));
+            assert!(memo.bytes <= MEMO_TOTAL_MAX_BYTES, "after {i}");
+        }
+        assert!(memo.map.len() < 64, "the total budget must have evicted");
+    }
+
+    /// F9b — gone ranges are the mirror of new ranges, in the EARLIER
+    /// tip's coordinates.
+    #[test]
+    fn a_dropped_hunk_yields_a_gone_range_in_the_earlier_coordinates() {
+        let h = |id: &str, start: u32| HunkRef {
+            id: id.into(),
+            new_start: start,
+            new_lines: 2,
+            binary: false,
+        };
+        let mut from = PathHunks::new();
+        from.insert("a".into(), vec![h("keep", 1), h("drop", 8)]);
+        let mut to = PathHunks::new();
+        to.insert("a".into(), vec![h("keep", 40)]);
+        assert_eq!(author_gone_ranges(&from, &to)["a"], vec![(8, 9)]);
+        assert!(author_new_ranges(&from, &to).is_empty());
     }
 
     #[test]
