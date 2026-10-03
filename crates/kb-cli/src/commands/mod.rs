@@ -26,6 +26,7 @@ pub mod get;
 pub mod graph;
 pub mod history;
 pub mod import;
+pub mod import_memory;
 pub mod index_page;
 pub mod links;
 pub mod list;

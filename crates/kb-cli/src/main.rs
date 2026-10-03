@@ -2724,6 +2724,34 @@ enum ImportAction {
         #[arg(long)]
         allow_oversized: bool,
     },
+    /// Bring Claude Code's native auto-memory (`<dir>/<project>/memory/*.md`)
+    /// into the HUMAN-GATED proposal inbox. Dry-run by default: prints the
+    /// mapping (title, tags, target corpus, dedupe key) and writes nothing.
+    /// `--apply` queues candidates via the `kb propose` route; approve them
+    /// with `kb proposals approve`. Nothing is ever written as a memory
+    /// directly. Idempotent via a `cm-<hash>` content tag.
+    ClaudeMemory {
+        /// Project tree to scan. Default `~/.claude/projects`.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Cap the number of NEW candidates queued by `--apply`.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Queue the candidates in the proposal inbox. Absent = dry-run.
+        #[arg(long)]
+        apply: bool,
+        /// Scope every candidate to this comma-separated kb list instead of
+        /// the `memory-<slug>` guessed from the project dir name.
+        #[arg(long)]
+        link: Option<String>,
+        /// Memory corpus that receives the proposals (else the sole kb).
+        #[arg(long)]
+        kb: Option<String>,
+        #[arg(long)]
+        daemon: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -7068,6 +7096,27 @@ async fn main() -> Result<()> {
         } => commands::reset::run(cli.config.as_ref(), &kb, yes, all, force),
         Cmd::Synth { docs, out, seed } => commands::synth::run(docs, out, seed),
         Cmd::Import { action } => match action {
+            ImportAction::ClaudeMemory {
+                dir,
+                limit,
+                apply,
+                link,
+                kb,
+                daemon,
+                json,
+            } => {
+                commands::import_memory::run(
+                    dir,
+                    limit,
+                    apply,
+                    link,
+                    kb,
+                    daemon,
+                    read_bearer(),
+                    json,
+                )
+                .await
+            }
             ImportAction::ClaudeHistory {
                 dir,
                 into,
