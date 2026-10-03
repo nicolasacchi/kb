@@ -727,7 +727,8 @@ kb context <query> [--cwd PATH] [--budget N] [--session SID] [--no-floor]
                                     `kb context`") points at: the hook injects
                                     COUNTS, this verb is the substance.
 kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
-   [--lanes recall,context] [--daemon URL] [--json]
+   [--lanes recall,context,slate] [--slate SLUG] [--slate-since SEQ]
+   [--daemon URL] [--json]
                                     v0.44 F6: the per-prompt hook's ONE call
                                     over `GET /api/turn` (recall + turn-1
                                     scent, composed by the daemon under a
@@ -735,8 +736,12 @@ kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
                                     repo slug (git main-checkout basename +
                                     local `project_slugs` aliases) is derived
                                     locally with NO network call and sent as
-                                    project=/visible_to=; the daemon checks
-                                    it against its own config. Prints `text`
+                                    project=/visible_to=: BOTH candidates
+                                    (the alias, then memory-<slug>) go on the
+                                    wire and the daemon takes the first it
+                                    has. --slate/--slate-since add the slate
+                                    lane (reply carries head_seq for your
+                                    cursor). Prints `text`
                                     verbatim. A lane that timed out / failed
                                     / fell back to keyword-only is NAMED in
                                     one line (`kb: recall skipped

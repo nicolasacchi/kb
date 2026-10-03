@@ -402,11 +402,22 @@ async fn turn_route_lanes_and_project_params() {
     let (_tmp, addr) = boot().await;
     let client = reqwest::Client::new();
     let bad = client
-        .get(url(addr, "/api/turn?q=hello&lanes=recall,slate"))
+        .get(url(addr, "/api/turn?q=hello&lanes=recall,bogus"))
         .send()
         .await
         .unwrap();
     assert_eq!(bad.status().as_u16(), 400);
+    // `slate` IS a lane (v044-X3): naming it must not 400.
+    let slate_ok = client
+        .get(url(addr, "/api/turn?q=hello&lanes=slate"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        slate_ok.status().is_success(),
+        "lanes=slate must not 400: {}",
+        slate_ok.status()
+    );
     let ok = client
         .get(url(
             addr,

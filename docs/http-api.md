@@ -1262,11 +1262,13 @@ GET  /api/events/schema/{kind}/{version}    per-type payload schema
 
 # v0.44 F6 — the per-prompt turn block
 GET  /api/turn?q=…|prompt=…[&session=SID&cwd=PATH&deadline_ms=N
-                    &project=CORPUS&visible_to=CSV&lanes=recall,context]
+                    &project=CORPUS[,CORPUS…]&visible_to=CSV
+                    &lanes=recall,context,slate&slate=SLUG&slate_since=SEQ]
                                             recall + the turn-1 context scent
                                             composed in-process under ONE
                                             shared deadline. Returns
                                             {text, recalled[{kb,id,pos,title}],
+                                            head_seq?,
                                             degraded[{kb,lane,error_class}]}.
                                             `text` is the hook's v2 recall
                                             block (golden-pinned against
@@ -1274,13 +1276,32 @@ GET  /api/turn?q=…|prompt=…[&session=SID&cwd=PATH&deadline_ms=N
                                             wrapper. project/visible_to narrow
                                             recall like `kb recall --scope
                                             auto` (scope=all + both fields);
-                                            project is checked against the
+                                            project is a csv of CANDIDATES
+                                            (`kb turn` sends the alias and
+                                            memory-<slug>), checked against the
                                             daemon's own [kb.*] config (no
-                                            storage) and an unknown name fails
-                                            OPEN to unscoped recall.
-                                            lanes= is a csv of recall|context
-                                            (default both); any other token is
-                                            400. No `head_seq`/slate lane yet.
+                                            storage): the first configured one
+                                            wins, none fails OPEN to unscoped
+                                            recall.
+                                            lanes= is a csv of
+                                            recall|context|slate (absent =
+                                            recall + context, plus slate when
+                                            slate= is given); any other token
+                                            is 400. The slate lane serves the
+                                            hook's slate step in-process: with
+                                            slate_since=SEQ the delta since it
+                                            (`kb slate delta --since`), without
+                                            the hybrid seed (`kb slate open
+                                            --hybrid`), appended after the
+                                            other lanes with a blank line, and
+                                            `head_seq` is what the CLIENT
+                                            advances its own cursor to (this
+                                            route writes no cursor). slate=
+                                            is the slug (cwd -> slug lives in
+                                            the CLI); an unknown slate is
+                                            empty text, no head_seq; lanes=slate
+                                            without slate= is named in
+                                            degraded[].
                                             A lane that misses the deadline or
                                             fails is named in degraded[]
                                             (error_class timeout|storage|

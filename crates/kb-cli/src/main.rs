@@ -295,9 +295,18 @@ enum Cmd {
         /// Shared budget in ms for all lanes (default 9000).
         #[arg(long)]
         deadline_ms: Option<u64>,
-        /// csv subset of `recall,context` (default both).
+        /// csv subset of `recall,context,slate` (default recall + context,
+        /// plus slate when `--slate` is given).
         #[arg(long)]
         lanes: Option<String>,
+        /// Slate slug for the slate lane (the caller resolves cwd -> slug).
+        /// The reply's `head_seq` is what your cursor advances to.
+        #[arg(long)]
+        slate: Option<String>,
+        /// Your slate cursor: serve the delta since it (default: the hybrid
+        /// seed, as `kb slate open --hybrid`).
+        #[arg(long)]
+        slate_since: Option<u64>,
         #[arg(long)]
         daemon: Option<String>,
         #[arg(long)]
@@ -4369,6 +4378,8 @@ async fn main() -> Result<()> {
             session,
             deadline_ms,
             lanes,
+            slate,
+            slate_since,
             daemon,
             json,
         } => {
@@ -4379,6 +4390,8 @@ async fn main() -> Result<()> {
                 session.as_deref(),
                 deadline_ms,
                 lanes.as_deref(),
+                slate.as_deref(),
+                slate_since,
                 daemon.as_deref(),
                 bearer.as_deref(),
                 json,
