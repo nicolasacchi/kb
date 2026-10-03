@@ -2381,3 +2381,249 @@ fn retrack_with_an_unreadable_forge_follows_the_stored_target_and_refuses_a_gues
     let b = fx.store.get_review_base(id).unwrap().unwrap();
     assert_eq!(b.base_branch.as_deref(), Some("develop"));
 }
+
+// =====================================================================
+// v0.44 K3 — merged PRs, retrack races, atomic creation
+// =====================================================================
+
+/// Author a merge-commit merge of the PR branch into the forge's `main`
+/// (GitHub's default "Create a merge commit").
+fn merge_pr_into_main(fx: &Fx) {
+    git(&fx.author, &["checkout", "-q", "main"]);
+    git(
+        &fx.author,
+        &["merge", "--no-ff", "-q", "-m", "Merge PR 7", "pr"],
+    );
+    git(&fx.author, &["push", "-q", "origin", "main"]);
+}
+
+/// A6-1 — after a merge-commit merge the target tip CONTAINS the PR head,
+/// so `merge-base(target, head) == head` and the patchset was
+/// (tip=head, base=head): zero files. Creation, snapshot/sync reuse and
+/// retrack (dry run AND apply) now refuse with the typed
+/// `pr-already-merged` instead of minting the empty patchset (which also
+/// orphaned every finding of an already-reviewed PR).
+#[test]
+fn a_pr_merged_into_its_target_is_refused_not_captured_as_an_empty_patchset() {
+    use crate::review_retrack::retrack_sync;
+    let fx = fixture();
+    fx.push_pr(&fx.m1, &["a.rs", "b.rs"], "v1");
+    let nr = || NewReview {
+        pr: Some(PR),
+        forge_base_ref: Some("main".into()),
+        ..NewReview::default()
+    };
+    // Before the merge the PR reviews normally: ps1 carries both files.
+    let prepared = fx.with(|c| c.prepare_new(&nr())).unwrap();
+    let review = fx.pr_review(&prepared.base_ref, Some(&prepared.policy));
+    let id = review.id;
+    let ps1 = recap(&fx, id, fetch()).outcome.ps;
+    assert_eq!(fx.diff_names(&ps1.base_sha, &ps1.tip_sha).len(), 2);
+    let before_ps = fx.store.list_patchsets(id).unwrap().len();
+
+    merge_pr_into_main(&fx);
+
+    // Creation (sync --merged-since, start-pr for a merged PR).
+    let err = fx
+        .with(|c| c.prepare_new(&nr()))
+        .err()
+        .expect("a merged PR must not be prepared against the live target");
+    assert_eq!(err.urn, URN_PR_ALREADY_MERGED, "{err}");
+    assert_eq!(err.status, 409);
+
+    // Reuse / snapshot of the existing review.
+    let review = fx.refetch(id);
+    let err = fx
+        .with(|c| c.recapture(&review, &fetch()))
+        .err()
+        .expect("a snapshot must not mint an empty patchset");
+    assert_eq!(err.urn, URN_PR_ALREADY_MERGED, "{err}");
+
+    // Retrack: the dry run predicts what the apply does.
+    let unread = vec![];
+    let dry = fx
+        .with(|c| retrack_sync(c, &review, None, true, Some("main"), unread.clone(), true))
+        .err()
+        .expect("dry run");
+    assert_eq!(dry.urn, URN_PR_ALREADY_MERGED, "{dry}");
+    let applied = fx
+        .with(|c| retrack_sync(c, &review, None, true, Some("main"), unread, false))
+        .err()
+        .expect("apply");
+    assert_eq!(applied.urn, URN_PR_ALREADY_MERGED, "{applied}");
+
+    assert_eq!(
+        fx.store.list_patchsets(id).unwrap().len(),
+        before_ps,
+        "no empty patchset was minted"
+    );
+}
+
+/// A6-3 — the policy check runs UNDER the ops lock, before minting: a
+/// capture computed from a policy that a concurrent retrack replaced
+/// fails with 409 `base-changed` and mints nothing.
+#[test]
+fn a_capture_whose_policy_went_stale_mints_nothing() {
+    let fx = fixture();
+    fx.push_pr(&fx.m1, &["a.rs"], "v1");
+    let prepared = fx
+        .with(|c| {
+            c.prepare_new(&NewReview {
+                pr: Some(PR),
+                forge_base_ref: Some("main".into()),
+                ..NewReview::default()
+            })
+        })
+        .unwrap();
+    let review = fx.pr_review(&prepared.base_ref, Some(&prepared.policy));
+    let eff = EffectiveBase::Policy(prepared.policy.clone());
+    let opts = CaptureOpts {
+        force: true,
+        kind_hint: None,
+    };
+    let stale = fx
+        .with(|c| c.capture_with(&review, &eff, &opts, || false, |_| panic!("must not run")))
+        .err()
+        .expect("a stale policy is refused");
+    assert_eq!(stale.urn, URN_BASE_CHANGED, "{stale}");
+    assert!(fx.store.list_patchsets(review.id).unwrap().is_empty());
+    // The same call with a still-valid policy mints.
+    let ok = fx
+        .with(|c| c.capture_with(&review, &eff, &opts, || true, |_| {}))
+        .unwrap();
+    assert!(ok.minted);
+}
+
+/// A6-7 — a tracked base branch the forge deleted: the dry run used to
+/// classify against the stale `refs/remotes/base/<branch>` the failed fetch
+/// left behind (no warning) while the apply answered 409 `base-vanished`.
+#[test]
+fn retrack_dry_run_reports_a_vanished_base_like_the_apply_does() {
+    use crate::review_retrack::retrack_sync;
+    let fx = fixture();
+    git(&fx.author, &["checkout", "-q", "-B", "release-3", "main"]);
+    commit(&fx.author, "r3.txt", "r3");
+    git(&fx.author, &["push", "-q", "origin", "release-3"]);
+    git(&fx.author, &["checkout", "-q", "main"]);
+    fx.push_pr(&fx.m1, &["p1.rs"], "v1");
+    let policy = BasePolicy::track("release-3", SetBy::User, BaseSource::Explicit);
+    let review = fx.pr_review(&fx.m1.clone(), Some(&policy));
+    let id = review.id;
+    // The store fetches release-3 once (the stale ref stays afterwards).
+    recap(&fx, id, fetch());
+    git(&fx.author, &["push", "-q", "origin", ":release-3"]);
+    let review = fx.refetch(id);
+    let dry = fx
+        .with(|c| retrack_sync(c, &review, None, true, Some("release-3"), vec![], true))
+        .err()
+        .expect("the dry run must not classify against a deleted branch");
+    assert_eq!(dry.urn, URN_BASE_VANISHED, "{dry}");
+    let apply = fx
+        .with(|c| retrack_sync(c, &review, None, true, Some("release-3"), vec![], false))
+        .err()
+        .expect("apply");
+    assert_eq!(apply.urn, URN_BASE_VANISHED, "{apply}");
+}
+
+/// A6-1 (retrack-bulk) — a CLOSED review is final: bulk retrack no longer
+/// scans it (re-basing one minted an empty `base-corrected` patchset that
+/// flipped its verdict stale and orphaned its findings).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retrack_bulk_skips_closed_reviews() {
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    git(&fx.clone, &["checkout", "-q", "-b", "feature"]);
+    commit(&fx.clone, "f.rs", "f");
+    let state = route_state(&fx).await;
+    let mk = |head: &str| {
+        let id = state
+            .store
+            .create_review(REPO, Some("t"), &fx.m1, head, None, 1)
+            .unwrap();
+        state
+            .store
+            .set_review_base(id, "pin", None, None, "legacy", None)
+            .unwrap();
+        id
+    };
+    let open_id = mk("feature");
+    let closed_id = mk("feature");
+    state
+        .store
+        .update_review(closed_id, None, Some("closed"), 2)
+        .unwrap();
+    let body = crate::review_retrack::RetrackAllBody {
+        repo: Some(REPO.into()),
+        pinned: true,
+        legacy: false,
+        dry_run: true,
+    };
+    let resp = crate::review_retrack::retrack_all_route(State(state.clone()), axum::Json(body))
+        .await
+        .unwrap_or_else(|e| panic!("retrack-bulk: {e:?}"))
+        .into_response();
+    let out = body_json(resp).await;
+    let ids: Vec<i64> = out["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["id"].as_i64())
+        .collect();
+    assert!(ids.contains(&open_id), "{out}");
+    assert!(!ids.contains(&closed_id), "closed review scanned: {out}");
+}
+
+/// A6.f8 — `review status` shares `verdict_block`'s staleness rule: a
+/// legacy verdict with NO recorded patchset is not "stale" (the old
+/// `status` expression `verdict_ps != latest_ps` said it was), and only a
+/// strictly later patchset makes a verdict stale.
+#[test]
+fn verdict_staleness_has_one_rule() {
+    let mut row = ReviewRow {
+        id: 1,
+        repo: REPO.into(),
+        title: None,
+        base_ref: "main".into(),
+        head_ref: "feature".into(),
+        session_id: None,
+        state: "open".into(),
+        created_at: 1,
+        updated_at: 1,
+        verdict: Some("approve".into()),
+        verdict_note: None,
+        verdict_at: Some(1),
+        verdict_ps: None,
+    };
+    assert!(!crate::reviews::verdict_block(&row, Some(2)).1);
+    row.verdict_ps = Some(1);
+    assert!(crate::reviews::verdict_block(&row, Some(2)).1);
+    assert!(!crate::reviews::verdict_block(&row, Some(1)).1);
+}
+
+/// A6.f4 — a failed step after the row insert removes the row (no unbound,
+/// patchset-less orphan for the next sync to duplicate); success keeps it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_creation_step_discards_the_half_created_review() {
+    let fx = tokio::task::spawn_blocking(fixture).await.unwrap();
+    let state = route_state(&fx).await;
+    let mk = || {
+        state
+            .store
+            .create_review(REPO, Some("t"), "main", "feature", None, 1)
+            .unwrap()
+    };
+    let kept = mk();
+    let ok: Result<(), crate::routes::ApiError> = Ok(());
+    crate::reviews::discard_on_err(&state, kept, ok)
+        .await
+        .unwrap();
+    assert!(state.store.get_review(kept).unwrap().is_some());
+    let gone = mk();
+    let err: Result<(), crate::routes::ApiError> =
+        Err(crate::routes::ApiError::bad_request("boom"));
+    assert!(crate::reviews::discard_on_err(&state, gone, err)
+        .await
+        .is_err());
+    assert!(state.store.get_review(gone).unwrap().is_none());
+}

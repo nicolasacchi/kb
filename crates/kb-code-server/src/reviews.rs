@@ -2824,7 +2824,11 @@ async fn create_review_value_inner(
         )
     })
     .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    .and_then(|r| r.map_err(ApiError::from));
+    // A6.f4 — a failed first capture (NoMergeBase, ...) must not leave the
+    // just-inserted row behind.
+    let out = discard_on_err(&state, review.id, out).await?;
     let (base, warnings) =
         review_base_block_async(&state, &review, &repo.path, Some(out.ps.base_sha.clone())).await;
     let ps = out.ps;
@@ -2964,7 +2968,7 @@ async fn capture_new_in_store(
 ) -> Result<CaptureOutcome, ApiError> {
     let review2 = review.clone();
     let eff = EffectiveBase::Policy(prepared.policy.clone());
-    let res = with_store_ctx(state, handle, member, move |ctx| {
+    let joined = with_store_ctx(state, handle, member, move |ctx| {
         ctx.capture(
             &review2,
             &eff,
@@ -2974,18 +2978,44 @@ async fn capture_new_in_store(
             },
         )
     })
-    .await?;
+    .await;
+    // A6.f4 — a JoinError / task failure is a failure too: the row must go
+    // on EVERY error path, not only on a clean `BaseError`.
+    let res = match joined {
+        Ok(r) => r,
+        Err(e) => {
+            discard_half_created(state, review.id).await;
+            return Err(e.into());
+        }
+    };
     match res {
         Ok(out) => Ok(out),
         Err(e) => {
-            let id = review.id;
-            let _ = state
-                .store
-                .run_blocking(move |store| store.delete_review(id))
-                .await;
+            discard_half_created(state, review.id).await;
             Err(e.into())
         }
     }
+}
+
+/// Delete a review row whose creation did not complete, so no unbound,
+/// patchset-less orphan survives for the next sync to duplicate.
+async fn discard_half_created(state: &SharedState, id: i64) {
+    let _ = state
+        .store
+        .run_blocking(move |store| store.delete_review(id))
+        .await;
+}
+
+/// [`discard_half_created`] when `r` is an error; `r` passes through.
+pub(crate) async fn discard_on_err<T>(
+    state: &SharedState,
+    id: i64,
+    r: Result<T, ApiError>,
+) -> Result<T, ApiError> {
+    if r.is_err() {
+        discard_half_created(state, id).await;
+    }
+    r
 }
 
 /// `POST /api/reviews/{id}/snapshot` body (all optional; an empty body is
@@ -4480,6 +4510,23 @@ async fn reuse_pr_review(
         })
         .await?;
 
+    // A6-5 — refresh the base branch too, before measuring the merge-base.
+    let root_for_base = repo.path.clone();
+    let base_ref_for_fetch = review.base_ref.clone();
+    let base_refresh_warning = crate::review_jobs::spawn_blocking_tracked(move || {
+        refresh_origin_base(
+            &WorkTreeRoot::user_clone(&root_for_base),
+            &base_ref_for_fetch,
+        )
+    })
+    .await
+    .map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("base fetch task panicked: {e}"),
+        )
+    })?;
+
     let store = state.store.clone();
     let bus = state.bus.clone();
     let root = repo.path.clone();
@@ -4512,12 +4559,44 @@ async fn reuse_pr_review(
             )
         })
         .await?;
-    let (base, warnings) =
+    let (base, mut warnings) =
         review_base_block_async(state, &review, &repo.path, Some(out.ps.base_sha.clone())).await;
+    if let Some(msg) = base_refresh_warning {
+        warnings.push(crate::review_base::warning(
+            crate::review_base::warn::BASE_REFRESH_FAILED,
+            msg,
+        ));
+    }
     if reopen {
         reopen_review(state, &existing).await?;
     }
     reuse_envelope(state, id, pr_number, &out, base, warnings).await
+}
+
+/// A6-5 — the branch a stored fallback `base_ref` (`refs/remotes/origin/<b>`,
+/// written by [`start_pr_base`]) tracks, or `None` for any other shape (a
+/// pinned sha, a local branch, an explicit user ref — nothing to refresh).
+fn origin_branch_of_base_ref(base_ref: &str) -> Option<&str> {
+    base_ref
+        .strip_prefix("refs/remotes/origin/")
+        .filter(|b| !b.is_empty())
+}
+
+/// A6-5 — refresh the remote-tracking base a no-store review compares
+/// against, with the same bounded fetch creation uses ([`fetch_remote_base`]).
+/// `fetch_pr_ref` only moves `refs/kbc/pr/<n>`: without this a rebased PR is
+/// diffed against the origin tip the clone last happened to fetch, and the
+/// patchset swallows every target commit in between. A failure is returned as
+/// a warning message (the capture still runs against what is there).
+fn refresh_origin_base(repo_root: &dyn GitRoot, base_ref: &str) -> Option<String> {
+    let b = origin_branch_of_base_ref(base_ref)?;
+    let spec = match parse_user_ref(b) {
+        Ok(s) => s,
+        Err(e) => return Some(format!("base {base_ref} not refreshed: {e}")),
+    };
+    fetch_remote_base(repo_root, &spec).err().map(|e| {
+        format!("origin/{b} could not be refreshed ({e}); the diff uses the last fetched tip")
+    })
 }
 
 /// Reopen a closed review (the V76-R1b `on_closed=reopen` write). A unique
@@ -4891,57 +4970,66 @@ pub(crate) async fn create_review_pr_value_known(
         })
         .await?;
 
-    crate::review_jobs::set_stage(&job, "patchset");
+    // A6.f4 — everything after the row insert either completes (capture +
+    // PR binding) or removes the row again: an unbound, patchset-less
+    // orphan would be duplicated by the next sync.
+    let review_id = review.id;
+    let outcome = async {
+        crate::review_jobs::set_stage(&job, "patchset");
 
-    let store = state.store.clone();
-    let bus = state.bus.clone();
-    let root = repo.path.clone();
-    let max = state.review.max_patchsets;
-    let review2 = review.clone();
-    let out = crate::review_jobs::spawn_blocking_tracked(move || {
-        capture_patchset_outcome(
-            &store,
-            &bus,
-            &WorkTreeRoot::user_clone(&root),
-            &review2,
-            max,
-            true,
+        let store = state.store.clone();
+        let bus = state.bus.clone();
+        let root = repo.path.clone();
+        let max = state.review.max_patchsets;
+        let review2 = review.clone();
+        let out = crate::review_jobs::spawn_blocking_tracked(move || {
+            capture_patchset_outcome(
+                &store,
+                &bus,
+                &WorkTreeRoot::user_clone(&root),
+                &review2,
+                max,
+                true,
+            )
+        })
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+
+        crate::review_jobs::set_stage(&job, "enrich");
+
+        let had_credentials = github.has_credentials();
+        // The `get_pull` already made above for the base rung — passing it here
+        // is what keeps the hoist free: one API call, not two.
+        let (pr_meta_json, pr_meta_unavailable_reason) = pr_enrichment(
+            &github,
+            gh_repo.as_ref(),
+            pull,
+            number,
+            had_credentials,
+            base_source.as_str(),
         )
-    })
-    .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-
-    crate::review_jobs::set_stage(&job, "enrich");
-
-    let had_credentials = github.has_credentials();
-    // The `get_pull` already made above for the base rung — passing it here
-    // is what keeps the hoist free: one API call, not two.
-    let (pr_meta_json, pr_meta_unavailable_reason) = pr_enrichment(
-        &github,
-        gh_repo.as_ref(),
-        pull,
-        number,
-        had_credentials,
-        base_source.as_str(),
-    )
-    .await?;
-    let (base, mut warnings) =
-        review_base_block_async(state, &review, &repo.path, Some(out.ps.base_sha.clone())).await;
-    warnings.extend(base_warnings);
-    bind_pr_and_respond(
-        state,
-        &review,
-        number,
-        &pr_repo_slug,
-        &fetched_sha,
-        pr_meta_json,
-        pr_meta_unavailable_reason,
-        base_source.as_str(),
-        &out,
-        serde_json::json!(base),
-        warnings,
-    )
-    .await
+        .await?;
+        let (base, mut warnings) =
+            review_base_block_async(state, &review, &repo.path, Some(out.ps.base_sha.clone()))
+                .await;
+        warnings.extend(base_warnings);
+        bind_pr_and_respond(
+            state,
+            &review,
+            number,
+            &pr_repo_slug,
+            &fetched_sha,
+            pr_meta_json,
+            pr_meta_unavailable_reason,
+            base_source.as_str(),
+            &out,
+            serde_json::json!(base),
+            warnings,
+        )
+        .await
+    }
+    .await;
+    discard_on_err(state, review_id, outcome).await
 }
 
 /// RS-U6 — [`create_review_pr_value`] against a ready review store.
@@ -5019,39 +5107,46 @@ async fn create_review_pr_in_store(
         body.session_id.clone(),
     )
     .await?;
-    crate::review_jobs::set_stage(&job, "patchset");
-    let out = capture_new_in_store(state, handle, member, &review, &prepared).await?;
-    crate::review_jobs::set_stage(&job, "enrich");
-    let base_source = prepared.policy.legacy_base_source();
-    let (pr_meta_json, pr_meta_unavailable_reason) = pr_enrichment(
-        &github,
-        gh_repo.as_ref(),
-        pull,
-        number,
-        had_credentials,
-        base_source,
-    )
-    .await?;
-    let base = base_out(
-        &EffectiveBase::Policy(prepared.policy.clone()),
-        prepared.policy.set_by.as_str(),
-        &prepared.status,
-        Some(&out.ps.base_sha),
-    );
-    bind_pr_and_respond(
-        state,
-        &review,
-        number,
-        &pr_repo_slug,
-        &prepared.head_sha,
-        pr_meta_json,
-        pr_meta_unavailable_reason,
-        base_source,
-        &out,
-        serde_json::json!(base),
-        prepared.warnings.clone(),
-    )
-    .await
+    let review_id = review.id;
+    let outcome = async {
+        crate::review_jobs::set_stage(&job, "patchset");
+        let out = capture_new_in_store(state, handle, member, &review, &prepared).await?;
+        crate::review_jobs::set_stage(&job, "enrich");
+        let base_source = prepared.policy.legacy_base_source();
+        let (pr_meta_json, pr_meta_unavailable_reason) = pr_enrichment(
+            &github,
+            gh_repo.as_ref(),
+            pull,
+            number,
+            had_credentials,
+            base_source,
+        )
+        .await?;
+        let base = base_out(
+            &EffectiveBase::Policy(prepared.policy.clone()),
+            prepared.policy.set_by.as_str(),
+            &prepared.status,
+            Some(&out.ps.base_sha),
+        );
+        bind_pr_and_respond(
+            state,
+            &review,
+            number,
+            &pr_repo_slug,
+            &prepared.head_sha,
+            pr_meta_json,
+            pr_meta_unavailable_reason,
+            base_source,
+            &out,
+            serde_json::json!(base),
+            prepared.warnings.clone(),
+        )
+        .await
+    }
+    .await;
+    // `capture_new_in_store` already removed the row on a capture failure;
+    // this covers the enrichment / binding steps after it.
+    discard_on_err(state, review_id, outcome).await
 }
 
 /// Best-effort GitHub metadata enrichment (design doc §2 row 1 / §1.2's
@@ -6715,6 +6810,28 @@ mod tests {
         .unwrap();
         assert_eq!(base_ref, "main");
         assert_eq!(source, BaseSource::LocalDefault);
+    }
+
+    /// A6-5 — the no-store reuse path refreshes the base branch: a stale
+    /// `refs/remotes/origin/main` is moved to origin's tip (it used to stay
+    /// where the clone last fetched it, so a rebased PR's diff swallowed
+    /// every target commit in between).
+    #[test]
+    fn refresh_origin_base_moves_a_stale_remote_tracking_base() {
+        let (_r, _b, _c, dir, base_sha, _pr_sha, remote_tip) = ladder_fixture(7, 2);
+        assert_ne!(base_sha, remote_tip);
+        lgit(&dir, &["update-ref", "refs/remotes/origin/main", &base_sha]);
+        let root = WorkTreeRoot::user_clone(&dir);
+        assert_eq!(refresh_origin_base(&root, "refs/remotes/origin/main"), None);
+        assert_eq!(
+            lgit_out(&dir, &["rev-parse", "refs/remotes/origin/main"]),
+            remote_tip
+        );
+        // Shapes that name no origin branch are left alone.
+        assert_eq!(origin_branch_of_base_ref("main"), None);
+        assert_eq!(origin_branch_of_base_ref(&base_sha), None);
+        assert_eq!(origin_branch_of_base_ref("refs/remotes/origin/"), None);
+        assert_eq!(refresh_origin_base(&root, &base_sha), None);
     }
 
     #[test]

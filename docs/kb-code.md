@@ -805,6 +805,8 @@ Error URNs (`BaseError`, rendered RFC 7807 through `ApiError`):
 | `urn:kb:errors:base-unavailable` | 409 | the policy's base tip is not in the store (never fetched, or gone from the forge) |
 | `urn:kb:errors:no-merge-base` | 400 | head and base share no history |
 | `urn:kb:errors:base-vanished` | 409 | a user-set (or legacy) base branch no longer exists on the forge and no replacement could be resolved |
+| `urn:kb:errors:pr-already-merged` | 409 | the PR head is already an ancestor of the target tip (a merge-commit merge), so a capture against the live target would mint an EMPTY patchset; creation, snapshot/sync reuse and `retrack` (dry run and apply) refuse. Pin the merge-time base with `--base <sha>` to review what landed |
+| `urn:kb:errors:base-changed` | 409 | the review's base policy changed (a concurrent retrack/retarget) while a capture waited on the fetch; nothing was minted, retry |
 | `urn:kb:errors:capture-failed` | 500 | the capture itself failed (git or DB) |
 | `urn:kb:errors:store-disabled` | 503 | the store's git spawner is unavailable |
 
