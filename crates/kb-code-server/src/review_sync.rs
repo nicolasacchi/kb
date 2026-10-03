@@ -370,12 +370,18 @@ fn sync_lock(root: &Path) -> Arc<tokio::sync::Mutex<()>> {
 /// (RS-U10b review fix), so its duplicate-binding check-then-insert can
 /// never race a `review sync` of the same repo. `None` = unknown repo (the
 /// caller's own lookup answers that).
+///
+/// Shared ([`crate::review_jobs::SharedRepoGuard`]): inside a job, every
+/// tracked blocking closure keeps the lock alive after the body is aborted,
+/// so a swept job's orphaned git work still serialises the repo.
 pub(crate) async fn repo_guard(
     state: &SharedState,
     repo: &str,
-) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+) -> Option<crate::review_jobs::SharedRepoGuard> {
     let root = find_repo(state, repo).ok()?.0.path.clone();
-    Some(sync_lock(&root).lock_owned().await)
+    let guard = std::sync::Arc::new(sync_lock(&root).lock_owned().await);
+    crate::review_jobs::register_repo_guard(&guard);
+    Some(guard)
 }
 
 // --- the forge answer cache (status) ------------------------------------------------------

@@ -111,13 +111,29 @@ pub fn capture_at(
     opts: &CaptureOpts,
     max_patchsets: u32,
 ) -> Result<CaptureOutcome, ReviewGitError> {
-    let merge_base = reviews::merge_base_sha(root, base_tip, tip)?;
+    let mut base_tip = base_tip;
+    let mut merge_base = reviews::merge_base_sha(root, base_tip, tip)?;
     // A6-1 — the shared choke point: the store paths, the no-store
-    // creation/reuse and the snapshot all mint through here.
+    // creation/reuse and the snapshot all mint through here. A PR whose head
+    // the target already contains was MERGED: capturing it against the live
+    // target would mint an empty patchset, so the base is pinned to the
+    // merge-time target tip (`M^1` of the merge commit that brought the head
+    // in) — the merged PR stays reviewable. With no merge commit to name
+    // (fast-forward / unreachable) it is refused honestly.
+    let merged_base;
     if pr_of_head(&review.head_ref).is_some() && tip == merge_base {
-        return Err(ReviewGitError::PrAlreadyMerged(
-            tip[..tip.len().min(12)].to_string(),
-        ));
+        match reviews::merged_pr_base_sha(root, base_tip, tip)? {
+            Some(b) => {
+                merged_base = b;
+                base_tip = merged_base.as_str();
+                merge_base = reviews::merge_base_sha(root, base_tip, tip)?;
+            }
+            None => {
+                return Err(ReviewGitError::PrAlreadyMerged(
+                    tip[..tip.len().min(12)].to_string(),
+                ));
+            }
+        }
     }
     let latest = store.latest_patchset(review.id).map_err(db_err)?;
     let kind = decide_kind(
@@ -207,12 +223,31 @@ pub(crate) fn refuse_merged_head(head: &str, merge_base: &str) -> Result<(), Bas
             409,
             URN_PR_ALREADY_MERGED,
             format!(
-                "the PR head {} is already contained in the target tip (the PR was merged): capturing against the live target would mint an empty patchset — pin the merge-time base with --base <sha> to review what landed",
+                "the PR head {} is already contained in the target tip (the PR was merged): no merge commit on the target's first-parent history names the base it was merged into (a fast-forward merge), so capturing against the live target would mint an empty patchset — pin the base explicitly with --base <sha> to review what landed",
                 &head[..head.len().min(12)]
             ),
         ));
     }
     Ok(())
+}
+
+/// A6-1 — for a PR whose head the target tip already contains
+/// (`head == merge_base`): the merge-time base to pin
+/// ([`reviews::merged_pr_base_sha`]), or the typed 409 `pr-already-merged`
+/// when no merge commit names it. `Ok(None)` = the PR is not merged.
+pub(crate) fn merged_pin(
+    root: &dyn GitRoot,
+    head: &str,
+    merge_base: &str,
+    target_tip: &str,
+) -> Result<Option<String>, BaseError> {
+    if head != merge_base {
+        return Ok(None);
+    }
+    match reviews::merged_pr_base_sha(root, target_tip, head).map_err(capture_error)? {
+        Some(b) => Ok(Some(b)),
+        None => refuse_merged_head(head, merge_base).map(|_| None),
+    }
 }
 
 /// The message of a review-row write that did not land (the DB, not the
@@ -417,6 +452,34 @@ impl FetchReport {
     }
 }
 
+/// X1/K3 — a bulk run's memo of the base-branch fetches it already did, so
+/// `retrack-bulk` fetches each DISTINCT base ONCE per repo instead of once per
+/// candidate review (dry run) plus once more per applied row. A memo is
+/// per-run state (never persisted): later runs fetch afresh. The PR head is
+/// per-PR and is never memoised.
+#[derive(Debug, Default)]
+pub struct BaseFetchMemo {
+    done: parking_lot::Mutex<std::collections::HashMap<String, MemoEntry>>,
+}
+
+#[derive(Debug, Clone)]
+struct MemoEntry {
+    state: String,
+    code: Option<String>,
+    vanished: bool,
+}
+
+impl BaseFetchMemo {
+    /// How many distinct base branches this run has fetched.
+    pub fn len(&self) -> usize {
+        self.done.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// One member of a ready store — see the module doc.
 pub struct StoreCtx<'a> {
     pub rs: &'a ReviewStores,
@@ -479,6 +542,9 @@ pub struct Recapture {
     /// (e.g. `credential-account-mismatch`, D12) — carried onto the
     /// envelope and into `base_status.code`.
     pub api_warnings: Vec<BaseWarningOut>,
+    /// A bulk run's base-fetch memo (X1/K3): each distinct base branch is
+    /// fetched once per run. `None` = every recapture fetches its own.
+    pub base_memo: Option<std::sync::Arc<BaseFetchMemo>>,
     /// Test seam (A6-3): runs right after the network fetch, before the
     /// capture takes the ops lock — where a concurrent retrack lands.
     #[cfg(test)]
@@ -899,6 +965,67 @@ impl<'a> StoreCtx<'a> {
         report
     }
 
+    /// [`Self::fetch_forge`] that fetches each base branch at most once per
+    /// `memo` (X1/K3 bulk retrack). Branches the memo already holds are not
+    /// fetched again — their recorded outcome (a vanished branch, a failed or
+    /// offline fetch) is folded into the report so the caller still sees it;
+    /// the PR head, when asked for, is always fetched fresh. `None` = exactly
+    /// [`Self::fetch_forge`].
+    pub fn fetch_forge_memo(
+        &self,
+        memo: Option<&BaseFetchMemo>,
+        access: Result<&Access, &str>,
+        branches: &[String],
+        pr: Option<u32>,
+    ) -> FetchReport {
+        let Some(memo) = memo else {
+            return self.fetch_forge(access, branches, pr);
+        };
+        if branches.is_empty() && pr.is_none() {
+            return self.fetch_forge(access, branches, pr);
+        }
+        let mut fresh: Vec<String> = Vec::new();
+        let mut seen: Vec<(String, MemoEntry)> = Vec::new();
+        {
+            let done = memo.done.lock();
+            for b in branches {
+                match done.get(b) {
+                    Some(e) => seen.push((b.clone(), e.clone())),
+                    None => fresh.push(b.clone()),
+                }
+            }
+        }
+        let mut rep = if fresh.is_empty() && pr.is_none() {
+            FetchReport {
+                state: "fetched".into(),
+                ..FetchReport::default()
+            }
+        } else {
+            self.fetch_forge(access, &fresh, pr)
+        };
+        {
+            let mut done = memo.done.lock();
+            for b in &fresh {
+                done.entry(b.clone()).or_insert_with(|| MemoEntry {
+                    state: rep.state.clone(),
+                    code: rep.code.clone(),
+                    vanished: rep.vanished.contains(b),
+                });
+            }
+        }
+        for (b, e) in seen {
+            if e.vanished {
+                if !rep.vanished.contains(&b) {
+                    rep.vanished.push(b);
+                }
+            } else if e.state != "fetched" && matches!(rep.state.as_str(), "fetched" | "skipped") {
+                rep.state = e.state;
+                rep.code = e.code;
+            }
+        }
+        rep
+    }
+
     /// One LOCAL fetch from the member clone (`work-<id>`, `file` only)
     /// under that member's fetch lock. `by_sha` = the source is an object
     /// id (the source-side `allowAnySHA1InWant` override).
@@ -1275,11 +1402,9 @@ impl<'a> StoreCtx<'a> {
                 "the review's base changed while this capture was waiting; retry",
             ));
         }
+        // A merged PR (the target contains the head) is pinned to its
+        // merge-time base INSIDE `capture_at`, or refused there.
         let t = self.base_tip(eff)?;
-        if pr_of_head(&review.head_ref).is_some() {
-            let mb = reviews::merge_base_sha(&self.root(), &t, &head).map_err(capture_error)?;
-            refuse_merged_head(&head, &mb)?;
-        }
         let out = capture_at(
             self.store,
             self.bus,
@@ -1384,11 +1509,21 @@ impl<'a> StoreCtx<'a> {
         } else {
             self.import_base(&eff)?;
         }
-        let base_tip = self.base_tip(&eff)?;
+        let mut base_tip = self.base_tip(&eff)?;
         let merge_base =
             reviews::merge_base_sha(&self.root(), &base_tip, &head_sha).map_err(capture_error)?;
+        let mut policy = policy;
+        let mut eff = eff;
         if nr.pr.is_some() {
-            refuse_merged_head(&head_sha, &merge_base)?;
+            // A6-1 — a merged PR is reviewed against the base it was merged
+            // INTO: the policy becomes `pin(M^1)` (auto-set, so the review
+            // never follows the live target again), or the creation is
+            // refused when no merge commit names that base.
+            if let Some(pin) = merged_pin(&self.root(), &head_sha, &merge_base, &base_tip)? {
+                policy = BasePolicy::pin(&pin, SetBy::Auto, policy.source);
+                eff = EffectiveBase::Policy(policy.clone());
+                base_tip = pin;
+            }
         }
         let status = status_after(&fetch, &eff, &BaseStatus::default());
         Ok(Prepared {
@@ -1604,9 +1739,12 @@ impl<'a> StoreCtx<'a> {
                 .collect()
         };
         let mut fetch = match &access {
-            Some(a) => {
-                self.fetch_forge(a.as_ref().map_err(String::as_str), &tracked(&effective), pr)
-            }
+            Some(a) => self.fetch_forge_memo(
+                rc.base_memo.as_deref(),
+                a.as_ref().map_err(String::as_str),
+                &tracked(&effective),
+                pr,
+            ),
             None => FetchReport::cached(),
         };
         #[cfg(test)]
