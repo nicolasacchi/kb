@@ -29,7 +29,7 @@ pub async fn propose(
     json: bool,
 ) -> Result<()> {
     let res = propose_inner(
-        title, body, kb, tags, global, link, salience, session_id, daemon, bearer,
+        title, body, kb, tags, global, link, salience, session_id, None, daemon, bearer,
     )
     .await;
     match res {
@@ -64,6 +64,7 @@ pub(crate) async fn propose_inner(
     link: Option<&str>,
     salience: Option<f32>,
     session_id: Option<&str>,
+    memory_created_at: Option<i64>,
     daemon: Option<&str>,
     bearer: Option<&str>,
 ) -> Result<Value> {
@@ -116,6 +117,9 @@ pub(crate) async fn propose_inner(
     }
     if let Some(sid) = session_id {
         payload["session_id"] = serde_json::json!(sid);
+    }
+    if let Some(ts) = memory_created_at {
+        payload["memory_created_at"] = serde_json::json!(ts);
     }
 
     let client = http::client_with_timeout_and_bearer(10, bearer)?;

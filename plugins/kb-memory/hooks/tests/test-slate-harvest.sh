@@ -44,6 +44,15 @@ if [ "${1:-}" = "slate" ] && [ "${2:-}" = "open" ]; then
   printf '%s' "${SLATE_OPEN_JSON:-{\"sections\":{\"take\":[]}}}"
   exit 0
 fi
+if [ "${1:-}" = "slate" ] && [ "${2:-}" = "show" ]; then
+  printf '%s' "${SLATE_SHOW_JSON:-{\"post\":{}}}"
+  exit 0
+fi
+if [ "${1:-}" = "slate" ] && [ "${2:-}" = "found" ] && [ -n "${KB_BODY_OUT:-}" ]; then
+  for a in "$@"; do
+    case "$a" in --body=*) printf '%s' "${a#--body=}" >"$KB_BODY_OUT" ;; esac
+  done
+fi
 if [ "${1:-}" = "slate" ]; then
   [ "${KB_SLATE_FAIL:-0}" = "1" ] && exit 1
   exit 0
@@ -155,8 +164,8 @@ mk_job "$job1c" "job-abc123" "sess-abc" "kimi" "/tmp/proj"
 jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"a.rs"}]},
                   {claim:"B", claim_type:"observed", evidence:[{path:"b.rs"}]}], open_questions:[]}' >"$job1c/report.json"
 PRIOR_DIGEST='{"sections":{"take":[{"seq":7,"kind":"take","refs":[{"raw":"job:job-abc123"}]}],
- "found_idea":[{"seq":12,"kind":"found","line":"job job-abc123: 1 findings, 0 questions — A","refs":[{"raw":"job:job-abc123"}]},
-               {"seq":15,"kind":"idea","line":"unrelated","refs":[{"raw":"job:job-abc123"}]}]}}'
+ "found_idea":[{"seq":12,"kind":"found","line":"job job-abc123: 1 findings, 0 questions — A","refs":[{"raw":"job:job-abc123"}],"who":{"origin":"import","job_id":"job-abc123"}},
+               {"seq":15,"kind":"idea","line":"unrelated","refs":[{"raw":"job:job-abc123"}],"who":{"origin":"import","job_id":"job-abc123"}}]}}'
 export KB_ARGV_SPY="$TMPROOT/spy1c.txt"
 export SLATE_OPEN_JSON="$PRIOR_DIGEST"
 bash "$HARVEST" "$job1c"
@@ -167,20 +176,64 @@ case "$spy1c" in
 *) bad "later round supersedes the earlier found (got: $spy1c)" ;;
 esac
 
+# First harvest of the one-finding report: capture the exact body the script
+# posts so the next runs can present it back as the "prior post".
 jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"a.rs"}]}], open_questions:[]}' >"$job1c/report.json"
-export KB_ARGV_SPY="$TMPROOT/spy1d.txt"
-export SLATE_OPEN_JSON="$PRIOR_DIGEST"
+export KB_ARGV_SPY="$TMPROOT/spy1e.txt" KB_BODY_OUT="$TMPROOT/body1e.txt"
+export SLATE_OPEN_JSON='{"sections":{"take":[],"found_idea":[]}}'
 bash "$HARVEST" "$job1c"
 unset KB_ARGV_SPY SLATE_OPEN_JSON
+BODY_A="$(cat "$TMPROOT/body1e.txt")"
+case "$BODY_A" in
+*$'\n\nharvest: '[0-9a-f]*) ok "body ends with a harvest hash marker" ;;
+*) bad "body ends with a harvest hash marker (got: $BODY_A)" ;;
+esac
+
+PRIOR_SAME="$PRIOR_DIGEST"
+SHOW_SAME="$(jq -n --arg b "$BODY_A" '{post:{seq:12, body:$b}}')"
+export KB_ARGV_SPY="$TMPROOT/spy1d.txt"
+export SLATE_OPEN_JSON="$PRIOR_SAME" SLATE_SHOW_JSON="$SHOW_SAME"
+bash "$HARVEST" "$job1c"
+unset KB_ARGV_SPY SLATE_OPEN_JSON SLATE_SHOW_JSON
 spy1d="$(cat "$TMPROOT/spy1d.txt" 2>/dev/null)"
 case "$spy1d" in
 *'slate found'*) bad "re-harvest of an unchanged report posts nothing (got: $spy1d)" ;;
-*) ok "re-harvest of an unchanged report posts nothing (idempotent)" ;;
+*) ok "re-harvest of an unchanged report (same line AND body) posts nothing (idempotent)" ;;
 esac
 case "$spy1d" in
 *'slate done 7 '*) ok "unchanged re-harvest still closes the take" ;;
 *) bad "unchanged re-harvest still closes the take (got: $spy1d)" ;;
 esac
+
+# Same summary LINE, different body (a finding's evidence path changed): the
+# line-only comparison would have skipped this; the whole-post hash must not.
+jq -n '{findings:[{claim:"A", claim_type:"observed", evidence:[{path:"moved/a.rs"}]}], open_questions:[]}' >"$job1c/report.json"
+export KB_ARGV_SPY="$TMPROOT/spy1f.txt"
+export SLATE_OPEN_JSON="$PRIOR_SAME" SLATE_SHOW_JSON="$SHOW_SAME"
+bash "$HARVEST" "$job1c"
+unset KB_ARGV_SPY SLATE_OPEN_JSON SLATE_SHOW_JSON
+spy1f="$(cat "$TMPROOT/spy1f.txt" 2>/dev/null)"
+case "$spy1f" in
+*'slate found job job-abc123: 1 findings, 0 questions — A --harness'*'--supersedes 12'*)
+  ok "same summary line but changed body supersedes the prior harvest" ;;
+*) bad "same line, changed body must supersede (got: $spy1f)" ;;
+esac
+
+# An agent's OWN found that cites the job ref is never superseded: the
+# harvest appends its own post instead.
+AGENT_DIGEST='{"sections":{"take":[{"seq":7,"kind":"take","refs":[{"raw":"job:job-abc123"}]}],
+ "found_idea":[{"seq":20,"kind":"found","line":"my own conclusion about the job","refs":[{"raw":"job:job-abc123"}],"who":{"origin":"agent","harness":"claude"}}]}}'
+export KB_ARGV_SPY="$TMPROOT/spy1g.txt"
+export SLATE_OPEN_JSON="$AGENT_DIGEST"
+bash "$HARVEST" "$job1c"
+unset KB_ARGV_SPY SLATE_OPEN_JSON
+spy1g="$(cat "$TMPROOT/spy1g.txt" 2>/dev/null)"
+case "$spy1g" in
+*'--supersedes'*) bad "never supersede an agent-origin found (got: $spy1g)" ;;
+*'slate found job job-abc123'*) ok "agent-origin found citing the job ref is left alone; harvest appends its own" ;;
+*) bad "harvest should append its own found (got: $spy1g)" ;;
+esac
+unset KB_BODY_OUT
 
 # --- 2. --abandoned mode: skips found/idea/ask/tried, only closes the take
 job2="$TMPROOT/job2"

@@ -4326,7 +4326,13 @@ enum SlateAction {
         parent_pid: Option<u32>,
     },
     /// Counts, never a verdict: hands, takes, asks, tried, provenance.
-    Stats,
+    Stats {
+        /// Also print the measurable design-doc dry-run conditions (posts
+        /// from other sessions and non-Claude harnesses, old takes still
+        /// blocking) as counts beside their thresholds. No verdict.
+        #[arg(long)]
+        design_checks: bool,
+    },
     /// Every slate on this daemon.
     Ls,
     /// Structural lint: contested takes, stale hands, answered-but-open
@@ -7468,7 +7474,7 @@ async fn main() -> Result<()> {
                     timeout,
                     parent_pid,
                 } => sl::watch(&ctx, once, timeout, parent_pid).await,
-                SlateAction::Stats => sl::stats(&ctx).await,
+                SlateAction::Stats { design_checks } => sl::stats(&ctx, design_checks).await,
                 SlateAction::Ls => sl::ls(&ctx).await,
                 SlateAction::Doctor => sl::doctor(&ctx).await,
             }

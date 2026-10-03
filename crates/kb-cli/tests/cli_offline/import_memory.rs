@@ -23,7 +23,14 @@ fn dry_run_json_maps_and_writes_nothing() {
         .unwrap()
         .env("HOME", "/home/alice")
         .env("KB_HOME", tmp.path().join("kbhome"))
-        .args(["import", "claude-memory", "--json", "--dir"])
+        .args([
+            "import",
+            "claude-memory",
+            "--json",
+            "--daemon",
+            "http://127.0.0.1:1",
+            "--dir",
+        ])
         .arg(tmp.path())
         .output()
         .unwrap();
@@ -37,7 +44,8 @@ fn dry_run_json_maps_and_writes_nothing() {
     let c = &v["candidates"][0];
     assert_eq!(c["title"], "Use fast profile");
     assert_eq!(c["target"], "memory-kb");
-    assert_eq!(c["status"], "new");
+    // No daemon to ask: the honest status, not a guessed `new`.
+    assert_eq!(c["status"], "unknown");
     assert_eq!(c["tags"][0], "imported-claude-memory");
     assert_eq!(c["tags"][1], "claude-type-feedback");
     assert_eq!(v["skipped"][0]["reason"], "index-file");
