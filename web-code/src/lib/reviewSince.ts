@@ -54,3 +54,44 @@ export function filterAuthorFiles<T extends { path: string; old_path: string | n
 export function sinceApplies(verdictPs: number | null | undefined, latestPs: number | null): boolean {
   return verdictPs != null && latestPs != null && verdictPs < latestPs;
 }
+
+/// The interdiff file rows to show for a `?ps=a..b` range: all of them, or —
+/// with the author-only switch on AND the author delta loaded — only the
+/// paths where the author added or dropped a hunk. Until the delta arrives
+/// the switch shows everything rather than an empty list that would read as
+/// "no author changes".
+export function rangeFileRows<T extends { path: string; old_path: string | null }>(
+  files: T[],
+  since: SinceReport | undefined,
+  authorOnly: boolean,
+): T[] {
+  return authorOnly ? filterAuthorFiles(files, since) : files;
+}
+
+/// "3 author changes · base moved" — the caption beside the switch.
+export function authorOnlyCaption(r: SinceReport): string {
+  const n = authorChangeCount(r);
+  return `${n} author change${n === 1 ? "" : "s"}${r.bases.moved ? " · base moved" : ""}`;
+}
+
+/// v0.44 F9b — may the Room offer "Re-affirm on psN"? Only for a verdict
+/// that went stale because a LATER patchset landed, when the daemon says that
+/// patchset is rebase-only against the verdict's own (no author hunk new or
+/// gone) AND the base actually moved. It is a prompt for a human click, never
+/// an automatic carry-forward (D20): the click records an ordinary verdict.
+export function canReaffirm(
+  verdictPs: number | null | undefined,
+  stale: boolean | undefined,
+  latestPs: number | null,
+  since: SinceReport | undefined,
+): boolean {
+  if (!stale || !sinceApplies(verdictPs, latestPs) || !since) return false;
+  return since.rebase_only && since.bases.moved && since.from.ps === verdictPs && since.to.ps === latestPs;
+}
+
+/// "Re-affirm approved on ps4" - the button's label.
+export function reaffirmLabel(state: string, latestPs: number): string {
+  const word =
+    state === "approve" ? "approval" : state === "request-changes" ? "changes requested" : "comment";
+  return `Re-affirm ${word} on ps${latestPs}`;
+}

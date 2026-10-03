@@ -90,6 +90,64 @@ impl Store {
         Ok(rows)
     }
 
+    /// v0.44 F9b — what a human already decided about the SAME paths in
+    /// OTHER reviews of `repo`: the unsuperseded findings with disposition
+    /// `dispute` or `waive` located on one of `paths`, excluding
+    /// `exclude_review_id`. Exact path match (a renamed file does not
+    /// carry); ordered `(path, review_id, slug)`. Chunked so a large change
+    /// set never nears SQLite's bound-variable limit. The `review context`
+    /// bundle's "other reviews" section reads it; surfaced, never scored.
+    pub fn other_review_judgements(
+        &self,
+        repo: &str,
+        exclude_review_id: i64,
+        paths: &[String],
+    ) -> Result<Vec<OtherReviewJudgement>> {
+        let mut out: Vec<OtherReviewJudgement> = Vec::new();
+        let conn = self.lock();
+        for chunk in paths.chunks(400) {
+            let placeholders = (0..chunk.len())
+                .map(|i| format!("?{}", i + 3))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT f.review_id, r.state, f.slug, f.severity, f.title,
+                        f.location_path, f.disposition, f.disposition_note,
+                        f.disposition_by, f.disposition_at
+                 FROM review_findings f JOIN reviews r ON r.id = f.review_id
+                 WHERE r.repo = ?1 AND f.review_id != ?2 AND f.superseded = 0
+                   AND f.disposition IN ('dispute', 'waive')
+                   AND f.location_path IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut binds: Vec<rusqlite::types::Value> = Vec::with_capacity(2 + chunk.len());
+            binds.push(rusqlite::types::Value::Text(repo.to_string()));
+            binds.push(rusqlite::types::Value::Integer(exclude_review_id));
+            for p in chunk {
+                binds.push(rusqlite::types::Value::Text(p.clone()));
+            }
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(binds), |r| {
+                    Ok(OtherReviewJudgement {
+                        review_id: r.get(0)?,
+                        review_state: r.get(1)?,
+                        slug: r.get(2)?,
+                        severity: r.get(3)?,
+                        title: r.get(4)?,
+                        path: r.get(5)?,
+                        disposition: r.get(6)?,
+                        note: r.get(7)?,
+                        by: r.get(8)?,
+                        at: r.get(9)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            out.extend(rows);
+        }
+        out.sort_by(|a, b| (&a.path, a.review_id, &a.slug).cmp(&(&b.path, b.review_id, &b.slug)));
+        Ok(out)
+    }
+
     /// [`Self::list_review_findings`] for a whole SET of `review_ids` —
     /// one query (dynamic `IN (…)`, plain `prepare`) instead of N round
     /// trips. A review with no matching findings is simply absent from the

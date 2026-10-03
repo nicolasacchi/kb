@@ -6,7 +6,11 @@ import type { SinceReport } from "../api/types";
 import {
   authorChangeCount,
   authorChangedPaths,
+  authorOnlyCaption,
+  canReaffirm,
   filterAuthorFiles,
+  rangeFileRows,
+  reaffirmLabel,
   sinceApplies,
   sinceLabel,
 } from "./reviewSince";
@@ -97,5 +101,70 @@ describe("sinceApplies", () => {
     expect(sinceApplies(4, 4)).toBe(false);
     expect(sinceApplies(null, 4)).toBe(false);
     expect(sinceApplies(2, null)).toBe(false);
+  });
+});
+
+// v0.44 F9b — the full-page review diff's `?ps=a..b` arm shares the switch.
+describe("rangeFileRows (ReviewDiff ?ps=a..b arm)", () => {
+  const files = [
+    { path: "a.txt", old_path: null },
+    { path: "upstream.txt", old_path: null },
+  ];
+  const r = report({ paths: [{ path: "a.txt", carried: 0, new: 1, gone: 0 }] });
+
+  it("shows every interdiff file with the switch off", () => {
+    expect(rangeFileRows(files, r, false)).toEqual(files);
+  });
+
+  it("drops upstream-only files with the switch on", () => {
+    expect(rangeFileRows(files, r, true).map((f) => f.path)).toEqual(["a.txt"]);
+  });
+
+  it("shows everything while the delta is still loading, never an empty list", () => {
+    expect(rangeFileRows(files, undefined, true)).toEqual(files);
+  });
+
+  it("captions the count and a moved base", () => {
+    expect(authorOnlyCaption(report({ author_delta: { new_hunks: 1, gone_hunks: 0, paths_changed: 1 } }))).toBe(
+      "1 author change · base moved",
+    );
+  });
+});
+
+// v0.44 F9b - the one-click re-affirm on a rebase-only patchset (D20: a
+// human click, never automatic).
+describe("canReaffirm", () => {
+  // report() defaults: ps2 -> ps4, rebase_only, base moved.
+  it("offers it for a stale verdict whose newer patchset is rebase-only with a moved base", () => {
+    expect(canReaffirm(2, true, 4, report())).toBe(true);
+  });
+
+  it("not while the delta is unknown, or the verdict is not stale", () => {
+    expect(canReaffirm(2, true, 4, undefined)).toBe(false);
+    expect(canReaffirm(2, false, 4, report())).toBe(false);
+    expect(canReaffirm(4, true, 4, report())).toBe(false);
+  });
+
+  it("never when the author changed anything since the verdict", () => {
+    const edited = report({
+      rebase_only: false,
+      author_delta: { new_hunks: 1, gone_hunks: 0, paths_changed: 1 },
+    });
+    expect(canReaffirm(2, true, 4, edited)).toBe(false);
+  });
+
+  it("not when the base did not move (a plain newer patchset is not a rebase)", () => {
+    const same = report({ bases: { from: "a".repeat(40), to: "a".repeat(40), moved: false } });
+    expect(canReaffirm(2, true, 4, same)).toBe(false);
+  });
+
+  it("not for a report about a different pair than verdict -> latest", () => {
+    expect(canReaffirm(3, true, 4, report())).toBe(false);
+    expect(canReaffirm(2, true, 5, report())).toBe(false);
+  });
+
+  it("labels the action with the verdict it records", () => {
+    expect(reaffirmLabel("approve", 4)).toBe("Re-affirm approval on ps4");
+    expect(reaffirmLabel("request-changes", 4)).toBe("Re-affirm changes requested on ps4");
   });
 });
