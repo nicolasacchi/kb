@@ -15,7 +15,7 @@ use std::io::Read;
 use crate::http::{
     client_with_timeout_and_bearer, encode_path_segment, get_lookup, resolve_default_kb,
 };
-use crate::session_marker::{read_session_marker, stamp_kb_session};
+use crate::session_marker::stamp_kb_session;
 
 const DEFAULT_DAEMON: &str = "http://127.0.0.1:4000";
 
@@ -280,7 +280,7 @@ pub async fn new(
     // caller-supplied `kb-session` in `--body`/`--stdin` frontmatter always
     // wins (never overwritten).
     if !no_session {
-        if let Some(sid) = read_session_marker() {
+        if let Some(sid) = crate::session_identity::session_for_write(None) {
             body_md = stamp_kb_session(&body_md, &sid);
         }
     }

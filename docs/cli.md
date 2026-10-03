@@ -927,3 +927,29 @@ verb and flag, run `kb tools`.
 line, useful for `| grep` / `| jq` pipelines (server-side `--types` /
 `--kb` / `--artifact` filters; Last-Event-ID reconnect + backoff).
 
+## Session and harness identity for CLI writes
+
+`kb remember`, `kb notes new`, `kb desk offer` and every `kb slate` verb decide
+"which session is this?" through ONE ladder (`kb_cli::session_identity`),
+first non-blank wins:
+
+1. `--session-id` (where the verb has the flag)
+2. `$KB_SESSION_ID`
+3. `$CLAUDE_CODE_SESSION_ID` (harness `claude`)
+4. `$GROK_SESSION_ID` (harness `grok`)
+5. the repo-keyed marker `current-session-repo-<slug>`, only while fresh (the
+   same 40-minute rule the git trailer hook uses)
+6. the legacy global `current-session` file, as a flagged fallback: it is
+   last-writer-wins across concurrent sessions, so using it prints a stderr
+   note
+7. none: slate posts are stamped `unattributed` by the daemon, and
+   `remember`/`notes new` write no `kb-session`
+
+The slate harness is `--harness` > `$KB_HARNESS` > the harness of the env var
+that supplied the session > a last-resort guess of `claude`. This changes
+provenance on NEW rows only; the slate and memory ledgers are append-only and
+keep what they recorded. A shell with no session env var now produces
+`unattributed` slate posts instead of posts attributed to whichever session last
+sent a prompt, so `kb slate stats` may show more unattributed posts than before.
+`kb doctor --hooks` warns when `$CLAUDE_CODE_SESSION_ID` disagrees with the
+global marker. Attribution only: kb still authenticates nobody.
