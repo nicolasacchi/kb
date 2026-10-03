@@ -242,17 +242,17 @@ async fn snapshots_append_every_run_and_read_back_newest_first() {
             .json()
             .await
             .unwrap();
-        assert_eq!(r["appended"], 4);
+        assert_eq!(r["appended"], 5);
         // The route echoes what it stored, so a caller renders the same
         // reading it recorded rather than a second, slightly-later read.
-        assert_eq!(r["report"]["indicators"].as_array().unwrap().len(), 4);
+        assert_eq!(r["report"]["indicators"].as_array().unwrap().len(), 5);
         assert_eq!(r["report"]["computed_at_unix"], r["taken_at_unix"]);
         tokio::time::sleep(Duration::from_millis(1_100)).await;
     }
 
     let log = get_json(&client, addr, "/api/kb/smoke/slo/snapshots?limit=100").await;
     let rows = log["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 8, "identical readings are NOT deduped away");
+    assert_eq!(rows.len(), 10, "identical readings are NOT deduped away");
     let ts: Vec<i64> = rows
         .iter()
         .map(|r| r["taken_at_unix"].as_i64().unwrap())
