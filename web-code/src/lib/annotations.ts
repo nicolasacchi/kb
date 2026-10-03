@@ -186,6 +186,17 @@ export function intentLabel(intent: string): string {
 /// iterates this rather than re-deriving the list.
 export const INTENT_OPTIONS: readonly AnnotationIntent[] = ["note", "question", "todo", "flag-for-agent", "tour-stop"];
 
+/// Does any finding (superseded ones included) use `annotationId` as its
+/// thread? The daemon refuses to rebind or unbind such an annotation (409),
+/// so the rail must not offer the controls. `undefined` (findings not
+/// loaded) reads as "not backed": the 409 stays the backstop.
+export function annotationBacksFinding(
+  findings: readonly { annotation_id: string }[] | undefined,
+  annotationId: string,
+): boolean {
+  return findings?.some((f) => f.annotation_id === annotationId) ?? false;
+}
+
 /// The anchor-kind badge's display label — `range`/`symbol` are a clickable
 /// jump target (the caller decides the click handler, this is text only);
 /// `diff` has no live line to jump to (see `crate::annotations::diff_line`'s

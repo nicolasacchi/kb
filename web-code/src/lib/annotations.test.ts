@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AnnotationView } from "../api/types";
 import {
   anchorBadgeLabel,
+  annotationBacksFinding,
   annotationGutterTitle,
   annotationsByLine,
   buildCreatePayload,
@@ -253,5 +254,18 @@ describe("anchorBadgeLabel", () => {
 
   it("labels a range annotation as L{line}–{line_end}", () => {
     expect(anchorBadgeLabel({ anchor_kind: "range", line: 10, line_end: 24 })).toBe("L10–24");
+  });
+});
+
+describe("annotationBacksFinding", () => {
+  it("is true only for an annotation some finding uses as its thread", () => {
+    const findings = [{ annotation_id: "a1" }, { annotation_id: "a2" }];
+    expect(annotationBacksFinding(findings, "a2")).toBe(true);
+    expect(annotationBacksFinding(findings, "a3")).toBe(false);
+  });
+
+  it("reads unloaded findings as not backed (the 409 stays the backstop)", () => {
+    expect(annotationBacksFinding(undefined, "a1")).toBe(false);
+    expect(annotationBacksFinding([], "a1")).toBe(false);
   });
 });
