@@ -423,3 +423,62 @@ async fn the_queue_lists_unanswered_human_questions_and_disputes_until_the_agent
     .await;
     assert_eq!(st, 404);
 }
+
+/// F9b lane 3 + dedupe: an agreed finding is waiting for a fix until the
+/// agent stores a suggestion on its thread, and a disputed finding whose
+/// thread is an open question is ONE row. Fails without lanes 3 and the
+/// annotation-id claim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agreed_finding_is_a_follow_up_until_a_suggestion_lands() {
+    let _guard = SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_tmp, base) = boot(vec![RepoEntry {
+        name: "r".to_string(),
+        path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+    }])
+    .await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base).await;
+    snapshot(&client, &base, id).await;
+
+    let resp = client
+        .post(format!("{base}/api/reviews/{id}/findings/import"))
+        .json(&serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [{
+                "slug": "f-agreed", "severity": "concern", "category": "style",
+                "location": {"path": "lib.txt", "kind": "single", "lines": [2]},
+                "title": "t", "rationale": "r",
+            }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
+    let resp = client
+        .put(format!(
+            "{base}/api/reviews/{id}/findings/f-agreed/disposition"
+        ))
+        .json(&serde_json::json!({ "disposition": "agree" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let rows = queue(&client, &base).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["lane"], "follow-up");
+    assert_eq!(rows[0]["finding_slug"], "f-agreed");
+    let ann = rows[0]["annotation_id"].as_str().unwrap().to_string();
+
+    let resp = client
+        .put(format!("{base}/api/annotations/{ann}/suggestion"))
+        .json(&serde_json::json!({ "replacement": "l2-fixed" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "{}", resp.text().await.unwrap());
+    assert!(
+        queue(&client, &base).await.is_empty(),
+        "a stored suggestion takes the finding off the follow-up lane"
+    );
+}

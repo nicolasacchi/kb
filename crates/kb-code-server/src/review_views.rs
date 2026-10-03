@@ -169,6 +169,87 @@ pub fn parse_log(raw: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Split a change set into the files whose hunks may be shown and the ones
+/// the secret denylist redacts: `(redacted, allowed)`. A redacted entry is
+/// NAMED with the pattern that matched and the typed URN, never its bytes;
+/// `allowed` lists every path (and a rename's old path) safe to hand to git.
+/// The ONE denylist floor for patch text: `GET /api/reviews/{id}/diff` and
+/// the `GET /api/reviews/{id}/context` bundle both read it from here.
+pub(crate) fn partition_by_secret_policy(
+    policy: &crate::security::secrets::SecretPolicy,
+    selected: &[crate::numstat::FileChange],
+) -> (Vec<serde_json::Value>, Vec<String>) {
+    let mut redacted = Vec::new();
+    let mut allowed: Vec<String> = Vec::new();
+    for f in selected {
+        let hit = policy.matched(&f.path).map(str::to_string).or_else(|| {
+            f.old_path
+                .as_deref()
+                .and_then(|o| policy.matched(o).map(str::to_string))
+        });
+        match hit {
+            Some(pattern) => redacted.push(serde_json::json!({
+                "path": f.path,
+                "pattern": pattern,
+                "type": crate::security::secrets::ERR_REDACTED_BY_POLICY,
+            })),
+            None => {
+                allowed.push(f.path.clone());
+                if let Some(o) = &f.old_path {
+                    allowed.push(o.clone());
+                }
+            }
+        }
+    }
+    (redacted, allowed)
+}
+
+/// The unified diff of `base..tip` limited to `allowed` (every entry a path
+/// git itself printed, passed after `--` as `:(literal)…`), or the whole
+/// range when `whole`. Empty `allowed` is the empty patch. Both endpoints
+/// are re-checked as 40-hex shas here.
+pub(crate) async fn patch_text(
+    ctx: &GitCtx,
+    base_sha: &str,
+    tip_sha: &str,
+    allowed: &[String],
+    whole: bool,
+) -> Result<String, ApiError> {
+    if allowed.is_empty() {
+        return Ok(String::new());
+    }
+    let c = ctx.clone();
+    let range = format!("{base_sha}..{tip_sha}");
+    let allowed = allowed.to_vec();
+    tokio::task::spawn_blocking(move || -> Result<String, ApiError> {
+        // Both endpoints are daemon-minted full shas (checked
+        // again here — never a name, never caller text).
+        let (a, b) = range.split_once("..").unwrap_or(("", ""));
+        if !is_full_sha(a) || !is_full_sha(b) {
+            return Err(ApiError::bad_request(format!("bad patchset range {range}")));
+        }
+        let mut args: Vec<String> = vec![
+            "diff".into(),
+            "--no-color".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "-M".into(),
+            range.clone(),
+        ];
+        if !whole {
+            args.push("--".into());
+            args.extend(allowed.iter().map(|p| format!(":(literal){p}")));
+        }
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = c
+            .read_with_fallback(|root| history::run_git_raw(root, &argv))
+            .map_err(ApiError::from)?;
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    })
+    .await
+    .map_err(join_err)?
+}
+
 // --- GET /api/reviews/{id}/diff -----------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -257,66 +338,9 @@ pub async fn review_diff_route(
     if mode == DiffMode::Patch {
         // Denylisted files never contribute hunks (same floor `/cat` and
         // `GET /api/file` enforce); they are NAMED, with the pattern.
-        let mut redacted = Vec::new();
-        let mut allowed: Vec<String> = Vec::new();
-        for f in &selected {
-            let hit = state
-                .secret_policy
-                .matched(&f.path)
-                .map(str::to_string)
-                .or_else(|| {
-                    f.old_path
-                        .as_deref()
-                        .and_then(|o| state.secret_policy.matched(o).map(str::to_string))
-                });
-            match hit {
-                Some(pattern) => redacted.push(serde_json::json!({
-                    "path": f.path,
-                    "pattern": pattern,
-                    "type": crate::security::secrets::ERR_REDACTED_BY_POLICY,
-                })),
-                None => {
-                    allowed.push(f.path.clone());
-                    if let Some(o) = &f.old_path {
-                        allowed.push(o.clone());
-                    }
-                }
-            }
-        }
+        let (redacted, allowed) = partition_by_secret_policy(&state.secret_policy, &selected);
         let whole = filter.trim_matches('/').is_empty() && redacted.is_empty();
-        let patch = if allowed.is_empty() {
-            String::new()
-        } else {
-            let c = ctx.clone();
-            let range = format!("{}..{}", ps.base_sha, ps.tip_sha);
-            tokio::task::spawn_blocking(move || -> Result<String, ApiError> {
-                // Both endpoints are daemon-minted full shas (checked
-                // again here — never a name, never caller text).
-                let (a, b) = range.split_once("..").unwrap_or(("", ""));
-                if !is_full_sha(a) || !is_full_sha(b) {
-                    return Err(ApiError::bad_request(format!("bad patchset range {range}")));
-                }
-                let mut args: Vec<String> = vec![
-                    "diff".into(),
-                    "--no-color".into(),
-                    "--no-ext-diff".into(),
-                    "--no-textconv".into(),
-                    "-M".into(),
-                    range.clone(),
-                ];
-                if !whole {
-                    args.push("--".into());
-                    args.extend(allowed.iter().map(|p| format!(":(literal){p}")));
-                }
-                let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-                let out = c
-                    .read_with_fallback(|root| history::run_git_raw(root, &argv))
-                    .map_err(ApiError::from)?;
-                Ok(String::from_utf8_lossy(&out).into_owned())
-            })
-            .await
-            .map_err(join_err)??
-        };
+        let patch = patch_text(&ctx, &ps.base_sha, &ps.tip_sha, &allowed, whole).await?;
         let patch_bytes = patch.len();
         let (limit, reason) = match params.budget {
             Some(tokens) => {

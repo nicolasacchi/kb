@@ -448,7 +448,7 @@ fn build_map_sync(
     }))
 }
 
-fn build_order_sync(
+pub(crate) fn build_order_sync(
     store: &Store,
     repo_id: i64,
     review_id: i64,

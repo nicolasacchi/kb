@@ -1618,6 +1618,25 @@ a.kbc-review__action {
   cursor: pointer;
 }
 
+.kbc-verdict__reaffirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--accent-bor);
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.kbc-verdict__reaffirm:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .kbc-verdict__popover {
   flex: 1 1 100%;
   display: flex;

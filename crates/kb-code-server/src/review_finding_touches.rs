@@ -198,13 +198,23 @@ fn hunk_overlap(lo: u32, hi: u32, hunk: &DiffHunk) -> Option<&'static str> {
 }
 
 /// F9 — does a tip-to-tip hunk lie on lines the author's own change set
-/// newly touches? Both sides are in the LATER tip's coordinates: the
-/// hunk's new-side range (a zero-width deletion is the point `new_start`)
-/// against each `(first, last)` author range, touching ranges counting.
-fn hunk_is_authored(hunk: &DiffHunk, author: &[(u32, u32)]) -> bool {
+/// touches? Two ways, each in its own coordinates: the hunk's NEW-side range
+/// against the hunks the author newly added (later-tip coordinates; a
+/// zero-width deletion is the point `new_start`), or the hunk's OLD-side
+/// range against the hunks the author reverted/dropped (earlier-tip
+/// coordinates — a revert leaves no new hunk, only a vanished one).
+/// Touching ranges count.
+fn hunk_is_authored(hunk: &DiffHunk, added: &[(u32, u32)], removed: &[(u32, u32)]) -> bool {
     let lo = hunk.new_start;
     let hi = hunk.new_start + hunk.new_lines.saturating_sub(1);
-    author.iter().any(|&(a_lo, a_hi)| a_lo <= hi && lo <= a_hi)
+    if added.iter().any(|&(a_lo, a_hi)| a_lo <= hi && lo <= a_hi) {
+        return true;
+    }
+    let old_lo = hunk.old_start;
+    let old_hi = hunk.old_start + hunk.old_lines.saturating_sub(1);
+    removed
+        .iter()
+        .any(|&(r_lo, r_hi)| r_lo <= old_hi && old_lo <= r_hi)
 }
 
 /// Fold several hunks' verdicts into one per-ps verdict: `exact` beats
@@ -372,10 +382,21 @@ pub fn compute_touched_in(
                         &resolved_path,
                         0,
                     );
-                    let author = ranges.get(&resolved_path).map(Vec::as_slice).unwrap_or(&[]);
+                    let added = ranges
+                        .added
+                        .get(&resolved_path)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    // The earlier tip names the file by the path the finding
+                    // cites; the removed ranges are in ITS coordinates.
+                    let removed = ranges
+                        .removed
+                        .get(&q.path)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
                     let mut overlap: Option<&'static str> = None;
                     let mut qualifying = 0usize;
-                    for h in hunks.iter().filter(|h| hunk_is_authored(h, author)) {
+                    for h in hunks.iter().filter(|h| hunk_is_authored(h, added, removed)) {
                         if let Some(o) = hunk_overlap(lo, hi, h) {
                             qualifying += 1;
                             overlap = better(overlap, Some(o));
@@ -952,6 +973,37 @@ mod tests {
         let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(tmp.path()));
         let out = compute_touched_in(&ctx, &patchsets, &queries);
         let e = &out[&71].entries;
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].ps, 2);
+        assert_eq!(e[0].overlap, OVERLAP_EXACT);
+    }
+
+    /// F9b — an author who REVERTS their own change across a base move
+    /// acted on the finding's lines, but the revert leaves no new hunk in
+    /// the later change set (it is a vanished one). Fails without the
+    /// removed-range attribution: the entry list used to be empty.
+    #[test]
+    fn a_revert_across_a_base_move_still_counts_as_an_author_touch() {
+        let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
+        let d = tmp.path();
+        git(d, &["checkout", "-q", "feature2"]);
+        let cur = std::fs::read_to_string(d.join("a.txt")).unwrap();
+        std::fs::write(d.join("a.txt"), cur.replace("a3-author\n", "a3\n")).unwrap();
+        git(d, &["commit", "-aq", "-m", "revert the author change"]);
+        let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &c0, &ps1_tip),
+            ps_row(2, 1, 2, &main_head, &ps2_tip),
+        ];
+        let queries = vec![TouchedInQuery {
+            finding_id: 72,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines: vec![3],
+        }];
+        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(d));
+        let out = compute_touched_in(&ctx, &patchsets, &queries);
+        let e = &out[&72].entries;
         assert_eq!(e.len(), 1, "{e:?}");
         assert_eq!(e[0].ps, 2);
         assert_eq!(e[0].overlap, OVERLAP_EXACT);

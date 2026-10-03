@@ -1574,3 +1574,52 @@ async fn promote_a_path_less_general_comment_400s_by_name() {
         "expected the 400 to name the offending anchor kind: {body}"
     );
 }
+
+/// v0.44 F9b — replying to a `whole_file` finding answered HTTP 500: the
+/// reply's view recurses into the parent's, and the parent's `anchor`
+/// column is the bare PATH (not JSON), which the generic `Anchor` parse
+/// rejected as a corrupt anchor. Fails without the `whole_file` branch in
+/// `routes::annotation_view`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replying_to_a_whole_file_finding_is_created_not_500() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let dir = repo_tmp.path();
+    let (_daemon, base) = boot_with_repo("r", dir).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let (status, created) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "severity": "concern",
+            "category": "Design",
+            "location": {"path": "order.rb", "kind": "whole_file"},
+            "title": "Whole file concern",
+            "rationale": "Applies to the file as a whole.",
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{created}");
+    let ann_id = created["annotation_id"].as_str().unwrap().to_string();
+
+    let reply = reply_to(&client, &base, "r", &ann_id, "agreed, will split").await;
+    assert_eq!(reply["parent_id"], ann_id.as_str(), "{reply}");
+    assert_eq!(reply["line"], 0, "no line claim for a whole-file thread");
+
+    // The twin reads of the same annotation: PATCH answers a view of the
+    // whole_file parent itself.
+    let resp = client
+        .patch(format!("{base}/api/annotations/{ann_id}"))
+        .json(&serde_json::json!({ "resolved": true }))
+        .send()
+        .await
+        .unwrap();
+    let st = resp.status();
+    let text = resp.text().await.unwrap();
+    assert_eq!(st, reqwest::StatusCode::OK, "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["anchor_kind"], "whole_file", "{v}");
+}
