@@ -8,6 +8,7 @@ mod common;
 
 mod adapter_grok;
 mod atlas;
+mod chores;
 mod doctor;
 mod doctor_hooks;
 mod fleet;

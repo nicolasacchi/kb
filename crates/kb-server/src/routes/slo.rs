@@ -1,6 +1,6 @@
 //! CT-F5 — corpus-health SLOs.
 //!
-//! * `GET  /api/kb/{kb}/slo` — the four indicators, computed now.
+//! * `GET  /api/kb/{kb}/slo` — the five indicators, computed now.
 //! * `POST /api/kb/{kb}/slo/snapshot` — compute + append one run to the
 //!   append-only log; returns the same report.
 //! * `GET  /api/kb/{kb}/slo/snapshots[?limit=N]` — newest-first page over the
@@ -184,6 +184,24 @@ async fn compute(
         .await
         .map_err(|e| error_to_problem_json(&e))?;
 
+    // v0.44 F10 — recall coverage: landed vs lost injections over the same
+    // trailing window and newest-capture scope as `/api/sessions/recall-
+    // coverage`, live sessions excluded (capture lag is not loss).
+    let now = chrono::Utc::now().timestamp();
+    let since = now - i64::from(crate::routes::sessions::COVERAGE_DEFAULT_DAYS) * 86_400;
+    let coverage_rows = ctx
+        .storage
+        .sessions_recall_coverage(since)
+        .await
+        .map_err(|e| error_to_problem_json(&e))?;
+    let live = crate::routes::sessions::live_session_ids(state, now);
+    let (recall_landed_turns, recall_lost_turns) = coverage_rows
+        .iter()
+        .filter(|r| !live.contains(&r.session_id))
+        .fold((0u64, 0u64), |(l, x), r| {
+            (l + r.landed_turns, x + r.lost_turns)
+        });
+
     let inputs = SloInputs {
         coderef_total,
         coderef_path_shaped,
@@ -194,6 +212,8 @@ async fn compute(
         recall_failed,
         recall_censused_captures,
         newest_session_started_at,
+        recall_landed_turns,
+        recall_lost_turns,
     };
     Ok(kb_core::slo::build(
         kb_name,

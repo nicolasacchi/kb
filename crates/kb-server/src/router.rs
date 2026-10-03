@@ -492,6 +492,10 @@ pub fn build_router(state: Arc<KbHandles>) -> Router {
         // D27 (v0.42) — the REPORTED cursor. A mutation, deliberately not
         // folded into any GET: nothing here is written by a read.
         .route("/slates/{slug}/cursor", post(routes::slates::cursor))
+        .route(
+            "/slates/{slug}/asks/close",
+            post(routes::slates::close_asks),
+        )
         .route("/slates/{slug}/close", post(routes::slates::close))
         .route("/slates/{slug}/reopen", post(routes::slates::reopen))
         .route("/slates/{slug}/rotate", post(routes::slates::rotate))

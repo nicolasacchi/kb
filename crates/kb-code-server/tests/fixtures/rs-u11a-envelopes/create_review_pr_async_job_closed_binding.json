@@ -1,0 +1,24 @@
+{
+  "error": "string",
+  "error_status": "number",
+  "error_type": "string",
+  "job_id": "string",
+  "kind": "string",
+  "pr_number": "number",
+  "progress": {
+    "stage": "string"
+  },
+  "repo": "string",
+  "result": {
+    "error": "string",
+    "existing_review_id": "number",
+    "options": [
+      "string"
+    ],
+    "status": "number",
+    "title": "string",
+    "type": "string"
+  },
+  "review_id": "null",
+  "status": "string"
+}

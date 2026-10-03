@@ -226,6 +226,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/slates` | `routes::slates::list` |
 | DELETE | `/api/slates/{slug}` | `routes::slates::purge` |
 | GET | `/api/slates/{slug}` | `routes::slates::get` |
+| POST | `/api/slates/{slug}/asks/close` | `routes::slates::close_asks` |
 | POST | `/api/slates/{slug}/close` | `routes::slates::close` |
 | POST | `/api/slates/{slug}/cursor` | `routes::slates::cursor` |
 | GET | `/api/slates/{slug}/delta` | `routes::slates::delta` |
@@ -240,4 +241,4 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/users` | `routes::users::list` |
 | GET | `/api/why` | `routes::sessions::why` |
 
-_230 routes._
+_231 routes._
