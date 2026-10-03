@@ -132,6 +132,20 @@ kb recall "kb-setup verified" --scope all --json  # explicit: deterministic
                                                     # bare default) infers
 ```
 
+## Step 6b — optional: import existing Claude Code history and memory
+
+Offer both, transcripts first, each as a dry-run the user inspects before
+anything is written:
+
+```bash
+kb import claude-history --dry-run --into "$HOME/kb/sessions"   # past transcripts
+kb import claude-memory                                          # dry-run: mapping table only
+```
+
+`kb import claude-memory --apply` only queues candidates in the proposal inbox
+(`kb proposals`); nothing becomes a memory until the user approves it. Skip this
+step if the user declines.
+
 ## Step 7 — report what exists now + next steps
 
 Tell the user plainly:
