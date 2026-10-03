@@ -1,6 +1,6 @@
 {
-  "artifact_hint_id": "null",
-  "artifact_hint_kb": "null",
+  "artifact_hint_id": "string",
+  "artifact_hint_kb": "string",
   "base_ref": "string",
   "created_at": "number",
   "has_report": "bool",
@@ -47,9 +47,9 @@
   "repo": "string",
   "report_risk_score": "number",
   "schema": "string",
-  "session_id": "null",
+  "session_id": "string",
   "state": "string",
-  "title": "null",
+  "title": "string",
   "updated_at": "number",
   "verdict": {
     "at": "number",

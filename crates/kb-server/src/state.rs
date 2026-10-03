@@ -65,6 +65,11 @@ pub fn parse_trusted_proxies(raw: &[String]) -> Vec<IpAddr> {
 pub const PROXY_RESOLVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 /// Per-lookup bound, so a wedged resolver cannot stall boot or the task.
 const PROXY_RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Consecutive failed (or empty) refreshes after which a name's last-good
+/// addresses are dropped: 10 x 30 s = 5 min. Tolerates a transient DNS blip,
+/// but a stopped proxy container (NXDOMAIN) whose IP is reassigned must not
+/// keep trusting the new owner of that address forever.
+pub const PROXY_MAX_CONSECUTIVE_FAILURES: u32 = 10;
 
 pub type ResolveFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<Vec<IpAddr>>> + Send>>;
@@ -115,6 +120,7 @@ impl TrustedProxies {
         let mut resolver = ProxyResolver {
             spec,
             last_good: std::collections::BTreeMap::new(),
+            failures: std::collections::BTreeMap::new(),
             handle: handle.clone(),
             resolve,
         };
@@ -130,6 +136,9 @@ pub struct ProxyResolver {
     /// lookup keeps this (fail-safe: never widen, never silently narrow
     /// to nothing on a transient DNS blip).
     last_good: std::collections::BTreeMap<String, Vec<IpAddr>>,
+    /// Consecutive failed/empty refreshes per name; reaching
+    /// [`PROXY_MAX_CONSECUTIVE_FAILURES`] expires that name's `last_good`.
+    failures: std::collections::BTreeMap<String, u32>,
     handle: TrustedProxies,
     resolve: ResolveFn,
 }
@@ -164,16 +173,26 @@ impl ProxyResolver {
         for (name, r) in results {
             match r {
                 Ok(ips) if !ips.is_empty() => {
+                    self.failures.remove(&name);
                     self.last_good.insert(name, ips);
+                    continue;
                 }
                 Ok(_) => tracing::warn!(
                     name = %name,
-                    "trusted_proxies name resolved to no addresses; keeping the last good set"
+                    "trusted_proxies name resolved to no addresses; keeping the last good set until it expires"
                 ),
                 Err(e) => tracing::warn!(
                     name = %name, error = %e,
-                    "trusted_proxies name did not resolve; keeping the last good set"
+                    "trusted_proxies name did not resolve; keeping the last good set until it expires"
                 ),
+            }
+            let n = self.failures.entry(name.clone()).or_insert(0);
+            *n = n.saturating_add(1);
+            if *n >= PROXY_MAX_CONSECUTIVE_FAILURES && self.last_good.remove(&name).is_some() {
+                tracing::warn!(
+                    name = %name, failures = *n,
+                    "trusted_proxies name failed to resolve for too long; no longer trusting its last addresses"
+                );
             }
         }
         let mut next = self.spec.literals.clone();
@@ -1580,6 +1599,65 @@ pub(crate) fn save_saved_queries(paths: &KbPaths, queries: &[SavedQuery]) -> std
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_resolver(names: &[&str]) -> ProxyResolver {
+        let raw: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        let spec = parse_trusted_proxy_spec(&raw);
+        let handle = TrustedProxies::new(spec.literals.clone());
+        ProxyResolver {
+            spec,
+            last_good: Default::default(),
+            failures: Default::default(),
+            handle,
+            resolve: system_resolver(),
+        }
+    }
+
+    fn fail(name: &str) -> Vec<(String, std::io::Result<Vec<IpAddr>>)> {
+        vec![(name.to_string(), Err(std::io::Error::other("NXDOMAIN")))]
+    }
+
+    #[test]
+    fn proxy_resolver_tolerates_a_blip_but_expires_a_dead_name() {
+        let ip: IpAddr = "172.18.0.5".parse().unwrap();
+        let mut r = test_resolver(&["proxy.internal"]);
+        r.apply(vec![("proxy.internal".into(), Ok(vec![ip]))]);
+        assert_eq!(r.handle.load().as_slice(), &[ip]);
+        for _ in 0..PROXY_MAX_CONSECUTIVE_FAILURES - 1 {
+            r.apply(fail("proxy.internal"));
+        }
+        assert_eq!(r.handle.load().as_slice(), &[ip]);
+        r.apply(fail("proxy.internal"));
+        assert!(r.handle.load().is_empty());
+    }
+
+    #[test]
+    fn proxy_resolver_success_resets_the_failure_streak() {
+        let ip: IpAddr = "172.18.0.5".parse().unwrap();
+        let mut r = test_resolver(&["proxy.internal"]);
+        r.apply(vec![("proxy.internal".into(), Ok(vec![ip]))]);
+        for _ in 0..PROXY_MAX_CONSECUTIVE_FAILURES - 1 {
+            r.apply(fail("proxy.internal"));
+        }
+        r.apply(vec![("proxy.internal".into(), Ok(vec![ip]))]);
+        for _ in 0..PROXY_MAX_CONSECUTIVE_FAILURES - 1 {
+            r.apply(fail("proxy.internal"));
+        }
+        assert_eq!(r.handle.load().as_slice(), &[ip]);
+    }
+
+    #[test]
+    fn proxy_resolver_empty_answers_count_as_failures_and_literals_survive() {
+        let lit: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip: IpAddr = "172.18.0.5".parse().unwrap();
+        let mut r = test_resolver(&["10.0.0.1", "proxy.internal"]);
+        r.apply(vec![("proxy.internal".into(), Ok(vec![ip]))]);
+        assert_eq!(r.handle.load().as_slice(), &[lit, ip]);
+        for _ in 0..PROXY_MAX_CONSECUTIVE_FAILURES {
+            r.apply(vec![("proxy.internal".into(), Ok(vec![]))]);
+        }
+        assert_eq!(r.handle.load().as_slice(), &[lit]);
+    }
 
     // --- P3+P4: route classification + histogram percentiles ----------
 

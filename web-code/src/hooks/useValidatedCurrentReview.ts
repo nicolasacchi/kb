@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { ApiError } from "../api/client";
-import { clearCurrentReview, useCurrentReview } from "../lib/currentReview";
+import { clearCurrentReview, peekCurrentReview, useCurrentReview } from "../lib/currentReview";
 import { isReviewIdString, judgeCurrentReview } from "../lib/currentReviewValidity";
 import { mergeCurrentSearch } from "../lib/codeUrl";
 import { toast } from "../lib/toast";
@@ -12,6 +12,9 @@ import { useReview } from "./useReviews";
 /// This hook probes `GET /api/reviews/{id}` once per marker; a 404, a review
 /// of another repo, or a non-numeric id clears the marker, strips
 /// `?review=` from the URL and says so. A network/5xx failure keeps it.
+/// THE one hook every surface uses to read the current review (reader,
+/// search, omnibox, top-bar chip, annotations rail) — a bare
+/// `useCurrentReview` would keep trusting a stale marker (A9.f5).
 /// Returns the marker (`null` once cleared) plus its numeric id (undefined
 /// unless the id is a plain positive integer).
 export function useValidatedCurrentReview(repo: string) {
@@ -35,6 +38,10 @@ export function useValidatedCurrentReview(repo: string) {
 
   useEffect(() => {
     if (!gone || !repo) return;
+    // Several surfaces (reader, search, omnibox, top bar, annotations rail)
+    // mount this hook at once. The first effect to run clears the marker;
+    // the rest see it gone and stay quiet — one clear, one strip, one toast.
+    if (peekCurrentReview(repo) === null) return;
     clearCurrentReview(repo);
     navigate({ search: mergeCurrentSearch((p) => p.delete("review")) }, { replace: true });
     toast.err(`Review #${id ?? "?"} doesn't exist in this repo — stopped working it`);
