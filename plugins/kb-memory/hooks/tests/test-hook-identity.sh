@@ -70,7 +70,7 @@ out="$(
 echo "== kb-wake.sh (real SessionStart hook) =="
 envfile2="$TMPROOT/wake-env"
 payload='{"session_id":"wake-ident-sid","cwd":"/tmp/wake-ident","source":"startup"}'
-( unset KB_SESSION_ID KB_HARNESS; export CLAUDE_ENV_FILE="$envfile2"; printf '%s' "$payload" | "$HOOKS_DIR/kb-wake.sh" >/dev/null 2>&1 )
+( unset KB_SESSION_ID KB_HARNESS; export CLAUDE_PLUGIN_ROOT=/x CLAUDE_ENV_FILE="$envfile2"; printf '%s' "$payload" | "$HOOKS_DIR/kb-wake.sh" >/dev/null 2>&1 )
 if grep -q 'wake-ident-sid' "$envfile2" 2>/dev/null && grep -q 'KB_HARNESS=claude' "$envfile2" 2>/dev/null; then
   ok "kb-wake.sh appends the identity to CLAUDE_ENV_FILE"
 else
@@ -80,6 +80,24 @@ if grep -q '^recall|sid=wake-ident-sid|harness=claude$' "$KB_ENV_SPY"; then
   ok "the kb the hook itself spawns inherits the identity"
 else
   bad "the kb the hook itself spawns inherits the identity ($(cat "$KB_ENV_SPY"))"
+fi
+
+# A foreign harness (codex/opencode) shells kb-wake.sh too: it must NOT be
+# relabelled claude, either by an explicit KB_HARNESS or by the absence of
+# CLAUDE_PLUGIN_ROOT.
+envfile3="$TMPROOT/wake-env-oc"
+( unset KB_SESSION_ID CLAUDE_PLUGIN_ROOT; export KB_HARNESS=opencode CLAUDE_ENV_FILE="$envfile3"; printf '%s' "$payload" | "$HOOKS_DIR/kb-wake.sh" >/dev/null 2>&1 )
+if grep -q 'KB_HARNESS=opencode' "$envfile3" 2>/dev/null && ! grep -q 'KB_HARNESS=claude' "$envfile3" 2>/dev/null; then
+  ok "kb-wake.sh keeps an explicit foreign KB_HARNESS"
+else
+  bad "kb-wake.sh keeps an explicit foreign KB_HARNESS ($(cat "$envfile3" 2>/dev/null))"
+fi
+envfile4="$TMPROOT/wake-env-none"
+( unset KB_SESSION_ID KB_HARNESS CLAUDE_PLUGIN_ROOT; export CLAUDE_ENV_FILE="$envfile4"; printf '%s' "$payload" | "$HOOKS_DIR/kb-wake.sh" >/dev/null 2>&1 )
+if ! grep -q 'KB_HARNESS' "$envfile4" 2>/dev/null; then
+  ok "kb-wake.sh does not guess claude outside Claude Code"
+else
+  bad "kb-wake.sh does not guess claude outside Claude Code ($(cat "$envfile4" 2>/dev/null))"
 fi
 
 echo "== post_distill_ask =="

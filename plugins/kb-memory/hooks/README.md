@@ -94,7 +94,13 @@ registering anywhere `kb-memory` is already installed. Design:
   session instead of the last-writer-wins marker. The omp extensions set
   `process.env` the same way (omp spawns its bash tool from it). Other
   harnesses have no such channel: their shell writes still fall back to
-  the repo marker (flagged on stderr).
+  the repo marker (flagged on stderr). `kb-wake.sh` names the harness only
+  when knowable (`KB_HARNESS`, else `claude` iff `CLAUDE_PLUGIN_ROOT` is
+  set), so codex/opencode shelling it are never relabelled `claude`.
+  Deliberately NOT exporting: the `kb-capture-*.sh` adapters and
+  `kb-beat.sh` call no identity-dependent verb (capture is `kb sessions
+  capture`/scrub, beat is `curl` only), and `kb-slate-harvest.sh` posts
+  with explicit `--harness`/session args per call.
 - **Capture needs `kb` on the hook PATH** — `kb-capture-codex.sh` and
   `kb-capture-opencode.sh` fail closed without `kb sessions scrub`: with no
   `kb` the session is *skipped* (one stderr line, exit 0), not captured

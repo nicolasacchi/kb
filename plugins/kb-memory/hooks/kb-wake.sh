@@ -105,7 +105,7 @@ recall_args=()
 hook_deadline_init
 # v0.44 X4 — attribute every shell `kb` write of this session (also lands in
 # $CLAUDE_ENV_FILE so the agent's own Bash tool calls inherit it).
-hook_export_identity "$sid" claude
+hook_export_identity "$sid" "${KB_HARNESS:-$([ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && echo claude)}"
 index="$(run_to 5 kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \
   | jq -r '(.hits // [])
       | map("- \(.title)  [\(.kb)]"
