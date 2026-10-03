@@ -19,9 +19,13 @@
 # picked deterministically: observed-with-evidence first, then observed,
 # then modeled/recommendation, each in report order.
 #   - IDEMPOTENT: the `slate open --all --json` digest (already fetched for
-#     the take lookup) is searched for an existing `found` carrying the same
-#     `job:<id>` ref. Same line -> nothing is posted; a changed summary is
-#     posted with `--supersedes <that seq>` instead of appended again.
+#     the take lookup) is searched for an existing HARVEST-origin `found`
+#     (`who.origin == import`, `who.job_id == <id>`; an agent's own found that
+#     merely cites the job ref is never touched) carrying the `job:<id>` ref.
+#     The post ends with a `harvest: <sha256>` marker line over the WHOLE post
+#     (summary line + body); the prior post's body is read with `kb slate show`
+#     and an equal marker posts nothing, a different one (summary OR body
+#     changed) is posted with `--supersedes <that seq>` instead of appended.
 #   - `open_questions` become an `ask` ONLY when the report marks them as
 #     blocking a human decision (an object with `"blocking": true`, or an
 #     entry of `blocking_questions[]`); a trailing `?` is appended if the
@@ -103,6 +107,18 @@ post() { # kind line [extra kb-slate args...]
     --ref "job:$job_id" "${cwd_args[@]}" "${sid_args[@]}" "$@" >/dev/null 2>&1
 }
 
+# Hex digest of stdin-free text; sha256sum, else shasum, else cksum (still a
+# deterministic content fingerprint, just shorter).
+hash_text() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
+  else
+    printf '%s' "$1" | cksum | awk '{printf "%016x", $1 * 4294967296 + $2}'
+  fi
+}
+
 # Flatten whitespace so a multi-line claim stays one line.
 flat() { printf '%s' "$1" | tr '\n\t' '  ' | tr -s ' '; }
 
@@ -145,21 +161,30 @@ if [ -z "$abandoned_reason" ]; then
           + (if ($q | length) > 0 then "\n\nQuestions:\n" + ($q | join("\n")) else "" end)' \
         "$report" 2>/dev/null)"
       body="${body}"$'\n\n'"Full report: $job_dir/report.json"
-      [ "${#body}" -gt 1900 ] && body="${body:0:1899}…"
+      [ "${#body}" -gt 1800 ] && body="${body:0:1799}…"
+      # Marker over the WHOLE post (line + body), so a changed body with an
+      # unchanged summary line is still a change.
+      post_hash="$(hash_text "${line}"$'\n'"${body}")"
+      body="${body}"$'\n\n'"harvest: ${post_hash}"
 
+      # Only a prior HARVEST-origin found for THIS job is ours to supersede.
       prev_seq=""
-      prev_line=""
       if [ -n "$digest_json" ]; then
-        prev="$(printf '%s' "$digest_json" | jq -r --arg ref "job:$job_id" \
+        prev_seq="$(printf '%s' "$digest_json" | jq -r --arg ref "job:$job_id" --arg job "$job_id" \
           '[(.sections.found_idea // [])[] | select(.kind == "found")
+            | select(.who.origin == "import" and .who.job_id == $job)
             | select(any((.refs // [])[]?; .raw == $ref))] | sort_by(.seq) | last
-            | if . == null then empty else "\(.seq)\t\(.line)" end' 2>/dev/null)"
-        prev_seq="${prev%%$'\t'*}"
-        [ -n "$prev" ] && prev_line="${prev#*$'\t'}"
+            | if . == null then empty else .seq end' 2>/dev/null)"
+      fi
+      prev_hash=""
+      if [ -n "$prev_seq" ]; then
+        prev_hash="$(kb slate show "$prev_seq" --json "${cwd_args[@]}" 2>/dev/null \
+          | jq -r '.post.body // empty' 2>/dev/null \
+          | sed -n 's/^harvest: \([0-9a-f]\{16,\}\)$/\1/p' | tail -n1)"
       fi
 
-      if [ -n "$prev_seq" ] && [ "$prev_line" = "$line" ]; then
-        : # already harvested with the same summary: nothing to append
+      if [ -n "$prev_seq" ] && [ "$prev_hash" = "$post_hash" ]; then
+        : # already harvested with the same line AND body: nothing to append
       elif [ -n "$prev_seq" ]; then
         post found "$line" --ref "path:$job_dir/report.json" --body="$body" --supersedes "$prev_seq"
       else
