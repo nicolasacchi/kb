@@ -71,6 +71,7 @@ ci-selfcheck:
     scripts/ci/run-canaries.sh --check-anchors
     scripts/check-doc-anchors.sh --self-test
     scripts/check-pinned-by.sh --self-test
+    plugins/kb-research/skills/kb-claims/claims.sh --self-test
 
 # rust-toolchain.toml is the single source of the toolchain version. Jobs get
 # it through the composite action .github/actions/setup-rust, which READS the
@@ -99,7 +100,7 @@ toolchain-pin-check:
     fi
     # Refuse to compare against a moving channel: a floating channel makes the
     # Dockerfile comparison below meaningless.
-    if ! printf '%s' "$channel" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if [[ ! "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       echo "FAIL: rust-toolchain.toml channel is \"$channel\", not an exact X.Y.Z." >&2
       exit 1
     fi

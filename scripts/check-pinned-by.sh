@@ -29,6 +29,8 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# `pinned by`, any capitalisation, any run of spaces (X5: prose says "Pinned by" too).
+PINNED_RE='[Pp][Ii][Nn][Nn][Ee][Dd][[:space:]]+[Bb][Yy]'
 crate_names="$(ls crates 2>/dev/null | tr '-' '_')"
 # The tracked-file list is written to a FILE and matched with `grep -E FILE
 # >/dev/null`, never `git ls-files | grep -q`: under pipefail a quiet grep
@@ -38,6 +40,21 @@ tracked="$(mktemp)"
 trap 'rm -f "$tracked"' EXIT
 git ls-files > "$tracked"
 has_file() { grep -E "(^|/)${1//./\\.}\$" "$tracked" >/dev/null; }
+
+# A TS/TSX test title: `it(`/`test(` (also `.each`, `.only`, `.skip`-free
+# forms) whose first argument is exactly $1, in any tracked .ts/.tsx file.
+# Fixed-string match on the quoted title, so regex metacharacters in a title
+# are harmless.
+ts_test_exists() {
+  local name="$1" q
+  for q in "'" '"' '`'; do
+    if git grep -qF -e "${q}${name}${q}" -- '*.ts' '*.tsx' 2>/dev/null \
+       && git grep -hE "(^|[^A-Za-z0-9_])(it|test)(\.[a-z]+)?\(" -- '*.ts' '*.tsx' 2>/dev/null | grep -F -e "${q}${name}${q}" >/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 # $1 = a citation token; echoes "ok"/"skip"/"missing:<why>"
 resolve() {
@@ -71,9 +88,17 @@ resolve() {
       if has_file "$base"; then echo ok; else echo "missing:no tracked file named $base"; fi
       return ;;
   esac
+  # A title with a space, or any identifier a TS test could be named, may be a
+  # vitest/playwright title: resolve it against it(/test( calls.
+  if [[ "$tok" == *" "* ]]; then
+    if ts_test_exists "$tok"; then echo ok; else echo "missing:no it(/test( titled '$tok' in any tracked .ts/.tsx file"; fi
+    return
+  fi
   if ! [[ "$name" =~ ^[a-z][a-z0-9]*(_[a-z0-9]+)+$ ]]; then echo skip; return; fi
   if printf '%s\n' "$crate_names" | grep -qx "$name"; then echo skip; return; fi
-  if git grep -qE "fn[[:space:]]+${name}([^A-Za-z0-9_]|\$)" -- '*.rs'; then echo ok; else echo "missing:no 'fn $name' in any tracked .rs file"; fi
+  if git grep -qE "fn[[:space:]]+${name}([^A-Za-z0-9_]|\$)" -- '*.rs'; then echo ok
+  elif ts_test_exists "$name"; then echo ok
+  else echo "missing:no 'fn $name' in any tracked .rs file"; fi
 }
 
 scan() {
@@ -89,10 +114,10 @@ scan() {
         skip) ;;
         missing:*) total=$((total + 1)); bad=$((bad + 1)); echo "UNRESOLVED  $file:$line  \`$tok\`  (${res#missing:})" ;;
       esac
-    done < <(printf '%s\n' "$text" | grep -oE 'pinned by `[^`]+`|`[A-Za-z0-9_./-]+\.rs::[a-z0-9_:]+`' | sed -E 's/^pinned by //')
+    done < <(printf '%s\n' "$text" | grep -oE "${PINNED_RE} \`[^\`]+\`|\`[A-Za-z0-9_./-]+\.rs::[a-z0-9_:]+\`" | sed -E "s/^${PINNED_RE}[[:space:]]*//")
   done < <(
-    { git grep -nE 'pinned by `|`[A-Za-z0-9_./-]+\.rs::[a-z0-9_:]+`' -- 'docs/*.md' 'CLAUDE.md' '*/CLAUDE.md' ':!docs/research' ;
-      git grep -nE '^[[:space:]]*(//|\*|#).*(pinned by `|`[A-Za-z0-9_./-]+\.rs::[a-z0-9_:]+`)' -- 'crates' 'web/src' 'web-code/src' 'tests' ':!docs/research' ; } 2>/dev/null
+    { git grep -nE "${PINNED_RE} \`|\`[A-Za-z0-9_./-]+\.rs::[a-z0-9_:]+\`" -- 'docs/*.md' 'CLAUDE.md' '*/CLAUDE.md' ':!docs/research' ;
+      git grep -nE "^[[:space:]]*(//|\*|#).*(${PINNED_RE} \`|\`[A-Za-z0-9_./-]+\.rs::[a-z0-9_:]+\`)" -- 'crates' 'web/src' 'web-code/src' 'tests' ':!docs/research' ; } 2>/dev/null
   )
   echo "pinned-by gate: $total citation(s) checked, $bad unresolved"
   [ "$bad" -eq 0 ]
@@ -107,6 +132,17 @@ if [ "${1:-}" = "--self-test" ]; then
   t "rust-toolchain.toml" ok
   t "nonexistent-file-xyz.ts" "missing:no tracked file named nonexistent-file-xyz.ts"
   t "resolve" skip
+  # TS test titles (X5): a titled it(/test( resolves, a stale title does not
+  tsfile="$(git grep -lE "^[[:space:]]*(it|test)\(['\"][^'\"]* [^'\"]*['\"]" -- 'web-code/src/*.test.ts' 'web-code/src/*.test.tsx' 'web/src/*.test.ts' 'web/src/*.test.tsx' | head -1)"
+  [ -n "$tsfile" ] || { echo "SELFTEST FAIL: no tracked TS test with a spaced title to prove against" >&2; fail=1; }
+  title="$(grep -hoE "^[[:space:]]*(it|test)\(['\"][^'\"]* [^'\"]*['\"]" "$tsfile" | head -1 | sed -E "s/^[[:space:]]*(it|test)\(['\"]//; s/['\"]\$//")"
+  t "$title" ok
+  t "$title but renamed away long ago" "missing:no it(/test( titled '$title but renamed away long ago' in any tracked .ts/.tsx file"
+  # case-insensitive `pinned by` is picked up by the scanner patterns
+  for phrase in 'pinned by' 'Pinned by' 'PINNED BY' 'Pinned  By'; do
+    printf 'x %s `no_such_fn_anywhere_zz`\n' "$phrase" | grep -oE "${PINNED_RE} \`[^\`]+\`" >/dev/null \
+      || { echo "SELFTEST FAIL: '$phrase' not matched by PINNED_RE" >&2; fail=1; }
+  done
   # a real, stable definition in this very tree
   t "parser::tests::task_counts_match_source_scan" ok
   [ "$fail" -eq 0 ] && echo "check-pinned-by self-test ok"

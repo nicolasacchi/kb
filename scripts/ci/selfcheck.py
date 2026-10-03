@@ -5,7 +5,7 @@ without running. Every check reads committed text; nothing builds.
   1. every workflow declares `defaults.run.shell: bash` (pipefail by default)
      and a workflow-level `permissions:`; every job in it declares its own
      `permissions:` block;
-  2. no workflow `run:` line pipes into a quiet `grep -q`/`grep -qE` (SIGPIPE
+  2. no workflow `run:` line, composite action (.github/actions/**) or justfile line pipes into a quiet `grep -q`/`grep -qE` (SIGPIPE
      under pipefail makes "found" read as "not found");
   3. the five path-filtered `code-*` jobs of ci.yml each call
      scripts/ci/code-changed.sh (and its --skip-message) and carry no inline
@@ -45,6 +45,25 @@ def jobs_of(text):
     return {lines[a].strip().rstrip(":"): "\n".join(lines[a:b]) for a, b in zip(heads, heads[1:])}
 
 
+QUIET_GREP = re.compile(r"\|\s*grep\s+(-[A-Za-z]*q[A-Za-z]*)\b")
+
+
+def check_quiet_grep(root, errs):
+    """`| grep -q` in a pipefail shell, in the files that run shell outside the
+    workflow yml proper: composite actions and the justfile (F1 carry)."""
+    paths = sorted(glob.glob(os.path.join(root, ".github/actions/**/*.yml"), recursive=True))
+    paths.append(os.path.join(root, "justfile"))
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        name = os.path.relpath(path, root)
+        for i, line in enumerate(open(path, encoding="utf-8").read().split("\n"), 1):
+            if re.match(r"^\s*#", line):
+                continue
+            if QUIET_GREP.search(line):
+                errs.append(f"{name}:{i}: `| grep -q` in a pipefail shell (SIGPIPE turns a match into a miss): {line.strip()[:90]}")
+
+
 def check_workflows(root, errs):
     for path in sorted(glob.glob(os.path.join(root, ".github/workflows/*.yml"))):
         name = os.path.relpath(path, root)
@@ -82,7 +101,8 @@ def check_code_jobs(root, errs):
             errs.append(f"ci.yml: `{j}` still carries an inline copy of the path filter")
     # the script's regex must still cover the workflow files themselves
     script = open(os.path.join(root, "scripts/ci/code-changed.sh"), encoding="utf-8").read()
-    for must in ('".github/workflows/ci.yml"', '"scripts/ci/code-changed.sh"', '"rust-toolchain.toml"', '"scripts/review-store/"'):
+    for must in ('".github/workflows/ci.yml"', '"scripts/ci/code-changed.sh"', '"rust-toolchain.toml"', '"scripts/review-store/"',
+                 '"ci/test-floors.toml"', '"scripts/ci/witness.py"', '".config/nextest.toml"', '"scripts/ci/selfcheck.py"'):
         if must not in script:
             errs.append(f"code-changed.sh no longer lists {must} (the filter must see its own definition)")
 
@@ -133,6 +153,7 @@ def check_deny_review_by(root, today, errs):
 def run(root, today):
     errs = []
     check_workflows(root, errs)
+    check_quiet_grep(root, errs)
     check_code_jobs(root, errs)
     check_witness(root, errs)
     check_checkout_pins(root, errs)

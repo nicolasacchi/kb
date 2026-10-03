@@ -5,7 +5,7 @@
       "additions": "number",
       "blob_sha": "string",
       "deletions": "number",
-      "old_path": "null",
+      "old_path": "string",
       "open_annotations": "number",
       "path": "string",
       "status": "string",
@@ -13,7 +13,12 @@
       "viewed_stale": "bool"
     }
   ],
-  "hunks_viewed": [],
+  "hunks_viewed": [
+    {
+      "hunk_id": "string",
+      "path": "string"
+    }
+  ],
   "ps_number": "number",
   "review_id": "number",
   "schema": "string",

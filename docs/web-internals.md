@@ -254,3 +254,31 @@ the "no `rehype-raw`, no raw-HTML sink" posture of `CommentBody.tsx` is
 intact. `CommentBody` gains an opt-in `sketchSeq?: number` prop that turns
 on the ` ```mermaid ` interception; absent (every pre-SL4 call site) the
 output is byte-identical.
+
+## web-code: why the review diff highlights per file, not per page
+
+The review diff paints each file section through `useDiffHighlights`
+(`web-code/src/hooks/useDiffHighlights.ts`), whose snippet fallback calls
+`useHighlight` and so makes its own `POST /api/highlight/batch`. A page of N
+files whose stored spans are unavailable (new files, unindexed blobs,
+pseudo-files) therefore makes up to N small batch requests, not one. This was
+considered (X2 A10.f4) and deliberately NOT lifted into one page-level request:
+
+- The common path makes NO highlight request at all. Stored spans ride the
+  `useFile` read the reader already caches (`["file", repo, path, ref]`), so
+  the fallback only fires for the files that lack them.
+- Sections mount lazily (`useInViewOnce`): a page-level batch would have to
+  paint off-screen files too, turning "highlight what the reviewer scrolls to"
+  into "highlight the whole patchset up front" -- the 64-item / 1 MiB batch
+  ceilings in `highlight.rs` would then split a large review into several
+  requests anyway, and the first paint would wait on the slowest file.
+- Three consumers (the review-diff route, the review-file list item, the
+  interdiff panel) each own a different loading and error shape; sharing one
+  hook would need a provider that outlives the sections and a per-file
+  "pending vs plain" state, a larger change than a stabilisation unit can
+  verify without a build.
+
+Duplicate snippets are already collapsed: `uniqueHighlightItems` keys on
+(lang, text), and the query key is the unique list, so identical text across
+sections is one cache entry. Revisit if a profile shows the per-file requests
+(not the file reads) dominating a large review.

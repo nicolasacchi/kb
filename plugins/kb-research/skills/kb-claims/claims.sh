@@ -5,12 +5,32 @@
 # actually sufficient?) is the agent's, in the SKILL.md workflow.
 #
 # Usage: claims.sh [<base-ref> [<head-ref>]]     (default: origin/main..HEAD)
+#        claims.sh --self-test
 #
 # Output, one row per claim:  STATUS  file:line  token  | the added line
-#   pinned    a `pinned by `x``, `invariant:N`, a backticked `file.rs::fn`, or a
-#             backticked snake_case identifier that is a real `fn` in the tree
+#   pinned    a `pinned by `x`` (any capitalisation), `invariant:N`, a backticked
+#             `file.rs::fn` (the ::fn is REQUIRED -- a bare file mention such as
+#             `foo.rs` names where the code lives, not what proves the claim),
+#             or a backticked snake_case identifier that is a real `fn` in the tree
 #   UNPINNED  none of the above within the line + next 3 added lines
 set -uo pipefail
+
+# Does this text carry a pin reference? (file-only mentions deliberately do not.)
+PIN_RE='[Pp][Ii][Nn][Nn][Ee][Dd][[:space:]]+[Bb][Yy] `|invariant:[0-9]+|`[A-Za-z0-9_./-]+\.(rs|ts|tsx)::[A-Za-z0-9_:]+`'
+has_pin_ref() { printf '%s' "$1" | grep -E "$PIN_RE" >/dev/null; }
+
+if [ "${1:-}" = "--self-test" ]; then
+  fail=0
+  t() { has_pin_ref "$2"; local got=$?; [ "$got" -eq "$1" ] || { echo "SELFTEST FAIL: has_pin_ref($2) = $got, want $1" >&2; fail=1; }; }
+  t 1 'This NEVER happens; see `crates/kb-core/src/lib.rs` for the code.'
+  t 1 'This NEVER happens (`lib.rs`).'
+  t 0 'This NEVER happens (`lib.rs::the_test`).'
+  t 0 'This NEVER happens (Pinned by `x`).'
+  t 0 'This NEVER happens, invariant:7.'
+  [ "$fail" -eq 0 ] && echo "claims self-test ok"
+  exit "$fail"
+fi
+
 base="${1:-origin/main}"
 head="${2:-HEAD}"
 cd "$(git rev-parse --show-toplevel)"
@@ -53,7 +73,7 @@ for i in "${!rows[@]}"; do
     window="$window $t2"
   done
   status=UNPINNED
-  if printf '%s' "$window" | grep -E 'pinned by `|invariant:[0-9]+|`[A-Za-z0-9_./-]+\.(rs|ts|tsx)(::[a-z0-9_]+)?`' >/dev/null; then
+  if has_pin_ref "$window"; then
     status=pinned
   else
     while IFS= read -r id; do

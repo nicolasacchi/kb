@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { StorageLike } from "../desk/deskState";
 import {
+  __resetCurrentReviewForTests,
   clearCurrentReview,
+  clearCurrentReviewIfSet,
   currentReviewStorageKey,
   CURRENT_REVIEW_VERSION,
   getCurrentReview,
+  peekCurrentReview,
   setCurrentReview,
 } from "./currentReview";
 
@@ -140,5 +143,42 @@ describe("corrupt / unreadable blobs degrade to null, never throw", () => {
     expect(getCurrentReview("kb", null)).toBeNull();
     expect(() => setCurrentReview("kb", { id: "1" }, null)).not.toThrow();
     expect(() => clearCurrentReview("kb", null)).not.toThrow();
+  });
+});
+
+// A9.f5 -- N surfaces mount the validated hook and each runs the "review is
+// gone" effect; exactly one may clear (one URL strip, one toast).
+describe("clearCurrentReviewIfSet / peekCurrentReview dedupe", () => {
+  it("lets exactly one of several same-tick callers clear the marker", () => {
+    __resetCurrentReviewForTests();
+    const s = mem();
+    setCurrentReview("kb", { id: "7" }, s);
+    expect(peekCurrentReview("kb")?.id).toBe("7");
+    // reader, search, omnibox, top bar, annotations rail
+    const results = [1, 2, 3, 4, 5].map(() => clearCurrentReviewIfSet("kb", s));
+    expect(results).toEqual([true, false, false, false, false]);
+    expect(peekCurrentReview("kb")).toBeNull();
+    expect(getCurrentReview("kb", s)).toBeNull();
+  });
+
+  it("reads the in-memory cache, not storage, so a failed storage write still dedupes", () => {
+    __resetCurrentReviewForTests();
+    const full: StorageLike = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("QuotaExceededError");
+      },
+      removeItem: () => {},
+    };
+    setCurrentReview("kb", { id: "9" }, full);
+    expect(getCurrentReview("kb", full)).toBeNull(); // storage never got it
+    expect(peekCurrentReview("kb")?.id).toBe("9"); // the cache did
+    expect(clearCurrentReviewIfSet("kb", full)).toBe(true);
+    expect(clearCurrentReviewIfSet("kb", full)).toBe(false);
+  });
+
+  it("does nothing for a repo with no marker", () => {
+    __resetCurrentReviewForTests();
+    expect(clearCurrentReviewIfSet("nothing-here", mem())).toBe(false);
   });
 });

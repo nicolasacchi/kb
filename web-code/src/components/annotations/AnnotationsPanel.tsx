@@ -395,7 +395,7 @@ interface ThreadItemProps {
 /// (opens an inline `ReviewBindSelector`) and "unbind". A REPLY has no
 /// scope of its own (`routes::bind_annotation_review`'s doc — it always
 /// inherits its parent's), so none of this renders on a reply row.
-function ThreadItem({
+export function ThreadItem({
   repo,
   thread,
   onGotoLine,
