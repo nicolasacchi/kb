@@ -556,9 +556,10 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
     assert_eq!(st, 200, "{v:#}");
     assert_eq!(v["schema"], "kbc-review-sync-open/1");
     assert_eq!(v["count"], 4, "{v:#}");
-    // PR 3 (no head ref) and PR 4 (merged into the target: refused, not
-    // captured as an empty patchset).
-    assert_eq!(v["failed"], 2, "{v:#}");
+    // Only PR 3 (no head ref) fails: PR 4 was merged with a merge commit, so
+    // its base is pinned to the merge-time target tip and it is reviewable
+    // (A6-1) instead of refused.
+    assert_eq!(v["failed"], 1, "{v:#}");
     // The truncation flags are part of the `kbc-review-sync-open/1`
     // contract and nothing else pins them: this mock answers ONE page
     // with no `Link` header and stays under `MAX_SYNC_PULLS`, so all
@@ -577,13 +578,13 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
         .collect();
     assert!(!by_pr.contains_key(&5), "merged before the window");
     let merged = by_pr[&4];
-    assert_eq!(merged["ok"], false, "{merged:#}");
+    assert_eq!(merged["ok"], true, "{merged:#}");
     assert_eq!(merged["listed_as"], "merged");
-    assert_eq!(merged["error"]["status"], 409, "{merged:#}");
-    assert_eq!(
-        merged["error"]["code"], "urn:kb:errors:pr-already-merged",
-        "{merged:#}"
-    );
+    assert_eq!(merged["reason"], "created", "{merged:#}");
+    // The merge-time base, not the live target: the real one-file diff of
+    // the merged PR rather than an empty patchset.
+    assert_eq!(merged["files_count"], 1, "{merged:#}");
+    assert_eq!(merged["files_equal"], true, "{merged:#}");
     for n in [1u64, 2] {
         let it = by_pr[&n];
         assert_eq!(it["ok"], true, "{it:#}");
@@ -613,7 +614,7 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
     assert_eq!(v["created"], false);
     assert!(has_warning(&v, "pr-closed"), "{v:#}");
 
-    // Run again: the three good ones are quiet, PR 4 is merged-final.
+    // Run again: the good ones are quiet, PR 4 is merged-final.
     let (_, v) = sync(
         &client,
         &base,
@@ -635,8 +636,11 @@ async fn sync_open_runs_every_pr_and_reports_failures_in_line() {
     assert_eq!(reasons[&1], "unchanged");
     assert_eq!(reasons[&2], "unchanged");
     assert!(
-        !reasons.contains_key(&4),
-        "the merged PR still has no (empty) review"
+        matches!(
+            reasons.get(&4).map(String::as_str),
+            Some("merged-final") | Some("unchanged")
+        ),
+        "the merged PR keeps its review and mints nothing new: {reasons:?}"
     );
 }
 

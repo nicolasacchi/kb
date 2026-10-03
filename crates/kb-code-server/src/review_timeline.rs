@@ -907,7 +907,6 @@ pub async fn review_timeline_route(
     let offset = params.offset.unwrap_or(0);
 
     let (review, repo, repo_id) = require_review(&state, id).await?;
-    let repo_root = repo.path.clone();
 
     // 2026-08-31 incident (store.rs module doc): every store read this
     // composition needs, in ONE blocking-pool trip.
@@ -1086,16 +1085,14 @@ pub async fn review_timeline_route(
             "the GitHub lane is a LIVE network call and was not requested (`?github=1`)",
         ));
     } else if let Some(pr_number) = binding.pr_number {
-        let root_for_origin = repo_root.clone();
-        let gh = tokio::task::spawn_blocking(move || crate::github::github_repo(&root_for_origin))
-            .await
-            .map_err(|e| {
-                ApiError::new(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            })?;
-        match gh {
-            Ok(gh_repo) => {
-                match state
-                    .github
+        // K2 carry — the forge project + credential come from `forge_ctx`.
+        let access = crate::reviews::forge_access(&state, repo).await;
+        match access {
+            Ok(crate::reviews::ForgeAccess::Ready {
+                repo: gh_repo,
+                client: github,
+            }) => {
+                match github
                     .list_pull_comments(&gh_repo.owner, &gh_repo.name, pr_number as u64)
                     .await
                 {
@@ -1126,10 +1123,17 @@ pub async fn review_timeline_route(
                     )),
                 }
             }
+            Ok(crate::reviews::ForgeAccess::Unavailable(reason)) => {
+                sources.push(LaneStatus::not_ok(
+                    "github",
+                    LANE_DEGRADED,
+                    format!("the forge could not be reached for this repo: {reason}"),
+                ))
+            }
             Err(e) => sources.push(LaneStatus::not_ok(
                 "github",
                 LANE_DEGRADED,
-                format!("this repo has no GitHub origin: {e}"),
+                format!("this repo has no GitHub origin: {}", e.message()),
             )),
         }
     } else {

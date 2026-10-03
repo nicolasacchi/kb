@@ -109,6 +109,61 @@ async fn post(
     }
 }
 
+/// POST `path?async=1`: a job-capable daemon answers 202 + `job_id` at once
+/// and this polls the job (the `start-pr` / `sync` pattern) for up to
+/// `budget`; an older daemon ignores the flag and answers inline, which is
+/// returned as is. A job that is still running when the budget ends is
+/// reported with its id (the daemon keeps working), never abandoned silently.
+async fn post_job(
+    daemon: &str,
+    path: &str,
+    body: &Value,
+    budget: std::time::Duration,
+    json: bool,
+    label: &str,
+) -> Result<Value, AgentError> {
+    let started = post(
+        daemon,
+        &format!("{path}?async=1"),
+        body,
+        review_agent::READ_TIMEOUT,
+    )
+    .await?;
+    let Some(job_id) = started["job_id"].as_str() else {
+        return Ok(started);
+    };
+    let c = client(review_agent::READ_TIMEOUT).await?;
+    let job = crate::poll_review_job(&c, daemon, job_id, budget, json, label)
+        .await
+        .map_err(|e| {
+            AgentError::new("job-poll", e.to_string(), envelope::EXIT_UNREACHABLE).with_hint(
+                format!("the daemon may still be working: GET /api/reviews/jobs/{job_id}"),
+            )
+        })?;
+    let Some(job) = job else {
+        return Err(AgentError::new(
+            "job-running",
+            format!(
+                "{label} job {job_id} still running after {} s — the daemon is still working",
+                budget.as_secs()
+            ),
+            envelope::EXIT_CONFLICT,
+        )
+        .with_hint(format!("poll GET /api/reviews/jobs/{job_id}")));
+    };
+    match job["status"].as_str() {
+        Some("done") => Ok(job["result"].clone()),
+        _ => {
+            let status = job["error_status"].as_u64().unwrap_or(500) as u16;
+            let failure = serde_json::json!({
+                "error": job["error"],
+                "type": job["error_type"],
+            });
+            Err(AgentError::from_http(status, &failure, "review retrack"))
+        }
+    }
+}
+
 pub async fn run(a: RetrackArgs) -> Result<()> {
     let result = if a.all {
         run_all(&a).await
@@ -138,11 +193,13 @@ async fn run_one(a: &RetrackArgs) -> Result<(), AgentError> {
     // `retrack` moves a whole review's base; a `/ps<n>` was silently ignored.
     review_agent::reject_patchset_address(raw, "retrack")?;
     let resolved = review_agent::resolve(&a.daemon, raw, a.repo.as_deref(), None).await?;
-    let body = post(
+    let body = post_job(
         &a.daemon,
         &format!("/api/reviews/{}/retrack", resolved.id),
         &serde_json::json!({ "base": a.base, "dry_run": a.dry_run }),
-        review_agent::READ_TIMEOUT,
+        review_agent::JOB_POLL_BUDGET,
+        a.json,
+        "retrack",
     )
     .await?;
     if a.json {
@@ -163,7 +220,7 @@ async fn run_all(a: &RetrackArgs) -> Result<(), AgentError> {
         return Err(AgentError::usage("pass --dry-run or --yes, not both"));
     }
     let dry_run = !a.yes;
-    let body = post(
+    let body = post_job(
         &a.daemon,
         "/api/reviews/retrack-bulk",
         &serde_json::json!({
@@ -172,7 +229,9 @@ async fn run_all(a: &RetrackArgs) -> Result<(), AgentError> {
             "legacy": a.legacy,
             "dry_run": dry_run,
         }),
-        review_agent::BULK_READ_TIMEOUT,
+        review_agent::BULK_JOB_POLL_BUDGET,
+        a.json,
+        "retrack --all",
     )
     .await?;
     if a.json {
