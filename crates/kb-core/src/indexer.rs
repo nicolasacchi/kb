@@ -2148,6 +2148,9 @@ async fn ensure_embedding_sidecar_imported(storage: &StorageHandle, quarantine_d
 
 /// Stored producer of this artifact's vector. `None` when no name is
 /// recorded (or the lookup failed) — the caller keeps today's reuse rule.
+/// (Production code uses [`stored_embedding_model_checked`] directly; this
+/// flattened form is what the reuse tests read.)
+#[cfg(test)]
 async fn stored_embedding_model(
     storage: &StorageHandle,
     quarantine_dir: &Path,
