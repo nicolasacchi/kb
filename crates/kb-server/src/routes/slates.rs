@@ -1606,7 +1606,7 @@ fn append_locked(
 fn stamp_provenance(body: &mut PostBody, user: String) -> Result<(), SlateError> {
     // --- provenance the DAEMON owns (rules matrix "`origin`") -------------
     body.prov.user = Some(user);
-    body.prov.session_id = body.prov.session_id.filter(|s| !s.trim().is_empty());
+    body.prov.session_id = body.prov.session_id.take().filter(|s| !s.trim().is_empty());
     if body.prov.session_id.is_none() && body.prov.origin == Origin::Agent {
         // The ONE value a client cannot send: stamped in place of `agent`
         // when no session id resolves. `human` and `import` are left alone.
