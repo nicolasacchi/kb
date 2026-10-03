@@ -14,6 +14,7 @@ mod diff_between_epoch;
 mod download;
 mod events;
 mod exclude;
+mod import_memory;
 mod memory_cli;
 mod notes;
 mod queries;

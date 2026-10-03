@@ -133,6 +133,14 @@ pub struct IngestBody {
     /// ordinary ok state; there is no `"ok"` value.
     #[serde(default)]
     pub outcome: Option<String>,
+    /// v0.44 X8 — the memory's TRUE creation time (unix seconds), written as
+    /// `kb-created` instead of the write time. Set by proposal approval for
+    /// imported facts (`kb import claude-memory` carries the source file's
+    /// mtime), so recall decay ages the fact by when it was written, not by
+    /// when it was imported. Non-positive values are rejected; a value in the
+    /// future is clamped to now. Absent ⇒ now (every other writer).
+    #[serde(default)]
+    pub created_at: Option<i64>,
 }
 
 /// `POST …/artifacts` body: the memory fields plus the optional idempotency key.
@@ -283,6 +291,18 @@ pub(crate) fn ingest_keyed(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    // v0.44 X8 — an explicit creation time (imported facts) replaces the
+    // write time as the decay basis; the filename keeps the write time `ts`.
+    let created_at = match body.created_at {
+        None => ts as i64,
+        Some(c) if c > 0 => c.min(ts as i64),
+        Some(c) => {
+            return Err(error_to_problem_json(&kb_core::Error::BadRequest(format!(
+                "created_at must be a positive unix timestamp; got {c}"
+            ))))
+        }
+    };
+
     // MI-W3.4 — validate the trust tag against the closed set BEFORE it can
     // reach the source as a free-text meta; an unrecognised value 400s
     // rather than silently persisting a typo forever (kb never corrects a
@@ -374,7 +394,7 @@ pub(crate) fn ingest_keyed(
         body.session_id.as_deref(),
         global,
         &body.linked_kbs,
-        Some(ts as i64),
+        Some(created_at),
         body.summary.as_deref(),
         (!provenance.is_empty()).then_some(&provenance),
         memory_type,

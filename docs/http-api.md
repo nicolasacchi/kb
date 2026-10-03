@@ -581,7 +581,10 @@ POST /api/kb/{kb}/proposals/{id}/reject     per-kb .proposals/ queue; approve
                                             fires the existing memory ingest
                                             with session provenance; the human
                                             gate is the point. CLI: kb propose,
-                                            kb proposals.
+                                            kb proposals. The submit body may
+                                            carry `memory_created_at` (unix
+                                            secs, > 0): the approved memory's
+                                            `kb-created` (imported facts).
 GET  /api/anchors/stale                     Q1: fleet-wide cold load for the
                                             SPA stale-anchors dashboard.
                                             Reads each kb's persisted
