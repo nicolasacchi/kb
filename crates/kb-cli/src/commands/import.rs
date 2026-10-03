@@ -449,7 +449,9 @@ fn import(
         }
         // The same W5.2 secrets-only floor a live `kb sessions capture`
         // applies: scrub every stored lane BEFORE the envelope is built.
-        let (scrubbed_raw, sidecar_texts, redacted) = scrub_capture_lanes(&raw, sidecar_texts);
+        let (scrubbed_raw, sidecar_texts, mut redacted) = scrub_capture_lanes(&raw, sidecar_texts);
+        let (subagents, digest_redacted) = super::sessions_scrub::scrub_subagents(subagents);
+        redacted += digest_redacted;
         secrets_redacted_total += redacted;
         if !dry_run {
             let html = wrap_envelope(&ts, &sid, &scrubbed_raw, &[], &subagents, &sidecar_texts);
@@ -911,6 +913,7 @@ fn refresh_subagents_backfill(
         // The sidecar-text lane is rewritten from raw files here, so it needs
         // the same secrets floor as a fresh capture.
         let (_, sidecar_texts, _) = scrub_capture_lanes("", sidecar_texts);
+        let (agents, _) = super::sessions_scrub::scrub_subagents(agents);
         let with_subagents = kb_core::sessions::replace_subagents_block(&html, &agents);
         let sidecar_text_block = kb_core::sessions::render_sidecar_text_block(&sidecar_texts);
         let rewritten =

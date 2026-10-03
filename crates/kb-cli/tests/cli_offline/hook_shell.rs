@@ -46,3 +46,21 @@ fn recall_hook_shell_tests() {
 fn wake_hook_shell_tests() {
     run("test-wake-slate.sh");
 }
+
+/// v0.44 F7b — the codex/opencode adapters scrub through the REAL `kb`
+/// binary (`kb sessions scrub`) and fail closed without it.
+#[test]
+fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
+    let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
+    let out = Command::new("bash")
+        .arg(tests_dir().join("test-capture-scrub.sh"))
+        .env("KB_BIN_DIR", kb.parent().unwrap())
+        .output()
+        .expect("bash is required to run the hook shell tests");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && !stdout.contains("not ok"),
+        "test-capture-scrub.sh failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
