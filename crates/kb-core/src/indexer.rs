@@ -1817,12 +1817,11 @@ enum ChunkReuse {
     Unusable,
 }
 
-/// Sidecar beside the per-kb quarantine directory, not inside it. Restore
-/// only deletes `{stem}.html` / `{stem}.error.txt`, but the model map must
-/// not live in a dir a future sweep might empty. Lance has no embedding-model
-/// column; this file is the persist the reuse decision reads. A missing
-/// file, a blank name, or an unknown schema version is "no stored name" —
-/// today's reuse rule, not a refusal.
+/// LEGACY sidecar beside the per-kb quarantine directory. The producer-model
+/// record now lives in sqlite (`doc_embedding_model`, V0044); this file
+/// format is only READ, once, by [`ensure_embedding_sidecar_imported`] to
+/// carry an existing deployment's records over. A blank name or an unknown
+/// schema version imports nothing ("no stored name" — today's reuse rule).
 const EMBEDDING_MODEL_SIDECAR_VERSION: u64 = 1;
 
 fn embedding_model_sidecar(quarantine_dir: &Path) -> PathBuf {
@@ -1832,12 +1831,6 @@ fn embedding_model_sidecar(quarantine_dir: &Path) -> PathBuf {
         }
         _ => quarantine_dir.join("embedding-models.json"),
     }
-}
-
-fn embedding_model_cache() -> &'static Mutex<HashMap<PathBuf, HashMap<String, String>>> {
-    static CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, HashMap<String, String>>>> =
-        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-    &CACHE
 }
 
 fn load_embedding_models(path: &Path) -> HashMap<String, String> {
@@ -1878,85 +1871,141 @@ fn load_embedding_models(path: &Path) -> HashMap<String, String> {
         .collect()
 }
 
-fn save_embedding_models(path: &Path, models: &HashMap<String, String>) {
-    let mut keys: Vec<&String> = models.keys().collect();
-    keys.sort();
-    let mut ordered = serde_json::Map::new();
-    for key in keys {
-        if let Some(name) = models.get(key) {
-            ordered.insert(key.clone(), serde_json::Value::String(name.clone()));
-        }
+/// Paths whose legacy sidecar has been imported (or found absent) in this
+/// process. Held across the import so the first callers serialise behind it
+/// and none reads sqlite before the legacy records landed.
+fn imported_sidecars() -> &'static tokio::sync::Mutex<HashSet<PathBuf>> {
+    static IMPORTED: std::sync::LazyLock<tokio::sync::Mutex<HashSet<PathBuf>>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashSet::new()));
+    &IMPORTED
+}
+
+/// One-shot migration of the legacy JSON sidecar into sqlite
+/// (`doc_embedding_model`, V0044). Imports with `INSERT OR IGNORE` (a row
+/// already in sqlite is newer and wins), then renames the file to
+/// `<name>.migrated` so it is never read again. A failed import keeps the
+/// file for the next process and is not retried per doc.
+async fn ensure_embedding_sidecar_imported(storage: &StorageHandle, quarantine_dir: &Path) {
+    let path = embedding_model_sidecar(quarantine_dir);
+    let mut done = imported_sidecars().lock().await;
+    if done.contains(&path) {
+        return;
     }
-    let body = serde_json::json!({
-        "version": EMBEDDING_MODEL_SIDECAR_VERSION,
-        "models": ordered,
-    });
-    let Ok(bytes) = serde_json::to_vec_pretty(&body) else {
+    done.insert(path.clone());
+    let read_path = path.clone();
+    let models = tokio::task::spawn_blocking(move || {
+        if read_path.exists() {
+            Some(load_embedding_models(&read_path))
+        } else {
+            None
+        }
+    })
+    .await
+    .unwrap_or(None);
+    let Some(models) = models else {
         return;
     };
-    if let Err(e) = crate::fsx::write_atomic(path, &bytes) {
-        tracing::warn!(
+    let rows: Vec<(String, String)> = models.into_iter().collect();
+    let n = rows.len();
+    match storage.embedding_model_import(rows).await {
+        Ok(inserted) => {
+            let mut migrated = path.clone().into_os_string();
+            migrated.push(".migrated");
+            if let Err(e) = std::fs::rename(&path, PathBuf::from(migrated)) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "embedding-model sidecar imported but could not be renamed aside"
+                );
+            }
+            tracing::info!(
+                path = %path.display(),
+                records = n,
+                inserted,
+                "imported legacy embedding-model sidecar into sqlite"
+            );
+        }
+        Err(e) => tracing::warn!(
             path = %path.display(),
             error = %e,
-            "failed to persist embedding-model sidecar"
-        );
+            "failed to import legacy embedding-model sidecar; stored names treated as missing"
+        ),
     }
 }
 
-fn with_embedding_models<T>(
+/// Stored producer of this artifact's vector. `None` when no name is
+/// recorded (or the lookup failed) — the caller keeps today's reuse rule.
+async fn stored_embedding_model(
+    storage: &StorageHandle,
     quarantine_dir: &Path,
-    f: impl FnOnce(&mut HashMap<String, String>) -> (T, bool),
-) -> T {
-    let path = embedding_model_sidecar(quarantine_dir);
-    let mut guard = embedding_model_cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if !guard.contains_key(&path) {
-        guard.insert(path.clone(), load_embedding_models(&path));
-    }
-    let models = guard.get_mut(&path).expect("just inserted");
-    let (out, dirty) = f(models);
-    if dirty {
-        save_embedding_models(&path, models);
-    }
-    out
+    artifact_id: &str,
+) -> Option<String> {
+    ensure_embedding_sidecar_imported(storage, quarantine_dir).await;
+    storage
+        .embedding_model_get(artifact_id.to_string())
+        .await
+        .ok()
+        .flatten()
 }
 
-/// Stored producer of this artifact's vector. `None` when the sidecar has
-/// no name — the caller keeps today's reuse rule.
-fn stored_embedding_model(quarantine_dir: &Path, artifact_id: &str) -> Option<String> {
-    with_embedding_models(quarantine_dir, |models| {
-        (models.get(artifact_id).cloned(), false)
-    })
-}
-
-fn record_embedding_model(quarantine_dir: &Path, artifact_id: &str, model: &str) {
+async fn record_embedding_model(
+    storage: &StorageHandle,
+    quarantine_dir: &Path,
+    artifact_id: &str,
+    model: &str,
+) {
     let model = model.trim();
     if artifact_id.is_empty() || model.is_empty() {
         return;
     }
-    with_embedding_models(quarantine_dir, |models| {
-        let dirty = models.get(artifact_id).map(String::as_str) != Some(model);
-        if dirty {
-            models.insert(artifact_id.to_string(), model.to_string());
+    ensure_embedding_sidecar_imported(storage, quarantine_dir).await;
+    if let Err(e) = storage
+        .embedding_model_set(artifact_id.to_string(), Some(model.to_string()))
+        .await
+    {
+        tracing::warn!(error = %e, "failed to record embedding model");
+    }
+}
+
+async fn clear_embedding_model(storage: &StorageHandle, quarantine_dir: &Path, artifact_id: &str) {
+    ensure_embedding_sidecar_imported(storage, quarantine_dir).await;
+    if let Err(e) = storage
+        .embedding_model_set(artifact_id.to_string(), None)
+        .await
+    {
+        tracing::warn!(error = %e, "failed to clear embedding model");
+    }
+}
+
+type EmbedderIdentityCache =
+    HashMap<usize, (std::sync::Weak<Mutex<Embedder>>, &'static str, usize)>;
+
+/// `(model_name, dim)` of a shared embedder WITHOUT taking its mutex on the
+/// hot path. The mutex is held for the whole of any embed call, so reading
+/// the name under it blocked a runtime worker behind another kb's
+/// multi-second embed (A3.f8). Both values are fixed for an embedder's
+/// lifetime; the cache keys on the Arc address and validates the entry with
+/// a `Weak` so a freed address reused by a new embedder is never trusted.
+fn embedder_identity(emb: &Arc<Mutex<Embedder>>) -> (&'static str, usize) {
+    static CACHE: std::sync::LazyLock<Mutex<EmbedderIdentityCache>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    let key = Arc::as_ptr(emb) as usize;
+    {
+        let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((weak, model, dim)) = cache.get(&key) {
+            if weak.upgrade().is_some_and(|a| Arc::ptr_eq(&a, emb)) {
+                return (*model, *dim);
+            }
         }
-        ((), dirty)
-    });
-}
-
-fn clear_embedding_model(quarantine_dir: &Path, artifact_id: &str) {
-    with_embedding_models(quarantine_dir, |models| {
-        ((), models.remove(artifact_id).is_some())
-    });
-}
-
-#[cfg(test)]
-fn drop_embedding_model_cache(quarantine_dir: &Path) {
-    let path = embedding_model_sidecar(quarantine_dir);
-    embedding_model_cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&path);
+    }
+    let (model, dim) = {
+        let guard = emb.lock().unwrap_or_else(|e| e.into_inner());
+        (guard.model_name(), guard.dim())
+    };
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|_, (w, _, _)| w.strong_count() > 0);
+    cache.insert(key, (Arc::downgrade(emb), model, dim));
+    (model, dim)
 }
 
 /// Inputs to [`reuse_stored_embedding`]. Pure so a unit test can pin the
@@ -2469,11 +2518,9 @@ async fn prepare_doc(
     // not emit `index.embedding` — that event is the inference signal the
     // TUI sums — and does not record embed latency. Doc and chunk vectors
     // are lock-step: `try_preserve_embeddings` returns both or neither.
-    let resolved = embedder.map(|emb| {
-        let guard = emb.lock().unwrap_or_else(|e| e.into_inner());
-        (guard.model_name(), guard.dim())
-    });
-    let stored_model_name = stored_embedding_model(quarantine_dir, artifact_id.as_str());
+    let resolved = embedder.map(embedder_identity);
+    let stored_model_name =
+        stored_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await;
     let preserved = match (force && !re_embed && hash_matches, resolved) {
         (true, Some((model, dim))) => {
             let parsed = if chunked {
@@ -2519,8 +2566,7 @@ async fn prepare_doc(
         None
     } else if let Some(emb) = embedder {
         let model = {
-            let guard = emb.lock().unwrap_or_else(|e| e.into_inner());
-            let model = guard.model_name();
+            let model = embedder_identity(emb).0;
             bus.emit(
                 "index.embedding",
                 json!({
@@ -2853,8 +2899,10 @@ async fn finish_indexed_doc(
         embedding_model,
     } = p;
     match &embedding_model {
-        Some(model) => record_embedding_model(quarantine_dir, artifact_id.as_str(), model),
-        None => clear_embedding_model(quarantine_dir, artifact_id.as_str()),
+        Some(model) => {
+            record_embedding_model(storage, quarantine_dir, artifact_id.as_str(), model).await
+        }
+        None => clear_embedding_model(storage, quarantine_dir, artifact_id.as_str()).await,
     }
     let path = path.as_path();
     let html = html.as_str();
@@ -6023,16 +6071,18 @@ mod tests {
             "aligned chunk vectors reuse in lock-step with the doc vector"
         );
     }
-    /// The quarantine-dir sidecar is the stored model name. A present name
-    /// that differs does not reuse; a missing name still reuses when the
-    /// hash and a unique dim match. The name survives a cache drop (restart).
-    #[test]
-    fn embedding_model_sidecar_mismatch_refuses_reuse_missing_name_reuses() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
+    /// The stored model name (sqlite `doc_embedding_model`) gates reuse. A
+    /// present name that differs does not reuse; a missing name still reuses
+    /// when the hash and a unique dim match.
+    #[tokio::test]
+    async fn embedding_model_record_mismatch_refuses_reuse_missing_name_reuses() {
+        let (_bus, storage, _kb, _slug, tmp) = setup().await;
+        let dir = tmp.path().join("quarantine");
         assert!(
-            stored_embedding_model(dir, "art-missing").is_none(),
-            "a missing sidecar name must stay missing"
+            stored_embedding_model(&storage, &dir, "art-missing")
+                .await
+                .is_none(),
+            "a missing record must stay missing"
         );
         let missing = EmbeddingReuseQuery {
             force: true,
@@ -6049,9 +6099,8 @@ mod tests {
             "missing model name + matching hash and unique dim must reuse"
         );
 
-        record_embedding_model(dir, "art-swap", "jina-embeddings-v2-base-code");
-        drop_embedding_model_cache(dir);
-        let stored = stored_embedding_model(dir, "art-swap");
+        record_embedding_model(&storage, &dir, "art-swap", "jina-embeddings-v2-base-code").await;
+        let stored = stored_embedding_model(&storage, &dir, "art-swap").await;
         assert_eq!(stored.as_deref(), Some("jina-embeddings-v2-base-code"));
         let mismatch = EmbeddingReuseQuery {
             resolved_model: Some("bge-base-en-v1.5"),
@@ -6065,8 +6114,8 @@ mod tests {
             "a stored model name that differs must not reuse the vector"
         );
 
-        record_embedding_model(dir, "art-same", "bge-base-en-v1.5");
-        let same = stored_embedding_model(dir, "art-same");
+        record_embedding_model(&storage, &dir, "art-same", "bge-base-en-v1.5").await;
+        let same = stored_embedding_model(&storage, &dir, "art-same").await;
         let matched = EmbeddingReuseQuery {
             stored_model: same.as_deref(),
             ..mismatch
@@ -6074,6 +6123,60 @@ mod tests {
         assert!(
             reuse_stored_embedding(&matched),
             "a stored model name that matches must reuse when hash and dim match"
+        );
+
+        clear_embedding_model(&storage, &dir, "art-same").await;
+        assert!(stored_embedding_model(&storage, &dir, "art-same")
+            .await
+            .is_none());
+    }
+
+    /// A3-7 — recording N models must not write a JSON sidecar (the old
+    /// path rewrote the whole map once per doc), and an existing legacy
+    /// sidecar is imported exactly once into sqlite and renamed aside.
+    #[tokio::test]
+    async fn embedding_model_records_live_in_sqlite_and_legacy_sidecar_imports_once() {
+        let (_bus, storage, _kb, _slug, tmp) = setup().await;
+        let dir = tmp.path().join("quarantine");
+        let sidecar = embedding_model_sidecar(&dir);
+        std::fs::write(
+            &sidecar,
+            br#"{"version":1,"models":{"legacy-a":"bge-small-en-v1.5","legacy-b":"bge-base-en-v1.5"}}"#,
+        )
+        .unwrap();
+
+        // First touch imports; the legacy record is visible.
+        assert_eq!(
+            stored_embedding_model(&storage, &dir, "legacy-a")
+                .await
+                .as_deref(),
+            Some("bge-small-en-v1.5")
+        );
+        assert!(!sidecar.exists(), "legacy sidecar must be renamed aside");
+        let mut migrated = sidecar.clone().into_os_string();
+        migrated.push(".migrated");
+        assert!(PathBuf::from(migrated).exists());
+
+        // A sqlite row recorded after the import is never clobbered by it.
+        record_embedding_model(&storage, &dir, "legacy-b", "jina-embeddings-v2-base-code").await;
+        for i in 0..50 {
+            record_embedding_model(&storage, &dir, &format!("doc-{i}"), "bge-small-en-v1.5").await;
+        }
+        assert!(
+            !sidecar.exists(),
+            "recording models must never (re)write the JSON sidecar"
+        );
+        assert_eq!(
+            stored_embedding_model(&storage, &dir, "legacy-b")
+                .await
+                .as_deref(),
+            Some("jina-embeddings-v2-base-code")
+        );
+        assert_eq!(
+            stored_embedding_model(&storage, &dir, "doc-49")
+                .await
+                .as_deref(),
+            Some("bge-small-en-v1.5")
         );
     }
 

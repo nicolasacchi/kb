@@ -442,10 +442,13 @@ unusual.
 
 Not backed up, on purpose: `<state>/query-embed-cache.json` (a
 regenerable perf cache), `<state>/kb-daemon.pid`, the `exports/` dir
-itself, and `<state>/quarantine/` — including the per-kb
-`*.embedding-models.json` records there. Those records only note which
-embedding model produced a quarantined index; a restored kb re-derives
-its embedding state on its next reindex.
+itself, and `<state>/quarantine/`.
+
+The record of which embedding model produced each stored vector lives in
+the kb's sqlite database (`doc_embedding_model`, v0.44) and so IS part of
+the backup. Deployments upgraded from before v0.44 carry the same record
+in `<state>/quarantine.embedding-models.json` (beside the quarantine dir); the daemon imports it
+into sqlite once on first touch and renames the file to `*.migrated`.
 
 The copy is **best-effort**: it runs after the local tarball is already
 written, and a failed or unreachable remote (bad credentials, network

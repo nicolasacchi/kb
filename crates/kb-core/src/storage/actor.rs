@@ -14,18 +14,21 @@
 //! `compact_off_loop`), so maintenance never head-of-line-blocks search.
 //! Index builds are write-class commits. During that window an Ensure*Index
 //! whose index already exists is answered `Ok(())` without `create_index`
-//! (not parked, dirty flag left set). A missing index — or one whose presence
-//! cannot be known — is forwarded so `ensure_*_index` actually runs. Swallowing
-//! that first build leaves FTS with no index and no flat-scan fallback.
+//! (not parked). A missing index — or one whose presence cannot be known — is
+//! forwarded so `ensure_*_index` actually runs. Swallowing that first build
+//! leaves FTS with no index and no flat-scan fallback.
 //!
-//! That spawn is already the single permit for lance mutations inside
-//! this actor. `run` awaits `compact_off_loop`, and a second compact is
-//! parked (`defers_during_compact`) until the optimize returns, so two
-//! compact passes cannot overlap. Index builds either run on this same
-//! loop (awaited, so they cannot race a compact) or, when that index
-//! already exists, are no-op'd for the window. Ordinary reads are serviced
-//! inline and are not parked behind maintenance. No semaphore and no
-//! cross-process lock — a permit would only duplicate the await.
+//! That spawn is the single permit for lance COMPACTION inside this actor.
+//! `run` awaits `compact_off_loop`, and a second compact is parked
+//! (`defers_during_compact`) until the optimize returns, so two compact
+//! passes cannot overlap. It is NOT a permit for every lance commit: a
+//! forwarded missing-index build runs `create_index` on the actor loop while
+//! the spawned optimize is still in flight, so for that window the two lance
+//! commits DO run concurrently and rely on lance's optimistic-concurrency
+//! conflict handling. A commit conflict surfaces as a degraded search or a
+//! failed compaction (retried by the next periodic pass), never as
+//! corruption. Ordinary reads are serviced inline and are not parked behind
+//! maintenance. No semaphore and no cross-process lock.
 
 use crate::cascade::CascadeMode;
 use crate::ids::{ArtifactId, ErrorId, RunId, SourceSlug};
@@ -48,7 +51,7 @@ use futures::FutureExt;
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -783,6 +786,22 @@ pub enum StorageMsg {
     /// v0.33 X2 — bring-up bulk seed (one tx of INSERT OR IGNORE).
     FirstSeenSeed {
         rows: Vec<(String, i64)>,
+        reply: oneshot::Sender<Result<usize>>,
+    },
+    /// v0.44 I1 (A3-7) — producer model of an artifact's stored vector.
+    EmbeddingModelGet {
+        artifact_id: String,
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    /// Record (`Some`) or clear (`None`) the producer model.
+    EmbeddingModelSet {
+        artifact_id: String,
+        model: Option<String>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    /// One-shot import of the legacy JSON sidecar (existing rows win).
+    EmbeddingModelImport {
+        rows: Vec<(String, String)>,
         reply: oneshot::Sender<Result<usize>>,
     },
     /// v0.33 X2 — is `doc_first_seen` empty? (bring-up seed gate).
@@ -1548,6 +1567,7 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             | StorageMsg::ReadingRollupForIds { .. }
             | StorageMsg::FirstSeenForIds { .. }
             | StorageMsg::FirstSeenIsEmpty { .. }
+            | StorageMsg::EmbeddingModelGet { .. }
             | StorageMsg::ListEntryUserOverridesForList { .. }
             // Shares / corkboard / pins / memory-link READS.
             | StorageMsg::SharesList { .. }
@@ -1703,7 +1723,7 @@ pub struct StorageHandle {
     /// round-trip (kb-server's 10× re-compact backoff).
     last_compact: Arc<Mutex<Option<LastCompact>>>,
     /// Test-only peak concurrent compact passes. Absent in production:
-    /// the actor loop is already the single permit.
+    /// the actor loop already serialises compactions.
     #[cfg(test)]
     compact_overlap: Arc<CompactOverlap>,
 }
@@ -1756,8 +1776,9 @@ impl StorageHandle {
 /// mutation off the actor loop, and it is exclusive: `run` awaits it,
 /// a second compact is parked, and an Ensure*Index whose index already
 /// exists is no-op'd rather than sent to `create_index`. A missing index
-/// is forwarded. The await is the single permit — no
-/// semaphore, no cross-process lock. Reads stay inline and are not parked.
+/// is forwarded and so may run beside the optimize (module doc). The await
+/// is the compaction gate — no semaphore, no cross-process lock. Reads
+/// stay inline and are not parked.
 pub struct StorageActor {
     storage: Arc<Storage>,
     db: Db,
@@ -2029,8 +2050,9 @@ impl StorageActor {
     /// parked here — search awaits it per-request, so parking it would
     /// re-freeze search behind the compaction. An index that already exists
     /// is also not forwarded to `create_index` during the window:
-    /// `dispatch_compact_read` replies `Ok(())` and leaves the dirty flag
-    /// set. A missing index is forwarded so the first build is not swallowed.
+    /// `dispatch_compact_read` replies `Ok(())`. A missing index is forwarded
+    /// so the first build is not swallowed — and therefore runs concurrently
+    /// with the optimize (see the module doc).
     fn defers_during_compact(msg: &StorageMsg) -> bool {
         matches!(
             msg,
@@ -2052,32 +2074,23 @@ impl StorageActor {
     /// Read-lane arrival while compaction is in flight.
     ///
     /// `EnsureFtsIndex` / `EnsureVectorIndex` / `EnsureChunkVectorIndex`
-    /// no-op only when `index_exists` is `Some(true)`: reply `Ok(())`, return
-    /// `None` (not forwarded to `ensure_*_index` / `create_index`, not pushed
-    /// onto `pending`, `dirty` left unchanged). `Some(false)` (index missing)
-    /// and `None` (presence cannot be known) return the message so the caller
-    /// can `process` it and `ensure_*_index` actually runs. Every other
-    /// message is returned so the caller can `process` it inline.
+    /// no-op only when `index_exists` is `Some(true)`: reply `Ok(())` and
+    /// return `None` (not forwarded to `ensure_*_index` / `create_index`).
+    /// `Some(false)` (index missing) and `None` (presence cannot be known)
+    /// return the message so the caller can `process` it and
+    /// `ensure_*_index` actually runs. Every other message is returned so
+    /// the caller can `process` it inline.
     ///
-    /// `index_exists` is consulted only for those three variants. `dirty` is
-    /// the index dirty flag this path must not clear. Callers pass the flag
-    /// they need the assertion on; this function never stores into it.
-    fn dispatch_compact_read(
-        stamped: Stamped,
-        pending: &mut VecDeque<Stamped>,
-        dirty: &AtomicBool,
-        index_exists: Option<bool>,
-    ) -> Option<Stamped> {
+    /// `index_exists` is consulted only for those three variants. The
+    /// function parks nothing: its only effects are the `Ok(())` reply on
+    /// the existing-index arm and the returned message.
+    fn dispatch_compact_read(stamped: Stamped, index_exists: Option<bool>) -> Option<Stamped> {
         let is_index = matches!(
             stamped.msg,
             StorageMsg::EnsureFtsIndex { .. }
                 | StorageMsg::EnsureVectorIndex { .. }
                 | StorageMsg::EnsureChunkVectorIndex { .. }
         );
-        // Touch both so a no-op cannot be "fixed" into a pending push or a
-        // dirty clear. Neither arm writes them.
-        let _ = pending.len();
-        let _ = dirty.load(Ordering::Relaxed);
         if is_index && index_exists == Some(true) {
             // invariant: an index that already exists must not be rebuilt
             // (create_index) while compaction is committing.
@@ -2150,10 +2163,12 @@ impl StorageActor {
     /// missing one is forwarded to `ensure_*_index`, not parked. Genuine
     /// lance mutations are parked in `pending`
     /// (bounded by [`COMPACT_DEFER_CAP`]) and replayed FIFO by `run()` once
-    /// the optimize finishes — at no point do two lance mutations run
-    /// concurrently, so single-writer-per-kb (kb-core invariant #2) holds.
-    /// The await is that gate: there is no maintenance semaphore and no
-    /// cross-process lock. A second `CompactAll` /
+    /// the optimize finishes, so two COMPACTIONS (and a compaction beside a
+    /// parked write) never overlap. The one exception is a forwarded
+    /// missing-index build: `create_index` runs on the actor loop while the
+    /// optimize is in flight and relies on lance's commit-conflict handling.
+    /// The await is the compaction gate: there is no maintenance semaphore
+    /// and no cross-process lock. A second `CompactAll` /
     /// `CompactAllWithRetention` is in [`Self::defers_during_compact`], so
     /// it is parked rather than spawned beside the in-flight optimize.
     /// Reads are not in that set and are not parked.
@@ -2244,19 +2259,15 @@ impl StorageActor {
                     match r {
                         None => pull_read = false,
                         Some(stamped) => {
-                            // Existing index: reply Ok(()) and leave the dirty
-                            // flag set. Do not call ensure_*_index / create_index
-                            // and do not push onto pending. Missing index, or
-                            // presence unknown: forward so ensure_*_index runs.
+                            // Existing index: reply Ok(()). Do not call
+                            // ensure_*_index / create_index. Missing index, or
+                            // presence unknown: forward so ensure_*_index runs
+                            // (concurrently with the optimize; module doc).
                             let index_exists =
                                 Self::compact_index_presence(&self.storage, &stamped.msg).await;
-                            let dirty_must_stay_set = AtomicBool::new(true);
-                            if let Some(stamped) = Self::dispatch_compact_read(
-                                stamped,
-                                pending,
-                                &dirty_must_stay_set,
-                                index_exists,
-                            ) {
+                            if let Some(stamped) =
+                                Self::dispatch_compact_read(stamped, index_exists)
+                            {
                                 self.process(stamped).await;
                             }
                         }
@@ -3056,6 +3067,19 @@ impl StorageActor {
             }
             StorageMsg::FirstSeenSeed { rows, reply } => {
                 let _ = reply.send(self.db.first_seen_seed(&rows));
+            }
+            StorageMsg::EmbeddingModelGet { artifact_id, reply } => {
+                let _ = reply.send(self.db.embedding_model_get(&artifact_id));
+            }
+            StorageMsg::EmbeddingModelSet {
+                artifact_id,
+                model,
+                reply,
+            } => {
+                let _ = reply.send(self.db.embedding_model_set(&artifact_id, model.as_deref()));
+            }
+            StorageMsg::EmbeddingModelImport { rows, reply } => {
+                let _ = reply.send(self.db.embedding_model_import(&rows));
             }
             StorageMsg::FirstSeenIsEmpty { reply } => {
                 let _ = reply.send(self.db.first_seen_is_empty());
@@ -4820,6 +4844,32 @@ impl StorageHandle {
             .await
     }
 
+    /// v0.44 I1 (A3-7) — producer model of an artifact's stored vector.
+    pub async fn embedding_model_get(&self, artifact_id: String) -> Result<Option<String>> {
+        self.send_and_await(|reply| StorageMsg::EmbeddingModelGet { artifact_id, reply })
+            .await
+    }
+
+    /// v0.44 I1 (A3-7) — record (`Some`) or clear (`None`) the producer model.
+    pub async fn embedding_model_set(
+        &self,
+        artifact_id: String,
+        model: Option<String>,
+    ) -> Result<()> {
+        self.send_and_await(|reply| StorageMsg::EmbeddingModelSet {
+            artifact_id,
+            model,
+            reply,
+        })
+        .await
+    }
+
+    /// v0.44 I1 (A3-7) — import the legacy sidecar map; returns rows inserted.
+    pub async fn embedding_model_import(&self, rows: Vec<(String, String)>) -> Result<usize> {
+        self.send_and_await(|reply| StorageMsg::EmbeddingModelImport { rows, reply })
+            .await
+    }
+
     /// v0.33 X2 — empty-table gate for the bring-up seed.
     pub async fn first_seen_is_empty(&self) -> Result<bool> {
         self.send_and_await(|reply| StorageMsg::FirstSeenIsEmpty { reply })
@@ -6472,8 +6522,8 @@ mod tests {
     /// Two compact requests cannot overlap inside one actor, and a read
     /// is not parked behind that window.
     ///
-    /// The actor loop is already the single permit: `compact_off_loop` is
-    /// the only off-loop lance mutation, `run` awaits it, and a second
+    /// The actor loop already serialises compactions: `compact_off_loop` is
+    /// the only off-loop optimize, `run` awaits it, and a second
     /// `CompactAll` / `CompactAllWithRetention` is write-class and
     /// `defers_during_compact`, so it is parked in `pending` rather than
     /// spawned. There is no semaphore and no cross-process lock. Reads
@@ -6509,28 +6559,16 @@ mod tests {
             !StorageActor::defers_during_compact(&read),
             "reads must not be parked behind compact"
         );
-        let mut pending = VecDeque::new();
-        let dirty = AtomicBool::new(true);
         assert!(
             StorageActor::dispatch_compact_read(
                 Stamped {
                     enqueued: Instant::now(),
                     msg: read,
                 },
-                &mut pending,
-                &dirty,
                 None,
             )
             .is_some(),
             "a read is forwarded, not swallowed by the compact window"
-        );
-        assert!(
-            pending.is_empty(),
-            "a read must not be parked in pending during compact"
-        );
-        assert!(
-            dirty.load(Ordering::Relaxed),
-            "forwarding a read must not clear the index dirty flag"
         );
 
         let (h, _tmp) = handle().await;
@@ -6959,11 +6997,11 @@ mod tests {
     /// lance-02 — during an in-flight compact the three Ensure*Index arms
     /// (read-lane, asserted in `read_lane_classification_is_conservative`)
     /// no-op only when that index already exists: reply Ok(()), not forwarded,
-    /// not parked, dirty left set. A missing index (`Some(false)`) and an
+    /// not parked. A missing index (`Some(false)`) and an
     /// unknown presence (`None`) are forwarded so `ensure_*_index` runs, still
-    /// not parked, dirty left set, reply not sent yet. A full lance concurrent
-    /// race cannot observe the private `*_needs_build` bits from this file;
-    /// this classification/reply pin is the regression test.
+    /// not parked, reply not sent yet. The forwarded build then runs beside
+    /// the optimize (module doc), so this pin asserts classification and
+    /// reply only — it does not claim the two cannot race.
     // invariant: an index that already exists must not be rebuilt during compaction.
     #[test]
     fn ensure_index_during_compact_forwards_missing_keeps_existing_noop() {
@@ -6982,24 +7020,12 @@ mod tests {
                 !StorageActor::defers_during_compact(&msg),
                 "must not be classified for pending"
             );
-            let mut pending = VecDeque::new();
-            let dirty = AtomicBool::new(true);
             let forwarded = StorageActor::dispatch_compact_read(
                 Stamped {
                     enqueued: Instant::now(),
                     msg,
                 },
-                &mut pending,
-                &dirty,
                 index_exists,
-            );
-            assert!(
-                pending.is_empty(),
-                "index build must not be parked in pending during compact"
-            );
-            assert!(
-                dirty.load(Ordering::Relaxed),
-                "dirty flag must survive compact dispatch"
             );
             if expect_forward {
                 let stamped = forwarded
@@ -7056,28 +7082,16 @@ mod tests {
 
         // A non-index read is still forwarded (the no-op is not a catch-all).
         let (tx, _rx) = oneshot::channel();
-        let dirty = AtomicBool::new(true);
-        let mut pending = VecDeque::new();
         assert!(
             StorageActor::dispatch_compact_read(
                 Stamped {
                     enqueued: Instant::now(),
                     msg: StorageMsg::CountRows { reply: tx },
                 },
-                &mut pending,
-                &dirty,
                 Some(true),
             )
             .is_some(),
             "non-index reads are still serviced inline during compact"
-        );
-        assert!(
-            pending.is_empty(),
-            "a non-index read must not be parked during compact"
-        );
-        assert!(
-            dirty.load(Ordering::Relaxed),
-            "forwarding a read must not clear the index dirty flag"
         );
     }
 
