@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import type { ReporterDescription } from "@playwright/test";
 
 // V72-C3 — GitHub-hosted CI runners are load, not logic: with 282 specs
 // (chromium+firefox) on a shared hosted runner, one random `expect` a run
@@ -11,6 +12,18 @@ import { defineConfig, devices } from "@playwright/test";
 // resource contention, not a real bug — widening the budget and absorbing
 // one retry is honest here in a way it would not be if a spec recurred.
 const isCI = !!process.env.CI;
+
+// v0.44 F1 -- when KB_WITNESS_DIR is set (CI), ALSO write Playwright's JSON
+// report there. scripts/ci/witness.py decides the lane from that file
+// (unexpected == 0 and executed >= the ci/test-floors.toml floor), not from
+// the process exit code, which `| tee` and friends can fake. `list` stays so
+// the live log is unchanged; `github` turns a retried-then-passed spec into a
+// job-summary annotation (a retry must stay VISIBLE, never a silent green).
+const reporters: ReporterDescription[] = [["list"]];
+if (isCI) reporters.push(["github"]);
+if (process.env.KB_WITNESS_DIR) {
+  reporters.push(["json", { outputFile: `${process.env.KB_WITNESS_DIR}/pw-e2e.json` }]);
+}
 
 /**
  * Playwright config for kb's iframe + SSE smoke. The test boots the kb-server
@@ -34,7 +47,7 @@ export default defineConfig({
   // reports it as "flaky", not "passed"). Local runs get zero retries, so a
   // real local failure still fails loud on the first try.
   retries: isCI ? 1 : 0,
-  reporter: isCI ? [["list"], ["github"]] : [["list"]],
+  reporter: reporters,
   globalSetup: require.resolve("./global-setup.ts"),
   globalTeardown: require.resolve("./global-teardown.ts"),
   use: {

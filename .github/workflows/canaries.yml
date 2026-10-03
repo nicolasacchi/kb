@@ -1,0 +1,89 @@
+# Invariant canaries (v0.44 F1, review idea I3 "canaries"): prove that each
+# pinned invariant's tests actually FAIL when the invariant is broken.
+#
+# A counted `// invariant:N` marker above a test is not evidence that the test
+# can fail -- the adversarial review found deleting the /capture host_guard
+# route_layer failed nothing. Each ci/canaries/NN-*.sh is one small anchored
+# edit that breaks one invariant and names the test(s) that must then fail;
+# scripts/ci/run-canaries.sh applies it, runs ONLY those tests under nextest,
+# expects failure, and restores the tree. A canary whose tests still pass means
+# the pin is decorative and this run goes red.
+#
+# NON-BLOCKING for PRs by construction: schedule + workflow_dispatch, plus a
+# pull_request trigger scoped to the canary machinery's own paths (so a change
+# to a canary proves itself on the PR that makes it). It is not a required
+# check. Hosted runner only.
+name: canaries
+
+on:
+  schedule:
+    # 04:47 UTC daily -- off the hour, clear of bench-nightly (03:17) and
+    # ghcr-gc (Mon 04:17).
+    - cron: "47 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "ci/canaries/**"
+      - "scripts/ci/run-canaries.sh"
+      - ".github/workflows/canaries.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: "0"
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  canaries:
+    permissions:
+      contents: read
+    name: canaries (each invariant pin must fail when broken)
+    runs-on: ubuntu-latest
+    # A fork inherits `schedule`; do not burn its minutes.
+    if: github.repository == 'nicolasacchi/kb' || github.event_name == 'pull_request'
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Free disk space (drop preinstalled SDKs)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+                      /usr/local/share/boost || true
+          df -h /
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+
+      - name: Cache cargo + target (restore-only, the `workspace` family)
+        # The canaries build the same dev-profile test binaries workspace-test
+        # does, so they restore main's entry and never write one (ci.yml's
+        # CACHING note: one writer per family, and a nightly must not evict
+        # the PR path's entries).
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace
+          save-if: "false"
+
+      - name: Install protoc (lancedb transitive dep)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Every canary's anchor still matches exactly once
+        run: scripts/ci/run-canaries.sh --check-anchors
+
+      - name: Apply each canary, run its pins, expect them to FAIL
+        run: scripts/ci/run-canaries.sh

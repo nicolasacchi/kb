@@ -12,8 +12,9 @@ name: gates-binary
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+# Least privilege: nothing by default; every job below declares its own grants
+# (v0.44 F1, review A12.f7).
+permissions: {}
 
 defaults:
   run:
@@ -25,11 +26,13 @@ concurrency:
 
 jobs:
   gates-binary:
+    permissions:
+      contents: read
     name: gates-binary (kb-code-server + kb-code artifact)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free disk space (drop preinstalled SDKs)
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \

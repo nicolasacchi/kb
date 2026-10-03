@@ -2,6 +2,14 @@
 //! allowlist for write-CSRF defense + v0.4 bearer-token auth + per-token
 //! rate limit. Topic 11 §C, docs/self-host.md.
 
+// v0.44 F1 (P2/K2 carry-over): no swallowed `Result` in a security-posture
+// module -- a failed check must be a named outcome, never a silent
+// fall-through. Test code is exempt (a `let _ = app.oneshot(..)` there is
+// fixture plumbing); `cfg_attr(not(test), ..)` keeps `--all-targets` clippy
+// from judging it. scripts/check-posture-swallow.sh ratchets the `.ok()` /
+// `unwrap_or(` forms this lint cannot see.
+#![cfg_attr(not(test), deny(clippy::let_underscore_must_use))]
+
 use crate::state::{AuthConfig, OriginConfig};
 use axum::{
     body::Body,
@@ -1206,7 +1214,7 @@ pub async fn rate_limit(
 }
 
 /// Derive the rate-limit bucket key for a non-loopback request.
-fn rate_limit_key(req: &Request<Body>, trusted_proxies: &[IpAddr]) -> String {
+fn rate_limit_key(req: &Request<Body>, _trusted_proxies: &[IpAddr]) -> String {
     // Prefer the identity auth_bearer already resolved (layer order:
     // auth_bearer is outer of rate_limit on the /api tree).
     if let Some(id) = req.extensions().get::<Identity>() {
@@ -1214,7 +1222,6 @@ fn rate_limit_key(req: &Request<Body>, trusted_proxies: &[IpAddr]) -> String {
     }
     // Fallback: no Identity extension (shouldn't happen on /api). Use
     // token-hash / no-token — same as pre-Y single-user behaviour.
-    let _ = trusted_proxies;
     req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())

@@ -51,6 +51,14 @@
 //! posture the design brief names, and the sibling daemons should not
 //! disagree on the spelling of "you were refused for a security reason".
 
+// v0.44 F1 (P2/K2 carry-over): no swallowed `Result` in a security-posture
+// module -- a failed check must be a named outcome, never a silent
+// fall-through. Test code is exempt; `cfg_attr(not(test), ..)` keeps
+// `--all-targets` clippy from judging fixture plumbing.
+// scripts/check-posture-swallow.sh ratchets the `.ok()` / `unwrap_or(` forms
+// this lint cannot see.
+#![cfg_attr(not(test), deny(clippy::let_underscore_must_use))]
+
 pub mod audit;
 pub mod origin;
 pub mod paths;

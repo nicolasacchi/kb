@@ -34,8 +34,9 @@ env:
   # here). No CARGO_PROFILE_DEV_DEBUG override — an env value would
   # silently win over any future Cargo.toml change.
 
-permissions:
-  contents: read
+# Least privilege: nothing by default; every job below declares its own grants
+# (v0.44 F1, review A12.f7).
+permissions: {}
 
 # RUNNERS — all jobs run on GitHub-hosted runners. Every job below is an
 # `ubuntu-latest` (4 vCPU / 16 GB / ~14 GB free disk; free and unlimited on a
@@ -118,6 +119,8 @@ defaults:
 
 jobs:
   workspace-lint:
+    permissions:
+      contents: read
     name: workspace-lint (fmt + clippy)
     runs-on: ubuntu-latest
     # SPLIT out of the old `workspace` job (2026-09-06), which ran fmt +
@@ -130,7 +133,7 @@ jobs:
     # with that recipe.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
         # A hosted runner starts with only ~14 GB free on /, and the
@@ -213,6 +216,8 @@ jobs:
         run: scripts/check-invariants.sh
 
   workspace-test:
+    permissions:
+      contents: read
     name: workspace-test (nextest + doctests + API route table)
     runs-on: ubuntu-latest
     # 120 dated from the SERIAL (--test-threads=1) era (outgrew 90 on
@@ -234,7 +239,7 @@ jobs:
       KB_TEST_INDEX_TIMEOUT_SECS: "120"
       KB_TEST_HTTP_TIMEOUT_SECS: "120"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
         # Same reclaim as the `workspace-lint` job — see its comment.
@@ -286,6 +291,18 @@ jobs:
         # live there).
         run: cargo nextest run --locked --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
 
+      - name: nextest overrides each match at least one test
+        # v0.44 F1 (I3): PF-C1 renamed the binaries and the `lance-heavy`
+        # override's filter matched NOTHING for a while -- silently, because a
+        # filter that matches nothing is not an error. Asks nextest itself.
+        run: python3 scripts/ci/nextest-overrides-check.py -- --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
+
+      - name: Witness (nextest junit -> floor + zero failures)
+        # v0.44 F1 -- decide the lane from nextest's own junit report
+        # (.config/nextest.toml [profile.ci.junit]), not from its exit code.
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/witness.py nextest-junit target/nextest/ci/junit.xml --lane nextest
+
       - name: cargo test --doc
         # nextest does not run doctests; the serial sweep it replaced did.
         # This keeps the flipped required job a coverage SUPERSET of the
@@ -310,6 +327,8 @@ jobs:
         run: just api-docs-check
 
   drift:
+    permissions:
+      contents: read
     name: drift (TS wire bindings)
     # PF-C1 — split out of `workspace`: `just types` recompiles kb-core +
     # kb-server under a SECOND feature flavor (--features ts-export), which
@@ -336,7 +355,7 @@ jobs:
     # family has an entry of its own; 90 keeps room for the cold case.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
         # Same reclaim as the `workspace-lint` job — see its comment.
@@ -377,6 +396,8 @@ jobs:
         run: just types-check
 
   code-drift:
+    permissions:
+      contents: read
     name: code-drift (kb-code TS wire bindings)
     # V76-R4a — own job, never a step on `drift` (the kb SPA generator).
     # `--features ts-export` on kb-code-server is a third flavor on top of
@@ -387,7 +408,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -396,16 +417,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: scripts/ci/code-changed.sh
 
       - name: Free disk space (drop preinstalled SDKs)
         if: steps.changes.outputs.run == 'true'
@@ -443,9 +455,14 @@ jobs:
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
-        run: echo "No changes under crates/kb-code-*/, crates/kb-core/, crates/kb-server/, crates/kb-lip/, plugins/kb-code/, web-code/, web/, Cargo.toml, Cargo.lock, or justfile — skipping."
+        run: scripts/ci/code-changed.sh --skip-message
 
   e2e:
+    permissions:
+      contents: read
+      # actions: read -> `gh run download` of the previous main run's witness
+      # report (flaky-twice detection, scripts/ci/witness.py --prev).
+      actions: read
     name: e2e (Playwright iframe smoke)
     # No `needs:` — hosted runners have no slot contention, so every job in
     # this file starts at T0 and a red `workspace-test` never delays this
@@ -457,7 +474,7 @@ jobs:
     # build, the SPA bundle, and two browser downloads before a spec runs.
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history + tags, because this job's binaries carry a VERSION
           # STAMP and the default shallow fetch silently corrupts it.
@@ -552,19 +569,14 @@ jobs:
         # (9d9f6234) and the whole script died with a SyntaxError. The e2e
         # spec annotator-bundle-isolation.spec.ts proves the behaviour; this
         # is the cheap structural pre-check that fails in seconds: the bundle
-        # must be a single IIFE, with no import/export statements.
+        # must be a single IIFE statement, with no import/export statements
+        # (scripts/ci/check-annotate-bundle.cjs PARSES it and walks every
+        # top-level statement -- the earlier regex looked only at the start, so
+        # `(function(){})();var x=1;` passed -- and self-tests that case).
         working-directory: web
         run: |
-          node -e '
-          const src = require("fs").readFileSync("dist/annotate.js", "utf8");
-          const body = src.replace(/^(\s|["\x27]use strict["\x27];?|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)+/, "");
-          const fail = (m) => { console.error("::error::annotate.js " + m); process.exit(1); };
-          if (!/^[(!]\s*(function\b|\(?\s*\)?\s*=>|async\b)/.test(body) && !/^\(\s*\(\s*\)\s*=>/.test(body))
-            fail("does not start with an IIFE; top-level declarations would leak into the host page. Starts with: " + JSON.stringify(body.slice(0, 60)));
-          if (/(^|[;}\n])\s*(import|export)\s*[\w{*"\x27]/.test(body)) fail("contains an import/export statement; it is injected as a classic script");
-          if (/\bimport\.meta\b/.test(body)) fail("uses import.meta; it is injected as a classic script");
-          console.log("annotate.js: IIFE-wrapped, no module syntax (" + src.length + " chars)");
-          '
+          node ../scripts/ci/check-annotate-bundle.cjs --self-test
+          node ../scripts/ci/check-annotate-bundle.cjs dist/annotate.js
 
       - name: Install Playwright deps
         working-directory: tests/e2e
@@ -612,8 +624,58 @@ jobs:
         # covers every step; the explicit `set -o pipefail` below is kept as a
         # belt-and-braces line so this step stays correct if that default is
         # ever removed.
+        #
+        # v0.44 F1 -- KB_WITNESS_DIR makes playwright.config.ts ALSO write its
+        # JSON report; the `Witness` step below decides the lane from THAT
+        # (unexpected == 0 and executed >= ci/test-floors.toml), so this
+        # step's exit status is no longer the only evidence.
+        env:
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
         working-directory: tests/e2e
-        run: set -o pipefail; npx playwright test 2>&1 | tee playwright-output.log
+        run: |
+          mkdir -p "$KB_WITNESS_DIR"
+          set -o pipefail; npx playwright test 2>&1 | tee playwright-output.log
+
+      - name: Previous main e2e report (flaky-twice check input)
+        # A12.f5 -- the same spec flaky on main twice in a row is a defect,
+        # not hosted-runner load (which loses a DIFFERENT spec each run).
+        # Only on a push to main: PRs are not failed for a flake main already
+        # carried. Absence of a previous report (first run after this landed,
+        # expired artifact) is tolerated and printed, never silent.
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          id="$(gh run list --branch main --workflow ci.yml --status success --event push -L 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -n "$id" ] && gh run download "$id" -n witness-e2e -D "$RUNNER_TEMP/prev"; then
+            echo "previous main report: run $id"
+          else
+            echo "no previous main e2e witness report available (run '$id'); flaky-twice check skipped"
+          fi
+
+      - name: Witness (Playwright JSON report -> floor + zero failures)
+        # Decides the lane from the REPORT: unexpected == 0 and executed >=
+        # the `e2e` floor in ci/test-floors.toml. `!cancelled()` so it also
+        # reports the count when the run step above already failed.
+        if: ${{ !cancelled() }}
+        env:
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
+        run: |
+          prev=()
+          if [ "${{ github.event_name }}" = push ] && [ -f "$RUNNER_TEMP/prev/pw-e2e.json" ]; then
+            prev=(--prev "$RUNNER_TEMP/prev/pw-e2e.json" --fail-repeat-flaky)
+          fi
+          python3 scripts/ci/witness.py playwright "$KB_WITNESS_DIR/pw-e2e.json" --lane e2e "${prev[@]}"
+
+      - name: Upload witness report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: witness-e2e
+          path: ${{ runner.temp }}/witness
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Flaky spec summary
         # V72-C3 — the CI-only retry (playwright.config.ts: `retries: 1`,
@@ -646,6 +708,8 @@ jobs:
           fi
 
   embedder-lint:
+    permissions:
+      contents: read
     name: embedder-lint (ORT surface — clippy)
     runs-on: ubuntu-latest
     # SPLIT out of the old `embedder` job (2026-09-06): clippy over the two
@@ -657,7 +721,7 @@ jobs:
     # No `needs:` — hosted runners are parallel and free; serializing only
     # delays the answer.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
         # Same reclaim as the `workspace-lint` job — see its comment.
@@ -707,6 +771,8 @@ jobs:
           cargo clippy --locked -p kb-core --features local-embedder --all-targets -- -D warnings
 
   embedder-test:
+    permissions:
+      contents: read
     name: embedder-test (ORT surface — tests)
     runs-on: ubuntu-latest
     # This leg compiles kb-core TWICE (plain, then with `local-embedder`)
@@ -718,7 +784,7 @@ jobs:
     # runner slot for the slow ORT build. Hosted runners are parallel and
     # free; serializing only delays the answer.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
         # Same reclaim as the `workspace-lint` job — see its comment.
@@ -764,6 +830,8 @@ jobs:
           cargo test --locked -p kb-core --features local-embedder --no-fail-fast
 
   code-lint:
+    permissions:
+      contents: read
     name: code-lint (kb-code + kb-lip clippy)
     # kb-code is a separate sibling daemon+SPA pair inside this workspace
     # (design v4, "The read-first IDE" — research kb corpus); kb-lip
@@ -774,13 +842,15 @@ jobs:
     # Paths-filtered: only actually builds when kb-code's own crates, kb-lip,
     # its SPA, or something that could affect any crate's resolution/build
     # shape (root Cargo.toml, Cargo.lock, the justfile), changed. The filter
-    # is inline `git diff` (no third-party paths-filter action to pin/trust —
-    # same reasoning as dco.yml) and gates each step via `if:`, not a
+    # is `scripts/ci/code-changed.sh` (no third-party paths-filter action to
+    # pin/trust — same reasoning as dco.yml; v0.44 F1 moved it out of five
+    # pasted inline copies whose skip messages had already drifted, and made
+    # it SIGPIPE-proof — see the script header) and gates each step via `if:`, not a
     # job-level `if:`, so the job itself always reports success/failure (safe
     # to mark as a required check; a job-level skip can leave a required
     # check permanently pending). All FIVE `code-*` jobs (code-drift,
-    # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
-    # for byte. Each entry is there because a job below actually reads that
+    # code-lint, code-test, code-spa, code-e2e) call the SAME script
+    # (`just ci-selfcheck` asserts it). Each entry is there because a job below actually reads that
     # path, not because the crate sounds related:
     #   crates/kb-core/, crates/kb-server/ — kb-code-server path-depends on
     #     both, so a change to either can break the only jobs that compile
@@ -815,7 +885,7 @@ jobs:
     # in lock-step (the sibling `code-test` job runs its second).
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the BASE_SHA..HEAD_SHA diff below is reachable
           # (actions/checkout's default shallow fetch only guarantees HEAD).
@@ -826,19 +896,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            # No usable base (e.g. first push to a new branch, or the
-            # all-zero SHA on a branch's first push) — run rather than
-            # silently skip.
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: scripts/ci/code-changed.sh
 
       - name: Free disk space (drop preinstalled SDKs)
         if: steps.changes.outputs.run == 'true'
@@ -880,9 +938,11 @@ jobs:
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
-        run: echo "No changes under crates/kb-code-*/, crates/kb-core/, crates/kb-server/, crates/kb-lip/, plugins/kb-code/, web-code/, web/, Cargo.toml, Cargo.lock, or justfile — skipping."
+        run: scripts/ci/code-changed.sh --skip-message
 
   code-test:
+    permissions:
+      contents: read
     name: code-test (kb-code + kb-lip tests)
     # kb-code is a separate sibling daemon+SPA pair inside this workspace
     # (design v4, "The read-first IDE" — research kb corpus); kb-lip
@@ -893,13 +953,15 @@ jobs:
     # Paths-filtered: only actually builds when kb-code's own crates, kb-lip,
     # its SPA, or something that could affect any crate's resolution/build
     # shape (root Cargo.toml, Cargo.lock, the justfile), changed. The filter
-    # is inline `git diff` (no third-party paths-filter action to pin/trust —
-    # same reasoning as dco.yml) and gates each step via `if:`, not a
+    # is `scripts/ci/code-changed.sh` (no third-party paths-filter action to
+    # pin/trust — same reasoning as dco.yml; v0.44 F1 moved it out of five
+    # pasted inline copies whose skip messages had already drifted, and made
+    # it SIGPIPE-proof — see the script header) and gates each step via `if:`, not a
     # job-level `if:`, so the job itself always reports success/failure (safe
     # to mark as a required check; a job-level skip can leave a required
     # check permanently pending). All FIVE `code-*` jobs (code-drift,
-    # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
-    # for byte. Each entry is there because a job below actually reads that
+    # code-lint, code-test, code-spa, code-e2e) call the SAME script
+    # (`just ci-selfcheck` asserts it). Each entry is there because a job below actually reads that
     # path, not because the crate sounds related:
     #   crates/kb-core/, crates/kb-server/ — kb-code-server path-depends on
     #     both, so a change to either can break the only jobs that compile
@@ -943,7 +1005,7 @@ jobs:
     # unratified conflict).
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the BASE_SHA..HEAD_SHA diff below is reachable
           # (actions/checkout's default shallow fetch only guarantees HEAD).
@@ -954,19 +1016,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            # No usable base (e.g. first push to a new branch, or the
-            # all-zero SHA on a branch's first push) — run rather than
-            # silently skip.
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: scripts/ci/code-changed.sh
 
       - name: Free disk space (drop preinstalled SDKs)
         if: steps.changes.outputs.run == 'true'
@@ -1004,9 +1054,11 @@ jobs:
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
-        run: echo "No changes under crates/kb-code-*/, crates/kb-core/, crates/kb-server/, crates/kb-lip/, plugins/kb-code/, web-code/, web/, Cargo.toml, Cargo.lock, or justfile — skipping."
+        run: scripts/ci/code-changed.sh --skip-message
 
   code-spa:
+    permissions:
+      contents: read
     name: code-spa (web-code build + theme lint + vitest)
     # kb-code is a separate sibling daemon+SPA pair inside this workspace
     # (design v4, "The read-first IDE" — research kb corpus); kb-lip
@@ -1017,13 +1069,15 @@ jobs:
     # Paths-filtered: only actually builds when kb-code's own crates, kb-lip,
     # its SPA, or something that could affect any crate's resolution/build
     # shape (root Cargo.toml, Cargo.lock, the justfile), changed. The filter
-    # is inline `git diff` (no third-party paths-filter action to pin/trust —
-    # same reasoning as dco.yml) and gates each step via `if:`, not a
+    # is `scripts/ci/code-changed.sh` (no third-party paths-filter action to
+    # pin/trust — same reasoning as dco.yml; v0.44 F1 moved it out of five
+    # pasted inline copies whose skip messages had already drifted, and made
+    # it SIGPIPE-proof — see the script header) and gates each step via `if:`, not a
     # job-level `if:`, so the job itself always reports success/failure (safe
     # to mark as a required check; a job-level skip can leave a required
     # check permanently pending). All FIVE `code-*` jobs (code-drift,
-    # code-lint, code-test, code-spa, code-e2e) carry the SAME filter, byte
-    # for byte. Each entry is there because a job below actually reads that
+    # code-lint, code-test, code-spa, code-e2e) call the SAME script
+    # (`just ci-selfcheck` asserts it). Each entry is there because a job below actually reads that
     # path, not because the crate sounds related:
     #   crates/kb-core/, crates/kb-server/ — kb-code-server path-depends on
     #     both, so a change to either can break the only jobs that compile
@@ -1057,7 +1111,7 @@ jobs:
     # protoc, no rust-cache and (nothing compiles here) no free-disk step.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the BASE_SHA..HEAD_SHA diff below is reachable
           # (actions/checkout's default shallow fetch only guarantees HEAD).
@@ -1068,19 +1122,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            # No usable base (e.g. first push to a new branch, or the
-            # all-zero SHA on a branch's first push) — run rather than
-            # silently skip.
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: scripts/ci/code-changed.sh
 
       - name: Setup Node.js
         if: steps.changes.outputs.run == 'true'
@@ -1094,7 +1136,16 @@ jobs:
 
       - name: just ci-code-spa
         if: steps.changes.outputs.run == 'true'
+        # KB_WITNESS_DIR -> web-code/vitest.config.ts adds the JSON reporter.
+        env:
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
         run: just ci-code-spa
+
+      - name: Witness (vitest JSON report -> floor + zero failures)
+        # `--only-if` is this lane's own path-filter output: a legitimately
+        # skipped lane is "skipped", not "0 of N tests".
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/witness.py vitest "$RUNNER_TEMP/witness/vitest-web-code.json" --lane web-code-vitest --only-if "${{ steps.changes.outputs.run }}"
 
       - name: Audit web-code production deps (high+ severity)
         if: steps.changes.outputs.run == 'true'
@@ -1117,9 +1168,14 @@ jobs:
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
-        run: echo "No changes under crates/kb-code-*/, crates/kb-core/, crates/kb-server/, crates/kb-lip/, plugins/kb-code/, web-code/, web/, Cargo.toml, Cargo.lock, or justfile — skipping."
+        run: scripts/ci/code-changed.sh --skip-message
 
   code-e2e:
+    permissions:
+      contents: read
+      # actions: read -> `gh run download` of the previous main run's witness
+      # report (flaky-twice detection, scripts/ci/witness.py --prev).
+      actions: read
     name: code-e2e (kb-code Search-Everywhere Playwright smoke)
     # Runs `just ci-code-e2e` (a fast-profile kb-code-server build + web-code/e2e/'s
     # own Playwright suite, driven against a fresh git fixture repo) — mirrors
@@ -1139,7 +1195,7 @@ jobs:
     # the measured 20.1 to ~11.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the BASE_SHA..HEAD_SHA diff below is reachable
           # (actions/checkout's default shallow fetch only guarantees HEAD).
@@ -1150,19 +1206,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA:-}" ] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            # No usable base (e.g. first push to a new branch, or the
-            # all-zero SHA on a branch's first push) — run rather than
-            # silently skip.
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
-               | grep -qE '^(crates/kb-(code-(server|cli)|core|server)/|crates/kb-lip/|plugins/kb-code/|web-code/|web/|scripts/review-store/|Cargo\.toml$|Cargo\.lock$|justfile$|rust-toolchain\.toml$|\.github/(workflows/ci\.yml|actions/setup-rust/action\.yml)$)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: scripts/ci/code-changed.sh
 
       - name: Free disk space (drop preinstalled SDKs)
         if: steps.changes.outputs.run == 'true'
@@ -1238,15 +1282,52 @@ jobs:
           # re-downloads its missing browser every run.
           key: playwright-code-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
+      - name: Previous main code-e2e report (flaky-twice check input)
+        # Same contract as the root `e2e` job's step of the same name.
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.changes.outputs.run == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          id="$(gh run list --branch main --workflow ci.yml --status success --event push -L 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -n "$id" ] && gh run download "$id" -n witness-code-e2e -D "$RUNNER_TEMP/prev"; then
+            echo "previous main report: run $id"
+          else
+            echo "no previous main code-e2e witness report available (run '$id'); flaky-twice check skipped"
+          fi
+
       - name: just ci-code-e2e
         if: steps.changes.outputs.run == 'true'
+        # KB_WITNESS_DIR -> web-code/e2e/playwright.config.ts adds the JSON reporter.
+        env:
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
         run: just ci-code-e2e
+
+      - name: Witness (Playwright JSON report -> floor + zero failures)
+        if: ${{ !cancelled() }}
+        run: |
+          prev=()
+          if [ "${{ github.event_name }}" = push ] && [ -f "$RUNNER_TEMP/prev/pw-code-e2e.json" ]; then
+            prev=(--prev "$RUNNER_TEMP/prev/pw-code-e2e.json" --fail-repeat-flaky)
+          fi
+          python3 scripts/ci/witness.py playwright "$RUNNER_TEMP/witness/pw-code-e2e.json" --lane code-e2e --only-if "${{ steps.changes.outputs.run }}" "${prev[@]}"
+
+      - name: Upload witness report
+        if: ${{ !cancelled() && steps.changes.outputs.run == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: witness-code-e2e
+          path: ${{ runner.temp }}/witness
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Skipped (no kb-code-relevant changes)
         if: steps.changes.outputs.run != 'true'
-        run: echo "No changes under crates/kb-code-*/, crates/kb-core/, crates/kb-server/, crates/kb-lip/, plugins/kb-code/, web-code/, web/, Cargo.toml, Cargo.lock, or justfile — skipping."
+        run: scripts/ci/code-changed.sh --skip-message
 
   web-unit:
+    permissions:
+      contents: read
     name: web (vitest + typecheck)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1254,7 +1335,7 @@ jobs:
     # give fast independent feedback on the SPA's logic (config deep-merge,
     # lib/ derivations, sort/group helpers). The e2e job covers the bundle.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1277,10 +1358,19 @@ jobs:
         run: npm run typecheck
 
       - name: Unit tests (vitest, TZ-pinned)
+        # KB_WITNESS_DIR -> web/vitest.config.ts adds the JSON reporter.
+        env:
+          KB_WITNESS_DIR: ${{ runner.temp }}/witness
         working-directory: web
         run: npm test
 
+      - name: Witness (vitest JSON report -> floor + zero failures)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/witness.py vitest "$RUNNER_TEMP/witness/vitest-web.json" --lane web-vitest
+
   supply-chain:
+    permissions:
+      contents: read
     name: supply-chain (cargo-deny — licenses + advisories)
     runs-on: ubuntu-latest
     # 30, not 20: no compile happens here, but a cold hosted runner still
@@ -1303,7 +1393,7 @@ jobs:
     # check in branch protection and renaming it would silently drop the
     # protection rule; the steps below it are the authority on what runs.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Install the prebuilt cargo-deny binary directly
       # (taiki-e/install-action fetches a release binary) instead of the
       # Docker-based cargo-deny-action — one less container image to pull
@@ -1432,6 +1522,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: just toolchain-pin-check
 
+      - name: CI cannot pass without running (just ci-selfcheck)
+        # v0.44 F1: every workflow defaults to a pipefail shell and scopes its
+        # permissions, the five code-* jobs share ONE path filter that cannot
+        # SIGPIPE into "skip", witness lanes have floors, checkout pins agree,
+        # deny.toml exceptions have not expired -- and the gates' own
+        # self-tests (witness, anchors, public-gate, pinned-by) pass.
+        if: ${{ !cancelled() }}
+        run: just ci-selfcheck
+
   # REQUIRED-CHECK AGGREGATOR (A12.f3). Branch protection should require THIS
   # job name only: per-job names (some of them path-filtered, some renamed
   # over time) cannot silently drop out of the protection rule if the gate is
@@ -1441,6 +1540,8 @@ jobs:
   # new job of this file to `needs` — the `jobs-covered` step below fails if
   # one is missing, so the list cannot rot quietly.
   ci-gate:
+    permissions:
+      contents: read
     name: ci-gate (required check)
     if: always()
     needs:
@@ -1460,7 +1561,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: every job of ci.yml is in needs
         run: |
           declared="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{sub(/:$/,"",$1);print $1}' .github/workflows/ci.yml | grep -vx ci-gate | sort)"

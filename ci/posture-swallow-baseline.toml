@@ -1,0 +1,17 @@
+# Baseline for scripts/check-posture-swallow.py: the number of `.ok()` /
+# `unwrap_or(` / `unwrap_or_default()` forms in the NON-TEST part of each
+# security-posture module (v0.44 F1). The count may only go DOWN. A module
+# that needs a new one raises its number in a PR that says why the swallowed
+# error is safe; a refactor that removes one lowers it here so the ratchet
+# stays tight. Measured at the commit that introduced the file.
+[files]
+"crates/kb-server/src/middleware.rs" = 17
+"crates/kb-code-server/src/security/mod.rs" = 0
+"crates/kb-code-server/src/security/audit.rs" = 5
+"crates/kb-code-server/src/security/origin.rs" = 4
+"crates/kb-code-server/src/security/paths.rs" = 0
+"crates/kb-code-server/src/security/secrets.rs" = 2
+"crates/kb-code-server/src/github.rs" = 15
+"crates/kb-code-server/src/review_gate.rs" = 0
+"crates/kb-code-server/src/review_store/cred.rs" = 5
+"crates/kb-code-server/src/review_store/registry.rs" = 11

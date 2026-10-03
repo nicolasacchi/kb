@@ -57,13 +57,13 @@ else comes from the daemon over HTTP + SSE.
 | `DaemonsManager` | Settings UI to add/remove daemon URLs; pings `/api/identity` before adding. | (reads/writes localStorage) |
 | `icons.tsx` | `Icon` — a record of ~28 SVG icon components `(SVGProps) => JSX`. | — |
 
-`CommentsPanelProps` (`components/CommentsPanel.tsx:13`):
+`CommentsPanelProps` (`components/CommentsPanel.tsx:96`):
 `kb`, `artifactId`, `file: ReviewFile`, `loading`, `error`,
 `staleCommentIds: Set<string>`, `onSave(next) → Promise<"saved"|"merged">`,
 `onRequestFlash(id)`, `onHoverComment(id|null)`, `activeCommentId`,
 `annotateMode`, `onToggleAnnotate`.
 
-`AnnotatorBridgeProps` (`components/AnnotatorBridge.tsx:16`):
+`AnnotatorBridgeProps` (`components/AnnotatorBridge.tsx:59`):
 `iframeRef`, `artifactId`, `hostSuffix`, `fileLabel`,
 `onAddComment(next, appended) → Promise<"saved"|"merged"|"error">`,
 `file: ReviewFile | null`, `annotateMode`, `onFocusComment(id)`.
