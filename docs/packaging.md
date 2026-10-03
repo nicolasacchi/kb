@@ -78,9 +78,13 @@ which builds and publishes **both halves** from one workflow:
 the aarch64 leg runs on a **native** `ubuntu-24.04-arm` GitHub-hosted
 runner, not a cross-compile, which sidesteps the usual cross-linking risk
 for `kb-embedder`'s statically-bundled ONNX Runtime. Neither tarball
-bundles its SPA (both daemons resolve `KB_SPA_DIST`/`KB_CODE_SPA_DIST`
-from disk at boot); the container images bake both SPAs in — that's the
-difference between the two channels. Versioning stays git-tag-derived
+carries its web reader under `share/` (`share/kb/web/dist` +
+`share/kb/sample-corpus`, `share/kb-code/web-code/dist`), the layout the
+container images use. Both daemons resolve it relative to their own
+executable (`<prefix>/bin/kb` beside `<prefix>/share/kb/web/dist`) when
+`KB_SPA_DIST`/`KB_CODE_SPA_DIST` is unset and there is no `./web/dist`;
+`install.sh` copies `share/` to `$PREFIX/share`. The images bake the SPAs in
+and additionally the embedding model. Versioning stays git-tag-derived
 (the workspace pins `version = "0.0.0"`; `VERSION="${GITHUB_REF_NAME#v}"`
 in the workflow, matching the `KB_GIT_DESCRIBE` build stamp — see
 `routes/identity.rs`), so there is no crate-version bump to keep in sync
@@ -102,6 +106,29 @@ per release.
    `dist` upgrade. The hand-rolled file mirrors `ci.yml`'s pins and
    otherwise uses the preinstalled `gh`/`docker` CLIs, so there are no
    extra actions to pin at all.
+
+## Verifying a release
+
+Every release tarball and both container images carry a SLSA build-provenance
+attestation produced by the release workflow
+(`actions/attest-build-provenance`), signed through GitHub's OIDC identity. A
+`.sha256` sidecar proves integrity only; the attestation proves the artifact
+was built by this repository's release workflow.
+
+```bash
+# a tarball (needs gh, signed in)
+gh attestation verify kb-<ver>-x86_64-unknown-linux-gnu.tar.gz -R nicolasacchi/kb
+
+# an image
+gh attestation verify oci://ghcr.io/nicolasacchi/kb:<ver> -R nicolasacchi/kb
+gh attestation verify oci://ghcr.io/nicolasacchi/kb-code:<ver> -R nicolasacchi/kb
+```
+
+`scripts/install.sh` runs the tarball check itself when `gh` is on `PATH` and
+signed in, and **fails closed**: a missing `.sha256` sidecar, a missing sha256
+tool, or a failed attestation aborts the install. `KB_INSECURE_SKIP_VERIFY=1`
+is the explicit override. Releases published before v0.44 carry no
+attestation; pin one with `KB_VERSION=` only together with the override.
 
 See [packaging/README.md](../packaging/README.md) for the full asset
 list, the release checklist, and the outstanding

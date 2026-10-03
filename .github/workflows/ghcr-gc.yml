@@ -8,8 +8,17 @@
 # artifacts nothing but a manual `docker pull ghcr.io/…:main-<sha12>`
 # during a redeploy ever reads.
 #
+# v0.44 F2: the previous implementation (actions/delete-package-versions with
+# an `ignore-versions` regex) logged "Total versions deleted till now: 7" on
+# 2026-09-14 and the v0.43 release tags (`0.43`, `latest`) were gone from ghcr
+# afterwards; the regex guard did not protect them. Selection is now ours and
+# is pinned by scripts/ci/ghcr-gc-selftest.sh: a version is deletable ONLY if
+# it has tags and EVERY tag is `main-*`. A version carrying a semver tag,
+# `latest`, or any other tag beside a main-* tag is never selected. Untagged
+# versions (multi-arch child manifests) are never selected either.
+#
 # Runs on GitHub-hosted ubuntu-latest, like every other workflow here: pure
-# ghcr.io/GitHub-API traffic, no repo checkout, no compute.
+# ghcr.io/GitHub-API traffic. The checkout is only for scripts/ghcr-gc.sh.
 name: ghcr-gc
 
 on:
@@ -17,7 +26,19 @@ on:
     # Weekly, off-peak — well clear of bench-nightly's 03:17 UTC and any
     # build-image run a main push might have queued.
     - cron: "17 4 * * 1"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted and delete nothing (default true; scheduled runs delete)"
+        type: boolean
+        default: true
+  # The selection rule is proven on a fixture whenever it (or this file) changes.
+  pull_request:
+    paths:
+      - ".github/workflows/ghcr-gc.yml"
+      - "scripts/ghcr-gc.sh"
+      - "scripts/ci/ghcr-gc-selftest.sh"
+      - "scripts/ci/channels-exist.sh"
 
 # Least privilege: nothing by default; every job below declares its own grants
 # (v0.44 F1, review A12.f7).
@@ -32,8 +53,24 @@ defaults:
     shell: bash
 
 jobs:
-  gc:
+  selftest:
+    name: gc selection selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prove release/latest/mixed/untagged versions are never selected
+        run: bash scripts/ci/ghcr-gc-selftest.sh
+      - name: Syntax-check the channel probe
+        run: bash -n scripts/ci/channels-exist.sh
+
+  gc:
+    if: github.event_name != 'pull_request'
+    needs: selftest
+    permissions:
+      contents: read
       packages: write
     name: gc (${{ matrix.package }})
     runs-on: ubuntu-latest
@@ -43,29 +80,35 @@ jobs:
       matrix:
         package: [kb, kb-code]
     steps:
-      - name: Delete old ${{ matrix.package }} versions
-        # SHA resolved + verified 2026-08-15 via:
-        #   gh api repos/actions/delete-package-versions/releases/latest --jq '.tag_name'   # -> v5.0.0
-        #   gh api repos/actions/delete-package-versions/git/ref/tags/v5.0.0 --jq '.object.sha,.object.type'
-        #     -> e5bc658cc4c965c472efe991f8beea3981499c55, commit
-        # (a lightweight tag — the ref resolves straight to the commit, no
-        # intermediate annotated-tag object to dereference).
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
-        with:
-          package-name: ${{ matrix.package }}
-          package-type: container
-          # Keep the newest 10 tagged versions (~10 weeks of main pushes at
-          # a typical cadence) and prune everything older — plenty of
-          # headroom to pull a recent commit's image for a redeploy or a
-          # bisect, without the version list growing forever.
-          min-versions-to-keep: "10"
-          # false: prune TAGGED versions too (every version here is a real
-          # main-<sha12> build-image.yml tag — there's no untagged-only
-          # churn to distinguish, unlike a package that also accumulates
-          # anonymous multi-arch manifest layers).
-          delete-only-untagged-versions: false
-          # Release versions are NOT main-<sha12> builds: release.yml pushes
-          # `<ver>` + `latest` to BOTH packages, and `latest` rides the newest
-          # `<ver>`. Protect every semver-shaped tag and `latest` so a release
-          # can never be pruned once ten newer main builds land.
-          ignore-versions: '^(v?[0-9]+\.[0-9]+(\.[0-9]+)?([-+][0-9A-Za-z.]+)?|latest)$'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prune old main-* versions of ${{ matrix.package }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE: ${{ matrix.package }}
+          OWNER: ${{ github.repository_owner }}
+          # Keep the newest 10 main-* versions (~10 weeks of main pushes at a
+          # typical cadence). Scheduled runs delete; a manual run defaults to
+          # list-only.
+          KEEP: "10"
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: scripts/ghcr-gc.sh
+
+  # Run after EVERY gc: a prune that took a release image would otherwise stay
+  # invisible until a newcomer's `docker pull` 404s. Red here means a documented
+  # channel is missing (also red from the day a release has been tagged but its
+  # images were never pushed).
+  channels-exist:
+    if: github.event_name != 'pull_request'
+    needs: gc
+    name: channels exist (anonymous)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve :latest and the newest version anonymously
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci/channels-exist.sh
