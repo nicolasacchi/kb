@@ -614,10 +614,8 @@ impl ReviewStores {
         let too_old = match self.git_version.get() {
             Some(v) => v.clone(),
             None => match seed::git_version_probe(git, seed::MIN_GIT) {
-                Ok(v) => {
-                    self.git_version.set(v.clone()).ok();
-                    v
-                }
+                // A racing prober's definitive answer wins and is equal.
+                Ok(v) => self.git_version.get_or_init(|| v).clone(),
                 Err(detail) => return Some(StoreUnavailable::Error { detail }),
             },
         };
