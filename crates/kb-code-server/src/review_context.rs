@@ -306,7 +306,6 @@ pub fn assemble(inputs: Inputs, budget_tokens: u64) -> Value {
             if let Some(piece) = fit_stub(body, remaining, &reason) {
                 let pw = escaped_len(&piece);
                 text.push_str(&piece);
-                remaining -= pw;
                 used += pw;
                 included += 1;
                 left_out = inputs.patches[i + 1..]
