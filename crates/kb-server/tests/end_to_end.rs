@@ -394,6 +394,36 @@ async fn kbs_route_lists_configured_kbs() {
     );
 }
 
+/// v044-X3 (A4.f6) — the project-key backfill is a daemon route (the storage
+/// actor stays the single writer): dry-run by default, `apply=true` echoed
+/// back, and every configured kb accounted for in `kbs`.
+#[tokio::test]
+async fn sessions_backfill_project_key_route_is_dry_run_by_default() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let dry: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-project-key"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(dry["apply"], false, "{dry}");
+    assert_eq!(dry["would_change"], 0, "{dry}");
+    assert_eq!(dry["changed"], 0, "{dry}");
+    assert_eq!(dry["kbs"][0]["kb"], "smoke", "{dry}");
+    let applied: serde_json::Value = client
+        .post(url(addr, "/api/sessions/backfill-project-key?apply=true"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(applied["apply"], true, "{applied}");
+}
+
 /// v044-F6 — `/api/turn` takes `project`/`visible_to`/`lanes`: an unknown
 /// lane is a 400 (not a silent skip), an unknown project fails open, and a
 /// lane subset is honoured.
