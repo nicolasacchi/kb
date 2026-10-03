@@ -177,14 +177,25 @@ pub struct TurnResponse {
     pub degraded: Vec<DegradedLane>,
 }
 
+/// The immediate TCP peer, from the request extensions. `None` (no
+/// `ConnectInfo`) is treated as not-loopback downstream - invariant #3.
+fn peer_ip(ext: &axum::http::Extensions) -> Option<std::net::IpAddr> {
+    ext.get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.ip())
+}
+
 /// `GET /api/turn?q=&prompt=&session=&cwd=&deadline_ms=&project=&visible_to=&lanes=&slate=&slate_since=`
 pub async fn get(
     State(state): State<Arc<KbHandles>>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Extension(identity): Extension<crate::middleware::Identity>,
     Query(params): Query<TurnParams>,
+    // Invariant #3: ConnectInfo is read from the request EXTENSIONS, never as
+    // an extractor (a missing one must fail CLOSED as not-loopback, not 500).
+    // The body is unused; `Request` must be the last extractor.
+    request: axum::extract::Request,
 ) -> Response {
+    let peer = peer_ip(request.extensions());
     let q = non_empty(&params.q).unwrap_or_else(|| params.prompt.clone());
     let q = q.trim().to_string();
     if q.is_empty() {
@@ -275,7 +286,7 @@ pub async fn get(
             ),
             Some(slug) => {
                 let loopback = crate::middleware::is_loopback_origin(
-                    Some(peer.ip()),
+                    peer,
                     &headers,
                     &state.origin.trusted_proxies.load(),
                 );
@@ -929,5 +940,35 @@ mod hook_parity_tests {
             compose_text(&hits, "no prior context"),
             golden.trim_end_matches('\n')
         );
+    }
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::*;
+
+    /// v0.44 X6 - the peer is read from request extensions; a request that
+    /// carries no `ConnectInfo` yields `None`, which `is_loopback_origin`
+    /// treats as NOT loopback (fail closed, invariant #3). The old extractor
+    /// form turned that same request into a 500 instead.
+    #[test]
+    fn missing_connect_info_fails_closed_instead_of_extracting() {
+        let mut ext = axum::http::Extensions::new();
+        assert_eq!(peer_ip(&ext), None);
+        assert!(!crate::middleware::is_loopback_origin(
+            peer_ip(&ext),
+            &HeaderMap::new(),
+            &[]
+        ));
+        ext.insert(ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            4000,
+        ))));
+        assert_eq!(peer_ip(&ext), Some("127.0.0.1".parse().unwrap()));
+        assert!(crate::middleware::is_loopback_origin(
+            peer_ip(&ext),
+            &HeaderMap::new(),
+            &[]
+        ));
     }
 }

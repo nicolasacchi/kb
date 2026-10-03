@@ -11409,6 +11409,45 @@ async fn memory_ingest_client_ref_replay_is_idempotent() {
     assert_eq!(named("deadbeef01234567"), 1);
 }
 
+/// v0.44 X6 - a reused `client_ref` with DIFFERENT text is a 409, not a silent
+/// drop of the new text (same title -> same file, different title -> same key
+/// owned by another file); identical content is still a 200 replay.
+#[tokio::test]
+async fn memory_ingest_client_ref_reuse_with_different_content_is_409() {
+    let (tmp, addr) = boot_memory_corpora(&[], &[]).await;
+    let client = reqwest::Client::new();
+    let post = |title: &str, text: &str| {
+        client
+            .post(url(addr, "/api/kb/globalmem/artifacts"))
+            .json(&serde_json::json!({
+                "title": title,
+                "body": text,
+                "category": "memory-project",
+                "client_ref": "aaaabbbbccccdddd",
+            }))
+            .send()
+    };
+    let first = post("Conflict Heron", "the original text").await.unwrap();
+    assert_eq!(first.status(), 201);
+    let same = post("Conflict Heron", "the original text").await.unwrap();
+    assert_eq!(same.status(), 200, "identical content is a replay");
+
+    let changed = post("Conflict Heron", "DIFFERENT text under the same key")
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), 409, "same key + same title + new text");
+    let retitled = post("Conflict Otter", "the original text").await.unwrap();
+    assert_eq!(retitled.status(), 409, "same key + new title");
+
+    let mut n = 0;
+    for f in walkdir_html(tmp.path()) {
+        if f.contains("aaaabbbbccccdddd") {
+            n += 1;
+        }
+    }
+    assert_eq!(n, 1, "the conflicting writes must not create files");
+}
+
 /// Every `.html` file name under `root`, for the replay test's on-disk count.
 fn walkdir_html(root: &std::path::Path) -> Vec<String> {
     let mut out = Vec::new();

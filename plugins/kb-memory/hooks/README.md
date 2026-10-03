@@ -12,7 +12,7 @@ opencode, Grok Build, Kimi Code) and a full extension-based wiring for omp
 | `kb-recall.sh` | `UserPromptSubmit` | Runs `kb recall <prompt> --cwd <payload cwd>` and injects the top memories as turn context. Silent on no hits / daemon down. **Project-scoped recall**: passing `--cwd` (never `--scope all`) lets the CLI resolve its own default "auto" scope — global corpora plus the caller repo's own `memory-<slug>` corpus, derived from the payload's `cwd` rather than this hook's process cwd (some harnesses run hooks with an unrelated `$PWD`). Outside a repo, or against a daemon too old to know "auto", the CLI degrades to the old fleet-wide behavior on its own. **Also works unchanged as a codex `UserPromptSubmit` hook** (same `.prompt` stdin field, same `hookSpecificOutput.additionalContext` output). For **Kimi Code**, run it with `KB_HOOK_FMT=kimi` — plain-stdout output instead of the JSON envelope, and it reads Kimi's array-shaped `.prompt` (`[{"type":"text","text":…}]`) as well as Claude/codex's string form. **CT-A3**: alongside each hit's human-readable line, it appends a machine-readable `<!--kb-recall/1 kb=<kb-name> id=<hex12>[ pos=<n>]-->` marker (the `pos=` rank pair is MR1; see [`KB_RECALL_LAYOUT`](#kb_recall_layout--the-shape-of-the-injected-block-mr1)), folded into that hit's block — the `memory_recalls` ledger's capture-side parse (`kb_core::sessions::view::derive_memory_recalls`) prefers this marker and falls back to the free-text line only when it's absent (older captures, a hand-edited transcript). **CT-D1**: on the **first** `UserPromptSubmit` of a session id it ALSO makes one `kb context "<prompt>" --cwd … --session …` call and APPENDS its COUNTS line ("3 prior sessions · 2 open comments · 5 memories") plus "run `kb context`" beneath the ordinary recall block. The scent is **additive, never a replacement** (ruling 2026-08-22): recall has pushed memory titles on every turn since v0.9 and invariant #11's R0/R3 governs EPISODIC material — so transcripts stay counts-and-pointers-only ("pulled on demand, never auto-injected") while turn 1 keeps the memory titles it always had. Either half may be empty: an empty recall window with prior sessions/comments emits the scent alone, and both empty exits silently as before. First-turn proxy = an ATOMIC `set -o noclobber` create of `~/.cache/kb/context-scent-<sid>`, so it fires exactly once per session id. EVERY miss degrades to the plain recall block — no session id, an unwritable cache dir, a resumed session, a daemon too old to serve `/api/context`, or an empty corpus (`"no prior context"` is never injected). Turns 2..n never enter the branch and are byte-identical to pre-CT-D1. **MR1**: the SHAPE of the block is selected by `KB_RECALL_LAYOUT` (`v1` \| `v2`, the default \| `v2-last`) — see the section below. Tests: `tests/test-recall-scent.sh`, `tests/test-recall-layout.sh`, plus `tests/test-recall-{flagged,warns,drift,kimi}.sh`. |
 | `kb-wake-kimi.sh` | `UserPromptSubmit` (Kimi Code) | The Kimi wake path. Kimi's `SessionStart` stdout never reaches the model (probe-verified: only `UserPromptSubmit` stdout is appended to context, as a `<hook_result>` user message), so the wake content rides the first prompt instead: once per session (marker `~/.cache/kb/waked-kimi-<sid>`) it emits the memory protocol (shared `memory-protocol.txt`), the recent-memories index (`kb recall '' --cwd <payload cwd>`, same project-scoped `--cwd`/no-`--scope all` as `kb-recall.sh`), and the distill-pending ledger surface-and-consume (same relay as `kb-wake.sh`, harness-labeled). Session marker files are left to `kb-recall.sh`, registered on the same event. Test: `tests/test-wake-kimi.sh`. |
 | `kb-wake.sh` | `SessionStart` | Re-injects the memory protocol + a compact index of recent memories (`kb recall '' --cwd <payload cwd>`, project-scoped like `kb-recall.sh` — no more `--scope all`). **MI-W0.3**: also surfaces (and consumes) the `~/.cache/kb/distill-pending` ledger — up to the 3 newest grok sessions queued by `kb-capture-grok.sh` that committed without a successful `kb remember`, dropping entries older than 14 days. See "Grok distill-pending relay" below. |
-| `kb-capture.sh` | `Stop` | Writes the conversation transcript verbatim into the `[kb.sessions]` corpus (set `KB_SESSIONS_DIR`). |
+| `kb-capture.sh` | `Stop` | Captures the conversation transcript into the `[kb.sessions]` corpus (set `KB_SESSIONS_DIR`) via `kb sessions capture` (scrubbed). A failed capture is spooled privately and replayed, never embedded raw - see "A failed capture is spooled" below. |
 | `kb-capture-codex.sh` | `Stop` (codex) | Capture adapter for OpenAI Codex CLI: translates the rollout JSONL named by `transcript_path` into a Claude-shaped session capture (commits, file edits from `patch_apply_end`, web searches, usage) so the digest, `kb why`, and `kb recollect` work across harnesses. Also runs as a CLI backfill: `kb-capture-codex.sh <rollout.jsonl>…`. Lossy by design (outputs capped, reasoning dropped); the raw rollout path rides an `adapter-meta` line. Same `KB_SESSIONS_DIR` gate + atomic overwrite-per-session contract as `kb-capture.sh`. Design + e2e evidence: [docs/research/kb-memory-for-foreign-harnesses-2026-07.html](../../../docs/research/kb-memory-for-foreign-harnesses-2026-07.html). |
 | `kb-capture-opencode.sh` | `session.idle` (opencode plugin) | Capture adapter for opencode: takes a session id (or an `opencode export` JSON file), translates message/part rows into Claude-shaped JSONL, writes the same capture envelope. Wired by `~/.config/opencode/plugin/kb-memory.ts` (recall via `chat.message` + `experimental.chat.system.transform`, capture on `session.idle`, `shell.env` sets `NO_PROXY` so agent-initiated `kb` calls reach loopback under opencode's VPN proxy alias). CLI backfill: `kb-capture-opencode.sh <sessionID\|export.json>…`. |
 | `kb-capture-grok.sh` | post-run (grokclaude) | Capture adapter for Grok Build sessions run via `grokclaude`: resolves a job's `meta.json.grok_session_id` to `~/.grok/sessions/<url-encoded-cwd>/<uuid>/`, translates `chat_history.jsonl` into Claude-shaped JSONL (reasoning folded as `thinking` blocks, tool calls name-mapped, timestamps joined from `events.jsonl` `loop_started`), and writes via the SAME preferred path as `kb-capture.sh` (`kb sessions capture`, bash-hand-rolled-HTML fallback). Skips fake runs (`GROKCLAUDE_FAKE`, or a `grok_session_id` absent/`fake-*`) and thin transcripts (<1 user or <1 assistant line). `--with-report` additionally renders `report.md` + `findings/*.json` as a linked `kb-category: reference` artifact (`grok-report-<job-ulid>.html`, cross-linked via `kb-session`). Modes: `<job-dir>` (the grokclaude post-run trigger's own call shape), `--session-dir <dir>` (direct), `--backfill [--root <blackboard-root>]`; `--dry-run` prints without writing. **MI-W0.3**: on a successful capture (either write path) also queues a distill-pending ledger line — see "Grok distill-pending relay" below. Fixture + golden mapping test: `crates/kb-cli/tests/adapter_grok.rs`. |
@@ -101,6 +101,47 @@ registering anywhere `kb-memory` is already installed. Design:
   `kb-beat.sh` call no identity-dependent verb (capture is `kb sessions
   capture`/scrub, beat is `curl` only), and `kb-slate-harvest.sh` posts
   with explicit `--harness`/session args per call.
+- **How the session id reaches a shell `kb` write, per harness (v0.44 X6)** —
+  the CLI resolves it by the ladder in `crates/kb-cli/src/session_identity.rs`
+  (`--session-id`, `KB_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `GROK_SESSION_ID`,
+  the fresh repo marker `current-session-repo-<slug>`, the global
+  `current-session` file - flagged on stderr - then none). What each harness
+  puts on those rungs:
+
+  | harness | channel that reaches the agent's shell | otherwise |
+  | --- | --- | --- |
+  | Claude Code | `$CLAUDE_ENV_FILE` (appended by `kb-wake.sh` on SessionStart) and Claude's own `CLAUDE_CODE_SESSION_ID` | repo marker |
+  | omp | `kb-omp.ts` sets `process.env.KB_SESSION_ID`/`KB_HARNESS` on `session_start` (omp spawns its bash tool from it); covered by `tests/test-omp-slate.sh`, which CI runs under bun | repo marker |
+  | Grok | `GROK_SESSION_ID` (ladder rung 4), when the harness exports it | repo marker |
+  | Codex | none - no env-file or process.env channel | repo marker written by `kb-recall.sh` on every prompt |
+  | Kimi Code | none | repo marker written by `kb-recall.sh`/`kb-wake-kimi.sh` |
+  | opencode | none documented (the plugin sets `shell.env` for proxies only) | repo marker |
+
+  A harness on the "repo marker" row is attributed to the most recent session
+  that prompted in the same repo within the freshness window (40 minutes), so
+  two concurrent sessions of ONE repo on such a harness can still be
+  mis-attributed; the CLI prints the caveat. A script outside any harness can
+  pass `--session-id` or export `KB_SESSION_ID`.
+- **A failed capture is spooled, never embedded raw (v0.44 X6)** -
+  `kb-capture.sh` has no bash envelope writer any more. When `kb sessions
+  capture` fails (or `kb` is missing) the raw transcript is copied to a private
+  spool outside every corpus - `$KB_CAPTURE_SPOOL`, else
+  `$KB_CACHE_DIR/capture-spool`, else `${XDG_CACHE_HOME:-~/.cache}/kb/capture-spool`
+  (dir 0700, files 0600, one item per session, never indexed). The next
+  successful `kb-capture.sh` run, or `kb sessions capture --replay-spool`,
+  pushes each item through the normal scrubbed capture path and deletes it;
+  `kb doctor --hooks` (check `outbox`) counts what is waiting. The
+  codex/opencode/kimi/omp/grok adapters never embedded raw bytes in their
+  fallbacks (they scrub their translated JSONL and fail closed), so they do
+  not spool: replaying a translated transcript through `kb sessions capture`
+  would drop the `kb-harness` meta those adapters add. Test:
+  `tests/test-capture-spool.sh`.
+- **Every `kb` call in the capture and harvest hooks is bounded** - the
+  `kb-capture*.sh` adapters and `kb-slate-harvest.sh` source `kb-hook-lib.sh`
+  and run each `kb` call under `run_to` inside `KB_CAPTURE_BUDGET_SECS`
+  (default 25, below the 30s hooks.json timeout; `KB_HARVEST_BUDGET_SECS`,
+  default 20, for the harvest). A hung daemon costs the capture (it is spooled
+  or skipped fail-closed), never the session end.
 - **Capture needs `kb` on the hook PATH** — `kb-capture-codex.sh` and
   `kb-capture-opencode.sh` fail closed without `kb sessions scrub`: with no
   `kb` the session is *skipped* (one stderr line, exit 0), not captured
@@ -696,7 +737,12 @@ same bytes as the shell render under the default v2 layout, pinned by
 failed, or fell back to keyword-only is named in one trailing line
 (`kb: recall skipped (timeout)`) instead of vanishing. Any failure of the
 call, or a non-v2 `KB_RECALL_LAYOUT`, takes the old two-call path unchanged;
-unset, `kb turn` is never called. The slate lane is still its own call. Test:
+unset, `kb turn` is never called. The slate lane rides the same call (v0.44
+X6): the hook adds `slate` to `--lanes`, sends the session's cursor as
+`--slate-since`, advances the cursor from the reply's `head_seq`, and skips its
+separate `kb slate` spawn when the turn served the lane (the CLI resolves
+cwd -> repo slug; outside a repo the lane is dropped). A golden test pins that
+KB_TURN=1 and the legacy path inject identical bytes. Test:
 `tests/test-recall-turn.sh`.
 
 `kb-hook-lib.sh` holds what the hooks used to copy: `run_to <cap> cmd…` (each

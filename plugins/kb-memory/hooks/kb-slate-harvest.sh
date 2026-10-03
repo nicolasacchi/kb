@@ -58,6 +58,14 @@ if [ "${1:-}" = "--abandoned" ]; then
 fi
 
 command -v kb >/dev/null 2>&1 || exit 0
+
+# v0.44 X6 (INT4) - bound every `kb` call by the shared hook deadline.
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  run_to() { shift; "$@"; }
+  hook_deadline_init() { :; }
+}
+KB_HOOK_BUDGET_SECS="${KB_HARVEST_BUDGET_SECS:-20}"
+hook_deadline_init
 command -v jq >/dev/null 2>&1 || exit 0
 [ -n "$job_dir" ] && [ -d "$job_dir" ] || exit 0
 
@@ -99,7 +107,7 @@ post() { # kind line [extra kb-slate args...]
   shift
   local line="$1"
   shift
-  kb slate "$kind" "$line" --harness "$backend" --origin import --job "$job_id" \
+  run_to 5 kb slate "$kind" "$line" --harness "$backend" --origin import --job "$job_id" \
     --ref "job:$job_id" "${cwd_args[@]}" "${sid_args[@]}" "$@" >/dev/null 2>&1
 }
 
@@ -108,7 +116,7 @@ flat() { printf '%s' "$1" | tr '\n\t' '  ' | tr -s ' '; }
 
 # One digest fetch serves the idempotency lookup AND the take lookup (design
 # §12: nothing is ever stored to find a post again).
-digest_json="$(kb slate open --all --json "${cwd_args[@]}" 2>/dev/null)" || digest_json=""
+digest_json="$(run_to 6 kb slate open --all --json "${cwd_args[@]}" 2>/dev/null)" || digest_json=""
 
 findings_error=""
 if [ -z "$abandoned_reason" ]; then
@@ -194,14 +202,14 @@ take_seq="$(printf '%s' "$digest_json" | jq -r --arg ref "job:$job_id" \
 [ -n "$take_seq" ] || exit 0
 
 if [ -n "$abandoned_reason" ]; then
-  kb slate done "$take_seq" "job $job_id: $abandoned_reason" --abandoned "$abandoned_reason" \
+  run_to 5 kb slate done "$take_seq" "job $job_id: $abandoned_reason" --abandoned "$abandoned_reason" \
     --harness "$backend" "${cwd_args[@]}" "${sid_args[@]}" >/dev/null 2>&1 || true
 elif [ -n "$findings_error" ]; then
   reason="$(trunc "findings error: $(flat "$findings_error")")"
-  kb slate done "$take_seq" "job $job_id: $reason" --abandoned "$reason" \
+  run_to 5 kb slate done "$take_seq" "job $job_id: $reason" --abandoned "$reason" \
     --harness "$backend" "${cwd_args[@]}" "${sid_args[@]}" >/dev/null 2>&1 || true
 else
-  kb slate done "$take_seq" "job $job_id finished" \
+  run_to 5 kb slate done "$take_seq" "job $job_id finished" \
     --harness "$backend" "${cwd_args[@]}" "${sid_args[@]}" >/dev/null 2>&1 || true
 fi
 

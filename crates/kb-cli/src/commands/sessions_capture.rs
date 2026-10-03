@@ -159,6 +159,107 @@ pub async fn run(
     Ok(())
 }
 
+/// v0.44 X6 — the private spool the capture hooks write a RAW transcript to
+/// when `kb sessions capture` fails. It lives OUTSIDE every corpus (never
+/// indexed, never watched): the old bash fallback embedded the raw bytes in
+/// the corpus unscrubbed. `$KB_CAPTURE_SPOOL` wins; else
+/// `$KB_CACHE_DIR/capture-spool`; else `$XDG_CACHE_HOME/kb/capture-spool`;
+/// else `$HOME/.cache/kb/capture-spool` (the exact order kb-capture.sh uses).
+pub fn spool_dir() -> Option<PathBuf> {
+    let env = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(p) = env("KB_CAPTURE_SPOOL") {
+        return Some(p);
+    }
+    if let Some(p) = env("KB_CACHE_DIR") {
+        return Some(p.join("capture-spool"));
+    }
+    if let Some(p) = env("XDG_CACHE_HOME") {
+        return Some(p.join("kb").join("capture-spool"));
+    }
+    env("HOME").map(|h| h.join(".cache").join("kb").join("capture-spool"))
+}
+
+/// Outcome of one `--replay-spool` run.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ReplaySummary {
+    pub replayed: usize,
+    pub failed: usize,
+}
+
+/// Replay every spooled item (`<key>.jsonl` + optional `<key>.meta` carrying
+/// `session_id=` / `cwd=` lines) through [`capture`] — the scrubbing path —
+/// and delete each on success. A failure leaves the item for the next run.
+pub async fn replay_spool(spool: &Path, out_dir: &Path) -> Result<ReplaySummary> {
+    let mut sum = ReplaySummary::default();
+    let rd = match std::fs::read_dir(spool) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(sum),
+        Err(e) => return Err(e).with_context(|| format!("reading spool {}", spool.display())),
+    };
+    let mut items: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl"))
+        .collect();
+    items.sort();
+    for jsonl in items {
+        let meta = jsonl.with_extension("meta");
+        let (mut sid, mut cwd) = (None, None);
+        if let Ok(m) = std::fs::read_to_string(&meta) {
+            for line in m.lines() {
+                match line.split_once('=') {
+                    Some(("session_id", v)) if !v.is_empty() => sid = Some(v.to_string()),
+                    Some(("cwd", v)) if !v.is_empty() => cwd = Some(PathBuf::from(v)),
+                    _ => {}
+                }
+            }
+        }
+        // A cwd that no longer exists must not fail the replay (it is only a
+        // commit-resolution hint).
+        let cwd = cwd.filter(|c| c.is_dir());
+        match capture(&jsonl, sid.as_deref(), cwd.as_deref(), out_dir, false).await {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&jsonl);
+                let _ = std::fs::remove_file(&meta);
+                sum.replayed += 1;
+            }
+            Err(e) => {
+                eprintln!(
+                    "kb sessions capture --replay-spool: {}: {e:#}",
+                    jsonl.display()
+                );
+                sum.failed += 1;
+            }
+        }
+    }
+    Ok(sum)
+}
+
+pub async fn run_replay_spool(out: Option<PathBuf>, json: bool) -> Result<()> {
+    let out_dir = resolve_out_dir(out)?;
+    let Some(spool) = spool_dir() else {
+        bail!("no capture spool dir: set KB_CAPTURE_SPOOL or HOME");
+    };
+    let sum = replay_spool(&spool, &out_dir).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&sum)?);
+    } else {
+        println!(
+            "spool: {} replayed, {} failed ({})",
+            sum.replayed,
+            sum.failed,
+            spool.display()
+        );
+    }
+    if sum.failed > 0 {
+        bail!("{} spooled capture(s) could not be replayed", sum.failed);
+    }
+    Ok(())
+}
+
 /// Resolve the target sessions-corpus dir: `--out` wins; else
 /// `$KB_SESSIONS_DIR` (exactly how kb-capture.sh resolves its target); else a
 /// hard error naming both.
@@ -1239,6 +1340,45 @@ mod tests {
             legacy_untouched, legacy_html,
             "the legacy file is never resurrected/overwritten"
         );
+    }
+
+    /// v0.44 X6 - a spooled RAW transcript is replayed through the scrubbing
+    /// capture path: the corpus gets the redacted artifact, the spool item is
+    /// deleted, and the secret appears nowhere in the corpus.
+    #[tokio::test]
+    async fn replay_spool_lands_scrubbed_and_deletes_the_item() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spool = tmp.path().join("spool");
+        let out_dir = tmp.path().join("sessions");
+        let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+        let jsonl = format!(
+            "{{\"sessionId\":\"sess-spool-1\",\"type\":\"user\",\"timestamp\":\"2026-03-01T09:00:00.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"token {secret}\"}},\"promptSource\":\"typed\"}}\n"
+        );
+        write(&spool, "sess-spool-1.jsonl", &jsonl);
+        write(&spool, "sess-spool-1.meta", "session_id=sess-spool-1\n");
+        let sum = replay_spool(&spool, &out_dir).await.unwrap();
+        assert_eq!((sum.replayed, sum.failed), (1, 0));
+        assert!(!spool.join("sess-spool-1.jsonl").exists());
+        assert!(!spool.join("sess-spool-1.meta").exists());
+        assert_eq!(count_html(&out_dir), 1);
+        for e in std::fs::read_dir(&out_dir).unwrap() {
+            let body = std::fs::read_to_string(e.unwrap().path()).unwrap();
+            assert!(!body.contains(secret), "raw secret reached the corpus");
+            assert!(body.contains("[redacted:"));
+        }
+    }
+
+    /// A failing item stays spooled (never dropped) and is counted.
+    #[tokio::test]
+    async fn replay_spool_keeps_a_failing_item() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spool = tmp.path().join("spool");
+        write(&spool, "bad.jsonl", "");
+        // out_dir is a FILE, so every capture fails.
+        let out_file = write(tmp.path(), "not-a-dir", "x");
+        let sum = replay_spool(&spool, &out_file).await.unwrap();
+        assert_eq!((sum.replayed, sum.failed), (0, 1));
+        assert!(spool.join("bad.jsonl").exists());
     }
 
     #[test]

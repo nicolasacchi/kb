@@ -1226,6 +1226,67 @@ fn slate_marker_gc_check(cache_dir: Option<&Path>, now: i64, removed: Option<usi
     }
     HookCheck::warn("slate-marker-gc", detail).with_fix("kb doctor --hooks --fix removes them")
 }
+/// v0.44 X6 - queued work the hooks/CLI promised and has not yet delivered:
+/// `kb remember` writes spooled while the daemon was slow/down
+/// (`<cache>/kb/outbox/*.json`, `.rejected` = refused for good) and raw
+/// transcripts parked by a failed capture (`capture-spool/*.jsonl`). Silence
+/// here used to mean "all delivered" and "never looked" alike.
+fn outbox_check(cache_dir: Option<&Path>) -> HookCheck {
+    let Some(cache_dir) = cache_dir else {
+        return HookCheck::skip(
+            "outbox",
+            "could not resolve a cache dir - neither XDG_CACHE_HOME nor HOME is set",
+        );
+    };
+    let count = |dir: &Path, ext: &str| -> usize {
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().extension().is_some_and(|x| x == ext))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    let outbox = cache_dir.join("kb").join("outbox");
+    let spool = crate::commands::sessions_capture::spool_dir()
+        .unwrap_or_else(|| cache_dir.join("kb").join("capture-spool"));
+    let pending = count(&outbox, "json");
+    let rejected = count(&outbox, "rejected");
+    let spooled = count(&spool, "jsonl");
+    if pending + rejected + spooled == 0 {
+        return HookCheck::pass(
+            "outbox",
+            "no queued `kb remember` writes, no spooled captures",
+        );
+    }
+    let mut parts = Vec::new();
+    if pending > 0 {
+        parts.push(format!("{pending} queued `kb remember` write(s)"));
+    }
+    if rejected > 0 {
+        parts.push(format!("{rejected} refused write(s) parked as .rejected"));
+    }
+    if spooled > 0 {
+        parts.push(format!(
+            "{spooled} spooled capture(s) in {}",
+            spool.display()
+        ));
+    }
+    let mut fixes = Vec::new();
+    if pending > 0 {
+        fixes.push("`kb outbox flush`");
+    }
+    if spooled > 0 {
+        fixes.push("`kb sessions capture --replay-spool`");
+    }
+    let c = HookCheck::warn("outbox", parts.join("; "));
+    if fixes.is_empty() {
+        c.with_fix("inspect/delete the .rejected files under the outbox dir")
+    } else {
+        c.with_fix(fixes.join(" / "))
+    }
+}
+
 // ============================================ i) recall-outcome census
 //
 // `kb doctor --hooks` used to probe Claude's marker files and could PASS
@@ -2457,6 +2518,8 @@ pub async fn hooks(
         gc_stale_slate_markers(&kb_dir, now)
     });
     checks.push(slate_marker_gc_check(cache_dir.as_deref(), now, removed));
+    // i) queued remember writes + spooled captures (v0.44 X6).
+    checks.push(outbox_check(cache_dir.as_deref()));
 
     if json_out {
         println!("{}", serde_json::to_string_pretty(&to_json(&checks))?);
@@ -3171,6 +3234,25 @@ mod tests {
 
         // Idempotent: nothing left to remove on a second pass.
         assert_eq!(gc_stale_slate_markers(dir, now), 0);
+    }
+
+    #[test]
+    fn outbox_check_counts_queued_writes_rejected_and_spooled_captures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let clean = outbox_check(Some(tmp.path()));
+        assert_eq!(clean.status, CheckStatus::Pass, "{}", clean.detail);
+
+        let outbox = tmp.path().join("kb").join("outbox");
+        std::fs::create_dir_all(&outbox).unwrap();
+        std::fs::write(outbox.join("aaaaaaaa.json"), "{}").unwrap();
+        std::fs::write(outbox.join("bbbbbbbb.json"), "{}").unwrap();
+        std::fs::write(outbox.join("cccccccc.rejected"), "{}").unwrap();
+        let c = outbox_check(Some(tmp.path()));
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert!(c.detail.contains("2 queued"), "{}", c.detail);
+        assert!(c.detail.contains("1 refused"), "{}", c.detail);
+        assert!(c.fix.as_deref().unwrap().contains("kb outbox flush"));
+        assert_eq!(outbox_check(None).status, CheckStatus::Skip);
     }
 
     #[test]

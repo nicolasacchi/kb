@@ -183,6 +183,14 @@ enum Cmd {
         link: Option<String>,
         #[arg(long)]
         daemon: Option<String>,
+        /// v0.44 X6 - deliver synchronously or fail. Without it a slow, down
+        /// or 5xx daemon makes `kb remember` exit 0 with `queued` (the write
+        /// is spooled and replays later, so there is NO id yet). With
+        /// `--wait` nothing is spooled: the command only succeeds, printing
+        /// the id, once the daemon has accepted the write; otherwise it exits
+        /// non-zero. Use it in scripts that need the id.
+        #[arg(long)]
+        wait: bool,
         #[arg(long)]
         json: bool,
     },
@@ -2219,9 +2227,16 @@ enum SessionsAction {
     /// daemon-facing `kb capture` quick-capture verb.
     Capture {
         /// Path to the raw JSONL transcript (Claude Code's own
-        /// `transcript_path`).
-        #[arg(long)]
-        transcript: PathBuf,
+        /// `transcript_path`). Required unless `--replay-spool`.
+        #[arg(long, required_unless_present = "replay_spool")]
+        transcript: Option<PathBuf>,
+        /// v0.44 X6 — push every transcript the capture hooks spooled (a
+        /// private dir outside every corpus, written when a capture failed)
+        /// through the normal scrubbed capture path, deleting each on success.
+        /// A failed item stays spooled for the next run. Exit non-zero when
+        /// any item could not be replayed.
+        #[arg(long = "replay-spool", conflicts_with_all = ["transcript", "session_id", "cwd"])]
+        replay_spool: bool,
         /// The hook's own `.session_id` — used ONLY when the transcript
         /// carries no `sessionId` of its own (the JSONL field is ground
         /// truth, invariant #11).
@@ -4413,6 +4428,7 @@ async fn main() -> Result<()> {
             global,
             link,
             daemon,
+            wait,
             json,
         } => {
             let bearer = read_bearer();
@@ -4436,6 +4452,7 @@ async fn main() -> Result<()> {
                 link.as_deref(),
                 daemon.as_deref(),
                 bearer.as_deref(),
+                wait,
                 json,
             )
             .await
@@ -5749,12 +5766,18 @@ async fn main() -> Result<()> {
         Cmd::Sessions { action } => match action {
             SessionsAction::Capture {
                 transcript,
+                replay_spool,
                 session_id,
                 cwd,
                 out,
                 json,
                 allow_oversized,
             } => {
+                if replay_spool {
+                    return commands::sessions_capture::run_replay_spool(out, json).await;
+                }
+                let transcript =
+                    transcript.ok_or_else(|| anyhow::anyhow!("--transcript is required"))?;
                 commands::sessions_capture::run(
                     transcript,
                     session_id,

@@ -245,7 +245,18 @@ TRANSLATE='
 '
 
 # capture_one <session.jsonl> [sid] [cwd] — sid/cwd default to the header's.
+# v0.44 X6 (INT4) - every `kb` call is bounded by the shared hook deadline
+# (kb-hook-lib.sh run_to), so a hung daemon/CLI can never hang the session
+# end; the harness timeout is the last resort, not the design. A standalone
+# copy without the lib runs its calls unbounded, as before.
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  run_to() { shift; "$@"; }
+  hook_deadline_init() { :; }
+}
+KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
+
 capture_one() {
+  hook_deadline_init # per-session budget (a backfill runs many)
   local tpath="$1" sid="${2:-}" cwd="${3:-}"
   [ -f "$tpath" ] || return 0
 
@@ -334,7 +345,7 @@ capture_one() {
 
   # Preferred writer: the shared Rust engine (same invocation kimi/grok use).
   if command -v kb >/dev/null 2>&1; then
-    if kb sessions capture \
+    if run_to 20 kb sessions capture \
          --transcript "$tmpjsonl" \
          --session-id "$sid" \
          --cwd "${cwd:-unknown}" \
@@ -372,7 +383,7 @@ capture_one() {
   # embedded. FAIL CLOSED: no `kb`, or a `kb` too old for the verb, means this
   # session is not captured here rather than captured unscrubbed.
   scrubbed="$(mktemp)" || { rm -rf "$scratch"; return 0; }
-  if command -v kb >/dev/null 2>&1 && kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
+  if command -v kb >/dev/null 2>&1 && run_to 15 kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
      && [ -s "$scrubbed" ]; then
     mv -f "$scrubbed" "$tmpjsonl"
   else

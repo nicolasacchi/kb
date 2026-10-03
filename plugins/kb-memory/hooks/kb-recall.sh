@@ -127,6 +127,23 @@ if [ -n "$sid" ]; then
   fi
 fi
 
+# SL3 — the slate cursor, resolved up here because the KB_TURN call below
+# asks for the slate lane too (and the shell lane further down reads the same).
+slate_sid="$sid"
+[ -n "$slate_sid" ] || slate_sid="${KB_SESSION_ID:-}"
+if [ -z "$slate_sid" ]; then
+  cs_marker="${XDG_CACHE_HOME:-$HOME/.cache}/kb/current-session"
+  [ -f "$cs_marker" ] && slate_sid="$(cat "$cs_marker" 2>/dev/null)"
+fi
+
+cursor_file=""
+cursor=""
+if [ -n "$slate_sid" ]; then
+  cursor_file="${XDG_CACHE_HOME:-$HOME/.cache}/kb/slate-cursor-$slate_sid"
+  [ -f "$cursor_file" ] && cursor="$(cat "$cursor_file" 2>/dev/null)"
+fi
+turn_slate_done=0
+
 # v0.44 F6 — KB_TURN=1 opts into ONE `kb turn` call (GET /api/turn: recall +
 # the turn-1 scent composed by the daemon under a shared deadline_ms) instead
 # of the separate `kb context` + `kb recall` processes below. The daemon's
@@ -142,6 +159,10 @@ turn_note=""
 if [ "${KB_TURN:-}" = "1" ] && [ "${KB_RECALL_LAYOUT:-v2}" = "v2" ]; then
   turn_lanes="recall"
   [ "$first_turn" = "1" ] && turn_lanes="recall,context"
+  # The slate lane rides the same call (the CLI resolves cwd -> slug, exactly
+  # as `kb slate delta --cwd` does). A cursor asks for the delta since it; no
+  # cursor seeds (the hybrid block), like the shell lane below.
+  [ -n "$slate_sid" ] && turn_lanes="$turn_lanes,slate"
   # Daemon budget: what is left of the shared deadline minus 1.5s for process
   # start + HTTP, capped at 9s (the route's design point), floored at 0.5s.
   turn_dl=$(( $(hook_left_ms 2>/dev/null || echo 10500) - 1500 ))
@@ -150,11 +171,22 @@ if [ "${KB_TURN:-}" = "1" ] && [ "${KB_RECALL_LAYOUT:-v2}" = "v2" ]; then
   turn_args=(--lanes "$turn_lanes" --deadline-ms "$turn_dl")
   [ -n "$cwd" ] && turn_args+=(--cwd "$cwd")
   [ -n "$sid" ] && turn_args+=(--session "$sid")
+  case "$cursor" in '' | *[!0-9]*) ;; *) turn_args+=(--slate-since "$cursor") ;; esac
   turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
   if [ -n "$turn_json" ] && printf '%s' "$turn_json" | jq -e 'has("text")' >/dev/null 2>&1; then
     turn_ok=1
     turn_text="$(printf '%s' "$turn_json" | jq -r '.text // empty' 2>/dev/null)" || turn_text=""
     turn_note="$(printf '%s' "$turn_json" | jq -r '.degraded_note // empty' 2>/dev/null)" || turn_note=""
+    # The daemon served the slate lane: advance the cursor to its head_seq (the
+    # same client-side write the shell lane does) and skip that lane below.
+    turn_head="$(printf '%s' "$turn_json" | jq -r '.head_seq // empty' 2>/dev/null)" || turn_head=""
+    if [ -n "$turn_head" ] && [ -n "$cursor_file" ]; then
+      turn_slate_done=1
+      mkdir -p "$(dirname "$cursor_file")" 2>/dev/null || true
+      printf '%s\n' "$turn_head" >"$cursor_file.tmp" 2>/dev/null \
+        && mv "$cursor_file.tmp" "$cursor_file" 2>/dev/null \
+        || true
+    fi
   fi
 fi
 
@@ -329,18 +361,8 @@ fi
 # `run_to 4` (seed) cap the added wall time (clipped to the shared deadline), and any failure — kb missing,
 # non-zero exit, malformed JSON, no git repo — is silent and leaves the
 # output byte-identical to today.
-slate_sid="$sid"
-[ -n "$slate_sid" ] || slate_sid="${KB_SESSION_ID:-}"
-if [ -z "$slate_sid" ]; then
-  cs_marker="${XDG_CACHE_HOME:-$HOME/.cache}/kb/current-session"
-  [ -f "$cs_marker" ] && slate_sid="$(cat "$cs_marker" 2>/dev/null)"
-fi
-
 slate_delta=""
-if [ -n "$slate_sid" ]; then
-  cursor_file="${XDG_CACHE_HOME:-$HOME/.cache}/kb/slate-cursor-$slate_sid"
-  cursor=""
-  [ -f "$cursor_file" ] && cursor="$(cat "$cursor_file" 2>/dev/null)"
+if [ -n "$slate_sid" ] && [ "$turn_slate_done" != "1" ]; then
   if [ -n "$cursor" ]; then
     slate_json="$(run_to 2 kb slate delta --since "$cursor" \
       --session-id "$slate_sid" --cwd "$cwd" "${extra[@]}" --budget 1500 --json 2>/dev/null)" || slate_json=""
