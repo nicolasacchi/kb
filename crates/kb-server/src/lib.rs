@@ -3179,6 +3179,48 @@ mod tests {
             .expect("task did not panic");
     }
 
+    /// A3-13 — the scheduler's stat-walk skip probe runs on the blocking
+    /// pool, not on a runtime worker. Deterministic: the runtime's ONLY
+    /// blocking thread is held by the test, so a probe that really goes
+    /// through `spawn_blocking` cannot finish until the thread is released,
+    /// while one running inline on the worker would finish at once.
+    #[test]
+    fn backup_skip_probe_runs_on_the_blocking_pool() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let paths = KbPaths::rooted_at(tmp.path(), "sched");
+            paths.ensure_dirs().unwrap();
+            let kb = KbName::new("notes").unwrap();
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let hold = tokio::task::spawn_blocking(move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            });
+            started_rx.await.unwrap();
+            let fut = backup_one_kb(&paths, &kb, &backup_section(Some(24)), true);
+            tokio::pin!(fut);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(300), &mut fut)
+                    .await
+                    .is_err(),
+                "the stat walk finished while the blocking pool was saturated: it ran on the async worker"
+            );
+            release_tx.send(()).unwrap();
+            let out = tokio::time::timeout(Duration::from_secs(10), &mut fut)
+                .await
+                .expect("completes once the blocking thread is free")
+                .unwrap();
+            assert!(matches!(out, ScheduledBackup::Skipped), "{out:?}");
+            hold.await.unwrap();
+        });
+    }
+
     #[tokio::test]
     async fn backup_one_kb_skips_unchanged_index_and_writes_after_a_write() {
         let tmp = tempfile::tempdir().unwrap();
