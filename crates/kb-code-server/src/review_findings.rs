@@ -1895,7 +1895,6 @@ pub async fn list_findings_route(
     AxumPath(id): AxumPath<i64>,
     Query(params): Query<ListFindingsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (review, repo, repo_id) = require_review(&state, id).await?;
     if let Some(d) = params.disposition.as_deref() {
         if !store::is_valid_disposition(d) {
             return Err(ApiError::bad_request(format!(
@@ -1903,6 +1902,20 @@ pub async fn list_findings_route(
             )));
         }
     }
+    let body = compose_findings_list(&state, id, &params).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)))
+}
+
+/// The `GET /api/reviews/{id}/findings` body, lifted out of the handler so
+/// the `review context` bundle carries the SAME finding objects (resolution,
+/// `touched_in`, prose refs) the route returns. The caller validates
+/// `params.disposition`.
+pub(crate) async fn compose_findings_list(
+    state: &SharedState,
+    id: i64,
+    params: &ListFindingsParams,
+) -> Result<serde_json::Value, ApiError> {
+    let (review, repo, repo_id) = require_review(state, id).await?;
     // 2026-08-31 incident (store.rs module doc): the four sequential reads
     // below (ps resolve, findings, annotations, patchsets — the last one
     // V80-F3's `touched_in` needs) are contiguous store work — one
@@ -2041,16 +2054,13 @@ pub async fn list_findings_route(
         }
     }
 
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
-            "schema": SCHEMA,
-            "review_id": id,
-            "repo": review.repo,
-            "ps": target_ps.ps_number,
-            "findings": out,
-        })),
-    ))
+    Ok(serde_json::json!({
+        "schema": SCHEMA,
+        "review_id": id,
+        "repo": review.repo,
+        "ps": target_ps.ps_number,
+        "findings": out,
+    }))
 }
 
 /// `PUT /api/reviews/{id}/findings/{slug}/disposition` (design doc §2 row
