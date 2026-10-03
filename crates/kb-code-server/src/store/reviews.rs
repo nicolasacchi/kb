@@ -5,6 +5,28 @@
 //! call them. Public paths stay `crate::store`.
 use super::*;
 
+/// [`Store::create_review_atomic`]'s base-policy columns (the same values
+/// [`Store::set_review_base`] writes).
+#[derive(Debug, Clone, Copy)]
+pub struct NewReviewBase<'a> {
+    pub mode: &'a str,
+    pub branch: Option<&'a str>,
+    pub member: Option<i64>,
+    pub set_by: &'a str,
+    pub status_json: Option<&'a str>,
+}
+
+/// [`Store::create_review_atomic`]'s PR-binding columns (the same values
+/// [`Store::set_review_pr_binding`] writes; `pr_meta_fetched_at` is the
+/// creation time when a snapshot is present).
+#[derive(Debug, Clone, Copy)]
+pub struct NewReviewPr<'a> {
+    pub number: i64,
+    pub repo_slug: &'a str,
+    pub head_sha: Option<&'a str>,
+    pub meta_json: Option<&'a str>,
+}
+
 impl Store {
     // --- local reviews (V3.R1, migration V0014) ---------------------------
     //
@@ -31,6 +53,63 @@ impl Store {
             params![repo, title, base_ref, head_ref, session_id, now],
         )?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// A6.f4 — create a review ATOMICALLY: the row, its base policy
+    /// (`base`, store mode) and its PR binding (`pr`, `start-pr`) land in ONE
+    /// transaction, so a failure of any step leaves no unbound,
+    /// policy-less half-created row for the next sync to duplicate. A
+    /// `(repo, pr_number)` collision among OPEN reviews (the
+    /// `idx_reviews_pr_binding` UNIQUE index) fails the whole call before
+    /// anything is committed. Returns the new `id`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_review_atomic(
+        &self,
+        repo: &str,
+        title: Option<&str>,
+        base_ref: &str,
+        head_ref: &str,
+        session_id: Option<&str>,
+        now: i64,
+        base: Option<&NewReviewBase<'_>>,
+        pr: Option<&NewReviewPr<'_>>,
+    ) -> Result<i64> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO reviews
+                (repo, title, base_ref, head_ref, session_id, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'open', ?6, ?6)",
+            params![repo, title, base_ref, head_ref, session_id, now],
+        )?;
+        let id = tx.last_insert_rowid();
+        if let Some(b) = base {
+            tx.execute(
+                "UPDATE reviews
+                 SET base_mode = ?2, base_branch = ?3, base_member = ?4, base_set_by = ?5,
+                     base_status = ?6
+                 WHERE id = ?1",
+                params![id, b.mode, b.branch, b.member, b.set_by, b.status_json],
+            )?;
+        }
+        if let Some(p) = pr {
+            tx.execute(
+                "UPDATE reviews
+                 SET pr_number = ?2, pr_repo_slug = ?3, pr_head_sha = ?4,
+                     pr_meta_json = ?5, pr_meta_fetched_at = ?6
+                 WHERE id = ?1",
+                params![
+                    id,
+                    p.number,
+                    p.repo_slug,
+                    p.head_sha,
+                    p.meta_json,
+                    p.meta_json.map(|_| now)
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(id)
     }
 
     pub fn get_review(&self, id: i64) -> Result<Option<ReviewRow>> {

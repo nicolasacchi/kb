@@ -83,6 +83,7 @@ mod recipes;
 mod review_docs;
 mod review_stores;
 mod reviews;
+pub use reviews::{NewReviewBase, NewReviewPr};
 mod scip_runs;
 mod symbols;
 #[cfg(test)]

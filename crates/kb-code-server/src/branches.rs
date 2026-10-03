@@ -438,8 +438,12 @@ pub async fn facts_route(
     let mut prs: HashMap<String, PrOut> = HashMap::new();
     let mut ci: HashMap<String, CiOut> = HashMap::new();
     if want_pr {
-        match crate::github::github_repo(&repo.path) {
-            Ok(slug) => match state.github.list_pulls(&slug.owner, &slug.name).await {
+        // K2 carry — the forge project + credential come from `forge_ctx`.
+        match crate::reviews::forge_access(&state, repo).await {
+            Ok(crate::reviews::ForgeAccess::Ready {
+                repo: slug,
+                client: github,
+            }) => match github.list_pulls(&slug.owner, &slug.name).await {
                 Ok(list) => {
                     for p in list {
                         prs.insert(
@@ -469,8 +473,7 @@ pub async fn facts_route(
                                 continue;
                             }
                             probes += 1;
-                            match state
-                                .github
+                            match github
                                 .list_checks(&slug.owner, &slug.name, &f.raw.tip_sha)
                                 .await
                             {
@@ -490,9 +493,13 @@ pub async fn facts_route(
                     reason: e.to_string(),
                 }),
             },
+            Ok(crate::reviews::ForgeAccess::Unavailable(reason)) => degraded.push(DegradedLane {
+                lane: "github",
+                reason,
+            }),
             Err(e) => degraded.push(DegradedLane {
                 lane: "github",
-                reason: e.to_string(),
+                reason: e.message().to_string(),
             }),
         }
     }
