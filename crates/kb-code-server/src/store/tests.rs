@@ -3127,7 +3127,7 @@ fn delete_annotation_cascades_reply_suggestions() {
 }
 
 #[test]
-fn set_review_verdict_is_a_noop_when_state_and_note_match() {
+fn set_review_verdict_is_a_noop_when_state_note_and_patchset_match() {
     let (_tmp, store) = open_temp();
     let id = store
         .create_review("r", None, "main", "feature", None, 1_000)
@@ -3143,15 +3143,30 @@ fn set_review_verdict_is_a_noop_when_state_and_note_match() {
     assert_eq!(first.verdict_at, Some(2_000));
     assert_eq!(first.verdict_ps, Some(1));
 
+    // A double-submit of the same (state, note, ps) is a no-op that does not
+    // restamp the time.
     assert_eq!(
         store
-            .set_review_verdict(id, "approve", None, 3_000, 2)
+            .set_review_verdict(id, "approve", None, 3_000, 1)
             .unwrap(),
         Some(false)
     );
     let again = store.get_review(id).unwrap().unwrap();
     assert_eq!(again.verdict_at, Some(2_000), "no-op must not restamp at");
     assert_eq!(again.verdict_ps, Some(1), "no-op must not restamp ps");
+
+    // v0.44 X9 - the SAME state and note against a NEWER patchset is the
+    // Room's "Re-affirm": it must move verdict_ps (else the verdict stays
+    // stale and the button is a no-op).
+    assert_eq!(
+        store
+            .set_review_verdict(id, "approve", None, 3_500, 2)
+            .unwrap(),
+        Some(true)
+    );
+    let reaffirmed = store.get_review(id).unwrap().unwrap();
+    assert_eq!(reaffirmed.verdict_ps, Some(2), "re-affirm restamps ps");
+    assert_eq!(reaffirmed.verdict_at, Some(3_500));
 
     assert_eq!(
         store

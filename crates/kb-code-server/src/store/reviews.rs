@@ -231,8 +231,12 @@ impl Store {
     }
 
     /// V4.C2 — set (or replace) the review-pass verdict. Compares
-    /// `(state, note)` only — `verdict_at` is ignored so a re-PUT of the
-    /// same pair is a no-op (kb-core `ReviewFile::set_verdict` G8).
+    /// `(state, note, ps)` — `verdict_at` is ignored so a double-submit of
+    /// the same triple is a no-op (kb-core `ReviewFile::set_verdict` G8).
+    /// The patchset is part of the identity: re-recording the SAME state and
+    /// note against a NEWER patchset (the Room's "Re-affirm" click after a
+    /// rebase-only patchset) must restamp `verdict_ps`, or the verdict stays
+    /// stale forever and the button does nothing (v0.44 X9).
     /// Returns `Ok(None)` when `id` is missing, `Ok(Some(false))` on a
     /// no-op, `Ok(Some(true))` when the four columns were written.
     /// Never `bump_generation`.
@@ -245,17 +249,23 @@ impl Store {
         ps: i64,
     ) -> Result<Option<bool>> {
         let conn = self.lock();
-        let Some((cur_state, cur_note)): Option<(Option<String>, Option<String>)> = conn
+        let Some((cur_state, cur_note, cur_ps)): Option<(
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        )> = conn
             .query_row(
-                "SELECT verdict, verdict_note FROM reviews WHERE id = ?1",
+                "SELECT verdict, verdict_note, verdict_ps FROM reviews WHERE id = ?1",
                 params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?
         else {
             return Ok(None);
         };
-        let unchanged = cur_state.as_deref() == Some(state) && cur_note.as_deref() == note;
+        let unchanged = cur_state.as_deref() == Some(state)
+            && cur_note.as_deref() == note
+            && cur_ps == Some(ps);
         if unchanged {
             return Ok(Some(false));
         }
