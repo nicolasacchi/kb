@@ -82,11 +82,11 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     days are flagged, and `--fix` removes
                                     THOSE ONLY — every other check here
                                     stays read-only.
-kb slo status [--kb NAME] [--json]  v0.38 CT-F5: corpus-health SLOs — four
+kb slo status [--kb NAME] [--json]  v0.38 CT-F5: corpus-health SLOs — five
    [--daemon URL]                   indicators over EXISTING tables (code-ref
                                     path shape, orphan kb_session docs,
                                     recall-ledger parse-failure rate, capture
-                                    freshness) against optional
+                                    freshness, recall injections landed) against optional
                                     [kb.<name>.slo] targets. SURFACED, NEVER
                                     ENFORCED: nothing changes behaviour on a
                                     miss, and this EXITS 0 even on a warn —
@@ -535,8 +535,8 @@ kb sessions scrub                      v0.44 F7b — secrets-only scrub filter, 
 kb sessions rescrub [--dir D] [--apply|--dry-run] [--json]  v0.44 F7b — re-scrub captures already on disk across every lane (transcript, structured digest blocks incl. the commits block, sidecar text). Dry run by default (per-lane counts, writes nothing; `--dry-run` spells that out and conflicts with `--apply`); `--apply` atomically rewrites only the affected captures, keeping each file's permission bits; idempotent. `kb doctor --hooks` (check `capture-scrub`) prints the same per-harness, per-lane data-at-rest table for `$KB_SESSIONS_DIR`, but audits only the newest 500 captures by mtime (it reads and regex-scrubs every lane of each one, so an unbounded walk is minutes of IO on a large corpus); the line names the sample (`500 newest of N`), `KB_DOCTOR_SCRUB_LIMIT=<n>` changes the cap and `0` audits all, and `rescrub` (dry run) is always the exact full count
 kb sessions list [--limit N] [--json] List captured sessions newest-first. Filters: --project, --substance (trivial|routine|substantive), --harness (claude|codex|opencode|grok|kimi), --folder, --since (unix|YYYY-MM-DD|<N>d|<N>h). v0.44 F10 `--undistilled` is the distill-debt queue (committed, no memory, not trivial; `/kb-distill --pending` works through it)
 kb sessions coverage [--days N] [--json]  v0.44 F10 — recall-hook coverage per harness: user turns vs turns where a memory injection landed vs serves that never landed (GET /api/sessions/recall-coverage). A floor, not a target
-kb sessions distilled <sid> [--note TEXT] [--slate SLUG]  v0.44 F10 — idempotently close the session's slate distill ask (`Distill session <sid>?`, ref `session:<sid>`) with `done`; no open ask is a no-op
-kb chores [--json] [--line]            v0.44 F10 — one derived agenda of due agent-layer upkeep (distill queue, slate tidy/rotate/hand, memory triage, resurface, stale hook markers), one `chore → skill (why)` line each. `--line` prints a single counts-only line, at most once per UTC day. Pull-only; schedules and stores nothing
+kb sessions distilled <sid> [--note TEXT] [--slate SLUG]  v0.44 F10 — idempotently close the session's slate distill ask (`Distill session <sid>?`, ref `session:<sid>`) with `done` (the daemon decides what is open under its per-slate lock, so concurrent runs post exactly one); no open ask is a no-op
+kb chores [--json] [--line]            v0.44 F10 — one derived agenda of due agent-layer upkeep (distill queue, slate tidy/rotate/hand, memory triage, resurface, stale hook markers, an aged `weekly-review` note, CLI/daemon build skew), one `chore → skill (why)` line each. `--line` prints a single counts-only line, at most once per UTC day, and prints nothing (exit 0) when nothing is due or the daemon is down; `kb-wake.sh` appends it to the SessionStart context. Pull-only; schedules and stores nothing
 kb sessions folders                    List the folders (working directories) sessions ran in, with counts
 kb sessions rollup                     R9 — top research queries per project folder (or overall)
 kb sessions funnel                     R9 — the activity funnel: searched → opened → edited → committed → commented

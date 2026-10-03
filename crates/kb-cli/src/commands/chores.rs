@@ -12,7 +12,8 @@
 //!
 //! `--line` prints a single counts-only line (nothing when nothing is due)
 //! and prints it at most once per UTC day, so a SessionStart hook can call it
-//! without becoming noise. Not wired into any hook yet.
+//! without becoming noise. `kb-wake.sh` (SessionStart) calls it; a daemon that
+//! is down or a CLI without the verb stays silent there.
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -38,6 +39,13 @@ pub const STALE_MARKER_DAYS: u64 = 14;
 /// ...and this many of them make a prune due.
 pub const STALE_MARKER_DUE_MIN: usize = 2_000;
 
+/// Days since the newest `weekly-review` note (what `/kb-weekly` writes) at
+/// which another review is due. Only a note that EXISTS can age: a user who
+/// never ran the skill is not nagged to start.
+pub const WEEKLY_NOTE_DUE_DAYS: u64 = 10;
+/// Tag `/kb-weekly` stamps on the note it saves.
+pub const WEEKLY_NOTE_TAG: &str = "weekly-review";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlateFacts {
     pub slug: String,
@@ -56,6 +64,12 @@ pub struct ChoreInputs {
     pub triage_items: Option<usize>,
     pub resurface_items: Option<usize>,
     pub stale_markers: Option<usize>,
+    /// Age in days of the newest weekly-review note (lane readable, no such
+    /// note = `Some(None)`).
+    pub weekly_note_age_days: Option<Option<u64>>,
+    /// `(cli_sha, daemon_sha)` when both stamps are known and name different
+    /// commits (lane readable, no skew = `Some(None)`).
+    pub cli_skew: Option<Option<(String, String)>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +145,57 @@ pub fn decide(i: &ChoreInputs) -> Vec<Chore> {
             reason: format!("{n} hook marker files older than {STALE_MARKER_DAYS}d"),
         });
     }
+    if let Some(Some(days)) = i
+        .weekly_note_age_days
+        .filter(|d| d.is_some_and(|d| d >= WEEKLY_NOTE_DUE_DAYS))
+    {
+        out.push(Chore {
+            id: "weekly-note",
+            skill: "/kb-weekly".into(),
+            reason: format!("the newest weekly review is {days} day(s) old"),
+        });
+    }
+    if let Some(Some((cli, daemon))) = &i.cli_skew {
+        out.push(Chore {
+            id: "cli-skew",
+            skill: "`kb doctor --hooks`".into(),
+            reason: format!("this CLI ({cli}) and the daemon ({daemon}) are different builds"),
+        });
+    }
     out
+}
+
+/// Pure: do two build stamps name different commits? `None` when either is
+/// unknown (a missing stamp is reported by `kb doctor --hooks`, not guessed
+/// at here). Prefix-equal shas and a `-dirty` suffix count as the same commit.
+pub fn skew_between(cli_sha: &str, daemon_sha: &str) -> Option<(String, String)> {
+    use super::doctor::sha_unknown;
+    if sha_unknown(cli_sha) || sha_unknown(daemon_sha) {
+        return None;
+    }
+    let c = cli_sha.strip_suffix("-dirty").unwrap_or(cli_sha);
+    let d = daemon_sha.strip_suffix("-dirty").unwrap_or(daemon_sha);
+    if c.starts_with(d) || d.starts_with(c) {
+        None
+    } else {
+        Some((cli_sha.to_string(), daemon_sha.to_string()))
+    }
+}
+
+/// Pure: age in whole days of the newest note tagged [`WEEKLY_NOTE_TAG`] in
+/// a `/api/notes` body; `None` when no such note carries a timestamp.
+pub fn weekly_note_age_days(notes: &Value, now_unix: i64) -> Option<u64> {
+    let newest = notes["notes"]
+        .as_array()?
+        .iter()
+        .filter(|n| {
+            n["tags"]
+                .as_array()
+                .is_some_and(|t| t.iter().any(|t| t.as_str() == Some(WEEKLY_NOTE_TAG)))
+        })
+        .filter_map(|n| n["updated_at"].as_i64())
+        .max()?;
+    Some((now_unix - newest).max(0) as u64 / 86_400)
 }
 
 /// The `--line` form: counts only, one line, nothing when nothing is due.
@@ -234,6 +298,21 @@ async fn gather(daemon: Option<&str>, bearer: Option<&str>, cwd: &Path) -> Resul
         Err(_) => None,
     };
 
+    let now_unix = chrono::Utc::now().timestamp();
+    let weekly_note_age_days = get_json(&client, &format!("{base}/api/notes"))
+        .await
+        .map(|v| weekly_note_age_days(&v, now_unix));
+
+    let cli_skew = get_json(&client, &format!("{base}/api/identity"))
+        .await
+        .map(|v| {
+            let (describe, sha) = super::version::stamp();
+            if super::version::stamp_missing(describe, sha) {
+                return None;
+            }
+            v["build_sha"].as_str().and_then(|d| skew_between(sha, d))
+        });
+
     let stale_markers = cache_dir()
         .and_then(|d| count_stale_markers(&d, STALE_MARKER_DAYS, std::time::SystemTime::now()));
     Ok(ChoreInputs {
@@ -242,6 +321,8 @@ async fn gather(daemon: Option<&str>, bearer: Option<&str>, cwd: &Path) -> Resul
         triage_items,
         resurface_items,
         stale_markers,
+        weekly_note_age_days,
+        cli_skew,
     })
 }
 
@@ -261,6 +342,12 @@ fn unavailable(i: &ChoreInputs) -> Vec<&'static str> {
     }
     if i.stale_markers.is_none() {
         v.push("stale-markers");
+    }
+    if i.weekly_note_age_days.is_none() {
+        v.push("weekly-note");
+    }
+    if i.cli_skew.is_none() {
+        v.push("cli-skew");
     }
     v
 }
@@ -353,6 +440,8 @@ mod tests {
             resurface_items: Some(RESURFACE_DUE_MIN - 1),
             stale_markers: Some(STALE_MARKER_DUE_MIN - 1),
             slate: Some(None),
+            weekly_note_age_days: Some(Some(WEEKLY_NOTE_DUE_DAYS - 1)),
+            cli_skew: Some(None),
         };
         assert!(decide(&i).is_empty());
     }
@@ -380,6 +469,56 @@ mod tests {
             }),
             vec!["memory-triage", "resurface", "stale-markers"]
         );
+    }
+
+    #[test]
+    fn weekly_note_is_due_only_once_an_existing_note_ages_out() {
+        let ids = |i: &ChoreInputs| decide(i).iter().map(|c| c.id).collect::<Vec<_>>();
+        let age = |a| ChoreInputs {
+            weekly_note_age_days: Some(a),
+            ..ChoreInputs::default()
+        };
+        assert_eq!(ids(&age(Some(WEEKLY_NOTE_DUE_DAYS))), vec!["weekly-note"]);
+        assert!(ids(&age(Some(WEEKLY_NOTE_DUE_DAYS - 1))).is_empty());
+        assert!(
+            ids(&age(None)).is_empty(),
+            "no note ever written is not a nag"
+        );
+    }
+
+    #[test]
+    fn weekly_note_age_reads_the_newest_tagged_note() {
+        let now = 100 * 86_400;
+        let body = json!({"notes": [
+            {"tags": ["weekly-review"], "updated_at": now - 12 * 86_400},
+            {"tags": ["weekly-review", "kb"], "updated_at": now - 3 * 86_400},
+            {"tags": ["other"], "updated_at": now},
+            {"tags": ["weekly-review"]},
+        ]});
+        assert_eq!(weekly_note_age_days(&body, now), Some(3));
+        assert_eq!(
+            weekly_note_age_days(&json!({"notes": [{"tags": ["x"], "updated_at": now}]}), now),
+            None
+        );
+        assert_eq!(weekly_note_age_days(&json!({}), now), None);
+    }
+
+    #[test]
+    fn cli_skew_needs_two_known_stamps_naming_different_commits() {
+        assert_eq!(skew_between("abc1234", "abc1234ffff"), None);
+        assert_eq!(skew_between("abc1234-dirty", "abc1234"), None);
+        assert_eq!(skew_between("unknown", "abc1234"), None);
+        assert_eq!(skew_between("abc1234", ""), None);
+        assert_eq!(
+            skew_between("abc1234", "def5678"),
+            Some(("abc1234".into(), "def5678".into()))
+        );
+        let d = decide(&ChoreInputs {
+            cli_skew: Some(skew_between("abc1234", "def5678")),
+            ..ChoreInputs::default()
+        });
+        assert_eq!(d[0].id, "cli-skew");
+        assert!(d[0].reason.contains("abc1234") && d[0].reason.contains("def5678"));
     }
 
     #[test]

@@ -14872,7 +14872,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             db.slo_snapshots_list(100).unwrap().len(),
-            4,
+            crate::slo::SloKey::ALL.len(),
             "the log outlives every document it ever measured"
         );
     }
@@ -15090,6 +15090,7 @@ mod tests {
     fn slo_snapshots_append_only_and_read_newest_first() {
         use crate::slo::{SloInputs, SloTargets};
         let mut db = db();
+        let n = crate::slo::SloKey::ALL.len();
         let first = crate::slo::build(
             "k",
             &SloInputs {
@@ -15103,25 +15104,29 @@ mod tests {
             },
             1_000,
         );
-        assert_eq!(db.slo_snapshot_append(1_000, &first.indicators).unwrap(), 4);
+        assert_eq!(db.slo_snapshot_append(1_000, &first.indicators).unwrap(), n);
         let second = crate::slo::build("k", &SloInputs::default(), &SloTargets::default(), 2_000);
         assert_eq!(
             db.slo_snapshot_append(2_000, &second.indicators).unwrap(),
-            4
+            n
         );
 
         let rows = db.slo_snapshots_list(100).unwrap();
-        assert_eq!(rows.len(), 8, "every run lands; nothing is deduped away");
+        assert_eq!(
+            rows.len(),
+            2 * n,
+            "every run lands; nothing is deduped away"
+        );
         assert_eq!(rows[0].taken_at_unix, 2_000, "newest first");
-        assert!(rows[..4].iter().all(|r| r.taken_at_unix == 2_000));
+        assert!(rows[..n].iter().all(|r| r.taken_at_unix == 2_000));
 
         // The identical-reading run is STILL appended (unlike atlas frames,
         // whose coord_hash skips a duplicate) — a flat line is the signal.
         assert_eq!(
             db.slo_snapshot_append(3_000, &second.indicators).unwrap(),
-            4
+            n
         );
-        assert_eq!(db.slo_snapshots_list(100).unwrap().len(), 12);
+        assert_eq!(db.slo_snapshots_list(100).unwrap().len(), 3 * n);
 
         // An `unknown` indicator stores a NULL value, never a fabricated 0.
         let unknown = db
