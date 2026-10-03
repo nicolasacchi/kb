@@ -304,7 +304,7 @@ GET  /api/search?q=…&mode=hybrid|keyword|semantic[&kb=NAME]
                                             (pre-RRF per-arm positions, additive).
 GET  /api/stats                             cross-kb summary
 GET  /api/kb/{kb}/stats                     per-kb stats
-GET  /api/kb/{kb}/slo                       CT-F5 corpus-health SLOs: four
+GET  /api/kb/{kb}/slo                       CT-F5 corpus-health SLOs: five
                                             indicators over EXISTING tables
                                             (code-ref path shape, orphan
                                             kb_session docs, recall-ledger

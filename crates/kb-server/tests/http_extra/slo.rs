@@ -133,24 +133,25 @@ fn indicator<'a>(report: &'a serde_json::Value, key: &str) -> &'a serde_json::Va
         .unwrap_or_else(|| panic!("indicator {key} missing"))
 }
 
-/// A corpus with nothing to measure must still answer a FULL report — four
+/// A corpus with nothing to measure must still answer a FULL report — five
 /// indicators, all present. Dropping an unmeasurable row would make a broken
 /// input look like a missing feature.
 #[tokio::test]
-async fn an_empty_corpus_reports_four_honest_unknowns() {
+async fn an_empty_corpus_reports_five_honest_unknowns() {
     let (_tmp, addr) = boot(&[], None).await;
     let client = reqwest::Client::new();
     let body = get_json(&client, addr, "/api/kb/smoke/slo").await;
 
     assert_eq!(body["grammar"], "kb-slo/1");
     assert_eq!(body["kb"], "smoke");
-    assert_eq!(body["indicators"].as_array().unwrap().len(), 4);
+    assert_eq!(body["indicators"].as_array().unwrap().len(), 5);
     assert_eq!(body["warn_count"], 0);
 
     for key in [
         "coderef_resolution_pct",
         "ledger_parse_failure_pct",
         "capture_freshness_hours",
+        "recall_coverage_pct",
     ] {
         let i = indicator(&body, key);
         assert!(i["value"].is_null(), "{key} must be null, not 0: {i}");

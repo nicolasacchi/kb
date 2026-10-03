@@ -797,7 +797,7 @@ async fn list_page(
 // v0.44 F10 — recall-hook coverage
 // ---------------------------------------------------------------------------
 
-const COVERAGE_DEFAULT_DAYS: u32 = 7;
+pub(crate) const COVERAGE_DEFAULT_DAYS: u32 = 7;
 const COVERAGE_MAX_DAYS: u32 = 365;
 
 #[derive(Debug, Deserialize, Default)]
@@ -896,6 +896,22 @@ pub fn aggregate_recall_coverage(
     (harnesses, total, excluded)
 }
 
+/// Session ids the live registry still tracks (not finished, not presumed
+/// ended): their capture may simply not have landed yet, so recall-coverage
+/// surfaces (the route and the `recall_coverage_pct` SLO) exclude them.
+pub(crate) fn live_session_ids(
+    state: &KbHandles,
+    now_unix: i64,
+) -> std::collections::HashSet<String> {
+    state
+        .live_registry
+        .snapshot(now_unix)
+        .into_iter()
+        .filter(|(_, st, _)| !matches!(st, LiveState::Finished | LiveState::PresumedEnded))
+        .map(|(r, _, _)| r.session_id)
+        .collect()
+}
+
 /// `GET /api/sessions/recall-coverage?days=7` — per harness, over the
 /// trailing window and NEWEST captures only: user turns vs turns where a
 /// memory injection landed vs serves that never landed. Derived per request
@@ -932,13 +948,7 @@ pub async fn recall_coverage(
         .into_iter()
         .flatten()
         .collect();
-    let live: std::collections::HashSet<String> = state
-        .live_registry
-        .snapshot(now_unix)
-        .into_iter()
-        .filter(|(_, st, _)| !matches!(st, LiveState::Finished | LiveState::PresumedEnded))
-        .map(|(r, _, _)| r.session_id)
-        .collect();
+    let live = live_session_ids(&state, now_unix);
     let (harnesses, total, excluded_live) = aggregate_recall_coverage(&rows, &live);
     Json(RecallCoverageResponse {
         days,

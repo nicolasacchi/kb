@@ -82,11 +82,11 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     days are flagged, and `--fix` removes
                                     THOSE ONLY — every other check here
                                     stays read-only.
-kb slo status [--kb NAME] [--json]  v0.38 CT-F5: corpus-health SLOs — four
+kb slo status [--kb NAME] [--json]  v0.38 CT-F5: corpus-health SLOs — five
    [--daemon URL]                   indicators over EXISTING tables (code-ref
                                     path shape, orphan kb_session docs,
                                     recall-ledger parse-failure rate, capture
-                                    freshness) against optional
+                                    freshness, recall injections landed) against optional
                                     [kb.<name>.slo] targets. SURFACED, NEVER
                                     ENFORCED: nothing changes behaviour on a
                                     miss, and this EXITS 0 even on a warn —
