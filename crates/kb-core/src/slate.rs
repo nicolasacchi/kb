@@ -1546,10 +1546,26 @@ pub fn author_tag(p: &Post) -> String {
     )
 }
 
-/// First four characters of a session id — enough to tell two concurrent
-/// sessions apart in a line, short enough to cost one token.
+/// Is this a canonical UUID whose version digit is 7? UUIDv7 leads with a
+/// millisecond timestamp (omp/grok/codex/kimi ids), so its first characters
+/// are identical for every session started in the same ~50-day window.
+fn is_uuid_v7(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b[14] == b'7'
+        && [8usize, 13, 18, 23].iter().all(|&i| b[i] == b'-')
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| [8usize, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit())
+}
+
+/// Four characters of a session id — enough to tell two concurrent
+/// sessions apart in a line, short enough to cost one token. The FIRST four
+/// for ordinary ids; the LAST four (random bits) for a UUIDv7, whose leading
+/// characters encode the timestamp and collide across a ~50-day window.
 pub fn session_short(session_id: Option<&str>) -> String {
     match session_id {
+        Some(s) if is_uuid_v7(s) => s[s.len() - 4..].to_string(),
         Some(s) if !s.is_empty() => s.chars().take(4).collect(),
         _ => "?".to_string(),
     }
@@ -3341,6 +3357,24 @@ pub fn to_ledger_line(p: &Post) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_short_uses_random_tail_for_uuid_v7() {
+        // Two omp sessions from the same window share every leading char.
+        let a = "01a025fd-51eb-7cd3-86f2-95261769cb14";
+        let b = "01a025fd-6a00-7e11-9d0a-0123456789ab";
+        assert_eq!(session_short(Some(a)), "cb14");
+        assert_eq!(session_short(Some(b)), "89ab");
+        // v4 and non-UUID ids keep the historical first-four tag.
+        assert_eq!(
+            session_short(Some("8f2a1111-2222-4333-8444-555566667777")),
+            "8f2a"
+        );
+        assert_eq!(session_short(Some("8f2a5b7c99")), "8f2a");
+        // A 7 in the version slot of a non-UUID shape is not v7.
+        assert_eq!(session_short(Some("01a025fd-51eb-7cd3-86f2-zzzz")), "01a0");
+        assert_eq!(session_short(None), "?");
+    }
+
     use super::*;
 
     const NOW: i64 = 1_767_225_600;
