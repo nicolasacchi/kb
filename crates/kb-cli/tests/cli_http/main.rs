@@ -19,5 +19,6 @@ mod memory_cli;
 mod notes;
 mod queries;
 mod search_json;
+mod search_scope;
 mod share;
 mod slate;
