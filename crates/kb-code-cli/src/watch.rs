@@ -196,7 +196,7 @@ impl WatchItem {
     /// react to), else the finding row's own `author` field — which the
     /// server already resolves to the manual author or the import's
     /// `"claude"` fallback, so no second fallback is needed here. This
-    /// is what makes `--ignore-author claude` suppress an agent's own
+    /// is what makes `--ignore-agents` (or `--ignore-author claude`) suppress an agent's own
     /// import while still surfacing a human's disposition on that same
     /// finding.
     pub fn author(&self) -> Option<&str> {

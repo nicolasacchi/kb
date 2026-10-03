@@ -11,6 +11,7 @@
 
 mod commands;
 mod http;
+mod session_identity;
 mod session_marker;
 mod sse;
 
@@ -3944,11 +3945,15 @@ pub(crate) struct SlateCommon {
     #[arg(long, global = true)]
     topic: Option<String>,
     /// Transcript session id. Ladder: this flag > `$KB_SESSION_ID` >
-    /// `~/.cache/kb/current-session`. NEVER a job id (invariant #11).
+    /// `$CLAUDE_CODE_SESSION_ID` > `$GROK_SESSION_ID` > the fresh repo-keyed
+    /// marker > the legacy global `current-session` file (flagged, stderr
+    /// note) > none (the daemon stamps `unattributed`). NEVER a job id
+    /// (invariant #11).
     #[arg(long = "session-id", global = true)]
     session_id: Option<String>,
-    /// claude | codex | opencode | grok | kimi | omp. Default `$KB_HARNESS`
-    /// else `claude`; an unknown value is SL2's 400.
+    /// claude | codex | opencode | grok | kimi | omp. Default `$KB_HARNESS`,
+    /// else the harness of the session env var that supplied the id, else a
+    /// flagged `claude` guess; an unknown value is SL2's 400.
     #[arg(long, global = true)]
     harness: Option<String>,
     /// Model id to record on the post's provenance.

@@ -647,3 +647,76 @@ async fn annotate_delete_prompts_unless_yes_and_cascades_to_replies() {
 
     task.abort();
 }
+
+/// v0.44 F5 — every annotation the CLI creates carries the shared author
+/// rule. Before, `annotate`/`annotate reply` sent no author and the daemon
+/// saved EVERY agent reply as the human `you`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn annotate_and_reply_save_the_harness_as_author_and_as_you_opts_out() {
+    let repo_tmp = fixture_repo();
+    let (_tmp, url, task) = boot(repo_tmp.path(), "fixture").await;
+
+    let run = |harness: Option<&str>, code_author: Option<&str>, extra: &[&str], base: &[&str]| {
+        let mut c = Command::cargo_bin("kb-code").unwrap();
+        c.env_remove("KB_HARNESS").env_remove("KB_CODE_AUTHOR");
+        if let Some(h) = harness {
+            c.env("KB_HARNESS", h);
+        }
+        if let Some(a) = code_author {
+            c.env("KB_CODE_AUTHOR", a);
+        }
+        let out = c
+            .args(base)
+            .args(extra)
+            .args(["--daemon", &url, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&out).unwrap()
+    };
+
+    // create under KB_HARNESS=omp -> omp
+    let parent = run(
+        Some("omp"),
+        None,
+        &[],
+        &["annotate", "lib.rs:2", "-m", "q?", "--repo", "fixture"],
+    );
+    assert_eq!(parent["author"], "omp", "{parent}");
+    let id = parent["id"].as_str().unwrap().to_string();
+
+    // reply under KB_HARNESS=omp -> omp (NOT "you")
+    let reply_base = [
+        "annotate",
+        "reply",
+        id.as_str(),
+        "-m",
+        "a",
+        "--repo",
+        "fixture",
+        "--path",
+        "lib.rs",
+    ];
+    let r = run(Some("omp"), None, &[], &reply_base);
+    assert_eq!(r["author"], "omp", "{r}");
+    // KB_CODE_AUTHOR beats KB_HARNESS
+    let r = run(Some("omp"), Some("codex"), &[], &reply_base);
+    assert_eq!(r["author"], "codex", "{r}");
+    // --author beats both; --as you is the human opt-out
+    let r = run(
+        Some("omp"),
+        Some("codex"),
+        &["--author", "grok"],
+        &reply_base,
+    );
+    assert_eq!(r["author"], "grok", "{r}");
+    let r = run(Some("omp"), Some("codex"), &["--as", "you"], &reply_base);
+    assert_eq!(r["author"], "you", "{r}");
+    // nothing set -> the flagged default
+    let r = run(None, None, &[], &reply_base);
+    assert_eq!(r["author"], "claude", "{r}");
+
+    task.abort();
+}

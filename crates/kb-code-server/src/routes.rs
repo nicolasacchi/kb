@@ -143,6 +143,13 @@ pub struct IdentityResponse {
     /// this field can never disagree with the gate's own 404/200 verdict
     /// on the very next request from the same caller.
     pub review_mutations_admitted: bool,
+    /// v0.44 F5 — whether THIS request's peer classifies as loopback (the
+    /// same `is_loopback_origin` walk the gate runs), independent of
+    /// `[review] remote_mutations`. Lets an agent CLI tell a LOOPBACK-ONLY
+    /// route's bodiless 404 ("you are not on the daemon host") from a real
+    /// not-found, and exit 4 `needs-daemon-host` instead of a confusing 404.
+    /// Computed per request, never cached.
+    pub caller_loopback: bool,
     /// V75-M1 — the Workspace re-key backfill's state: `pending` |
     /// `running` | `done` (`crate::rekey::state_label`).
     ///
@@ -169,11 +176,12 @@ pub async fn identity(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    let review_mutations_admitted = kb_server::middleware::is_loopback_origin(
+    let caller_loopback = kb_server::middleware::is_loopback_origin(
         Some(peer.ip()),
         &headers,
         &state.auth.trusted_proxies.load(),
-    ) || state.review.remote_mutations;
+    );
+    let review_mutations_admitted = caller_loopback || state.review.remote_mutations;
     // Every configured repo was `upsert_repo`'d in `bind_and_spawn`, so
     // `id` is always `Some` in practice; `unwrap_or_default()` (zero
     // counts) is the defensive fallback rather than a panic if that ever
@@ -226,6 +234,7 @@ pub async fn identity(
         schema_epoch: crate::store::schema_epoch(),
         remote_mutations: state.review.remote_mutations,
         review_mutations_admitted,
+        caller_loopback,
         rekey: crate::rekey::state_label(&state.rekey),
         repos,
         started_at: state.started_at.to_rfc3339(),

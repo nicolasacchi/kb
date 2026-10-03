@@ -65,6 +65,8 @@ impl Fixture {
             .env("XDG_CACHE_HOME", &self.cache)
             .env_remove("KB_SESSION_ID")
             .env_remove("KB_HARNESS")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("GROK_SESSION_ID")
             .args(&full);
         cmd
     }
@@ -396,4 +398,37 @@ async fn hook_json_carries_text_and_head_seq_for_open_and_delta() {
         .is_some_and(|t| t.contains("worth trying the pool")));
     assert_eq!(delta["head_seq"], 2);
     assert_eq!(delta["truncated"], false);
+}
+
+/// v0.44 F5 — identity ladder through the real binary. A stale legacy
+/// `current-session` file (some other concurrent session's id) must lose to
+/// `CLAUDE_CODE_SESSION_ID`, and `KB_HARNESS=omp` must save as `omp`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slate_identity_ladder_env_beats_global_marker_and_harness_env_is_saved() {
+    let f = boot("identity").await;
+    std::fs::create_dir_all(f.cache.join("kb")).unwrap();
+    std::fs::write(f.cache.join("kb/current-session"), "other-session-zzz\n").unwrap();
+
+    // CLAUDE_CODE_SESSION_ID beats the legacy global file; harness derives
+    // from the env var that supplied the id.
+    let mut c = f.cmd(&["now", "from claude env", "--json"]);
+    c.env("CLAUDE_CODE_SESSION_ID", "sess-claude-env");
+    let v: Value = serde_json::from_slice(&c.assert().success().get_output().stdout).unwrap();
+    assert_eq!(v["post"]["prov"]["session_id"], "sess-claude-env", "{v}");
+    assert_eq!(v["post"]["prov"]["harness"], "claude", "{v}");
+
+    // KB_SESSION_ID outranks CLAUDE_CODE_SESSION_ID; KB_HARNESS=omp is saved.
+    let mut c = f.cmd(&["now", "from omp", "--json"]);
+    c.env("KB_SESSION_ID", "sess-omp")
+        .env("CLAUDE_CODE_SESSION_ID", "sess-claude-env")
+        .env("KB_HARNESS", "omp");
+    let v: Value = serde_json::from_slice(&c.assert().success().get_output().stdout).unwrap();
+    assert_eq!(v["post"]["prov"]["session_id"], "sess-omp", "{v}");
+    assert_eq!(v["post"]["prov"]["harness"], "omp", "{v}");
+
+    // GROK_SESSION_ID alone names the grok harness.
+    let mut c = f.cmd(&["now", "from grok", "--json"]);
+    c.env("GROK_SESSION_ID", "sess-grok");
+    let v: Value = serde_json::from_slice(&c.assert().success().get_output().stdout).unwrap();
+    assert_eq!(v["post"]["prov"]["harness"], "grok", "{v}");
 }

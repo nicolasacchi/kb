@@ -1577,6 +1577,24 @@ mod v2_tests {
         );
     }
 
+    /// v0.44 F5 — the SPA's `isAgentAuthorName` used to hard-code
+    /// `=== "claude"` while this set has seven names, so an `omp` reply
+    /// looked human in the Room. Both sides now load ONE fixture; the SPA
+    /// half is `web-code/src/lib/agentAuthors.golden.test.ts`.
+    #[test]
+    fn the_agent_author_set_matches_the_shared_golden_fixture() {
+        let fx: serde_json::Value =
+            serde_json::from_str(include_str!("../grammar/agent-authors.golden.json")).unwrap();
+        assert_eq!(fx["schema"], "kbc-agent-authors/1");
+        let names: Vec<&str> = fx["names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap())
+            .collect();
+        assert_eq!(names, AGENT_AUTHOR_NAMES);
+    }
+
     #[test]
     fn an_author_kind_is_derived_from_the_name_and_nothing_else() {
         assert_eq!(author_for(None).kind, AUTHOR_SYSTEM);

@@ -1,0 +1,5 @@
+{
+  "schema": "kbc-agent-authors/1",
+  "note": "Author names read as an AGENT. Loaded by review_timeline.rs (AGENT_AUTHOR_NAMES) and web-code/src/lib/agentAuthors.golden.test.ts (questionState.ts AGENT_AUTHOR_NAMES). Attribution only - a name convention, not authentication.",
+  "names": ["claude", "codex", "opencode", "grok", "kimi", "omp", "agent"]
+}

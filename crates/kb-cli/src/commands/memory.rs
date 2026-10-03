@@ -4,7 +4,6 @@
 //! reachable daemon (no offline mode).
 
 use crate::http;
-use crate::session_marker::read_session_marker;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -150,16 +149,16 @@ pub(crate) async fn remember_inner(
     // carries the indexed marker rather than silently losing it.
     let outcome = apply_failed_outcome(failed, &mut tags_vec);
 
-    // v0.14 S1 — session-id resolution. `--session-id` wins; else read
-    // the marker file the SessionStart / UserPromptSubmit hooks drop
-    // at `${XDG_CACHE_HOME:-$HOME/.cache}/kb/current-session`. The
+    // v0.14 S1 / v0.44 F5 — session-id resolution via
+    // `session_identity` (`--session-id` wins; the global marker file is
+    // only a flagged last resort). The
     // `--no-session` flag short-circuits both paths.
     let resolved_session = if no_session {
         None
-    } else if let Some(sid) = session_id {
-        Some(sid.to_string())
     } else {
-        read_session_marker()
+        // v0.44 F5 — the shared identity ladder (flag > KB_SESSION_ID >
+        // harness env > fresh repo marker > flagged legacy file).
+        crate::session_identity::session_for_write(session_id)
     };
 
     // L8 — visibility flags, now composed with MI-W0.2's auto-link and
@@ -693,7 +692,10 @@ fn recall_session_id() -> Option<String> {
                 Some(sid.to_string())
             }
         }
-        Err(_) => read_session_marker(),
+        Err(_) => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            crate::session_identity::resolve_process(None, None, &cwd).session_id
+        }
     }
 }
 
