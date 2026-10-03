@@ -108,7 +108,7 @@ fn with_security_headers(mut resp: Response<Body>) -> Response<Body> {
 /// directory names:
 ///   1. `KB_CODE_SPA_DIST` env var (absolute path to a built dist dir)
 ///   2. `web-code/dist` relative to the current working directory
-///   3. `<exe dir>/../share/kb-code/web/dist` — the release tarball / image
+///   3. `<exe dir>/../share/kb-code/web-code/dist` — the release tarball / image
 ///      layout, so an installed `kb-code-server` finds its UI with no env var
 ///   4. `None` — the daemon serves `/api/*` only; every other path 404s
 ///      (lets `cargo test`/CI boot the daemon without building the SPA).
@@ -151,7 +151,7 @@ pub(crate) fn resolve_spa_dist_from(
                 let candidate = prefix
                     .join("share")
                     .join("kb-code")
-                    .join("web")
+                    .join("web-code")
                     .join("dist");
                 if has_index(&candidate) {
                     return Some(candidate);
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn spa_dist_resolves_next_to_the_executable() {
         let root = tempfile::tempdir().unwrap();
-        let dist = root.path().join("share/kb-code/web/dist");
+        let dist = root.path().join("share/kb-code/web-code/dist");
         std::fs::create_dir_all(&dist).unwrap();
         std::fs::write(dist.join("index.html"), "<html></html>").unwrap();
         let exe = root.path().join("bin/kb-code-server");
