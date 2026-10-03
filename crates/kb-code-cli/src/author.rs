@@ -27,9 +27,14 @@ pub fn resolve_author(
     as_who: Option<&str>,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String> {
+    // Lowercased + trimmed: the daemon's human/agent classifiers
+    // (`is_agent_author`, `review_timeline::author_for`) lowercase before
+    // matching but the STORED value is verbatim, and `--ignore-author` /
+    // `thread_is_unanswered` compare it byte-for-byte — so `Claude` and
+    // `claude` must be the same row author from the start.
     let pick = |s: Option<&str>| {
         let t = s?.trim();
-        (!t.is_empty()).then(|| t.to_string())
+        (!t.is_empty()).then(|| t.to_ascii_lowercase())
     };
     if let Some(a) = pick(author) {
         return Ok(a);
@@ -50,9 +55,32 @@ pub fn resolve_author(
     Ok("claude".to_string())
 }
 
-/// Production entry over the process environment.
+/// A stderr warning when a resolved author is neither the human `you` nor
+/// in the daemon's agent vocabulary: the server would classify the row as a
+/// HUMAN (`review_timeline::author_for`, `is_agent_author`), so an agent
+/// reply saved under it never flips the awaiting-agent chip. `None` when the
+/// name is in the shared vocabulary (or is `you`).
+pub fn author_warning(author: &str) -> Option<String> {
+    if author == "you" || agent_names().contains(&author) {
+        return None;
+    }
+    Some(format!(
+        "warning: author {author:?} is not in the agent vocabulary ({}); the daemon will \
+         treat this row as written by a HUMAN — use one of those names with --author, or \
+         `--as you` if a human really is speaking",
+        agent_names().join("|")
+    ))
+}
+
+/// Production entry over the process environment. Prints
+/// [`author_warning`] to stderr for an out-of-vocabulary name (the write
+/// still proceeds: attribution only, one trust tier).
 pub fn author_for_write(author: Option<&str>, as_who: Option<&str>) -> Result<String> {
-    resolve_author(author, as_who, &|k| std::env::var(k).ok())
+    let a = resolve_author(author, as_who, &|k| std::env::var(k).ok())?;
+    if let Some(w) = author_warning(&a) {
+        eprintln!("{w}");
+    }
+    Ok(a)
 }
 
 /// `--ignore-agents` expands to every agent author name, merged with any
@@ -97,6 +125,33 @@ mod tests {
         // blanks fall through
         let e = env(&[("KB_CODE_AUTHOR", "  "), ("KB_HARNESS", "")]);
         assert_eq!(resolve_author(Some(" "), None, &e).unwrap(), "claude");
+    }
+
+    /// v0.44 X4 — the stored author is lowercased so `Claude` never becomes
+    /// a different identity from `claude` (server compares verbatim).
+    #[test]
+    fn resolved_author_is_trimmed_and_lowercased_from_every_rung() {
+        let e = env(&[("KB_CODE_AUTHOR", " Codex ")]);
+        assert_eq!(resolve_author(Some(" Claude"), None, &e).unwrap(), "claude");
+        assert_eq!(resolve_author(None, None, &e).unwrap(), "codex");
+        assert_eq!(resolve_author(None, Some("YOU"), &e).unwrap(), "you");
+        let e = env(&[("KB_HARNESS", "OMP")]);
+        assert_eq!(resolve_author(None, None, &e).unwrap(), "omp");
+    }
+
+    /// v0.44 X4 — every vocabulary name and `you` is silent; anything else
+    /// warns (the server would read it as a human).
+    #[test]
+    fn out_of_vocabulary_authors_warn_and_vocabulary_names_do_not() {
+        for n in agent_names() {
+            assert!(author_warning(n).is_none(), "{n}");
+        }
+        assert!(author_warning("you").is_none());
+        let w = author_warning("gemini").unwrap();
+        assert!(w.contains("gemini") && w.contains("HUMAN"), "{w}");
+        for n in agent_names() {
+            assert!(w.contains(n), "warning must list {n}");
+        }
     }
 
     #[test]
