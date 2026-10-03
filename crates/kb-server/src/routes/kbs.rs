@@ -50,9 +50,11 @@ pub struct KbConfigSummary {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ListParams {
-    /// `false` skips the per-corpus `count_rows` + last-run reads (the
-    /// storage-actor fan-out). Absent or any other value: the full listing.
-    pub counts: Option<bool>,
+    /// The literal `false` skips the per-corpus `count_rows` + last-run reads
+    /// (the storage-actor fan-out). Absent or ANY other value (`true`, `0`,
+    /// empty, garbage) gives the full listing — deliberately a string, not a
+    /// bool, so a non-boolean value is never a 400.
+    pub counts: Option<String>,
 }
 
 /// Pure projection of `[kb.*]` config. Synchronous on purpose: with no
@@ -76,7 +78,7 @@ pub async fn list(
     State(state): State<Arc<KbHandles>>,
     Query(params): Query<ListParams>,
 ) -> Response {
-    if params.counts == Some(false) {
+    if params.counts.as_deref() == Some("false") {
         return Json(config_summaries(&state)).into_response();
     }
     Json(list_with_counts(&state).await).into_response()

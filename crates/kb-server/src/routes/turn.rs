@@ -89,13 +89,24 @@ fn confirmed_scope(
     project: Option<&str>,
     visible_to: Option<&str>,
 ) -> (Option<String>, Option<String>) {
+    let known = |p: &str| {
+        kb_core::types::KbName::new(p)
+            .ok()
+            .is_some_and(|n| state.kbs.contains_key(&n))
+    };
+    scope_of(known, project, visible_to)
+}
+
+/// Pure core of [`confirmed_scope`]: `known` answers "is this a configured kb".
+fn scope_of(
+    known: impl Fn(&str) -> bool,
+    project: Option<&str>,
+    visible_to: Option<&str>,
+) -> (Option<String>, Option<String>) {
     let Some(project) = project.map(str::trim).filter(|p| !p.is_empty()) else {
         return (None, None);
     };
-    let known = kb_core::types::KbName::new(project)
-        .ok()
-        .is_some_and(|n| state.kbs.contains_key(&n));
-    if !known {
+    if !known(project) {
         return (None, None);
     }
     (
@@ -592,6 +603,38 @@ mod summary_line_tests {
         assert_eq!(out, "\n    ↳ Fix:  use X  now");
         assert!(!out[1..].contains('\n'));
         assert!(!out.contains('\r'));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::scope_of;
+
+    fn known(p: &str) -> bool {
+        p == "memory-a"
+    }
+
+    #[test]
+    fn known_project_passes_project_and_visible_to() {
+        assert_eq!(
+            scope_of(known, Some(" memory-a "), Some("a, memory-a")),
+            (Some("memory-a".into()), Some("a, memory-a".into()))
+        );
+        assert_eq!(
+            scope_of(known, Some("memory-a"), Some("  ")),
+            (Some("memory-a".into()), None)
+        );
+    }
+
+    #[test]
+    fn unknown_project_yields_no_scope_at_all() {
+        assert_eq!(scope_of(known, Some("memory-z"), Some("a")), (None, None));
+    }
+
+    #[test]
+    fn visible_to_is_dropped_without_a_project() {
+        assert_eq!(scope_of(known, None, Some("a")), (None, None));
+        assert_eq!(scope_of(known, Some(""), Some("a")), (None, None));
     }
 }
 

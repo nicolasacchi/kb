@@ -428,10 +428,71 @@ async fn turn_route_lanes_and_project_params() {
         .json()
         .await
         .unwrap();
-    assert!(none["degraded"]
-        .as_array()
-        .map(|d| d.iter().all(|l| l["lane"] != "context"))
-        .unwrap_or(true));
+    assert!(
+        none["degraded"]
+            .as_array()
+            .map(|d| d.iter().all(|l| l["lane"] != "context"))
+            .unwrap_or(true),
+        "context lane was not asked for, so it must not be named degraded: {none}"
+    );
+}
+
+/// v044-F6 — a KNOWN `project` narrows the turn's recall exactly as
+/// `kb recall` does; without it both project corpora answer. Fails if
+/// `project` is not threaded into `RecallParams`.
+#[tokio::test]
+async fn turn_route_known_project_narrows_recall() {
+    let (tmp, mut cfg, paths) = fixture_corpus();
+    let template = cfg.kb.get(&KbName::new("smoke").unwrap()).unwrap().clone();
+    for name in ["memory-a", "memory-b"] {
+        let dir = tmp.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("note.html"),
+            format!(
+                r#"<html><head><meta name="kb-category" content="memory-user">
+                <title>Note {name}</title></head>
+                <body><p>zirconium scoping probe {name}</p></body></html>"#
+            ),
+        )
+        .unwrap();
+        let mut sec = template.clone();
+        sec.path = dir;
+        sec.memory_scope = Some("project".to_string());
+        cfg.kb.insert(KbName::new(name).unwrap(), sec);
+    }
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "memory-a", 1).await;
+    common::wait_docs_listed(addr, "memory-b", 1).await;
+    let client = reqwest::Client::new();
+    let kbs_of = |path: String| {
+        let client = client.clone();
+        async move {
+            let v: serde_json::Value = client
+                .get(url(addr, &path))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let mut kbs: Vec<String> = v["recalled"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| h["kb"].as_str().unwrap().to_string())
+                .collect();
+            kbs.sort();
+            kbs.dedup();
+            kbs
+        }
+    };
+    let all = kbs_of("/api/turn?q=zirconium&lanes=recall".to_string()).await;
+    assert_eq!(all, vec!["memory-a", "memory-b"], "unscoped sees both");
+    let scoped = kbs_of("/api/turn?q=zirconium&lanes=recall&project=memory-a".to_string()).await;
+    assert_eq!(scoped, vec!["memory-a"], "known project must narrow recall");
 }
 
 /// v044-F6 — `?counts=false` is the per-prompt pre-flight: config fields
@@ -466,7 +527,13 @@ async fn kbs_route_counts_false_returns_config_fields_only() {
         );
     }
     // Default and counts=true keep the full shape.
-    for q in ["/api/kbs", "/api/kbs?counts=true"] {
+    for q in [
+        "/api/kbs",
+        "/api/kbs?counts=true",
+        "/api/kbs?counts=0",
+        "/api/kbs?counts=no",
+        "/api/kbs?counts=",
+    ] {
         let full: Vec<serde_json::Value> = client
             .get(url(addr, q))
             .send()
