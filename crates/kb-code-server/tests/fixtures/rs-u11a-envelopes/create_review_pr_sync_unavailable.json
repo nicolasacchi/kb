@@ -1,0 +1,44 @@
+{
+  "base": {
+    "branch": "string",
+    "fetched_at": "null",
+    "fetched_via": "null",
+    "last_fetch": "null",
+    "merge_base": "string",
+    "mode": "string",
+    "set_by": "string",
+    "source": "string",
+    "state": "string"
+  },
+  "base_ref": "string",
+  "base_sha": "string",
+  "base_source": "string",
+  "base_tip_sha": "null",
+  "created_at": "number",
+  "head_ref": "string",
+  "id": "number",
+  "kind": "string",
+  "latest_ps": "number",
+  "minted": "bool",
+  "pr_head_sha": "string",
+  "pr_meta": "null",
+  "pr_meta_unavailable_reason": {
+    "code": "string",
+    "hint": "string"
+  },
+  "pr_number": "number",
+  "pr_repo_slug": "string",
+  "repo": "string",
+  "schema": "string",
+  "session_id": "string",
+  "state": "string",
+  "tip_sha": "string",
+  "title": "string",
+  "updated_at": "number",
+  "warnings": [
+    {
+      "code": "string",
+      "message": "string"
+    }
+  ]
+}

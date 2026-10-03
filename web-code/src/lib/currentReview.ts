@@ -184,9 +184,26 @@ export function peekCurrentReview(repo: string): CurrentReview | null {
   return snapshotFor(repo);
 }
 
-/// Subscribe to the current review for `repo` — `null` when unset. Any
-/// component under the SPA root that needs to know or react: the TopBar
-/// chip, the reader's rail gate + URL sync, the search results chip.
+/// Clear the marker only if it is STILL set, reporting whether this call did.
+/// Several surfaces mount `useValidatedCurrentReview` at once and each runs
+/// the same "the review is gone" effect; the first to get here clears, the
+/// rest see `null` (the shared cache, not storage) and must stay quiet so
+/// the URL strip and the toast happen once (A9.f5).
+export function clearCurrentReviewIfSet(
+  repo: string,
+  storage: StorageLike | null = defaultStorage(),
+): boolean {
+  if (peekCurrentReview(repo) === null) return false;
+  clearCurrentReview(repo, storage);
+  return true;
+}
+
+/// The RAW marker for `repo` -- `null` when unset. It is whatever sessionStorage
+/// or a `?review=` URL put there and is NEVER checked against the daemon, so a
+/// stale or foreign id comes back as-is. Surfaces that ACT on the marker
+/// (bind a comment, scope a search, gate the rail) should read it through
+/// `useValidatedCurrentReview`, which probes the review and clears a dead
+/// marker; this raw hook is the subscription that hook is built on.
 export function useCurrentReview(repo: string): CurrentReview | null {
   return useSyncExternalStore(
     subscribe,

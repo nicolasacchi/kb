@@ -52,8 +52,12 @@ function gitSha(): string {
 // There is NO `output.format: "iife"` for the annotate entry: it is emitted
 // by the same build as `main`/`sketch`, as a classic script, and stays
 // collision-safe only because `src/scripts/annotate.ts` wraps its own body
-// in an IIFE. The guard is tests/e2e/annotator-bundle-isolation.spec.ts
-// (e2e job only) — keep the source IIFE.
+// in an IIFE. Two guards: scripts/ci/check-annotate-bundle.cjs (a structural
+// parse of dist/annotate.js, run by ci.yml's e2e job after the build -- it is NOT part of
+// `npm run build`, which runs only scripts/check-main-chunk.mjs for the
+// mermaid-out-of-the-shell check below) and the behavioural
+// tests/e2e/annotator-bundle-isolation.spec.ts (e2e job only) — keep the
+// source IIFE.
 export default defineConfig({
   plugins: [react()],
   base: "/",
@@ -119,8 +123,8 @@ export default defineConfig({
         // mermaid chunk — every SPA route chunk then carried a hard
         // `import "./mermaid-*.js"`. Left to the default algorithm mermaid is
         // reachable ONLY from `src/sketch/main.ts` (the second HTML entry).
-        // That used to be a comment; `scripts/check-main-chunk.mjs` (run by
-        // `npm run build`) now fails the build if the mermaid chunk (found
+        // That used to be a comment; `web/scripts/check-main-chunk.mjs` (the last
+        // step of `npm run build`, so `just ci-spa` and the web CI jobs run it) now fails the build if the mermaid chunk (found
         // by its mermaidAPI export, not by size) is in the shell's static
         // import closure.
         codeSplitting: {

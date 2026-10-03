@@ -79,8 +79,10 @@
 # An anchor with NO adjacent symbol is WEAK: it resolves and is in range, but
 # nothing can ever tell whether the line is still the right one. WEAK is not
 # fatal per anchor; it is held under WEAK_CEILING below, which may only go
-# DOWN (being under it is a printed note, never a failure): pairing an anchor with its symbol lowers the real count, and the next
-# person lowers the constant to match. A NEW unpaired anchor raises the count
+# DOWN: being UNDER it is a failure too, until the constant is lowered in the
+# same PR (otherwise a later regrowth up to the stale number passes silently).
+# Pairing an anchor with its symbol lowers the real count; lower the constant
+# to match. A NEW unpaired anchor raises the count
 # and fails the build, so the debt cannot grow quietly.
 #
 # SOURCE COMMENTS (A10.f5): the same adjacent-pair check runs over comment
@@ -391,10 +393,11 @@ END {
     printf "\nFAIL: %d WEAK anchor(s) exceeds the ceiling of %d. A new `file:LINE` citation must name its\n", weak, weak_ceiling
     printf "symbol -- write `Symbol` (`path.rs:N`) -- so the gate can tell when it goes stale.\n"
   }
-  if (weak < weak_ceiling) {
-    printf "\nNOTE: WEAK is %d, below the ceiling %d: lower WEAK_CEILING in this script to %d so the ratchet holds (not a failure).\n", weak, weak_ceiling, weak
+  weak_under = (weak < weak_ceiling)
+  if (weak_under) {
+    printf "\nFAIL: WEAK is %d, below the ceiling %d: lower WEAK_CEILING in this script to %d in this PR so a later regrowth cannot pass silently.\n", weak, weak_ceiling, weak
   }
-  if (hard > 0 || weak_over) exit 1
+  if (hard > 0 || weak_over || weak_under) exit 1
   printf "\nOK: every doc anchor names one existing file, lies inside it, and every symbol-paired anchor lands on its symbol.\n"
 }
 ' "$FILELIST" "$SRCLIST" "${DOCS[@]}" $(cat "$SRCLIST")

@@ -17,6 +17,16 @@ slow-timeout = { period = "120s", terminate-after = 3 }
 [profile.ci.junit]
 path = "junit.xml"
 
+# v0.44 X5 -- the code-test lane (kb-code-server + kb-code-cli + kb-lip) runs
+# under its own profile so its junit report lands in its own directory
+# (target/nextest/ci-code/junit.xml) and is witnessed against the `code-nextest`
+# floor. It inherits the ci timeouts/threads; it has no overrides of its own.
+[profile.ci-code]
+inherits = "ci"
+
+[profile.ci-code.junit]
+path = "junit.xml"
+
 [test-groups]
 lance-heavy = { max-threads = 1 }
 
