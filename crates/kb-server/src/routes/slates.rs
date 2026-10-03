@@ -1544,34 +1544,7 @@ fn append_locked(
         .into());
     }
 
-    // --- provenance the DAEMON owns (rules matrix "`origin`") -------------
-    body.prov.user = Some(user);
-    body.prov.session_id = body.prov.session_id.filter(|s| !s.trim().is_empty());
-    if body.prov.session_id.is_none() && body.prov.origin == Origin::Agent {
-        // The ONE value a client cannot send: stamped in place of `agent`
-        // when no session id resolves. `human` and `import` are left alone.
-        body.prov.origin = Origin::Unattributed;
-    }
-    // A human is not a harness: `origin: human` posts carry the SURFACE that
-    // wrote them (`spa`, `cli`) unvalidated; agent/import/unattributed posts
-    // must name one of the six session harnesses (rules matrix "`origin`").
-    if body.prov.origin != Origin::Human
-        && !kb_core::sessions::HARNESSES.contains(&body.prov.harness.as_str())
-    {
-        return Err(SlateError::new(
-            cap_codes::UNKNOWN_HARNESS,
-            400,
-            format!(
-                "unknown harness {:?} — one of {}",
-                body.prov.harness,
-                kb_core::sessions::HARNESSES.join(", ")
-            ),
-        )
-        .into());
-    }
-    if body.prov.origin == Origin::Human && body.prov.harness.trim().is_empty() {
-        body.prov.harness = "human".to_string();
-    }
+    stamp_provenance(&mut body, user)?;
 
     // --- the idempotent mark (rules matrix "Mark idempotency") ------------
     // Before validation and before the rate window: a repeat is a NO-OP,
@@ -1623,6 +1596,42 @@ fn append_locked(
     Ok(commit_post(
         paths, slug, &mut meta, posts, body, now_unix, &policy, presence,
     )?)
+}
+
+/// Stamp the provenance the DAEMON owns onto a post body (rules matrix
+/// "`origin`"): the resolved user, the empty-session filter, the
+/// `unattributed` origin for an agent post with no session, and the harness
+/// validation. Shared by `POST …/posts` and the ask-close route so the two
+/// cannot disagree about who authored a post.
+fn stamp_provenance(body: &mut PostBody, user: String) -> Result<(), SlateError> {
+    // --- provenance the DAEMON owns (rules matrix "`origin`") -------------
+    body.prov.user = Some(user);
+    body.prov.session_id = body.prov.session_id.take().filter(|s| !s.trim().is_empty());
+    if body.prov.session_id.is_none() && body.prov.origin == Origin::Agent {
+        // The ONE value a client cannot send: stamped in place of `agent`
+        // when no session id resolves. `human` and `import` are left alone.
+        body.prov.origin = Origin::Unattributed;
+    }
+    // A human is not a harness: `origin: human` posts carry the SURFACE that
+    // wrote them (`spa`, `cli`) unvalidated; agent/import/unattributed posts
+    // must name one of the six session harnesses (rules matrix "`origin`").
+    if body.prov.origin != Origin::Human
+        && !kb_core::sessions::HARNESSES.contains(&body.prov.harness.as_str())
+    {
+        return Err(SlateError::new(
+            cap_codes::UNKNOWN_HARNESS,
+            400,
+            format!(
+                "unknown harness {:?} — one of {}",
+                body.prov.harness,
+                kb_core::sessions::HARNESSES.join(", ")
+            ),
+        ));
+    }
+    if body.prov.origin == Origin::Human && body.prov.harness.trim().is_empty() {
+        body.prov.harness = "human".to_string();
+    }
+    Ok(())
 }
 
 /// Mint, write, and measure — the last third of the critical section,
@@ -1779,6 +1788,176 @@ fn check_count_caps(
         }
         _ => Ok(()),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Close every open ask carrying a ref (v0.44 F10) — the idempotent close
+// ---------------------------------------------------------------------------
+
+/// `POST /api/slates/{slug}/asks/close` body. `ref` is one typed ref
+/// (`session:<sid>` for a distill ask); `line` is the `done` line each
+/// closed ask receives.
+#[derive(Debug, Deserialize)]
+pub struct AsksCloseBody {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub line: String,
+    pub prov: slate::Prov,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ClosedAsk {
+    pub ask_seq: u64,
+    pub done_seq: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AsksCloseResponse {
+    /// Empty when no ask carrying the ref was open: a no-op, not an error.
+    pub closed: Vec<ClosedAsk>,
+    pub head_seq: u64,
+}
+
+struct AsksClosed {
+    response: AsksCloseResponse,
+    events: Vec<serde_json::Value>,
+    head: Option<crate::slate_registry::CachedHead>,
+}
+
+/// `POST /api/slates/{slug}/asks/close` — append a `done` for EVERY open
+/// ask carrying `ref`, deciding which asks are open INSIDE the per-slug lock
+/// ([`slate::open_asks_with_ref`]). The client-side read-then-post it
+/// replaces had a window: two concurrent `kb sessions distilled` runs both
+/// saw the ask open, and one lost the race with an `already-done` error
+/// (or, when a late `answer` landed in the window, both an `answer` and a
+/// `done` were minted). Here the second caller finds nothing open and gets
+/// an empty `closed`. One `slate.updated` per appended `done` (#24).
+pub async fn close_asks(
+    State(state): State<Arc<KbHandles>>,
+    Path(slug): Path<String>,
+    axum::Extension(identity): axum::Extension<Identity>,
+    Json(body): Json<AsksCloseBody>,
+) -> Response<Body> {
+    let slug = match parse_slug(&slug) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Err(e) = slate::parse_ref(&body.reference, u64::MAX) {
+        return slate_problem(&e);
+    }
+    let now_unix = chrono::Utc::now().timestamp();
+    let presence = presence_slice(&state, now_unix);
+
+    let lock = state.slate_lock_for(slug.as_str());
+    let guard = lock.lock().await;
+
+    let paths = state.paths.clone();
+    let slug_owned = slug.clone();
+    let user = identity.user.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        close_asks_locked(&paths, &slug_owned, body, user, now_unix, &presence)
+    })
+    .await;
+    drop(guard);
+
+    let outcome = match joined {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return append_fail(e),
+        Err(e) => {
+            return error_to_problem_json(&kb_core::Error::Storage(format!(
+                "slate ask-close join error: {e}"
+            )))
+        }
+    };
+    if let Some(head) = outcome.head {
+        state.slates.note_head(slug.as_str(), head);
+    }
+    for payload in outcome.events {
+        state.bus.emit("slate.updated", payload);
+    }
+    no_store_json(StatusCode::OK, outcome.response)
+}
+
+/// The critical section of [`close_asks`]; the caller holds the per-slug
+/// lock. Re-reads the ledger after every append so each `done` is validated
+/// against the board it will actually land on.
+fn close_asks_locked(
+    paths: &KbPaths,
+    slug: &SlateSlug,
+    body: AsksCloseBody,
+    user: String,
+    now_unix: i64,
+    presence: &[Presence],
+) -> Result<AsksClosed, AppendFail> {
+    let none = |head_seq| AsksClosed {
+        response: AsksCloseResponse {
+            closed: Vec::new(),
+            head_seq,
+        },
+        events: Vec::new(),
+        head: None,
+    };
+    // No slate at all = nothing open: a no-op, never a 404 (the verb is
+    // "make sure this is closed").
+    let Some(mut meta) = load_meta(paths, slug)? else {
+        return Ok(none(0));
+    };
+    let mut posts = load_posts(paths, slug)?;
+    let open = slate::open_asks_with_ref(&posts, &body.reference);
+    if open.is_empty() {
+        return Ok(none(meta.head_seq));
+    }
+    if meta.closed() {
+        return Err(SlateError::new(
+            codes::SLATE_CLOSED,
+            409,
+            format!("slate {slug} is closed — `kb slate reopen {slug}` first"),
+        )
+        .into());
+    }
+    let policy = LivePolicy::default();
+    let mut closed = Vec::new();
+    let mut events = Vec::new();
+    let mut head = None;
+    for ask_seq in open {
+        let mut done = PostBody {
+            kind: Kind::Done,
+            line: body.line.clone(),
+            body: None,
+            topic: None,
+            subject: None,
+            refs: Vec::new(),
+            re: Some(ask_seq),
+            supersedes: None,
+            pin: None,
+            anyway: false,
+            over: None,
+            abandoned: None,
+            failed: None,
+            to: None,
+            prov: body.prov.clone(),
+        };
+        stamp_provenance(&mut done, user.clone())?;
+        slate::validate_post(&done, meta.head_seq, &posts)?;
+        let appended = commit_post(
+            paths, slug, &mut meta, posts, done, now_unix, &policy, presence,
+        )?;
+        closed.push(ClosedAsk {
+            ask_seq,
+            done_seq: appended.response.post.seq,
+        });
+        events.extend(appended.event);
+        head = Some(appended.head);
+        posts = load_posts(paths, slug)?;
+    }
+    Ok(AsksClosed {
+        response: AsksCloseResponse {
+            closed,
+            head_seq: meta.head_seq,
+        },
+        events,
+        head,
+    })
 }
 
 // ---------------------------------------------------------------------------

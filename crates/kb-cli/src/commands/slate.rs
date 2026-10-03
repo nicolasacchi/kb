@@ -1060,6 +1060,18 @@ pub async fn done(ctx: &Ctx, target: u64, line: &str, abandoned: Option<&str>) -
     append(ctx, b).await.map(|_| ())
 }
 
+/// `POST …/asks/close` (v0.44 F10) — the daemon closes EVERY open ask carrying
+/// `reference` under its per-slate lock and answers `{closed:[{ask_seq,
+/// done_seq}], head_seq}`; nothing open is an empty list, not an error.
+pub async fn close_asks(ctx: &Ctx, reference: &str, line: &str) -> Result<Value> {
+    let url = ctx.url("/asks/close");
+    let req = ctx
+        .client(20)?
+        .post(&url)
+        .json(&json!({"ref": reference, "line": line, "prov": ctx.prov()}));
+    call(ctx, req, &format!("POST {url}")).await
+}
+
 /// `drop #n "…" [--anyway]` — the attributed tombstone (D17).
 pub async fn drop_post(ctx: &Ctx, target: u64, line: &str, anyway: bool) -> Result<()> {
     let mut b = post_body(ctx, "drop", line);

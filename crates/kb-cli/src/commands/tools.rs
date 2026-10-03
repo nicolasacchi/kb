@@ -138,6 +138,58 @@ fn example_for(name: &str) -> Option<&'static str> {
              kb desk ls --all                                          # fleet-wide, * = attention\n\
              kb desk promote ticket-123 --to notes/ticket-123.md --category note",
         ),
+        "chores" => Some(
+            "kb chores                 # what agent-layer upkeep is due, and which skill runs it\n\
+             kb chores --json          # {due:[{id,skill,reason}], unavailable:[...]}\n\
+             kb chores --line          # one counts-only line, once per UTC day, silent when nothing is due",
+        ),
+        "outbox" => Some(
+            "kb outbox list            # `kb remember` writes spooled while the daemon was slow or down\n\
+             kb outbox flush           # replay them now (the daemon dedupes on client_ref)",
+        ),
+        "rescrub" => Some(
+            "kb sessions rescrub                  # dry run: per-lane count of captures still holding a secret\n\
+             kb sessions rescrub --apply         # rewrite only the affected captures, atomically",
+        ),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every example for the upkeep verbs must name a real verb path with
+    /// real flags: a doc line that does not parse is a lie the manifest
+    /// would hand a model.
+    #[test]
+    fn upkeep_examples_parse_against_the_real_cli() {
+        for name in ["chores", "outbox", "rescrub"] {
+            let ex = example_for(name).unwrap_or_else(|| panic!("no example for {name}"));
+            for line in ex.lines() {
+                let cmd = line.split('#').next().unwrap().trim();
+                let argv: Vec<&str> = cmd.split_whitespace().collect();
+                assert_eq!(argv[0], "kb", "{line}");
+                if let Err(e) = crate::Cli::command().try_get_matches_from(argv) {
+                    panic!("`{cmd}` does not parse: {e}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_manifest_emits_the_upkeep_verbs() {
+        fn names(cmd: &clap::Command, out: &mut Vec<String>) {
+            for s in cmd.get_subcommands() {
+                out.push(s.get_name().to_string());
+                names(s, out);
+            }
+        }
+        let mut all = Vec::new();
+        names(&crate::Cli::command(), &mut all);
+        for n in ["chores", "outbox", "rescrub"] {
+            assert!(all.iter().any(|x| x == n), "{n} missing from the CLI tree");
+        }
     }
 }

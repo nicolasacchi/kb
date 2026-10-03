@@ -90,6 +90,30 @@ class SelfCheck(unittest.TestCase):
         d = self.tree(deny="nothing here\n")
         self.assertTrue(any("vacuous" in x for x in self.errs(selfcheck.check_deny_review_by, d, datetime.date(2026, 1, 1))))
 
+    def test_ci_code_recipe_must_run_nextest_and_doctests(self):
+        good = "ci-code:\n    cargo clippy -p a\n    cargo nextest run --locked --profile ci-code -p a\n    cargo test --locked --doc -p a\n\nnext:\n    echo\n"
+        d = self.tree()
+        with open(os.path.join(d, "justfile"), "w") as fh:
+            fh.write(good)
+        self.assertEqual(self.errs(selfcheck.check_ci_code_recipe, d), [])
+        for bad, needle in [
+            (good.replace("cargo nextest run --locked --profile ci-code -p a", "cargo test -p a --no-fail-fast"), "nextest"),
+            (good.replace("    cargo test --locked --doc -p a\n", ""), "--doc"),
+            (good.replace("--profile ci-code", "--profile ci"), "nextest"),
+        ]:
+            with open(os.path.join(d, "justfile"), "w") as fh:
+                fh.write(bad)
+            e = self.errs(selfcheck.check_ci_code_recipe, d)
+            self.assertTrue(any(needle in x for x in e), (needle, e))
+
+    def test_unquoted_name_with_colon_space_is_flagged(self):
+        d = self.tree(GOOD_WF.replace("name: x", "name: cargo-mutants (label: mutants)"))
+        self.assertTrue(any("invalid YAML" in x for x in self.errs(selfcheck.check_yaml_names, d)))
+        d = self.tree(GOOD_WF.replace("name: x", 'name: "cargo-mutants (label: mutants)"'))
+        self.assertEqual(self.errs(selfcheck.check_yaml_names, d), [])
+        d = self.tree()
+        self.assertEqual(self.errs(selfcheck.check_yaml_names, d), [])
+
     def test_the_real_tree_passes(self):
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         self.assertEqual(selfcheck.run(root, datetime.date.today()), [])

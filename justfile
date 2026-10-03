@@ -269,9 +269,15 @@ build-embedder:
 # narrower, an Esc row with no dismiss order, or an unratified conflict. No
 # separate step to remember to add, and the twin check runs against the clap
 # tree of the binary actually being tested.
+#
+# v0.44 X7 — the test half is the same two commands as the CI `code` job:
+# `cargo nextest run --profile ci-code` (process-per-test isolation, the same
+# .config/nextest.toml profile) followed by `cargo test --doc`, because
+# nextest does not run doctests. It needs `cargo install cargo-nextest`.
 ci-code:
     cargo clippy -p kb-code-server -p kb-code-cli -p kb-lip --all-targets -- -D warnings
-    cargo test -p kb-code-server -p kb-code-cli -p kb-lip --no-fail-fast
+    cargo nextest run --locked --profile ci-code --no-fail-fast -p kb-code-server -p kb-code-cli -p kb-lip
+    cargo test --locked --doc -p kb-code-server -p kb-code-cli -p kb-lip
 
 # W4.1 — the kb-code reader SPA (web-code/): npm ci (a committed lockfile,
 # same discipline as tests/e2e's — see the /dist .gitignore comment above)

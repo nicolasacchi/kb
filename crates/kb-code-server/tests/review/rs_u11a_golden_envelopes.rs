@@ -47,9 +47,12 @@
 //! (`unavailable_forge_golden_envelope_shapes`,
 //! `create_review_pr_async_job_failed_golden_envelope_shape`) whose goldens
 //! pin the string/object TYPES of `pr_meta_unavailable_reason`,
-//! `unavailable_reason` (pr-status and the sweep row) and `error`. Still
-//! presence-only: the failed job's `error_type` (it is only set for a typed
-//! problem such as a closed-binding 409). `review_files[].old_path` and
+//! `unavailable_reason` (pr-status and the sweep row) and `error`. The failed
+//! job's `error_type` is pinned non-null by
+//! `create_review_pr_async_job_closed_binding_golden_envelope_shape` (a typed
+//! problem: the closed-binding 409, with the refusal body kept under
+//! `result`); the missing-ref failure above has no typed problem, so its
+//! `error_type` stays presence-only. `review_files[].old_path` and
 //! `hunks_viewed[]` are NOW exercised non-null (the PR fixture renames a file
 //! and one hunk is marked viewed). Review `title`, `session_id`,
 //! `artifact_hint_id` and `artifact_hint_kb` are pinned non-null (v0.44 X2).
@@ -816,6 +819,96 @@ async fn create_review_pr_async_job_failed_golden_envelope_shape() {
 
     let mut problems = Vec::new();
     if let Err(e) = golden_check("create_review_pr_async_job_failed", &job_body) {
+        problems.push(e);
+    }
+    finish(problems);
+}
+
+// --- X7: a FAILED async job carrying a TYPED problem -- the closed-binding
+// 409. The job's `error_type` is the refusal's URN (a poller branches on it,
+// never on the prose) and `result` keeps the refusal body the sync route
+// would have sent. ---------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_review_pr_async_job_closed_binding_golden_envelope_shape() {
+    let (_repo_tmp, _bare_tmp, dir, _pr_sha) = fixture_pr_repo(106);
+    let (gh_addr, _gh_server) = mock_github_server(Router::new()).await;
+    let (_tmp, base) = boot(cfg_with_repo_and_github("fixture", &dir, gh_addr)).await;
+    let client = reqwest::Client::new();
+
+    // Bind the PR, then close the review: a second start-pr for the same
+    // (repo, PR) now 409s `review-closed` unless `on_closed` says otherwise.
+    let resp = client
+        .post(format!("{base}/api/reviews/pr"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 106 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::CREATED,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_i64()
+        .expect("bound review has an id");
+    let resp = client
+        .patch(format!("{base}/api/reviews/{id}"))
+        .json(&serde_json::json!({ "state": "closed" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "{}",
+        resp.text().await.unwrap()
+    );
+
+    let resp = client
+        .post(format!("{base}/api/reviews/pr?async=1"))
+        .json(&serde_json::json!({ "repo": "fixture", "pr_number": 106 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::ACCEPTED,
+        "{}",
+        resp.text().await.unwrap()
+    );
+    let job_id = resp.json::<serde_json::Value>().await.unwrap()["job_id"]
+        .as_str()
+        .expect("job_id")
+        .to_string();
+
+    let mut job_body = serde_json::Value::Null;
+    for _ in 0..200 {
+        job_body = client
+            .get(format!("{base}/api/reviews/jobs/{job_id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if job_body["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(job_body["status"], "failed", "{job_body}");
+    assert_eq!(job_body["error_status"], 409, "{job_body}");
+    assert_eq!(
+        job_body["error_type"],
+        kb_code_server::reviews::ERR_REVIEW_CLOSED,
+        "a typed refusal must reach the poller as error_type: {job_body}"
+    );
+    assert_eq!(job_body["result"]["existing_review_id"], id, "{job_body}");
+
+    let mut problems = Vec::new();
+    if let Err(e) = golden_check("create_review_pr_async_job_closed_binding", &job_body) {
         problems.push(e);
     }
     finish(problems);

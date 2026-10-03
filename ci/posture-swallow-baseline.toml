@@ -1,9 +1,11 @@
 # Baseline for scripts/check-posture-swallow.py: the number of `.ok()` /
 # `unwrap_or(` / `unwrap_or_default()` forms in the NON-TEST part of each
-# security-posture module (v0.44 F1). The count is held EXACTLY: above it fails (justify and raise it in a PR that says why), and below it fails until the entry is lowered in the same PR, so a later regrowth cannot pass silently. A module
-# that needs a new one raises its number in a PR that says why the swallowed
-# error is safe; a refactor that removes one lowers it here so the ratchet
-# stays tight. Measured at the commit that introduced the file.
+# security-posture module (v0.44 F1). The count is held EXACTLY: above it
+# fails (justify and raise it in a PR that says why), and below it fails until
+# the entry is lowered in the same PR, so a later regrowth cannot pass
+# silently. A module that needs a new one raises its number in a PR that says
+# why the swallowed error is safe; a refactor that removes one lowers it here
+# so the ratchet stays tight. Measured at the commit that introduced the file.
 [files]
 "crates/kb-server/src/middleware.rs" = 17
 "crates/kb-code-server/src/security/mod.rs" = 0

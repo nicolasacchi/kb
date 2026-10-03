@@ -1001,6 +1001,29 @@ fn is_closed_by_done(posts: &[Post], seq: u64) -> bool {
     })
 }
 
+/// Seqs of the OPEN `ask` posts carrying the typed ref `reference` (e.g.
+/// `session:<sid>`), oldest first. An ask is closed by an undropped
+/// non-`--abandoned` `done` (the rules matrix), by an undropped `answer`
+/// naming it (v0.44 F10: an answered ask is handled, so a late `done` must
+/// not be minted on top of it), or by being dropped itself. A closer that was
+/// itself dropped, and an `--abandoned` done, close nothing. Pure, so the
+/// daemon's close route and its tests share ONE definition.
+pub fn open_asks_with_ref(posts: &[Post], reference: &str) -> Vec<u64> {
+    let dropped = dropped_set(posts);
+    let answered: HashSet<u64> = posts
+        .iter()
+        .filter(|p| p.kind == Kind::Answer && !dropped.contains(&p.seq))
+        .filter_map(|p| p.re)
+        .collect();
+    posts
+        .iter()
+        .filter(|p| p.kind == Kind::Ask && !dropped.contains(&p.seq))
+        .filter(|p| p.refs.iter().any(|r| r == reference))
+        .map(|p| p.seq)
+        .filter(|seq| !answered.contains(seq) && !is_closed_by_done(posts, *seq))
+        .collect()
+}
+
 /// The idempotency lookup behind the rules matrix's "Mark idempotency":
 /// a plain (`pin: None`) mark keys on (session, target), and a repeat
 /// returns the EXISTING post in the ordinary envelope rather than
@@ -3703,6 +3726,59 @@ mod tests {
             validate_post(&again, 3, &ledger).unwrap_err().code,
             codes::ALREADY_DONE
         );
+    }
+
+    #[test]
+    fn open_asks_with_ref_honours_done_answer_drop_and_abandoned() {
+        let p = || prov("claude", Some("aaaa1111"), Origin::Agent);
+        let ask = |seq: u64, r: &str| {
+            Post::mint(
+                PostBody {
+                    refs: vec![r.to_string()],
+                    prov: p(),
+                    ..body(Kind::Ask, "Distill session s?")
+                },
+                seq,
+                NOW - 100,
+            )
+        };
+        let closer = |seq: u64, kind: Kind, re: u64, abandoned: Option<&str>| {
+            Post::mint(
+                PostBody {
+                    re: Some(re),
+                    abandoned: abandoned.map(str::to_string),
+                    prov: p(),
+                    ..body(kind, "x")
+                },
+                seq,
+                NOW - 50,
+            )
+        };
+        let mut l = vec![
+            ask(1, "session:s"),
+            ask(2, "session:s"),
+            ask(3, "session:t"),
+        ];
+        assert_eq!(open_asks_with_ref(&l, "session:s"), vec![1, 2]);
+        assert_eq!(open_asks_with_ref(&l, "session:t"), vec![3]);
+        // A real done, an answer and a drop each close their own ask.
+        l.push(closer(4, Kind::Done, 1, None));
+        assert_eq!(open_asks_with_ref(&l, "session:s"), vec![2]);
+        l.push(closer(5, Kind::Answer, 2, None));
+        assert!(open_asks_with_ref(&l, "session:s").is_empty());
+        // `--abandoned` keeps the ask open; a dropped closer closes nothing.
+        l.push(closer(6, Kind::Done, 3, Some("still red")));
+        assert_eq!(open_asks_with_ref(&l, "session:t"), vec![3]);
+        l.push(closer(7, Kind::Done, 3, None));
+        assert!(open_asks_with_ref(&l, "session:t").is_empty());
+        l.push(closer(8, Kind::Drop, 7, None));
+        assert_eq!(
+            open_asks_with_ref(&l, "session:t"),
+            vec![3],
+            "the done that closed it was dropped, so the ask is open again"
+        );
+        l.push(closer(9, Kind::Drop, 3, None));
+        assert!(open_asks_with_ref(&l, "session:t").is_empty());
     }
 
     #[test]

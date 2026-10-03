@@ -1403,6 +1403,11 @@ pub struct SloSection {
     /// `started_at`. `None` = measured, unjudged.
     #[serde(default)]
     pub capture_freshness_hours: Option<f64>,
+
+    /// MINIMUM acceptable percentage of served memory injections that landed
+    /// in a capture (`recall_coverage_pct`). `None` = measured, unjudged.
+    #[serde(default)]
+    pub recall_coverage_pct: Option<f64>,
 }
 
 impl SloSection {
@@ -1416,6 +1421,7 @@ impl SloSection {
             orphan_kb_sessions: self.orphan_kb_sessions,
             ledger_parse_failure_pct: self.ledger_parse_failure_pct,
             capture_freshness_hours: self.capture_freshness_hours,
+            recall_coverage_pct: self.recall_coverage_pct,
         }
     }
 }
@@ -2375,6 +2381,7 @@ impl KbConfig {
                     ("orphan_kb_sessions", s.orphan_kb_sessions, false),
                     ("ledger_parse_failure_pct", s.ledger_parse_failure_pct, true),
                     ("capture_freshness_hours", s.capture_freshness_hours, false),
+                    ("recall_coverage_pct", s.recall_coverage_pct, true),
                 ] {
                     let Some(v) = v else { continue };
                     if !v.is_finite() || v < 0.0 {
@@ -3263,10 +3270,12 @@ mod tests {
             orphan_kb_sessions = 0
             ledger_parse_failure_pct = 1.5
             capture_freshness_hours = 48
+            recall_coverage_pct = 85
         "#;
         let c = KbConfig::from_toml_str(toml_str).unwrap();
         let kb = c.kb.get(&KbName::new("notes").unwrap()).unwrap();
         let t = kb.slo.expect("section present").targets();
+        assert_eq!(t.recall_coverage_pct, Some(85.0));
         assert_eq!(t.coderef_resolution_pct, Some(80.0));
         assert_eq!(t.orphan_kb_sessions, Some(0.0));
         assert_eq!(t.ledger_parse_failure_pct, Some(1.5));
