@@ -32,6 +32,67 @@ struct Hit {
     path: String,
     #[serde(default)]
     kb_category: Option<String>,
+    /// Corpus the hit came from — present only on federated
+    /// (`scope=all`) responses; absent keeps single-kb `--json`
+    /// output byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kb: Option<String>,
+}
+
+/// What the CLI asks the daemon for: the `scope=` query value (None =
+/// omit the param, the pre-existing single-kb request) and whether the
+/// scope was widened implicitly (so a one-line stderr note is printed).
+#[derive(Debug, PartialEq, Eq)]
+struct ResolvedScope {
+    param: Option<&'static str>,
+    widened: bool,
+}
+
+/// Pure scope decision (mirrors `kb recall`'s auto scope). `--kb` pins a
+/// single corpus; with neither flag, a daemon serving more than one kb
+/// is searched federated instead of failing with a 400. `kb_count` is
+/// only consulted when it matters (None = unknown/not fetched).
+fn resolve_scope(
+    scope: Option<&str>,
+    kb: Option<&str>,
+    kb_count: Option<usize>,
+) -> Result<ResolvedScope> {
+    match (scope, kb) {
+        (Some("all"), Some(_)) => Err(anyhow!(
+            "--scope all searches every kb; drop --kb (or use --scope one --kb <name>)"
+        )),
+        (Some("all"), None) => Ok(ResolvedScope {
+            param: Some("all"),
+            widened: false,
+        }),
+        (Some("one"), _) | (None, Some(_)) => Ok(ResolvedScope {
+            param: None,
+            widened: false,
+        }),
+        (None, None) => Ok(if kb_count.is_some_and(|n| n > 1) {
+            ResolvedScope {
+                param: Some("all"),
+                widened: true,
+            }
+        } else {
+            ResolvedScope {
+                param: None,
+                widened: false,
+            }
+        }),
+        (Some(other), _) => Err(anyhow!(
+            "unsupported --scope {other:?}; expected one of: one, all"
+        )),
+    }
+}
+
+/// How many kbs the daemon serves (config-only listing).
+async fn daemon_kb_count(daemon: &str, bearer: Option<&str>) -> Option<usize> {
+    let url = format!("{}/api/kbs?counts=false", daemon.trim_end_matches('/'));
+    let client = http::client_with_timeout_and_bearer(5, bearer).ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    let body: serde_json::Value = resp.error_for_status().ok()?.json().await.ok()?;
+    body.as_array().map(|a| a.len())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -39,6 +100,7 @@ pub async fn run(
     config_path: Option<&PathBuf>,
     q: &str,
     kb: Option<&str>,
+    scope: Option<&str>,
     mode: &str,
     limit: u32,
     category: Option<&str>,
@@ -53,6 +115,7 @@ pub async fn run(
         config_path,
         q,
         kb,
+        scope,
         mode,
         limit,
         category,
@@ -90,6 +153,7 @@ async fn run_inner(
     config_path: Option<&PathBuf>,
     q: &str,
     kb: Option<&str>,
+    scope: Option<&str>,
     mode: &str,
     limit: u32,
     category: Option<&str>,
@@ -118,12 +182,18 @@ async fn run_inner(
     let read_from_unix = read_from.map(parse_time_bound).transpose()?;
     let read_to_unix = read_to.map(parse_time_bound).transpose()?;
 
+    if offline && scope == Some("all") {
+        return Err(anyhow!(
+            "--scope all needs the daemon; drop --offline or pass --kb"
+        ));
+    }
     if !offline {
         if let Some(url) = http::detect_daemon(daemon, bearer).await {
             return search_via_http(
                 &url,
                 q,
                 kb,
+                scope,
                 mode,
                 limit,
                 category,
@@ -167,6 +237,7 @@ fn build_search_url(
     daemon: &str,
     q: &str,
     kb: Option<&str>,
+    scope_param: Option<&str>,
     mode: &str,
     limit: u32,
     category: Option<&str>,
@@ -183,6 +254,9 @@ fn build_search_url(
     );
     if let Some(k) = kb {
         url.push_str(&format!("&kb={}", http::encode_path_segment(k)));
+    }
+    if let Some(sc) = scope_param {
+        url.push_str(&format!("&scope={sc}"));
     }
     if let Some(c) = category {
         url.push_str(&format!("&category={}", http::encode_path_segment(c)));
@@ -224,6 +298,7 @@ async fn search_via_http(
     daemon: &str,
     q: &str,
     kb: Option<&str>,
+    scope: Option<&str>,
     mode: &str,
     limit: u32,
     category: Option<&str>,
@@ -232,7 +307,30 @@ async fn search_via_http(
     bearer: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let url = build_search_url(daemon, q, kb, mode, limit, category, read_from, read_to);
+    // Only probe the kb count when the answer can change the request.
+    let kb_count = if scope.is_none() && kb.is_none() {
+        daemon_kb_count(daemon, bearer).await
+    } else {
+        None
+    };
+    let resolved = resolve_scope(scope, kb, kb_count)?;
+    if resolved.widened {
+        eprintln!(
+            "note: daemon serves {} kbs; searching all of them (pass --kb <name> or --scope one to narrow)",
+            kb_count.unwrap_or(0)
+        );
+    }
+    let url = build_search_url(
+        daemon,
+        q,
+        kb,
+        resolved.param,
+        mode,
+        limit,
+        category,
+        read_from,
+        read_to,
+    );
     let client = http::client_with_timeout_and_bearer(10, bearer)?;
     let resp = client.get(&url).send().await?;
     let status = resp.status();
@@ -308,6 +406,7 @@ async fn search_offline(
             title: r.title,
             path: r.path,
             kb_category: r.kb_category,
+            kb: None,
         })
         .filter(|h| category_matches(category, h.kb_category.as_deref()))
         .take(limit as usize)
@@ -325,9 +424,14 @@ fn print_hits(hits: &[Hit], ms: u64, source: &str) {
     println!("{} hits in {} ms ({})", hits.len(), ms, source);
     for hit in hits {
         let cat = hit.kb_category.as_deref().unwrap_or("-");
+        // Federated hits name their corpus: `[kb/category]`.
+        let tag = match hit.kb.as_deref() {
+            Some(k) => format!("{k}/{cat}"),
+            None => cat.to_string(),
+        };
         println!(
             "  {}  {}  [{}]\n        {}",
-            hit.id, hit.title, cat, hit.path
+            hit.id, hit.title, tag, hit.path
         );
     }
 }
@@ -356,6 +460,7 @@ mod tests {
             "http://127.0.0.1:4000",
             "borrow checker",
             None,
+            None,
             "hybrid",
             20,
             None,
@@ -374,6 +479,7 @@ mod tests {
             "http://127.0.0.1:4000",
             "DD_TRACE_PARTIAL_FLUSH_ENABLED",
             Some("sessions"),
+            None,
             "keyword",
             20,
             Some("memory-session"),
@@ -391,7 +497,17 @@ mod tests {
         // Categories are single tokens in practice, but the encoder is
         // shared with every other query param — confirm it actually runs
         // on `category` rather than being interpolated raw.
-        let url = build_search_url("http://d", "q", None, "hybrid", 5, Some("a b"), None, None);
+        let url = build_search_url(
+            "http://d",
+            "q",
+            None,
+            None,
+            "hybrid",
+            5,
+            Some("a b"),
+            None,
+            None,
+        );
         assert!(url.ends_with("&category=a%20b"), "{url}");
     }
 
@@ -401,6 +517,7 @@ mod tests {
         let url = build_search_url(
             "http://d",
             "q",
+            None,
             None,
             "hybrid",
             5,
@@ -416,9 +533,51 @@ mod tests {
 
     #[test]
     fn build_search_url_omits_read_window_when_unset() {
-        let url = build_search_url("http://d", "q", None, "hybrid", 5, None, None, None);
+        let url = build_search_url("http://d", "q", None, None, "hybrid", 5, None, None, None);
         assert!(!url.contains("read_from"));
         assert!(!url.contains("read_to"));
+    }
+
+    #[test]
+    fn build_search_url_appends_scope_all() {
+        let url = build_search_url(
+            "http://d",
+            "q",
+            None,
+            Some("all"),
+            "hybrid",
+            5,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(url, "http://d/api/search?q=q&mode=hybrid&limit=5&scope=all");
+    }
+
+    #[test]
+    fn resolve_scope_widens_only_when_multi_kb_and_unpinned() {
+        let wide = resolve_scope(None, None, Some(2)).unwrap();
+        assert_eq!(wide.param, Some("all"));
+        assert!(wide.widened);
+        // Single kb / unknown count: the pre-existing request, no note.
+        for n in [Some(1), Some(0), None] {
+            let r = resolve_scope(None, None, n).unwrap();
+            assert_eq!((r.param, r.widened), (None, false));
+        }
+        // --kb pins one corpus regardless of how many the daemon serves.
+        let pinned = resolve_scope(None, Some("a"), Some(5)).unwrap();
+        assert_eq!((pinned.param, pinned.widened), (None, false));
+        // Explicit one never widens.
+        let one = resolve_scope(Some("one"), None, Some(5)).unwrap();
+        assert_eq!((one.param, one.widened), (None, false));
+    }
+
+    #[test]
+    fn resolve_scope_rejects_contradictions_and_unknown_values() {
+        assert!(resolve_scope(Some("all"), Some("a"), None).is_err());
+        assert!(resolve_scope(Some("bogus"), None, None).is_err());
+        let all = resolve_scope(Some("all"), None, None).unwrap();
+        assert_eq!((all.param, all.widened), (Some("all"), false));
     }
 
     #[test]
