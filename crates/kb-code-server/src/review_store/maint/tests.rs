@@ -1587,8 +1587,9 @@ fn two_repacks_on_one_store_serialise_on_the_maint_lock() {
     let held = e.rs.maint_lock(row.id).blocking_lock_owned();
     std::thread::scope(|s| {
         let (tx, rx) = std::sync::mpsc::channel();
-        let weekly = s.spawn(|| {
-            let r = run_pass_for_store(&e.rs, &e.store, &row, &[MaintTask::Weekly], 1);
+        let (env, row_ref) = (&e, &row);
+        let weekly = s.spawn(move || {
+            let r = run_pass_for_store(&env.rs, &env.store, row_ref, &[MaintTask::Weekly], 1);
             tx.send(()).unwrap();
             r
         });
