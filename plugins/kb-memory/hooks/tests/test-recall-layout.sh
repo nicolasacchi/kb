@@ -73,6 +73,17 @@ else
   diff -u "$BASELINE" "$TMPROOT/v1.txt" | head -20
 fi
 
+# --- 1b. v2 (the default) is byte-identical to its captured golden --------
+# The same file is include_str!'d by kb-server's turn.rs parity test, so the
+# route's `text` and this hook's shell render cannot drift apart unnoticed.
+V2_GOLDEN="$SCRIPT_DIR/fixtures/recall-layout-v2.txt"
+if diff -q "$V2_GOLDEN" "$TMPROOT/v2.txt" >/dev/null 2>&1; then
+  ok "v2 is byte-identical to the captured v2 golden"
+else
+  bad "v2 is byte-identical to the captured v2 golden"
+  diff -u "$V2_GOLDEN" "$TMPROOT/v2.txt" | head -20
+fi
+
 # --- 2. v1's marker carries NO pos (the pre-MR1 grammar) ----------------
 case "$(cat "$TMPROOT/v1.txt")" in
   *"<!--kb-recall/1 kb=kb id=a1b2c3d4e5f6-->"*) ok "v1 marker has no pos= pair" ;;

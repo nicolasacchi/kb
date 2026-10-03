@@ -103,21 +103,15 @@ extra=()
 # KB_HOOK_BUDGET_SECS, default 13), and a call with nothing left is skipped
 # (a miss, never a kill). `timeout` is guarded: without coreutils the call
 # runs unwrapped, as before.
-hook_t0="$(date +%s 2>/dev/null)" || hook_t0=0
-hook_budget="${KB_HOOK_BUDGET_SECS:-13}"
-run_to() {
-  local cap="$1" now left
-  shift
-  now="$(date +%s 2>/dev/null)" || now="$hook_t0"
-  left=$((hook_budget - (now - hook_t0)))
-  [ "$left" -gt 0 ] || return 124
-  [ "$left" -lt "$cap" ] && cap="$left"
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$cap" "$@"
-  else
-    "$@"
-  fi
+# The clock is milliseconds and the helpers live in kb-hook-lib.sh (shared
+# with kb-wake*.sh): a hook that starts at x.9s is not credited a phantom
+# second. A standalone copy without the lib runs its calls unbounded, as the
+# pre-H1 hook did.
+. "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
+  hook_deadline_init() { :; }
+  run_to() { shift; "$@"; }
 }
+hook_deadline_init
 
 first_turn=0
 if [ -n "$sid" ]; then
@@ -128,11 +122,39 @@ if [ -n "$sid" ]; then
   fi
 fi
 
-# GET /api/turn composes this block on the daemon, but `kb turn` is not a
-# CLI verb yet. This hook still calls `kb context` and `kb recall` until
-# `kb turn` is wired. The `run_to` deadline wrappers stay.
+# v0.44 F6 — KB_TURN=1 opts into ONE `kb turn` call (GET /api/turn: recall +
+# the turn-1 scent composed by the daemon under a shared deadline_ms) instead
+# of the separate `kb context` + `kb recall` processes below. The daemon's
+# `text` is the same bytes the shell path renders for the default v2 layout
+# (pinned by fixtures/recall-layout-v2.txt on both sides), and a degraded
+# lane is NAMED in one trailing line instead of silently dropped. ANY failure
+# of the call (older daemon without the route, unreachable, slow, bad JSON)
+# falls through to the old path below, unchanged. A non-default
+# KB_RECALL_LAYOUT also takes the old path: the route only speaks v2.
+turn_ok=0
+turn_text=""
+turn_note=""
+if [ "${KB_TURN:-}" = "1" ] && [ "${KB_RECALL_LAYOUT:-v2}" = "v2" ]; then
+  turn_lanes="recall"
+  [ "$first_turn" = "1" ] && turn_lanes="recall,context"
+  # Daemon budget: what is left of the shared deadline minus 1.5s for process
+  # start + HTTP, capped at 9s (the route's design point), floored at 0.5s.
+  turn_dl=$(( $(hook_left_ms 2>/dev/null || echo 10500) - 1500 ))
+  [ "$turn_dl" -gt 9000 ] && turn_dl=9000
+  [ "$turn_dl" -lt 500 ] && turn_dl=500
+  turn_args=(--lanes "$turn_lanes" --deadline-ms "$turn_dl")
+  [ -n "$cwd" ] && turn_args+=(--cwd "$cwd")
+  [ -n "$sid" ] && turn_args+=(--session "$sid")
+  turn_json="$(run_to 11 kb turn "$prompt" "${extra[@]}" "${turn_args[@]}" --json 2>/dev/null)" || turn_json=""
+  if [ -n "$turn_json" ] && printf '%s' "$turn_json" | jq -e 'has("text")' >/dev/null 2>&1; then
+    turn_ok=1
+    turn_text="$(printf '%s' "$turn_json" | jq -r '.text // empty' 2>/dev/null)" || turn_text=""
+    turn_note="$(printf '%s' "$turn_json" | jq -r '.degraded_note // empty' 2>/dev/null)" || turn_note=""
+  fi
+fi
+
 scent_line=""
-if [ "$first_turn" = "1" ]; then
+if [ "$first_turn" = "1" ] && [ "$turn_ok" != "1" ]; then
   # ONE call. The whole point of the acceptance criterion: the hook does not
   # hand-chain recall + recollect + inbox + code-refs, it asks the one verb
   # that composes them. `--session "$sid"` keeps the pack from reporting the
@@ -175,7 +197,10 @@ recall_args=()
 # turn-1 scent above is already computed (its once-per-session marker is
 # spent) and the slate lane below still runs, so neither is thrown away.
 recall_prefix=(env "KB_RECALL_SESSION=${sid}")
-hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
+hits=""
+if [ "$turn_ok" != "1" ]; then
+  hits="$(run_to 6 "${recall_prefix[@]}" kb recall "$prompt" "${extra[@]}" "${recall_args[@]}" --limit 5 --json 2>/dev/null)" || hits=""
+fi
 
 # CT-A3 — alongside the human-readable line, append ONE machine-readable
 # marker per hit (`<!--kb-recall/1 kb=<kb-name> id=<hex12>[ pos=<n>]-->`),
@@ -259,6 +284,15 @@ block="$(printf '%s' "$hits" | jq -r --arg layout "$layout" '
     else "Relevant memories from kb (recall — these persist across sessions):\n" + join("\n")
     end
 ' 2>/dev/null)" || block=""
+# KB_TURN=1 and the call answered: the daemon already composed recall + scent
+# (block == the same bytes), so the shell render above ran on empty hits.
+if [ "$turn_ok" = "1" ]; then
+  block="$turn_text"
+  # Name what was skipped, once, after the block (never inside a hit).
+  if [ -n "$turn_note" ]; then
+    if [ -n "$block" ]; then block="$block"$'\n\n'"$turn_note"; else block="$turn_note"; fi
+  fi
+fi
 
 # CT-D1 (orchestrator ruling, 2026-08-22) — the turn-1 scent is ADDITIVE,
 # never a replacement. R0/R3 governs EPISODIC material (transcripts stay

@@ -497,17 +497,53 @@ pub(crate) fn derived_project_miss_line(derived: &str) -> String {
     )
 }
 
-/// The write path's `GET /api/kbs`. Recall reuses it before sending a
-/// derived project filter.
+/// Pre-flight timeout for the config-only kb listing, seconds.
+const KBS_PREFLIGHT_SECS: u64 = 5;
+
+/// Config-only kb listing path. `counts=false` skips the per-corpus
+/// `count_rows` fan-out on a daemon that knows it; an older daemon ignores
+/// the parameter and answers with counts, which every caller tolerates
+/// because they read `name`/`memory_scope`/... only.
+pub(crate) const KBS_CONFIG_PATH: &str = "/api/kbs?counts=false";
+
+/// Error wording that tells a SLOW daemon (the request was sent, the clock
+/// ran out) from an UNREACHABLE one (it never connected). The hook path
+/// discards stderr, but `kb remember` prints this to a human/agent who must
+/// not conclude "kb is down" from a loaded host.
+pub(crate) fn kbs_request_error(e: &reqwest::Error, daemon: &str, secs: u64) -> anyhow::Error {
+    if e.is_timeout() {
+        anyhow!(
+            "daemon slow (GET {daemon}{KBS_CONFIG_PATH} > {secs}s) — it is up but busy, not down"
+        )
+    } else if e.is_connect() {
+        anyhow!("daemon not reachable at {daemon} — start it with `kb daemon`")
+    } else {
+        anyhow!("GET {daemon}{KBS_CONFIG_PATH} failed: {e}")
+    }
+}
+
+/// The write path's `GET /api/kbs?counts=false`. Recall and context reuse it
+/// before sending a derived project filter.
 pub(crate) async fn fetch_kbs(daemon: &str, bearer: Option<&str>) -> Result<serde_json::Value> {
-    let client = http::client_with_timeout_and_bearer(5, bearer)?;
-    let kbs: serde_json::Value = client
-        .get(format!("{daemon}/api/kbs"))
+    fetch_kbs_with_timeout(daemon, bearer, KBS_PREFLIGHT_SECS).await
+}
+
+async fn fetch_kbs_with_timeout(
+    daemon: &str,
+    bearer: Option<&str>,
+    secs: u64,
+) -> Result<serde_json::Value> {
+    let client = http::client_with_timeout_and_bearer(secs, bearer)?;
+    let resp = client
+        .get(format!("{daemon}{KBS_CONFIG_PATH}"))
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .map_err(|e| kbs_request_error(&e, daemon, secs))?
+        .error_for_status()?;
+    let kbs: serde_json::Value = resp
         .json()
-        .await?;
+        .await
+        .map_err(|e| kbs_request_error(&e, daemon, secs))?;
     Ok(kbs)
 }
 
@@ -559,14 +595,14 @@ async fn recall_inner(
                             eprintln!("{}", derived_project_miss_line(&derived));
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
                         // Could not verify. Sending the derived name would
                         // be a filter that might match nothing. This is not
                         // a confirmed miss, so it does not use that line.
                         wire_project = None;
                         wire_visible_to = None;
                         eprintln!(
-                            "note: derived project corpus memory-{s} could not be checked against GET /api/kbs; sending no project filter"
+                            "note: derived project corpus memory-{s} could not be checked against GET /api/kbs ({e}); sending no project filter"
                         );
                     }
                 }
@@ -1149,7 +1185,7 @@ async fn resolve_memory_kb_for_id(
     }
     let client = http::client_with_timeout_and_bearer(5, bearer)?;
     let kbs: serde_json::Value = client
-        .get(format!("{url}/api/kbs"))
+        .get(format!("{url}{KBS_CONFIG_PATH}"))
         .send()
         .await?
         .error_for_status()?
@@ -1428,7 +1464,7 @@ async fn resolve_memory_doc(
 async fn memory_scoped_kbs(url: &str, bearer: Option<&str>) -> Result<Vec<String>> {
     let client = http::client_with_timeout_and_bearer(5, bearer)?;
     let kbs: serde_json::Value = client
-        .get(format!("{url}/api/kbs"))
+        .get(format!("{url}{KBS_CONFIG_PATH}"))
         .send()
         .await?
         .error_for_status()?
@@ -1569,12 +1605,37 @@ fn anchor_header(anchor: &serde_json::Value) -> String {
 // ---- helpers ---------------------------------------------------------
 
 async fn require_daemon(daemon: Option<&str>, bearer: Option<&str>) -> Result<String> {
-    http::detect_daemon(daemon, bearer).await.ok_or_else(|| {
-        anyhow!(
-            "daemon not reachable{} — start it with `kb daemon`",
-            daemon.map(|d| format!(" at {d}")).unwrap_or_default()
-        )
-    })
+    // The identity probe inside `detect_daemon` has a 500 ms budget: on a
+    // loaded host a daemon that is merely slow fails it, and "not reachable"
+    // is then a lie that costs the caller its write. Re-probe once with a
+    // real budget and name what actually happened.
+    if let Some(u) = http::detect_daemon(daemon, bearer).await {
+        return Ok(u);
+    }
+    let base = daemon.unwrap_or("http://127.0.0.1:4000");
+    let client = http::client_with_timeout_and_bearer(IDENTITY_REPROBE_SECS, bearer)?;
+    match client.get(format!("{base}/api/identity")).send().await {
+        Ok(r) if r.status().is_success() => Ok(base.to_string()),
+        Ok(r) => Err(anyhow!(
+            "daemon at {base} answered HTTP {} to /api/identity — check the token / URL",
+            r.status().as_u16()
+        )),
+        Err(e) => Err(daemon_probe_error(&e, base, IDENTITY_REPROBE_SECS)),
+    }
+}
+
+/// Seconds for the second, patient identity probe.
+const IDENTITY_REPROBE_SECS: u64 = 3;
+
+/// Slow vs unreachable, by what the transport reported. A timeout means the
+/// socket was open and the daemon did not answer in time; a connect error
+/// means nothing is listening.
+pub(crate) fn daemon_probe_error(e: &reqwest::Error, base: &str, secs: u64) -> anyhow::Error {
+    if e.is_timeout() {
+        anyhow!("daemon slow (no answer from {base} in {secs}s) — it is up but busy; retry, nothing was sent")
+    } else {
+        anyhow!("daemon not reachable at {base} — start it with `kb daemon`")
+    }
 }
 
 /// MI-W0.2 — where a bare `kb remember` (no `--kb`) resolves to.
@@ -3021,5 +3082,82 @@ mod tests {
         });
         let text = render_expand(&out);
         assert!(text.contains("no specific passage — this highlight anchors the whole artifact"));
+    }
+
+    // ---- v044-F6 — config-only pre-flight + slow-vs-unreachable wording ----
+
+    /// One-shot stub: accepts a connection, records the request line, and
+    /// either answers `body` or (when `body` is None) never answers.
+    fn stub_once(body: Option<&'static str>) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let head = String::from_utf8_lossy(&buf[..n]).to_string();
+            let line = head.lines().next().unwrap_or("").to_string();
+            let _ = tx.send(line);
+            match body {
+                Some(b) => {
+                    let _ = s.write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{b}",
+                            b.len()
+                        )
+                        .as_bytes(),
+                    );
+                }
+                None => std::thread::sleep(std::time::Duration::from_secs(8)),
+            }
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    /// The per-prompt pre-flight must ask for the config-only listing; the
+    /// old bare `/api/kbs` made the daemon count rows in every corpus.
+    #[tokio::test]
+    async fn fetch_kbs_asks_for_counts_false() {
+        let (url, rx) = stub_once(Some(r#"[{"name":"a","memory_scope":"global"}]"#));
+        let kbs = fetch_kbs(&url, None).await.unwrap();
+        assert_eq!(corpus_names(&kbs), vec!["a"]);
+        let line = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(line, "GET /api/kbs?counts=false HTTP/1.1");
+    }
+
+    /// A daemon that accepted the connection but never answered is SLOW,
+    /// not down; nothing listening is unreachable. The two used to read the
+    /// same ("error sending request"), which is how a busy host looked like
+    /// a dead daemon.
+    #[tokio::test]
+    async fn fetch_kbs_separates_slow_from_unreachable() {
+        let (url, _rx) = stub_once(None);
+        // A bare client with its own timeout: `client_with_timeout_and_bearer`
+        // honours KB_TEST_HTTP_TIMEOUT_SECS (CI sets 120), which would turn
+        // this into a two-minute wait.
+        let e = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(300))
+            .build()
+            .unwrap()
+            .get(format!("{url}{KBS_CONFIG_PATH}"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(e.is_timeout());
+        let msg = kbs_request_error(&e, &url, 1).to_string();
+        assert!(msg.contains("daemon slow"), "{msg}");
+        assert!(!msg.contains("not reachable"), "{msg}");
+
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", l.local_addr().unwrap())
+        };
+        let err = fetch_kbs(&dead, None).await.unwrap_err().to_string();
+        assert!(err.contains("daemon not reachable"), "{err}");
+        assert!(!err.contains("daemon slow"), "{err}");
     }
 }
