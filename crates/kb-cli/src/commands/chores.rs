@@ -347,7 +347,6 @@ mod tests {
             resurface_items: Some(RESURFACE_DUE_MIN - 1),
             stale_markers: Some(STALE_MARKER_DUE_MIN - 1),
             slate: Some(None),
-            ..ChoreInputs::default()
         };
         assert!(decide(&i).is_empty());
     }
