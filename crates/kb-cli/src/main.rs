@@ -655,7 +655,9 @@ enum Cmd {
         fix: bool,
         /// Exit 1 when any check is WARN or FAIL (SKIP never trips it), so a
         /// script can gate on the report. Without it the exit code is 0
-        /// whatever the report says.
+        /// whatever the report says. `cli-skew` and the off-host-copy
+        /// finding are WARNs, so they trip it: a CLI pinned on purpose or a
+        /// local-only backup setup fails the gate until fixed.
         #[arg(long)]
         strict: bool,
     },

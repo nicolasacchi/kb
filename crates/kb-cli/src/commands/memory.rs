@@ -2803,6 +2803,77 @@ mod tests {
         );
     }
 
+    // ---- memory-protocol.txt golden ------------------------------------
+
+    /// v044-X3 (F8 carry) — the wake hooks inject `memory-protocol.txt` as the
+    /// agent's instructions. Its claim about where a bare `kb remember`
+    /// lands used to be a flat "GLOBAL by default", which the ladder in
+    /// `pick_memory_target_aliased` has not been since MI-W0.2. This pins the
+    /// text and the code to each other: the three rule lines must be present
+    /// verbatim, and each is exercised against the real function.
+    #[test]
+    fn memory_protocol_describes_the_remember_ladder_the_code_implements() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/kb-memory/hooks/memory-protocol.txt");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for rule in [
+            "  1. a corpus named memory-<project>, or a project_slugs alias -> that project corpus;",
+            "  2. else the global memory corpus, scoped to the kb named <project> when one exists;",
+            "  3. else the global memory corpus, recallable from every kb.",
+        ] {
+            assert!(text.contains(rule), "protocol lost the rule line: {rule}");
+        }
+        assert!(
+            !text.contains("By default a remembered fact is GLOBAL"),
+            "the flat unconditional claim contradicts rules 1-2"
+        );
+
+        let none = HashMap::new();
+        // Rule 1: the project's own corpus.
+        let kbs = serde_json::json!([
+            {"name": "memory-app", "memory_scope": "project"},
+            {"name": "memory", "memory_scope": "global"},
+            {"name": "app"},
+        ]);
+        assert_eq!(
+            pick_memory_target_aliased(&kbs, "project", "app", &none).unwrap(),
+            MemoryTarget::Corpus("memory-app".into())
+        );
+        // Rule 1, alias form.
+        let mut alias = HashMap::new();
+        alias.insert("app".to_string(), "memory-core".to_string());
+        let kbs = serde_json::json!([
+            {"name": "memory-core", "memory_scope": "project"},
+            {"name": "memory", "memory_scope": "global"},
+        ]);
+        assert_eq!(
+            pick_memory_target_aliased(&kbs, "project", "app", &alias).unwrap(),
+            MemoryTarget::Corpus("memory-core".into())
+        );
+        // Rule 2: global corpus, scoped to the kb named <project>.
+        let kbs = serde_json::json!([
+            {"name": "memory", "memory_scope": "global"},
+            {"name": "app"},
+        ]);
+        assert_eq!(
+            pick_memory_target_aliased(&kbs, "project", "app", &none).unwrap(),
+            MemoryTarget::GlobalLinked {
+                kb: "memory".into(),
+                link: Some("app".into())
+            }
+        );
+        // Rule 3: plain global.
+        let kbs = serde_json::json!([{"name": "memory", "memory_scope": "global"}]);
+        assert_eq!(
+            pick_memory_target_aliased(&kbs, "project", "app", &none).unwrap(),
+            MemoryTarget::GlobalLinked {
+                kb: "memory".into(),
+                link: None
+            }
+        );
+    }
+
     // ---- pick_memory_target --------------------------------------------
 
     #[test]

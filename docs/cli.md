@@ -47,7 +47,22 @@ kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
                                     tarball that never reached a configured
                                     off-host target WARNs), and --strict
                                     exits 1 on any WARN/FAIL (SKIP never
-                                    trips it; default exit stays 0).
+                                    trips it; default exit stays 0). That
+                                    INCLUDES `cli-skew` (a CLI pinned on
+                                    purpose, or one built from a dirty tree,
+                                    WARNs) and the off-host WARN, so a gate
+                                    on a deliberately-skewed machine fails
+                                    until the skew is fixed — gate on the
+                                    JSON `status` of the ids you care about
+                                    instead if that is not what you want.
+                                    The skew wording names which side is
+                                    older (behind: install the daemon's
+                                    build; ahead: redeploy the daemon;
+                                    diverged / no git: update the older
+                                    side). A kb.toml that cannot be read
+                                    SKIPs `backup-offhost` (the off-host
+                                    half was not verified) rather than
+                                    silently assuming none is expected.
                                     Read-only,
                                     PASS/WARN/SKIP + a one-line fix per
                                     link: session marker files, the git
