@@ -1003,3 +1003,168 @@ impl Store {
         Ok(rows)
     }
 }
+
+/// One `reviews` row (V3.R1 / V0014; V4.C1 / V0023 adds the four
+/// `verdict*` columns — NULL until V4.C2's write routes stamp them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewRow {
+    pub id: i64,
+    pub repo: String,
+    pub title: Option<String>,
+    pub base_ref: String,
+    pub head_ref: String,
+    pub session_id: Option<String>,
+    pub state: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// `"comment"` | `"approve"` | `"request-changes"` when set.
+    pub verdict: Option<String>,
+    pub verdict_note: Option<String>,
+    pub verdict_at: Option<i64>,
+    pub verdict_ps: Option<i64>,
+}
+
+/// One `review_patchsets` row (V3.R1 / V0014).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewPatchsetRow {
+    pub id: i64,
+    pub review_id: i64,
+    pub ps_number: i64,
+    pub tip_sha: String,
+    pub base_sha: String,
+    pub captured_at: i64,
+}
+
+/// One `review_viewed` row (V3.R1 / V0014).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewViewedRow {
+    pub review_id: i64,
+    pub path: String,
+    pub blob_sha: String,
+    pub viewed_at: i64,
+}
+
+/// One `review_hunk_viewed` row (V73-K2a / V0031). `hunk_id` is the
+/// SPA's own `kbc-hunkid/1` content address — opaque here by design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewHunkViewedRow {
+    pub review_id: i64,
+    pub hunk_id: String,
+    pub path: String,
+    pub viewed_at: i64,
+}
+
+fn review_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewRow> {
+    Ok(ReviewRow {
+        id: r.get(0)?,
+        repo: r.get(1)?,
+        title: r.get(2)?,
+        base_ref: r.get(3)?,
+        head_ref: r.get(4)?,
+        session_id: r.get(5)?,
+        state: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+        verdict: r.get(9)?,
+        verdict_note: r.get(10)?,
+        verdict_at: r.get(11)?,
+        verdict_ps: r.get(12)?,
+    })
+}
+
+fn review_patchset_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewPatchsetRow> {
+    Ok(ReviewPatchsetRow {
+        id: r.get(0)?,
+        review_id: r.get(1)?,
+        ps_number: r.get(2)?,
+        tip_sha: r.get(3)?,
+        base_sha: r.get(4)?,
+        captured_at: r.get(5)?,
+    })
+}
+
+fn review_viewed_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewViewedRow> {
+    Ok(ReviewViewedRow {
+        review_id: r.get(0)?,
+        path: r.get(1)?,
+        blob_sha: r.get(2)?,
+        viewed_at: r.get(3)?,
+    })
+}
+
+// ── PRR-R1: PR binding + findings ──────────────────────────────────────
+//
+// kb v0.39 "The PR Room" (T2), unit R1 — Phase 1 of design-server.md: schema
+// (migration V0024, already applied above) + the store-layer CRUD/
+// reconciliation core. No routes, nothing reachable from HTTP yet — the
+// NEXT phase (R2/R3) wires these through `router.rs`. Severity/disposition
+// vocab per the milestone plan's arbitrations (blocker|concern|ok,
+// agree|dispute|waive|fix-later), not the design doc's original sketch.
+//
+// PR-binding / report / verdict-publish are plain columns on `reviews`
+// (design doc §1.2 — a snapshot, not a live mirror). Rather than widen the
+// existing `ReviewRow`/`review_row_from`/`get_review` surface (shared,
+// high-traffic, and edited by sibling units this same wave), these get
+// their OWN small targeted get/set pairs (the `impl Store` methods above), each doing its own
+// SELECT/UPDATE over just the columns it owns — additive-only, zero risk
+// of colliding with another unit's edit to the existing review CRUD.
+//
+// Findings (`review_findings`, design doc §1.3) are a sibling table 1:1 on
+// `annotation_id`, mirroring `annotation_suggestions`'s existing shape.
+// [`derive_finding_anchor`] implements the §1.4 location-kind ladder
+// (single|range|multi|whole_file -> annotations anchor_kind/anchor/anchor2/
+// side) as a PURE function — no git I/O — so it is unit-testable without a
+// repo; a later phase's import route supplies the real per-line text read
+// from the target patchset's pinned git blob. [`Store::reconcile_findings_
+// import`] is the §4.3 reconciliation core: new slug -> create; existing
+// slug present again -> refresh volatile fields + stamp
+// `content_updated_at` + un-supersede, but NEVER touch disposition/thread
+// (a human's prior agree/dispute/waive call survives a re-review
+// untouched); existing slug absent -> soft-supersede
+// (`superseded_reason="not_in_reimport"`), never hard-deleted, mirroring
+// invariant #10's MI-W2.3 precedent. A slug whose refreshed fields are
+// BYTE-IDENTICAL to what is already stored (and was not previously
+// superseded) is reported "unchanged" rather than "updated" — no spurious
+// `content_updated_at` bump or watch-loop noise on a true no-op re-review,
+// the same "compare before writing" discipline `set_review_verdict` already
+// uses for the verdict columns.
+//
+// Design fill-ins not spelled out verbatim in the spec (flagged here, and
+// in the unit's own report, for a later phase to revisit if wrong):
+//   - A finding's linked `annotations.body` mirrors its `title` (the
+//     annotation table's `body` is NOT NULL and needs *something*
+//     human-readable for `/comments`-style thread rendering; `rationale`
+//     stays the long-form field, `review_findings`-only).
+//   - A finding's linked `annotations.author` is whatever the import call
+//     supplies (the generator agent's identity, e.g. "claude") — plain
+//     pass-through, not defaulted here.
+//   - `side` is always written explicitly ("old" when `location_removed`,
+//     else "new") — never a bare `NULL`, matching
+//     `resolve_review_create_scope`'s existing explicit-string convention.
+//   - Un-superseding a slug whose CONTENT happens to be unchanged still
+//     stamps `content_updated_at`/`updated_at` (it is itself a real,
+//     narratively meaningful write) and is bucketed "updated", not
+//     "unchanged".
+
+/// PR-binding columns on `reviews` (V0024), as read back. Every field is
+/// `None` on a pre-V0024 (or never-bound) review — see
+/// `legacy_review_row_reads_back_with_pr_binding_report_and_verdict_
+/// publish_columns_null`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReviewPrBinding {
+    pub pr_number: Option<i64>,
+    pub pr_repo_slug: Option<String>,
+    pub pr_head_sha: Option<String>,
+    pub pr_meta_json: Option<String>,
+    pub pr_meta_fetched_at: Option<i64>,
+    pub artifact_hint_kb: Option<String>,
+    pub artifact_hint_id: Option<String>,
+}
+
+/// The agent-authored review report (V0024's `report_json`/
+/// `report_updated_at`), as read back.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReviewReport {
+    pub report_json: Option<String>,
+    pub report_updated_at: Option<i64>,
+}

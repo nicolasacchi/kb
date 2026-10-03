@@ -102,3 +102,65 @@ impl Store {
         Ok(out)
     }
 }
+
+// ── PRR-R9: review disposition analytics ────────────────────────────────
+
+/// One `review_findings` row, joined to its owning review's `repo` —
+/// [`Store::list_findings_for_analytics`]'s data source. Deliberately
+/// narrower than [`ReviewFindingRow`] (only the columns `review_analytics`'s
+/// pure `compute_analytics` needs) so that fn's fixture rows stay small and
+/// the join query only pulls what it uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyticsFindingRow {
+    pub review_id: i64,
+    /// "blocker" | "concern" | "ok".
+    pub severity: String,
+    pub category: String,
+    pub location_path: String,
+    /// "agree" | "dispute" | "waive" | "fix-later" | `None` (undecided).
+    pub disposition: Option<String>,
+    pub disposition_at: Option<i64>,
+    /// "unpublished" | "published".
+    pub published_state: String,
+    pub superseded: bool,
+    pub created_at: i64,
+}
+
+fn analytics_finding_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AnalyticsFindingRow> {
+    Ok(AnalyticsFindingRow {
+        review_id: r.get(0)?,
+        severity: r.get(1)?,
+        category: r.get(2)?,
+        location_path: r.get(3)?,
+        disposition: r.get(4)?,
+        disposition_at: r.get(5)?,
+        published_state: r.get(6)?,
+        superseded: r.get::<_, i64>(7)? != 0,
+        created_at: r.get(8)?,
+    })
+}
+
+/// `(category, location_path)` seen across at least [`RECURRENCE_MIN_
+/// REVIEWS`] DISTINCT reviews — [`Store::recurrence_pairs`]'s row shape.
+/// `review_ids` is always sorted ascending (SQLite's `GROUP_CONCAT(DISTINCT
+/// …)` element order is unspecified — sorting here is what makes repeated
+/// calls over unchanged state byte-identical, same "the query result isn't
+/// naturally deterministic, so the store layer imposes an order" precedent
+/// as `sort_inbox_rows`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecurrenceRow {
+    pub category: String,
+    pub location_path: String,
+    pub review_count: i64,
+    pub finding_count: i64,
+    pub review_ids: Vec<i64>,
+}
+
+/// The addendum-2 §C default — a pair recurs once it has landed in two or
+/// more distinct reviews. Exposed as a named constant (not a magic `2`
+/// inline) since both `review_analytics::analytics_route` and a later
+/// frontier chip (design-addendum-2 §C's own note: "this is also the
+/// frontier recurring-finding query") share this threshold.
+pub const RECURRENCE_MIN_REVIEWS: i64 = 2;
+
+// ── end PRR-R9 ───────────────────────────────────────────────────────────

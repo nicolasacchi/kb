@@ -54,3 +54,19 @@ impl Store {
             .map_err(Into::into)
     }
 }
+
+// ── PRR-N12: scip runs ──────────────────────────────────────────────────
+
+/// PRR-N12 (N1) — one `scip_runs` row: the outcome of one successful
+/// `POST /api/scip/ingest` call, stamped by `crate::scip::scip_ingest_route`
+/// (see migration V0025's doc). `head_sha` is the repo's git HEAD AT THE
+/// MOMENT of that ingest call — compared against the repo's CURRENT HEAD by
+/// `routes::repos`'s `ScipStatus::fresh`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScipRunRow {
+    pub head_sha: String,
+    pub ingested_at: i64,
+    pub docs_accepted: i64,
+}
+
+// ── end PRR-N12 ──────────────────────────────────────────────────────────

@@ -1745,7 +1745,7 @@ mod tests {
         // V70-H1 — was asserted `== 1` ("untouched, different cache slot
         // entirely") before V70-A3X's `Store::replace_symbols` purge landed.
         // That assertion predates the fix and this crate's OWN new coverage
-        // (`store::tests::replace_symbols_purges_only_this_blobs_stale_same_language_rows`)
+        // (`store::tests::symbols::replace_symbols_purges_only_this_blobs_stale_same_language_rows`)
         // now pins the opposite, intended behaviour: a fresh derivation
         // under the blob's CURRENT salt purges every OTHER stale salt of
         // the SAME language for that blob (`lang_prefix_pattern`) — that's
