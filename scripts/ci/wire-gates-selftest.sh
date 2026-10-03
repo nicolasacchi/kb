@@ -35,8 +35,12 @@ mk; echo 'export interface Foo { a: string }' >> "$tmp/r/web-code/src/api/types.
 expect fail check-ts-shadows.sh "hand interface shadows generated Foo"
 
 mk; echo 'export interface Foo { a: string }' >> "$tmp/r/web-code/src/api/types.ts"
-echo '// Foo asserted here' > "$tmp/r/web-code/src/api/drift.ts"
-expect ok check-ts-shadows.sh "shadow named in drift.ts is accepted"
+echo 'export type _Foo = Assert<Satisfies<FooWire, Foo>>;' > "$tmp/r/web-code/src/api/drift.ts"
+expect ok check-ts-shadows.sh "shadow named in drift.ts code is accepted"
+
+mk; echo 'export interface Foo { a: string }' >> "$tmp/r/web-code/src/api/types.ts"
+printf '// Foo asserted here\n/* and Foo\n   again Foo */\n' > "$tmp/r/web-code/src/api/drift.ts"
+expect fail check-ts-shadows.sh "a name that appears only in drift.ts comments is not an assertion"
 
 mk; echo 'web-code:Gone:web-code/src/api/types.ts' >> "$tmp/r/scripts/ci/ts-shadow-allowlist.txt"
 expect fail check-ts-shadows.sh "stale allowlist entry"

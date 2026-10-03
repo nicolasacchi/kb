@@ -1828,6 +1828,103 @@ pub(crate) struct SlateStats {
     pub done_abandoned: usize,
     pub by_harness: Vec<(String, usize)>,
     pub by_session: Vec<(String, usize)>,
+    /// `--design-checks` only: the measurable §19 conditions as counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub design_checks: Option<DesignChecks>,
+}
+
+/// Fewer posts than this from sessions other than the busiest one is one of
+/// the design's kill conditions (§19 "The dry run").
+pub(crate) const DESIGN_MIN_OTHER_POSTS: usize = 10;
+/// A take older than this from a session with no liveness evidence, yet
+/// still blocking others, is another (§19).
+pub(crate) const DESIGN_OLD_TAKE_SECS: i64 = 2 * 3600;
+
+/// The measurable §19 dry-run conditions, as COUNTS next to their thresholds.
+/// The verdict stays with the operator: nothing here says "pass" or "fail".
+/// "Orchestrator" is not recorded anywhere, so it is operationalised as the
+/// attributed session with the most posts (ties: smallest harness/id).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct DesignChecks {
+    /// The attributed `harness/session` with the most posts, if any.
+    pub busiest_session: Option<String>,
+    /// Posts attributed to a session other than `busiest_session`.
+    pub posts_from_other_sessions: usize,
+    pub other_sessions_threshold: usize,
+    /// Posts whose harness is known and not `claude`.
+    pub posts_from_non_claude_harnesses: usize,
+    /// Posts the daemon stamped `unattributed` (excluded from both counts
+    /// above: an unknown author proves nothing about demand).
+    pub unattributed_posts: usize,
+    /// Open takes older than two hours, still blocking (live or stale), whose
+    /// liveness rests on posts alone (`confidence: presumed`) — the closest
+    /// countable proxy for "a take from a presumed-ended session still
+    /// honoured by another session".
+    pub old_takes_still_blocking: usize,
+    pub old_take_secs: i64,
+}
+
+fn post_origin_unattributed(p: &Value) -> bool {
+    p.get("prov")
+        .and_then(|v| v.get("origin"))
+        .and_then(Value::as_str)
+        == Some("unattributed")
+}
+
+/// PURE over the same two reads as [`compute_stats`].
+pub(crate) fn compute_design_checks(digest: &Value, posts: &[Value]) -> DesignChecks {
+    let mut per: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+    let mut non_claude = 0usize;
+    let mut unattributed = 0usize;
+    for p in posts {
+        if post_origin_unattributed(p) {
+            unattributed += 1;
+            continue;
+        }
+        let prov = p.get("prov");
+        let h = prov
+            .and_then(|v| v.get("harness"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        if h != "claude" && h != "unknown" {
+            non_claude += 1;
+        }
+        if let Some(sid) = prov
+            .and_then(|v| v.get("session_id"))
+            .and_then(Value::as_str)
+        {
+            *per.entry((h.to_string(), sid.to_string())).or_default() += 1;
+        }
+    }
+    // max_by_key keeps the LAST max; iterate reversed so the smallest key wins a tie.
+    let busiest = per
+        .iter()
+        .rev()
+        .max_by_key(|(_, n)| **n)
+        .map(|(k, _)| k.clone());
+    let total: usize = per.values().sum();
+    let others = busiest.as_ref().map_or(0, |k| total - per[k]);
+    let old_blocking = section(digest, "take")
+        .iter()
+        .filter(|t| t.get("age_secs").and_then(Value::as_i64) > Some(DESIGN_OLD_TAKE_SECS))
+        .filter(|t| {
+            matches!(
+                t.get("liveness").and_then(Value::as_str),
+                Some("live" | "stale")
+            )
+        })
+        .filter(|t| t.get("confidence").and_then(Value::as_str) == Some("presumed"))
+        .count();
+    DesignChecks {
+        busiest_session: busiest.map(|(h, sid)| format!("{h}/{sid}")),
+        posts_from_other_sessions: others,
+        other_sessions_threshold: DESIGN_MIN_OTHER_POSTS,
+        posts_from_non_claude_harnesses: non_claude,
+        unattributed_posts: unattributed,
+        old_takes_still_blocking: old_blocking,
+        old_take_secs: DESIGN_OLD_TAKE_SECS,
+    }
 }
 
 /// PURE over the two reads `stats` needs: the `--all` digest (open state,
@@ -1976,6 +2073,7 @@ pub(crate) fn compute_stats(slug: &str, digest: &Value, posts: &[Value]) -> Slat
             .count(),
         by_harness: tally(posts.iter().map(|p| author(p).0).collect()),
         by_session: session_rows(tally(posts.iter().map(|p| author(p).1).collect())),
+        design_checks: None,
     }
 }
 
@@ -2023,14 +2121,39 @@ pub(crate) fn render_stats(s: &SlateStats) -> String {
     ));
     out.push_str(&format!("by harness  {}\n", pairs(&s.by_harness)));
     out.push_str(&format!("by session  {}\n", pairs(&s.by_session)));
+    if let Some(d) = &s.design_checks {
+        out.push_str("\ndesign checks (counts beside thresholds; the verdict is yours)\n");
+        out.push_str(&format!(
+            "  posts from sessions other than {}   {} (design wants at least {})\n",
+            d.busiest_session.as_deref().unwrap_or("(none attributed)"),
+            d.posts_from_other_sessions,
+            d.other_sessions_threshold
+        ));
+        out.push_str(&format!(
+            "  posts from non-Claude harnesses   {} (design wants at least 1)\n",
+            d.posts_from_non_claude_harnesses
+        ));
+        out.push_str(&format!(
+            "  takes older than {}h still blocking, liveness from posts alone   {} (design wants 0)\n",
+            d.old_take_secs / 3600,
+            d.old_takes_still_blocking
+        ));
+        out.push_str(&format!(
+            "  unattributed posts (counted in none of the above)   {}\n",
+            d.unattributed_posts
+        ));
+    }
     out
 }
 
-pub async fn stats(ctx: &Ctx) -> Result<()> {
+pub async fn stats(ctx: &Ctx, design_checks: bool) -> Result<()> {
     let digest = get(ctx, "", &[("all", "1".to_string())]).await?;
     let posts = get(ctx, "/posts", &[]).await?;
     let posts = posts.as_array().cloned().unwrap_or_default();
-    let stats = compute_stats(&ctx.slug, &digest, &posts);
+    let mut stats = compute_stats(&ctx.slug, &digest, &posts);
+    if design_checks {
+        stats.design_checks = Some(compute_design_checks(&digest, &posts));
+    }
     if ctx.json {
         println!("{}", serde_json::to_string_pretty(&stats)?);
         return Ok(());
@@ -2659,5 +2782,82 @@ mod tests {
             s.by_session,
             vec![("omp/cb14".to_string(), 2), ("omp/89ab".to_string(), 1)]
         );
+    }
+
+    #[test]
+    fn stats_label_collision_falls_back_to_the_full_session_id() {
+        let mk = |seq: u64, sid: &str| {
+            json!({"seq": seq, "kind": "found", "line": "x",
+                   "prov": {"harness": "omp", "session_id": sid}})
+        };
+        // Two UUIDv7 ids with DIFFERENT timestamps but the same last four
+        // hex characters: the short tag `cb14` would merge them in a label.
+        let a = "01a025fd-51eb-7cd3-86f2-95261769cb14";
+        let b = "01a99999-6a00-7e11-9d0a-0123456acb14";
+        let c = "01a025fd-0000-7000-8000-000000000001";
+        let posts = vec![mk(1, a), mk(2, a), mk(3, b), mk(4, c)];
+        let digest = json!({"generation": 1, "head_seq": 4, "sections": {}});
+        let s = compute_stats("kb", &digest, &posts);
+        assert_eq!(
+            s.by_session,
+            vec![
+                (format!("omp/{a}"), 2),
+                ("omp/0001".to_string(), 1),
+                (format!("omp/{b}"), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn design_checks_count_the_s19_conditions_beside_their_thresholds() {
+        let mk = |seq: u64, h: &str, sid: &str| {
+            json!({"seq": seq, "kind": "found", "line": "x",
+                   "prov": {"harness": h, "session_id": sid, "origin": "agent"}})
+        };
+        let mut posts: Vec<Value> = (1..=5).map(|i| mk(i, "claude", "orch")).collect();
+        posts.push(mk(6, "claude", "other"));
+        posts.push(mk(7, "codex", "cx"));
+        posts.push(mk(8, "codex", "cx"));
+        posts.push(json!({"seq": 9, "kind": "found", "line": "x",
+                          "prov": {"harness": "claude", "origin": "unattributed"}}));
+        let digest = json!({"generation": 1, "head_seq": 9, "sections": {"take": [
+            {"seq": 1, "age_secs": 7300, "liveness": "stale", "confidence": "presumed"},
+            {"seq": 2, "age_secs": 7300, "liveness": "live", "confidence": "known"},
+            {"seq": 3, "age_secs": 60, "liveness": "live", "confidence": "presumed"},
+            {"seq": 4, "age_secs": 9000, "liveness": "expired", "confidence": "presumed"}
+        ]}});
+        let d = compute_design_checks(&digest, &posts);
+        assert_eq!(d.busiest_session.as_deref(), Some("claude/orch"));
+        assert_eq!(d.posts_from_other_sessions, 3);
+        assert_eq!(d.posts_from_non_claude_harnesses, 2);
+        assert_eq!(d.unattributed_posts, 1);
+        assert_eq!(d.old_takes_still_blocking, 1);
+        let mut s = compute_stats("kb", &digest, &posts);
+        assert!(!render_stats(&s).contains("design checks"));
+        s.design_checks = Some(d);
+        let text = render_stats(&s);
+        assert!(
+            text.contains(
+                "posts from sessions other than claude/orch   3 (design wants at least 10)"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("non-Claude harnesses   2"), "{text}");
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["design_checks"]["old_takes_still_blocking"], 1);
+        assert!(serde_json::to_value(compute_stats("kb", &digest, &posts))
+            .unwrap()
+            .get("design_checks")
+            .is_none());
+    }
+
+    #[test]
+    fn token_lint_flags_authelia_tokens_and_unbounded_sk() {
+        assert!(
+            looks_token_shaped("Authorization authelia_at_abcdefghij0123456789ABCDEF").is_some()
+        );
+        assert!(looks_token_shaped("the authelia_at_ prefix").is_none());
+        // The dispatcher scans `sk-` anywhere, so the lint does too.
+        assert!(looks_token_shaped("disk-bound-and-everything-else-too").is_some());
     }
 }

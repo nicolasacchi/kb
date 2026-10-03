@@ -591,15 +591,23 @@ kb import claude-memory [--dir PATH] [--limit N] [--apply] [--link KBS]
                                     bring Claude Code's native auto-memory
                                     (<dir>/<project>/memory/*.md) into the
                                     HUMAN-GATED proposal inbox. Dry-run by
-                                    default (prints title/tags/target corpus/
-                                    dedupe key; touches no daemon); --apply
+                                    default (prints status/title/tags/target
+                                    corpus/dedupe key; writes nothing, and only
+                                    READS a reachable daemon to mark duplicates
+                                    — `unknown` when none answers; --limit
+                                    shows as `over-limit`); --apply
                                     queues via the `kb propose` route, a human
-                                    approves with `kb proposals approve`.
+                                    approves with `kb proposals approve`. The
+                                    source file's mtime becomes the memory's
+                                    created date (recall decay), and the
+                                    provenance footer names the decoded project
+                                    slug, never the encoded home-path dir.
                                     MEMORY.md is skipped; idempotent via a
                                     cm-<hash> tag (--apply refuses when the
                                     proposal queue exceeds the daemon's 200-item
-                                    listing cap; identical content in two
-                                    projects dedupes to one); the target corpus is a
+                                    listing cap; the target corpus is part of
+                                    the hash, so identical content in two
+                                    projects is two candidates); the target corpus is a
                                     best-effort guess from the lossy project dir
                                     name (--link a,b overrides; an unconfigured
                                     --link is an error).
