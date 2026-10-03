@@ -128,7 +128,23 @@ gh attestation verify oci://ghcr.io/nicolasacchi/kb-code:<ver> -R nicolasacchi/k
 signed in, and **fails closed**: a missing `.sha256` sidecar, a missing sha256
 tool, or a failed attestation aborts the install. `KB_INSECURE_SKIP_VERIFY=1`
 is the explicit override. Releases published before v0.44 carry no
-attestation; pin one with `KB_VERSION=` only together with the override.
+attestation, so with `gh` signed in `install.sh` **hard-fails** for every
+tag before v0.44 (v0.43 included) and for any `KB_BASE_URL` mirror whose
+tarballs were not attested by this repository; pin one with `KB_VERSION=`
+(or point at a mirror) only together with `KB_INSECURE_SKIP_VERIFY=1`.
+
+### Attestation referrers and ghcr cleanup
+
+Image attestations are stored as OCI referrers, and ghcr can list them as
+**untagged** package versions beside the tagged image. The `ghcr-gc` job never
+deletes untagged versions (deleting one could orphan an attestation that a
+tagged image still references), so they accumulate without bound — safe, but
+not free. Clean them by hand when it matters: list the package's versions in
+the GitHub UI (Packages -> the image -> Versions -> untagged) or with
+`gh api /users/<owner>/packages/container/<name>/versions`, confirm that a
+version is not referenced by a live tag (`gh attestation verify
+oci://ghcr.io/<owner>/<name>:<ver>` must still pass for every tag you keep
+afterwards), and delete only the unreferenced ones.
 
 See [packaging/README.md](../packaging/README.md) for the full asset
 list, the release checklist, and the outstanding

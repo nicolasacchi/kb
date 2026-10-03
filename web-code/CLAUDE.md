@@ -2117,6 +2117,13 @@ chords.
 
 
 
+## v0.44 notes
+
+The review-store wire types are generated (`web-code/src/api/generated`), and
+CI's `code-drift` job asserts them, including `ClaimOut`; when it fails, apply
+the printed diff byte-for-byte rather than hand-editing a type. The
+reviewer-facing gate table lives in docs/kb-code.md, not here.
+
 ## Wire types (V76-R4a)
 
 `web-code/src/api/generated/` is produced by `just gen-ts-code` from
