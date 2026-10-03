@@ -40,8 +40,9 @@ use super::{
     classify_base, decide_kind, effective_base, pick_default_branch, resolve_non_pr_base,
     resolve_pr_base, valid_branch_name, warn, warning, BaseError, BaseMode, BasePolicy, BaseProbe,
     BaseSource, BaseStatus, BaseWarningOut, Classified, EffectiveBase, NonPrChain, PatchsetKind,
-    PrChain, SetBy, URN_BASE_UNAVAILABLE, URN_CAPTURE_FAILED, URN_HEAD_UNAVAILABLE,
-    URN_NO_MERGE_BASE, URN_PR_FETCH_FAILED, URN_PR_REFS_UNSUPPORTED,
+    PrChain, SetBy, URN_BASE_CHANGED, URN_BASE_UNAVAILABLE, URN_CAPTURE_FAILED,
+    URN_HEAD_UNAVAILABLE, URN_NO_MERGE_BASE, URN_PR_ALREADY_MERGED, URN_PR_FETCH_FAILED,
+    URN_PR_REFS_UNSUPPORTED,
 };
 use crate::git::roots::{GitRoot, StoreRoot, WorkTreeRoot};
 use crate::git::Revspec;
@@ -186,6 +187,25 @@ pub fn capture_at(
         kind: Some(kind.as_str().to_string()),
         base_tip_sha,
     })
+}
+
+/// A6-1 — refuse to capture a PR head that the target tip already
+/// contains. After a merge-commit merge `merge-base(target, head) == head`,
+/// so the patchset would be (tip=head, base=head): zero files, and on an
+/// existing review a `base-corrected`/`base-moved` patchset that orphans
+/// every finding. `merge_base` is `merge-base(base_tip, head)`.
+pub(crate) fn refuse_merged_head(head: &str, merge_base: &str) -> Result<(), BaseError> {
+    if head == merge_base {
+        return Err(BaseError::new(
+            409,
+            URN_PR_ALREADY_MERGED,
+            format!(
+                "the PR head {} is already contained in the target tip (the PR was merged): capturing against the live target would mint an empty patchset — pin the merge-time base with --base <sha> to review what landed",
+                &head[..head.len().min(12)]
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// The message of a review-row write that did not land (the DB, not the
@@ -1183,14 +1203,15 @@ impl<'a> StoreCtx<'a> {
         eff: &EffectiveBase,
         opts: &CaptureOpts,
     ) -> Result<CaptureOutcome, BaseError> {
-        self.capture_with(review, eff, opts, |_| {})
+        self.capture_with(review, eff, opts, || true, |_| {})
     }
 
-    fn capture_with(
+    pub(super) fn capture_with(
         &self,
         review: &ReviewRow,
         eff: &EffectiveBase,
         opts: &CaptureOpts,
+        still_valid: impl FnOnce() -> bool,
         under_lock: impl FnOnce(&CaptureOutcome),
     ) -> Result<CaptureOutcome, BaseError> {
         let imported_head = match pr_of_head(&review.head_ref) {
@@ -1211,7 +1232,23 @@ impl<'a> StoreCtx<'a> {
             }
             None => self.head_tip(&review.head_ref)?,
         };
+        // A6-3 — re-check, UNDER the ops lock and before minting, that the
+        // policy this capture was computed from is still the stored one: a
+        // concurrent retrack/retarget that persisted while this call was
+        // waiting on the network fetch must win, not be undone by a patchset
+        // minted against the stale policy.
+        if !still_valid() {
+            return Err(BaseError::new(
+                409,
+                URN_BASE_CHANGED,
+                "the review's base changed while this capture was waiting; retry",
+            ));
+        }
         let t = self.base_tip(eff)?;
+        if pr_of_head(&review.head_ref).is_some() {
+            let mb = reviews::merge_base_sha(&self.root(), &t, &head).map_err(capture_error)?;
+            refuse_merged_head(&head, &mb)?;
+        }
         let out = capture_at(
             self.store,
             self.bus,
@@ -1317,7 +1354,11 @@ impl<'a> StoreCtx<'a> {
             self.import_base(&eff)?;
         }
         let base_tip = self.base_tip(&eff)?;
-        reviews::merge_base_sha(&self.root(), &base_tip, &head_sha).map_err(capture_error)?;
+        let merge_base =
+            reviews::merge_base_sha(&self.root(), &base_tip, &head_sha).map_err(capture_error)?;
+        if nr.pr.is_some() {
+            refuse_merged_head(&head_sha, &merge_base)?;
+        }
         let status = status_after(&fetch, &eff, &BaseStatus::default());
         Ok(Prepared {
             base_ref: policy.display_base_ref(mapped.first().map(String::as_str)),
@@ -1669,6 +1710,7 @@ impl<'a> StoreCtx<'a> {
                 force: rc.force,
                 kind_hint,
             },
+            || policy_key(self.store.get_review_base(id).ok().flatten().as_ref()) == started_from,
             |_| {
                 // Under the ops lock: re-read, then write.
                 let now_row = self.store.get_review_base(id).ok().flatten();

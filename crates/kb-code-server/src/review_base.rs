@@ -62,6 +62,13 @@ pub const URN_BASE_UNAVAILABLE: &str = "urn:kb:errors:base-unavailable";
 pub const URN_NO_MERGE_BASE: &str = "urn:kb:errors:no-merge-base";
 /// A user-set (or legacy) base branch no longer exists on the forge.
 pub const URN_BASE_VANISHED: &str = "urn:kb:errors:base-vanished";
+/// A PR review's head is already an ancestor of the target tip (a merge-
+/// commit merge): capturing against the live target would mint an EMPTY
+/// patchset, so the capture is refused instead.
+pub const URN_PR_ALREADY_MERGED: &str = "urn:kb:errors:pr-already-merged";
+/// The review's base policy changed (a concurrent retrack/retarget) between
+/// this capture reading it and minting; retry.
+pub const URN_BASE_CHANGED: &str = "urn:kb:errors:base-changed";
 /// The capture itself failed (git or DB).
 pub const URN_CAPTURE_FAILED: &str = "urn:kb:errors:capture-failed";
 
