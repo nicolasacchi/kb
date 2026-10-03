@@ -15673,7 +15673,7 @@ mod tests {
             let mut values: Vec<Value> = Vec::new();
             for (name, ty, notnull, has_default) in &info {
                 let is_target = name == col;
-                if !is_target && !(*notnull && !*has_default) {
+                if !is_target && (!*notnull || *has_default) {
                     continue;
                 }
                 let v = if is_target {
