@@ -78,6 +78,13 @@ fn wake_hook_appends_the_chores_line() {
     run("test-wake-chores.sh");
 }
 
+/// v0.45 N5 - the kimi wake hook carries the same chores line on its first
+/// prompt.
+#[test]
+fn wake_kimi_hook_appends_the_chores_line() {
+    run("test-wake-kimi-chores.sh");
+}
+
 /// The four distill nudges share `post_distill_ask` from `kb-hook-lib.sh`
 /// (previously four hand-copied definitions); these run each end to end.
 #[test]

@@ -23,7 +23,8 @@
 #       rendering kb-wake.sh does);
 #   (c) the distill-pending ledger surfacing + consume-on-read (same
 #       logic as kb-wake.sh, harness-labeled — queued by
-#       kb-distill-nudge-kimi.sh / kb-capture-grok.sh).
+#       kb-distill-nudge-kimi.sh / kb-capture-grok.sh);
+#   (d) the one-line `kb chores --line` (v0.45 N5), last.
 #
 # Deterministic, LLM-free, fail-open: a down daemon just means no index;
 # any failure exits 0 with nothing injected.
@@ -152,10 +153,24 @@ if [ -n "$slate_json" ]; then
   fi
 fi
 
+# v0.45 N5 — the chores line (same block as kb-wake.sh). `kb chores --line`
+# prints ONE counts-only line when agent-layer upkeep is due, at most once per
+# UTC day (the CLI keeps that stamp; not reimplemented here), and nothing when
+# nothing is due, the daemon is down or the CLI predates the verb. This
+# script has no skew notice, so KB_SKEW_SHOWN=0. Capped at 3s through run_to
+# (and by what is left of KB_HOOK_BUDGET_SECS); one line only; empty on any
+# failure. Appended LAST. Once-per-session is inherited from the marker above.
+chores_block=""
+if command -v kb >/dev/null 2>&1; then
+  chores_block="$(KB_SKEW_SHOWN=0 run_to 3 kb chores --line "${extra[@]}" 2>/dev/null)" || chores_block=""
+  chores_block="$(printf '%s\n' "$chores_block" | head -n 1)"
+fi
+
 ctx="$protocol"
 [ -n "${index:-}" ] && ctx="$ctx"$'\n\n'"$index"
 [ -n "${pending_block:-}" ] && ctx="$ctx"$'\n\n'"$pending_block"
 [ -n "${slate_text:-}" ] && ctx="$ctx"$'\n\n'"$slate_text"
+[ -n "${chores_block:-}" ] && ctx="$ctx"$'\n\n'"$chores_block"
 [ -n "$ctx" ] || exit 0
 
 # Mark only when we actually emitted — a missing protocol file / down
