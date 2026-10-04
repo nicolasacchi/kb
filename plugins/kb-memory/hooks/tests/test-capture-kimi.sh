@@ -4,8 +4,9 @@
 # the REAL script in CLI (backfill) mode against a checked-in synthesized
 # fixture (tests/fixtures/kimi-wire-commit.jsonl) laid out in the real
 # on-disk shape (<session_dir>/agents/main/wire.jsonl), with a fake `kb`
-# on PATH whose `sessions capture` FAILS — forcing the bash-fallback write
-# path so the test is hermetic (same trick as test-grok-distill-pending.sh).
+# on PATH whose `sessions capture` is the minimal stand-in
+# fixtures/fake-capture-kb.sh (v0.45: the adapter no longer writes HTML itself,
+# so the translation is asserted on what it hands to `kb sessions capture`).
 #
 # Runnable standalone:  bash plugins/kb-memory/hooks/tests/test-capture-kimi.sh
 set -u
@@ -25,16 +26,9 @@ ok() { PASS=$((PASS + 1)); printf 'ok      - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
 
 mkdir -p "$TMPROOT/bin"
-cat >"$TMPROOT/bin/kb" <<'EOF'
-#!/usr/bin/env bash
-# `kb sessions capture` fails -> forces kb-capture-kimi.sh's bash-fallback
-# write path, keeping this test hermetic (no real kb binary / daemon).
-if [ "$1" = "sessions" ] && [ "$2" = "capture" ]; then exit 1; fi
-# v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
-if [ "$1" = "sessions" ] && [ "$2" = "scrub" ]; then exec cat; fi
-exit 0
-EOF
+cp "$SCRIPT_DIR/fixtures/fake-capture-kb.sh" "$TMPROOT/bin/kb"
 chmod +x "$TMPROOT/bin/kb"
+export HOOKS_DIR
 export PATH="$TMPROOT/bin:$PATH"
 
 export KB_SESSIONS_DIR="$TMPROOT/sessions"
@@ -63,12 +57,6 @@ else
 fi
 
 out="$(find "$KB_SESSIONS_DIR" -name "session-*-$SAFE_SID.html" | head -1)"
-
-if grep -q 'kb-harness" content="kimi"' "$out"; then
-  ok 'envelope carries kb-harness "kimi"'
-else
-  bad 'envelope carries kb-harness "kimi"'
-fi
 
 first="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$out")"
 if printf '%s' "$first" | jq -e '.type == "adapter-meta" and .harness == "kimi" and .adapter == "kb-capture-kimi/1"' >/dev/null 2>&1; then

@@ -26,14 +26,9 @@ ok() { PASS=$((PASS + 1)); printf 'ok      - %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
 
 mkdir -p "$TMPROOT/bin"
-cat >"$TMPROOT/bin/kb" <<'EOF'
-#!/usr/bin/env bash
-if [ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ]; then exit 1; fi
-# v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
-if [ "${1:-}" = "sessions" ] && [ "${2:-}" = "scrub" ]; then exec cat; fi
-exit 0
-EOF
+cp "$SCRIPT_DIR/fixtures/fake-capture-kb.sh" "$TMPROOT/bin/kb"
 chmod +x "$TMPROOT/bin/kb"
+export HOOKS_DIR
 # OK4 — saved before the fake-kb override below, so the subagent-sidecar
 # block near the end can shell out to the REAL installed kb binary (the
 # Rust sidecar digest walk is not exercised by the bash-fallback path the
@@ -70,11 +65,6 @@ else
   echo "passed=$PASS failed=$FAIL"; exit 1
 fi
 
-if grep -q 'kb-harness" content="omp"' "$out"; then
-  ok "envelope carries kb-harness: omp"
-else
-  bad "envelope missing kb-harness: omp"
-fi
 
 first="$(awk '/<pre>/{sub(/.*<pre>/,""); print; exit}' "$out")"
 if printf '%s' "$first" | jq -e '.type == "adapter-meta" and .harness == "omp" and .adapter == "kb-capture-omp/1"' >/dev/null 2>&1; then
@@ -259,7 +249,10 @@ echo "== OK4: subagent sidecar staging (real kb sessions capture engine) =="
 # The sidecar digest walk is Rust-only (sessions_capture.rs) — the bash
 # fallback the rest of this file forces never sees it, by design (see the
 # header comment) — so this block shells out to the REAL installed kb.
-if command -v kb >/dev/null 2>&1; then
+# `command -v kb` here would find the stand-in installed above, so look for the
+# real one on the pre-override PATH or in KB_BIN_DIR (what CI sets).
+if PATH="$REAL_PATH" command -v kb >/dev/null 2>&1 \
+  || [ -n "${KB_BIN_DIR:-}" ] && [ -x "${KB_BIN_DIR:-}/kb" ]; then
   OK4_SUB_ROOT="$TMPROOT/subagents-e2e"
   mkdir -p "$OK4_SUB_ROOT/parent-session"
   cp "$SCRIPT_DIR/fixtures/omp-subagent.jsonl" \
@@ -296,7 +289,7 @@ if command -v kb >/dev/null 2>&1; then
     bad "subagent name sanitization or multi-subagent count wrong"
   fi
 else
-  echo "skip - kb binary not on PATH, cannot exercise the real capture engine" >&2
+  echo "skip - no real kb on PATH or in KB_BIN_DIR, cannot exercise the real capture engine" >&2
 fi
 
 echo

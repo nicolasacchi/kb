@@ -196,12 +196,14 @@ hook_sid_key() { hook_spool_key "$1"; }
 # The pre-v0.44 lossy key. Kept ONLY so a cleanup can recognise legacy files.
 hook_sid_key_lossy() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
 
-# hook_spool_put <transcript> <raw-session-id> [cwd]
-# Dir 0700, files 0600, one item per session (latest snapshot wins, as the
-# corpus file does). Refuses a transcript over the 48MiB capture cap. Returns
+# hook_spool_put <transcript> <raw-session-id> [cwd] [stamp] [harness]
+# `stamp` (compact UTC, the session's true start time) and `harness` ride the
+# .meta so a replayed capture keeps its start-time filename (v0.45 N4); the
+# replay ignores keys it does not know. Dir 0700, files 0600, one item per
+# session (latest snapshot wins, as the corpus file does). Refuses a transcript over the 48MiB capture cap. Returns
 # non-zero when nothing was spooled; never writes anywhere but the spool.
 hook_spool_put() {
-  local tpath="$1" raw_sid="$2" cwd="${3:-}" dir key tmp size
+  local tpath="$1" raw_sid="$2" cwd="${3:-}" stamp="${4:-}" harness="${5:-}" dir key tmp size
   dir="$(hook_spool_dir)" || return 1
   size="$(stat -c %s "$tpath" 2>/dev/null || wc -c <"$tpath" 2>/dev/null)"
   if [ -n "$size" ] && [ "$size" -gt 50331648 ]; then
@@ -217,6 +219,9 @@ hook_spool_put() {
     {
       printf 'session_id=%s\n' "$raw_sid"
       [ -n "$cwd" ] && printf 'cwd=%s\n' "$cwd"
+      [ -n "$stamp" ] && printf 'stamp=%s\n' "$stamp"
+      [ -n "$harness" ] && printf 'harness=%s\n' "$harness"
+      true
     } >"$dir/$key.meta" || { rm -f "$tmp"; exit 1; }
     mv -f "$tmp" "$dir/$key.jsonl"
   )
@@ -250,4 +255,62 @@ hook_spool_pending() {
     [ -f "$f" ] && return 0
   done
   return 1
+}
+
+# hook_adapter_land <raw-session-id> <translated-jsonl> <cwd> <stamp> <harness>
+# v0.45 N4 - the ONE landing path for the codex/opencode/kimi/omp/grok capture
+# adapters. They translate their harness-native transcript into Claude-shaped
+# JSONL (first record = `adapter-meta`, whose `harness` is the enrich ladder's
+# rung 1, so the harness survives the Rust-written envelope) and hand the
+# result here. It is pushed through `kb sessions capture` (envelope + secrets
+# scrub, never a bash-written HTML); on success this session's older spool item
+# is dropped and any other pending items are replayed. On failure, or with no
+# `kb`, the UNSCRUBBED translation is parked in the private spool (0700/0600,
+# outside every corpus) for the next success / `--replay-spool`. NOTHING raw
+# is ever written to the corpus. Returns 0 = landed in the corpus, 1 = spooled,
+# 2 = neither (stderr says why). Callers that only run inside a hook ignore it:
+# a hook never fails a turn.
+# Needs KB_SESSIONS_DIR; cwd/stamp/harness may be empty.
+hook_adapter_land() {
+  local sid="$1" tj="$2" cwd="${3:-}" stamp="${4:-}" harness="${5:-}" ccwd=""
+  [ -d "$cwd" ] && ccwd="$cwd"
+  # A harness hook often runs with a minimal PATH: probe the usual install
+  # dirs (and KB_BIN_DIR) before concluding `kb` is absent.
+  if ! command -v kb >/dev/null 2>&1; then
+    local d
+    for d in "${KB_BIN_DIR:-}" "${HOME:-}/.local/bin" "${HOME:-}/.cargo/bin" /usr/local/bin /opt/homebrew/bin; do
+      if [ -n "$d" ] && [ -x "$d/kb" ]; then
+        PATH="$d:$PATH"
+        break
+      fi
+    done
+  fi
+  if command -v kb >/dev/null 2>&1; then
+    # A `kb` older than the plugin has no `--stamp`: retry once without it
+    # (the capture then gets a now-stamped name) before giving up to the spool.
+    local attempt extra=() base=(--transcript "$tj" --session-id "$sid")
+    [ -n "$ccwd" ] && base+=(--cwd "$ccwd")
+    for attempt in stamped plain; do
+      extra=()
+      if [ "$attempt" = stamped ]; then
+        [ -n "$stamp" ] || continue
+        extra=(--stamp "$stamp")
+      fi
+      if run_to 20 kb sessions capture "${base[@]}" ${extra[@]+"${extra[@]}"} \
+        --out "$KB_SESSIONS_DIR" >/dev/null 2>&1; then
+        # The spooled snapshot of THIS session is now older than what landed.
+        hook_spool_drop "$sid"
+        if hook_spool_pending; then
+          run_to 10 kb sessions capture --replay-spool --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 || true
+        fi
+        return 0
+      fi
+    done
+  fi
+  if hook_spool_put "$tj" "$sid" "$cwd" "$stamp" "$harness"; then
+    echo "kb-hook-lib: ${harness:-adapter} capture failed - spooled session $sid for replay" >&2
+    return 1
+  fi
+  echo "kb-hook-lib: ${harness:-adapter} capture failed and the transcript could not be spooled (session $sid)" >&2
+  return 2
 }

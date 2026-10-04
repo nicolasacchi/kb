@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# test-capture-scrub.sh — v0.44 F7b + X4: every adapter that hand-writes its
-# own envelope (the codex + opencode adapters, and the bash FALLBACK writers of
-# the kimi, omp and grok adapters used when `kb sessions capture` fails) must
-# run the translated transcript through the secrets-only scrubber
-# (`kb sessions scrub`) before embedding it, and must FAIL CLOSED (write
-# nothing) when the scrubber is unavailable.
+# test-capture-scrub.sh — v0.44 F7b + X4, reworked in v0.45 N4: none of the
+# codex/opencode/kimi/omp/grok adapters writes session HTML itself any more.
+# Each hands its translated transcript to `kb sessions capture` (the Rust
+# engine, which applies the secrets-only scrub), and when that cannot run it
+# parks the translation in the private spool instead. So: with the REAL kb, no
+# raw secret reaches the artifact and the harness survives (adapter-meta, the
+# enrich ladder's rung 1); with a failing/absent kb, NOTHING is written to the
+# corpus.
 #
 # Uses the REAL `kb` binary (KB_BIN_DIR, set by the cargo harness, else PATH)
-# for the positive cases and a fake failing `kb` for the fail-closed ones.
+# for the positive cases and a fake failing `kb` for the failure ones.
 # Fixtures are synthetic; the canaries are the scrubber's own documented
 # example token shapes.
 #
@@ -52,13 +54,6 @@ cat >"$EXPORT" <<JSON
 {"info":{"id":"oc-sess-0001","directory":"/tmp/x","title":"t"},"messages":[{"info":{"role":"user","time":{"created":1772355600000}},"parts":[{"type":"text","text":"my key is $AWS ok"}]},{"info":{"role":"assistant","time":{"created":1772355601000}},"parts":[{"type":"tool","tool":"bash","callID":"c1","state":{"status":"completed","input":{"command":"echo hi"},"output":"token $GH here"}}]}]}
 JSON
 
-run_codex() { # $1 = PATH, $2 = sessions dir
-  PATH="$1" KB_SESSIONS_DIR="$2" bash "$HOOKS_DIR/kb-capture-codex.sh" "$ROLLOUT" >/dev/null 2>&1
-}
-run_oc() {
-  PATH="$1" KB_SESSIONS_DIR="$2" bash "$HOOKS_DIR/kb-capture-opencode.sh" "$EXPORT" >/dev/null 2>&1
-}
-
 check_scrubbed() { # name dir harness
   local name="$1" dir="$2" harness="$3" f
   f="$(ls "$dir"/session-*.html 2>/dev/null | head -1)"
@@ -66,78 +61,60 @@ check_scrubbed() { # name dir harness
   ok "$name: a capture was written"
   if grep -q "$GH\|$AWS" "$f"; then bad "$name: no raw secret reaches the artifact"; else ok "$name: no raw secret reaches the artifact"; fi
   if grep -q '\[redacted:' "$f"; then ok "$name: redaction markers present"; else bad "$name: redaction markers present"; fi
-  if grep -q "name=\"kb-harness\" content=\"$harness\"" "$f"; then ok "$name: kb-harness meta preserved"; else bad "$name: kb-harness meta preserved"; fi
+  # The harness rides the adapter-meta record inside the <pre> (ladder rung 1).
+  if grep -q "\"harness\":\"$harness\"" "$f"; then ok "$name: harness $harness survives in adapter-meta"; else bad "$name: harness $harness survives in adapter-meta"; fi
 }
 
-echo "== adapter secrets floor =="
-D1="$TMPROOT/s-codex"; run_codex "$REAL_PATH" "$D1"; check_scrubbed codex "$D1" codex
-D2="$TMPROOT/s-oc"; run_oc "$REAL_PATH" "$D2"; check_scrubbed opencode "$D2" opencode
-
-echo "== fail closed when the scrubber is unavailable =="
-D3="$TMPROOT/f-codex"; mkdir -p "$D3"; run_codex "$TMPROOT/failbin:$PATH" "$D3"
-if ls "$D3"/session-*.html >/dev/null 2>&1; then bad "codex: nothing written on scrub failure"; else ok "codex: nothing written on scrub failure"; fi
-D4="$TMPROOT/f-oc"; mkdir -p "$D4"; run_oc "$TMPROOT/failbin:$PATH" "$D4"
-if ls "$D4"/session-*.html >/dev/null 2>&1; then bad "opencode: nothing written on scrub failure"; else ok "opencode: nothing written on scrub failure"; fi
-
-echo "== bash-fallback writers of kimi, omp and grok (capture forced to fail) =="
-# `sessions capture` fails (forcing the fallback writer); every other verb runs
-# the REAL kb, so `sessions scrub` is the real scrubber.
-mkdir -p "$TMPROOT/fbbin"
-REAL_KB="$(PATH="$REAL_PATH" command -v kb || true)"
-cat >"$TMPROOT/fbbin/kb" <<FAKE
-#!/usr/bin/env bash
-if [ "\${1:-}" = "sessions" ] && [ "\${2:-}" = "capture" ]; then exit 1; fi
-exec "$REAL_KB" "\$@"
-FAKE
-chmod +x "$TMPROOT/fbbin/kb"
-
-# kimi: wire.jsonl laid out as <home>/sessions/<wd>/<session>/agents/main/wire.jsonl
+# Fixtures for the three adapters that need an on-disk layout.
 KSDIR="$TMPROOT/kimi-home/sessions/wd_x_deadbeef/session_aaaaaaaa-0000-0000-0000-000000000001/agents/main"
 mkdir -p "$KSDIR"
 sed "s/commit the widget fix please/commit the widget fix please $AWS/; s/wrote \/tmp\/widget.py/token $GH leaked/" \
   "$SCRIPT_DIR/fixtures/kimi-wire-commit.jsonl" >"$KSDIR/wire.jsonl"
-# omp: fixed-width title slot + fixture body with a secret in the user prompt
 OMPS="$TMPROOT/omp-session.jsonl"
 {
   title='{"type":"title","v":1,"title":"t"}'
   printf '%s%*s\n' "$title" "$((256 - ${#title} - 1))" ''
   sed "s/commit the widget fix please/commit the widget fix please $AWS token $GH/" "$SCRIPT_DIR/fixtures/omp-session-commit.jsonl"
 } >"$OMPS"
-# grok: a session dir with a secret in a user message
 GSD="$TMPROOT/grok-sd"
 cp -r "$SCRIPT_DIR/fixtures/grok-session" "$GSD"
 sed -i "s/Add a --dry-run flag to the fixture export command./Add a flag; my key is $AWS and $GH/" "$GSD/chat_history.jsonl"
 
-run_fb() { # adapter PATH dir
+run_adapter() { # adapter PATH dir [spool]
+  local spool="${4:-$TMPROOT/spool-$1}"
   case "$1" in
-    kimi) PATH="$2" KB_SESSIONS_DIR="$3" bash "$HOOKS_DIR/kb-capture-kimi.sh" "$KSDIR/wire.jsonl" >/dev/null 2>&1 ;;
-    omp) PATH="$2" KB_SESSIONS_DIR="$3" bash "$HOOKS_DIR/kb-capture-omp.sh" "$OMPS" >/dev/null 2>&1 ;;
-    grok) PATH="$2" KB_SESSIONS_DIR="$3" XDG_CACHE_HOME="$TMPROOT/cache-$1" bash "$HOOKS_DIR/kb-capture-grok.sh" --session-dir "$GSD" --cwd /tmp/x >/dev/null 2>&1 ;;
+    codex) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-codex.sh" "$ROLLOUT" >/dev/null 2>&1 ;;
+    opencode) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-opencode.sh" "$EXPORT" >/dev/null 2>&1 ;;
+    kimi) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-kimi.sh" "$KSDIR/wire.jsonl" >/dev/null 2>&1 ;;
+    omp) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" bash "$HOOKS_DIR/kb-capture-omp.sh" "$OMPS" >/dev/null 2>&1 ;;
+    grok) PATH="$2" KB_SESSIONS_DIR="$3" KB_CAPTURE_SPOOL="$spool" XDG_CACHE_HOME="$TMPROOT/cache-$1" bash "$HOOKS_DIR/kb-capture-grok.sh" --session-dir "$GSD" --cwd /tmp/x >/dev/null 2>&1 ;;
   esac
 }
+
+REAL_KB="$(PATH="$REAL_PATH" command -v kb || true)"
 if [ -z "$REAL_KB" ]; then
-  bad "fallback writers: a real kb binary is required (KB_BIN_DIR)"
+  bad "adapters: a real kb binary is required (KB_BIN_DIR)"
 else
-  for h in kimi omp grok; do
-    D="$TMPROOT/fb-$h"; mkdir -p "$D"
-    run_fb "$h" "$TMPROOT/fbbin:$REAL_PATH" "$D"
-    check_scrubbed "$h fallback" "$D" "$h"
-    DF="$TMPROOT/fbf-$h"; mkdir -p "$DF"
-    run_fb "$h" "$TMPROOT/failbin:$PATH" "$DF"
-    if ls "$DF"/session-*.html >/dev/null 2>&1; then bad "$h fallback: nothing written on scrub failure"; else ok "$h fallback: nothing written on scrub failure"; fi
+  for h in codex opencode kimi omp grok; do
+    echo "== $h: real kb scrubs, harness survives =="
+    D="$TMPROOT/s-$h"; run_adapter "$h" "$REAL_PATH" "$D"; check_scrubbed "$h" "$D" "$h"
+    echo "== $h: a failing kb writes nothing to the corpus =="
+    DF="$TMPROOT/f-$h"; mkdir -p "$DF"; run_adapter "$h" "$TMPROOT/failbin:$PATH" "$DF"
+    if ls "$DF"/session-*.html >/dev/null 2>&1; then bad "$h: nothing written to the corpus on capture failure"; else ok "$h: nothing written to the corpus on capture failure"; fi
+    if grep -rq "$GH\|$AWS" "$DF" 2>/dev/null; then bad "$h: no raw secret in the corpus dir"; else ok "$h: no raw secret in the corpus dir"; fi
   done
 fi
 
 echo "== kb resolution when the hook PATH lacks it =="
 # A minimal PATH (jq + coreutils only) with `kb` installed under $HOME/.local/bin:
 # the adapter must find it there instead of silently skipping the capture. With
-# no kb anywhere it must skip (fail closed) AND say so on stderr.
+# no kb anywhere nothing reaches the corpus, the translation is spooled, and
+# the stderr line says so.
 if [ -n "$REAL_KB" ] && command -v jq >/dev/null 2>&1; then
   MINPATH="/usr/bin:/bin:$(dirname "$(command -v jq)")"
   skip_min=0
   PATH="$MINPATH" command -v kb >/dev/null 2>&1 && skip_min=1
-  HOME1="$TMPROOT/home-with-kb"; mkdir -p "$HOME1/.local/bin"; cp "$TMPROOT/fbbin/kb" "$HOME1/.local/bin/kb" 2>/dev/null
-  # the copied wrapper keeps `sessions capture` failing, which this adapter never calls
+  HOME1="$TMPROOT/home-with-kb"; mkdir -p "$HOME1/.local/bin"; ln -sf "$REAL_KB" "$HOME1/.local/bin/kb"
   DR="$TMPROOT/r-codex"; mkdir -p "$DR"
   if [ "$skip_min" = 1 ]; then
     ok "kb-on-minimal-PATH check skipped (kb already lives on /usr/bin)"
@@ -149,8 +126,8 @@ if [ -n "$REAL_KB" ] && command -v jq >/dev/null 2>&1; then
     check_scrubbed "opencode (kb found via ~/.local/bin)" "$DR2" opencode
     DR3="$TMPROOT/r-none"; mkdir -p "$DR3" "$TMPROOT/home-empty"
     err="$(env -i PATH="$MINPATH" HOME="$TMPROOT/home-empty" KB_SESSIONS_DIR="$DR3" bash "$HOOKS_DIR/kb-capture-codex.sh" "$ROLLOUT" 2>&1 >/dev/null)"
-    if ls "$DR3"/session-*.html >/dev/null 2>&1; then bad "codex: no kb anywhere writes nothing"; else ok "codex: no kb anywhere writes nothing"; fi
-    case "$err" in *"not capturing session"*) ok "codex: the skip is named on stderr" ;; *) bad "codex: the skip is named on stderr ($err)" ;; esac
+    if ls "$DR3"/session-*.html >/dev/null 2>&1; then bad "codex: no kb anywhere writes nothing to the corpus"; else ok "codex: no kb anywhere writes nothing to the corpus"; fi
+    case "$err" in *"spooled session"*) ok "codex: the spooling is named on stderr" ;; *) bad "codex: the spooling is named on stderr ($err)" ;; esac
   fi
 fi
 
