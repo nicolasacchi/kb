@@ -146,6 +146,58 @@ version is not referenced by a live tag (`gh attestation verify
 oci://ghcr.io/<owner>/<name>:<ver>` must still pass for every tag you keep
 afterwards), and delete only the unreferenced ones.
 
+## Post-release smoke (first-run)
+
+`.github/workflows/first-run.yml` answers one question after every release:
+does the PUBLISHED artifact work for a stranger? It installs the tag with the
+tag's own `scripts/install.sh` (checksum verified, build provenance verified
+with an upstream `gh`), starts `kb daemon` on a spare loopback port against a
+copy of the sample corpus, then checks that the SPA is served from
+`<bin>/../share/kb/web/dist` with no environment variable, that keyword
+(`--mode keyword`, no embedding model) search finds a seeded document, that
+the file watcher indexes a file written while the daemon runs, and that
+`kb daemon doctor` is healthy. The checks live in one script,
+`scripts/ci/first-run-smoke.sh`, which prints `STEP n/8 ... ok|FAIL` lines and a
+final `RESULT <leg> PASS|FAIL`.
+
+Legs: tarball on `debian:trixie` (provenance REQUIRED), `ubuntu:24.04`,
+`fedora:latest` and `debian:trixie` on an arm64 runner (aarch64 tarball), plus a
+`docker` leg that pulls `ghcr.io/nicolasacchi/kb:<version>` anonymously (no
+login, which is itself the "a stranger can pull it" check), mounts the tag's
+`corpus/canon`, and requires the image HEALTHCHECK to report healthy.
+
+- **Trigger.** `workflow_run` of the `release` workflow (tag-push runs that
+  succeeded) and `workflow_dispatch`. It is not a release-published trigger:
+  the release is created with the default `GITHUB_TOKEN`, which never starts
+  other workflows, and it is created before the tarballs are uploaded, so such a
+  trigger would race the assets. `workflow_run` only fires from the default
+  branch's copy of the file, so the first automatic run is the first release
+  after the workflow lands.
+- **By hand.** Actions -> first-run -> Run workflow, tag `v0.44` (or
+  `gh workflow run first-run.yml -f tag=v0.44`). The run's step summary lists
+  each leg's STEP lines, whether provenance was `ok` or `not-checked`, and the
+  `report` job's table.
+- **It reports, it does not gate.** A red run never unpublishes or blocks a
+  release; `release.yml` does not depend on it. A failing provenance check on
+  the debian leg is a real finding about the release, not a smoke bug.
+- **PR-time coverage.** `scripts/ci/first-run-selftest.sh` (wired into the
+  `installer` workflow) drives the same script against a fake file:// mirror and
+  a stub daemon, including negative cases (unhealthy daemon, zero hits, missing
+  SPA, missing checksum sidecar) and a lint of the workflow's trigger shape.
+- **Tarball legs are model-free.** The smoke writes `[defaults]
+  disable_embedder_fallback = true` into its throwaway `kb.toml`, so the daemon
+  does not try to download the registry-default embedding model on a clean
+  runner; it gates on keyword search only. The install step (download and
+  verify) is retried once after 30 s for CDN lag; a failure in any later step is
+  not retried.
+- **Docker leg.** It probes `127.0.0.1:4000` with `--network host`, relying on
+  the image's own default address (the same one its CMD and HEALTHCHECK use).
+- **Not covered.** musl/Alpine and glibc older than 2.39 (unsupported, the
+  installer says so), hybrid/semantic search (needs a model download), macOS,
+  and kb-code.
+- **Health check note.** `kb doctor` alone is not a health check: it requires
+  `--hooks` (provenance chain). The daemon check is `kb daemon doctor`.
+
 See [packaging/README.md](../packaging/README.md) for the full asset
 list, the release checklist, and the outstanding
 `TODO(verify-after-public)` markers the workflow carries until the first

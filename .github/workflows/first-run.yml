@@ -1,0 +1,281 @@
+# Post-release first-run smoke: does the PUBLISHED release work for a stranger?
+#
+# After a release is fully published (tarballs + ghcr images + channels check),
+# install it the way the README tells a user to -- scripts/install.sh from the
+# tag, on clean debian / ubuntu / fedora containers -- start the daemon against
+# the bundled sample corpus and check the SPA, keyword search, the watcher and
+# `kb daemon doctor`. A fourth leg pulls the ghcr image anonymously and runs it.
+# scripts/ci/first-run-smoke.sh is the single source of truth for the checks.
+#
+# WHY `workflow_run` AND NOT a release-published trigger: the release is
+# created by release.yml with the default GITHUB_TOKEN, and events created with
+# that token never start other workflows. It is also created BEFORE the
+# per-target tarballs are uploaded, so such a trigger would race the assets.
+# `workflow_run` fires when release.yml has finished (tarballs, images and the
+# channels-exist probe done). It only runs from the default branch's copy of
+# this file, so the first release after merging is the first automatic run;
+# `workflow_dispatch` (input: tag) is the manual path.
+#
+# This workflow REPORTS. It does not gate, unpublish or demote a release, and
+# release.yml does not depend on it. No secrets, no write permissions.
+name: first-run
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to smoke-test, e.g. v0.44"
+        type: string
+        required: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    name: resolve tag
+    # A completed release.yml run caused by a tag push that succeeded, in this
+    # repository (not a fork); or a manual dispatch.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.repository == 'nicolasacchi/kb'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            # A tag-push run reports the tag name as head_branch; confirm via the API.
+            tag="$RUN_HEAD_BRANCH"
+            if ! [[ "$tag" =~ ^v[0-9] ]]; then
+              tag="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)"
+            fi
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+(\.[0-9]+)*([-.][0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$tag' does not look like a release tag (vN.N...)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Smoke-testing release $tag" >> "$GITHUB_STEP_SUMMARY"
+
+  tarball:
+    name: tarball (${{ matrix.name }})
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian-trixie
+            runner: ubuntu-latest
+            image: debian:trixie
+            pm: apt
+            require_provenance: "1"
+          - name: ubuntu-24.04
+            runner: ubuntu-latest
+            image: ubuntu:24.04
+            pm: apt
+            require_provenance: "0"
+          - name: fedora-latest
+            runner: ubuntu-latest
+            image: fedora:latest
+            pm: dnf
+            require_provenance: "0"
+          - name: debian-trixie-aarch64
+            runner: ubuntu-24.04-arm
+            image: debian:trixie
+            pm: apt
+            require_provenance: "0"
+    container:
+      image: ${{ matrix.image }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Container prep (curl, git, procps, gh)
+        env:
+          PM: ${{ matrix.pm }}
+        run: |
+          set -euo pipefail
+          if [ "$PM" = apt ]; then
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+              curl ca-certificates tar gzip procps git
+          else
+            dnf install -y -q curl ca-certificates tar gzip procps-ng git
+          fi
+          # Distro gh builds predate `gh attestation verify` (added in 2.49), so
+          # install a pinned upstream gh, checksum-verified, for provenance.
+          ghv=2.102.0
+          case "$(uname -m)" in
+            x86_64)  garch=amd64; gsum=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386 ;;
+            aarch64) garch=arm64; gsum=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484 ;;
+            *) echo "::error::unsupported arch"; exit 1 ;;
+          esac
+          curl -fsSL --retry 3 -o /tmp/gh.tgz \
+            "https://github.com/cli/cli/releases/download/v${ghv}/gh_${ghv}_linux_${garch}.tar.gz"
+          echo "${gsum}  /tmp/gh.tgz" | sha256sum -c -
+          tar -xzf /tmp/gh.tgz -C /tmp
+          install -m 0755 "/tmp/gh_${ghv}_linux_${garch}/bin/gh" /usr/local/bin/gh
+          gh --version
+          ldd --version | head -n1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: First-run smoke (installer from the tag, real tarball)
+        env:
+          KB_VERSION: ${{ needs.resolve.outputs.version }}
+          LEG: tarball-${{ matrix.name }}
+          REQUIRE_PROVENANCE: ${{ matrix.require_provenance }}
+        run: |
+          set -euo pipefail
+          # Retry once: release assets can lag the CDN for a moment.
+          # Only a failure of the install step (download/verify) is retried; a failure
+          # of any later step is a real finding and fails at once.
+          for attempt in 1 2; do
+            if bash scripts/ci/first-run-smoke.sh 2>&1 | tee smoke.log; then ok=1; break; fi
+            ok=0
+            if [ "$attempt" = 1 ] && grep -q '^STEP 1/[0-9]* install ... FAIL' smoke.log; then
+              echo "install step failed (asset/CDN lag?); retrying once"; sleep 30
+            else
+              break
+            fi
+          done
+          [ "$ok" = 1 ]
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### tarball ${{ matrix.name }}"
+            echo '```'
+            grep -E '^(STEP|PROVENANCE|RESULT)' smoke.log || echo "no smoke output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Documented one-liner still resolves (non-gating)
+        continue-on-error: true
+        run: curl -fsSL -o /dev/null https://raw.githubusercontent.com/nicolasacchi/kb/main/scripts/install.sh
+
+  docker:
+    name: docker (ghcr image, anonymous pull)
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      IMAGE: ghcr.io/nicolasacchi/kb:${{ needs.resolve.outputs.version }}
+      # The step below probes 127.0.0.1:4000 because it relies on the image's own
+      # default addr (its CMD and HEALTHCHECK) with --network host.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - name: Pull anonymously (no registry login on purpose)
+        run: |
+          for attempt in 1 2 3; do
+            docker pull "$IMAGE" && exit 0
+            echo "pull attempt $attempt failed"; sleep 30
+          done
+          exit 1
+      - name: Run the image against the sample corpus
+        run: |
+          set -euo pipefail
+          T="$(mktemp -d)"
+          mkdir -p "$T/config/kb" "$T/state"
+          # The sample corpus is not baked into the image: mount it from the tag.
+          cp -R corpus/canon "$T/corpus"
+          cat > "$T/config/kb/kb.toml" <<'TOML'
+          [kb.canon]
+          path = "/corpus"
+          TOML
+          chmod -R 777 "$T/config" "$T/state"
+          echo "T=$T" >> "$GITHUB_ENV"
+          docker run -d --name kb --network host \
+            -v "$T/config:/var/lib/kb/config" \
+            -v "$T/state:/var/lib/kb/state" \
+            -v "$T/corpus:/corpus:ro" \
+            "$IMAGE"
+          for i in $(seq 1 60); do
+            curl -fsS --max-time 3 http://127.0.0.1:4000/healthz >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:4000/healthz
+          code="$(curl -sS -o root.html -w '%{http_code}' http://127.0.0.1:4000/)"
+          [ "$code" = 200 ] && grep -q '<div id="root"' root.html
+          found=0
+          for i in $(seq 1 60); do
+            n="$(docker exec kb kb search borrow --kb canon --mode keyword --json 2>/dev/null | grep -c '"source_relative"' || true)"
+            if [ "${n:-0}" -ge 1 ]; then found=1; break; fi
+            sleep 3
+          done
+          [ "$found" = 1 ]
+          docker exec kb kb daemon doctor
+          for i in $(seq 1 30); do
+            st="$(docker inspect --format '{{.State.Health.Status}}' kb)"
+            [ "$st" = healthy ] && break
+            sleep 5
+          done
+          [ "$st" = healthy ]
+          echo "RESULT docker PASS"
+      - name: Container logs
+        if: failure()
+        run: docker logs kb 2>&1 | tail -n 150
+      - name: Cleanup
+        if: always()
+        run: docker rm -f kb >/dev/null 2>&1 || true
+      - name: Summary
+        if: always()
+        run: |
+          echo "### docker ${IMAGE} - ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
+
+  report:
+    name: report
+    needs: [resolve, tarball, docker]
+    if: always() && needs.resolve.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Leg table
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          R_RESOLVE: ${{ needs.resolve.result }}
+          R_TARBALL: ${{ needs.tarball.result }}
+          R_DOCKER: ${{ needs.docker.result }}
+        run: |
+          {
+            echo "## First-run smoke for ${TAG:-?}"
+            echo "| leg | result |"
+            echo "|---|---|"
+            echo "| resolve | $R_RESOLVE |"
+            echo "| tarball (debian, ubuntu, fedora, aarch64) | $R_TARBALL |"
+            echo "| docker image | $R_DOCKER |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$R_RESOLVE" = success ] && [ "$R_TARBALL" = success ] && [ "$R_DOCKER" = success ]
