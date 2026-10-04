@@ -41,6 +41,7 @@ pin what you changed.
 |---|---|
 | [`configuration.md`](configuration.md) | The complete `kb.toml` reference — `[daemon]`, `[server]` (incl. rate limits), `[indexer]`, `[ui]`, `[webhooks]`, and per-kb `[kb.<name>]` (path, embedding model, atlas, outbound scrub, templates). |
 | [`self-host.md`](self-host.md) | Deployment: TLS and reverse proxies, bearer-token auth, the threat model, rate limiting, team identities, comment isolation, backup/restore, mDNS, and a hardening checklist. |
+| [`public-mirror.md`](public-mirror.md) | Recipe for a read-only public mirror: a dedicated daemon behind an allowlisting edge, the GET-only route allowlist, reference Traefik and Caddy rules, threat table and a verification checklist. |
 | [`packaging.md`](packaging.md) | How kb becomes shippable artifacts — the two-binary rule, the Docker build, the release workflow, and building from source. |
 | [`multi-machine.md`](multi-machine.md) | ADR (accepted 2026-07-10): the supported topology for reaching one corpus, index and memory from several machines, and which alternatives are explicitly rejected. |
 | [`deploy-sessions.md`](deploy-sessions.md) | Operator runbook for turning on the `/api/sessions/*` surface and its SPA route on an existing reverse-proxied deployment. |
