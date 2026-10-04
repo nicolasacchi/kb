@@ -52,10 +52,12 @@
 //!
 //! When a later patchset sits on a different base AND the file was renamed,
 //! `review_since::author_ranges_between_for_path` reads both change sets
-//! with the rename-aware `diff::diff_range_u0_renames`. That read is NOT
-//! memoised: it costs up to two extra `git diff` runs per renamed
-//! (finding, patchset) pair, bounded by [`MAX_TOUCHED_IN_PATCHSETS`]. The
-//! `--no-renames` `/since` reader and its memo are untouched.
+//! with the rename-aware `diff::diff_range_u0_renames`. That read is memoised
+//! per `(base, tip)` in a map owned by ONE `compute_touched_in` call (no
+//! cross-request cache), so a read runs at most one such diff per distinct
+//! patchset change set (at most one per patchset plus the earlier one),
+//! not two per renamed (finding, patchset) pair. The `--no-renames` `/since`
+//! reader and its memo are untouched.
 //!
 //! # The cap
 //!
@@ -354,6 +356,10 @@ pub fn compute_touched_in(
     let mut out: HashMap<i64, TouchedInResult> = HashMap::new();
     let mut rename_cache: RenameCache = HashMap::new();
     let mut hunk_cache: HunkCache = HashMap::new();
+    // Scoped to this one read (dropped on return): each distinct rename-aware
+    // `(base, tip)` change-set diff runs at most once however many findings
+    // sit in renamed files.
+    let mut rename_read_memo = review_since::RenameReadMemo::new();
 
     for q in queries {
         let Some((lo, hi)) = line_bounds(&q.lines) else {
@@ -403,8 +409,9 @@ pub fn compute_touched_in(
                 let ranges = if resolved_path == q.path {
                     review_since::author_ranges_between(ctx, own_row, ps)
                 } else {
-                    review_since::author_ranges_between_for_path(
+                    review_since::author_ranges_between_for_path_memo(
                         ctx,
+                        &mut rename_read_memo,
                         own_row,
                         ps,
                         &q.path,

@@ -305,7 +305,10 @@ read the entry degrades to `overlap: "rebased"` rather than claim the author
 acted. Renames are followed across that base move too (v0.45, `git -M` at a
 bounded 50% similarity, the finding's file matched under one canonical name);
 `rebased` remains for a rename that cannot be resolved (below the bound,
-unreadable change set, or ambiguous). `GET
+unreadable change set, or ambiguous). That rename-aware read is memoised
+per `(base, tip)` for the duration of one request (no cross-request cache), so
+a read runs each distinct change-set diff at most once however many findings
+sit in renamed files. `GET
 `/api/reviews/{id}/findings/recurrence`
 (bearer) surfaces which of a review's own findings recur across the repo's
 other reviews, off the same `recurrence_pairs` query `review analytics`
