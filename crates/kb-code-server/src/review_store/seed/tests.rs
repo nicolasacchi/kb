@@ -1923,3 +1923,29 @@ fn a_recovered_member_clears_member_problems_in_state_json() {
         "adopt left a stale list"
     );
 }
+
+/// A6.f5: `sync_ready`'s closing state write failing must be an error, not a
+/// success report. The failure is injected with a `BEFORE UPDATE ... RAISE`
+/// trigger on `review_stores`, and the stored state must stay as it was.
+#[test]
+fn a_failing_state_write_fails_the_sync_and_leaves_the_store_row_alone() {
+    let e = env();
+    let id = member_id(&e.rs.register_repo(&e.store, "widgets-02", None));
+    e.rs.seed(&e.store, id, false).unwrap();
+    let h = e.rs.handle_for_repo(&e.store, "widgets-02").unwrap();
+    // Control: the sync works before the trigger exists.
+    e.rs.sync_ready(&e.store, &h, false).unwrap();
+    let before = row_for(&e, "widgets-02").state_json;
+
+    e.store.exec_sql_for_test(
+        "CREATE TRIGGER boom_store BEFORE UPDATE ON review_stores \
+         BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+    );
+    match e.rs.sync_ready(&e.store, &h, false) {
+        Err(StoreUnavailable::Error { detail }) => {
+            assert!(detail.contains("boom"), "{detail}");
+        }
+        other => panic!("a failed state write must be an error, got {other:?}"),
+    }
+    assert_eq!(row_for(&e, "widgets-02").state_json, before);
+}
