@@ -360,7 +360,12 @@ mod tests {
             renamed.contains("@@ -3 +3 @@"),
             "-U0 hunk header: {renamed}"
         );
-        assert!(!renamed.contains(" l2"), "no context lines: {renamed}");
+        // A `-U0` body line starts with `+`/`-`/`\\`; a context line would start with a
+        // space. (The hunk header's ` l2` funcname suffix is not a body line.)
+        assert!(
+            !renamed.lines().any(|l| l.starts_with(' ')),
+            "no context lines: {renamed}"
+        );
 
         // The `--no-renames` reader must stay exactly as it was.
         let plain = diff_range_u0(dir, &c1, &c2).unwrap();

@@ -48,6 +48,15 @@
 //! this relies on (an oid git itself printed, never a caller string, so
 //! there is no pathspec position for SEC-17's `--` rule to guard).
 //!
+//! # Rename-aware author ranges (different base)
+//!
+//! When a later patchset sits on a different base AND the file was renamed,
+//! `review_since::author_ranges_between_for_path` reads both change sets
+//! with the rename-aware `diff::diff_range_u0_renames`. That read is NOT
+//! memoised: it costs up to two extra `git diff` runs per renamed
+//! (finding, patchset) pair, bounded by [`MAX_TOUCHED_IN_PATCHSETS`]. The
+//! `--no-renames` `/since` reader and its memo are untouched.
+//!
 //! # The cap
 //!
 //! [`MAX_TOUCHED_IN_PATCHSETS`] bounds how many LATER patchsets any one
@@ -1163,9 +1172,12 @@ mod tests {
     }
 
     /// N6 - a "rename" below the similarity bound is delete + add to git,
-    /// so the new name is never followed: whatever is reported, it is never
-    /// attributed through `b.txt` (at most the one ps-2 entry for the
-    /// deleted `a.txt`, exactly as before this lane).
+    /// so the new name is never followed: `resolve_path` maps `a.txt` to
+    /// itself (the deletion), the same-path branch applies, and the author
+    /// deleting the file the finding sits on is reported once, on ps 2, as
+    /// `exact` - the pre-lane behaviour, NOT a rename follow (a followed
+    /// rename would have needed `resolve_path` to return `b.txt`, asserted
+    /// against above). Pinned to the exact outcome rather than a bound.
     #[test]
     fn a_rename_below_the_similarity_bound_stays_unfollowed() {
         let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
@@ -1189,7 +1201,9 @@ mod tests {
             (main_head.as_str(), ps2_tip.as_str()),
             vec![3],
         );
-        assert!(e.len() <= 1 && e.iter().all(|x| x.ps == 2), "{e:?}");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].ps, 2, "{e:?}");
+        assert_eq!(e[0].overlap, OVERLAP_EXACT, "{e:?}");
     }
 
     #[test]
