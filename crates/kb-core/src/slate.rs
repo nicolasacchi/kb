@@ -3414,14 +3414,16 @@ mod tests {
 
     const NOW: i64 = 1_767_225_600;
 
-    /// X5 (posture inventory, `kb_core::posture`): `Human` is the only value
-    /// that earns the `[you]` rendering and the pin check, so the default an
-    /// absent `origin` deserialises to must never be it.
+    /// N5-a: `Origin` is a `Posture` type (restrictive = `Agent`); its
+    /// `Default` must be that value.
     #[test]
     fn origin_default_is_restrictive() {
         crate::posture::assert_default_is_restrictive::<Origin>();
     }
 
+    /// X5 (posture inventory, `kb_core::posture`): `Human` is the only value
+    /// that earns the `[you]` rendering and the pin check, so the default an
+    /// absent `origin` deserialises to must never be it.
     #[test]
     fn origin_default_never_claims_human() {
         assert_ne!(Origin::default(), Origin::Human);
