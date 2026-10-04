@@ -1,0 +1,52 @@
+{
+  "budget": {
+    "tokens": 1000,
+    "bytes": 4000,
+    "used_bytes": 0,
+    "estimate": "bytes = tokens x 4; measured on the serialised sections"
+  },
+  "header": {
+    "title": "t"
+  },
+  "threads": [
+    {
+      "id": "a"
+    },
+    {
+      "id": "b"
+    }
+  ],
+  "findings": [
+    {
+      "slug": "f-1",
+      "severity": "blocker"
+    }
+  ],
+  "other_reviews": [],
+  "since": {
+    "applicable": false,
+    "reason": "no-verdict"
+  },
+  "reading_order": [
+    {
+      "path": "x.rs"
+    },
+    {
+      "path": "y.rs"
+    }
+  ],
+  "files": [
+    {
+      "path": "x.rs"
+    },
+    {
+      "path": "y.rs"
+    }
+  ],
+  "omitted": [],
+  "note": "A leading part of the full content in a fixed order, never a summary: every cut is named in omitted[]. Derived on each read from existing reads; shown, never a verdict; the daemon carries nothing forward.",
+  "schema": "kbc-review-context/1",
+  "review_id": 1,
+  "repo": "demo",
+  "ps": 1
+}

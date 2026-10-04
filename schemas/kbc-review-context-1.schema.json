@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kbc-review-context/1",
+  "title": "kbc-review-context/1 review context bundle",
+  "description": "GET /api/reviews/{id}/context: a budgeted, ordered bundle with every cut named in omitted[] (crates/kb-code-server/src/review_context.rs). Section element shapes are deliberately open: they are composed from other reads and are validated by their own contracts. Structural lint; the daemon is the authority.",
+  "type": "object",
+  "required": [
+    "schema",
+    "review_id",
+    "repo",
+    "ps",
+    "budget",
+    "header",
+    "threads",
+    "findings",
+    "other_reviews",
+    "since",
+    "reading_order",
+    "files",
+    "patch",
+    "omitted",
+    "note"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kbc-review-context/1"
+    },
+    "review_id": {
+      "type": "integer"
+    },
+    "repo": {
+      "type": "string"
+    },
+    "ps": {
+      "type": "integer"
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "tokens",
+        "bytes",
+        "used_bytes",
+        "estimate"
+      ],
+      "properties": {
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "used_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimate": {
+          "type": "string"
+        }
+      }
+    },
+    "header": {
+      "type": "object"
+    },
+    "threads": {
+      "type": "array"
+    },
+    "findings": {
+      "type": "array"
+    },
+    "other_reviews": {
+      "type": "array"
+    },
+    "since": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "applicable"
+          ],
+          "properties": {
+            "applicable": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "reading_order": {
+      "type": "array"
+    },
+    "files": {
+      "type": "array"
+    },
+    "patch": {
+      "type": "object",
+      "required": [
+        "text",
+        "files_included",
+        "files_total",
+        "truncated",
+        "redacted"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "files_included": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "type": "array"
+        }
+      }
+    },
+    "omitted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "section",
+          "reason",
+          "kept",
+          "total"
+        ],
+        "properties": {
+          "section": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "kept": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files_truncated": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "note": {
+      "type": "string"
+    }
+  }
+}

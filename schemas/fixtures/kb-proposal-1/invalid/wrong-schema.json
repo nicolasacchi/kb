@@ -1,0 +1,14 @@
+{
+  "id": "p_0123456789ab",
+  "schema": "kb-proposal/2",
+  "created_at": 1767214800,
+  "title": "Retry budget is per process",
+  "body": "Measured on the demo service.",
+  "category": "memory-user",
+  "tags": [
+    "demo"
+  ],
+  "global": true,
+  "linked_kbs": [],
+  "source": "agent"
+}

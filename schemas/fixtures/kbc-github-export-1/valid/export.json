@@ -1,0 +1,33 @@
+{
+  "schema": "kbc-github-export/1",
+  "review_id": 1,
+  "repo": "demo",
+  "ps_number": 2,
+  "event": "COMMENT",
+  "event_reason": null,
+  "body": null,
+  "commit_id": "0123456789abcdef0123456789abcdef01234567",
+  "comments": [
+    {
+      "path": "src/lib.rs",
+      "line": 10,
+      "line_end": null,
+      "side": "RIGHT",
+      "body": "**Missing bounds check**",
+      "finding_slug": "f-missing-bounds-check",
+      "orphaned": false
+    }
+  ],
+  "general_comments": [],
+  "skipped_orphaned": [
+    {
+      "finding_slug": "f-gone",
+      "reason": "orphaned",
+      "original": {
+        "ps": 1,
+        "line": 3
+      }
+    }
+  ],
+  "stale_export": false
+}

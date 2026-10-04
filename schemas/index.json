@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "note": "Registry of versioned wire/file contracts. Schemas are hand-written structural lints of the Rust serde types; serde is the authority. See docs/protocols.md.",
+  "schemas": [
+    {
+      "id": "kb-comments/1",
+      "kind": "json",
+      "file": "kb-comments-1.schema.json",
+      "owner": "crates/kb-core/src/review.rs",
+      "carrier": ".review/<artifact-id>.json sidecar (no private note)"
+    },
+    {
+      "id": "kb-comments/2",
+      "kind": "json",
+      "file": "kb-comments-2.schema.json",
+      "owner": "crates/kb-core/src/review.rs",
+      "carrier": ".review/<artifact-id>.json sidecar stamped when a private note exists"
+    },
+    {
+      "id": "kb-list/1",
+      "kind": "md-header",
+      "file": "kb-list-1.schema.json",
+      "owner": "crates/kb-core/src/lists.rs",
+      "carrier": "<!-- kb-list {...} --> header of a Markdown reading list (or a JSON list export)"
+    },
+    {
+      "id": "kb-slate/1",
+      "kind": "jsonl",
+      "file": "kb-slate-1.schema.json",
+      "owner": "crates/kb-core/src/slate.rs",
+      "carrier": "slates/<slug>/ledger.jsonl, one post per line"
+    },
+    {
+      "id": "kb-proposal/1",
+      "kind": "json",
+      "file": "kb-proposal-1.schema.json",
+      "owner": "crates/kb-server/src/routes/proposals.rs",
+      "carrier": ".proposals/<id>.json memory candidate"
+    },
+    {
+      "id": "kbc-findings/1",
+      "kind": "json",
+      "file": "kbc-findings-1.schema.json",
+      "owner": "crates/kb-code-server/src/review_findings.rs",
+      "carrier": "findings import batch"
+    },
+    {
+      "id": "kbc-findings/2",
+      "kind": "json",
+      "file": "kbc-findings-2.schema.json",
+      "owner": "crates/kb-code-server/src/review_doc/mod.rs",
+      "carrier": "findings v2 sidecar"
+    },
+    {
+      "id": "kbc-review-context/1",
+      "kind": "json",
+      "file": "kbc-review-context-1.schema.json",
+      "owner": "crates/kb-code-server/src/review_context.rs",
+      "carrier": "GET /api/reviews/{id}/context body"
+    },
+    {
+      "id": "kbc-github-export/1",
+      "kind": "json",
+      "file": "kbc-github-export-1.schema.json",
+      "owner": "crates/kb-code-server/src/review_github_export.rs",
+      "carrier": "GET /api/reviews/{id}/export/github body"
+    },
+    {
+      "id": "kbc-cmd/1",
+      "kind": "json",
+      "file": "kbc-cmd-1.schema.json",
+      "owner": "crates/kb-code-server/commands/registry.json",
+      "carrier": "kb-code command registry"
+    },
+    {
+      "id": "kbc-theme/1",
+      "kind": "json",
+      "file": "kbc-theme-1.schema.json",
+      "owner": "crates/kb-code-server/themes/registry.json",
+      "carrier": "kb-code theme registry"
+    },
+    {
+      "id": "kb-recall/1",
+      "kind": "text",
+      "file": null,
+      "owner": "crates/kb-core/src/sessions/view.rs",
+      "carrier": "<!--kb-recall/1 kb=<kb> id=<hex12>[ pos=<n>]--> marker lines in a recall injection",
+      "pattern": "^<!--kb-recall/1( [^ =]+=[^ ]*| [^ =]+)+-->$",
+      "rules": "kb required and non-empty; id required, exactly 12 lowercase hex; pos optional, integer 1..=99; unknown pairs and bare tokens ignored"
+    }
+  ]
+}

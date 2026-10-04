@@ -1,0 +1,60 @@
+{
+  "schema": "kbc-cmd/9",
+  "leader": "Space",
+  "presets": [
+    {
+      "id": "vim",
+      "title": "vim",
+      "default": true
+    }
+  ],
+  "reserved_chords": {
+    "hard": [
+      "Ctrl-w"
+    ],
+    "passthrough": [
+      "F11"
+    ]
+  },
+  "context_keys": [
+    {
+      "key": "mode",
+      "values": [
+        "normal"
+      ]
+    }
+  ],
+  "scopes": [
+    {
+      "id": "global",
+      "title": "Everywhere",
+      "depth": 0,
+      "coactive_with": []
+    }
+  ],
+  "commands": [
+    {
+      "id": "cmd.palette.search",
+      "title": "Search everywhere",
+      "aka": [],
+      "group": "Palette",
+      "keys": {
+        "vim": [
+          "Ctrl-k"
+        ],
+        "plain": [
+          "Ctrl-k"
+        ],
+        "helix": [
+          "Ctrl-k"
+        ]
+      },
+      "scope": "global",
+      "cli": "kb-code search",
+      "mutation": "none",
+      "side_effect": "none",
+      "lifecycle": "shipped",
+      "dispatch": "central"
+    }
+  ]
+}
