@@ -72,7 +72,8 @@ fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
 #[test]
 fn kimi_and_omp_adapter_shell_tests() {
     run("test-capture-kimi.sh");
-    run("test-capture-omp.sh");
+    // omp's sidecar block drives the real engine: hand it the built `kb`.
+    run_with_real_kb("test-capture-omp.sh");
 }
 
 /// v0.44 F8 — the once-a-day CLI/hook skew notice.

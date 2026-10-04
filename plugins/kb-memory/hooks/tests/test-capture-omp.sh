@@ -249,7 +249,10 @@ echo "== OK4: subagent sidecar staging (real kb sessions capture engine) =="
 # The sidecar digest walk is Rust-only (sessions_capture.rs) — the bash
 # fallback the rest of this file forces never sees it, by design (see the
 # header comment) — so this block shells out to the REAL installed kb.
-if command -v kb >/dev/null 2>&1; then
+# `command -v kb` here would find the stand-in installed above, so look for the
+# real one on the pre-override PATH or in KB_BIN_DIR (what CI sets).
+if PATH="$REAL_PATH" command -v kb >/dev/null 2>&1 \
+  || [ -n "${KB_BIN_DIR:-}" ] && [ -x "${KB_BIN_DIR:-}/kb" ]; then
   OK4_SUB_ROOT="$TMPROOT/subagents-e2e"
   mkdir -p "$OK4_SUB_ROOT/parent-session"
   cp "$SCRIPT_DIR/fixtures/omp-subagent.jsonl" \
@@ -286,7 +289,7 @@ if command -v kb >/dev/null 2>&1; then
     bad "subagent name sanitization or multi-subagent count wrong"
   fi
 else
-  echo "skip - kb binary not on PATH, cannot exercise the real capture engine" >&2
+  echo "skip - no real kb on PATH or in KB_BIN_DIR, cannot exercise the real capture engine" >&2
 fi
 
 echo
