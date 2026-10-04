@@ -374,6 +374,22 @@ impl SloTargets {
     }
 }
 
+/// Default trailing window (days) of the `recall_coverage_pct` indicator and
+/// of `GET /api/sessions/recall-coverage`.
+pub const RECALL_COVERAGE_DEFAULT_DAYS: u32 = 7;
+/// Largest accepted recall-coverage window; the one clamp shared by the route
+/// `?days=` and `[kb.<name>.slo] recall_coverage_window_days`.
+pub const RECALL_COVERAGE_MAX_DAYS: u32 = 365;
+
+/// Resolve a configured/requested recall-coverage window: absent = 7, else
+/// clamped to `1..=RECALL_COVERAGE_MAX_DAYS`.
+pub fn clamp_recall_coverage_days(days: Option<i64>) -> u32 {
+    match days {
+        None => RECALL_COVERAGE_DEFAULT_DAYS,
+        Some(d) => d.clamp(1, i64::from(RECALL_COVERAGE_MAX_DAYS)) as u32,
+    }
+}
+
 /// Every raw count the five indicators need, read from EXISTING tables by the
 /// caller. Nothing here is derived — this struct is the seam that keeps the
 /// computation pure and every `unknown` path fixture-testable.
@@ -406,6 +422,10 @@ pub struct SloInputs {
     pub recall_landed_turns: u64,
     /// ...and served turns no capture covers.
     pub recall_lost_turns: u64,
+    /// The trailing window (days) those two sums were taken over. It is a
+    /// WINDOW, not a target, so it rides the inputs and not [`SloTargets`].
+    /// `0` (the `Default`) reads as [`RECALL_COVERAGE_DEFAULT_DAYS`].
+    pub recall_window_days: u32,
 }
 
 /// Round to two decimals, half-away-from-zero. Applied to every non-integer
@@ -586,14 +606,20 @@ fn freshness_indicator(inputs: &SloInputs, targets: &SloTargets, now_unix: i64) 
 fn recall_coverage_indicator(inputs: &SloInputs, targets: &SloTargets) -> SloIndicator {
     let key = SloKey::RecallCoveragePct;
     let served = inputs.recall_landed_turns + inputs.recall_lost_turns;
+    let window = if inputs.recall_window_days == 0 {
+        RECALL_COVERAGE_DEFAULT_DAYS
+    } else {
+        inputs.recall_window_days
+    };
     if served == 0 {
         return indicator(
             key,
             None,
             targets,
-            "no memory injection was served or captured in the window — \
-             an empty denominator is not 0%"
-                .to_string(),
+            format!(
+                "no memory injection was served or captured in the trailing {window}d \
+                 window — an empty denominator is not 0%"
+            ),
         );
     }
     let pct = round2((inputs.recall_landed_turns as f64 / served as f64) * 100.0);
@@ -602,8 +628,9 @@ fn recall_coverage_indicator(inputs: &SloInputs, targets: &SloTargets) -> SloInd
         Some(pct),
         targets,
         format!(
-            "{} of {} served memory injections landed in a capture ({} lost: the hook \
-             answered but no capture saw the injection; live sessions are excluded)",
+            "{} of {} served memory injections landed in a capture over the trailing {window}d \
+             window ({} lost: the hook answered but no capture saw the injection; live \
+             sessions are excluded)",
             inputs.recall_landed_turns, served, inputs.recall_lost_turns,
         ),
     )
@@ -964,6 +991,46 @@ mod tests {
         assert_eq!(i.status, SloStatus::Warn, "a MINIMUM target: 75 < 90");
         assert_eq!(i.direction, "higher_is_better");
         assert_eq!(i.unit, "percent");
+    }
+
+    #[test]
+    fn recall_coverage_indicator_detail_names_window() {
+        let served = SloInputs {
+            recall_landed_turns: 1,
+            recall_lost_turns: 1,
+            recall_window_days: 14,
+            ..Default::default()
+        };
+        let r = build("k", &served, &no_targets(), 0);
+        assert!(
+            find(&r, SloKey::RecallCoveragePct)
+                .detail
+                .contains("trailing 14d window"),
+            "{}",
+            find(&r, SloKey::RecallCoveragePct).detail
+        );
+        let empty = SloInputs {
+            recall_window_days: 30,
+            ..Default::default()
+        };
+        let r = build("k", &empty, &no_targets(), 0);
+        assert!(find(&r, SloKey::RecallCoveragePct)
+            .detail
+            .contains("trailing 30d window"));
+        // Unset window reads as the 7d default, never as "0d".
+        let r = build("k", &SloInputs::default(), &no_targets(), 0);
+        assert!(find(&r, SloKey::RecallCoveragePct)
+            .detail
+            .contains("trailing 7d window"));
+    }
+
+    #[test]
+    fn recall_window_clamp_is_shared_and_total() {
+        assert_eq!(clamp_recall_coverage_days(None), 7);
+        assert_eq!(clamp_recall_coverage_days(Some(0)), 1);
+        assert_eq!(clamp_recall_coverage_days(Some(-5)), 1);
+        assert_eq!(clamp_recall_coverage_days(Some(30)), 30);
+        assert_eq!(clamp_recall_coverage_days(Some(9_999)), 365);
     }
 
     #[test]

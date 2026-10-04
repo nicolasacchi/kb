@@ -20,7 +20,8 @@
 //!   git-housekeeping cadences now: the named one, or whatever is due
 //!   (RS-U9, loopback-only).
 //! * `store restore --repo R --bundle FILE` — recreate the `refs/kbc/*`
-//!   heads of a store bundle (the `.bundle` files `kb-code backup` and the
+//!   heads (and, from a GC pre-apply bundle, the `refs/remotes/work-<id>/*`
+//!   member mirrors) of a store bundle (the `.bundle` files `kb-code backup` and the
 //!   GC pre-apply pass write), create-or-fast-forward only; flags the
 //!   restore guard when it wrote anything (loopback-only).
 //!
@@ -148,8 +149,9 @@ pub enum StoreCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Restore the `refs/kbc/*` heads of a store bundle into the repo's
-    /// review store. Create-or-fast-forward only: a ref the store holds at
+    /// Restore the `refs/kbc/*` heads (and `refs/remotes/work-<id>/*` member
+    /// mirrors, which only a GC pre-apply bundle holds) of a store bundle
+    /// into the repo's review store. Create-or-fast-forward only: a ref the store holds at
     /// another value is reported as rejected and never overwritten. A
     /// restore that wrote refs flags the restore guard, so scheduled GC
     /// stays dry-run until `store gc --yes`. Run `store sync` first (thin

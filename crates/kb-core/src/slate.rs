@@ -300,6 +300,18 @@ impl Origin {
     }
 }
 
+/// Posture (X5/N5): `Human` is the only value that earns the `[you]`
+/// rendering and the pin check, so it is the privileged value. The
+/// restrictive one is `Agent`, the client default. `Unattributed` is NOT more
+/// restrictive: it is only the daemon's stamp for "no session id resolved",
+/// carries no extra or fewer rights than `Agent`, and a client can never send
+/// it, so it cannot be the value an absent `origin` deserialises to.
+impl crate::posture::Posture for Origin {
+    fn restrictive() -> Self {
+        Origin::Agent
+    }
+}
+
 /// The beat tuple every harness hook already carries (`BeatBody`), plus
 /// the `user` the daemon stamps from `auth_bearer`'s `Identity` (§4
 /// "Provenance"). `session_id` holds a TRANSCRIPT id or null, NEVER a job
@@ -3401,6 +3413,13 @@ mod tests {
     use super::*;
 
     const NOW: i64 = 1_767_225_600;
+
+    /// N5-a: `Origin` is a `Posture` type (restrictive = `Agent`); its
+    /// `Default` must be that value.
+    #[test]
+    fn origin_default_is_restrictive() {
+        crate::posture::assert_default_is_restrictive::<Origin>();
+    }
 
     /// X5 (posture inventory, `kb_core::posture`): `Human` is the only value
     /// that earns the `[you]` rendering and the pin check, so the default an
