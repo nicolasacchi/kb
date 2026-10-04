@@ -176,7 +176,8 @@ Full index with a suggested reading order: [`docs/README.md`](docs/README.md).
 behaviour) · [`docs/http-api.md`](docs/http-api.md) (the API canon: endpoints,
 parameters, response shapes, SSE events) ·
 [`docs/api-routes.md`](docs/api-routes.md) (the generated method/path/handler
-table, `just api-docs`) · [`docs/kb-code.md`](docs/kb-code.md) (the sibling
+table, `just api-docs`) · [`docs/protocols.md`](docs/protocols.md) (the versioned file
+and wire contracts, `kb validate`) · [`docs/kb-code.md`](docs/kb-code.md) (the sibling
 daemon) · [`docs/configuration.md`](docs/configuration.md) (`kb.toml`).
 
 **Guides** — [quickstart](docs/quickstart.md) · [self-host](docs/self-host.md) ·

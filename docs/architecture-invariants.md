@@ -474,6 +474,13 @@ scrub CAN strip it on non-loopback (opt-in per kb via
     `render_comments_section`, which itself renders every comment it is handed
     and applies no visibility filter of its own).
 
+- **Contract registry (v0.45).** The sidecar family's version strings and
+  shapes are registered as JSON Schemas under `schemas/` (see
+  [`protocols.md`](protocols.md)); `kb validate <file>` checks a sidecar against
+  them offline and never edits it. The schemas are structural lints of the serde
+  types - serde stays the authority, and `crates/kb-cli/tests/schema_registry.rs`
+  is the drift gate.
+
 ### 7. `artifact_host_suffix` is runtime config, not a const
 
 `[server] artifact_host_suffix` (default `.artifacts.localhost`), threaded
