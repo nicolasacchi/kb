@@ -302,7 +302,10 @@ base movement, so (v0.44 F9) a hunk only counts when it lies on lines the
 author's own change set newly touches (the `review since` derivation below);
 upstream-only hunks produce no entry, and if the author's change set cannot be
 read the entry degrades to `overlap: "rebased"` rather than claim the author
-acted. `GET
+acted. Renames are followed across that base move too (v0.45, `git -M` at a
+bounded 50% similarity, the finding's file matched under one canonical name);
+`rebased` remains for a rename that cannot be resolved (below the bound,
+unreadable change set, or ambiguous). `GET
 `/api/reviews/{id}/findings/recurrence`
 (bearer) surfaces which of a review's own findings recur across the repo's
 other reviews, off the same `recurrence_pairs` query `review analytics`

@@ -108,6 +108,100 @@ pub fn split_file_diffs(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// [`split_file_diffs`] for a diff read WITH rename detection
+/// (`diff::diff_range_u0_renames`): `(old_path, new_path, that file's diff
+/// text)`. A renamed file's `diff --git a/old b/new` header is ambiguous
+/// (names may hold spaces), so the pair is read from the preamble's exact
+/// `rename from`/`rename to` lines; every other entry has
+/// `old_path == new_path`. A rename with no hunk (a pure rename) still
+/// yields its entry.
+pub fn split_file_diffs_renames(text: &str) -> Vec<(String, String, String)> {
+    split_file_diffs(text)
+        .into_iter()
+        .map(|(path, body)| {
+            let mut from: Option<String> = None;
+            let mut to: Option<String> = None;
+            for l in body.lines().skip(1) {
+                if l.starts_with("@@") {
+                    break;
+                }
+                if let Some(f) = l.strip_prefix("rename from ") {
+                    from = Some(f.to_string());
+                } else if let Some(t) = l.strip_prefix("rename to ") {
+                    to = Some(t.to_string());
+                }
+            }
+            match (from, to) {
+                (Some(f), Some(t)) => (f, t, body),
+                _ => (path.clone(), path, body),
+            }
+        })
+        .collect()
+}
+
+/// The hunks of the ONE file whose NEW path is `wanted` in a
+/// rename-detected diff, addressed as if the file were called `label` (so
+/// the same change under two names gets the same `kbc-hunkid/1`). `None`
+/// when the file is ambiguous in this diff: `wanted` is also the source of
+/// a rename (renamed away and re-created) or two entries claim it. An
+/// absent file is `Some(vec![])`. Pure.
+fn labeled_path_hunks(text: &str, wanted: &str, label: &str) -> Option<Vec<HunkRef>> {
+    let files = split_file_diffs_renames(text);
+    if files
+        .iter()
+        .any(|(old, new, _)| old != new && old == wanted)
+    {
+        return None;
+    }
+    let mut hits = files.iter().filter(|(_, new, _)| new == wanted);
+    let hit = hits.next();
+    if hits.next().is_some() {
+        return None;
+    }
+    let Some((_, _, body)) = hit else {
+        return Some(Vec::new());
+    };
+    let parsed = review_hunks::parse_unified_diff(body);
+    if parsed.binary {
+        return Some(vec![HunkRef {
+            id: binary_id(label, &parsed.preamble),
+            new_start: 0,
+            new_lines: 0,
+            binary: true,
+        }]);
+    }
+    Some(parsed.hunks.iter().map(|h| hunk_ref(label, h)).collect())
+}
+
+/// [`AuthorRanges`] for one file followed across a rename, from the two
+/// patchsets' rename-detected `-U0` change sets. The earlier file is
+/// `q_path`, the later one `resolved_path`; both are addressed under the
+/// canonical label `q_path` so an unchanged author hunk matches across the
+/// rename. `added` is keyed by `resolved_path` (later-tip coordinates),
+/// `removed` by `q_path` (earlier-tip coordinates) — the exact shape the
+/// same-path consumer reads. `None` when either side is ambiguous. Pure;
+/// uses the same `classify` matcher as everything else here.
+pub fn renamed_author_ranges(
+    from_text: &str,
+    to_text: &str,
+    q_path: &str,
+    resolved_path: &str,
+) -> Option<AuthorRanges> {
+    let from_hunks = labeled_path_hunks(from_text, q_path, q_path)?;
+    let to_hunks = labeled_path_hunks(to_text, resolved_path, q_path)?;
+    let mut from: PathHunks = BTreeMap::new();
+    let mut to: PathHunks = BTreeMap::new();
+    from.insert(q_path.to_string(), from_hunks);
+    to.insert(q_path.to_string(), to_hunks);
+    let mut added = author_new_ranges(&from, &to);
+    let removed = author_gone_ranges(&from, &to);
+    let added = match added.remove(q_path) {
+        Some(r) => HashMap::from([(resolved_path.to_string(), r)]),
+        None => HashMap::new(),
+    };
+    Some(AuthorRanges { added, removed })
+}
+
 /// A binary file has no hunk; its identity is its path plus the blob it
 /// ends up as (the `index <old>..<new>` line), so an unchanged binary
 /// carried through a rebase is carried and a changed one is new.
@@ -365,6 +459,35 @@ pub fn author_ranges_between(
         added: author_new_ranges(&from, &to),
         removed: author_gone_ranges(&from, &to),
     })
+}
+
+/// [`author_ranges_between`] for a file that was RENAMED between the two
+/// patchsets (`q_path` in the earlier tip, `resolved_path` in the later).
+/// Reads each patchset's change set with rename detection
+/// ([`crate::diff::diff_range_u0_renames`], deliberately NOT memoised in
+/// the `--no-renames` memo the `/since` wire depends on) and matches the
+/// file's hunks under one canonical label. `None` when either change set is
+/// unreadable or the rename is ambiguous — the caller keeps its honest
+/// `rebased` fallback.
+pub fn author_ranges_between_for_path(
+    ctx: &GitCtx,
+    own: &ReviewPatchsetRow,
+    later: &ReviewPatchsetRow,
+    q_path: &str,
+    resolved_path: &str,
+) -> Option<AuthorRanges> {
+    let read = |p: &ReviewPatchsetRow| -> Option<String> {
+        if !is_full_sha(&p.base_sha) || !is_full_sha(&p.tip_sha) {
+            return None;
+        }
+        ctx.read_with_fallback(|root| {
+            crate::diff::diff_range_u0_renames(root.git_path(), &p.base_sha, &p.tip_sha)
+        })
+        .ok()
+    };
+    let from_text = read(own)?;
+    let to_text = read(later)?;
+    renamed_author_ranges(&from_text, &to_text, q_path, resolved_path)
 }
 
 // --- the report ---------------------------------------------------------------
@@ -830,5 +953,92 @@ mod tests {
         assert!(parse_ps_ref("0", "verdict").is_err());
         // `verdict` is only a keyword on the `from` side.
         assert!(parse_ps_ref("verdict", "latest").is_err());
+    }
+
+    #[test]
+    fn split_file_diffs_reads_rename_headers() {
+        let text = "diff --git a/old dir/a b.txt b/new dir/a b.txt\n\
+similarity index 90%\n\
+rename from old dir/a b.txt\n\
+rename to new dir/a b.txt\n\
+index 111..222 100644\n\
+--- a/old dir/a b.txt\n\
++++ b/new dir/a b.txt\n\
+@@ -3 +3 @@\n\
+-x\n\
++y\n\
+diff --git a/plain.txt b/plain.txt\n\
+index 111..222 100644\n\
+--- a/plain.txt\n\
++++ b/plain.txt\n\
+@@ -1 +1 @@\n\
+-p\n\
++q\n\
+diff --git a/pure.txt b/moved.txt\n\
+similarity index 100%\n\
+rename from pure.txt\n\
+rename to moved.txt\n";
+        let got = split_file_diffs_renames(text);
+        let names: Vec<(&str, &str)> = got
+            .iter()
+            .map(|(o, n, _)| (o.as_str(), n.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("old dir/a b.txt", "new dir/a b.txt"),
+                ("plain.txt", "plain.txt"),
+                ("pure.txt", "moved.txt"),
+            ]
+        );
+        // The pure rename has no hunk but still yields its entry.
+        assert!(!got[2].2.contains("@@"));
+    }
+
+    fn rename_diff(old: &str, new: &str, minus: &str, plus: &str) -> String {
+        let (hdr, from, to) = if old == new {
+            (
+                format!("diff --git a/{old} b/{new}\n"),
+                String::new(),
+                String::new(),
+            )
+        } else {
+            (
+                format!("diff --git a/{old} b/{new}\n"),
+                format!("rename from {old}\n"),
+                format!("rename to {new}\n"),
+            )
+        };
+        format!(
+            "{hdr}index 111..222 100644\n{from}{to}--- a/{old}\n+++ b/{new}\n@@ -3 +3 @@\n-{minus}\n+{plus}\n"
+        )
+    }
+
+    #[test]
+    fn renamed_path_hunks_carry_under_a_canonical_label() {
+        let from = rename_diff("a.txt", "a.txt", "a3", "a3-author");
+        // Unchanged author hunk, file renamed: carried, so nothing is
+        // new or gone on either side.
+        let same = rename_diff("a.txt", "b.txt", "a3", "a3-author");
+        let r = renamed_author_ranges(&from, &same, "a.txt", "b.txt").unwrap();
+        assert!(r.added.is_empty() && r.removed.is_empty(), "{r:?}");
+        // An edited one is new (later coordinates, keyed by the NEW name)
+        // and the old one is gone (earlier coordinates, the OLD name).
+        let edited = rename_diff("a.txt", "b.txt", "a3", "a3-author-v2");
+        let r = renamed_author_ranges(&from, &edited, "a.txt", "b.txt").unwrap();
+        assert_eq!(r.added.get("b.txt"), Some(&vec![(3, 3)]));
+        assert_eq!(r.removed.get("a.txt"), Some(&vec![(3, 3)]));
+    }
+
+    #[test]
+    fn an_ambiguous_rename_is_unresolved() {
+        // `a.txt` is renamed away AND re-created in the same change set.
+        let to = format!(
+            "{}{}",
+            rename_diff("a.txt", "b.txt", "x", "y"),
+            rename_diff("c.txt", "a.txt", "x", "y")
+        );
+        let from = rename_diff("a.txt", "a.txt", "a3", "a3-author");
+        assert!(renamed_author_ranges(&from, &to, "a.txt", "a.txt").is_none());
     }
 }
