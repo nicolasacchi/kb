@@ -110,15 +110,24 @@ jobs:
       - name: cargo update --workspace (prune, assert no version moved)
         run: |
           cargo --version
-          before=$(grep -c '^name = ' Cargo.lock)
+          cp Cargo.lock /tmp/Cargo.lock.before
           cargo update --workspace
           cargo metadata --locked --format-version 1 > /dev/null
-          after=$(grep -c '^name = ' Cargo.lock)
-          echo "packages: $before -> $after"
-          if git diff Cargo.lock | grep '^+version'; then
-            echo "::error::cargo update --workspace moved a version; refusing to commit"
-            exit 1
-          fi
+          # A line diff is not a reliable "did a version move" test (git
+          # re-aligns removed blocks and shows unrelated `+version` lines), so
+          # compare the (name, version) SETS: the pruned lock must be a subset.
+          python3 - <<'PY'
+          import sys, tomllib
+          def load(p):
+              with open(p, "rb") as f:
+                  return {(x["name"], x["version"]) for x in tomllib.load(f)["package"]}
+          before, after = load("/tmp/Cargo.lock.before"), load("Cargo.lock")
+          print(f"packages: {len(before)} -> {len(after)}")
+          added = sorted(after - before)
+          if added:
+              print("::error::cargo update --workspace added/moved packages: " + ", ".join(f"{n} {v}" for n, v in added))
+              sys.exit(1)
+          PY
 
       - name: Commit and push Cargo.lock
         env:
