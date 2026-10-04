@@ -1,0 +1,17 @@
+{
+  "schema": "kbc-findings/1",
+  "findings": [
+    {
+      "slug": "f-missing-bounds-check",
+      "severity": "concern",
+      "category": "correctness",
+      "location": {
+        "path": "src/lib.rs",
+        "kind": "single"
+      },
+      "title": "Missing bounds check",
+      "rationale": "The index is unchecked.",
+      "recommendation": "Check it."
+    }
+  ]
+}

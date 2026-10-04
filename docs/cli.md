@@ -478,6 +478,14 @@ kb tools [--core]                   Emit Claude-prompt-friendly markdown
                                     remember, recall, why, recollect,
                                     comments, slate), 8 KB or less, for
                                     foreign-harness instruction files.
+kb validate <file> [--schema ID]    Check a file against the versioned
+   [--json] | --list                protocol registry (schemas/): review
+                                    sidecars, kb-list headers, slate ledgers,
+                                    proposals, recall markers, kb-code wire
+                                    docs. Schema auto-detected. Offline, never
+                                    edits. Exit 0 conforms, 1 does not (JSON
+                                    pointers listed), 2 unknown schema or
+                                    unreadable file. See protocols.md.
 kb status [--json] [--watch SECS]   sqlite-backed observability snapshot
                                     Q7: --watch loops with ANSI clear
                                     (mutually exclusive with --json).

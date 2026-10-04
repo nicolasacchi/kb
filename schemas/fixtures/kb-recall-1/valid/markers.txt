@@ -1,0 +1,6 @@
+- demo memory  [kb]
+<!--kb-recall/1 kb=kb id=a1b2c3d4e5f6 pos=1-->
+- another  [main]
+<!--kb-recall/1 kb=main id=0f0f0f0f0f0f-->
+- future pair  [kb]
+<!--kb-recall/1 kb=kb id=111111111111 pos=3 extra=ignored-->

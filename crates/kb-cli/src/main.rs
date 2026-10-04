@@ -1314,6 +1314,26 @@ enum Cmd {
         #[arg(long)]
         core: bool,
     },
+    /// Check a file against the versioned protocol registry (`schemas/`):
+    /// kb-comments review sidecars, kb-list headers, slate ledgers,
+    /// kb-proposal files, kb-recall markers and kb-code's wire documents.
+    /// Pure offline file check - no daemon, never edits the file. The schema
+    /// is auto-detected from the file; exit 0 = conforms, 1 = does not (JSON
+    /// pointers listed), 2 = unknown or undetectable schema / unreadable file.
+    Validate {
+        /// File to check (`-` reads stdin). Not needed with `--list`.
+        file: Option<PathBuf>,
+        /// Contract id (e.g. `kb-comments/2`) instead of auto-detection; a
+        /// value ending in `.json` is read as your own JSON Schema file.
+        #[arg(long)]
+        schema: Option<String>,
+        /// List the registered contracts and exit.
+        #[arg(long)]
+        list: bool,
+        /// Machine-readable result on stdout.
+        #[arg(long)]
+        json: bool,
+    },
     /// Force the daemon to re-walk a kb's source folder and
     /// re-emit `watch.modify` for every HTML file (bypasses the
     /// content-hash dedup gate via `force=true`). Stored embeddings are
@@ -7244,6 +7264,12 @@ async fn main() -> Result<()> {
             .await
         }
         Cmd::Tools { core } => commands::tools::run(core),
+        Cmd::Validate {
+            file,
+            schema,
+            list,
+            json,
+        } => commands::validate::run(file.as_deref(), schema.as_deref(), json, list),
         Cmd::Find {
             input,
             kb,

@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kbc-github-export/1",
+  "title": "kbc-github-export/1 GitHub review export",
+  "description": "GET /api/reviews/{id}/export/github: the payload an agent turns into `gh` calls. kb-code never writes to GitHub itself (crates/kb-code-server/src/review_github_export.rs). Structural lint; the daemon is the authority.",
+  "type": "object",
+  "required": [
+    "schema",
+    "review_id",
+    "repo",
+    "ps_number",
+    "event",
+    "event_reason",
+    "body",
+    "commit_id",
+    "comments",
+    "general_comments",
+    "skipped_orphaned",
+    "stale_export"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kbc-github-export/1"
+    },
+    "review_id": {
+      "type": "integer"
+    },
+    "repo": {
+      "type": "string"
+    },
+    "ps_number": {
+      "type": "integer"
+    },
+    "event": {
+      "enum": [
+        "APPROVE",
+        "REQUEST_CHANGES",
+        "COMMENT",
+        null
+      ]
+    },
+    "event_reason": {
+      "enum": [
+        "no_verdict_set",
+        null
+      ]
+    },
+    "body": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "commit_id": {
+      "type": "string"
+    },
+    "comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "line",
+          "side",
+          "body",
+          "finding_slug"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line_end": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "side": {
+            "enum": [
+              "LEFT",
+              "RIGHT"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "finding_slug": {
+            "type": "string"
+          },
+          "orphaned": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "general_comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "body",
+          "finding_slug",
+          "reason"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "finding_slug": {
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "orphaned",
+              "whole_file",
+              "multi_line"
+            ]
+          }
+        }
+      }
+    },
+    "skipped_orphaned": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "finding_slug",
+          "reason",
+          "original"
+        ],
+        "properties": {
+          "finding_slug": {
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "orphaned",
+              "whole_file",
+              "multi_line"
+            ]
+          },
+          "original": {
+            "type": "object",
+            "required": [
+              "ps"
+            ],
+            "properties": {
+              "ps": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "stale_export": {
+      "type": "boolean"
+    }
+  }
+}

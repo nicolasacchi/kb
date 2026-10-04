@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kb-comments/2",
+  "title": "kb-comments/2 review sidecar",
+  "description": "The .review/<artifact-id>.json sidecar (invariant #6). Stamped at save time (kb_core::review::wire_schema_for) on a sidecar that carries at least one private comment, so a pre-notes binary fails CLOSED on load instead of publishing the notes. Same document shape as /1. Structural lint of the serde shape in crates/kb-core/src/review.rs; serde is the authority.",
+  "type": "object",
+  "required": [
+    "schema",
+    "artifact",
+    "generatedAt",
+    "comments"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kb-comments/2"
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "kb"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "kb": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "src",
+              "label"
+            ],
+            "properties": {
+              "src": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "generatedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+    },
+    "comments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/comment"
+      },
+      "contains": {
+        "type": "object",
+        "required": [
+          "private"
+        ],
+        "properties": {
+          "private": {
+            "const": true
+          }
+        }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "required": [
+        "state",
+        "at",
+        "by"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "comment",
+            "approve",
+            "request_changes"
+          ]
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        },
+        "by": {
+          "enum": [
+            "you",
+            "claude"
+          ]
+        },
+        "note": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "choice": {
+      "type": "object",
+      "required": [
+        "label",
+        "reply"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "reply": {
+          "type": "string"
+        },
+        "resolve": {
+          "type": "boolean"
+        }
+      }
+    },
+    "attachment": {
+      "type": "object",
+      "required": [
+        "id",
+        "filename",
+        "contentType",
+        "size",
+        "createdAt",
+        "author"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "contentType": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        },
+        "author": {
+          "enum": [
+            "you",
+            "claude"
+          ]
+        },
+        "user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "required": [
+        "id",
+        "author",
+        "body",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "author": {
+          "enum": [
+            "you",
+            "claude"
+          ]
+        },
+        "body": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        },
+        "editedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/choice"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/attachment"
+          }
+        },
+        "user": {
+          "type": "string"
+        }
+      }
+    },
+    "anchor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "file"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "path"
+          ],
+          "properties": {
+            "kind": {
+              "const": "chapter"
+            },
+            "path": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "section"
+            },
+            "id": {
+              "type": "string"
+            },
+            "tag": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "snippet": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "css_path",
+            "offset",
+            "snippet"
+          ],
+          "properties": {
+            "kind": {
+              "const": "selection"
+            },
+            "css_path": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "snippet": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "comment": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "file",
+        "fileLabel",
+        "anchor",
+        "author",
+        "body",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "open",
+            "resolved"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "fileLabel": {
+          "type": "string"
+        },
+        "anchor": {
+          "$ref": "#/$defs/anchor"
+        },
+        "author": {
+          "enum": [
+            "you",
+            "claude"
+          ]
+        },
+        "body": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+        },
+        "editedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "replies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reply"
+          }
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/choice"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/attachment"
+          }
+        },
+        "user": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "private": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

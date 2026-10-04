@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kb-proposal/1",
+  "title": "kb-proposal/1 memory candidate",
+  "description": "One queued memory candidate, <state>/<kb>/.proposals/<id>.json (crates/kb-server/src/routes/proposals.rs, Proposal). Structural lint; serde is the authority.",
+  "type": "object",
+  "required": [
+    "id",
+    "schema",
+    "created_at",
+    "title",
+    "body",
+    "source"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^p_[0-9a-f]{12}$"
+    },
+    "schema": {
+      "const": "kb-proposal/1"
+    },
+    "created_at": {
+      "type": "integer"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "global": {
+      "type": "boolean"
+    },
+    "linked_kbs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "salience": {
+      "type": "number"
+    },
+    "supersedes": {
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "agent",
+        "human",
+        "comment"
+      ]
+    },
+    "note": {
+      "type": "string"
+    },
+    "memory_created_at": {
+      "type": "integer"
+    }
+  }
+}

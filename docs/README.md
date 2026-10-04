@@ -65,6 +65,7 @@ pin what you changed.
 | [`cli.md`](cli.md) | Every `kb` verb, flag and behaviour, one block per family. `kb tools` prints the same manifest from your installed binary. |
 | [`http-api.md`](http-api.md) | The narrative HTTP API canon — endpoints, parameters, response shapes, SSE event kinds, and the behaviour behind each. |
 | [`api-routes.md`](api-routes.md) | The complete method/path/handler table, generated from `router.rs` by `just api-docs` (CI fails when stale). Also documents the three surfaces outside the `/api` tree: the artifact-host fallback, `GET /healthz`, and `POST /capture`. |
+| [`protocols.md`](protocols.md) | The versioned contract registry (`kb-comments/1`/`2`, `kb-list/1`, `kb-slate/1`, `kb-proposal/1`, `kb-recall/1`, kb-code's wire documents), the JSON Schemas under `schemas/`, the compatibility rules, and `kb validate`. |
 | [`kb-code.md`](kb-code.md) | The sibling code-reading daemon: what it indexes, its review/PR surface, its search grammar, its auth split, and how it talks to kb. |
 
 The daemon also serves its own authoritative event registry at
