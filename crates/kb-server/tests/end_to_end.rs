@@ -14048,6 +14048,157 @@ async fn sessions_undistilled_since_cuts_the_walk_midway_and_clears_next_cursor(
     assert_eq!(ids(&uncut).len(), 2, "{uncut}");
 }
 
+/// v0.44 F10 — the filtered walk's ROUND BUDGET (`MAX_ROUNDS` = 40 fetches of
+/// `limit` rows). 43 commit-less sessions (never debt) sit newer than two
+/// committed ones, so with `limit=1` the first call burns all 40 rounds
+/// without a single keep: it must return no rows and a cursor equal to the
+/// last row SCANNED (the 40th newest), and following cursors must reach both
+/// debt rows exactly once, never looping on the dropped run. A second walk
+/// adds `since` between the two committed rows: only the newer one appears.
+#[tokio::test]
+async fn sessions_undistilled_round_budget_resumes_after_last_scanned_row() {
+    let mk = |sid: &str, minute: u32, committed: bool| {
+        let ts = format!("20260601T10{minute:02}00Z");
+        let iso = format!("2026-06-01T10:{minute:02}:00Z");
+        let jsonl = format!(
+            concat!(
+                r#"{{"type":"user","promptSource":"typed","timestamp":"{iso}","message":{{"role":"user","content":"ship the thing"}}}}"#,
+                "\n",
+                r#"{{"type":"assistant","timestamp":"{iso}","message":{{"role":"assistant","model":"claude","content":[{{"type":"text","text":"Shipped the thing and it is verified."}}]}}}}"#,
+                "\n",
+            ),
+            iso = iso
+        );
+        let sha = format!("{:x}", 0xa0 + minute).repeat(20);
+        let commits: Vec<_> = if committed {
+            vec![resolved_commit_fixture(&sha, vec![])]
+        } else {
+            vec![]
+        };
+        (
+            format!("session-{ts}-{sid}.html"),
+            session_transcript_html_with_commits(sid, &ts, &jsonl, &commits),
+        )
+    };
+    let mut sessions = vec![mk("sid-bud-00", 0, true), mk("sid-bud-02", 2, true)];
+    for m in [1u32].into_iter().chain(3..44) {
+        sessions.push(mk(&format!("sid-bud-{m:02}"), m, false));
+    }
+    let global: Vec<(&str, String)> = sessions
+        .iter()
+        .map(|(n, h)| (n.as_str(), h.clone()))
+        .collect();
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    let get = |path: String| {
+        let client = client.clone();
+        async move {
+            client
+                .get(url(addr, &path))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let all = loop {
+        let all = get("/api/sessions?limit=100".into()).await;
+        let rows = all["sessions"].as_array().cloned().unwrap_or_default();
+        let committed = rows.iter().filter(|r| r["commit_count"] == 1).count();
+        if rows.len() == 44 && committed == 2 {
+            break all;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the 44 sessions: {} rows, {committed} committed",
+            rows.len()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    // Newest-first plain listing: index 39 is the 40th row the budget scans.
+    let plain = all["sessions"].as_array().unwrap();
+    let scanned_last = &plain[39];
+    let started = |sid: &str| {
+        plain
+            .iter()
+            .find(|r| r["session_id"] == sid)
+            .unwrap_or_else(|| panic!("{sid} listed"))["started_at"]
+            .as_i64()
+            .unwrap()
+    };
+    let ids = |body: &serde_json::Value| -> Vec<String> {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["session_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Follow cursors from `base`: every kept id, the first page, the call count.
+    let walk = |base: String| {
+        let get = &get;
+        let ids = &ids;
+        async move {
+            let mut seen: Vec<String> = Vec::new();
+            let mut first: Option<serde_json::Value> = None;
+            let mut path = base.clone();
+            for call in 1..=10 {
+                let page = get(path.clone()).await;
+                seen.extend(ids(&page));
+                if first.is_none() {
+                    first = Some(page.clone());
+                }
+                let (Some(c), Some(cid)) = (
+                    page["next_cursor"].as_i64(),
+                    page["next_cursor_id"].as_str(),
+                ) else {
+                    return (seen, first.unwrap(), call);
+                };
+                path = format!("{base}&cursor={c}&cursor_id={cid}");
+            }
+            panic!("cursor walk did not terminate in 10 calls: {seen:?}");
+        }
+    };
+
+    let (seen, first, calls) = walk("/api/sessions?undistilled=1&limit=1".into()).await;
+    assert!(
+        ids(&first).is_empty(),
+        "40 dropped rounds keep nothing: {first}"
+    );
+    assert_eq!(
+        first["next_cursor"], scanned_last["started_at"],
+        "budget exhaustion resumes after the last row SCANNED: {first}"
+    );
+    assert_eq!(
+        first["next_cursor_id"], scanned_last["artifact_id"],
+        "{first}"
+    );
+    let mut sorted = seen.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec!["sid-bud-00".to_string(), "sid-bud-02".to_string()],
+        "following the cursor reaches each debt row exactly once: {seen:?}"
+    );
+    assert!(
+        calls <= 5,
+        "the walk must not re-scan dropped rows: {calls} calls"
+    );
+
+    // `since` between the two committed rows, through the same exhausted walk.
+    let since = started("sid-bud-02");
+    assert!(since > started("sid-bud-00"));
+    let (seen, _, _) = walk(format!("/api/sessions?undistilled=1&limit=1&since={since}")).await;
+    assert_eq!(
+        seen,
+        vec!["sid-bud-02".to_string()],
+        "rows older than since never appear after a resumed walk"
+    );
+}
+
 // P1 — A1/A2/A3: aiTitle → title → display_name, cwd → folder, file counts,
 // the /folders facet, and the ?folder= filter.
 #[tokio::test]
