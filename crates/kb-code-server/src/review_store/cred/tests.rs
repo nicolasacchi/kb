@@ -566,6 +566,55 @@ fn ladder_inherit_only_when_allowed_else_none() {
     assert_eq!(r.skipped.last().unwrap().rung, ProfileKind::Inherit);
 }
 
+/// Posture proof (N5-a): `CredentialPin::default()` is `Auto`, a ladder and
+/// not a point on the access axis, so it is NOT a `Posture` type. What makes
+/// it safe is behavioural: without `allow_inherited_credentials` the resolved
+/// credential for the default pin is never `Inherit`, whatever the probes and
+/// the remote shape do. The gate is the `cfg.allow_inherited_credentials`
+/// check in `resolve_fetch_credential` (rung 6) and in the explicit-pin arm.
+#[test]
+fn credential_pin_default_never_inherits_without_opt_in() {
+    assert_eq!(CredentialPin::default(), CredentialPin::Auto);
+    let c = cfg();
+    assert!(!c.allow_inherited_credentials);
+    assert_eq!(c.pin, CredentialPin::default());
+    let ssh = RemoteUrl::parse_remote("git@github.com:acme/widgets.git").unwrap();
+    let odd = RemoteUrl::parse_remote("ssh://git@git.example.com:7999/acme/widgets.git").unwrap();
+    let probe_sets = [
+        Probes::default(),
+        Probes {
+            anon_ok: true,
+            ..Default::default()
+        },
+        Probes {
+            token_ok: true,
+            ..Default::default()
+        },
+        Probes {
+            gh: Some(fake_gh_cred),
+            ..Default::default()
+        },
+    ];
+    for p in &probe_sets {
+        for url in [gh_url(), ssh.clone(), odd.clone()] {
+            if let Ok(r) = resolve_fetch_credential(&c, &url, p) {
+                assert_ne!(r.credential.kind(), ProfileKind::Inherit);
+                assert!(!r.credential.is_amber());
+            }
+        }
+    }
+    // Every probe failing lands on `none`, with inherit recorded as skipped.
+    let r = resolve_fetch_credential(&c, &gh_url(), &Probes::default()).unwrap();
+    assert_eq!(r.credential.kind(), ProfileKind::None);
+    // The explicit pin is refused too, not silently downgraded.
+    let mut pinned = cfg();
+    pinned.pin = CredentialPin::Inherit;
+    assert!(matches!(
+        resolve_fetch_credential(&pinned, &gh_url(), &Probes::default()),
+        Err(CredError::Refused(_))
+    ));
+}
+
 #[test]
 fn a_pinned_rung_never_falls_through() {
     let p = Probes {

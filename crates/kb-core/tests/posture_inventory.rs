@@ -24,13 +24,14 @@ use Class::{Posture, Reviewed};
 
 const INVENTORY: &[(&str, Class)] = &[
     ("Visibility", Posture),
-    (
-        "Origin",
-        Reviewed("slate: default is Agent; pinned in slate's tests as 'never Human'"),
-    ),
+    ("Origin", Posture),
     (
         "CredentialPin",
-        Reviewed("selector; permissive modes are gated by allow_inherited_credentials=false"),
+        Reviewed(
+            "Auto is a ladder, not a point on the axis; Inherit is gated by \
+             allow_inherited_credentials=false, proven by \
+             test:credential_pin_default_never_inherits_without_opt_in",
+        ),
     ),
     ("ForgeKind", Reviewed("selector")),
     ("BranchSort", Reviewed("selector")),
@@ -322,6 +323,59 @@ fn posture_entries_implement_the_trait_and_pin_their_default() {
             Reviewed(why) => assert!(!why.trim().is_empty(), "`{name}`: empty review reason"),
         }
     }
+}
+
+/// Test names a `Reviewed` reason cites as `test:<fn_name>`.
+fn cited_tests(why: &str) -> Vec<String> {
+    why.split("test:")
+        .skip(1)
+        .map(|r| {
+            r.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// Does `code` define `fn <name>(`?
+fn defines_fn(code: &str, name: &str) -> bool {
+    code.match_indices("fn ").any(|(i, _)| {
+        let before_ok = i == 0 || !code[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_');
+        let rest = &code[i + 3..];
+        before_ok
+            && rest.starts_with(name)
+            && rest[name.len()..].trim_start().starts_with(['(', '<'])
+    })
+}
+
+/// A `Reviewed` reason that cites a test (`test:<fn_name>`) must name a fn
+/// that exists in the workspace, so the prose cannot rot.
+#[test]
+fn inventory_reviewed_reasons_name_existing_tests() {
+    let (_, all) = scan();
+    let mut cited = 0;
+    for (name, class) in INVENTORY {
+        if let Reviewed(why) = class {
+            for t in cited_tests(why) {
+                cited += 1;
+                assert!(
+                    defines_fn(&all, &t),
+                    "`{name}`: reason cites test `{t}` but no `fn {t}` exists in crates/*/src"
+                );
+            }
+        }
+    }
+    assert!(cited >= 1, "no Reviewed entry cites a test any more");
+}
+
+#[test]
+fn cited_test_helpers_work() {
+    assert_eq!(cited_tests("x test:abc_1, test:d"), vec!["abc_1", "d"]);
+    assert!(defines_fn("#[test]\nfn abc_1() {}", "abc_1"));
+    assert!(!defines_fn("fn abc_12() {}", "abc_1"));
+    assert!(!defines_fn("// nothing", "abc_1"));
+    assert!(!defines_fn("fn not_abc_1() {}", "abc_1"));
 }
 
 /// Literals that span lines, raw strings and char literals holding a quote
