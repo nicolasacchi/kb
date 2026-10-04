@@ -1,0 +1,45 @@
+{
+  "schema": "coderef/1",
+  "kb": "notes",
+  "doc_id": "0123456789ab",
+  "doc_path": "notes/retry.html",
+  "title": "Retry budget",
+  "doc_hash": "blake3:abc123",
+  "extracted_at": 1767214800,
+  "never_scanned": false,
+  "code_rev": {
+    "label": "main",
+    "sha": "0123456789abcdef0123456789abcdef01234567",
+    "dirty": false
+  },
+  "ref_count": 1,
+  "ungrouped_count": 0,
+  "truncated": false,
+  "groups": [
+    {
+      "ordinal": 0,
+      "key": "retry",
+      "label": "Retry",
+      "anchor": "retry"
+    }
+  ],
+  "refs": [
+    {
+      "ordinal": 0,
+      "group": "retry",
+      "kind": "path",
+      "raw": "src/retry.rs:10",
+      "path_hint": "src/retry.rs",
+      "line_start": 10,
+      "line_end": null,
+      "line_spans": null,
+      "symbol_container": null,
+      "symbol_member": null,
+      "context": "see src/retry.rs:10",
+      "context_tokens": [
+        "see"
+      ],
+      "declared": false
+    }
+  ]
+}

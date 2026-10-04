@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/unified-inbox/1",
+  "title": "unified-inbox/1 one inbox",
+  "description": "GET /api/inbox: kb-code's federated attention queue, read by kb-code-cli (`kb-code inbox`) and the web-code SPA (crates/kb-code-server/src/unified_inbox.rs). Four lanes, each capped at 50, surfaced and never scored. The kb lane degrades whole with a named reason. Structural lint; the daemon is the authority.",
+  "type": "object",
+  "required": [
+    "schema",
+    "reviews",
+    "annotations",
+    "kb",
+    "worktrees"
+  ],
+  "properties": {
+    "schema": {
+      "const": "unified-inbox/1"
+    },
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "review_id",
+          "repo",
+          "pr_number",
+          "title",
+          "unresolved_findings",
+          "unanswered_questions",
+          "human_open",
+          "verdict",
+          "verdict_stale",
+          "pr_head_drift",
+          "updated_at"
+        ],
+        "properties": {
+          "review_id": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "pr_number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unresolved_findings": {
+            "type": "integer"
+          },
+          "unanswered_questions": {
+            "type": "integer"
+          },
+          "human_open": {
+            "type": "integer"
+          },
+          "verdict": {},
+          "verdict_stale": {
+            "type": "boolean"
+          },
+          "pr_head_drift": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "repo",
+          "path",
+          "line",
+          "intent",
+          "author",
+          "excerpt",
+          "reply_count",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "intent": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "reply_count": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "kb": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "available",
+            "reason",
+            "desk",
+            "comments"
+          ],
+          "properties": {
+            "available": {
+              "const": true
+            },
+            "reason": {
+              "type": "null"
+            },
+            "desk": {
+              "type": "object",
+              "required": [
+                "items",
+                "attention",
+                "truncated"
+              ],
+              "properties": {
+                "items": {
+                  "type": "array"
+                },
+                "attention": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "comments": {
+              "type": "object",
+              "required": [
+                "items",
+                "total_open",
+                "truncated"
+              ],
+              "properties": {
+                "items": {
+                  "type": "array"
+                },
+                "total_open": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "available",
+            "reason",
+            "desk",
+            "comments"
+          ],
+          "properties": {
+            "available": {
+              "const": false
+            },
+            "reason": {
+              "enum": [
+                "disabled",
+                "unreachable",
+                "sibling_mismatch"
+              ]
+            },
+            "desk": {
+              "type": "null"
+            },
+            "comments": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "worktrees": {
+      "type": "object",
+      "required": [
+        "available",
+        "reason",
+        "items",
+        "truncated"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

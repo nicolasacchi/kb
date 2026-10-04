@@ -72,6 +72,34 @@ const EMBEDDED: &[(&str, &str)] = &[
         "kbc-theme/1",
         include_str!("../../../../schemas/kbc-theme-1.schema.json"),
     ),
+    (
+        "kb-sibling/1",
+        include_str!("../../../../schemas/kb-sibling-1.schema.json"),
+    ),
+    (
+        "coderef/1",
+        include_str!("../../../../schemas/coderef-1.schema.json"),
+    ),
+    (
+        "coderef-feed/1",
+        include_str!("../../../../schemas/coderef-feed-1.schema.json"),
+    ),
+    (
+        "unified-inbox/1",
+        include_str!("../../../../schemas/unified-inbox-1.schema.json"),
+    ),
+    (
+        "kbc-claim/1",
+        include_str!("../../../../schemas/kbc-claim-1.schema.json"),
+    ),
+    (
+        "kb-capture-grok/1",
+        include_str!("../../../../schemas/kb-capture-grok-1.schema.json"),
+    ),
+    (
+        "kb-session-bundle/1",
+        include_str!("../../../../schemas/kb-session-bundle-1.schema.json"),
+    ),
 ];
 
 /// The id of the one registered contract that is a text grammar, not JSON.
@@ -81,14 +109,17 @@ const RECALL_ID: &str = "kb-recall/1";
 // this lint with it. A value outside the range is read as "unknown rank", which
 // a lint reports as malformed.
 use kb_core::sessions::view::{
-    RECALL_MARKER_POS_RANGE as RECALL_POS_RANGE, RECALL_MARKER_PREFIX as RECALL_PREFIX,
-    RECALL_MARKER_SUFFIX as RECALL_SUFFIX,
+    is_recall_marker_id, RECALL_MARKER_POS_RANGE as RECALL_POS_RANGE,
+    RECALL_MARKER_PREFIX as RECALL_PREFIX, RECALL_MARKER_SUFFIX as RECALL_SUFFIX,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Json,
     Jsonl,
+    /// Only the FIRST non-empty line is the contract (a transcript whose head
+    /// line is an adapter record); the rest of the file is another format.
+    JsonlHead,
     MdHeader,
     Text,
 }
@@ -98,6 +129,7 @@ impl Kind {
         match s {
             "json" => Some(Kind::Json),
             "jsonl" => Some(Kind::Jsonl),
+            "jsonl-head" => Some(Kind::JsonlHead),
             "md-header" => Some(Kind::MdHeader),
             "text" => Some(Kind::Text),
             _ => None,
@@ -108,6 +140,7 @@ impl Kind {
         match self {
             Kind::Json => "json",
             Kind::Jsonl => "jsonl",
+            Kind::JsonlHead => "jsonl-head",
             Kind::MdHeader => "md-header",
             Kind::Text => "text",
         }
@@ -243,11 +276,22 @@ fn id_from_object(v: &Value) -> std::result::Result<String, String> {
     if let Some(s) = v.get("schema").and_then(Value::as_str) {
         return Ok(s.to_string());
     }
+    // kb-sibling/1 rides GET /api/identity, which has no `schema` key.
+    if let Some(s) = v.get("sibling_protocol").and_then(Value::as_str) {
+        return Ok(s.to_string());
+    }
+    // A capture adapter's head record names its own contract in `adapter`.
+    if v.get("type").and_then(Value::as_str) == Some("adapter-meta") {
+        if let Some(s) = v.get("adapter").and_then(Value::as_str) {
+            return Ok(s.to_string());
+        }
+    }
     if slate_shape(v) {
         return Ok("kb-slate/1".to_string());
     }
     Err(
-        "the JSON has no string `schema` key and does not look like a kb-slate/1 ledger line"
+        "the JSON has no string `schema`, `sibling_protocol` or adapter-meta `adapter` key and \
+         does not look like a kb-slate/1 ledger line"
             .to_string(),
     )
 }
@@ -360,10 +404,7 @@ fn validate_recall(text: &str) -> Vec<Problem> {
         match id {
             None => problems.push(problem("missing `id`")),
             Some(v) => {
-                let hex = v.len() == 12
-                    && v.chars()
-                        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
-                if !hex {
+                if !is_recall_marker_id(v) {
                     problems.push(problem("`id` must be exactly 12 lowercase hex characters"));
                 }
             }
@@ -450,6 +491,17 @@ fn validate_with(
                 }
             }
         }
+        Kind::JsonlHead => match text.lines().enumerate().find(|(_, l)| !l.trim().is_empty()) {
+            Some((i, l)) => match serde_json::from_str::<Value>(l) {
+                Ok(v) => check_value(&schemas, idx, &v, Some(i + 1), &mut problems),
+                Err(e) => problems.push(not_json(Some(i + 1), &e)),
+            },
+            None => problems.push(Problem {
+                line: None,
+                pointer: String::new(),
+                message: "the file is empty".to_string(),
+            }),
+        },
         Kind::MdHeader => {
             // A JSON list export validates as itself; a Markdown list by its
             // `<!-- kb-list {...} -->` provenance header.
@@ -738,6 +790,26 @@ mod tests {
         );
         assert!(validate_recall(&top).is_empty());
         assert!(!validate_recall(&over).is_empty());
+    }
+
+    #[test]
+    fn recall_id_rule_is_the_readers_single_source() {
+        for id in [
+            "a1b2c3d4e5f6",
+            "A1B2C3D4E5F6",
+            "a1b2c3d4e5f",
+            "a1b2c3d4e5f67",
+            "g1b2c3d4e5f6",
+            "",
+            "0123456789ab",
+        ] {
+            let m = format!("{RECALL_PREFIX}kb=kb id={id}{RECALL_SUFFIX}");
+            assert_eq!(
+                validate_recall(&m).is_empty(),
+                is_recall_marker_id(id),
+                "validate and the reader disagree on id {id:?}"
+            );
+        }
     }
 
     #[test]
