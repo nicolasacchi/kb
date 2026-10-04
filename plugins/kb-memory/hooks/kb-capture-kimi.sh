@@ -18,12 +18,14 @@
 # id is the parent directory name three levels up (the session_<uuid> dir —
 # the wire itself has no sessionId field, so the dir name IS the id).
 #
-# Deterministic and LLM-free, mirroring kb-capture-codex.sh's envelope +
-# atomic mv contract, and kb-capture-grok.sh's dual write path: the
-# PREFERRED writer is `kb sessions capture` (the Rust engine — atomic
-# writes, one-file-per-sid reuse, git commit resolution against cwd); a
-# bash hand-rolled-HTML fallback runs when `kb` is absent or the capture
-# call fails.
+# Deterministic and LLM-free. Landing (v0.45 N4): the translated JSONL (its
+# first record is an `adapter-meta` line carrying `harness: "kimi"`, the enrich
+# ladder's rung 1) goes through `kb sessions capture` (the Rust engine: atomic
+# writes, one-file-per-sid reuse, secrets scrub, git commit resolution against
+# cwd). When that fails, or `kb` is missing, the UNSCRUBBED translation is
+# parked in the private capture spool (kb-hook-lib.sh hook_adapter_land) and
+# replayed through the same scrubbed path by the next successful capture. This
+# adapter NEVER writes HTML itself, so nothing raw can reach the corpus.
 #
 # wire.jsonl → Claude-shape mapping (drives kb's parse_session_activity;
 # verified against a live wire file):
@@ -108,9 +110,16 @@ TRANSLATE='
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # Standalone copy without the lib: capture only, no spool, never any HTML.
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
+  hook_adapter_land() {
+    command -v kb >/dev/null 2>&1 || { echo "kb-capture-kimi.sh: kb not found - session $1 not captured" >&2; return 0; }
+    kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
+      --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 \
+      || echo "kb-capture-kimi.sh: kb sessions capture failed - session $1 not captured" >&2
+    return 0
+  }
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 
@@ -162,77 +171,8 @@ capture_one() {
                   content: []}}' >>"$tmpjsonl" 2>/dev/null
   fi
 
-  # Preferred writer: the shared Rust engine (same invocation grok uses).
-  if command -v kb >/dev/null 2>&1; then
-    if run_to 20 kb sessions capture \
-         --transcript "$tmpjsonl" \
-         --session-id "$sid" \
-         --cwd "$cwd" \
-         --out "$KB_SESSIONS_DIR" \
-         >/dev/null 2>&1; then
-      rm -f "$tmpjsonl"
-      return 0
-    fi
-  fi
-
-  # Bash fallback — hand-rolled envelope, same contract as
-  # kb-capture-codex.sh (atomic tmp+mv, one file per session, overwritten
-  # on re-capture; the original start timestamp survives in the name).
-  mkdir -p "$KB_SESSIONS_DIR" || { rm -f "$tmpjsonl"; return 0; }
-  local safe_sid out f esc tmp scrubbed
-  safe_sid="$(hook_sid_key "$sid")"
-  out=""
-  for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
-    [ -f "$f" ] && out="$f"
-  done
-  [ -n "$out" ] || out="$KB_SESSIONS_DIR/session-$cts-$safe_sid.html"
-
-  # 2026-08-21 ci-host incident hardening — refuse an oversized translated
-  # transcript in this bash fallback path (the Rust `kb sessions capture`
-  # call above already refuses one on its own — this guards the exact case
-  # where that refusal is why we're down here at all).
-  local tsize
-  tsize="$(stat -c %s "$tmpjsonl" 2>/dev/null || wc -c <"$tmpjsonl" 2>/dev/null)"
-  if [ -n "$tsize" ] && [ "$tsize" -gt 50331648 ]; then
-    echo "kb-capture-kimi.sh: skipping oversized translated transcript ($tsize bytes > 48MiB cap) for session $sid" >&2
-    rm -f "$tmpjsonl"
-    return 0
-  fi
-
-  # Secrets floor (v0.44 X4) — this bash fallback hand-writes the envelope, so
-  # the translated JSONL goes through `kb sessions scrub` (the same
-  # secrets-only scrubber the codex/opencode adapters use) BEFORE it is
-  # embedded. FAIL CLOSED: no `kb`, or a `kb` too old for the verb, means this
-  # session is not captured here rather than captured unscrubbed.
-  scrubbed="$(mktemp)" || { rm -f "$tmpjsonl"; return 0; }
-  if command -v kb >/dev/null 2>&1 && run_to 15 kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
-     && [ -s "$scrubbed" ]; then
-    mv -f "$scrubbed" "$tmpjsonl"
-  else
-    echo "kb-capture-kimi.sh: kb sessions scrub unavailable — not capturing session $sid in the bash fallback (fail closed)" >&2
-    rm -f "$scrubbed"
-    rm -f "$tmpjsonl"
-    return 0
-  fi
-
-  esc="$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$tmpjsonl")" \
-    || { rm -f "$tmpjsonl"; return 0; }
+  hook_adapter_land "$sid" "$tmpjsonl" "$cwd" "$cts" kimi
   rm -f "$tmpjsonl"
-  tmp="$out.tmp"
-  cat >"$tmp" <<EOF || { rm -f "$tmp"; return 0; }
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>Kimi session transcript $cts</title>
-<meta name="kb-category" content="memory-session">
-<meta name="kb-decay" content="fast">
-<meta name="kb-session" content="$safe_sid">
-<meta name="kb-harness" content="kimi">
-</head><body>
-<h1>Kimi session transcript $cts</h1>
-<pre>$esc</pre>
-</body></html>
-EOF
-  mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"
 }
 
 # Resolve the wire path from a hook payload's session_id + cwd.

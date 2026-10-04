@@ -2,16 +2,17 @@
 # kb-capture-grok — capture adapter: Grok Build (via grokclaude) session
 # transcripts → kb session-capture HTML (Claude-Code-shaped JSONL inside a
 # <pre>). Sibling of kb-capture-codex.sh / kb-capture-opencode.sh, but the
-# PREFERRED write path (W5/R8) is the SAME shared writer kb-capture.sh
-# itself prefers: `kb sessions capture --transcript <synthesized.jsonl>
-# --session-id <grok-uuid> [--cwd <cwd>] --out $KB_SESSIONS_DIR` — the Rust
-# engine, which gets us atomic writes, one-file-per-sid reuse-on-recapture,
-# git commit resolution against the job's cwd, and `kb-decay: fast` for
-# free (the "shared writer" the milestone brief calls out). A bash
-# hand-rolled-HTML fallback (mirroring kb-capture.sh's own dual-path
-# design) runs when `kb` is absent from PATH or the capture call fails for
-# any reason — a translation bug in the jq program must never leave a real
-# grok session uncaptured.
+# only write path (W5/R8, v0.45 N4) is the SAME shared writer kb-capture.sh
+# uses: `kb sessions capture --transcript <synthesized.jsonl>
+# --session-id <grok-uuid> [--cwd <cwd>] --stamp <start> --out
+# $KB_SESSIONS_DIR` — the Rust engine, which gets us atomic writes,
+# one-file-per-sid reuse-on-recapture, the secrets scrub, git commit
+# resolution against the job's cwd, and `kb-decay: fast`. When `kb` is absent
+# or the capture fails, the UNSCRUBBED translation is parked in the private
+# capture spool (kb-hook-lib.sh hook_adapter_land) and replayed through the
+# same scrubbed path by the next successful capture. This adapter NEVER
+# writes session HTML itself, so nothing raw can reach the corpus (the
+# separate grok-report lane below writes a report, not a session capture).
 #
 # Grok's own message-by-message transcript does NOT live in the grokclaude
 # blackboard (.grokclaude/jobs/<ulid>/) — it lives entirely in Grok Build's
@@ -109,12 +110,13 @@
 #     produced a real exchange leaves nothing worth indexing, and a
 #     retried/resumed job re-captures on its next real round).
 #
-# Scrub posture: same as every harness (kb-capture.sh, codex, opencode) —
-# captured verbatim, no capture-time secret scrub; outbound serve-time scrub
-# (#4/#5) and export scrub floors apply identically once indexed. Grok's
-# tool_result content can inline file contents the worker read (broad
-# research-role read access per grokclaude's write-rails design) — the same
-# posture as every other tool-output-bearing harness capture.
+# Scrub posture: the capture goes through the Rust engine (`kb sessions
+# capture`), which scrubs secrets at capture time like every harness; the
+# unscrubbed translation only ever exists in the private spool until a
+# successful capture replays it through that same scrub. Grok's tool_result
+# content can inline file contents the worker read (broad research-role read
+# access per grokclaude's write-rails design); the scrub and the outbound
+# serve-time/export scrub floors (#4/#5) apply to it like any other harness.
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -481,9 +483,16 @@ queue_distill_pending() {
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # Standalone copy without the lib: capture only, no spool, never any HTML.
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
+  hook_adapter_land() {
+    command -v kb >/dev/null 2>&1 || { echo "kb-capture-grok.sh: kb not found - session $1 not captured" >&2; return 2; }
+    kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
+      --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 \
+      || { echo "kb-capture-grok.sh: kb sessions capture failed - session $1 not captured" >&2; return 2; }
+    return 0
+  }
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 
@@ -517,76 +526,20 @@ capture_one() {
     return 1
   fi
 
-  local wrote=0
-  if command -v kb >/dev/null 2>&1; then
-    if run_to 20 kb sessions capture \
-         --transcript "$tmpjsonl" \
-         --session-id "$gid" \
-         ${cwd:+--cwd "$cwd"} \
-         --out "$KB_SESSIONS_DIR" \
-         >/dev/null 2>&1; then
-      wrote=1
-    fi
-  fi
-
-  if [ "$wrote" -eq 0 ]; then
-    # 2026-08-21 ci-host incident hardening — refuse an oversized translated
-    # transcript in this bash fallback path (the Rust `kb sessions capture`
-    # call above already refuses one on its own — this guards the exact
-    # case where that refusal is why wrote=0). A capture skip must never
-    # abort the wider grokclaude backfill.
-    local tsize
-    tsize="$(stat -c %s "$tmpjsonl" 2>/dev/null || wc -c <"$tmpjsonl" 2>/dev/null)"
-    if [ -n "$tsize" ] && [ "$tsize" -gt 50331648 ]; then
-      log "job=${job_ulid:-direct} grok_session=$gid action=skip reason=oversized-transcript ($tsize bytes > 48MiB cap)"
-      rm -f "$tmpjsonl"
-      return 1
-    fi
-
-    # Bash fallback — hand-rolled envelope, same contract as
-    # kb-capture.sh's own fallback path (no commit resolution, no sidecar
-    # walk; still atomic, still one-file-per-sid).
-    mkdir -p "$KB_SESSIONS_DIR" || { rm -f "$tmpjsonl"; return 1; }
-    local ts safe_sid out f esc tmp scrubbed
-    ts="$(date -u +%Y%m%dT%H%M%SZ)"
-    safe_sid="$(hook_sid_key "$gid")"
-    out=""
-    for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
-      [ -f "$f" ] && out="$f"
-    done
-    [ -n "$out" ] || out="$KB_SESSIONS_DIR/session-$ts-$safe_sid.html"
-    # Secrets floor (v0.44 X4) — this bash fallback hand-writes the envelope, so
-    # the translated JSONL goes through `kb sessions scrub` (the same
-    # secrets-only scrubber the codex/opencode adapters use) BEFORE it is
-    # embedded. FAIL CLOSED: no `kb`, or a `kb` too old for the verb, means this
-    # session is not captured here rather than captured unscrubbed.
-    scrubbed="$(mktemp)" || { rm -f "$tmpjsonl"; return 1; }
-    if command -v kb >/dev/null 2>&1 && run_to 15 kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
-       && [ -s "$scrubbed" ]; then
-      mv -f "$scrubbed" "$tmpjsonl"
-    else
-      echo "kb-capture-grok.sh: kb sessions scrub unavailable — not capturing session $gid in the bash fallback (fail closed)" >&2
-      rm -f "$scrubbed"
-      rm -f "$tmpjsonl"
-      return 1
-    fi
-
-    esc="$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$tmpjsonl")" || { rm -f "$tmpjsonl"; return 1; }
-    tmp="$out.tmp"
-    cat >"$tmp" <<EOF || { rm -f "$tmp" "$tmpjsonl"; return 1; }
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>Grok session transcript $ts</title>
-<meta name="kb-category" content="memory-session">
-<meta name="kb-decay" content="fast">
-<meta name="kb-session" content="$safe_sid">
-<meta name="kb-harness" content="grok">
-</head><body>
-<h1>Grok session transcript $ts</h1>
-<pre>$esc</pre>
-</body></html>
-EOF
-    mv -f "$tmp" "$out" 2>/dev/null && wrote=1 || rm -f "$tmp"
+  # Filename stamp for a NEW capture: the session's own start time (the
+  # translated adapter-meta line's timestamp), else now.
+  local cts_iso cts wrote=0 rc
+  cts_iso="$(head -1 "$tmpjsonl" | jq -r '.timestamp // empty' 2>/dev/null)"
+  cts="$(date -u -d "$cts_iso" +%Y%m%dT%H%M%SZ 2>/dev/null)" || cts=""
+  [ -n "$cts" ] || cts="$(date -u +%Y%m%dT%H%M%SZ)"
+  hook_adapter_land "$gid" "$tmpjsonl" "$cwd" "$cts" grok
+  rc=$?
+  [ "$rc" -eq 0 ] && wrote=1
+  if [ "$rc" -eq 1 ]; then
+    # Parked in the private spool: not lost, replayed on the next success.
+    rm -f "$tmpjsonl"
+    log "job=${job_ulid:-direct} grok_session=$gid action=spooled"
+    return 0
   fi
 
   if [ "$wrote" -eq 1 ]; then

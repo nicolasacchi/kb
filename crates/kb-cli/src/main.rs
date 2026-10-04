@@ -2341,6 +2341,13 @@ enum SessionsAction {
         /// contract).
         #[arg(long)]
         allow_oversized: bool,
+        /// UTC `YYYYMMDDTHHMMSSZ` to use as the filename timestamp of a NEW
+        /// capture (a harness adapter passes the session's true start time;
+        /// `started_at` derives from the filename). Ignored when an existing
+        /// capture of the session is reused - its name is never changed.
+        // Provenance: v0.45 N4
+        #[arg(long, conflicts_with = "replay_spool")]
+        stamp: Option<String>,
     },
     /// Secrets-only scrub filter: JSONL on stdin, redacted JSONL on stdout
     /// (the same floor `kb sessions capture` applies). The codex/opencode
@@ -5917,6 +5924,7 @@ async fn main() -> Result<()> {
                 out,
                 json,
                 allow_oversized,
+                stamp,
             } => {
                 if replay_spool {
                     return commands::sessions_capture::run_replay_spool(out, json).await;
@@ -5930,6 +5938,7 @@ async fn main() -> Result<()> {
                     out,
                     json,
                     allow_oversized,
+                    stamp,
                 )
                 .await
             }

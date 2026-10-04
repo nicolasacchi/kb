@@ -26,9 +26,9 @@ bad() { FAIL=$((FAIL + 1)); printf 'not ok  - %s\n' "$1"; }
 mkdir -p "$TMPROOT/bin"
 cat >"$TMPROOT/bin/kb" <<'EOF'
 #!/usr/bin/env bash
-# `kb sessions capture` fails -> forces kb-capture-grok.sh's bash-fallback
-# write path, so this test matrix exercises "cover the success of
-# either" write path (see test 1b below for the primary-path case).
+# `kb sessions capture` fails -> kb-capture-grok.sh spools the translation
+# (v0.45 N4: there is no bash-fallback writer any more); see test 1b below for
+# the landed case, which is what queues the distill ledger line.
 if [ "$1" = "sessions" ] && [ "$2" = "capture" ]; then exit 1; fi
 # v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
 if [ "$1" = "sessions" ] && [ "$2" = "scrub" ]; then exec cat; fi
@@ -53,17 +53,19 @@ cat >"$FIXDIR/chat_history.jsonl" <<'EOF'
 {"type":"assistant","content":"Done.","tool_calls":[]}
 EOF
 
-# --- 1a. capture (bash-fallback write path) with commit-no-success ---------
+# --- 1a. capture that FAILS: spooled, not corpus, and no ledger line yet -----
 export KB_SESSIONS_DIR="$TMPROOT/grok-sessions"
+export KB_CAPTURE_SPOOL="$TMPROOT/grok-spool"
 export XDG_CACHE_HOME="$TMPROOT/cache1"
 mkdir -p "$KB_SESSIONS_DIR"
 LEDGER="$XDG_CACHE_HOME/kb/distill-pending"
 
 "$GROK_CAPTURE" --session-dir "$FIXDIR" --cwd /tmp/kb-grok-fixture-cwd2 >/dev/null 2>&1
-if [ -f "$LEDGER" ] && [ "$(grep -c '^grok grok-session-commit ' "$LEDGER")" = "1" ]; then
-  ok "commit-no-success capture (bash-fallback path) queues one ledger line"
+if [ ! -s "$LEDGER" ] && [ -n "$(find "$KB_CAPTURE_SPOOL" -name '*.jsonl' 2>/dev/null)" ] \
+   && [ -z "$(find "$KB_SESSIONS_DIR" -type f 2>/dev/null)" ]; then
+  ok "a failed capture is spooled (corpus empty) and queues no ledger line yet"
 else
-  bad "commit-no-success capture (bash-fallback path) queues one ledger line (ledger: $(cat "$LEDGER" 2>/dev/null))"
+  bad "a failed capture is spooled (corpus empty) and queues no ledger line yet (ledger: $(cat "$LEDGER" 2>/dev/null))"
 fi
 
 # --- 1b. same, but via the PRIMARY `kb sessions capture` write path --------
@@ -84,20 +86,11 @@ if [ -f "$LEDGER_1B" ] && [ "$(grep -c '^grok grok-session-commit ' "$LEDGER_1B"
 else
   bad "commit-no-success capture (primary write path) also queues one ledger line (ledger: $(cat "$LEDGER_1B" 2>/dev/null))"
 fi
-# restore the fallback-forcing fake kb for the rest of the matrix
-cat >"$TMPROOT/bin/kb" <<'EOF'
-#!/usr/bin/env bash
-if [ "$1" = "sessions" ] && [ "$2" = "capture" ]; then exit 1; fi
-# v0.44 X4: the fallback scrubs through `kb sessions scrub` (stdin -> stdout).
-if [ "$1" = "sessions" ] && [ "$2" = "scrub" ]; then exec cat; fi
-if [ "$1" = "recall" ]; then echo '{"hits":[]}'; exit 0; fi
-exit 0
-EOF
-chmod +x "$TMPROOT/bin/kb"
-
 # --- 2. re-run (retry / resumed job) -> no duplicate ledger line ----------
 export KB_SESSIONS_DIR="$TMPROOT/grok-sessions"
+export KB_CAPTURE_SPOOL="$TMPROOT/grok-spool"
 export XDG_CACHE_HOME="$TMPROOT/cache1"
+"$GROK_CAPTURE" --session-dir "$FIXDIR" --cwd /tmp/kb-grok-fixture-cwd2 >/dev/null 2>&1
 "$GROK_CAPTURE" --session-dir "$FIXDIR" --cwd /tmp/kb-grok-fixture-cwd2 >/dev/null 2>&1
 if [ "$(grep -c '^grok grok-session-commit ' "$LEDGER")" = "1" ]; then
   ok "re-capture does not duplicate the ledger line"
