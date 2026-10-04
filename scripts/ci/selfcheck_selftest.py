@@ -89,6 +89,10 @@ class SelfCheck(unittest.TestCase):
         self.assertTrue(any("EXPIRED" in x for x in self.errs(selfcheck.check_deny_review_by, d, datetime.date(2027, 1, 1))))
         d = self.tree(deny="nothing here\n")
         self.assertTrue(any("vacuous" in x for x in self.errs(selfcheck.check_deny_review_by, d, datetime.date(2026, 1, 1))))
+        d = self.tree(deny='[advisories]\nignore = [{ id = "RUSTSEC-0000-0000", reason = "x" }]\n')
+        self.assertTrue(any("vacuous" in x for x in self.errs(selfcheck.check_deny_review_by, d, datetime.date(2026, 1, 1))))
+        d = self.tree(deny="[advisories]\nignore = []\n")
+        self.assertEqual(self.errs(selfcheck.check_deny_review_by, d, datetime.date(2026, 1, 1)), [])
 
     def test_ci_code_recipe_must_run_nextest_and_doctests(self):
         good = "ci-code:\n    cargo clippy -p a\n    cargo nextest run --locked --profile ci-code -p a\n    cargo test --locked --doc -p a\n\nnext:\n    echo\n"

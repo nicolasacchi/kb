@@ -151,7 +151,15 @@ def check_deny_review_by(root, today, errs):
             if today > d:
                 errs.append(f"deny.toml:{i}: exception review-by {d} has EXPIRED (today {today}); re-review it and move the date, or drop the ignore")
     if seen == 0:
-        errs.append("deny.toml: no `review by <date>` marker found -- the expiry check would be vacuous")
+        # An EMPTY advisories.ignore list has nothing to expire (v0.45 N7 removed
+        # the last three). A non-empty list with no review-by marker is the
+        # vacuous case this guard exists for.
+        try:
+            ignores = tomllib.loads(text).get("advisories", {}).get("ignore", [])
+        except tomllib.TOMLDecodeError:
+            ignores = ["<unparseable deny.toml>"]
+        if ignores or "[advisories]" not in text:
+            errs.append("deny.toml: no `review by <date>` marker found -- the expiry check would be vacuous")
 
 
 def check_ci_code_recipe(root, errs):

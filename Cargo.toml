@@ -54,7 +54,15 @@ lance-index = "=11.0.0"
 # `lance::index::DatasetIndexExt` (the trait moved from `lance_index` to
 # `lance::index` in lance 11). Direct exact pin inside the same lockstep
 # set — one lance family, one arrow family.
-lance = "=11.0.0"
+#
+# v0.45 N7: `default-features = false` is what makes kb's "local filesystem
+# only" posture true in the dependency graph. lance 11's defaults (aws, azure,
+# gcp, oss, huggingface, tencent, tos, goosefs, geo) compiled the whole cloud
+# object-store stack (object_store/opendal/reqsign/aws-sdk, quick-xml, rsa)
+# into the build although kb only ever opens local paths. lance-index 11
+# has `default = []`, so it needs no trim. scripts/ci/no-cloud-stack.sh (the
+# supply-chain job) fails if that stack comes back.
+lance = { version = "=11.0.0", default-features = false }
 arrow = "=58.4.0"
 arrow-array = "=58.4.0"
 arrow-schema = "=58.4.0"
