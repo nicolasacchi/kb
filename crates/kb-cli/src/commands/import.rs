@@ -83,7 +83,7 @@ const DEFAULT_DIR: &str = "~/.claude/projects";
 /// The env var the capture hook resolves its target from. Mirror it exactly so
 /// an existing capture setup needs no new configuration to backfill.
 const SESSIONS_DIR_ENV: &str = "KB_SESSIONS_DIR";
-/// The hook's `cut -c1-80` bound on the sanitised session id.
+/// The bound (bytes) under which a plain session id is its own file-name key.
 const SID_MAX_CHARS: usize = 80;
 
 /// What happened to one transcript.
@@ -956,12 +956,51 @@ fn refresh_subagents_backfill(
     })
 }
 
-/// The hook's `jq -r '.session_id' | tr -c 'a-zA-Z0-9' '-' | cut -c1-80`:
-/// every non-alphanumeric char → `-`, then the first 80 chars. For a UUID
-/// this is a no-op (hyphens stay, length ≤ 36).
+/// THE per-session file-name key - byte-for-byte the shell's `hook_spool_key`
+/// / `hook_sid_key` (`plugins/kb-memory/hooks/kb-hook-lib.sh`). A plain id
+/// (non-empty, ASCII alphanumerics and `-` only, at most 80 bytes - every
+/// UUID) is its own key. Anything else becomes `{prefix}-{hash}`: `prefix` is
+/// the id with every NON-alphanumeric BYTE mapped to one `-` (GNU `tr -c` is
+/// bytewise, so a multi-byte char yields several dashes), cut to 48, `session`
+/// when empty; `hash` is the first 16 lowercase hex of the SHA-256 of the FULL
+/// raw id. Two distinct ids ("a_b" vs "a-b", or two ids sharing an 80-char
+/// prefix) therefore never share one capture file. The pre-v0.45 lossy form
+/// ([`legacy_lossy_sid`]) is recognised for migration only.
 pub(crate) fn sanitize_sid(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+    let dashed = dash_non_alnum_bytes(s);
+    if !s.is_empty() && dashed == s && s.len() <= SID_MAX_CHARS {
+        return s.to_string();
+    }
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(s.as_bytes());
+    let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    let prefix: String = dashed.chars().take(48).collect();
+    let prefix = if prefix.is_empty() {
+        "session"
+    } else {
+        prefix.as_str()
+    };
+    format!("{prefix}-{hex}")
+}
+
+/// `tr -c 'a-zA-Z0-9' '-'`: one `-` per non-alphanumeric BYTE.
+fn dash_non_alnum_bytes(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                b as char
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// The pre-v0.45 lossy key (`tr -c 'a-zA-Z0-9' '-' | cut -c1-80`), kept ONLY
+/// so an old capture file can be recognised (and then verified by content).
+pub(crate) fn legacy_lossy_sid(s: &str) -> String {
+    dash_non_alnum_bytes(s)
+        .chars()
         .take(SID_MAX_CHARS)
         .collect()
 }
@@ -1920,6 +1959,74 @@ mod tests {
             "the clean id must be recovered from the <pre> JSONL despite \
              the dirty filename/meta"
         );
+    }
+
+    /// v0.45 N4 - the SAME table is pinned in plugins/kb-memory/hooks/tests/
+    /// test-sid-key.sh against the shell `hook_sid_key`; the two sides must
+    /// agree byte-for-byte or the throttle looks at the wrong file.
+    #[test]
+    fn sanitize_sid_matches_hook_spool_key_golden_table() {
+        let rows: &[(&str, &str)] = &[
+            (
+                "0b2f1c9e-5d3a-4e7b-8c1d-9a6f2e4b7d10",
+                "0b2f1c9e-5d3a-4e7b-8c1d-9a6f2e4b7d10",
+            ),
+            ("a_b", "a-b-648fa9b31bc7ff7e"),
+            ("a-b", "a-b"),
+            ("ses_01HXYZ", "ses-01HXYZ-8413c6b038ea242d"),
+            ("s\u{e9}si\u{f3}n", "s--si--n-857c877373c39c8b"),
+            ("", "session-e3b0c44298fc1c14"),
+        ];
+        for (raw, want) in rows {
+            assert_eq!(sanitize_sid(raw), *want, "raw {raw:?}");
+        }
+        let a81 = "a".repeat(81);
+        assert_eq!(
+            sanitize_sid(&a81),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-8c48280d57fb88f1"
+        );
+        let (p1, p2) = (
+            format!("{}X", "p".repeat(80)),
+            format!("{}Y", "p".repeat(80)),
+        );
+        assert_eq!(
+            sanitize_sid(&p1),
+            "pppppppppppppppppppppppppppppppppppppppppppppppp-f697b5af07a87313"
+        );
+        assert_eq!(
+            sanitize_sid(&p2),
+            "pppppppppppppppppppppppppppppppppppppppppppppppp-ffe6644da0d12e79"
+        );
+        assert_ne!(sanitize_sid(&p1), sanitize_sid(&p2));
+        // exactly 80 plain chars stay their own key
+        let a80 = "a".repeat(80);
+        assert_eq!(sanitize_sid(&a80), a80);
+        // the legacy form collapses what the new key separates
+        assert_eq!(legacy_lossy_sid("a_b"), legacy_lossy_sid("a-b"));
+        assert_eq!(legacy_lossy_sid(&p1), legacy_lossy_sid(&p2));
+    }
+
+    /// An old capture written under the lossy name still dedupes an import of
+    /// the same id (dedupe reads the embedded JSONL id, not the filename).
+    #[test]
+    fn import_dedupes_against_legacy_lossy_named_capture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let into = tmp.path().join("sessions");
+        let sid = "ses_legacy_01";
+        let legacy = wrap_envelope(
+            "20260301T090000Z",
+            &legacy_lossy_sid(sid),
+            &fixture_jsonl(sid),
+            &[],
+            &[],
+            &[],
+        );
+        write(
+            &into,
+            &format!("session-20260301T090000Z-{}.html", legacy_lossy_sid(sid)),
+            &legacy,
+        );
+        assert!(scan_existing_ids(&into).contains(sid));
     }
 
     #[test]

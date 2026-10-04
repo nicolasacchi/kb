@@ -14,10 +14,15 @@
 #   CLI mode  : kb-capture-omp.sh <session.jsonl>...   (backfill; sid + cwd
 #               are read from the file's own `session` header)
 #
-# Deterministic and LLM-free, mirroring the kimi adapter's envelope +
-# atomic-mv contract and dual write path: the PREFERRED writer is
-# `kb sessions capture` (the Rust engine); a bash hand-rolled-HTML fallback
-# runs when `kb` is absent or the capture call fails.
+# Deterministic and LLM-free. Landing (v0.45 N4): the translated JSONL (its
+# first record is an `adapter-meta` line carrying `harness: "omp"`, the enrich
+# ladder's rung 1) goes through `kb sessions capture` (the Rust engine). When
+# that fails, or `kb` is missing, the UNSCRUBBED translation is parked in the
+# private capture spool (kb-hook-lib.sh hook_adapter_land) and replayed
+# through the same scrubbed path by the next successful capture; this adapter
+# NEVER writes HTML itself, so nothing raw can reach the corpus. The spool
+# keeps the main transcript only: staged subagent sidecars are folded into the
+# capture by the live `kb sessions capture` call and are not spooled.
 #
 # omp JSONL → Claude-shape mapping (verified against a live v3 session file):
 #   fixed-width 256-byte title slot line    → dropped from the body, but its
@@ -250,9 +255,16 @@ TRANSLATE='
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # Standalone copy without the lib: capture only, no spool, never any HTML.
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
+  hook_adapter_land() {
+    command -v kb >/dev/null 2>&1 || { echo "kb-capture-omp.sh: kb not found - session $1 not captured" >&2; return 0; }
+    kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
+      --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 \
+      || echo "kb-capture-omp.sh: kb sessions capture failed - session $1 not captured" >&2
+    return 0
+  }
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 
@@ -344,74 +356,8 @@ capture_one() {
       snapshot: {trackedFileBackups: ($edited | map({key: ., value: {}}) | from_entries)}}' \
     >>"$tmpjsonl" 2>/dev/null
 
-  # Preferred writer: the shared Rust engine (same invocation kimi/grok use).
-  if command -v kb >/dev/null 2>&1; then
-    if run_to 20 kb sessions capture \
-         --transcript "$tmpjsonl" \
-         --session-id "$sid" \
-         --cwd "${cwd:-unknown}" \
-         --out "$KB_SESSIONS_DIR" \
-         >/dev/null 2>&1; then
-      rm -rf "$scratch"
-      return 0
-    fi
-  fi
-
-  # Bash fallback — hand-rolled envelope, same contract as the other adapters
-  # (atomic tmp+mv, one file per session, overwritten on re-capture). Ignores
-  # any staged subagent sidecars (Rust-only feature, W0.5/W0.6) — same as
-  # pre-OK4.
-  mkdir -p "$KB_SESSIONS_DIR" || { rm -rf "$scratch"; return 0; }
-  local safe_sid out f esc tmp scrubbed
-  safe_sid="$(hook_sid_key "$sid")"
-  out=""
-  for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
-    [ -f "$f" ] && out="$f"
-  done
-  [ -n "$out" ] || out="$KB_SESSIONS_DIR/session-$cts-$safe_sid.html"
-
-  local tsize
-  tsize="$(stat -c %s "$tmpjsonl" 2>/dev/null || wc -c <"$tmpjsonl" 2>/dev/null)"
-  if [ -n "$tsize" ] && [ "$tsize" -gt 50331648 ]; then
-    echo "kb-capture-omp.sh: skipping oversized translated transcript ($tsize bytes > 48MiB cap) for session $sid" >&2
-    rm -rf "$scratch"
-    return 0
-  fi
-
-  # Secrets floor (v0.44 X4) — this bash fallback hand-writes the envelope, so
-  # the translated JSONL goes through `kb sessions scrub` (the same
-  # secrets-only scrubber the codex/opencode adapters use) BEFORE it is
-  # embedded. FAIL CLOSED: no `kb`, or a `kb` too old for the verb, means this
-  # session is not captured here rather than captured unscrubbed.
-  scrubbed="$(mktemp)" || { rm -rf "$scratch"; return 0; }
-  if command -v kb >/dev/null 2>&1 && run_to 15 kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
-     && [ -s "$scrubbed" ]; then
-    mv -f "$scrubbed" "$tmpjsonl"
-  else
-    echo "kb-capture-omp.sh: kb sessions scrub unavailable — not capturing session $sid in the bash fallback (fail closed)" >&2
-    rm -f "$scrubbed"
-    rm -rf "$scratch"
-    return 0
-  fi
-
-  esc="$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$tmpjsonl")" \
-    || { rm -rf "$scratch"; return 0; }
+  hook_adapter_land "$sid" "$tmpjsonl" "${cwd:-unknown}" "$cts" omp
   rm -rf "$scratch"
-  tmp="$out.tmp"
-  cat >"$tmp" <<EOF || { rm -f "$tmp"; return 0; }
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>omp session transcript $cts</title>
-<meta name="kb-category" content="memory-session">
-<meta name="kb-decay" content="fast">
-<meta name="kb-session" content="$safe_sid">
-<meta name="kb-harness" content="omp">
-</head><body>
-<h1>omp session transcript $cts</h1>
-<pre>$esc</pre>
-</body></html>
-EOF
-  mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"
 }
 
 if [ "$#" -gt 0 ]; then

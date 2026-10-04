@@ -51,18 +51,70 @@ if [ -z "$raw_sid" ]; then
   exit 0
 fi
 
-# Same sanitize + glob-then-take-last as kb-capture.sh's own existing-
-# capture lookup (kb-capture.sh's "One file per session" block) — this
-# MUST resolve to the exact same file kb-capture.sh itself would find/
-# write, or the interval check compares against the wrong mtime.
-sid="$(printf '%s' "$raw_sid" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
+# Resolve the session's existing capture. The file-name key is the ONE shared
+# `hook_sid_key` (v0.45 N4): `kb sessions capture` (Rust `sanitize_sid`) names
+# its file with the identical algorithm, pinned by a golden table on both
+# sides - the interval check must compare against the exact file the capture
+# would rewrite. The standalone copy (no lib beside this script) carries an
+# inline copy of the same function.
+. "$HOOK_DIR/kb-hook-lib.sh" 2>/dev/null || {
+  hook_sid_key() {
+    local raw="$1" safe h
+    safe="$(printf '%s' "$raw" | tr -c 'a-zA-Z0-9' '-')"
+    if [ -n "$raw" ] && [ "$safe" = "$raw" ] && [ "${#raw}" -le 80 ]; then
+      printf '%s' "$raw"
+      return 0
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+      h="$(printf '%s' "$raw" | sha256sum | cut -c1-16)"
+    elif command -v shasum >/dev/null 2>&1; then
+      h="$(printf '%s' "$raw" | shasum -a 256 | cut -c1-16)"
+    else
+      h="$(printf '%s' "$raw" | cksum | tr ' ' '-')"
+    fi
+    safe="$(printf '%s' "$safe" | cut -c1-48)"
+    printf '%s-%s' "${safe:-session}" "$h"
+  }
+  hook_sid_key_lossy() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+}
+
+sid="$(hook_sid_key "$raw_sid")"
+raw_lit="$(printf '%s' "$raw_sid" | jq -Rs . 2>/dev/null)"
+
+# The sessionId JSON literal embedded in a capture's head ('' when none).
+# Depends on the envelope keeping transcript quotes unescaped inside the <pre>;
+# pinned by sessions_capture::capture_envelope_keeps_session_id_json_literal_unescaped_in_head.
+file_sid_literal() {
+  head -c 262144 "$1" 2>/dev/null \
+    | grep -o -m1 '"sessionId": *"\([^"\\]\|\\.\)*"' \
+    | head -1 | sed 's/^"sessionId": *//'
+}
+
 out=""
-for f in "$KB_SESSIONS_DIR"/session-*-"$sid.html"; do
-  [ -f "$f" ] && out="$f"
+# Current name: `session-<16-char ts>-<key>.html`, take the newest whose
+# embedded id (when it has one) is this session's - a pre-v0.45 lossy name was
+# shared by distinct ids, so a name match alone must not adopt a stranger's file.
+for f in "$KB_SESSIONS_DIR"/session-????????T??????Z-"$sid.html"; do
+  [ -f "$f" ] || continue
+  lit="$(file_sid_literal "$f")"
+  if [ -z "$lit" ] || [ "$lit" = "$raw_lit" ]; then out="$f"; fi
 done
 
+# MIGRATION: a capture written under the pre-v0.45 lossy name still throttles
+# its own session, but ONLY when the file's embedded id equals this raw id.
 if [ -z "$out" ]; then
-  # First capture for this session — nothing to throttle against, fire.
+  lossy="$(hook_sid_key_lossy "$raw_sid")"
+  if [ "$lossy" != "$sid" ]; then
+    for f in "$KB_SESSIONS_DIR"/session-????????T??????Z-"$lossy.html" \
+             "$KB_SESSIONS_DIR"/session-????????T??????Z-"$lossy-.html"; do
+      [ -f "$f" ] || continue
+      [ "$(file_sid_literal "$f")" = "$raw_lit" ] && out="$f"
+    done
+  fi
+fi
+
+if [ -z "$out" ]; then
+  # First capture for this session - nothing to throttle against, fire.
   printf '%s' "$input" | "$CAPTURE_SH"
   exit 0
 fi

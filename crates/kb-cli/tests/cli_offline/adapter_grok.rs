@@ -94,6 +94,15 @@ fn run_script(args: &[&str], kb_sessions_dir: &Path, grok_root: &Path, path: &st
         .env("KB_SESSIONS_DIR", kb_sessions_dir)
         .env("GROK_SESSIONS_ROOT", grok_root)
         .env("PATH", path)
+        // v0.45 N4: a failed capture is SPOOLED (never written as HTML). Keep
+        // the spool, and the HOME the hook probes for a `kb`, inside the
+        // test's own tempdir so no ambient kb/spool can leak in.
+        .env(
+            "KB_CAPTURE_SPOOL",
+            kb_sessions_dir.parent().unwrap().join("spool"),
+        )
+        .env("HOME", kb_sessions_dir.parent().unwrap())
+        .env_remove("KB_BIN_DIR")
         .env_remove("GROKCLAUDE_FAKE")
         .output()
         .expect("run kb-capture-grok.sh");
@@ -279,20 +288,20 @@ fn session_dir_mode_captures_the_expected_envelope_via_kb_sessions_capture() {
     assert_eq!(html_path, html_path2, "must reuse the same capture file");
 }
 
-/// The bash hand-rolled-HTML fallback path (`kb sessions capture` failing)
-/// must produce an equivalent envelope — same meta tags, same session id —
-/// via its own independent write path, now scrubbed through the REAL
-/// `kb sessions scrub` (v0.44 X4: it used to embed the transcript raw).
+/// v0.45 N4 - when `kb sessions capture` fails the adapter writes NO session
+/// HTML (the old bash envelope writer is gone): it parks the translated,
+/// unscrubbed JSONL in the private spool, and a later `--replay-spool` lands
+/// it through the scrubbing Rust path with the same envelope and session id.
 #[test]
-fn session_dir_mode_falls_back_to_scrubbed_hand_rolled_html_when_capture_fails() {
+fn session_dir_mode_spools_when_capture_fails_and_replay_lands_it() {
     let tmp = tempfile::tempdir().unwrap();
     let sessions_out = tmp.path().join("sessions");
     std::fs::create_dir_all(&sessions_out).unwrap();
     let grok_root = tmp.path().join("grok-sessions");
     let session_dir = seed_session_dir(&grok_root, FIXTURE_CWD, FIXTURE_SESSION_UUID);
 
-    // A `kb` whose `sessions capture` fails (forcing the bash fallback) and
-    // which runs the real binary for everything else, `sessions scrub` included.
+    // A `kb` whose `sessions capture` fails and which runs the real binary
+    // for everything else.
     let wrap = tmp.path().join("wrapbin");
     std::fs::create_dir_all(&wrap).unwrap();
     let real_kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
@@ -316,21 +325,48 @@ fn session_dir_mode_falls_back_to_scrubbed_hand_rolled_html_when_capture_fails()
         &format!("{}:/usr/bin:/bin", wrap.display()),
     );
     assert!(run.status.success(), "stderr: {}", run.stderr);
-    assert!(run.stderr.contains("action=captured"), "{}", run.stderr);
+    assert!(run.stderr.contains("action=spooled"), "{}", run.stderr);
+    assert!(!run.stderr.contains("action=captured"), "{}", run.stderr);
+    assert!(
+        std::fs::read_dir(&sessions_out).unwrap().next().is_none(),
+        "nothing may be written to the corpus on a failed capture"
+    );
 
-    let html_path = only_capture_html(&sessions_out);
-    let html = std::fs::read_to_string(&html_path).unwrap();
+    let spool = tmp.path().join("spool");
+    let items: Vec<PathBuf> = std::fs::read_dir(&spool)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl"))
+        .collect();
+    assert_eq!(items.len(), 1, "{items:?}");
+    let first = std::fs::read_to_string(&items[0]).unwrap();
+    let first: serde_json::Value = serde_json::from_str(first.lines().next().unwrap()).unwrap();
+    assert_eq!(first["type"], "adapter-meta");
+    assert_eq!(first["harness"], "grok");
+
+    // Replay through the real binary: scrubbed Rust envelope, harness intact.
+    let status = Command::new(&real_kb)
+        .args(["sessions", "capture", "--replay-spool", "--out"])
+        .arg(&sessions_out)
+        .env("KB_CAPTURE_SPOOL", &spool)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let html = std::fs::read_to_string(only_capture_html(&sessions_out)).unwrap();
     assert!(html.contains(r#"<meta name="kb-category" content="memory-session">"#));
-    assert!(html.contains(r#"<meta name="kb-harness" content="grok">"#));
     assert!(html.contains(&format!(
         r#"<meta name="kb-session" content="{FIXTURE_SESSION_UUID}">"#
     )));
+    let recovered = kb_core::sessions::recover_jsonl_from_capture(&html).unwrap();
+    assert!(recovered.contains(r#""harness":"grok""#));
+    assert!(!spool.join(items[0].file_name().unwrap()).exists());
 }
 
-/// v0.44 X4 — with NO `kb` reachable the fallback cannot scrub, so it FAILS
-/// CLOSED: nothing is written (it used to embed the raw transcript).
+/// v0.45 N4 - with NO `kb` reachable the adapter cannot capture or scrub, so
+/// it spools the translation and writes nothing to the corpus.
 #[test]
-fn session_dir_mode_without_kb_on_path_fails_closed_and_writes_nothing() {
+fn session_dir_mode_without_kb_on_path_spools_and_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let sessions_out = tmp.path().join("sessions");
     std::fs::create_dir_all(&sessions_out).unwrap();
@@ -344,8 +380,8 @@ fn session_dir_mode_without_kb_on_path_fails_closed_and_writes_nothing() {
         &bare_path(),
     );
     assert!(
-        run.stderr.contains("fail closed"),
-        "stderr must name the skip: {}",
+        run.stderr.contains("spooled session"),
+        "stderr must name the spooling: {}",
         run.stderr
     );
     assert!(!run.stderr.contains("action=captured"), "{}", run.stderr);
@@ -354,6 +390,10 @@ fn session_dir_mode_without_kb_on_path_fails_closed_and_writes_nothing() {
         .filter_map(|e| e.ok())
         .any(|e| e.file_name().to_string_lossy().ends_with(".html"));
     assert!(!any_html, "an unscrubbed capture was written");
+    assert!(
+        std::fs::read_dir(tmp.path().join("spool")).unwrap().count() >= 1,
+        "the translation must be parked in the spool"
+    );
 }
 
 /// `--job-dir` mode: resolves `meta.json.grok_session_id` + `cwd` to the
