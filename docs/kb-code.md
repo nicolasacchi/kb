@@ -1245,11 +1245,16 @@ Note: a monthly pass that may expire cruft holds the store's ops lock for the wh
    git's own message (naming the missing prerequisites) if step 1 was not
    enough; nothing is written then.
 2. `kb-code store restore --repo R --bundle <backups dir>/store-<uuid>-<ts>.bundle`.
-   Only the bundle's `refs/kbc/*` heads are restored, **create or
+   Only the bundle's `refs/kbc/*` heads and member mirror refs
+   (`refs/remotes/work-<id>/<branch>`) are restored, **create or
    fast-forward only**: a ref the store holds at another value is listed as
-   `rejected` (exit 7) and is never overwritten. Mirror refs
-   (`refs/remotes/work-<id>/*`) are not restored — `store sync` re-imports
-   them from the member clones.
+   `rejected` (exit 7) and is never overwritten; any other ref in the bundle
+   is counted as `skipped`. Only a GC pre-apply bundle carries mirror refs
+   (routine backups hold `refs/kbc/*` alone, since mirrors are re-importable),
+   so for a routine bundle `store sync` is still what brings them back. A
+   mirror ref of a member that is no longer registered is restored as an
+   orphan, and GC will propose it again (the restore guard holds scheduled
+   GC dry-run until you acknowledge).
 3. A restore that wrote any ref flags the restore guard
    (`restore_guard::flag_manual`, a new incident): restored refs can belong
    to reviews this database no longer lists, which store-wide GC would

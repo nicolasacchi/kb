@@ -1663,3 +1663,89 @@ fn restore_bundle_recreates_lost_refs_never_overwrites_and_flags_the_guard() {
     // A relative or missing path is refused before git runs.
     assert!(restore_bundle(&e.rs, &row, Path::new("nope.bundle"), 1).is_err());
 }
+
+/// Build the GC pre-apply bundle that covers a de-registered member's work
+/// mirror ref, and return `(env, work_ref, bundle_path, oid)`. The member's
+/// ref is GONE from the store afterwards (the apply deleted it).
+fn preapply_bundle_with_deleted_work_ref() -> (TwoMember, String, PathBuf, String) {
+    let e = two_member_env();
+    let dir = Path::new(&e.row.git_dir).to_path_buf();
+    let work_ref = format!("refs/remotes/work-{}/main", e.id_two);
+    let oid = git(&dir, &["rev-parse", &work_ref]);
+    e.store.remove_repo_from_store(e.id_two).unwrap();
+    let report = run_gc_now(&e.rs, &e.store, &e.row, true, true, 500).unwrap();
+    assert!(report.applied, "{report:?}");
+    assert!(
+        !store_refs(&dir).contains(&work_ref),
+        "fixture sanity: the apply deleted the mirror ref"
+    );
+    let bundle = preapply_bundle_path(&e.rs.settings().backups_dir, &e.row.uuid, 500);
+    assert!(bundle.is_file(), "{bundle:?}");
+    (e, work_ref, bundle, oid)
+}
+
+/// N5-d: a `refs/remotes/work-<id>/*` mirror ref a GC pre-apply bundle
+/// covers is restored (create), with the same oid and the guard flagged.
+#[test]
+fn restore_bundle_restores_work_mirror_refs_from_a_preapply_bundle() {
+    let (e, work_ref, bundle, oid) = preapply_bundle_with_deleted_work_ref();
+    let dir = Path::new(&e.row.git_dir);
+    let rep = restore_bundle(&e.rs, &e.row, &bundle, 600).unwrap();
+    assert_eq!(rep.created, vec![work_ref.clone()], "{rep:?}");
+    assert!(rep.rejected.is_empty(), "{rep:?}");
+    assert_eq!(git(dir, &["rev-parse", &work_ref]), oid);
+    assert!(rep.guard_flagged, "{rep:?}");
+
+    // Idempotent: a second restore finds it unchanged.
+    let again = restore_bundle(&e.rs, &e.row, &bundle, 700).unwrap();
+    assert!(again.created.is_empty(), "{again:?}");
+    assert!(again.unchanged.contains(&work_ref), "{again:?}");
+}
+
+/// N5-d: the no-force rule holds for mirror refs: a work ref that moved to
+/// a commit the bundle's value is not an ancestor of is rejected, untouched.
+#[test]
+fn restore_bundle_never_force_updates_a_diverged_work_ref() {
+    let (e, work_ref, bundle, oid) = preapply_bundle_with_deleted_work_ref();
+    let dir = Path::new(&e.row.git_dir);
+    let stranger = git(
+        dir,
+        &["commit-tree", &format!("{oid}^{{tree}}"), "-m", "unrelated"],
+    );
+    git(dir, &["update-ref", &work_ref, &stranger]);
+    let rep = restore_bundle(&e.rs, &e.row, &bundle, 600).unwrap();
+    assert_eq!(rep.rejected, vec![work_ref.clone()], "{rep:?}");
+    assert!(rep.created.is_empty() && rep.updated.is_empty(), "{rep:?}");
+    assert_eq!(git(dir, &["rev-parse", &work_ref]), stranger);
+}
+
+/// N5-d: anything that is neither `refs/kbc/*` nor a valid work mirror stays
+/// skipped (counted), including look-alikes.
+#[test]
+fn restore_bundle_still_skips_non_kbc_non_work_refs() {
+    let e = env();
+    let r1 = review_with_patchset(&e, &e.fx.feat_tip, &e.fx.main_tip);
+    let row = ready_row(&e);
+    let dir = Path::new(&row.git_dir);
+    let ps = seed::patchset_ref(r1, 1);
+    let skipped = [
+        "refs/heads/x",
+        "refs/remotes/base/main",
+        "refs/remotes/work-abc/main",
+        "refs/remotes/work-0/main",
+    ];
+    for r in skipped {
+        git(dir, &["update-ref", r, &e.fx.feat_tip]);
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("mixed.bundle");
+    let mut args = vec!["bundle", "create", dest.to_str().unwrap(), ps.as_str()];
+    args.extend(skipped);
+    git(dir, &args);
+    git(dir, &["update-ref", "-d", &ps]);
+
+    let rep = restore_bundle(&e.rs, &row, &dest, 500).unwrap();
+    assert_eq!(rep.heads, 1, "{rep:?}");
+    assert_eq!(rep.skipped, skipped.len(), "{rep:?}");
+    assert_eq!(rep.created, vec![ps], "{rep:?}");
+}

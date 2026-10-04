@@ -1408,9 +1408,22 @@ pub struct SloSection {
     /// in a capture (`recall_coverage_pct`). `None` = measured, unjudged.
     #[serde(default)]
     pub recall_coverage_pct: Option<f64>,
+
+    /// Trailing window, in days, the `recall_coverage_pct` indicator is
+    /// measured over. A WINDOW, not a target: it is not part of
+    /// [`crate::slo::SloTargets`]. Absent = 7. Out-of-range values (below 1 or
+    /// above 365) warn at `validate()` and are clamped by
+    /// [`SloSection::recall_window_days`]; never a boot failure.
+    #[serde(default)]
+    pub recall_coverage_window_days: Option<i64>,
 }
 
 impl SloSection {
+    /// The effective recall-coverage window in days (absent = 7, clamped).
+    pub fn recall_window_days(&self) -> u32 {
+        crate::slo::clamp_recall_coverage_days(self.recall_coverage_window_days)
+    }
+
     /// Project onto the pure [`crate::slo::SloTargets`] the indicator
     /// computation takes. A straight field copy — the two types are kept
     /// separate so `kb_core::slo` stays free of any config/serde dependency
@@ -2402,6 +2415,18 @@ impl KbConfig {
                         ));
                     }
                 }
+                if let Some(d) = s.recall_coverage_window_days {
+                    if d < 1 || d > i64::from(crate::slo::RECALL_COVERAGE_MAX_DAYS) {
+                        issues.push(ValidationIssue::warn(
+                            format!("/kb/{name}/slo/recall_coverage_window_days"),
+                            format!(
+                                "`{d}` is outside 1..={}; it is clamped to {}",
+                                crate::slo::RECALL_COVERAGE_MAX_DAYS,
+                                s.recall_window_days()
+                            ),
+                        ));
+                    }
+                }
             }
         }
 
@@ -3258,6 +3283,45 @@ mod tests {
     }
 
     // --- CT-F5 [kb.*.slo] -----------------------------------------------
+
+    #[test]
+    fn slo_section_parses_recall_coverage_window_days() {
+        let parse = |body: &str| {
+            let toml_str = format!("[kb.notes]\npath = \"/tmp/notes\"\n[kb.notes.slo]\n{body}\n");
+            KbConfig::from_toml_str(&toml_str).unwrap()
+        };
+        let window = |c: &KbConfig| {
+            c.kb.get(&KbName::new("notes").unwrap())
+                .unwrap()
+                .slo
+                .unwrap()
+                .recall_window_days()
+        };
+        // Absent key (and absent section values) = 7, byte-identical default.
+        let c = parse("recall_coverage_pct = 85");
+        assert_eq!(window(&c), 7);
+        assert!(slo_issues(&c).is_empty());
+        let c = parse("recall_coverage_window_days = 14");
+        assert_eq!(window(&c), 14);
+        assert!(slo_issues(&c).is_empty());
+        // 0 and above-max clamp, with a warning, never an error.
+        let c = parse("recall_coverage_window_days = 0");
+        assert_eq!(window(&c), 1);
+        assert_eq!(slo_issues(&c).len(), 1);
+        let c = parse("recall_coverage_window_days = 100000");
+        assert_eq!(window(&c), 365);
+        assert_eq!(slo_issues(&c).len(), 1);
+        let c = parse("recall_coverage_window_days = -3");
+        assert_eq!(window(&c), 1);
+        // It is a window, not a target.
+        let t =
+            c.kb.get(&KbName::new("notes").unwrap())
+                .unwrap()
+                .slo
+                .unwrap()
+                .targets();
+        assert_eq!(t, crate::slo::SloTargets::default());
+    }
 
     #[test]
     fn slo_section_parses_from_toml() {

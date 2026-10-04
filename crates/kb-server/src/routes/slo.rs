@@ -188,7 +188,8 @@ async fn compute(
     // trailing window and newest-capture scope as `/api/sessions/recall-
     // coverage`, live sessions excluded (capture lag is not loss).
     let now = chrono::Utc::now().timestamp();
-    let since = now - i64::from(crate::routes::sessions::COVERAGE_DEFAULT_DAYS) * 86_400;
+    let window_days = ctx.slo_recall_window_days;
+    let since = now - i64::from(window_days) * 86_400;
     let coverage_rows = ctx
         .storage
         .sessions_recall_coverage(since)
@@ -214,6 +215,7 @@ async fn compute(
         newest_session_started_at,
         recall_landed_turns,
         recall_lost_turns,
+        recall_window_days: window_days,
     };
     Ok(kb_core::slo::build(
         kb_name,

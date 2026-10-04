@@ -2659,6 +2659,7 @@ async fn bring_up_kb(
             // CT-F5 — an absent `[kb.*.slo]` resolves to the all-`None`
             // default, which still yields a full report (measured, unjudged).
             slo_targets: kb_section.slo.unwrap_or_default().targets(),
+            slo_recall_window_days: kb_section.slo.unwrap_or_default().recall_window_days(),
             code_url: kb_section.code_url.clone(),
             memory_decay_policy: kb_section.decay_policy.as_deref().and_then(|s| {
                 let parsed = kb_core::memory::DecayPolicy::parse(s);
