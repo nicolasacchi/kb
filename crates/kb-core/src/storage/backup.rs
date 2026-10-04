@@ -1611,9 +1611,6 @@ mod tests {
         );
     }
 
-    /// A4-1 / A3-9 / A4.f1 — a tar that fails leaves NOTHING under a name
-    /// the skip predicate or doctor could read as a backup, and does not
-    /// clobber an existing file at the destination.
     /// The old `tar -czf <path>` shape let tar's gzip child create the
     /// partial after our cleanup; repeat the failing run so that race (if it
     /// ever returns) surfaces, and sweep after a short settle.
@@ -1638,6 +1635,9 @@ mod tests {
         assert!(names.is_empty(), "stranded files: {names:?}");
     }
 
+    /// A4-1 / A3-9 / A4.f1 — a tar that fails leaves NOTHING under a name
+    /// the skip predicate or doctor could read as a backup, and does not
+    /// clobber an existing file at the destination.
     #[test]
     fn a_failed_tar_leaves_no_tarball_and_no_partial() {
         let tmp = tempfile::tempdir().unwrap();
