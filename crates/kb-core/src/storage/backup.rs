@@ -789,12 +789,25 @@ fn tar_tree(
     snapshot_started: SystemTime,
 ) -> Result<()> {
     let partial = sidecar(out, &format!(".{}.partial", std::process::id()));
+    // We own the archive NAME: the partial is created here and tar writes the
+    // gzip stream to its inherited stdout (`-f -`). With `-czf <path>` the
+    // gzip child opens the path itself and, when tar dies early, can create it
+    // AFTER our cleanup below, stranding a `.partial`. Through an inherited fd
+    // a straggling child can only write into an already-unlinked inode.
+    let sink = match std::fs::File::create(&partial) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(e.into());
+        }
+    };
     let mut cmd = Command::new("tar");
     cmd.arg("-czf")
-        .arg(&partial)
+        .arg("-")
         .arg("-C")
         .arg(staging)
-        .arg("--");
+        .arg("--")
+        .stdout(sink);
     for name in top_level {
         cmd.arg(name);
     }
@@ -1596,6 +1609,30 @@ mod tests {
                 .any(|l| l.starts_with("slates") || l.ends_with(".json") && !l.contains('/')),
             "daemon-scope members leaked into a per-kb tarball: {listing:?}"
         );
+    }
+
+    /// The old `tar -czf <path>` shape let tar's gzip child create the
+    /// partial after our cleanup; repeat the failing run so that race (if it
+    /// ever returns) surfaces, and sweep after a short settle.
+    #[test]
+    fn a_failed_tar_never_strands_a_partial_across_many_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("notes-20260101-000000.tar.gz");
+        for _ in 0..100 {
+            let r = tar_tree(
+                &tmp.path().join("no-such-staging"),
+                &out,
+                &["notes".to_string()],
+                SystemTime::now(),
+            );
+            assert!(r.is_err());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let names: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(names.is_empty(), "stranded files: {names:?}");
     }
 
     /// A4-1 / A3-9 / A4.f1 — a tar that fails leaves NOTHING under a name
