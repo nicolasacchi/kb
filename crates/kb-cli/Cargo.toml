@@ -28,6 +28,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 walkdir = { workspace = true }
+boon = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 bytes = "1"

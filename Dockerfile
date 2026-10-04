@@ -136,6 +136,9 @@ RUN mkdir -p crates/kb-core/src crates/kb-server/src crates/kb-cli/src crates/kb
 # source layer are shared, byte-identical, by `builder` and
 # `kb-code-builder` below.
 COPY crates ./crates
+# `kb validate` embeds the protocol registry (include_str! of schemas/*.json
+# from crates/kb-cli/src/commands/validate.rs), so the build needs it too.
+COPY schemas ./schemas
 
 # --- kb builder stage ---------------------------------------------------
 #
