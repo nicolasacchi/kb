@@ -2192,8 +2192,11 @@ pub fn restore_bundle(
     // Same lock a capture/GC takes around this ref family.
     let ops = rs.ops_lock(row.id);
     let _ops = ops.blocking_lock();
+    // `for-each-ref` patterns match whole path components, so `refs/remotes/work-`
+    // would match nothing; scan `refs/remotes/` (the map is only ever looked
+    // up by the `wanted` names, so the extra mirrors are inert).
     let before: std::collections::BTreeMap<String, String> =
-        super::seed::list_refs(git, git_dir, &["refs/kbc/", "refs/remotes/work-"])?
+        super::seed::list_refs(git, git_dir, &["refs/kbc/", "refs/remotes/"])?
             .into_iter()
             .map(|(o, n)| (n, o))
             .collect();
@@ -2228,7 +2231,7 @@ pub fn restore_bundle(
         .filter_map(|l| l.rsplit(' ').next().map(str::to_string))
         .collect();
     let after: std::collections::BTreeMap<String, String> =
-        super::seed::list_refs(git, git_dir, &["refs/kbc/", "refs/remotes/work-"])?
+        super::seed::list_refs(git, git_dir, &["refs/kbc/", "refs/remotes/"])?
             .into_iter()
             .map(|(o, n)| (n, o))
             .collect();
