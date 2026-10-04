@@ -1336,7 +1336,7 @@ invariant #2 records).
     where sharing would be a WRONG ANSWER rather than a saving →
     `worktree_id`. `meta` = about the daemon, not about code (`repos`, the
     audit ledger — re-keying it would rewrite history — and the
-    cross-daemon doc-lens pin). `store::tests::v75_m1::
+    cross-daemon doc-lens pin). `rekey::tests::
     every_repo_keyed_table_is_classified` walks `sqlite_master` against the
     list from BOTH ends, so a table added later with a `repo_id`/`repo`
     column fails the build until it declares a class. The blob-keyed
