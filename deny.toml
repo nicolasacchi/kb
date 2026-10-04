@@ -26,8 +26,8 @@ version = 2
 #   yanked         -> warn   (overridden to DENY below — see `yanked =`)
 #   notice/unsound -> warn
 # `ignore` is an AUDITED EXCEPTION LIST, not an empty-means-clean signal: it
-# currently holds three entries (below), each with an owner, a review-by date
-# and a re-check trigger. Adding one needs the same three things. An advisory
+# is currently empty (see the note inside), and any entry needs an owner, a
+# review-by date and a re-check trigger. Adding one needs the same three things. An advisory
 # that fires is never silenced without a written reason that names why kb's
 # code cannot reach it.
 unmaintained = "workspace"
@@ -36,46 +36,14 @@ unmaintained = "workspace"
 # reports 0 yanked crates today (verified), so this only catches NEW yanks.
 yanked = "deny"
 ignore = [
-    # RUSTSEC-2026-0194/0195 — owner: whoever lands the next lance/datafusion
-    # lockstep; REVIEW BY 2026-12-31.
-    # quick-xml 0.39.4 is pinned by object_store 0.13 (`quick-xml ^0.39`),
-    # which datafusion 54 (= the ratified lockstep set) requires; the fixed
-    # 0.41 line needs object_store 0.14 / datafusion 55. The vulnerable XML
-    # parsing runs on object_store's cloud (S3/GCS/azure) RESPONSE paths.
-    #
-    # CORRECTION (v044-C1, review A12-7): the earlier text said kb's build is
-    # "local-only (`lancedb default-features = false`)". That is not what the
-    # manifests say: the workspace declares `lance` with its DEFAULT features
-    # (aws/azure/gcp/... enabled) and kb-core inherits it, so the cloud
-    # object-store stack, and quick-xml with it, IS compiled into the kb and
-    # kb-code binaries. The ignore is justified by REACHABILITY only: every
-    # lance/lancedb connect site opens a local filesystem path
-    # (crates/kb-core/src/storage/lance.rs, crates/kb-code-server/src/semantic/
-    # store.rs), so no untrusted remote XML is ever parsed. Trimming the
-    # features in Cargo.toml (`lance` with default-features = false) would make
-    # the original wording true; that is a separate Cargo.toml change.
-    # v0.44 F1: that change was CONSIDERED and deliberately NOT made here. It
-    # edits the dependency graph (Cargo.lock sheds packages, which `--locked`
-    # rejects until the lock is regenerated) and lancedb's own `lance`
-    # dependency may re-enable the default features through feature
-    # unification -- neither is knowable without a build, and this unit may not
-    # build. So the wording above stays the honest one (reachability, not
-    # feature trimming). What IS enforced now: every `review by` date in this
-    # file is checked by `just ci-selfcheck` (scripts/ci/selfcheck.py) and the
-    # supply-chain job FAILS the day one expires.
-    # RE-CHECK TRIGGER: any non-filesystem URI (s3://, gs://, az://, http) given
-    # to lance/lancedb, or the datafusion 55 lockstep, whichever comes first.
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.39 capped by object_store 0.13 (datafusion 54 lockstep); compiled in via lance default features but only local filesystem URIs are ever opened. Review by 2026-12-31" },
-    { id = "RUSTSEC-2026-0195", reason = "same as RUSTSEC-2026-0194 (quick-xml 0.39 via object_store 0.13); same reachability argument. Review by 2026-12-31" },
-    # RUSTSEC-2023-0071 — rsa Marvin timing sidechannel: "no safe upgrade is
-    # available". REVIEW BY 2026-12-31. rsa enters via opendal's reqsign
-    # cloud-signing stack (reqsign-google / reqsign-azure-storage, from
-    # lance-io's cloud features, which lance's default features enable —
-    # see the CORRECTION above). kb never signs anything with an RSA key and
-    # opens no cloud URI, so the timing channel has no input.
-    # RE-CHECK TRIGGER: a fixed rsa release, or any cloud URI/credential
-    # being configured for lance.
-    { id = "RUSTSEC-2023-0071", reason = "no fix exists; rsa via opendal reqsign (cloud signing), compiled in but never invoked (no cloud URIs, no RSA keys handled). Review by 2026-12-31" },
+    # (empty) RUSTSEC-2026-0194/0195 (quick-xml 0.39 via object_store) and
+    # RUSTSEC-2023-0071 (rsa via opendal/reqsign) were ignored until v0.45 N7:
+    # `lance` was declared with its default features, which compiled the cloud
+    # object-store stack in. `lance` now has `default-features = false`, those
+    # crates are gone from Cargo.lock (quick-xml remains only at >= 0.41, which
+    # is fixed), and scripts/ci/no-cloud-stack.sh fails the supply-chain job if
+    # they ever return. Add an entry here only with an owner, a review-by date
+    # and a re-check trigger.
 ]
 
 [licenses]
@@ -143,7 +111,7 @@ exceptions = [
 # graph), mdns-sd 0.13→0.21 (socket2 0.5 left the graph), and reqwest
 # 0.12→0.13 on kb's direct edge (the last reqwest-eventsource 0.6 call
 # site moved to kb-cli's in-house SSE parser; 0.12 stays transitive-only
-# via goosefs-sdk, see below).
+# via hf-hub / lance-namespace-impls / lancedb, see below).
 multiple-versions = "deny"
 wildcards = "allow"
 deny = []
@@ -154,22 +122,18 @@ skip = [
     { crate = "axum-core", version = "0.4.5", reason = "via axum 0.7" },
     { crate = "matchit", version = "0.7.3", reason = "via axum 0.7" },
     { crate = "tower-http", version = "0.5.2", reason = "via lance-namespace-impls 11" },
-    # base64: kb pins 0.22; 0.13 via spm_precompiled (tokenizers), 0.23 via opendal 0.58.
+    # base64: 0.13 via spm_precompiled (tokenizers); 0.23 is kb's direct edge (+ reqwest 0.13).
     { crate = "base64", version = "0.13.1", reason = "spm_precompiled (tokenizer chain)" },
-    { crate = "base64", version = "0.23.1", reason = "opendal 0.58 (lance-io)" },
+    { crate = "base64", version = "0.23.1", reason = "kb direct edge + reqwest 0.13 (lance chain stays on 0.22)" },
     { crate = "bitflags", version = "1.3.2", reason = "kanaria (unicode chain)" },
-    # RustCrypto 0.10 chain: sha1-checked (gix-hash), rsa/pkcs5/scrypt
-    # (opendal reqsign), aws-config. kb's direct sha1/sha2 edge is on 0.11.
-    { crate = "block-buffer", version = "0.10.4", reason = "digest 0.10 chain" },
-    { crate = "const-oid", version = "0.9.6", reason = "der/rsa chain" },
-    { crate = "cpufeatures", version = "0.2.17", reason = "sha1/sha2 0.10, aes 0.8" },
-    { crate = "crypto-common", version = "0.1.7", reason = "digest 0.10 chain" },
-    { crate = "digest", version = "0.10.7", reason = "sha1-checked (gix) + rsa chain" },
-    { crate = "hmac", version = "0.12.1", reason = "pbkdf2 0.12 (rsa chain)" },
-    { crate = "md-5", version = "0.10.6", reason = "object_store 0.13" },
+    # RustCrypto 0.10 chain: sha1-checked (gix-hash), blake2. kb's direct
+    # sha1/sha2 edge is on 0.11.
+    { crate = "block-buffer", version = "0.10.4", reason = "digest 0.10 chain (sha1-checked / blake2)" },
+    { crate = "cpufeatures", version = "0.2.17", reason = "sha1 0.10 (sha1-checked)" },
+    { crate = "crypto-common", version = "0.1.7", reason = "digest 0.10 chain (sha1-checked / blake2)" },
+    { crate = "digest", version = "0.10.7", reason = "sha1-checked (gix) / blake2" },
     { crate = "sha1", version = "0.10.7", reason = "sha1-checked 0.10 (gix-hash)" },
-    { crate = "sha2", version = "0.10.9", reason = "pkcs5/rsa/scrypt (opendal reqsign)" },
-    { crate = "core-foundation", version = "0.9.4", reason = "rustls-platform-verifier/security-framework (macOS)" },
+    { crate = "core-foundation", version = "0.9.4", reason = "system-configuration (macOS)" },
     # lol_html 3.0 pins the older servo stack than scraper 0.27.
     { crate = "cssparser", version = "0.36.0", reason = "lol_html 3 (scraper 0.27 uses 0.37)" },
     { crate = "cssparser-macros", version = "0.6.1", reason = "via cssparser 0.36" },
@@ -210,40 +174,24 @@ skip = [
     { crate = "hashbrown", version = "0.14.5", reason = "dashmap 6 / hashlink" },
     { crate = "hashbrown", version = "0.15.5", reason = "petgraph 0.8" },
     { crate = "hashbrown", version = "0.16.1", reason = "clru / quick_cache / safetensors" },
-    # http 0.2 / http-body 0.4: aws-smithy stack (lance-io aws feature in the
-    # all-features deny graph).
-    { crate = "http", version = "0.2.12", reason = "aws-sdk smithy stack" },
-    { crate = "http-body", version = "0.4.6", reason = "aws-smithy-runtime" },
-    { crate = "itertools", version = "0.10.5", reason = "criterion (dev-only)" },
-    { crate = "itertools", version = "0.11.0", reason = "earcutr (geo chain)" },
     { crate = "ndarray", version = "0.16.1", reason = "lance-index 11 (fastembed/ort use 0.17)" },
     { crate = "nom", version = "7.1.3", reason = "spm_precompiled (tokenizer chain)" },
     { crate = "phf", version = "0.12.1", reason = "chrono-tz 0.10" },
     { crate = "phf_codegen", version = "0.13.1", reason = "comrak 0.52 (build) / jieba-macros / selectors 0.37-0.38 / web_atoms 0.2.5" },
     { crate = "phf_generator", version = "0.13.1", reason = "via phf_codegen 0.13 (string_cache_codegen 0.6.1 build)" },
     { crate = "phf_shared", version = "0.12.1", reason = "via phf 0.12" },
-    { crate = "quick-xml", version = "0.39.4", reason = "object_store 0.13" },
     { crate = "r-efi", version = "5.3.0", reason = "getrandom 0.3 (uefi target)" },
-    # rand: 0.8 via num-bigint-dig (rsa), 0.9 via tokenizers-era consumers;
-    # rand_chacha 0.3 / rand_core 0.6 follow rand 0.8.
-    { crate = "rand", version = "0.8.8", reason = "num-bigint-dig (rsa chain)" },
-    { crate = "rand", version = "0.9.4", reason = "tokenizers/getrandom-0.3 chain" },
-    { crate = "rand_chacha", version = "0.3.1", reason = "via rand 0.8" },
-    { crate = "rand_core", version = "0.6.4", reason = "via rand 0.8" },
-    { crate = "rand_core", version = "0.9.5", reason = "getrandom 0.3 / tokenizers" },
     # reqwest: kb's direct edge is on 0.13 (V76-R4e; reqwest-eventsource 0.6
     # dropped for kb-cli's in-house SSE parser). 0.12.28 stays transitive-only
-    # via goosefs-sdk → opendal-service-goosefs → opendal 0.58 (lance-io) —
+    # via hf-hub, lance-namespace-impls and lancedb's `remote` feature —
     # unmovable without moving the lance set.
-    { crate = "reqwest", version = "0.12.28", reason = "goosefs-sdk via opendal 0.58 (lance-io)" },
-    { crate = "wasm-streams", version = "0.4.2", reason = "follows reqwest 0.12 (goosefs-sdk)" },
+    { crate = "reqwest", version = "0.12.28", reason = "hf-hub / lance-namespace-impls / lancedb (remote feature)" },
+    { crate = "wasm-streams", version = "0.4.2", reason = "follows reqwest 0.12" },
     { crate = "snafu", version = "0.8.9", reason = "lancedb 0.38 (lance uses 0.9)" },
     { crate = "snafu-derive", version = "0.8.9", reason = "via snafu 0.8" },
-    { crate = "spin", version = "0.9.9", reason = "flume / lazy_static / multer" },
     { crate = "syn", version = "2.0.117", reason = "proc-macro ecosystem split (3.0 via bytemuck/clap_derive)" },
-    { crate = "thiserror", version = "1.0.69", reason = "geoarrow-schema / protobuf" },
+    { crate = "thiserror", version = "1.0.69", reason = "protobuf (lance build chain)" },
     { crate = "thiserror-impl", version = "1.0.69", reason = "via thiserror 1" },
-    { crate = "wasi", version = "0.11.1+wasi-snapshot-preview1", reason = "getrandom 0.2 / mio" },
     # windows platform crates: 0.52.6 family via tokio/mio-era consumers,
     # 0.53.x via windows-sys 0.60/0.61.
     { crate = "windows-sys", version = "0.52.0", reason = "mio / older tokio chain" },
