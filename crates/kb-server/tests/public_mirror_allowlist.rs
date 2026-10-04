@@ -127,26 +127,85 @@ fn private_hit(path: &str) -> Option<&'static str> {
     DENIED_FRAGMENTS.iter().copied().find(|f| path.contains(f))
 }
 
+/// Why a rule must not be on a public edge (empty = acceptable).
+fn rule_violations(m: &str, p: &str) -> Vec<String> {
+    let mut v = Vec::new();
+    if m != "GET" {
+        v.push(format!("non-GET rule `{m} {p}`"));
+    }
+    if let Some(f) = private_hit(p) {
+        v.push(format!("rule `{m} {p}` is a private family ({f})"));
+    }
+    // `{*name}` (a named tail) is the only legal star; a bare `*` is a wildcard rule.
+    let mut stripped = p.to_string();
+    while let Some(i) = stripped.find("{*") {
+        let j = stripped[i..].find('}').unwrap() + i;
+        stripped.replace_range(i..=j, "");
+    }
+    if stripped.contains('*') {
+        v.push(format!("wildcard rule `{p}`"));
+    }
+    if !(p.len() > "/api/".len() || p == "/healthz") {
+        v.push(format!("too-broad rule `{p}`"));
+    }
+    if !p.starts_with('/') {
+        v.push(format!("bad template `{p}`"));
+    }
+    v
+}
+
 #[test]
 fn allowlist_denies_private_families() {
     for (m, p) in rules() {
-        assert_eq!(private_hit(&p), None, "rule `{m} {p}` is a private family");
-        // `{*name}` (a named tail) is the only legal star; a bare `*` is a wildcard rule.
-        let mut stripped = p.clone();
-        while let Some(i) = stripped.find("{*") {
-            let j = stripped[i..].find('}').unwrap() + i;
-            stripped.replace_range(i..=j, "");
-        }
-        assert!(!stripped.contains('*'), "wildcard rule `{p}`");
-        assert!(
-            p.len() > "/api/".len() || p == "/healthz",
-            "too-broad rule `{p}`"
-        );
-        assert!(p.starts_with('/'), "bad template `{p}`");
+        assert_eq!(rule_violations(&m, &p), Vec::<String>::new());
     }
-    // Seed-check: the guard rejects the leak the review called out.
-    assert!(private_hit("/api/events").is_some());
-    assert!(private_hit("/api/kb/{kb}/artifacts/{id}/prompt").is_some());
+}
+
+#[test]
+fn rule_checker_rejects_seeded_bad_rules() {
+    // A seeded allowlist line must be rejected by the same checker the real
+    // allowlist goes through, not merely matched by the fragment table.
+    for (m, p) in [
+        ("GET", "/api/events"),
+        ("GET", "/api/kb/{kb}/artifacts/{id}/prompt"),
+        ("GET", "/api/*"),
+        ("GET", "/api/kb/{kb}/*"),
+        ("GET", "/api/"),
+        ("POST", "/api/search"),
+        ("DELETE", "/api/kb/{kb}/docs/{id}"),
+        ("GET", "api/search"),
+    ] {
+        assert!(
+            !rule_violations(m, p).is_empty(),
+            "seeded bad rule `{m} {p}` was accepted"
+        );
+    }
+    assert!(rule_violations("GET", "/api/kb/{kb}/docs/by-path/{*path}").is_empty());
+}
+
+#[test]
+fn doc_states_the_edge_preconditions() {
+    // Doc truth pinned to the code it describes: the scrub needs a
+    // non-loopback-looking request (scrub.rs::looks_non_loopback), /api/kbs
+    // and the docs routes return absolute paths, and Traefik's noop service
+    // answers 418, so the recipe must not rely on it for a 403.
+    assert!(DOC.contains("X-Forwarded-For"), "doc must require XFF");
+    assert!(DOC.contains("does nothing for a direct loopback fetch"));
+    assert!(
+        DOC.contains("/srv/public-docs"),
+        "neutral mount path advice"
+    );
+    assert!(DOC.contains("filesystem\n  layout") || DOC.contains("filesystem layout"));
+    assert!(
+        DOC.contains("418"),
+        "doc must state the noop@internal status"
+    );
+    let tr = fenced("traefik");
+    assert!(
+        tr.contains("mirror-forbid"),
+        "deny router needs the 403 middleware"
+    );
+    assert!(tr.contains("ipAllowList"));
 }
 
 #[test]

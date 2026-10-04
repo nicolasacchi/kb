@@ -36,7 +36,18 @@ snippet by hand fails CI.
 - **Scrub the kb-prompt.** Every mirrored kb needs
   `[kb.<name>.outbound] strip_kb_prompt = true`. The scrub is applied on the
   artifact serve path only when that flag is set; a mirror kb without it
-  serves the kb-prompt template verbatim.
+  serves the kb-prompt template verbatim. The scrub also only engages for a
+  request that looks non-loopback: a loopback peer with no `X-Forwarded-For`
+  is treated as local and is NOT scrubbed. The edge must therefore forward
+  `X-Forwarded-For` (Traefik and Caddy both add it by default), and
+  `strip_kb_prompt` does nothing for a direct loopback fetch of the daemon
+  (run the prompt check below through the edge, never against `127.0.0.1`).
+- **Neutral mount path.** `GET /api/kbs` returns each kb's `path`, and the
+  docs list, `docs/{id}` and `by-path` responses carry the canonical absolute
+  `path` of each document, so the allowlist exposes the daemon's filesystem
+  layout. Mount the corpus at a neutral path such as `/srv/public-docs`
+  (inside the container, if you use one), never under a home directory or a
+  path that names people, clients or hosts.
 
 ```toml
 [daemon]
@@ -76,7 +87,14 @@ becoming `[^/]+` and `{*x}` becoming `.+`). Everything under `/api`,
 `/capture` and `/metrics` that does not match is denied; the SPA shell and the
 artifact hosts pass through. Allow only `GET` and `HEAD`.
 
-Traefik (dynamic configuration):
+Traefik (dynamic configuration). The `noop@internal` service alone answers
+418, so the deny router carries the `mirror-forbid` middleware: an
+`ipAllowList` whose only range is a TEST-NET address no client can have,
+which answers 403 for every real caller (Traefik v3 `ipAllowList`; on v2 use
+`ipWhiteList`). Denied requests are 403 on both edges, except that Caddy
+answers 405 for a non-GET/HEAD method outside `/api`; the exact status per
+edge is listed in the checklist. Neither status is verified in CI (no edge
+runs in the test suite), so confirm them with the checklist after deploy.
 
 ```traefik
 http:
@@ -99,11 +117,18 @@ http:
     mirror-deny:
       priority: 90
       service: noop@internal
+      middlewares:
+        - mirror-forbid
       rule: Host(`docs.example.com`) && (PathPrefix(`/api`) || PathPrefix(`/capture`) || PathPrefix(`/metrics`) || !Method(`GET`, `HEAD`))
     mirror-shell:
       priority: 10
       service: kb-mirror
       rule: Host(`docs.example.com`) || HostRegexp(`^[a-z0-9-]+\.artifacts\.example\.com$`)
+  middlewares:
+    mirror-forbid:
+      ipAllowList:
+        sourceRange:
+          - 192.0.2.1/32
   services:
     kb-mirror:
       loadBalancer:
@@ -150,11 +175,12 @@ docs.example.com, *.artifacts.example.com {
 | Mutating routes | Daemon trusts any caller that reaches it | Edge allows GET/HEAD only; allowlist is GET-only |
 | DNS rebinding | A page rebinds its name to the loopback daemon and gets operator authority | `[server] hostnames` set; edge matches `Host` |
 | kb-prompt leak via artifact bytes | Scrub only runs with `strip_kb_prompt = true` | Set it on every mirrored kb |
-| `GET /api/kbs` | Lists mounted corpora and their summaries | Acceptable only because the daemon mounts public corpora exclusively |
+| `GET /api/kbs`, docs list, `docs/{id}`, `by-path` | Return absolute server paths (`path`), exposing the daemon's filesystem layout | Mount at a neutral path such as `/srv/public-docs`; mount public corpora exclusively |
+| Direct loopback fetch of the daemon | No `X-Forwarded-For`, so the request counts as local and `strip_kb_prompt` does not scrub | Publish only through the edge; keep the edge forwarding `X-Forwarded-For` |
 
 ## Verification checklist
 
-Run against the public name after every deploy (expected status in brackets):
+Run against the public name after every deploy (expected status in brackets; 403 is what both reference edges are written to return, 405 is Caddy's answer to a non-GET/HEAD method):
 
 ```sh
 curl -si https://docs.example.com/healthz | head -1                 # 200
@@ -163,7 +189,7 @@ curl -si https://docs.example.com/api/events | head -1              # 403
 curl -si https://docs.example.com/api/config | head -1              # 403
 curl -si https://docs.example.com/api/identity | head -1            # 403
 curl -si https://docs.example.com/api/sessions | head -1            # 403
-curl -si -X POST https://docs.example.com/api/kb/public-docs/capture | head -1  # 403 or 405
+curl -si -X POST https://docs.example.com/api/kb/public-docs/capture | head -1  # 403 (Traefik), 403 or 405 (Caddy)
 curl -si -H 'Host: evil.example' http://127.0.0.1:4000/api/kbs | head -1        # 403 (Host guard)
 # a served artifact must not contain the prompt template:
 curl -s "https://docs.example.com/api/kb/public-docs/artifact/<id>" | grep -c 'kb-prompt'   # 0
