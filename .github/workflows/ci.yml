@@ -1492,6 +1492,10 @@ jobs:
         # quick-xml, and arrow/lance must each resolve to one version
         # (invariant #1). Reads the committed lock; compile-free.
         run: scripts/ci/no-cloud-stack.sh
+      - name: lance-io feature diagnostic (informational)
+        # v0.45 N7: records in the log which crates (if any) enable lance-io
+        # features, so a future re-enabler is named without a local cargo.
+        run: cargo tree --locked -e features -i lance-io || true
       - name: cargo-deny (advisories)
         run: cargo-deny check advisories
       - name: cargo-deny (licenses + bans + sources)
