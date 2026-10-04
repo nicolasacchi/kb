@@ -184,3 +184,8 @@ tempfile = { workspace = true }
 # `assert_eq!`; the larger per-fixture symbol lists and highlight span
 # lists use insta, matching kb-core's own snapshot convention).
 insta = { workspace = true }
+# v0.45 N8 — protocol-registry drift tests (`tests/schema_drift.rs` and the
+# `common` helpers): validate REAL kb-code-server output against
+# `../../schemas/*.schema.json` with the same validator kb-cli's registry tests
+# use. Already in the lockfile via kb-cli; no network loader is registered.
+boon = { workspace = true }
