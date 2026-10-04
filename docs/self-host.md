@@ -1087,3 +1087,7 @@ in-app capture sheet there instead.
   changes (`kb token rotate && systemctl restart kb-daemon`).
 - Monitor `/api/identity` from your uptime checker; the daemon
   exposes no secret info there.
+
+To expose a read-only subset of public documents, do not harden your main
+daemon; follow the [public mirror recipe](public-mirror.md) (a dedicated daemon
+behind an allowlisting edge).
