@@ -143,6 +143,13 @@ if ! grep -q '^\[server\]' "$cfg"; then
 else
   fail "kb add wrote a [server] section; the smoke cannot pick a spare port"
 fi
+# The tarball ships no embedding model. Without this the daemon falls back to the
+# registry default (bge-small) and may try to download it at boot/index time, which
+# would eat the INDEX_WAIT budget on a clean runner. Keyword search is all we gate on.
+if grep -q '^\[defaults\]' "$cfg"; then
+  fail "kb add wrote a [defaults] section; the smoke cannot disable the embedder fallback"
+fi
+printf '\n[defaults]\ndisable_embedder_fallback = true\n' >>"$cfg"
 ok
 
 # 4. start the daemon, wait for /healthz

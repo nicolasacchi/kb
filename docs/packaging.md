@@ -184,6 +184,14 @@ login, which is itself the "a stranger can pull it" check), mounts the tag's
   `installer` workflow) drives the same script against a fake file:// mirror and
   a stub daemon, including negative cases (unhealthy daemon, zero hits, missing
   SPA, missing checksum sidecar) and a lint of the workflow's trigger shape.
+- **Tarball legs are model-free.** The smoke writes `[defaults]
+  disable_embedder_fallback = true` into its throwaway `kb.toml`, so the daemon
+  does not try to download the registry-default embedding model on a clean
+  runner; it gates on keyword search only. The install step (download and
+  verify) is retried once after 30 s for CDN lag; a failure in any later step is
+  not retried.
+- **Docker leg.** It probes `127.0.0.1:4000` with `--network host`, relying on
+  the image's own default address (the same one its CMD and HEALTHCHECK use).
 - **Not covered.** musl/Alpine and glibc older than 2.39 (unsupported, the
   installer says so), hybrid/semantic search (needs a model download), macOS,
   and kb-code.

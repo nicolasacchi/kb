@@ -83,6 +83,9 @@ case "$1" in
         port="$(sed -n 's/^addr = "127.0.0.1:\([0-9]*\)"/\1/p' "$cfg")"
         corpus="$(sed -n 's/^path = "\(.*\)"/\1/p' "$cfg")"
         echo "stub daemon booting on $port"
+        if ! grep -q '^disable_embedder_fallback = true' "$cfg"; then
+          echo "stub-daemon-log: embedder fallback not disabled; would download a model"; exit 3
+        fi
         if [ "${STUB_MODE:-}" = unhealthy ]; then
           echo "stub-daemon-log: wedged, never serves"; exec sleep 600
         fi
@@ -162,6 +165,15 @@ if [ "$rc" != 0 ] && grep -q 'STEP 1/8 install ... FAIL' "$work/nosum.out" \
    && ! grep -q 'KB_INSECURE_SKIP_VERIFY=' "$smoke"; then pass first_run_selftest_refuses_unverified
 else fail "first_run_selftest_refuses_unverified rc=$rc"; cat "$work/nosum.out"; fi
 
+# 6a. corrupted tarball (sidecar present but wrong) -> fails closed at step 1
+cp "$work/mirror/$pkg.tar.gz.sha256" "$work/sha.bak"
+echo "$(printf 0%.0s $(seq 1 64))  $pkg.tar.gz" > "$work/mirror/$pkg.tar.gz.sha256"
+run_smoke badsum
+mv "$work/sha.bak" "$work/mirror/$pkg.tar.gz.sha256"
+if [ "$rc" != 0 ] && grep -q 'STEP 1/8 install ... FAIL' "$work/badsum.out" && [ ! -s "$work/badsum.pid" ]; then
+  pass first_run_selftest_refuses_bad_checksum
+else fail "first_run_selftest_refuses_bad_checksum rc=$rc"; cat "$work/badsum.out"; fi
+
 # 6b. REQUIRE_PROVENANCE=1 without a signed-in gh -> fails at step 1
 run_smoke noprov REQUIRE_PROVENANCE=1
 if [ "$rc" != 0 ] && grep -q 'STEP 1/8 install ... FAIL: REQUIRE_PROVENANCE' "$work/noprov.out"; then
@@ -177,10 +189,11 @@ nolint() { ! echo "$code" | grep -qE "$1" || { fail "first_run_workflow_triggers
 lint '^  workflow_run:'
 lint '^  workflow_dispatch:'
 lint '^permissions: \{\}$'
-lint 'image: debian:trixie'
-lint 'image: ubuntu:24\.04'
-lint 'image: fedora:latest'
-lint '^  docker:'
+lint '^            image: debian:trixie$'
+lint '^            image: ubuntu:24\.04$'
+lint '^            image: fedora:latest$'
+lint '^  docker:$'
+lint '^  tarball:$'
 nolint '^  release:'
 nolint 'secrets\.'
 nolint 'pull_request_target'

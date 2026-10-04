@@ -157,9 +157,16 @@ jobs:
         run: |
           set -euo pipefail
           # Retry once: release assets can lag the CDN for a moment.
+          # Only a failure of the install step (download/verify) is retried; a failure
+          # of any later step is a real finding and fails at once.
           for attempt in 1 2; do
             if bash scripts/ci/first-run-smoke.sh 2>&1 | tee smoke.log; then ok=1; break; fi
-            ok=0; echo "attempt $attempt failed"; sleep 30
+            ok=0
+            if [ "$attempt" = 1 ] && grep -q '^STEP 1/[0-9]* install ... FAIL' smoke.log; then
+              echo "install step failed (asset/CDN lag?); retrying once"; sleep 30
+            else
+              break
+            fi
           done
           [ "$ok" = 1 ]
       - name: Summary
@@ -184,6 +191,8 @@ jobs:
       contents: read
     env:
       IMAGE: ghcr.io/nicolasacchi/kb:${{ needs.resolve.outputs.version }}
+      # The step below probes 127.0.0.1:4000 because it relies on the image's own
+      # default addr (its CMD and HEALTHCHECK) with --network host.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -252,6 +261,7 @@ jobs:
     if: always() && needs.resolve.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions: {}
     steps:
       - name: Leg table
         env:
