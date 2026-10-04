@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kb-list/1",
+  "title": "kb-list/1 portable list header",
+  "description": "The provenance header of a portable reading list: the JSON object inside the Markdown comment <!-- kb-list {...} --> (crates/kb-core/src/lists.rs, KbListMeta). A JSON list export (ListExport) also validates, since it is the same object plus title/entries. Structural lint; serde is the authority.",
+  "type": "object",
+  "required": [
+    "schema"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kb-list/1"
+    },
+    "kb": {
+      "type": "string"
+    },
+    "list_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "pinned": {
+      "type": "boolean"
+    },
+    "archived": {
+      "type": "boolean"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source_relative": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "anchor": {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "file",
+                  "chapter",
+                  "section",
+                  "selection"
+                ]
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "read_override": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -69,6 +69,7 @@ pub mod token;
 pub mod tools;
 pub mod turn;
 pub mod users;
+pub mod validate;
 pub mod version;
 pub mod versions;
 pub mod whoami;

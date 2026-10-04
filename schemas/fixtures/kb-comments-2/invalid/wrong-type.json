@@ -1,0 +1,59 @@
+{
+  "schema": "kb-comments/2",
+  "artifact": {
+    "id": "0123456789ab",
+    "title": "Example design note",
+    "kb": "notes",
+    "tags": [
+      "design"
+    ],
+    "pages": []
+  },
+  "generatedAt": "2026-01-15T10:00:00Z",
+  "comments": [
+    {
+      "id": "c_a1b2c3d4e5f6",
+      "status": "open",
+      "file": "0123456789ab",
+      "fileLabel": "Example design note",
+      "anchor": {
+        "kind": "section",
+        "id": "tradeoffs",
+        "tag": "section",
+        "snippet": null
+      },
+      "author": "you",
+      "body": "Is the retry budget per process?",
+      "createdAt": "2026-01-15T10:01:00Z",
+      "editedAt": null,
+      "replies": [
+        {
+          "id": "r_0123456789ab",
+          "author": "claude",
+          "body": "Per process today.",
+          "createdAt": "2026-01-15T10:02:00Z",
+          "editedAt": null,
+          "choices": [
+            {
+              "label": "Apply",
+              "reply": "Please apply it.",
+              "resolve": true
+            }
+          ],
+          "attachments": []
+        }
+      ],
+      "choices": [],
+      "attachments": [],
+      "private": "yes",
+      "tags": [
+        "scratch"
+      ]
+    }
+  ],
+  "verdict": {
+    "state": "comment",
+    "at": "2026-01-15T10:03:00Z",
+    "by": "you"
+  }
+}

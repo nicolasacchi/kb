@@ -1,0 +1,42 @@
+{
+  "schema": "kbc-theme/9",
+  "themes": [
+    {
+      "id": "demo-dark",
+      "family": "demo",
+      "family_name": "Demo",
+      "name": "Demo Dark",
+      "appearance": "dark",
+      "license": "MIT",
+      "source_url": "https://example.com/demo",
+      "anchors": {
+        "base": "#101010",
+        "surface": "#101010",
+        "sunken": "#101010",
+        "overlay": "#101010",
+        "highlightLow": "#101010",
+        "highlightMed": "#101010",
+        "highlightHigh": "#101010",
+        "muted": "#101010",
+        "subtle": "#101010",
+        "text": "#101010",
+        "red": "#101010",
+        "orange": "#101010",
+        "yellow": "#101010",
+        "green": "#101010",
+        "cyan": "#101010",
+        "blue": "#101010",
+        "violet": "#101010",
+        "magenta": "#101010",
+        "pink": "#101010",
+        "teal": "#101010",
+        "accent": "#101010",
+        "accentFg": "#101010",
+        "diffAdd": "#101010",
+        "diffDel": "#101010",
+        "diffMod": "#101010",
+        "scrim": "#101010"
+      }
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+{"schema": "kb-slate/1"}
+{"seq": 1, "id": "e_0000000a1eef", "at": 1767214800, "kind": "now", "line": "sprout: questions lane", "topic": "sprout", "prov": {"harness": "claude", "origin": "human", "user": "operator"}}
+{"seq": 2, "id": "e_0000000a3dde", "at": 1767218400, "kind": "ask", "line": "does open_store run the epoch guard before the migrations?", "topic": "sprout", "prov": {"harness": "claude", "origin": "agent", "session_id": "4b7e91c2a0", "model": "claude-opus-5"}}

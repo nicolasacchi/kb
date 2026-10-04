@@ -178,6 +178,10 @@ similar = "3"
 # regenerates. chrono-impl maps DateTime<Utc> → string.
 ts-rs = { version = "12", features = ["chrono-impl"] }
 
+# JSON Schema validator for `kb validate` (kb-cli only; pure Rust, no remote
+# $ref loading is ever configured — schemas are embedded and self-contained).
+boon = "0.6"
+
 # Filesystem
 walkdir = "2"
 tempfile = "3"
