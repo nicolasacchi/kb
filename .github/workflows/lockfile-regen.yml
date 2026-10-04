@@ -13,6 +13,11 @@
 # included) to the PR branch. A push made with GITHUB_TOKEN does not trigger
 # other workflows, so push any follow-up commit (or re-run the checks) afterwards.
 #
+# The `regen-cargo` job (v0.45 N7) runs after the npm job and prunes
+# Cargo.lock with `cargo update --workspace` (re-resolve against the edited
+# manifests; never a blanket `cargo update`). It FAILS if any retained package
+# version moved, so the arrow/lance lockstep (invariant #1) cannot drift.
+#
 # SAFETY: the label path runs only for same-repo PRs; the branch name reaches
 # the shell through an env var, never interpolated into the script.
 name: lockfile-regen
@@ -80,4 +85,51 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- web/package-lock.json web-code/package-lock.json tests/e2e/package-lock.json web-code/e2e/package-lock.json
           git commit -s -m "chore(deps): regenerate npm lockfiles in CI (lockfile-regen)"
+          git push origin "HEAD:refs/heads/${HEAD_REF}"
+
+  regen-cargo:
+    permissions:
+      contents: write
+    name: regenerate Cargo.lock (prune only, no version moves)
+    needs: regen
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >-
+      !cancelled() && needs.regen.result == 'success' && (
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'regen-lockfiles' &&
+       github.event.pull_request.head.repo.full_name == github.repository))
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+
+      - name: cargo update --workspace (prune, assert no version moved)
+        run: |
+          cargo --version
+          before=$(grep -c '^name = ' Cargo.lock)
+          cargo update --workspace
+          cargo metadata --locked --format-version 1 > /dev/null
+          after=$(grep -c '^name = ' Cargo.lock)
+          echo "packages: $before -> $after"
+          if git diff Cargo.lock | grep '^+version'; then
+            echo "::error::cargo update --workspace moved a version; refusing to commit"
+            exit 1
+          fi
+
+      - name: Commit and push Cargo.lock
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already current; nothing to push"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- Cargo.lock
+          git commit -s -m "chore(deps): regenerate Cargo.lock in CI (lockfile-regen)"
           git push origin "HEAD:refs/heads/${HEAD_REF}"

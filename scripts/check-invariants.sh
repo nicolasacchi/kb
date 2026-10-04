@@ -50,14 +50,14 @@ is_retired() {
   return 1
 }
 
-# Grep every source tree that can carry a pin: Rust crates + web/ + tests/e2e.
+# Grep every source tree that can carry a pin: Rust crates + web/ + tests/e2e + scripts/ci (shell gates).
 # Exclude build output / deps so a stray match in a vendored file or the
 # target dir never inflates the count.
 grep_invariant() {
   local n="$1"
   grep -rn "invariant:${n}\b" \
-    --include='*.rs' --include='*.ts' --include='*.tsx' \
-    crates web tests/e2e 2>/dev/null
+    --include='*.rs' --include='*.ts' --include='*.tsx' --include='*.sh' \
+    crates web tests/e2e scripts/ci 2>/dev/null
 }
 
 declare -a UNPINNED=()

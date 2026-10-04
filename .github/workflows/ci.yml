@@ -1486,6 +1486,12 @@ jobs:
         # have to change the lock, so the graph audited here is the graph
         # committed. The compile lanes above also pass --locked.
         run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: cloud-stack-absent (lance without default features, one arrow/lance)
+        # v0.45 N7: Cargo.lock must not carry the cloud object-store stack
+        # (opendal, reqsign, aws-sdk, rsa, goosefs-sdk) nor an advisory-affected
+        # quick-xml, and arrow/lance must each resolve to one version
+        # (invariant #1). Reads the committed lock; compile-free.
+        run: scripts/ci/no-cloud-stack.sh
       - name: cargo-deny (advisories)
         run: cargo-deny check advisories
       - name: cargo-deny (licenses + bans + sources)

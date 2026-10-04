@@ -39,7 +39,11 @@ lance + arrow MUST share one version — V76-R4c pinned set: lancedb `=0.38.0`
 `cargo metadata` showing two arrow versions = the dep graph won't unify
 RecordBatch types. The check is `cargo tree -d -i arrow-array` (and
 `-i arrow-schema`): both must show a single version. See
-`Cargo.toml [workspace.dependencies]`.
+`Cargo.toml [workspace.dependencies]`. `lance` is declared with
+`default-features = false` (v0.45 N7): kb only opens local paths, and lance's
+default features compiled the whole cloud object-store stack in.
+`scripts/ci/no-cloud-stack.sh` (supply-chain job) pins both the single-version
+rule and the absence of that stack in `Cargo.lock`.
 
 ### 2. The doc↔code bridge: kb extracts hints, kb-code mints classes, nothing is cached (DCB v1)
 
