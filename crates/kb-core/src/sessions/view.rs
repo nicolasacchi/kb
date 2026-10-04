@@ -119,8 +119,8 @@ pub const VIEW_GRAMMAR: &str = "session-view/1";
 /// the FOLD — which decides whether a marker becomes its own `items[]`
 /// entry and therefore whether the ledger census double-counts — reject a
 /// forward-compatible marker it should have absorbed.
-const RECALL_MARKER_PREFIX: &str = "<!--kb-recall/1 ";
-const RECALL_MARKER_SUFFIX: &str = "-->";
+pub const RECALL_MARKER_PREFIX: &str = "<!--kb-recall/1 ";
+pub const RECALL_MARKER_SUFFIX: &str = "-->";
 
 /// MR1 — the inclusive range a `pos=<n>` pair must land in to be believed.
 /// The recall hook injects at most a handful of hits (`--limit 5` today);
@@ -128,7 +128,7 @@ const RECALL_MARKER_SUFFIX: &str = "-->";
 /// is "this hit's rank is unknown" (`pos: None`) rather than a number the
 /// ledger would then display. It never invalidates the marker: `kb` and
 /// `id` are what the row is FOR.
-const RECALL_MARKER_POS_RANGE: std::ops::RangeInclusive<u32> = 1..=99;
+pub const RECALL_MARKER_POS_RANGE: std::ops::RangeInclusive<u32> = 1..=99;
 
 /// Caps + tunables the engine reads. All fields have documented defaults so a
 /// future wire route can expose a subset without changing the engine's

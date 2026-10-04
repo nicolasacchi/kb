@@ -1,0 +1,17 @@
+{
+  "schema": "kbc-findings/2",
+  "findings": [
+    {
+      "act": "issue",
+      "severity": "blocker",
+      "category": "security",
+      "blocking": true,
+      "title": "Unescaped path",
+      "rationale": "Path reaches a shell.",
+      "cites": [
+        "src/run.rs:20"
+      ],
+      "supersedes": []
+    }
+  ]
+}

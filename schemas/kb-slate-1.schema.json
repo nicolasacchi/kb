@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kb-slate/1",
+  "title": "kb-slate/1 ledger line",
+  "description": "ONE line of a slate ledger (<state>/slates/<slug>/ledger.jsonl, JSONL, append-only): a post as minted by the daemon (kb_core::slate::Post), or a bare {\"schema\":\"kb-slate/1\"} header line which the reader skips. Validate a file line by line (kb validate does). Structural lint; serde is the authority.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "seq",
+        "id",
+        "at",
+        "kind",
+        "line",
+        "prov"
+      ],
+      "properties": {
+        "schema": {
+          "const": "kb-slate/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^e_[0-9a-f]{12}$"
+        },
+        "at": {
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "now",
+            "warn",
+            "take",
+            "done",
+            "hand",
+            "ask",
+            "answer",
+            "found",
+            "idea",
+            "tried",
+            "drop",
+            "mark"
+          ]
+        },
+        "line": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "re": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "supersedes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pin": {
+          "type": "boolean"
+        },
+        "anyway": {
+          "type": "boolean"
+        },
+        "over": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "abandoned": {
+          "type": "string"
+        },
+        "failed": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "prov": {
+          "type": "object",
+          "required": [
+            "harness"
+          ],
+          "properties": {
+            "harness": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "agent",
+                "human",
+                "import",
+                "unattributed"
+              ]
+            },
+            "user": {
+              "type": "string"
+            },
+            "job_id": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema"
+      ],
+      "properties": {
+        "schema": {
+          "const": "kb-slate/1"
+        }
+      },
+      "not": {
+        "required": [
+          "kind"
+        ]
+      }
+    }
+  ]
+}

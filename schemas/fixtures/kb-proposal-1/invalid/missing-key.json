@@ -1,0 +1,13 @@
+{
+  "id": "p_0123456789ab",
+  "schema": "kb-proposal/1",
+  "created_at": 1767214800,
+  "body": "Measured on the demo service.",
+  "category": "memory-user",
+  "tags": [
+    "demo"
+  ],
+  "global": true,
+  "linked_kbs": [],
+  "source": "agent"
+}

@@ -540,6 +540,16 @@ Notes and limits:
   (no client-side conflict to retry); the SSE refetch keeps every open
   view current.
 
+## Checking a sidecar (`kb validate`)
+
+The `.review/<id>.json` sidecars are daemon-owned and never hand-edited. To
+confirm one is still well-formed - after a restore, or when something reads it
+oddly - run `kb validate .review/<id>.json`. It detects `kb-comments/1` or `/2`
+from the file's `schema` key, lists every failing JSON pointer, exits 1 on a
+mismatch, and never modifies the file. It is offline: no daemon is needed. The
+contract registry and the `/1` versus `/2` stamp rules are in
+[`protocols.md`](protocols.md).
+
 ## Where to look in the code
 
 | piece | path |
