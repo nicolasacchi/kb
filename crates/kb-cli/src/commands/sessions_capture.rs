@@ -115,14 +115,21 @@ pub async fn run(
     out: Option<PathBuf>,
     json: bool,
     allow_oversized: bool,
+    stamp: Option<String>,
 ) -> Result<()> {
     let out_dir = resolve_out_dir(out)?;
-    let summary = capture(
+    if let Some(st) = stamp.as_deref() {
+        if !valid_compact_stamp(st) {
+            bail!("--stamp must look like YYYYMMDDTHHMMSSZ (UTC), got {st:?}");
+        }
+    }
+    let summary = capture_with(
         &transcript,
         session_id.as_deref(),
         cwd.as_deref(),
         &out_dir,
         allow_oversized,
+        stamp.as_deref(),
     )
     .await?;
     if json {
@@ -207,12 +214,16 @@ pub async fn replay_spool(spool: &Path, out_dir: &Path) -> Result<ReplaySummary>
     items.sort();
     for jsonl in items {
         let meta = jsonl.with_extension("meta");
-        let (mut sid, mut cwd) = (None, None);
+        let (mut sid, mut cwd, mut stamp) = (None, None, None);
         if let Ok(m) = std::fs::read_to_string(&meta) {
             for line in m.lines() {
                 match line.split_once('=') {
                     Some(("session_id", v)) if !v.is_empty() => sid = Some(v.to_string()),
                     Some(("cwd", v)) if !v.is_empty() => cwd = Some(PathBuf::from(v)),
+                    // v0.45 N4 - the adapter's true session-start stamp, so a
+                    // replayed capture keeps its start time in the filename.
+                    // An invalid value is ignored (never fails the replay).
+                    Some(("stamp", v)) if valid_compact_stamp(v) => stamp = Some(v.to_string()),
                     _ => {}
                 }
             }
@@ -220,7 +231,16 @@ pub async fn replay_spool(spool: &Path, out_dir: &Path) -> Result<ReplaySummary>
         // A cwd that no longer exists must not fail the replay (it is only a
         // commit-resolution hint).
         let cwd = cwd.filter(|c| c.is_dir());
-        match capture(&jsonl, sid.as_deref(), cwd.as_deref(), out_dir, false).await {
+        match capture_with(
+            &jsonl,
+            sid.as_deref(),
+            cwd.as_deref(),
+            out_dir,
+            false,
+            stamp.as_deref(),
+        )
+        .await
+        {
             Ok(_) => {
                 let _ = std::fs::remove_file(&jsonl);
                 let _ = std::fs::remove_file(&meta);
@@ -276,14 +296,55 @@ fn resolve_out_dir(out: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
+/// `YYYYMMDDTHHMMSSZ`: 8 digits, `T`, 6 digits, `Z`, with in-range fields.
+pub(crate) fn valid_compact_stamp(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 16 || b[8] != b'T' || b[15] != b'Z' {
+        return false;
+    }
+    if !b[..8].iter().chain(&b[9..15]).all(u8::is_ascii_digit) {
+        return false;
+    }
+    let n = |r: std::ops::Range<usize>| s[r].parse::<u32>().unwrap_or(99);
+    (1..=12).contains(&n(4..6))
+        && (1..=31).contains(&n(6..8))
+        && n(9..11) < 24
+        && n(11..13) < 60
+        && n(13..15) < 61
+}
+
 /// The whole capture, printing-free — `run` renders this (and tests assert
 /// on it directly).
+#[cfg(test)]
 async fn capture(
     transcript: &Path,
     session_id_hint: Option<&str>,
     cwd_hint: Option<&Path>,
     out_dir: &Path,
     allow_oversized: bool,
+) -> Result<CaptureSummary> {
+    capture_with(
+        transcript,
+        session_id_hint,
+        cwd_hint,
+        out_dir,
+        allow_oversized,
+        None,
+    )
+    .await
+}
+
+/// [`capture`] plus `stamp`: the compact UTC timestamp to use as the filename
+/// ts of a NEW file (an adapter passes the session's true start time). Ignored
+/// when an existing capture is reused - the original name's ts is load-bearing
+/// for `started_at` (invariant #11) and is never renamed.
+async fn capture_with(
+    transcript: &Path,
+    session_id_hint: Option<&str>,
+    cwd_hint: Option<&Path>,
+    out_dir: &Path,
+    allow_oversized: bool,
+    stamp: Option<&str>,
 ) -> Result<CaptureSummary> {
     // 2026-08-21 ci-host incident, defect 1: a 292MB raw Codex rollout (77%
     // base64 screenshots) entered capture through THIS path — bypassing
@@ -346,8 +407,11 @@ async fn capture(
     // invariant #11's note on the truncated-meta bug applies here too: the
     // filename is load-bearing). Mirror the hook's glob-then-take-last
     // exactly (see `find_existing_capture`).
-    let existing = find_existing_capture(out_dir, &sid);
-    let capture_ts = compact_utc_now();
+    let existing = find_existing_capture(out_dir, &sid, &raw_sid);
+    let capture_ts = stamp
+        .filter(|s| valid_compact_stamp(s))
+        .map(str::to_string)
+        .unwrap_or_else(compact_utc_now);
     let out_path = existing
         .clone()
         .unwrap_or_else(|| out_dir.join(format!("session-{capture_ts}-{sid}.html")));
@@ -484,29 +548,73 @@ async fn capture(
 /// stranding the legacy one. Clean matches always win over legacy ones when
 /// both exist for the same sid — reuse standardises on the clean filename
 /// going forward and never resurrects a stale legacy file.
-fn find_existing_capture(out_dir: &Path, sid: &str) -> Option<PathBuf> {
-    let clean_suffix = format!("-{sid}.html");
-    let legacy_suffix = format!("-{sid}-.html");
-    let file_name = |p: &Path| p.file_name().and_then(|n| n.to_str()).map(str::to_string);
-
-    let entries: Vec<PathBuf> = std::fs::read_dir(out_dir)
+///
+/// v0.45 N4 - a third rung recognises a capture written under the pre-v0.45
+/// LOSSY name (`tr -c ... | cut -c1-80`, which maps "a_b"/"a-b" and ids that
+/// share an 80-char prefix to one name). Such a file is reused only when its
+/// own embedded `sessionId` / `kb-session` meta equals `raw_sid`, so a
+/// colliding id's file is never adopted. It is reused in place (name
+/// unchanged), never renamed or duplicated.
+fn find_existing_capture(out_dir: &Path, sid: &str, raw_sid: &str) -> Option<PathBuf> {
+    let legacy_dash = format!("{sid}-");
+    // Strict `session-<ts>-<name>.html` parse: the name must EQUAL the key
+    // (a bare `ends_with("-{sid}.html")` let sid "b" match "...-a-b.html").
+    let names: Vec<(PathBuf, String)> = std::fs::read_dir(out_dir)
         .ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| file_name(p).is_some_and(|n| n.starts_with("session-")))
+        .filter_map(|p| {
+            let n = p.file_name()?.to_str()?.to_string();
+            let stem = n.strip_suffix(".html")?.strip_prefix("session-")?;
+            let (ts, name) = stem.split_once('-')?;
+            (ts.len() == 16 && ts.ends_with('Z')).then(|| (p.clone(), name.to_string()))
+        })
         .collect();
 
-    let newest_matching = |suffix: &str| {
-        let mut matches: Vec<PathBuf> = entries
+    // The file's own embedded id (JSONL ground truth, else the meta) when it
+    // names a DIFFERENT session: a pre-v0.45 lossy name was shared by distinct
+    // ids, so a name match alone must never adopt a colliding id's file.
+    let foreign = |p: &Path| {
+        std::fs::read_to_string(p).is_ok_and(|html| {
+            kb_core::sessions::recover_jsonl_from_capture(&html)
+                .and_then(|j| kb_core::session_bundle::first_transcript_field(&j, "sessionId"))
+                .is_some_and(|id| id != raw_sid)
+        })
+    };
+    let owns = |p: &Path| {
+        std::fs::read_to_string(p).is_ok_and(|html| {
+            kb_core::sessions::recover_jsonl_from_capture(&html)
+                .and_then(|j| kb_core::session_bundle::first_transcript_field(&j, "sessionId"))
+                .is_some_and(|s| s == raw_sid)
+                || super::import::meta_session(&html).is_some_and(|m| m == raw_sid)
+        })
+    };
+    let newest = |want: &dyn Fn(&str) -> bool, ok: &dyn Fn(&Path) -> bool| {
+        let mut m: Vec<&PathBuf> = names
             .iter()
-            .filter(|p| file_name(p).is_some_and(|n| n.ends_with(suffix)))
-            .cloned()
+            .filter(|(_, n)| want(n.as_str()))
+            .map(|(p, _)| p)
             .collect();
-        matches.sort();
-        matches.pop()
+        m.sort();
+        m.into_iter().rev().find(|p| ok(p.as_path())).cloned()
     };
 
-    newest_matching(&clean_suffix).or_else(|| newest_matching(&legacy_suffix))
+    // Clean name wins over the stale trailing-dash variant; both rejected
+    // when they embed another session's id.
+    if let Some(p) = newest(&|n| n == sid, &|p| !foreign(p))
+        .or_else(|| newest(&|n| n == legacy_dash, &|p| !foreign(p)))
+    {
+        return Some(p);
+    }
+
+    // Migration rung: the pre-v0.45 lossy name, reused ONLY when the file
+    // verifiably holds this raw id; reused in place, never renamed.
+    let lossy = super::import::legacy_lossy_sid(raw_sid);
+    if lossy == sid {
+        return None;
+    }
+    let lossy_dash = format!("{lossy}-");
+    newest(&|n| n == lossy || n == lossy_dash, &owns)
 }
 
 /// Unix-now → `YYYYMMDDTHHMMSSZ`, the kb-capture.sh `date -u
@@ -1379,6 +1487,148 @@ mod tests {
         let sum = replay_spool(&spool, &out_file).await.unwrap();
         assert_eq!((sum.replayed, sum.failed), (0, 1));
         assert!(spool.join("bad.jsonl").exists());
+    }
+
+    fn one_line_jsonl(sid: &str) -> String {
+        format!(
+            "{{\"sessionId\":\"{sid}\",\"type\":\"user\",\"timestamp\":\"2026-03-01T09:00:00.000Z\",\"message\":{{\"role\":\"user\",\"content\":\"start\"}},\"promptSource\":\"typed\"}}\n"
+        )
+    }
+
+    fn html_names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter(|n| n.ends_with(".html"))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// v0.45 N4 - "a_b" and "a-b" used to share ONE capture file (lossy key).
+    #[tokio::test]
+    async fn capture_distinct_non_uuid_ids_write_distinct_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("sessions");
+        for sid in ["a_b", "a-b"] {
+            let t = write(
+                &tmp.path().join("src"),
+                &format!("{sid}.jsonl"),
+                &one_line_jsonl(sid),
+            );
+            let s = capture(&t, None, None, &out_dir, false).await.unwrap();
+            assert!(!s.reused_existing, "{sid} must not adopt the other's file");
+        }
+        assert_eq!(count_html(&out_dir), 2, "{:?}", html_names(&out_dir));
+    }
+
+    /// An old capture under the lossy name is reused in place when it
+    /// verifiably holds this id: same name, no duplicate, no rename.
+    #[tokio::test]
+    async fn capture_reuses_verified_legacy_lossy_named_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("sessions");
+        let sid = "ses_legacy_7";
+        let lossy = crate::commands::import::legacy_lossy_sid(sid);
+        let name = format!("session-20260301T090000Z-{lossy}.html");
+        write(
+            &out_dir,
+            &name,
+            &wrap_envelope(
+                "20260301T090000Z",
+                &lossy,
+                &one_line_jsonl(sid),
+                &[],
+                &[],
+                &[],
+            ),
+        );
+        let t = write(&tmp.path().join("src"), "t.jsonl", &one_line_jsonl(sid));
+        let s = capture(&t, None, None, &out_dir, false).await.unwrap();
+        assert!(s.reused_existing);
+        assert_eq!(html_names(&out_dir), vec![name]);
+    }
+
+    /// The lossy name is shared by distinct ids: a file whose embedded id is
+    /// someone else's must NOT be overwritten.
+    #[tokio::test]
+    async fn capture_does_not_reuse_legacy_file_of_colliding_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("sessions");
+        let other = "a-b"; // plain id; its (legacy) file name is also a_b's lossy name
+        let name = format!("session-20260301T090000Z-{other}.html");
+        let theirs = wrap_envelope(
+            "20260301T090000Z",
+            other,
+            &one_line_jsonl(other),
+            &[],
+            &[],
+            &[],
+        );
+        write(&out_dir, &name, &theirs);
+        let t = write(&tmp.path().join("src"), "t.jsonl", &one_line_jsonl("a_b"));
+        let s = capture(&t, None, None, &out_dir, false).await.unwrap();
+        assert!(!s.reused_existing);
+        assert_eq!(count_html(&out_dir), 2);
+        assert_eq!(
+            std::fs::read_to_string(out_dir.join(&name)).unwrap(),
+            theirs
+        );
+        // and a hashed-key session next to a legacy file of another id
+        let t2 = write(&tmp.path().join("src"), "t2.jsonl", &one_line_jsonl("a.b"));
+        let s2 = capture(&t2, None, None, &out_dir, false).await.unwrap();
+        assert!(!s2.reused_existing);
+        assert_eq!(count_html(&out_dir), 3);
+        assert_eq!(
+            std::fs::read_to_string(out_dir.join(&name)).unwrap(),
+            theirs
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_stamp_names_new_file_but_is_ignored_on_reuse() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("sessions");
+        let sid = "ses_stamp_1";
+        let t = write(&tmp.path().join("src"), "t.jsonl", &one_line_jsonl(sid));
+        let s = capture_with(&t, None, None, &out_dir, false, Some("20250102T030405Z"))
+            .await
+            .unwrap();
+        let key = sanitize_sid(sid);
+        assert_eq!(
+            Path::new(&s.path).file_name().unwrap().to_str().unwrap(),
+            format!("session-20250102T030405Z-{key}.html")
+        );
+        let s2 = capture_with(&t, None, None, &out_dir, false, Some("20260909T010101Z"))
+            .await
+            .unwrap();
+        assert!(s2.reused_existing);
+        assert_eq!(s2.path, s.path, "stamp must not rename a reused file");
+        assert!(!valid_compact_stamp("2025-01-02"));
+        assert!(!valid_compact_stamp("20251302T030405Z"));
+        assert!(valid_compact_stamp("20250102T030405Z"));
+    }
+
+    #[tokio::test]
+    async fn replay_spool_honours_stamp_meta() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spool = tmp.path().join("spool");
+        let out_dir = tmp.path().join("sessions");
+        let sid = "ses_replay_stamp";
+        let key = sanitize_sid(sid);
+        write(&spool, &format!("{key}.jsonl"), &one_line_jsonl(sid));
+        write(
+            &spool,
+            &format!("{key}.meta"),
+            &format!("session_id={sid}\nstamp=20240506T070809Z\nharness=opencode\n"),
+        );
+        let sum = replay_spool(&spool, &out_dir).await.unwrap();
+        assert_eq!((sum.replayed, sum.failed), (1, 0));
+        assert_eq!(
+            html_names(&out_dir),
+            vec![format!("session-20240506T070809Z-{key}.html")]
+        );
     }
 
     #[test]

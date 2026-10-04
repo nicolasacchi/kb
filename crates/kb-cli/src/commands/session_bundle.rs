@@ -308,20 +308,28 @@ fn find_newest_capture(dir: &Path, session_id: &str) -> Result<Option<CaptureHit
         let Some((ts, fsid)) = parse_capture_filename(fname) else {
             continue;
         };
-        // Fast path: filename sid matches. Only read the file (the expensive
-        // part) when it doesn't — to check the embedded id + meta (legacy
-        // truncated-filename robustness, mirrors `import::scan_existing_ids`).
+        // Filename sid matches (verified against the embedded id) or, when it
+        // does not, the embedded id / meta decides (legacy truncated-filename
+        // robustness, mirrors `import::scan_existing_ids`).
         let mut is_match = fsid == target_sid;
-        if !is_match {
+        if is_match {
+            // v0.45 N4: a pre-v0.45 lossy name was shared by distinct ids, so
+            // a name match is vetoed by a DIFFERENT embedded JSONL id.
             if let Ok(html) = std::fs::read_to_string(path) {
-                is_match = recover_jsonl_from_capture(&html)
+                if let Some(id) = recover_jsonl_from_capture(&html)
                     .and_then(|j| first_transcript_field(&j, "sessionId"))
-                    .map(|s| s == session_id)
-                    .unwrap_or(false)
-                    || meta_session(&html)
-                        .map(|m| m == session_id)
-                        .unwrap_or(false);
+                {
+                    is_match = id == session_id;
+                }
             }
+        } else if let Ok(html) = std::fs::read_to_string(path) {
+            is_match = recover_jsonl_from_capture(&html)
+                .and_then(|j| first_transcript_field(&j, "sessionId"))
+                .map(|s| s == session_id)
+                .unwrap_or(false)
+                || meta_session(&html)
+                    .map(|m| m == session_id)
+                    .unwrap_or(false);
         }
         if !is_match {
             continue;
@@ -849,6 +857,44 @@ mod tests {
         .unwrap();
         let hit = find_newest_capture(dir, full).unwrap();
         assert!(hit.is_some(), "matched via embedded sessionId");
+    }
+
+    #[test]
+    fn parse_capture_filename_roundtrips_hashed_key() {
+        let key = sanitize_sid("ses_01HXYZ");
+        let fname = format!("session-20260301T090000Z-{key}.html");
+        assert_eq!(
+            parse_capture_filename(&fname),
+            Some(("20260301T090000Z".to_string(), key))
+        );
+    }
+
+    #[test]
+    fn bundle_find_newest_capture_matches_hashed_and_legacy_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let sid = "ses_bundle_9";
+        let jsonl = format!("{{\"sessionId\":\"{sid}\"}}\n");
+        // Legacy lossy name (pre-v0.45), older.
+        let lossy = super::super::import::legacy_lossy_sid(sid);
+        std::fs::write(
+            dir.join(format!("session-20260101T101010Z-{lossy}.html")),
+            capture_html(&lossy, &jsonl),
+        )
+        .unwrap();
+        let hit = find_newest_capture(dir, sid).unwrap().expect("legacy hit");
+        assert!(hit.filename.contains(&lossy), "{}", hit.filename);
+        // Hashed name, newer: wins.
+        let key = sanitize_sid(sid);
+        std::fs::write(
+            dir.join(format!("session-20260202T090000Z-{key}.html")),
+            capture_html(&key, &jsonl),
+        )
+        .unwrap();
+        let hit = find_newest_capture(dir, sid).unwrap().expect("hashed hit");
+        assert!(hit.filename.contains(&key), "{}", hit.filename);
+        // A colliding id's file (same lossy name, other embedded id) is not a match.
+        assert!(find_newest_capture(dir, "ses-bundle-9").unwrap().is_none());
     }
 
     #[test]
