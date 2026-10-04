@@ -13,15 +13,15 @@
 # (tool outputs capped, reasoning dropped). The export path (when a file)
 # or session id rides an adapter-meta line.
 #
-# Secrets floor (v0.44 F7b): this adapter hand-writes its own envelope (the
-# `kb-harness` meta `kb sessions capture` does not emit), so the translated
-# JSONL is piped through `kb sessions scrub` — the same secrets-only scrubber
-# every other lane uses — BEFORE it is embedded. FAIL CLOSED: with no `kb`
-# on PATH (or a `kb` too old to have the verb) the session is NOT captured;
-# an unscrubbed capture is never written. That means the capture is SKIPPED
-# (stderr message only, exit 0 — a hook must never fail the session) when `kb`
-# cannot be found; the adapter probes KB_BIN_DIR, ~/.local/bin, ~/.cargo/bin,
-# /usr/local/bin and /opt/homebrew/bin before concluding that.
+# Landing (v0.45 N4): the translated JSONL (its first record is an
+# `adapter-meta` line carrying `harness: "opencode"`, the enrich ladder's
+# rung 1) goes through `kb sessions capture`, the Rust engine: envelope,
+# secrets scrub, commit resolution. When that fails, or `kb` is missing, the
+# UNSCRUBBED translation is parked in the private capture spool
+# (kb-hook-lib.sh hook_adapter_land) and replayed through the same scrubbed
+# path by the next successful capture. This adapter NEVER writes HTML itself,
+# so nothing raw can reach the corpus. It probes KB_BIN_DIR, ~/.local/bin,
+# ~/.cargo/bin, /usr/local/bin and /opt/homebrew/bin for `kb` first.
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -29,7 +29,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 # Resolve `kb` robustly (v0.44 X4). Harness hooks routinely run with a minimal
 # PATH (a GUI-launched harness, a service manager, a sandboxed `env -i`) that
 # lacks ~/.local/bin, so `command -v kb` failed and the capture was silently
-# skipped (this adapter fails closed without the scrubber — see above).
+# skipped.
 # Probe the usual install locations before giving up, and say so on stderr when
 # `kb` truly cannot be found: the session is then NOT captured by this hook.
 if ! command -v kb >/dev/null 2>&1; then
@@ -72,14 +72,18 @@ translate_export() {
   model="$(jq -r '.info.model.id // .info.model.modelID // "opencode"' "$src" 2>/dev/null)"
   title="$(jq -r '.info.title // empty' "$src" 2>/dev/null)"
 
-  local safe_sid ts out tmp jsonl
-  safe_sid="$(hook_sid_key "$sid")"
-  ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  out=""
-  for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
-    [ -f "$f" ] && out="$f"
-  done
-  [ -n "$out" ] || out="$KB_SESSIONS_DIR/session-$ts-$safe_sid.html"
+  # Filename stamp for a NEW capture: the session's creation time when the
+  # export carries it (`.info.time.created`, ms), else now. A re-capture of a
+  # known session reuses its existing file, whatever the stamp.
+  local ts created tj
+  created="$(jq -r '.info.time.created // empty' "$src" 2>/dev/null)"
+  ts=""
+  case "$created" in
+    '' | *[!0-9]*) ;;
+    *) ts="$(date -u -d "@$((created / 1000))" +%Y%m%dT%H%M%SZ 2>/dev/null)" || ts="" ;;
+  esac
+  [ -n "$ts" ] || ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  local jsonl
 
   jsonl="$(jq -c --arg sid "$sid" --arg cwd "$cwd" --arg model "$model" \
     --arg title "$title" --arg src "$src" --argjson cap "$OUT_CAP" '
@@ -111,8 +115,11 @@ translate_export() {
     {sessionId: $sid, type: "adapter-meta", adapter: "kb-capture-opencode/1",
      harness: "opencode", export_path: $src, cwd: $cwd, title: $title,
      timestamp: (now | todateiso8601)},
-    # then messages
-    (.messages // [])[] |
+    # then messages. The parentheses matter: `,` binds tighter than `|`,
+    # so without them the adapter-meta record above was piped THROUGH the
+    # message handler and silently dropped - the harness (enrich ladder rung
+    # 1) then rode only the old hand-written kb-harness meta tag.
+    ((.messages // [])[] |
     . as $m |
     ($m.info.role // "user") as $role |
     ($m.info.time.created // null) as $tms |
@@ -144,40 +151,15 @@ translate_export() {
             content: ((.state.output // "") | cap_str),
             is_error: ($st == "error" or $st == "failed")}]}}
       )
-    else empty end
+    else empty end)
   ' "$src" 2>/dev/null)" || return 0
 
   [ -n "$jsonl" ] || return 0
 
-  # Secrets floor — fail closed (see the header).
-  if command -v kb >/dev/null 2>&1; then
-    jsonl="$(printf '%s\n' "$jsonl" | run_to 15 kb sessions scrub 2>/dev/null)" || jsonl=""
-  else
-    jsonl=""
-  fi
-  if [ -z "$jsonl" ]; then
-    echo "kb-capture-opencode.sh: kb sessions scrub unavailable — not capturing session $sid (fail closed)" >&2
-    return 0
-  fi
-
-  mkdir -p "$KB_SESSIONS_DIR" || return 0
-  tmp="$out.tmp"
-  {
-    printf '%s\n' '<!DOCTYPE html>'
-    printf '%s\n' '<html lang="en"><head><meta charset="utf-8">'
-    printf '<title>Session transcript %s</title>\n' "$ts"
-    printf '%s\n' '<meta name="kb-category" content="memory-session">'
-    printf '%s\n' '<meta name="kb-decay" content="fast">'
-    printf '<meta name="kb-session" content="%s">\n' "$sid"
-    printf '%s\n' '<meta name="kb-harness" content="opencode">'
-    printf '%s\n' '</head><body>'
-    printf '<h1>Session transcript %s</h1>\n' "$ts"
-    printf '%s\n' '<pre>'
-    # HTML-escape the JSONL
-    printf '%s\n' "$jsonl" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
-    printf '%s\n' '</pre></body></html>'
-  } >"$tmp" || { rm -f "$tmp"; return 0; }
-  mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"
+  tj="$(mktemp)" || return 0
+  printf '%s\n' "$jsonl" >"$tj" || { rm -f "$tj"; return 0; }
+  hook_adapter_land "$sid" "$tj" "$cwd" "$ts" opencode
+  rm -f "$tj"
 }
 
 # v0.44 X6 (INT4) - every `kb` call is bounded by the shared hook deadline
@@ -185,9 +167,16 @@ translate_export() {
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # Standalone copy without the lib: capture only, no spool, never any HTML.
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
+  hook_adapter_land() {
+    command -v kb >/dev/null 2>&1 || { echo "kb-capture-opencode.sh: kb not found - session $1 not captured" >&2; return 0; }
+    kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
+      --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 \
+      || echo "kb-capture-opencode.sh: kb sessions capture failed - session $1 not captured" >&2
+    return 0
+  }
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 

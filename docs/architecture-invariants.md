@@ -891,6 +891,21 @@ enrichment table** holds the parse-expensive metadata (`session_id`,
 paths) is cached in the daemon-wide `TouchesCache` LRU keyed `(kb, artifact_id,
 mtime_unix)` so the SPA atlas overlay can poll every render without rescanning.
 
+**One file-name key, one writer (v0.45 N4 amendment).** A capture's file name
+carries the session key `sanitize_sid` (Rust) = `hook_sid_key` (shell): a plain
+id (ASCII alphanumerics and `-`, at most 80 bytes - every UUID) is its own key,
+any other id is `{prefix<=48}-{16 hex of sha256(raw id)}`, so distinct ids never
+share a file (the old `tr -c ... | cut -c1-80` form mapped `a_b`/`a-b`, or ids
+sharing an 80-char prefix, to one file and one overwrote the other). A golden
+table is pinned on both sides. `find_existing_capture` reuses a clean-named file
+unless its embedded `sessionId` names another session, and reuses a pre-v0.45
+lossy-named file ONLY when its embedded id equals the raw id - in place, never
+renamed (the filename ts is `started_at`). Every harness capture goes through
+`kb sessions capture` (`--stamp` names a NEW file with the session's true start
+time); the five adapters no longer write HTML and spool the translated,
+unscrubbed JSONL privately on failure (`hook_adapter_land`), the harness riding
+the `adapter-meta` record (ladder rung 1).
+
 **Multi-capture: read the NEWEST capture, never the union.** A long session is
 captured at *every* Stop, so one `session_id` accrues many `sessions` rows (one
 per capture, each a distinct `artifact_id`; on a busy day a single session can

@@ -48,8 +48,9 @@ fn wake_hook_shell_tests() {
     run("test-wake-slate.sh");
 }
 
-/// v0.44 F7b — the codex/opencode adapters scrub through the REAL `kb`
-/// binary (`kb sessions scrub`) and fail closed without it.
+/// v0.44 F7b, reworked in v0.45 N4 - the five harness adapters land through
+/// the REAL `kb sessions capture` (which scrubs) and write nothing to the
+/// corpus without it.
 #[test]
 fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
     let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
@@ -123,4 +124,43 @@ fn capture_hook_spools_instead_of_embedding_raw_and_replays_scrubbed() {
         "test-capture-spool.sh failed:\n{stdout}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Run `script` with `KB_BIN_DIR` pointing at the freshly built `kb`.
+fn run_with_real_kb(script: &str) {
+    let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
+    let out = Command::new("bash")
+        .arg(tests_dir().join(script))
+        .env("KB_BIN_DIR", kb.parent().unwrap())
+        .output()
+        .expect("bash is required to run the hook shell tests");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && !stdout.contains("not ok"),
+        "{script} failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// v0.45 N4 - codex/opencode/kimi/omp/grok park their translated transcript
+/// in the private spool when `kb sessions capture` fails or `kb` is missing
+/// (never raw HTML in the corpus); the replay lands it scrubbed with the
+/// harness intact and the session's true start stamp in the filename.
+#[test]
+fn harness_adapters_spool_and_replay_through_the_real_kb() {
+    run_with_real_kb("test-capture-adapters-spool.sh");
+}
+
+/// v0.45 N4 - the capture throttle and the Rust capture engine agree on the
+/// per-session file name (distinct non-UUID ids do not share a throttle slot;
+/// pre-v0.45 lossy-named captures still throttle their own id).
+#[test]
+fn capture_throttle_agrees_with_the_rust_capture_file_name() {
+    run_with_real_kb("test-capture-throttle.sh");
+}
+
+/// v0.45 N4 - the grok adapter's distill-pending relay on the landed path.
+#[test]
+fn grok_distill_pending_relay() {
+    run("test-grok-distill-pending.sh");
 }

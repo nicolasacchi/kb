@@ -130,12 +130,34 @@ registering anywhere `kb-memory` is already installed. Design:
   (dir 0700, files 0600, one item per session, never indexed). The next
   successful `kb-capture.sh` run, or `kb sessions capture --replay-spool`,
   pushes each item through the normal scrubbed capture path and deletes it;
-  `kb doctor --hooks` (check `outbox`) counts what is waiting. The
-  codex/opencode/kimi/omp/grok adapters never embedded raw bytes in their
-  fallbacks (they scrub their translated JSONL and fail closed), so they do
-  not spool: replaying a translated transcript through `kb sessions capture`
-  would drop the `kb-harness` meta those adapters add. Test:
+  `kb doctor --hooks` (check `outbox`) counts what is waiting. Test:
   `tests/test-capture-spool.sh`.
+- **The codex/opencode/kimi/omp/grok adapters spool too (v0.45 N4)** - none of
+  them writes session HTML any more. Each translates its harness transcript to
+  Claude-shaped JSONL (the first record is an `adapter-meta` line carrying
+  `harness`, which is rung 1 of the enrich harness ladder, so the harness
+  survives a Rust-written envelope - the old `kb-harness` meta tag was only
+  rung 2) and hands it to `hook_adapter_land` in `kb-hook-lib.sh`: `kb sessions
+  capture --stamp <session-start>` (secrets scrub, commit resolution, atomic
+  write), then on success it drops that session's older spool item and replays
+  any other pending items. On failure, or with no `kb`, the UNSCRUBBED
+  translation is parked in the same private spool as above (the `.meta` records
+  `session_id`, `stamp`, `harness`) and lands scrubbed on the next success or
+  `--replay-spool`, the filename still carrying the session's true start time.
+  A `kb` too old to know `--stamp` is retried once without it. omp's staged
+  subagent sidecars are folded in by the live capture only; the spool keeps the
+  main transcript. Test: `tests/test-capture-adapters-spool.sh`.
+- **One per-session key (v0.45 N4)** - every per-session file name (capture
+  file, spool item, throttle lookup, markers) derives from `hook_sid_key`, and
+  `kb sessions capture` (`sanitize_sid`) uses the identical algorithm: a plain
+  id (ASCII alphanumerics and `-`, at most 80 bytes - every UUID) is its own
+  key; any other id is `{prefix<=48}-{first 16 hex of sha256(raw id)}`, so
+  `a_b` and `a-b` (or two ids sharing an 80-char prefix) can never share a file.
+  The two sides are pinned by one golden table (`tests/test-sid-key.sh` and
+  `sanitize_sid_matches_hook_spool_key_golden_table`). Captures written under
+  the old lossy name are never renamed: the throttle and the capture engine
+  still recognise one, but only when the id embedded in the file equals the raw
+  id.
 - **Every `kb` call in the capture and harvest hooks is bounded** - the
   `kb-capture*.sh` adapters and `kb-slate-harvest.sh` source `kb-hook-lib.sh`
   and run each `kb` call under `run_to` inside `KB_CAPTURE_BUDGET_SECS`

@@ -29,15 +29,15 @@
 #   last token_count.total_token_usage → one trailing assistant usage line
 #   turn_context.model                 → message.model
 #
-# Secrets floor (v0.44 F7b): this adapter hand-writes its own envelope (the
-# `kb-harness` meta `kb sessions capture` does not emit), so the translated
-# JSONL is piped through `kb sessions scrub` — the same secrets-only scrubber
-# every other lane uses — BEFORE it is embedded. FAIL CLOSED: with no `kb`
-# on PATH (or a `kb` too old to have the verb) the session is NOT captured;
-# an unscrubbed capture is never written. That means the capture is SKIPPED
-# (stderr message only, exit 0 — a hook must never fail the session) when `kb`
-# cannot be found; the adapter probes KB_BIN_DIR, ~/.local/bin, ~/.cargo/bin,
-# /usr/local/bin and /opt/homebrew/bin before concluding that.
+# Landing (v0.45 N4): the translated JSONL (its first record is an
+# `adapter-meta` line carrying `harness: "codex"`, the enrich ladder's rung 1)
+# goes through `kb sessions capture`, the Rust engine: envelope, secrets scrub,
+# commit resolution. When that fails, or `kb` is missing, the UNSCRUBBED
+# translation is parked in the private capture spool (kb-hook-lib.sh
+# hook_adapter_land) and replayed through the same scrubbed path by the next
+# successful capture. This adapter NEVER writes HTML itself, so nothing raw
+# can reach the corpus. The adapter probes KB_BIN_DIR, ~/.local/bin,
+# ~/.cargo/bin, /usr/local/bin and /opt/homebrew/bin for `kb` first.
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -45,7 +45,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 # Resolve `kb` robustly (v0.44 X4). Harness hooks routinely run with a minimal
 # PATH (a GUI-launched harness, a service manager, a sandboxed `env -i`) that
 # lacks ~/.local/bin, so `command -v kb` failed and the capture was silently
-# skipped (this adapter fails closed without the scrubber — see above).
+# skipped.
 # Probe the usual install locations before giving up, and say so on stderr when
 # `kb` truly cannot be found: the session is then NOT captured by this hook.
 if ! command -v kb >/dev/null 2>&1; then
@@ -126,9 +126,16 @@ TRANSLATE='
 # end; the harness timeout is the last resort, not the design. A standalone
 # copy without the lib runs its calls unbounded, as before.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # Standalone copy without the lib: capture only, no spool, never any HTML.
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
+  hook_adapter_land() {
+    command -v kb >/dev/null 2>&1 || { echo "kb-capture-codex.sh: kb not found - session $1 not captured" >&2; return 0; }
+    kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
+      --out "$KB_SESSIONS_DIR" >/dev/null 2>&1 \
+      || echo "kb-capture-codex.sh: kb sessions capture failed - session $1 not captured" >&2
+    return 0
+  }
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 
@@ -173,61 +180,8 @@ capture_one() {
                   content: []}}' >>"$tmpjsonl" 2>/dev/null
   fi
 
-  # Secrets floor — scrub in place, fail closed (see the header).
-  local scrubbed
-  scrubbed="$(mktemp)" || { rm -f "$tmpjsonl"; return 0; }
-  if command -v kb >/dev/null 2>&1 && run_to 15 kb sessions scrub <"$tmpjsonl" >"$scrubbed" 2>/dev/null \
-     && [ -s "$scrubbed" ]; then
-    mv -f "$scrubbed" "$tmpjsonl"
-  else
-    echo "kb-capture-codex.sh: kb sessions scrub unavailable — not capturing session $sid (fail closed)" >&2
-    rm -f "$scrubbed" "$tmpjsonl"
-    return 0
-  fi
-
-  mkdir -p "$KB_SESSIONS_DIR" || { rm -f "$tmpjsonl"; return 0; }
-  # One file per session, overwritten on re-capture (same contract as
-  # kb-capture.sh — the original start timestamp survives in the name).
-  local safe_sid out f
-  safe_sid="$(hook_sid_key "$sid")"
-  out=""
-  for f in "$KB_SESSIONS_DIR"/session-*-"$safe_sid.html"; do
-    [ -f "$f" ] && out="$f"
-  done
-  [ -n "$out" ] || out="$KB_SESSIONS_DIR/session-$cts-$safe_sid.html"
-
-  # 2026-08-21 ci-host incident hardening — refuse an oversized translated
-  # transcript before it's streamed into the heredoc below. The jq
-  # whitelist above already drops images/screenshots, so this should be
-  # rare in practice; defense in depth against a rollout that still
-  # balloons the translation (e.g. huge tool outputs).
-  local tsize
-  tsize="$(stat -c %s "$tmpjsonl" 2>/dev/null || wc -c <"$tmpjsonl" 2>/dev/null)"
-  if [ -n "$tsize" ] && [ "$tsize" -gt 50331648 ]; then
-    echo "kb-capture-codex.sh: skipping oversized translated transcript ($tsize bytes > 48MiB cap) for session $sid" >&2
-    rm -f "$tmpjsonl"
-    return 0
-  fi
-
-  local esc tmp
-  esc="$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$tmpjsonl")" \
-    || { rm -f "$tmpjsonl"; return 0; }
+  hook_adapter_land "$sid" "$tmpjsonl" "$cwd" "$cts" codex
   rm -f "$tmpjsonl"
-  tmp="$out.tmp"
-  cat >"$tmp" <<EOF || { rm -f "$tmp"; return 0; }
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<title>Codex session transcript $cts</title>
-<meta name="kb-category" content="memory-session">
-<meta name="kb-decay" content="fast">
-<meta name="kb-session" content="$safe_sid">
-<meta name="kb-harness" content="codex">
-</head><body>
-<h1>Codex session transcript $cts</h1>
-<pre>$esc</pre>
-</body></html>
-EOF
-  mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"
 }
 
 if [ "$#" -gt 0 ]; then
