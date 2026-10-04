@@ -833,8 +833,8 @@ async fn list_page(
 // v0.44 F10 — recall-hook coverage
 // ---------------------------------------------------------------------------
 
-pub(crate) const COVERAGE_DEFAULT_DAYS: u32 = 7;
-const COVERAGE_MAX_DAYS: u32 = 365;
+pub(crate) const COVERAGE_DEFAULT_DAYS: u32 = kb_core::slo::RECALL_COVERAGE_DEFAULT_DAYS;
+const COVERAGE_MAX_DAYS: u32 = kb_core::slo::RECALL_COVERAGE_MAX_DAYS;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct RecallCoverageParams {

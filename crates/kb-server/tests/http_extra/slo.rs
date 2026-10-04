@@ -384,3 +384,110 @@ async fn recall_coverage_slo_excludes_live_sessions_on_the_wire() {
     );
     assert_eq!(i["status"], "unknown");
 }
+
+/// A sessions-corpus boot whose only transcript started `age_days` ago, plus
+/// the session id. The transcript's first record carries the timestamp, which
+/// becomes `sessions.started_at`.
+async fn boot_aged_session(
+    age_days: i64,
+    slo: Option<SloSection>,
+) -> (tempfile::TempDir, std::net::SocketAddr, &'static str) {
+    let started = chrono::Utc::now() - chrono::Duration::days(age_days);
+    let ts = started.format("%Y%m%dT%H%M%SZ").to_string();
+    let iso = started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let sid = "sid-slo-window-0001";
+    let jsonl = format!(
+        "{{\"type\":\"user\",\"sessionId\":\"{sid}\",\"timestamp\":\"{iso}\",\"promptSource\":\"typed\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n"
+    )
+    .replace('&', "&amp;")
+    .replace('<', "&lt;")
+    .replace('>', "&gt;");
+    let transcript = format!(
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <title>Session transcript {ts}</title>\
+         <meta name=\"kb-category\" content=\"memory-session\">\
+         <meta name=\"kb-session\" content=\"{sid}\"></head><body>\
+         <h1>Session transcript {ts}</h1><pre>{jsonl}</pre></body></html>"
+    );
+    let memory = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
+         <title>Wombat window memory</title>\
+         <meta name=\"kb-category\" content=\"memory-user\">\
+         <meta name=\"kb-salience\" content=\"0.9\"></head>\
+         <body><h1>Wombat window memory</h1><p>wombatword is served</p></body></html>"
+        .to_string();
+    let transcript_name = format!("session-{ts}-{sid}.html");
+    let (tmp, addr) = boot_named(
+        "sessions",
+        Some("global"),
+        &[
+            ("mem-wombat.html", memory),
+            (transcript_name.as_str(), transcript),
+        ],
+        slo,
+    )
+    .await;
+    (tmp, addr, sid)
+}
+
+/// N5-b: `recall_coverage_window_days` reaches the route. A session that
+/// started 10 days ago with one served-but-uncaptured injection is outside
+/// the default 7d window (unknown) and inside a configured 14d window (0%).
+#[tokio::test]
+async fn slo_route_recall_coverage_honours_window() {
+    let client = reqwest::Client::new();
+
+    // Configured 14d: the 10-day-old lost turn is counted.
+    let (_t1, wide, sid) = boot_aged_session(
+        10,
+        Some(SloSection {
+            recall_coverage_window_days: Some(14),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let body = common::poll_until("a measured 14d recall_coverage_pct", || async {
+        let _ = client
+            .get(url(
+                wide,
+                &format!("/api/memory/recall?q=wombatword&session={sid}"),
+            ))
+            .send()
+            .await;
+        let b = get_json(&client, wide, "/api/kb/sessions/slo").await;
+        (!indicator(&b, "recall_coverage_pct")["value"].is_null()).then_some(b)
+    })
+    .await;
+    let i = indicator(&body, "recall_coverage_pct");
+    assert_eq!(i["value"], 0.0, "{i}");
+    assert!(
+        i["detail"]
+            .as_str()
+            .unwrap()
+            .contains("trailing 14d window"),
+        "{i}"
+    );
+
+    // Default window: the same session is outside 7d. Prove it is indexed and
+    // served (the 14d route read counts its lost turn) before asserting that
+    // the SLO, correctly, does not.
+    let (_t2, narrow, sid) = boot_aged_session(10, None).await;
+    common::poll_until("the aged session served and indexed", || async {
+        let _ = client
+            .get(url(
+                narrow,
+                &format!("/api/memory/recall?q=wombatword&session={sid}"),
+            ))
+            .send()
+            .await;
+        let b = get_json(&client, narrow, "/api/sessions/recall-coverage?days=14").await;
+        (b["total"]["lost_turns"].as_u64().unwrap_or(0) >= 1).then_some(b)
+    })
+    .await;
+    let b = get_json(&client, narrow, "/api/kb/sessions/slo").await;
+    let i = indicator(&b, "recall_coverage_pct");
+    assert!(i["value"].is_null(), "10d-old session is outside 7d: {i}");
+    assert!(
+        i["detail"].as_str().unwrap().contains("trailing 7d window"),
+        "{i}"
+    );
+}
