@@ -72,7 +72,10 @@ bindings), `e2e` (Playwright iframe/SPA smoke), `embedder-lint` +
 web-code SPA), `web-unit` (SPA typecheck + vitest), and `supply-chain`
 (`cargo-deny`). Lint and test lanes are split so the heavy test lane owns each
 rust-cache family. A separate workflow (`dco.yml`) gates the DCO sign-off
-described above. All of it must be green before merge.
+described above. `installer.yml` self-tests `scripts/install.sh` and the
+first-run smoke script (`scripts/ci/first-run-selftest.sh`); after a release,
+`first-run.yml` installs the published tarballs and image on clean distros (see
+[docs/packaging.md](docs/packaging.md)). All of it must be green before merge.
 
 ## Commit + PR conventions
 
