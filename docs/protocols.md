@@ -37,6 +37,9 @@ kb validate -                        # read stdin
   `<!-- kb-list {...} -->` header; a front-matter `schema:` line; or a
   `<!--kb-recall/1 ...-->` marker. `--schema` accepts a registered id, or a path
   ending in `.json` to check against your own JSON Schema (whole-file JSON only).
+  Such a schema must be self-contained: a `$ref`/`$dynamicRef` that is not a
+  same-document fragment (`#...`) is refused with exit 2, so a user schema can
+  never make `kb validate` load another file or fetch a URL.
 
 ## The registry (v1)
 
@@ -60,7 +63,9 @@ kb validate -                        # read stdin
 marker line in the file: `kb` required and non-empty, `id` required and exactly
 12 lowercase hex characters, `pos` optional and an integer in 1..=99, unknown
 `key=value` pairs and bare tokens ignored (the reader ignores them too, which is
-what keeps the grammar forward-compatible).
+what keeps the grammar forward-compatible). The `pos` range and the marker
+framing are the reader's own constants (`kb_core::sessions::view`), imported by
+the validator rather than copied.
 
 Other versioned strings exist (`kb-sibling/1`, `lip/1`, `unified-inbox/1`, the
 `kbc-store` family, `kbc-tour/1`, the many read-route envelopes). They are API

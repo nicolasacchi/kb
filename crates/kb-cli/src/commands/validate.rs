@@ -76,11 +76,14 @@ const EMBEDDED: &[(&str, &str)] = &[
 
 /// The id of the one registered contract that is a text grammar, not JSON.
 const RECALL_ID: &str = "kb-recall/1";
-const RECALL_PREFIX: &str = "<!--kb-recall/1 ";
-const RECALL_SUFFIX: &str = "-->";
-/// What `kb_core::sessions::view` accepts as a marker `pos` (1..=99); a value
-/// outside it is read as "unknown rank", which a lint reports as malformed.
-const RECALL_POS_RANGE: std::ops::RangeInclusive<u32> = 1..=99;
+// The marker grammar constants are the reader's own (`kb_core::sessions::view`),
+// not copies: a change to the accepted `pos` range or the marker framing moves
+// this lint with it. A value outside the range is read as "unknown rank", which
+// a lint reports as malformed.
+use kb_core::sessions::view::{
+    RECALL_MARKER_POS_RANGE as RECALL_POS_RANGE, RECALL_MARKER_PREFIX as RECALL_PREFIX,
+    RECALL_MARKER_SUFFIX as RECALL_SUFFIX,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -387,6 +390,43 @@ fn validate_recall(text: &str) -> Vec<Problem> {
 
 // --- validation --------------------------------------------------------------
 
+/// A caller-supplied schema must be self-contained: every `$ref` /
+/// `$dynamicRef` has to be a same-document fragment (`#...`). Anything else
+/// would make the schema compiler resolve a resource (a local file or a URL)
+/// the user never handed us, so it is refused before compiling.
+fn reject_external_refs(schema_json: &str) -> std::result::Result<(), String> {
+    fn walk(v: &Value, path: &str) -> std::result::Result<(), String> {
+        match v {
+            Value::Object(m) => {
+                for (k, child) in m {
+                    if k == "$ref" || k == "$dynamicRef" {
+                        if let Some(r) = child.as_str() {
+                            if !r.starts_with('#') {
+                                return Err(format!(
+                                    "schema {path}/{k} is {r:?}: only same-document refs (\"#...\") \
+                                     are allowed in a --schema file"
+                                ));
+                            }
+                        }
+                    }
+                    walk(child, &format!("{path}/{k}"))?;
+                }
+                Ok(())
+            }
+            Value::Array(a) => a
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, c)| walk(c, &format!("{path}/{i}"))),
+            _ => Ok(()),
+        }
+    }
+    match serde_json::from_str::<Value>(schema_json) {
+        Ok(v) => walk(&v, ""),
+        // compile() reports the parse error with its own wording
+        Err(_) => Ok(()),
+    }
+}
+
 fn validate_with(
     kind: Kind,
     schema_json: &str,
@@ -531,7 +571,9 @@ pub fn run(file: Option<&Path>, schema: Option<&str>, json: bool, list: bool) ->
                 Ok(t) => t,
                 Err(e) => usage_exit(json, &format!("cannot read schema {s}: {e}")),
             };
-            validate_with(Kind::Json, &schema_json, &text).map(|p| (s.to_string(), p))
+            reject_external_refs(&schema_json)
+                .and_then(|()| validate_with(Kind::Json, &schema_json, &text))
+                .map(|p| (s.to_string(), p))
         }
         Some(id) => validate_text(&text, Some(id)),
         None => validate_text(&text, None),
@@ -663,6 +705,39 @@ mod tests {
         ] {
             assert!(!validate_recall(bad).is_empty(), "{bad}");
         }
+    }
+
+    #[test]
+    fn user_schemas_may_not_reference_other_resources() {
+        for bad in [
+            r#"{"$ref":"other.json"}"#,
+            r#"{"properties":{"a":{"$ref":"file:///etc/hostname"}}}"#,
+            r#"{"allOf":[{"$ref":"https://example.invalid/s.json"}]}"#,
+        ] {
+            let err = reject_external_refs(bad).unwrap_err();
+            assert!(err.contains("same-document"), "{bad}: {err}");
+        }
+        assert!(reject_external_refs(
+            r##"{"$defs":{"x":{"type":"string"}},"properties":{"a":{"$ref":"#/$defs/x"}}}"##
+        )
+        .is_ok());
+        // a property merely NAMED "$ref" is not a reference
+        assert!(reject_external_refs(r#"{"properties":{"$ref":{"type":"string"}}}"#).is_ok());
+    }
+
+    #[test]
+    fn recall_range_is_the_readers_own() {
+        assert_eq!(RECALL_POS_RANGE, 1..=99);
+        let top = format!(
+            "{RECALL_PREFIX}kb=kb id=a1b2c3d4e5f6 pos={}{RECALL_SUFFIX}",
+            RECALL_POS_RANGE.end()
+        );
+        let over = format!(
+            "{RECALL_PREFIX}kb=kb id=a1b2c3d4e5f6 pos={}{RECALL_SUFFIX}",
+            RECALL_POS_RANGE.end() + 1
+        );
+        assert!(validate_recall(&top).is_empty());
+        assert!(!validate_recall(&over).is_empty());
     }
 
     #[test]

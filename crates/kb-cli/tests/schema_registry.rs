@@ -686,6 +686,18 @@ fn kb_validate_bad_file_exits_1_with_pointer() {
 }
 
 #[test]
+fn kb_validate_refuses_external_refs_in_a_user_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let schema = dir.path().join("mine.json");
+    std::fs::write(&schema, r#"{"$ref":"other.json"}"#).unwrap();
+    let doc = dir.path().join("doc.json");
+    std::fs::write(&doc, "{}").unwrap();
+    let o = kb_validate(&["--schema", schema.to_str().unwrap(), doc.to_str().unwrap()]);
+    assert_eq!(code(&o), 2);
+    assert!(stderr(&o).contains("same-document"), "{}", stderr(&o));
+}
+
+#[test]
 fn kb_validate_unknown_schema_exits_2() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("future.json");
