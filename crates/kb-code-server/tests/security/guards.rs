@@ -203,6 +203,104 @@ async fn a_rebound_host_is_refused_on_every_tier() {
     }
 }
 
+/// A13.f2, kb-code half. Every top-level mount of `build_router` must be the
+/// host-guarded `/api` nest or on the explicit exempt list below; a new
+/// top-level `.nest/.route/.merge/.fallback` fails here until it is guarded
+/// or consciously exempted. The mounts are read from the source of the final
+/// `Router::new()` expression, so the inventory cannot drift from the router.
+#[tokio::test]
+async fn top_level_mounts_are_host_guarded_or_exempt() {
+    const SRC: &str = include_str!("../../src/router.rs");
+    // Exempt: unauthenticated liveness probe and the SPA fallback (static
+    // assets, no data). Everything else must live under the guarded nest.
+    const EXEMPT_ROUTES: &[&str] = &["/healthz"];
+
+    let code: String = SRC
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let start = code
+        .rfind("Router::new()")
+        .expect("final Router::new() expression");
+    let tail = &code[start..];
+    let end = tail
+        .find(".with_state(")
+        .expect("with_state ends the router");
+    let expr = &tail[..end];
+
+    let mut mounts: Vec<(String, String)> = Vec::new();
+    for kind in [".nest(", ".route(", ".merge(", ".fallback("] {
+        let mut rest = expr;
+        while let Some(i) = rest.find(kind) {
+            let after = &rest[i + kind.len()..];
+            let arg = if kind == ".nest(" || kind == ".route(" {
+                let q1 = after.find('"').expect("path literal");
+                let q2 = after[q1 + 1..].find('"').expect("path literal end");
+                after[q1 + 1..q1 + 1 + q2].to_string()
+            } else {
+                String::new()
+            };
+            mounts.push((kind.trim_matches(|c| c == '.' || c == '(').to_string(), arg));
+            rest = after;
+        }
+    }
+    assert!(!mounts.is_empty(), "no mounts parsed - extractor is broken");
+
+    let mut saw_api_nest = false;
+    let mut saw_fallback = false;
+    for (kind, path) in &mounts {
+        match (kind.as_str(), path.as_str()) {
+            ("nest", "/api") => saw_api_nest = true,
+            ("route", p) if EXEMPT_ROUTES.contains(&p) => {}
+            ("fallback", _) => saw_fallback = true,
+            other => panic!(
+                "top-level mount {other:?} in build_router is neither the guarded /api nest nor \
+                 exempt; layer origin_host_guard on it or add it to EXEMPT_ROUTES with a test"
+            ),
+        }
+    }
+    assert!(saw_api_nest && saw_fallback, "mounts: {mounts:?}");
+    // The nest is only guarded if the router it mounts carries the layer.
+    assert!(
+        code.contains("let api_all") && {
+            let a = code.find("let api_all").unwrap();
+            code[a..start].contains("security::origin::origin_host_guard")
+        },
+        "api_all must be layered with origin_host_guard"
+    );
+
+    // Positive behaviour under a rebound Host.
+    let repo = fixture_repo();
+    let (_tmp, base) = boot_default(repo.path()).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{base}/api/repos"))
+        .header("Host", "attacker.example")
+        .send()
+        .await
+        .unwrap();
+    assert_problem(resp, "urn:kb:errors:origin-refused").await;
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("Host", "attacker.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "/healthz is exempt");
+    let resp = client
+        .get(format!("{base}/some/spa/path"))
+        .header("Host", "attacker.example")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status() == 200 || resp.status() == 404,
+        "SPA fallback is exempt (static shell), got {}",
+        resp.status()
+    );
+}
+
 /// F1, kb-code half. A rebound page sets `X-Forwarded-For` itself (it is not
 /// a forbidden request header). The gate used to resolve "is the peer
 /// loopback" THROUGH that header, so one forged value switched the Host
