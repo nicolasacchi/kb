@@ -174,7 +174,6 @@ skip = [
     { crate = "hashbrown", version = "0.14.5", reason = "dashmap 6 / hashlink" },
     { crate = "hashbrown", version = "0.15.5", reason = "petgraph 0.8" },
     { crate = "hashbrown", version = "0.16.1", reason = "clru / quick_cache / safetensors" },
-    { crate = "itertools", version = "0.10.5", reason = "criterion (dev-only)" },
     { crate = "ndarray", version = "0.16.1", reason = "lance-index 11 (fastembed/ort use 0.17)" },
     { crate = "nom", version = "7.1.3", reason = "spm_precompiled (tokenizer chain)" },
     { crate = "phf", version = "0.12.1", reason = "chrono-tz 0.10" },

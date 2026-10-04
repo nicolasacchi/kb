@@ -13,7 +13,8 @@
 # included) to the PR branch. A push made with GITHUB_TOKEN does not trigger
 # other workflows, so push any follow-up commit (or re-run the checks) afterwards.
 #
-# The `regen-cargo` job (v0.45 N7) runs after the npm job and prunes
+# The `regen-cargo` job (v0.45 N7) runs after the npm job, re-renders
+# THIRD-PARTY-LICENSES.md (cargo-about) and prunes
 # Cargo.lock with `cargo update --workspace` (re-resolve against the edited
 # manifests; never a blanket `cargo update`). It FAILS if any retained package
 # version moved, so the arrow/lance lockstep (invariant #1) cannot drift.
@@ -90,7 +91,7 @@ jobs:
   regen-cargo:
     permissions:
       contents: write
-    name: regenerate Cargo.lock (prune only, no version moves)
+    name: regenerate Cargo.lock + THIRD-PARTY-LICENSES.md (prune only, no version moves)
     needs: regen
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -129,16 +130,27 @@ jobs:
               sys.exit(1)
           PY
 
-      - name: Commit and push Cargo.lock
+      - name: Install cargo-about (pinned like the supply-chain job)
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-about@0.9.2
+
+      - name: Regenerate THIRD-PARTY-LICENSES.md from the pruned lock
+        # The supply-chain job's `licenses-set-check` compares per-license
+        # COUNTS, which this render reproduces; the text order is cache-state
+        # dependent and is not gated.
+        run: cargo about generate about.hbs > THIRD-PARTY-LICENSES.md
+
+      - name: Commit and push Cargo.lock + THIRD-PARTY-LICENSES.md
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
         run: |
-          if git diff --quiet -- Cargo.lock; then
-            echo "Cargo.lock already current; nothing to push"
+          if git diff --quiet -- Cargo.lock THIRD-PARTY-LICENSES.md; then
+            echo "Cargo.lock and THIRD-PARTY-LICENSES.md already current; nothing to push"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- Cargo.lock
-          git commit -s -m "chore(deps): regenerate Cargo.lock in CI (lockfile-regen)"
+          git add -- Cargo.lock THIRD-PARTY-LICENSES.md
+          git commit -s -m "chore(deps): regenerate Cargo.lock and THIRD-PARTY-LICENSES.md in CI (lockfile-regen)"
           git push origin "HEAD:refs/heads/${HEAD_REF}"
