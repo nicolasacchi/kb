@@ -2361,6 +2361,34 @@ fn git_toplevel(repo: &Path) -> Option<PathBuf> {
     run_git(repo, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
 }
 
+/// `kb doctor --public-mirror` (v0.45 N9): lint the resolved kb.toml against
+/// the posture in docs/public-mirror.md. File-only; returns the exit code
+/// (0 clean, 1 findings).
+pub fn public_mirror(config: Option<&PathBuf>, json_out: bool) -> Result<i32> {
+    let path = super::resolve_config_path(config)?;
+    if !path.exists() {
+        anyhow::bail!("config file not found: {}", path.display());
+    }
+    let cfg = super::load_config_or_default(&path)?;
+    let findings = kb_core::public_mirror::public_mirror_findings(&cfg);
+    if json_out {
+        let v = serde_json::json!({"ok": findings.is_empty(), "findings": findings});
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else if findings.is_empty() {
+        println!("public-mirror: {} - clean", path.display());
+    } else {
+        println!(
+            "public-mirror: {} - {} finding(s)",
+            path.display(),
+            findings.len()
+        );
+        for f in &findings {
+            println!("  ✗ {}  {}  -  {}", f.rule, f.subject, f.message);
+        }
+    }
+    Ok(if findings.is_empty() { 0 } else { 1 })
+}
+
 pub async fn hooks(
     repo: Option<PathBuf>,
     daemon: Option<&str>,

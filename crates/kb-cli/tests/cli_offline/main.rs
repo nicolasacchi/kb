@@ -16,6 +16,7 @@ mod hook_shell;
 mod import_memory;
 mod json_output;
 mod lookup;
+mod public_mirror;
 mod pull;
 mod push;
 mod reindex;
