@@ -3566,3 +3566,33 @@ fn a_forge_answering_403_or_404_leaves_the_target_unread_and_retrack_refuses_the
         assert_eq!(after.base_mode, before.base_mode, "{status}");
     }
 }
+
+/// A6.f5 / A6-8: a recapture whose DB write FAILS must surface as a 500
+/// `capture-failed`, never as a 200 carrying a `base` block the DB does not
+/// hold. The failing write is injected with a `BEFORE UPDATE` trigger that
+/// aborts on the review's base columns.
+#[test]
+fn a_failing_base_write_fails_the_recapture_instead_of_reporting_it_done() {
+    let fx = fixture();
+    fx.push_pr(&fx.m1, &["p1.rs"], "v1");
+    let review = fx.pr_review(&fx.m1.clone(), None);
+    let id = review.id;
+    // Control: without the trigger the same recapture succeeds.
+    recap(&fx, id, fetch());
+    let before = fx.store.get_review_base(id).unwrap().unwrap();
+
+    fx.store.exec_sql_for_test(
+        "CREATE TRIGGER boom_base BEFORE UPDATE OF base_status, base_ref, base_mode, \
+         base_branch, base_set_by ON reviews \
+         BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+    );
+    let current = fx.refetch(id);
+    let err = fx
+        .with(|ctx| ctx.recapture(&current, &fetch()))
+        .expect_err("a failed base write must not be reported as a finished capture");
+    assert_eq!(err.status, 500, "{err:?}");
+    assert_eq!(err.urn, URN_CAPTURE_FAILED, "{err:?}");
+    assert!(err.message.contains("boom"), "{err:?}");
+    let after = fx.store.get_review_base(id).unwrap().unwrap();
+    assert_eq!(after.base_status, before.base_status, "nothing was written");
+}

@@ -4697,7 +4697,7 @@ repository has always cost zero re-extraction for them. They are outside
 the classification because they need no key, not because they were
 forgotten.
 
-`store::tests::v75_m1` walks `sqlite_master` against that table from both
+`rekey::tests::every_repo_keyed_table_is_classified` walks `sqlite_master` against that table from both
 ends: **a table added later with a `repo_id`/`repo` column fails the build
 until it declares a class.** That walk is the re-key's teeth.
 
