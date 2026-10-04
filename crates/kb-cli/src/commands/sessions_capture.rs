@@ -1523,6 +1523,28 @@ mod tests {
         assert_eq!(count_html(&out_dir), 2, "{:?}", html_names(&out_dir));
     }
 
+    /// The capture throttle (`kb-capture-throttle.sh` `file_sid_literal`) greps
+    /// the first 256 KiB of a capture for an UNESCAPED `"sessionId":"<id>"`
+    /// JSON literal to tell its own file from a stranger's. This pins that the
+    /// envelope keeps the transcript quotes unescaped inside the `<pre>`; if the
+    /// HTML escaping ever changes, this fails instead of the throttle silently
+    /// treating every legacy file as foreign.
+    #[tokio::test]
+    async fn capture_envelope_keeps_session_id_json_literal_unescaped_in_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("sessions");
+        let sid = "ses_literal-1";
+        let t = write(&tmp.path().join("src"), "t.jsonl", &one_line_jsonl(sid));
+        capture(&t, None, None, &out_dir, false).await.unwrap();
+        let name = html_names(&out_dir).remove(0);
+        let bytes = std::fs::read(out_dir.join(name)).unwrap();
+        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(262_144)]).into_owned();
+        assert!(
+            head.contains(&format!("\"sessionId\":\"{sid}\"")),
+            "throttle's file_sid_literal needs the raw literal in the head"
+        );
+    }
+
     /// An old capture under the lossy name is reused in place when it
     /// verifiably holds this id: same name, no duplicate, no rename.
     #[tokio::test]

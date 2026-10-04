@@ -67,6 +67,14 @@ fn codex_and_opencode_adapters_scrub_secrets_and_fail_closed() {
     );
 }
 
+/// v0.45 N4 - the kimi and omp adapter matrices (stand-in `kb`, fixtures) were
+/// not run by any CI lane before; both need `jq`, which CI runners ship.
+#[test]
+fn kimi_and_omp_adapter_shell_tests() {
+    run("test-capture-kimi.sh");
+    run("test-capture-omp.sh");
+}
+
 /// v0.44 F8 — the once-a-day CLI/hook skew notice.
 #[test]
 fn wake_hook_names_cli_skew_once_a_day() {

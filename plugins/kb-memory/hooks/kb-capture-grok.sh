@@ -110,12 +110,13 @@
 #     produced a real exchange leaves nothing worth indexing, and a
 #     retried/resumed job re-captures on its next real round).
 #
-# Scrub posture: same as every harness (kb-capture.sh, codex, opencode) —
-# captured verbatim, no capture-time secret scrub; outbound serve-time scrub
-# (#4/#5) and export scrub floors apply identically once indexed. Grok's
-# tool_result content can inline file contents the worker read (broad
-# research-role read access per grokclaude's write-rails design) — the same
-# posture as every other tool-output-bearing harness capture.
+# Scrub posture: the capture goes through the Rust engine (`kb sessions
+# capture`), which scrubs secrets at capture time like every harness; the
+# unscrubbed translation only ever exists in the private spool until a
+# successful capture replays it through that same scrub. Grok's tool_result
+# content can inline file contents the worker read (broad research-role read
+# access per grokclaude's write-rails design); the scrub and the outbound
+# serve-time/export scrub floors (#4/#5) apply to it like any other harness.
 set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0

@@ -82,6 +82,8 @@ sid="$(hook_sid_key "$raw_sid")"
 raw_lit="$(printf '%s' "$raw_sid" | jq -Rs . 2>/dev/null)"
 
 # The sessionId JSON literal embedded in a capture's head ('' when none).
+# Depends on the envelope keeping transcript quotes unescaped inside the <pre>;
+# pinned by sessions_capture::capture_envelope_keeps_session_id_json_literal_unescaped_in_head.
 file_sid_literal() {
   head -c 262144 "$1" 2>/dev/null \
     | grep -o -m1 '"sessionId": *"\([^"\\]\|\\.\)*"' \

@@ -77,9 +77,13 @@ printf 'session_id=a-b\n' >"$KB_CAPTURE_SPOOL/a-b.meta"
 hook_spool_drop 'a_b'
 [ -e "$KB_CAPTURE_SPOOL/a-b.jsonl" ] && ok "a colliding id's item survives" || bad "a colliding id's item survives"
 
-echo "== no_hook_uses_lossy_key_in_any_adapter_or_throttle =="
-if grep -nE "tr -c 'a-zA-Z0-9' '-' \| cut -c1-80" "$HOOKS_DIR"/*.sh \
-  | grep -vE 'kb-hook-lib.sh|hook_sid_key\(\)|hook_sid_key_lossy\(\)|safe_ulid|safe="\$\(printf .%s. "\$base"'; then
+echo "== no_capture_adapter_or_throttle_uses_lossy_key =="
+# Scope: the five capture adapters, kb-capture.sh and the capture throttle. The
+# marker-file stubs (kb-beat-throttle, kb-distill-nudge*, kb-wake-kimi) still
+# carry a local lossy hook_sid_key; they only name marker files and are NOT
+# covered by this test.
+if grep -nE "tr -c 'a-zA-Z0-9' '-' \| cut -c1-80" "$HOOKS_DIR"/kb-capture*.sh \
+  | grep -vE 'hook_sid_key_lossy\(\)|safe_ulid'; then
   bad "a hook still uses the lossy session key"
 else
   ok "only the documented exceptions keep the lossy form"
@@ -106,6 +110,25 @@ for raw in "$UUID" 'a_b' 'a-b' 'ses_01HXYZ' 'sésión' "$A81"; do
     hook_sid_key "$2"' _ "$HOOKS_DIR/kb-capture-throttle.sh" "$raw")"
   [ "$inline" = "$(hook_sid_key "$raw")" ] && ok "inline throttle key == lib key for '${raw:0:12}'" || bad "inline throttle key diverges for '${raw:0:12}' ($inline)"
 done
+
+echo "== hook_spool_put_with_empty_cwd_succeeds_and_writes_meta_without_cwd =="
+export KB_CAPTURE_SPOOL="$TMPROOT/spool-nocwd"
+printf '{"sessionId":"x"}\n' >"$TMPROOT/nocwd.jsonl"
+if hook_spool_put "$TMPROOT/nocwd.jsonl" 'ses_nocwd' '' '20260101T000000Z' 'codex'; then
+  ok "spool put with an empty cwd returns 0"
+else
+  bad "spool put with an empty cwd returns 0"
+fi
+nk="$(hook_spool_key 'ses_nocwd')"
+[ -s "$KB_CAPTURE_SPOOL/$nk.jsonl" ] && ok "empty-cwd item is spooled" || bad "empty-cwd item is spooled"
+if grep -q '^session_id=ses_nocwd$' "$KB_CAPTURE_SPOOL/$nk.meta" \
+  && grep -q '^stamp=20260101T000000Z$' "$KB_CAPTURE_SPOOL/$nk.meta" \
+  && grep -q '^harness=codex$' "$KB_CAPTURE_SPOOL/$nk.meta" \
+  && ! grep -q '^cwd=' "$KB_CAPTURE_SPOOL/$nk.meta"; then
+  ok "meta carries id/stamp/harness and no cwd line"
+else
+  bad "meta carries id/stamp/harness and no cwd line"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
