@@ -664,6 +664,14 @@ impl Store {
             .expect("drop symbols table");
     }
 
+    /// Run raw SQL on the store connection. Test-only: lets a test install a
+    /// `BEFORE UPDATE ... RAISE(ABORT)` trigger so a DB write FAILS on demand
+    /// and the caller's error path can be exercised end to end.
+    #[cfg(test)]
+    pub(crate) fn exec_sql_for_test(&self, sql: &str) {
+        self.lock().execute_batch(sql).expect("exec_sql_for_test");
+    }
+
     /// Current generation — see the field doc. Monotonically increasing for
     /// the lifetime of this `Store`; never resets.
     pub fn generation(&self) -> u64 {
