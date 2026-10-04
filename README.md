@@ -309,3 +309,10 @@ Commit conventions and provenance carry over unchanged: `feat(crate): summary
 (PhaseID)`-style messages, DCO sign-off, and `Co-Authored-By` trailers naming the
 model that drove a change when AI wrote it — kb's own session↔commit join works
 the same way going forward.
+
+On 2026-10-04 (v0.44) this repository was re-created from a rewritten history to
+remove private data that had been committed after 2026-09-22. History up to that
+date — including the tags `v0.43` and `kb-code-v7.6` … `kb-code-v8.0` — is
+unchanged; later commits carry new SHAs. Commit messages that cite a pull request
+as `nicolasacchi/kb-pre-v044#N` refer to the original repository, now a private
+archive, and pull request numbers in this repository start again from #1.
