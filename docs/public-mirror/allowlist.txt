@@ -1,0 +1,23 @@
+# Public-mirror edge allowlist (browse profile).
+#
+# One rule per line: `METHOD<space>PATH-TEMPLATE`, the template spelled
+# exactly as in docs/api-routes.md (generated from router.rs). GET only.
+# Anything not listed here is denied at the edge. Sorted byte-wise; the
+# test crates/kb-server/tests/public_mirror_allowlist.rs pins every rule
+# to a real route, rejects private route families, and checks that the
+# reference Traefik and Caddy snippets in docs/public-mirror.md are
+# derived from exactly this list.
+#
+# The `minimal` profile needs no rule here beyond /healthz: artifacts are
+# served by the wildcard artifact host through the daemon's fallback, not
+# through /api.
+GET /api/kb/{kb}/artifact/{id}
+GET /api/kb/{kb}/docs
+GET /api/kb/{kb}/docs/by-path/{*path}
+GET /api/kb/{kb}/docs/{id}
+GET /api/kb/{kb}/facets
+GET /api/kb/{kb}/folders
+GET /api/kb/{kb}/tags
+GET /api/kbs
+GET /api/search
+GET /healthz

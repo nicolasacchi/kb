@@ -228,7 +228,8 @@ why. These are rulings, not backlog.
 - **No in-daemon visibility, ACLs or public mode — the corpus mount is the
   ACL.** Every federated read fans out over every mounted corpus by design; a
   public mirror is a *dedicated daemon* mounting only public corpora behind an
-  allowlisting edge, a deployment recipe rather than a daemon feature.
+  allowlisting edge, a deployment recipe rather than a daemon feature
+  ([docs/public-mirror.md](docs/public-mirror.md)).
 - **The TUI is retired.** Removed after a per-tab parity check showed every
   panel already had a reader or CLI home; the accepted losses, recorded, are
   the watcher heatmap and the `$EDITOR` shortcut.
