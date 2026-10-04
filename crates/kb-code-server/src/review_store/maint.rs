@@ -2086,10 +2086,12 @@ pub fn spawn_maintenance_worker(state: SharedState) -> tokio::task::JoinHandle<(
 /// What [`restore_bundle`] did.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RestoreReport {
-    /// `refs/kbc/*` heads the bundle carries.
+    /// Restorable heads the bundle carries: `refs/kbc/*` plus
+    /// `refs/remotes/work-<id>/<branch>` member mirrors (only a GC
+    /// pre-apply bundle holds those).
     pub heads: usize,
-    /// Bundle heads outside `refs/kbc/*` (or not a ref name kb mints): not
-    /// restored, counted.
+    /// Bundle heads outside those two families (or not a ref name kb
+    /// mints): not restored, counted.
     pub skipped: usize,
     /// Refs that did not exist in the store and now do.
     pub created: Vec<String>,
@@ -2105,9 +2107,10 @@ pub struct RestoreReport {
     pub guard_flagged: bool,
 }
 
-/// Restore the `refs/kbc/*` heads of a store bundle (the `.bundle` files
-/// `kb-code backup` / the GC pre-apply pass write) into the store at
-/// `git_dir`, CREATE-OR-FAST-FORWARD ONLY (no `+`: an existing ref at
+/// Restore the `refs/kbc/*` heads, and the `refs/remotes/work-<id>/<branch>`
+/// member-mirror heads a GC pre-apply bundle covers, of a store bundle (the
+/// `.bundle` files `kb-code backup` / the GC pre-apply pass write) into the
+/// store at `git_dir`, CREATE-OR-FAST-FORWARD ONLY (no `+`: an existing ref at
 /// another value is reported in `rejected`, never overwritten).
 ///
 /// `git bundle verify` runs first, in the store, so a thin bundle whose
@@ -2165,9 +2168,13 @@ pub fn restore_bundle(
         let Some((oid, name)) = line.split_once(' ') else {
             continue;
         };
-        let ok = name.starts_with("refs/kbc/")
+        // `work_repo_id` validates the id digits AND the branch half through
+        // `RefName`, the same rule GC uses to classify a mirror ref, so a
+        // name GC would never touch is never written here either.
+        let ok = (name.starts_with("refs/kbc/")
             && crate::reviews::parse_kbc_ref(name).is_some()
-            && super::url::RefName::parse(name).is_ok();
+            && super::url::RefName::parse(name).is_ok())
+            || super::gc::work_repo_id(name).is_some();
         if !ok {
             report.skipped += 1;
             continue;
@@ -2186,7 +2193,7 @@ pub fn restore_bundle(
     let ops = rs.ops_lock(row.id);
     let _ops = ops.blocking_lock();
     let before: std::collections::BTreeMap<String, String> =
-        super::seed::list_refs(git, git_dir, &["refs/kbc/"])?
+        super::seed::list_refs(git, git_dir, &["refs/kbc/", "refs/remotes/work-"])?
             .into_iter()
             .map(|(o, n)| (n, o))
             .collect();
@@ -2221,7 +2228,7 @@ pub fn restore_bundle(
         .filter_map(|l| l.rsplit(' ').next().map(str::to_string))
         .collect();
     let after: std::collections::BTreeMap<String, String> =
-        super::seed::list_refs(git, git_dir, &["refs/kbc/"])?
+        super::seed::list_refs(git, git_dir, &["refs/kbc/", "refs/remotes/work-"])?
             .into_iter()
             .map(|(o, n)| (n, o))
             .collect();
