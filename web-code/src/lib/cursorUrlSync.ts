@@ -28,6 +28,15 @@ export interface CursorUrlSyncOptions {
   /// fresh at flush time (not at `onSelection` time), so a param changed
   /// by something else in between is respected rather than clobbered.
   getSearch: () => string;
+  /// Optional accessor for the CURRENT `location.pathname`. When supplied, the
+  /// pathname is captured at `onSelection` time and compared at flush time: if
+  /// it changed in between, the write is DROPPED. Without this, a debounce that
+  /// fires after another navigation has already moved `window.location` (but
+  /// before this component unmounts and disposes the sync) reads the NEW
+  /// route's search, appends `line=`, and `replace`s it onto the OLD route's
+  /// path — clobbering the navigation (add-to-board's `navigate(~boards/…)`
+  /// was overwritten by `…/lib.rs?line=9`).
+  getPathname?: () => string;
 }
 
 export interface CursorUrlSync {
@@ -44,7 +53,8 @@ export function createCursorUrlSync(opts: CursorUrlSyncOptions): CursorUrlSync {
   const debounceMs = opts.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
-  function flush(sel: { start: number; end: number } | null): void {
+  function flush(sel: { start: number; end: number } | null, scheduledPath: string | null): void {
+    if (scheduledPath !== null && opts.getPathname && opts.getPathname() !== scheduledPath) return;
     const params = new URLSearchParams(opts.getSearch());
     const nextLine = sel ? formatLineParam(sel) : "";
     const currentLine = params.get("line") ?? "";
@@ -62,9 +72,10 @@ export function createCursorUrlSync(opts: CursorUrlSyncOptions): CursorUrlSync {
   return {
     onSelection(sel) {
       if (timer !== null) clearTimeout(timer);
+      const scheduledPath = opts.getPathname ? opts.getPathname() : null;
       timer = setTimeout(() => {
         timer = null;
-        flush(sel);
+        flush(sel, scheduledPath);
       }, debounceMs);
     },
     dispose() {
@@ -99,7 +110,8 @@ export function createPane2CursorUrlSync(opts: Pane2CursorUrlSyncOptions): Curso
   const debounceMs = opts.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
-  function flush(sel: { start: number; end: number } | null): void {
+  function flush(sel: { start: number; end: number } | null, scheduledPath: string | null): void {
+    if (scheduledPath !== null && opts.getPathname && opts.getPathname() !== scheduledPath) return;
     const base = opts.getPaneBase();
     if (!base) return; // pane2 closed mid-debounce — nothing to write
 
@@ -125,9 +137,10 @@ export function createPane2CursorUrlSync(opts: Pane2CursorUrlSyncOptions): Curso
   return {
     onSelection(sel) {
       if (timer !== null) clearTimeout(timer);
+      const scheduledPath = opts.getPathname ? opts.getPathname() : null;
       timer = setTimeout(() => {
         timer = null;
-        flush(sel);
+        flush(sel, scheduledPath);
       }, debounceMs);
     },
     dispose() {

@@ -1219,6 +1219,7 @@ export default function Reader() {
         navigate({ search }, { replace: true });
       },
       getSearch: () => window.location.search,
+      getPathname: () => window.location.pathname,
     });
     cursorSyncRef1.current = sync;
     return () => {
@@ -1246,6 +1247,7 @@ export default function Reader() {
         navigate({ search }, { replace: true });
       },
       getSearch: () => window.location.search,
+      getPathname: () => window.location.pathname,
     });
     cursorSyncRef2.current = sync;
     return () => {
