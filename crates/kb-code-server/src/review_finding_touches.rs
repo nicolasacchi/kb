@@ -80,8 +80,10 @@ pub const OVERLAP_ADJACENT: &str = "adjacent";
 /// own patchset, so the own-tip -> later-tip diff mixes the author's edits
 /// with upstream movement. A hunk over the finding's lines is then NOT
 /// evidence the author acted: such a pair is reported as `rebased`, never
-/// `exact`/`adjacent`. (The rebase-aware per-patchset delta is future
-/// work; this is the honest minimum.)
+/// `exact`/`adjacent`. Since F9/N6 this is the FALLBACK only: a rebased pair
+/// whose author change set is readable is attributed hunk by hunk (renames
+/// followed), and `rebased` survives for an unreadable change set or a
+/// rename that cannot be resolved.
 pub const OVERLAP_REBASED: &str = "rebased";
 
 /// A later hunk within this many lines of a finding's own range counts as
@@ -247,9 +249,12 @@ fn resolve_path(
             Some(f) => f,
             None => {
                 let range = format!("{from_sha}..{to_sha}");
-                match ctx
-                    .read_with_fallback(|root| history::diff_files(root, "diff", &["-M", &range]))
-                {
+                // The SAME bound `diff::diff_range_u0_renames` uses, so this
+                // resolver and the author-range read agree on what a rename is.
+                let find_renames = format!("-M{}%", diff::RENAME_SIMILARITY_PCT);
+                match ctx.read_with_fallback(|root| {
+                    history::diff_files(root, "diff", &[find_renames.as_str(), &range])
+                }) {
                     Ok(f) => {
                         memo_put(&GLOBAL_RENAMES, key.clone(), f.clone());
                         f
@@ -373,16 +378,31 @@ pub fn compute_touched_in(
             // not evidence and produce no entry.
             //
             // A file RENAMED between the two patchsets (`resolved_path !=
-            // q.path`) is excluded: the patchset change sets are read with
-            // `--no-renames`, so against a base that still has the old name
-            // the file looks wholly deleted under it and wholly added under
-            // the new one, and nothing in `ranges` lines up with the tip-to-
-            // tip hunks. Attributing from that would call upstream movement
-            // (or nothing at all) an author edit. It takes the honest
-            // fallback below instead: reported as `rebased`, which the wire
-            // already says is NOT evidence the author acted.
-            if ps.base_sha != own_row.base_sha && resolved_path == q.path {
-                if let Some(ranges) = review_since::author_ranges_between(ctx, own_row, ps) {
+            // q.path`) is followed too: the patchset change sets for the
+            // `/since` wire are read with `--no-renames`, which cannot line
+            // a renamed file up, so the rename-aware reader
+            // (`author_ranges_between_for_path`, `git diff -M<N>%` with the
+            // same bound `resolve_path` uses) matches the file's hunks under
+            // ONE canonical label across the rename. A rename can sit on
+            // either side of the base move (the author renamed it, or
+            // upstream did) - both reduce to "the earlier change set has
+            // `q.path`, the later one `resolved_path`". `rebased` remains
+            // only when that cannot be resolved: below the similarity
+            // bound (`resolve_path` then never maps the name), an
+            // unreadable change set, or an ambiguous rename.
+            if ps.base_sha != own_row.base_sha {
+                let ranges = if resolved_path == q.path {
+                    review_since::author_ranges_between(ctx, own_row, ps)
+                } else {
+                    review_since::author_ranges_between_for_path(
+                        ctx,
+                        own_row,
+                        ps,
+                        &q.path,
+                        &resolved_path,
+                    )
+                };
+                if let Some(ranges) = ranges {
                     let hunks = parsed_hunks(
                         ctx,
                         &mut hunk_cache,
@@ -1019,47 +1039,53 @@ mod tests {
         assert_eq!(e[0].overlap, OVERLAP_EXACT);
     }
 
-    /// F9b/X9 - a file RENAMED between patchsets across a base move: the
-    /// patchset change sets are read with `--no-renames`, so the old name
-    /// looks wholly removed and the new one wholly added, and an upstream-only
-    /// hunk near the finding (line 6, finding on line 3) used to be attributed
-    /// to the author as `adjacent`. It is now reported as `rebased` (not
-    /// evidence the author acted) - the same honest label every unattributable
-    /// rebased pair gets.
+    /// Shared body of the rename tests: run `touched_in` for one finding on
+    /// `a.txt` line(s) `lines` over (ps1 on `c0`, ps2 on `main_head`).
+    fn touched(
+        d: &Path,
+        ps1: (&str, &str),
+        ps2: (&str, &str),
+        lines: Vec<i64>,
+    ) -> Vec<TouchedInEntry> {
+        let patchsets = vec![ps_row(1, 1, 1, ps1.0, ps1.1), ps_row(2, 1, 2, ps2.0, ps2.1)];
+        let queries = vec![TouchedInQuery {
+            finding_id: 80,
+            own_ps: 1,
+            path: "a.txt".to_string(),
+            lines,
+        }];
+        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(d));
+        compute_touched_in(&ctx, &patchsets, &queries)
+            .remove(&80)
+            .expect("finding present")
+            .entries
+    }
+
+    /// N6 - a pure rename across a base move, finding on the line upstream
+    /// edited (6): the rename carries the author's hunk unchanged and the
+    /// line-6 hunk is upstream's, so there is no touch at all. Fails
+    /// without rename-following: the pair used to read `rebased`.
     #[test]
-    fn upstream_movement_in_a_renamed_file_is_never_claimed_as_an_author_touch() {
+    fn rename_only_across_a_base_move_is_no_touch() {
         let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
         let d = tmp.path();
         git(d, &["checkout", "-q", "feature2"]);
         git(d, &["mv", "a.txt", "b.txt"]);
         git(d, &["commit", "-aq", "-m", "rename a to b"]);
         let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
-        let patchsets = vec![
-            ps_row(1, 1, 1, &c0, &ps1_tip),
-            ps_row(2, 1, 2, &main_head, &ps2_tip),
-        ];
-        let queries = vec![TouchedInQuery {
-            finding_id: 73,
-            own_ps: 1,
-            path: "a.txt".to_string(),
-            lines: vec![3],
-        }];
-        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(d));
-        let out = compute_touched_in(&ctx, &patchsets, &queries);
-        assert!(
-            out[&73]
-                .entries
-                .iter()
-                .all(|e| e.overlap == OVERLAP_REBASED),
-            "a rename plus upstream movement is not an author edit: {:?}",
-            out[&73].entries
+        let e = touched(
+            d,
+            (c0.as_str(), ps1_tip.as_str()),
+            (main_head.as_str(), ps2_tip.as_str()),
+            vec![6],
         );
+        assert!(e.is_empty(), "{e:?}");
     }
 
-    /// ...and a real author edit in the renamed file is also only `rebased`:
-    /// the pair cannot be attributed, so the entry never claims `exact`.
+    /// N6 - rename plus a real author edit of the finding's own line across
+    /// a base move is `exact`, not `rebased`.
     #[test]
-    fn an_author_edit_in_a_renamed_file_after_a_rebase_is_reported_as_rebased() {
+    fn rename_plus_author_edit_at_the_finding_across_a_base_move_is_exact() {
         let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
         let d = tmp.path();
         git(d, &["checkout", "-q", "feature2"]);
@@ -1073,21 +1099,97 @@ mod tests {
         git(d, &["add", "b.txt"]);
         git(d, &["commit", "-aq", "-m", "rename and re-edit"]);
         let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
-        let patchsets = vec![
-            ps_row(1, 1, 1, &c0, &ps1_tip),
-            ps_row(2, 1, 2, &main_head, &ps2_tip),
-        ];
-        let queries = vec![TouchedInQuery {
-            finding_id: 74,
-            own_ps: 1,
-            path: "a.txt".to_string(),
-            lines: vec![3],
-        }];
-        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(d));
-        let out = compute_touched_in(&ctx, &patchsets, &queries);
-        let e = &out[&74].entries;
+        let e = touched(
+            d,
+            (c0.as_str(), ps1_tip.as_str()),
+            (main_head.as_str(), ps2_tip.as_str()),
+            vec![3],
+        );
         assert_eq!(e.len(), 1, "{e:?}");
-        assert_eq!(e[0].overlap, OVERLAP_REBASED);
+        assert_eq!(e[0].ps, 2);
+        assert_eq!(e[0].overlap, OVERLAP_EXACT);
+    }
+
+    /// N6 - rename plus upstream movement only (finding on line 3, the
+    /// upstream edit on line 6): not evidence the author acted, so NO entry.
+    /// A wrong `exact` here is the failure the canonical hunk label guards.
+    #[test]
+    fn rename_across_a_base_move_with_upstream_edit_near_finding_is_not_a_touch() {
+        let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
+        let d = tmp.path();
+        git(d, &["checkout", "-q", "feature2"]);
+        git(d, &["mv", "a.txt", "b.txt"]);
+        git(d, &["commit", "-aq", "-m", "rename a to b"]);
+        let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
+        let e = touched(
+            d,
+            (c0.as_str(), ps1_tip.as_str()),
+            (main_head.as_str(), ps2_tip.as_str()),
+            vec![3],
+        );
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    /// N6 - the rename is UPSTREAM's: the new base already calls the file
+    /// `b.txt`, ps1 (on the old base) calls it `a.txt`, and the author's
+    /// re-edit of line 3 in ps2 is still `exact`.
+    #[test]
+    fn upstream_rename_on_the_new_base_follows_the_path() {
+        let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
+        let d = tmp.path();
+        git(d, &["checkout", "-q", "-b", "renamed-main", &main_head]);
+        git(d, &["mv", "a.txt", "b.txt"]);
+        git(d, &["commit", "-aq", "-m", "upstream renames a to b"]);
+        let new_base = git_out(d, &["rev-parse", "HEAD"]);
+        git(d, &["checkout", "-q", "-b", "feature3", &new_base]);
+        git(d, &["cherry-pick", &ps1_tip]);
+        let cur = std::fs::read_to_string(d.join("b.txt")).unwrap();
+        std::fs::write(
+            d.join("b.txt"),
+            cur.replace("a3-author\n", "a3-author-v2\n"),
+        )
+        .unwrap();
+        git(d, &["commit", "-aq", "-m", "re-edit"]);
+        let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
+        let e = touched(
+            d,
+            (c0.as_str(), ps1_tip.as_str()),
+            (new_base.as_str(), ps2_tip.as_str()),
+            vec![3],
+        );
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].ps, 2);
+        assert_eq!(e[0].overlap, OVERLAP_EXACT);
+    }
+
+    /// N6 - a "rename" below the similarity bound is delete + add to git,
+    /// so the new name is never followed: whatever is reported, it is never
+    /// attributed through `b.txt` (at most the one ps-2 entry for the
+    /// deleted `a.txt`, exactly as before this lane).
+    #[test]
+    fn a_rename_below_the_similarity_bound_stays_unfollowed() {
+        let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
+        let d = tmp.path();
+        git(d, &["checkout", "-q", "feature2"]);
+        git(d, &["rm", "-q", "a.txt"]);
+        std::fs::write(d.join("b.txt"), "zz1\nzz2\nzz3\nzz4\nzz5\nzz6\n").unwrap();
+        git(d, &["add", "b.txt"]);
+        git(d, &["commit", "-aq", "-m", "replace a with unrelated b"]);
+        let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
+        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(d));
+        let mut cache = RenameCache::new();
+        assert_ne!(
+            resolve_path(&ctx, &mut cache, &ps1_tip, &ps2_tip, "a.txt").as_deref(),
+            Some("b.txt"),
+            "git must not call this a rename"
+        );
+        let e = touched(
+            d,
+            (c0.as_str(), ps1_tip.as_str()),
+            (main_head.as_str(), ps2_tip.as_str()),
+            vec![3],
+        );
+        assert!(e.len() <= 1 && e.iter().all(|x| x.ps == 2), "{e:?}");
     }
 
     #[test]

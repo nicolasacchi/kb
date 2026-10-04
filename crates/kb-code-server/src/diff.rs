@@ -236,6 +236,48 @@ pub fn diff_range_u0(repo_root: &Path, base_sha: &str, tip_sha: &str) -> Result<
     }
 }
 
+/// The ONE rename-similarity bound (percent) every rename-aware read in
+/// `touched_in` uses: `review_finding_touches::resolve_path`'s
+/// `git diff -M<N>%` and [`diff_range_u0_renames`] both format it, so the
+/// two cannot disagree about whether a file was renamed. 50 is git's own
+/// default for a bare `-M`.
+pub const RENAME_SIMILARITY_PCT: u32 = 50;
+
+/// `git diff --no-color -M<N>% -U0 <base> <tip>` — [`diff_range_u0`] with
+/// rename detection ON (bounded by [`RENAME_SIMILARITY_PCT`]; no copy
+/// detection). Used ONLY by `touched_in`'s rename-aware author-range read;
+/// `/since` and its memo stay on the `--no-renames` reader. A rename shows
+/// up as `rename from`/`rename to` lines in the file's preamble (a pure
+/// rename has no hunk at all). Same argv discipline as [`diff_range_u0`]:
+/// full daemon-minted shas, `core.quotepath=false`, `--no-ext-diff`, no
+/// pathspec.
+pub fn diff_range_u0_renames(repo_root: &Path, base_sha: &str, tip_sha: &str) -> Result<String> {
+    let find_renames = format!("-M{RENAME_SIMILARITY_PCT}%");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args([
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--no-color",
+            find_renames.as_str(),
+            "--no-ext-diff",
+            "-U0",
+            base_sha,
+            tip_sha,
+        ])
+        .output()
+        .map_err(DiffError::Spawn)?;
+    match output.status.code() {
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        other => Err(DiffError::GitFailed {
+            status: other.unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }),
+    }
+}
+
 /// V70-A2 (SEC-17) — a `RevspecError` from a route's own
 /// `Revspec::parse` folds into this module's error type, so the wire shape
 /// of a rejected `?from=`/`?to=` is byte-identical to the pre-V70-A2
@@ -294,6 +336,35 @@ mod tests {
         git(dir, &["config", "user.email", "test@example.com"]);
         git(dir, &["config", "user.name", "Test"]);
         tmp
+    }
+
+    #[test]
+    fn diff_range_u0_renames_reports_renames_with_zero_u0_context() {
+        let tmp = init_repo();
+        let dir = tmp.path();
+        let body = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n";
+        std::fs::write(dir.join("a.txt"), body).unwrap();
+        git(dir, &["add", "a.txt"]);
+        git(dir, &["commit", "-q", "-m", "c1"]);
+        let c1 = git_out(dir, &["rev-parse", "HEAD"]);
+        git(dir, &["mv", "a.txt", "b.txt"]);
+        std::fs::write(dir.join("b.txt"), body.replace("l3\n", "l3-edit\n")).unwrap();
+        git(dir, &["add", "b.txt"]);
+        git(dir, &["commit", "-q", "-m", "c2"]);
+        let c2 = git_out(dir, &["rev-parse", "HEAD"]);
+
+        let renamed = diff_range_u0_renames(dir, &c1, &c2).unwrap();
+        assert!(renamed.contains("rename from a.txt"), "got: {renamed}");
+        assert!(renamed.contains("rename to b.txt"), "got: {renamed}");
+        assert!(
+            renamed.contains("@@ -3 +3 @@"),
+            "-U0 hunk header: {renamed}"
+        );
+        assert!(!renamed.contains(" l2"), "no context lines: {renamed}");
+
+        // The `--no-renames` reader must stay exactly as it was.
+        let plain = diff_range_u0(dir, &c1, &c2).unwrap();
+        assert!(!plain.contains("rename from"), "got: {plain}");
     }
 
     #[test]
