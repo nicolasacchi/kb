@@ -331,6 +331,9 @@ pub struct KbContext {
     /// missed target, so this field is read by exactly one route and one CLI
     /// verb and by nothing on any hot path.
     pub slo_targets: kb_core::slo::SloTargets,
+    /// `[kb.foo.slo] recall_coverage_window_days`, already clamped (absent
+    /// = 7). A window, not a target, so it lives beside `slo_targets`.
+    pub slo_recall_window_days: u32,
     /// DCB — `[kb.foo] code_url`, threaded from the `KbSection` so
     /// `routes/kbs.rs`'s `KbSummary` can surface it and the SPA's Code
     /// section knows where to send the browser's own fetch. kb itself never
