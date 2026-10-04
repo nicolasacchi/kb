@@ -81,9 +81,11 @@ echo "== no_capture_adapter_or_throttle_uses_lossy_key =="
 # Scope: the five capture adapters, kb-capture.sh and the capture throttle. The
 # marker-file stubs (kb-beat-throttle, kb-distill-nudge*, kb-wake-kimi) still
 # carry a local lossy hook_sid_key; they only name marker files and are NOT
-# covered by this test.
+# covered by this test. The one other exemption is kb-capture-omp.sh's sidecar
+# AGENT file name (`"$base"`): it names a subagent, not a session, and its
+# readable form is the visible agent_id (see the PR's deferred list).
 if grep -nE "tr -c 'a-zA-Z0-9' '-' \| cut -c1-80" "$HOOKS_DIR"/kb-capture*.sh \
-  | grep -vE 'hook_sid_key_lossy\(\)|safe_ulid'; then
+  | grep -vE 'hook_sid_key_lossy\(\)|safe_ulid|"\$base"'; then
   bad "a hook still uses the lossy session key"
 else
   ok "only the documented exceptions keep the lossy form"
