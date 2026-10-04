@@ -244,6 +244,17 @@ pub async fn replay_spool(spool: &Path, out_dir: &Path) -> Result<ReplaySummary>
             Ok(_) => {
                 let _ = std::fs::remove_file(&jsonl);
                 let _ = std::fs::remove_file(&meta);
+                // v0.45 N10 - parked subagent sidecars (`<spool>/<sid>/
+                // subagents`, written by the omp hook) were folded into the
+                // capture above; drop them with the item. Plain ids only, so a
+                // crafted session_id can never point this at another path.
+                if let Some(s) = sid.as_deref().filter(|s| {
+                    !s.is_empty()
+                        && s.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                }) {
+                    let _ = std::fs::remove_dir_all(spool.join(s));
+                }
                 sum.replayed += 1;
             }
             Err(e) => {
@@ -1650,6 +1661,32 @@ mod tests {
         assert_eq!(
             html_names(&out_dir),
             vec![format!("session-20240506T070809Z-{key}.html")]
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_spool_folds_and_then_removes_parked_sidecars() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spool = tmp.path().join("spool");
+        let out_dir = tmp.path().join("sessions");
+        let sid = "ses-omp-sidecar";
+        let key = sanitize_sid(sid);
+        write(&spool, &format!("{key}.jsonl"), &one_line_jsonl(sid));
+        write(
+            &spool,
+            &format!("{key}.meta"),
+            &format!("session_id={sid}\n"),
+        );
+        write(
+            &spool.join(sid).join("subagents"),
+            "agent-a1.jsonl",
+            &one_line_jsonl(sid),
+        );
+        let sum = replay_spool(&spool, &out_dir).await.unwrap();
+        assert_eq!((sum.replayed, sum.failed), (1, 0));
+        assert!(
+            !spool.join(sid).exists(),
+            "parked sidecars must be removed after a successful replay"
         );
     }
 

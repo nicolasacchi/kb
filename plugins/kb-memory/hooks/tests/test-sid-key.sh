@@ -77,33 +77,32 @@ printf 'session_id=a-b\n' >"$KB_CAPTURE_SPOOL/a-b.meta"
 hook_spool_drop 'a_b'
 [ -e "$KB_CAPTURE_SPOOL/a-b.jsonl" ] && ok "a colliding id's item survives" || bad "a colliding id's item survives"
 
-echo "== no_capture_adapter_or_throttle_uses_lossy_key =="
-# Scope: the five capture adapters, kb-capture.sh and the capture throttle. The
-# marker-file stubs (kb-beat-throttle, kb-distill-nudge*, kb-wake-kimi) still
-# carry a local lossy hook_sid_key; they only name marker files and are NOT
-# covered by this test. The one other exemption is kb-capture-omp.sh's sidecar
-# AGENT file name (`"$base"`): it names a subagent, not a session, and its
-# readable form is the visible agent_id (see the PR's deferred list).
-if grep -nE "tr -c 'a-zA-Z0-9' '-' \| cut -c1-80" "$HOOKS_DIR"/kb-capture*.sh \
-  | grep -vE 'hook_sid_key_lossy\(\)|safe_ulid|"\$base"'; then
+echo "== no_hook_uses_lossy_key_in_any_adapter_or_throttle =="
+# Scope: EVERY hook script. The lossy `tr -c ... | cut -c1-80` pipeline may
+# appear only in the migration-recognition helper hook_sid_key_lossy() (and
+# the lib's own hook_marker_seen/drop callers use that helper by name). No
+# per-script exemptions: a local hook_sid_key stub, a marker name, a sidecar
+# name - a lossy form anywhere else fails. The single named exception is the
+# grok report lane's `safe_ulid`: a job id is a ULID (Crockford base32, already
+# [A-Z0-9]), so the map is the identity and cannot collide.
+if grep -nE "tr -c 'a-zA-Z0-9' '-' \| cut -c1-80" "$HOOKS_DIR"/*.sh \
+  | grep -vE 'hook_sid_key_lossy\(\)|hook_agent_stem\(\)|safe_ulid='; then
   bad "a hook still uses the lossy session key"
 else
-  ok "only the documented exceptions keep the lossy form"
+  ok "the only lossy form is the migration-recognition helper"
 fi
-# Adapters and the throttle must not carry a local hook_sid_key stub at all
-# (the throttle's standalone fallback is the HASHED algorithm, checked below).
-if grep -nE 'hook_sid_key\(\)' "$HOOKS_DIR"/kb-capture-codex.sh "$HOOKS_DIR"/kb-capture-opencode.sh \
-  "$HOOKS_DIR"/kb-capture-kimi.sh "$HOOKS_DIR"/kb-capture-omp.sh "$HOOKS_DIR"/kb-capture-grok.sh; then
-  bad "an adapter still defines a local (lossy) hook_sid_key stub"
+if grep -nE 'hook_sid_key\(\)' "$HOOKS_DIR"/*.sh | grep -vE 'kb-hook-lib.sh:|kb-capture-throttle.sh:'; then
+  bad "a hook script defines its own hook_sid_key (must source the lib)"
 else
-  ok "no adapter defines a local hook_sid_key stub"
+  ok "hook_sid_key is defined only in kb-hook-lib.sh and the throttle's hashed standalone copy"
 fi
-if grep -nE "tr -c 'a-zA-Z0-9' '-' \| cut -c1-80" "$HOOKS_DIR/kb-capture-throttle.sh" \
-  | grep -vE 'hook_sid_key_lossy\(\)'; then
-  bad "the throttle still derives its key with the lossy pipeline"
-else
-  ok "the throttle's only lossy form is the migration-recognition helper"
-fi
+echo "== marker upgrade compatibility: an old lossy-named marker still suppresses =="
+mdir="$TMPROOT/markers"; mkdir -p "$mdir"
+: >"$mdir/distill-nudged-$(hook_sid_key_lossy 'ses_old.1')"
+hook_marker_seen "$mdir/distill-nudged-" 'ses_old.1' && ok "legacy marker is honoured (no double fire after upgrade)" || bad "legacy marker ignored"
+hook_marker_seen "$mdir/distill-nudged-" 'ses_new.2' && bad "unrelated id wrongly suppressed" || ok "an unrelated id is not suppressed"
+: >"$mdir/distill-nudged-$(hook_sid_key 'ses_new.2')"
+hook_marker_seen "$mdir/distill-nudged-" 'ses_new.2' && ok "new-key marker is honoured" || bad "new-key marker ignored"
 echo "== the throttle's standalone copy of the key equals the lib's =="
 for raw in "$UUID" 'a_b' 'a-b' 'ses_01HXYZ' 'sésión' "$A81"; do
   inline="$(bash -c '
