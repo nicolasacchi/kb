@@ -64,7 +64,15 @@ test.describe("open in a new tab (inside kb)", () => {
     // `Received string: ""` on a loaded runner and passed on retry.
     // `waitForURL` is the primitive that actually waits for the navigation
     // to commit; the `toHaveURL` after it stays as the real assertion.
-    await newPage.waitForURL(/\/a\/canon\/[^/]+\.html(\?|$)/);
+    // `waitUntil: "commit"` (not the default "load"): these tests assert
+    // only the URL the new tab opened. The artifact reader page (SPA shell
+    // + artifact iframe + SSE) can take longer than the 10 s default to
+    // fire `load` on a loaded CI runner, which timed out even though the
+    // correct URL had already committed. Every waitForURL below on a
+    // newly opened tab uses the same option for the same reason.
+    await newPage.waitForURL(/\/a\/canon\/[^/]+\.html(\?|$)/, {
+      waitUntil: "commit",
+    });
     await expect(newPage).toHaveURL(/\/a\/canon\/[^/]+\.html(\?|$)/);
     // The modified click must NOT close the palette in the original tab.
     await expect(dialog).toBeVisible();
@@ -96,6 +104,7 @@ test.describe("open in a new tab (inside kb)", () => {
     ]);
     await newPage.waitForURL(
       artifactUrlRe("canon", pm[1].source_relative),
+      { waitUntil: "commit" },
     );
     await expect(newPage).toHaveURL(
       artifactUrlRe("canon", pm[1].source_relative),
@@ -126,7 +135,9 @@ test.describe("open in a new tab (inside kb)", () => {
         modifiers: ["ControlOrMeta"],
       }),
     ]);
-    await newPage.waitForURL(/\/a\/canon\/[^/]+/);
+    await newPage.waitForURL(/\/a\/canon\/[^/]+/, {
+      waitUntil: "commit",
+    });
     await expect(newPage).toHaveURL(/\/a\/canon\/[^/]+/);
   });
 

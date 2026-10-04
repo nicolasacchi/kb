@@ -1,6 +1,52 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCursorUrlSync, createPane2CursorUrlSync } from "./cursorUrlSync";
 
+describe("pathname guard (stale debounce vs a navigation that already moved the URL)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("pane1: drops the write when the pathname changed since onSelection", () => {
+    let path = "/r/fixture/lib.rs";
+    const replace = vi.fn();
+    const sync = createCursorUrlSync({ replace, getSearch: () => "", getPathname: () => path });
+    sync.onSelection({ start: 9, end: 9 });
+    path = "/r/fixture/~boards/e2e-add-board"; // add-to-board navigated away
+    vi.advanceTimersByTime(500);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("pane1: still writes when the pathname is unchanged", () => {
+    const replace = vi.fn();
+    const sync = createCursorUrlSync({
+      replace,
+      getSearch: () => "",
+      getPathname: () => "/r/fixture/lib.rs",
+    });
+    sync.onSelection({ start: 9, end: 9 });
+    vi.advanceTimersByTime(500);
+    expect(replace).toHaveBeenCalledWith("?line=9");
+  });
+
+  it("pane2: drops the write when the pathname changed since onSelection", () => {
+    let path = "/r/fixture/lib.rs";
+    const replace = vi.fn();
+    const sync = createPane2CursorUrlSync({
+      replace,
+      getSearch: () => "?pane2=src%2Fother.rs%40%3A",
+      getPaneBase: () => ({ path: "src/other.rs" }),
+      getPathname: () => path,
+    });
+    sync.onSelection({ start: 4, end: 4 });
+    path = "/r/fixture/~boards/x";
+    vi.advanceTimersByTime(500);
+    expect(replace).not.toHaveBeenCalled();
+  });
+});
+
 describe("createCursorUrlSync", () => {
   beforeEach(() => {
     vi.useFakeTimers();
