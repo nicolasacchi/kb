@@ -71,7 +71,7 @@ strip_kb_prompt = true
 `kb --config mirror.toml doctor --public-mirror` lints the config file against
 the posture above. It reads the file only (no daemon, no network), prints one
 line per finding and exits 1 when there is any, 0 when clean (`--json` emits
-`{ok, findings}`). It cannot see the edge rules, the `KB_ALLOW_NO_AUTH`
+`{ok, findings}`). It cannot see the edge rules, API tokens, the `KB_ALLOW_NO_AUTH`
 environment or what the mounted directories contain, so the checklist below
 still applies. The sample config above passes its own check (pinned by a
 test that extracts it from this page). The logic is the pure function
@@ -83,12 +83,12 @@ test that extracts it from this page). The logic is the pure function
 | `strip-kb-prompt` | a kb lacks `[kb.<name>.outbound] strip_kb_prompt = true` |
 | `hostnames-unset` | `[server] hostnames` is empty |
 | `artifact-origin-default` | `parent_origin` or `artifact_host_suffix` is still the local-dev default |
-| `bind-not-private` | `[server] addr` is not loopback or a private address |
-| `private-corpus` | a kb is named `memory*`/`session*`, or sets `default_search_category` to such a value, `memory_scope` or `decay_policy` |
+| `bind-not-private` | `[server] addr` is not loopback or a private address. A container deployment binds `0.0.0.0` inside the container (the reference deploy does), so this finding is EXPECTED there: the config check cannot see that the published port is loopback-only or reachable only through the edge. There is no per-rule silence; verify the port publishing and edge rules with the checklist instead and treat this one finding as accepted |
+| `private-corpus` | a kb is named `memory*`/`session*` (a prefix HEURISTIC, so `memory-bank-docs` also fires; rename the corpus, there is no silence), or sets `default_search_category` to such a value, `memory_scope` or `decay_policy` |
 | `capture-lane` | a kb sets `capture_dir` |
 | `sessions-live-dir` | `[sessions] live_transcripts_dir` is set |
 | `webhook-egress` | `[webhooks]` has a URL |
-| `home-path` | a kb path is under `/home`, `/Users` or `/root` |
+| `home-path` | a kb path is under `/home/`, `/Users/` or is `/root` or under `/root/` (`/rootfs` does not match) |
 
 ## Profiles
 
