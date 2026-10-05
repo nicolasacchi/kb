@@ -10,6 +10,8 @@
 # it against a fake release mirror + fake `kb` on every PR.
 #
 # Environment:
+#   INSTALL_SH            installer to run (default: ../install.sh next to this
+#                         script; the workflow points it at the TAG's copy).
 #   KB_VERSION            required. Release tag or bare version (v0.44 / 0.44).
 #   KB_BASE_URL           optional. file:// or http mirror (selftest only).
 #   LEG                   label printed in the RESULT line (default: local).
@@ -201,7 +203,7 @@ ok
 # leg can show WHY it saw nothing (empty index vs unreachable daemon vs error).
 hits() {
   "$kb" search "$1" --kb canon --mode keyword --json --daemon "$url" >"$tmp/search.last" 2>&1
-  grep -c '"source_relative"' "$tmp/search.last" || true
+  bash "$here/first-run-hits.sh" "$tmp/search.last"
 }
 search_diag() {
   echo "---- last kb search output ----"
