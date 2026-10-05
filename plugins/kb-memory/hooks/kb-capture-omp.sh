@@ -21,8 +21,10 @@
 # private capture spool (kb-hook-lib.sh hook_adapter_land) and replayed
 # through the same scrubbed path by the next successful capture; this adapter
 # NEVER writes HTML itself, so nothing raw can reach the corpus. The spool
-# keeps the main transcript only: staged subagent sidecars are folded into the
-# capture by the live `kb sessions capture` call and are not spooled.
+# replay never overwrites a fresher capture of the same session (the Rust
+# writer drops a stale spooled snapshot; see README). Staged subagent sidecars
+# are folded into the capture by the live `kb sessions capture` call and are
+# parked beside the main transcript only when the landing fails.
 #
 # omp JSONL → Claude-shape mapping (verified against a live v3 session file):
 #   fixed-width 256-byte title slot line    → dropped from the body, but its

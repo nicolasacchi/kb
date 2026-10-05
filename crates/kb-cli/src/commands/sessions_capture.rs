@@ -105,6 +105,10 @@ pub struct CaptureSummary {
     /// was caught without grepping the artifact for `[redacted:…]` markers.
     /// `0` when the secrets-only pass found nothing to redact.
     pub secrets_redacted: u32,
+    /// `true` when a REPLAYED snapshot was older than the capture already in
+    /// the corpus and was therefore NOT written (the existing file is
+    /// untouched). Only [`replay_spool`] can produce this.
+    pub skipped_stale: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -195,6 +199,9 @@ pub fn spool_dir() -> Option<PathBuf> {
 pub struct ReplaySummary {
     pub replayed: usize,
     pub failed: usize,
+    /// Items dropped because the corpus already held a capture published after
+    /// the item's snapshot (a stale replay never overwrites a fresher capture).
+    pub dropped_stale: usize,
 }
 
 /// Replay every spooled item (`<key>.jsonl` + optional `<key>.meta` carrying
@@ -231,17 +238,33 @@ pub async fn replay_spool(spool: &Path, out_dir: &Path) -> Result<ReplaySummary>
         // A cwd that no longer exists must not fail the replay (it is only a
         // commit-resolution hint).
         let cwd = cwd.filter(|c| c.is_dir());
-        match capture_with(
+        // The snapshot's own age: the item is a copy made when the adapter
+        // parked it, so its mtime is the instant the snapshot was taken. A
+        // capture published after that is fresher and must win.
+        let snap = std::fs::metadata(&jsonl).and_then(|m| m.modified()).ok();
+        match capture_inner(
             &jsonl,
             sid.as_deref(),
             cwd.as_deref(),
             out_dir,
             false,
             stamp.as_deref(),
+            snap,
         )
         .await
         {
-            Ok(_) => {
+            Ok(done) => {
+                if done.skipped_stale {
+                    eprintln!(
+                        "kb sessions capture --replay-spool: dropped stale spool item {} \
+                         (the corpus already holds a fresher capture of session {})",
+                        jsonl.display(),
+                        done.session_id
+                    );
+                    sum.dropped_stale += 1;
+                } else {
+                    sum.replayed += 1;
+                }
                 let _ = std::fs::remove_file(&jsonl);
                 let _ = std::fs::remove_file(&meta);
                 // v0.45 N10 - parked subagent sidecars (`<spool>/<sid>/
@@ -255,7 +278,6 @@ pub async fn replay_spool(spool: &Path, out_dir: &Path) -> Result<ReplaySummary>
                 }) {
                     let _ = std::fs::remove_dir_all(spool.join(s));
                 }
-                sum.replayed += 1;
             }
             Err(e) => {
                 eprintln!(
@@ -279,8 +301,9 @@ pub async fn run_replay_spool(out: Option<PathBuf>, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&sum)?);
     } else {
         println!(
-            "spool: {} replayed, {} failed ({})",
+            "spool: {} replayed, {} dropped stale, {} failed ({})",
             sum.replayed,
+            sum.dropped_stale,
             sum.failed,
             spool.display()
         );
@@ -356,6 +379,101 @@ async fn capture_with(
     out_dir: &Path,
     allow_oversized: bool,
     stamp: Option<&str>,
+) -> Result<CaptureSummary> {
+    capture_inner(
+        transcript,
+        session_id_hint,
+        cwd_hint,
+        out_dir,
+        allow_oversized,
+        stamp,
+        None,
+    )
+    .await
+}
+
+/// Per-session publish lock directory: `$KB_CAPTURE_LOCKS`, else
+/// `$KB_CACHE_DIR/capture-locks`, else `$XDG_CACHE_HOME/kb/capture-locks`, else
+/// `$HOME/.cache/kb/capture-locks` - the SAME directory the shell adapters
+/// keep their per-session locks in (kb-hook-lib.sh `hook_capture_lock_dir`),
+/// under a distinct `publish-` file prefix.
+fn publish_lock_dir() -> Option<PathBuf> {
+    let env = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(p) = env("KB_CAPTURE_LOCKS") {
+        return Some(p);
+    }
+    if let Some(p) = env("KB_CACHE_DIR") {
+        return Some(p.join("capture-locks"));
+    }
+    if let Some(p) = env("XDG_CACHE_HOME") {
+        return Some(p.join("kb").join("capture-locks"));
+    }
+    env("HOME").map(|h| h.join(".cache").join("kb").join("capture-locks"))
+}
+
+/// Exclusive advisory lock held across ONE capture's write + rename (a
+/// millisecond-scale section, NOT the adapter's long per-session lock). It
+/// makes "is the file I am about to replace fresher than my snapshot?" and the
+/// rename a single step against every other writer of the same session, so a
+/// replay can never rename a stale snapshot over a capture that landed between
+/// its check and its rename. Best effort: with no resolvable lock dir the
+/// caller proceeds unlocked (the check still runs). Released on drop.
+struct PublishLock {
+    _file: Option<std::fs::File>,
+}
+
+impl PublishLock {
+    fn acquire(sid: &str) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let Some(dir) = publish_lock_dir() else {
+                return Self { _file: None };
+            };
+            if std::fs::create_dir_all(&dir).is_err() {
+                return Self { _file: None };
+            }
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(dir.join(format!("publish-{sid}.plock")));
+            match f {
+                Ok(f) => {
+                    // SAFETY: flock on a valid, owned fd.
+                    let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+                    Self {
+                        _file: if rc == 0 { Some(f) } else { None },
+                    }
+                }
+                Err(_) => Self { _file: None },
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = sid;
+            Self { _file: None }
+        }
+    }
+}
+
+/// `capture_with` plus `stale_before`: when set (a REPLAYED spool item, whose
+/// value is the snapshot's own mtime), an existing capture of the session that
+/// was published AFTER that instant is strictly fresher - the snapshot is
+/// dropped (`skipped_stale`), never written. A direct capture passes `None`:
+/// it is always the newest view of the transcript.
+async fn capture_inner(
+    transcript: &Path,
+    session_id_hint: Option<&str>,
+    cwd_hint: Option<&Path>,
+    out_dir: &Path,
+    allow_oversized: bool,
+    stamp: Option<&str>,
+    stale_before: Option<std::time::SystemTime>,
 ) -> Result<CaptureSummary> {
     // 2026-08-21 ci-host incident, defect 1: a 292MB raw Codex rollout (77%
     // base64 screenshots) entered capture through THIS path — bypassing
@@ -526,22 +644,39 @@ async fn capture_with(
     // truncated".
     let sidecar_text_truncated = kb_core::sessions::sidecar_text_truncates(&sidecar_texts);
     // Atomic replace: write to a `.tmp` sibling and rename into place, same
-    // as kb-capture.sh's `mv -f "$tmp" "$out"` — the watcher never ingests a
-    // half-written multi-MB transcript.
-    let tmp = PathBuf::from(format!("{}.tmp", out_path.display()));
-    std::fs::write(&tmp, &html).with_context(|| format!("write capture tmp {}", tmp.display()))?;
-    std::fs::rename(&tmp, &out_path)
-        .with_context(|| format!("finalize capture {}", out_path.display()))?;
+    // as kb-capture.sh's `mv -f "$tmp" "$out"` - the watcher never ingests a
+    // half-written multi-MB transcript. The whole write + freshness check +
+    // rename runs under the per-session publish lock (see `PublishLock`), and
+    // the existing capture is RE-RESOLVED under it: a replay that raced a live
+    // capture must see the file the live capture just published (and must not
+    // mint a second filename for the session).
+    let _publish = PublishLock::acquire(&sid);
+    let existing_now = find_existing_capture(out_dir, &sid, &raw_sid);
+    let out_path = existing_now.clone().unwrap_or(out_path);
+    let mut skipped_stale = false;
+    if let (Some(snap), Some(cur)) = (stale_before, existing_now.as_ref()) {
+        if let Ok(published) = std::fs::metadata(cur).and_then(|m| m.modified()) {
+            skipped_stale = published > snap;
+        }
+    }
+    if !skipped_stale {
+        let tmp = PathBuf::from(format!("{}.tmp", out_path.display()));
+        std::fs::write(&tmp, &html)
+            .with_context(|| format!("write capture tmp {}", tmp.display()))?;
+        std::fs::rename(&tmp, &out_path)
+            .with_context(|| format!("finalize capture {}", out_path.display()))?;
+    }
 
     Ok(CaptureSummary {
         session_id: raw_sid,
         path: out_path.display().to_string(),
-        reused_existing: existing.is_some(),
+        reused_existing: existing.is_some() || existing_now.is_some(),
         commits_detected: activity.commits.len(),
         commits_resolved,
         subagents_captured: subagents.len(),
         sidecar_text_truncated,
         secrets_redacted,
+        skipped_stale,
     })
 }
 
@@ -1688,6 +1823,75 @@ mod tests {
             !spool.join(sid).exists(),
             "parked sidecars must be removed after a successful replay"
         );
+    }
+
+    /// Round 5 - a replayed snapshot OLDER than the capture already in the
+    /// corpus is dropped (file untouched, item removed); a snapshot NEWER than
+    /// it still replays. The shared spool replays every session's items, so
+    /// this is what stops Y's replay publishing X's stale M1 over X's fresh M2.
+    #[tokio::test]
+    async fn replay_spool_never_overwrites_a_fresher_capture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spool = tmp.path().join("spool");
+        let out_dir = tmp.path().join("sessions");
+        let sid = "ses_stale_replay";
+        let key = sanitize_sid(sid);
+        let m1 = one_line_jsonl(sid);
+        let m2 = format!(
+            "{m1}{{\"sessionId\":\"{sid}\",\"type\":\"assistant\",\"timestamp\":\"2026-03-01T09:05:00.000Z\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"fresh-m2-marker\"}}]}}}}\n"
+        );
+        // X's M1 snapshot is spooled first ...
+        let item = write(&spool, &format!("{key}.jsonl"), &m1);
+        write(
+            &spool,
+            &format!("{key}.meta"),
+            &format!("session_id={sid}\n"),
+        );
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30);
+        std::fs::File::options()
+            .write(true)
+            .open(&item)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        // ... then X lands M2 fresh (published now, after the snapshot).
+        let t2 = write(tmp.path(), "m2.jsonl", &m2);
+        let fresh = capture(&t2, None, None, &out_dir, false).await.unwrap();
+        let before = std::fs::read_to_string(&fresh.path).unwrap();
+        assert!(before.contains("fresh-m2-marker"));
+
+        let sum = replay_spool(&spool, &out_dir).await.unwrap();
+        assert_eq!((sum.replayed, sum.dropped_stale, sum.failed), (0, 1, 0));
+        assert_eq!(
+            std::fs::read_to_string(&fresh.path).unwrap(),
+            before,
+            "a stale replay must leave the fresher capture byte-identical"
+        );
+        assert_eq!(count_html(&out_dir), 1, "no duplicate filename minted");
+        assert!(
+            !item.exists(),
+            "the stale item is dropped, not retried forever"
+        );
+
+        // A snapshot taken AFTER the corpus file was published still replays.
+        let item = write(&spool, &format!("{key}.jsonl"), &m1);
+        write(
+            &spool,
+            &format!("{key}.meta"),
+            &format!("session_id={sid}\n"),
+        );
+        let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
+        std::fs::File::options()
+            .write(true)
+            .open(&item)
+            .unwrap()
+            .set_modified(newer)
+            .unwrap();
+        let sum = replay_spool(&spool, &out_dir).await.unwrap();
+        assert_eq!((sum.replayed, sum.dropped_stale, sum.failed), (1, 0, 0));
+        assert!(!std::fs::read_to_string(&fresh.path)
+            .unwrap()
+            .contains("fresh-m2-marker"));
     }
 
     #[test]

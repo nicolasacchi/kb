@@ -148,6 +148,27 @@ registering anywhere `kb-memory` is already installed. Design:
   subagent sidecars ride the spool too (`<spool>/<session-id>/subagents/`, where
   the capture engine already looks; removed after a successful replay or when a
   live capture lands first). Test: `tests/test-capture-adapters-spool.sh`.
+- **A replay never overwrites a fresher capture (omp capture round 5)** - the
+  spool is shared by every session and every adapter, and `hook_adapter_land`
+  replays ALL pending items while holding only the current session's lock, so
+  a replay could read X's old M1 snapshot, lose a race with X landing M2, and
+  then publish M1 over it (X's fingerprint already matched, so X stayed stale
+  until it next changed). The fix is in the Rust writer, so it covers every
+  adapter: `kb sessions capture --replay-spool` compares each item's snapshot
+  time (its file mtime, i.e. when it was parked) with the mtime of the
+  session's existing capture and DROPS the item (stderr line, `dropped_stale`
+  in the summary, item and parked sidecars removed - not retried forever) when
+  the capture was published after the snapshot. The check, the write and the
+  rename run under a short per-session publish lock
+  (`<capture-locks>/publish-<sid>.plock`, same directory as the adapter locks),
+  and the existing capture is re-resolved under it, so a live capture landing
+  between the check and the rename cannot be overwritten and no second
+  filename is minted. Direct captures are never refused: they always carry the
+  newest view of the transcript. Limits: the freshness key is file mtime (a
+  clock set backwards or a filesystem with coarse mtime can misjudge items
+  within the timestamp granularity), and the lock is advisory (non-unix builds
+  run the check without it). Tests: `replay_spool_never_overwrites_a_fresher_capture`
+  (Rust) and `tests/test-capture-replay-order.sh` (real kb).
 - **The omp capture owns its lifecycle (v0.45 OC)** - a growing omp session is
   captured from three triggers (turn end, compaction, shutdown) and from
   several omp processes at once, and a 400 MB session once left two orphaned
@@ -159,7 +180,9 @@ registering anywhere `kb-memory` is already installed. Design:
     interleave). A request that finds the lock held only bumps a request counter
     and returns; the owner re-converts the live file and runs another pass until
     no request arrived during the last one, so a newer request is coalesced,
-    never dropped, and a stale conversion can never overwrite a fresher one.
+    never dropped, and a stale conversion of THIS session can never overwrite
+    a fresher one. (The lock is per session; the spool replay is shared - see
+    "A replay never overwrites a fresher capture" below.)
     Different sessions never contend. CLI backfill (`kb-capture-omp.sh
     <file>...`) waits for the lock (`KB_CAPTURE_LOCK_WAIT_SECS`, default 60) and
     always converts.
@@ -237,8 +260,12 @@ registering anywhere `kb-memory` is already installed. Design:
     linked synthetic chain).
   `kb-omp.ts` spawns the script OWNED (`detached`: its own session and process
   group, never omp's) and, on its timeout (`KB_CAPTURE_TIMEOUT_MS`, default
-  120 s) or an aborted `session_stop` signal, sends SIGTERM to that pid first (so
-  the trap runs) and SIGKILLs only the group it created after 3 s. `run()`'s
+  120 s), sends SIGTERM to that pid first (so the trap runs) and SIGKILLs only
+  the group it created after 3 s. An aborted `session_stop` signal (omp's 30 s
+  handler budget) is NOT a cancellation (operator ruling): the handler just
+  stops waiting, and the capture keeps running detached, still exclusive per
+  session, still killed by the TS timeout while omp lives and bounded by the
+  script's own `KB_CAPTURE_HARD_SECS` deadline regardless. `run()`'s
   behaviour for every other hook and tool is unchanged. A shutdown-triggered
   capture is detached on purpose: omp gives `session_shutdown` 2 s and then
   exits, so the capture outlives it and is bounded by the hard deadline alone.

@@ -348,7 +348,9 @@ hook_spool_pending() {
 # is dropped and any other pending items are replayed. On failure, or with no
 # `kb`, the UNSCRUBBED translation is parked in the private spool (0700/0600,
 # outside every corpus) for the next success / `--replay-spool`. NOTHING raw
-# is ever written to the corpus. Returns 0 = landed in the corpus, 1 = spooled,
+# is ever written to the corpus. The replay covers EVERY session's items while
+# the caller holds only its own session's lock, so the Rust writer (not this
+# lock) refuses to publish a spooled snapshot over a fresher capture. Returns 0 = landed in the corpus, 1 = spooled,
 # 2 = neither (stderr says why). Callers that only run inside a hook ignore it:
 # a hook never fails a turn.
 # Needs KB_SESSIONS_DIR; cwd/stamp/harness may be empty.

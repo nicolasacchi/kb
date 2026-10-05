@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # test-omp-capture-lifecycle.sh - kb-omp.ts's CAPTURE spawn path (v0.45 OC):
 # the capture script is spawned OWNED (detached: its own session/process group,
-# never omp's), a timeout or an aborted session_stop terminates it - SIGTERM to
+# never omp's), a timeout terminates it - SIGTERM to
 # its pid first (so its trap can reap what it owns), then SIGKILL of its OWN
-# process group as a backstop - and run()'s plain behaviour for every other
+# process group as a backstop. An aborted session_stop (omp's 30 s budget) only stops the
+# handler WAITING: the capture keeps running detached and lands (operator
+# ruling), still bounded by the timeout - and run()'s plain behaviour for every other
 # hook is unchanged.
 #
 # The extension is driven WITHOUT omp (the fake `pi` of test-omp-slate.sh); the
@@ -185,20 +187,61 @@ test("the script is asked to stop with SIGTERM first so its trap can reap its ow
   delete process.env.STUB_MODE;
 });
 
-test("an aborted session_stop (event.signal) cancels the capture too", async () => {
-  const s = stub("abort");
-  process.env.STUB_MODE = "trap";
+test("an aborted session_stop stops WAITING but the capture keeps running and lands", async () => {
+  const s = stub("abort-lands");
+  // A capture that needs ~1.5 s: it is still working when the budget aborts.
+  writeFileSync(`${ROOT}/hooks/kb-capture-omp.sh`, `#!/usr/bin/env bash
+cat >/dev/null
+echo $$ >"$STUB_DIR/script.pid"
+trap 'echo term >"$STUB_DIR/got-term"; exit 0' TERM
+sleep 1.5 &
+wait $!
+echo landed >"$STUB_DIR/landed"
+`);
   process.env.KB_CAPTURE_TIMEOUT_MS = "120000";
+  const handlers = makePi();
+  const ac = new AbortController();
+  let returned = false;
+  const p = handlers.get("session_stop")({ signal: ac.signal, session_file: FILE }, ctx).then(() => { returned = true; });
+  expect(await until(() => s.rd("script.pid") !== "", 4_000)).toBe(true);
+  const script = Number(s.rd("script.pid"));
+  await sleep(200);
+  ac.abort();
+  await p;
+  expect(returned).toBe(true); // the handler stopped waiting ...
+  expect(alive(script)).toBe(true); // ... the capture was NOT cancelled ...
+  expect(s.rd("got-term")).toBe("");
+  expect(await until(() => s.rd("landed") === "landed", 6_000)).toBe(true); // ... and it landed
+  expect(await until(() => !alive(script), 3_000)).toBe(true);
+  expect(s.rd("got-term")).toBe(""); // it exited by itself, never signalled
+});
+
+test("after an abort the capture is still bounded: the timeout kills it, no orphan remains", async () => {
+  const s = stub("abort-bounded");
+  process.env.STUB_MODE = "trap";
+  process.env.KB_CAPTURE_TIMEOUT_MS = "1500";
+  writeFileSync(`${ROOT}/hooks/kb-capture-omp.sh`, `#!/usr/bin/env bash
+cat >/dev/null
+echo $$ >"$STUB_DIR/script.pid"
+ps -o pgid= -p $$ | tr -d ' ' >"$STUB_DIR/script.pgid"
+sleep 300 &
+echo $! >"$STUB_DIR/grandchild.pid"
+trap 'echo term >"$STUB_DIR/got-term"; kill "$(cat "$STUB_DIR/grandchild.pid")" 2>/dev/null; exit 0' TERM
+wait
+`);
   const handlers = makePi();
   const ac = new AbortController();
   const p = handlers.get("session_stop")({ signal: ac.signal, session_file: FILE }, ctx);
   expect(await until(() => s.rd("grandchild.pid") !== "", 4_000)).toBe(true);
   const script = Number(s.rd("script.pid"));
-  expect(alive(script)).toBe(true);
+  const grand = Number(s.rd("grandchild.pid"));
   ac.abort();
-  expect(await until(() => s.rd("got-term") === "term", 3_000)).toBe(true);
-  expect(await until(() => !alive(script), 4_000)).toBe(true);
   await p;
+  await sleep(300);
+  expect(alive(script)).toBe(true); // abort alone does not stop it
+  expect(s.rd("got-term")).toBe("");
+  expect(await until(() => s.rd("got-term") === "term", 5_000)).toBe(true); // the timeout does
+  expect(await until(() => !alive(script) && !alive(grand), 6_000)).toBe(true);
   delete process.env.STUB_MODE;
 });
 
@@ -217,7 +260,7 @@ test("a capture that finishes normally is left alone", async () => {
 TS
 
 if ( cd "$TMPROOT" && HOME="$TMPROOT" KB_OMP_TS="$OMP_TS" bun test "$TMPROOT/capture-lifecycle.test.ts" ) >"$TMPROOT/bun.log" 2>&1; then
-  ok "bun test: owned spawn, TERM-then-group-KILL on timeout and abort, normal completion untouched"
+  ok "bun test: owned spawn, TERM-then-group-KILL on timeout, abort = stop waiting (capture lands, still bounded), normal completion untouched"
 else
   bad "bun test failed"
   sed -n '1,80p' "$TMPROOT/bun.log"

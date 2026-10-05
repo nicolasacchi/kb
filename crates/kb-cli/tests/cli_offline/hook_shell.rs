@@ -196,6 +196,14 @@ fn omp_capture_lifecycle_excludes_coalesces_reaps_and_recovers() {
     run("test-capture-omp-lifecycle.sh");
 }
 
+/// omp capture round 5 - the spool is shared by every session and adapter; a
+/// replayed snapshot older than a capture that already landed is dropped, never
+/// published over it (the real writer enforces it, so this runs the real kb).
+#[test]
+fn spool_replay_never_overwrites_a_fresher_capture() {
+    run_with_real_kb("test-capture-replay-order.sh");
+}
+
 /// v0.45 N4 - the grok adapter's distill-pending relay on the landed path.
 #[test]
 fn grok_distill_pending_relay() {
