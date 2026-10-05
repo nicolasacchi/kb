@@ -259,6 +259,18 @@ test.describe("spa move / rename-folder UI (F4)", () => {
     await expect(
       page.getByRole("navigation", { name: "artifact context" }),
     ).toBeVisible();
+
+    // N13 — IN-SPA navigation to the old path (no shell round-trip): the
+    // by-path lookup follows the moves log and the reader replaces the URL
+    // with the live path.
+    await page.evaluate((rel) => {
+      window.history.pushState({}, "", `/a/canon/${rel}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, oldRel);
+    await expect
+      .poll(() => urlSourceRel(page.url()), { timeout: 15_000 })
+      .toBe(newRel);
+    await expect(page).toHaveTitle(new RegExp(TITLE));
   });
 
   test("rename folder from gallery → new folder name + new artifact ids", async ({
