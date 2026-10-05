@@ -167,7 +167,16 @@ registering anywhere `kb-memory` is already installed. Design:
   newest view of the transcript. Limits: the freshness key is file mtime (a
   clock set backwards or a filesystem with coarse mtime can misjudge items
   within the timestamp granularity), and the lock is advisory (non-unix builds
-  run the check without it). Tests: `replay_spool_never_overwrites_a_fresher_capture`
+  run the check without it). Anything that bumps the existing capture's mtime
+  without a new snapshot (a restore, `touch`, a tool rewriting it) makes a
+  legitimately newer spooled snapshot look stale and be dropped. A replay also
+  deletes an item only if its mtime is unchanged since it was read, so a newer
+  snapshot re-parked meanwhile survives for the next replay. The rule lives only
+  in the Rust writer: **deploy the kb binary before (or with) the plugin** - a
+  plugin updated ahead of the binary has no replay protection (the replay-order
+  test reproduces the overwrite against kb 0.45). Bash publishers that do not
+  take the publish lock (the Claude `kb-capture.sh` does `mv -f`) are outside
+  the rule; they do not use the shared omp spool. Tests: `replay_spool_never_overwrites_a_fresher_capture`
   (Rust) and `tests/test-capture-replay-order.sh` (real kb).
 - **The omp capture owns its lifecycle (v0.45 OC)** - a growing omp session is
   captured from three triggers (turn end, compaction, shutdown) and from
@@ -264,11 +273,18 @@ registering anywhere `kb-memory` is already installed. Design:
   the group it created after 3 s. An aborted `session_stop` signal (omp's 30 s
   handler budget) is NOT a cancellation (operator ruling): the handler just
   stops waiting, and the capture keeps running detached, still exclusive per
-  session, still killed by the TS timeout while omp lives and bounded by the
-  script's own `KB_CAPTURE_HARD_SECS` deadline regardless. `run()`'s
+  session, still killed by the TS timeout while omp lives (if the host has
+  exited that timer never fires and only the script's own deadlines and the
+  watchdog bound it). The script's own bound is NOT `KB_CAPTURE_HARD_SECS`
+  alone: that covers one conversion pass, and the `kb` landing that follows
+  gets a fresh `KB_HOOK_BUDGET_SECS` (default 25: the landing call up to 20 s
+  plus a spool-replay call up to 10 s). Measured with HARD=5 the last
+  descendant was gone at about t+27 s, so the real bound is about
+  `KB_CAPTURE_HARD_SECS` + 25 s per pass; coalesced extra passes (other
+  processes bumping the same session) each get a fresh window. `run()`'s
   behaviour for every other hook and tool is unchanged. A shutdown-triggered
   capture is detached on purpose: omp gives `session_shutdown` 2 s and then
-  exits, so the capture outlives it and is bounded by the hard deadline alone.
+  exits, so the capture outlives it, bounded by that same per-pass figure.
   Tests: `tests/test-capture-omp-lifecycle.sh` (real subprocesses; run by
   `hook_shell.rs`), `tests/test-omp-capture-lifecycle.sh` (bun lane).
 - **One per-session key (v0.45 N4)** - every per-session file name (capture

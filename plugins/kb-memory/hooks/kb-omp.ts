@@ -102,7 +102,8 @@ type RunOptions = {
    * Owned mode only: aborting makes the CALLER stop waiting (the promise
    * settles with code 124) and nothing else - the child is NOT terminated. It
    * keeps running detached, still bounded by `timeoutMs` (while this process
-   * lives) and by the script's own hard deadline.
+   * lives); otherwise only by the script's own deadlines (KB_CAPTURE_HARD_SECS
+   * per conversion pass plus the landing's KB_HOOK_BUDGET_SECS, about +25 s).
    */
   signal?: AbortSignal;
 };
@@ -189,7 +190,8 @@ function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<{
     // capture (operator ruling): the handler just stops waiting. The child
     // keeps its pipes (closing them could SIGPIPE the script mid-landing), is
     // still killed by the TIMEOUT above while this process lives, and by its
-    // own KB_CAPTURE_HARD_SECS deadline regardless. Unref'd so it never holds
+    // own deadlines regardless (HARD_SECS per conversion pass plus the landing
+    // budget, about +25 s). Unref'd so it never holds
     // a headless `omp -p` open.
     const onAbort = () => {
       if (done) return;
@@ -575,7 +577,8 @@ export default function kbMemoryOmp(pi: {
    * everything it spawned on TERM/timeout; this side spawns it OWNED (own
    * process group, never omp's) and cancels it on timeout. `signal` (the
    * session_stop abort) only stops the WAITING: the capture keeps running
-   * detached and lands, bounded by its own deadline.
+   * detached and lands, bounded by its own deadlines (KB_CAPTURE_HARD_SECS
+   * per conversion pass plus the landing budget, about +25 s).
    * `KB_CAPTURE_TIMEOUT_MS` overrides the 120 s default (tests).
    */
   async function capture(

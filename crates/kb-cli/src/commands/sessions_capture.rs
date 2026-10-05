@@ -194,6 +194,12 @@ pub fn spool_dir() -> Option<PathBuf> {
     env("HOME").map(|h| h.join(".cache").join("kb").join("capture-spool"))
 }
 
+/// True when `item` still carries the mtime read before it was processed (a
+/// producer that re-parks a newer snapshot over it changes the mtime).
+fn item_unchanged(item: &Path, snap: Option<std::time::SystemTime>) -> bool {
+    std::fs::metadata(item).and_then(|m| m.modified()).ok() == snap
+}
+
 /// Outcome of one `--replay-spool` run.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ReplaySummary {
@@ -264,6 +270,13 @@ pub async fn replay_spool(spool: &Path, out_dir: &Path) -> Result<ReplaySummary>
                     sum.dropped_stale += 1;
                 } else {
                     sum.replayed += 1;
+                }
+                // A producer may have re-parked a NEWER snapshot over this item
+                // (`mv -f`) while we processed the old one: delete only what we
+                // actually read (same mtime as at the stat), else leave the
+                // fresher item for the next replay.
+                if !item_unchanged(&jsonl, snap) {
+                    continue;
                 }
                 let _ = std::fs::remove_file(&jsonl);
                 let _ = std::fs::remove_file(&meta);
@@ -1892,6 +1905,24 @@ mod tests {
         assert!(!std::fs::read_to_string(&fresh.path)
             .unwrap()
             .contains("fresh-m2-marker"));
+    }
+
+    /// A newer snapshot re-parked over an item while it was processed must not
+    /// be deleted with the old one.
+    #[test]
+    fn item_unchanged_detects_a_reparked_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let item = write(tmp.path(), "i.jsonl", "a\n");
+        let snap = std::fs::metadata(&item).and_then(|m| m.modified()).ok();
+        assert!(item_unchanged(&item, snap));
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&item)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(!item_unchanged(&item, snap));
     }
 
     #[test]
