@@ -104,6 +104,22 @@ set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
+# Hook mode: become a session leader so everything this capture spawns is
+# ours to reap (see "lifecycle" below) and a caller's group-wide signal or
+# a terminal never reaches us by accident. `setsid` from a non-leader keeps
+# the PID, so a caller that signals the PID it spawned (the pre-OC
+# kb-omp.ts: SIGTERM to the shell only) still reaches this script, whose
+# trap then reaps its own session. stdin passes through the exec.
+if [ "$#" -eq 0 ] && [ -z "${KB_CAPTURE_ISOLATED:-}" ] \
+  && command -v setsid >/dev/null 2>&1 && command -v ps >/dev/null 2>&1; then
+  _sid="$(ps -o sid= -p "$$" 2>/dev/null | tr -d ' ')"
+  _pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
+  if [ -n "$_sid" ] && [ "$_sid" != "$$" ] && [ "$_pgid" != "$$" ]; then
+    export KB_CAPTURE_ISOLATED=1
+    exec setsid "${BASH:-bash}" "$0"
+  fi
+fi
+
 TRANSLATE='
   def ms2iso: if (. | type) == "number" then ((. / 1000) | todate) else null end;
   def canon:
@@ -122,11 +138,18 @@ TRANSLATE='
   (if ($hdr.id // "") != "" then $hdr.id else ($es[0].id // "unknown") end) as $sid |
   ($hdr.cwd // "unknown") as $cwd |
   (($hdr.title // "")) as $stitle |
-  (reduce range(($n - 1); -1; -1) as $i (
-     {cur: ($es[$n - 1].id // null), keep: []};
+  # Linear walk (v0.45 OC): only the scalar cursor lives in the loop state and
+  # the chain is COLLECTED by foreach. The earlier reduce carried the growing
+  # `keep` array in its state and prepended to it, copying the whole array on
+  # every kept record (O(chain^2): ~38 s at 20k records, ~3 min at 40k).
+  # Semantics are unchanged: a null cursor stops the walk, and the first
+  # backward match wins on a duplicate id.
+  ([foreach range(($n - 1); -1; -1) as $i (
+     {cur: ($es[$n - 1].id // null), hit: false};
      if .cur != null and ($es[$i].id // null) == .cur
-     then {cur: ($es[$i].parentId // null), keep: ([$es[$i]] + .keep)}
-     else . end)).keep as $chain |
+     then {cur: ($es[$i].parentId // null), hit: true}
+     else {cur: .cur, hit: false} end;
+     if .hit then $es[$i] else empty end)] | reverse) as $chain |
   # /clear boundary: everything at-or-before the LAST reset_boundary is hidden
   ([ $chain | to_entries[] | select(.value.type == "reset_boundary") | .key ]
    | last // -1) as $rb |
@@ -249,7 +272,6 @@ TRANSLATE='
   end
 '
 
-# capture_one <session.jsonl> [sid] [cwd] — sid/cwd default to the header's.
 # v0.44 X6 (INT4) - every `kb` call is bounded by the shared hook deadline
 # (kb-hook-lib.sh run_to), so a hung daemon/CLI can never hang the session
 # end; the harness timeout is the last resort, not the design. A standalone
@@ -260,6 +282,8 @@ TRANSLATE='
   hook_deadline_init() { :; }
   hook_agent_safe_name() { return 1; }
   hook_spool_put_sidecars() { return 1; }
+  hook_capture_lock_dir() { return 1; }
+  hook_capture_key() { return 1; }
   hook_adapter_land() {
     command -v kb >/dev/null 2>&1 || { echo "kb-capture-omp.sh: kb not found - session $1 not captured" >&2; return 0; }
     kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
@@ -270,12 +294,186 @@ TRANSLATE='
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 
-capture_one() {
+
+# --- lifecycle (v0.45 OC) ----------------------------------------------------
+# A growing session is captured from three triggers (every turn end, a
+# compaction, shutdown), from several omp processes at once, and a large one
+# can take minutes. This script therefore owns its lifecycle:
+#   * EXCLUSION   one active conversion per canonical session file, across
+#                 processes (flock, key = hash of the realpath). A request that
+#                 finds the lock held only BUMPS a request counter and returns;
+#                 the owner re-reads the source afresh and runs another pass
+#                 until no request arrived during the last one (coalescing,
+#                 never a silent drop). Independent sessions never contend.
+#   * FRESHNESS   only the lock holder publishes, strictly in order, and it
+#                 re-converts the live file on every pass, so a stale
+#                 conversion cannot overwrite a fresher one. A pass is skipped
+#                 only when the input fingerprint (parent inode:size:mtime-ns,
+#                 a hash of the first 512 bytes = the in-place title slot, the
+#                 sidecar listing, this script's version) equals the one
+#                 recorded after the last SUCCESSFUL landing AND the capture
+#                 file still exists. The fingerprint is taken BEFORE reading, so
+#                 an append during conversion forces another pass; it is
+#                 recorded only when hook_adapter_land returned 0 (rc 1 = only
+#                 parked in the spool, rc 2 = lost), so failed work is never
+#                 recorded as captured. CLI backfill never skips.
+#   * OWNERSHIP   in hook mode the script makes itself a session leader
+#                 (setsid; same PID, so a caller that signals the PID it spawned
+#                 still reaches us). Every long child runs in the background
+#                 under `timeout` (the remaining hard deadline) and is awaited
+#                 with `wait`, which a trapped signal interrupts - a foreground
+#                 child would defer the trap until it exited. TERM/INT/HUP and
+#                 EXIT reap every process of OUR session (not our process
+#                 group: timeout(1) moves its child into a group of its own),
+#                 remove the scratch files and release the lock. Nothing
+#                 outside our session is ever signalled.
+#   * DEADLINE    KB_CAPTURE_HARD_SECS (default 120, the caller's own timeout)
+#                 per pass: each child is capped at what is left of it.
+CAP_HARD="${KB_CAPTURE_HARD_SECS:-120}"
+CAP_LOCK_WAIT="${KB_CAPTURE_LOCK_WAIT_SECS:-60}"
+CAP_VERSION="kb-capture-omp/1+oc1"
+CAP_TMP=()
+CAP_CLEANED=""
+CAP_HAVE_TIMEOUT=""
+command -v timeout >/dev/null 2>&1 && CAP_HAVE_TIMEOUT=1
+
+# Pids of every process this script owns (never $$ itself).
+cap_owned_pids() {
+  command -v ps >/dev/null 2>&1 || return 0
+  local mysid
+  mysid="$(ps -o sid= -p "$$" 2>/dev/null | tr -d ' ')"
+  if [ "$mysid" = "$$" ]; then
+    ps -s "$$" -o pid= 2>/dev/null | tr -d ' ' | grep -vx "$$"
+  else
+    # Not a session leader (setsid unavailable / CLI mode): our descendants.
+    ps -e -o pid=,ppid= 2>/dev/null | awk -v root="$$" '
+      { pp[$1] = $2 }
+      END {
+        mark[root] = 1; changed = 1
+        while (changed) {
+          changed = 0
+          for (p in pp) if (!(p in mark) && (pp[p] in mark)) { mark[p] = 1; changed = 1; print p }
+        }
+      }'
+  fi
+  return 0
+}
+
+cap_alive() { # alive and not a zombie
+  local st
+  st="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ]
+}
+
+cap_reap() {
+  local pids p i alive
+  pids="$(cap_owned_pids)"
+  [ -n "$pids" ] || return 0
+  for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+  for i in $(seq 1 25); do
+    alive=""
+    for p in $pids; do
+      if cap_alive "$p"; then alive=1; break; fi
+    done
+    [ -z "$alive" ] && return 0
+    sleep 0.1
+  done
+  for p in $pids; do kill -KILL "$p" 2>/dev/null; done
+  return 0
+}
+
+cap_cleanup() {
+  [ -z "$CAP_CLEANED" ] || return 0
+  CAP_CLEANED=1
+  trap '' TERM INT HUP
+  cap_reap
+  local i=0
+  while [ "$i" -lt "${#CAP_TMP[@]}" ]; do
+    [ -n "${CAP_TMP[$i]}" ] && rm -rf "${CAP_TMP[$i]}" 2>/dev/null
+    i=$((i + 1))
+  done
+  { exec 9>&-; } 2>/dev/null
+  return 0
+}
+cap_on_signal() { cap_cleanup; exit 143; }
+
+cap_track() { CAP_TMP+=("$1"); }
+cap_untrack() { # rm now and forget
+  local i=0
+  while [ "$i" -lt "${#CAP_TMP[@]}" ]; do
+    [ "${CAP_TMP[$i]}" = "$1" ] && CAP_TMP[$i]=""
+    i=$((i + 1))
+  done
+  rm -rf "$1" 2>/dev/null
+}
+
+# Run "$@" in the background and wait for it. `wait` is interruptible by a
+# trapped signal; a foreground child is not.
+cap_bg() {
+  "$@" &
+  local p=$!
+  wait "$p"
+  local rc=$?
+  return "$rc"
+}
+
+# Cap an EXTERNAL command at what is left of this pass's hard deadline.
+capt() {
+  local left=$((CAP_HARD - SECONDS))
+  [ "$left" -gt 0 ] || return 124
+  if [ -n "$CAP_HAVE_TIMEOUT" ]; then
+    timeout -k 2 "$left" "$@"
+  else
+    "$@"
+  fi
+}
+
+# The authoritative edited-set (lenient: a torn trailing line is skipped).
+cap_edited_set() {
+  capt grep '"toolCall"' "$1" 2>/dev/null \
+    | capt jq -R -c 'fromjson? | select(.type == "message") | .message.content[]?
+             | select(.type == "toolCall")
+             | select(((.name // "") | ascii_downcase) == "write"
+                      or ((.name // "") | ascii_downcase) == "edit")
+             | [.arguments.path // .arguments.file_path // empty]' 2>/dev/null \
+    | capt jq -s -c 'add // [] | unique'
+  local st=("${PIPESTATUS[@]}")
+  [ "${st[0]}" -le 1 ] && [ "${st[1]}" -eq 0 ] && [ "${st[2]}" -eq 0 ]
+}
+
+# Input fingerprint (see the header). rc 1 = cannot be computed (never skip).
+cap_fingerprint() {
+  local f="$1" sdir="${1%.jsonl}" a b c=""
+  a="$(stat -c '%i:%s:%.9Y' -- "$f" 2>/dev/null)" || return 1
+  [ -n "$a" ] || return 1
+  b="$(head -c 512 -- "$f" 2>/dev/null | cksum)"
+  if [ -d "$sdir" ]; then
+    c="$(find "$sdir" -maxdepth 1 -name '*.jsonl' -printf '%f %s %T@ %i\n' 2>/dev/null | LC_ALL=C sort)"
+  fi
+  printf '%s\n%s\n%s\n%s\n' "$CAP_VERSION" "$a" "$b" "$c" | { sha256sum 2>/dev/null || cksum; } | cut -d' ' -f1-2
+}
+
+cap_capture_exists() { compgen -G "$KB_SESSIONS_DIR/session-*-$(hook_sid_key "$1").html" >/dev/null 2>&1; }
+
+cap_req_bump() { # <base>
+  (
+    flock 8 || exit 0
+    n="$(cat "$1.req" 2>/dev/null)"
+    case "$n" in '' | *[!0-9]*) n=0 ;; esac
+    printf '%s\n' "$((n + 1))" >"$1.req"
+  ) 8>"$1.reqlock" 2>/dev/null
+  return 0
+}
+cap_req_read() { local n; n="$(cat "$1.req" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+
+# capture_pass <session.jsonl> [sid] [cwd] [force] [lock-base] - ONE conversion
+# + landing. rc 0 = captured or legitimately skipped, 1 = not captured.
+capture_pass() {
   hook_deadline_init # per-session budget (a backfill runs many)
-  local tpath="$1" sid="${2:-}" cwd="${3:-}"
+  local tpath="$1" sid="${2:-}" cwd="${3:-}" force="${4:-0}" base="${5:-}"
   [ -f "$tpath" ] || return 0
 
-  local hdr created cts edited
+  local hdr created cts fp=""
   hdr="$(head -c 262144 "$tpath" \
     | jq -c 'select(.type == "session") | {id, cwd, timestamp}' 2>/dev/null | head -1)"
   # Caller-provided sid (hook mode / TS) wins; CLI mode falls back to the
@@ -292,58 +490,67 @@ capture_one() {
   cts="$(date -u -d "$created" +%Y%m%dT%H%M%SZ 2>/dev/null)"
   [ -n "${cts:-}" ] || cts="$(date -u +%Y%m%dT%H%M%SZ)"
 
-  edited="$(grep '"toolCall"' "$tpath" 2>/dev/null \
-    | jq -c 'select(.type == "message") | .message.content[]?
-             | select(.type == "toolCall")
-             | select(((.name // "") | ascii_downcase) == "write"
-                      or ((.name // "") | ascii_downcase) == "edit")
-             | [.arguments.path // .arguments.file_path // empty]' 2>/dev/null \
-    | jq -s -c 'add // [] | unique')"
-  [ -n "$edited" ] || edited='[]'
+  if [ -n "$base" ]; then
+    fp="$(cap_fingerprint "$tpath")" || fp=""
+    if [ "$force" != 1 ] && [ -n "$fp" ] \
+      && [ "$(cat "$base.done" 2>/dev/null)" = "$fp" ] && cap_capture_exists "$sid"; then
+      return 0 # nothing changed since the last successful landing
+    fi
+  fi
 
-  # OK4 — a scratch DIR (not a bare file), so a sibling subagent dir can be
+  # OK4 - a scratch DIR (not a bare file), so a sibling subagent dir can be
   # staged at <scratch>/<raw-session-id>/subagents/ beside the main
-  # translated transcript — exactly the shape sessions_capture.rs's sidecar
+  # translated transcript - exactly the shape sessions_capture.rs's sidecar
   # walk resolves (transcript.parent().join(&raw_sid).join("subagents")).
-  local scratch tmpclean tmpjsonl
-  scratch="$(mktemp -d)" || return 0
-  tmpclean="$(mktemp)" || { rm -rf "$scratch"; return 0; }
+  local scratch tmpclean tmpjsonl edited
+  scratch="$(mktemp -d)" || return 1
+  cap_track "$scratch"
+  tmpclean="$scratch/clean.jsonl"
   tmpjsonl="$scratch/transcript.jsonl"
 
-  # Lenient pre-clean (same policy as omp's own loader): drop unparsable
-  # lines instead of aborting — a torn trailing line from a crash or an
-  # active append must never kill the whole capture.
-  jq -R -c 'fromjson? // empty' "$tpath" >"$tmpclean" 2>/dev/null
-  jq -c -s --arg file "$tpath" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null
-  rm -f "$tmpclean"
-  if [ ! -s "$tmpjsonl" ]; then rm -rf "$scratch"; return 0; fi
+  cap_bg cap_edited_set "$tpath" >"$scratch/edited.json" || { cap_untrack "$scratch"; return 1; }
+  edited="$(cat "$scratch/edited.json" 2>/dev/null)"
+  [ -n "$edited" ] || edited='[]'
 
-  # OK4 — subagent sidecars: <session-file-stem>/ is omp's own on-disk
+  # Lenient pre-clean (same policy as omp's own loader): drop unparsable
+  # lines instead of aborting - a torn trailing line from a crash or an
+  # active append must never kill the whole capture.
+  if ! cap_bg capt jq -R -c 'fromjson? // empty' "$tpath" >"$tmpclean" 2>/dev/null; then
+    cap_untrack "$scratch"; return 1
+  fi
+  if ! cap_bg capt jq -c -s --arg file "$tpath" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null; then
+    cap_untrack "$scratch"; return 1
+  fi
+  rm -f "$tmpclean"
+  if [ ! -s "$tmpjsonl" ]; then cap_untrack "$scratch"; return 0; fi
+
+  # OK4 - subagent sidecars: <session-file-stem>/ is omp's own on-disk
   # convention for a Task-tool delegation's per-agent JSONL (verified live:
-  # ~/.omp/agent/sessions/<cwd>/<ts>_<sid>/<AgentName>.jsonl — no
+  # ~/.omp/agent/sessions/<cwd>/<ts>_<sid>/<AgentName>.jsonl - no
   # subagents/ level, no agent- prefix, unlike Claude Code). raw_sid is read
   # back off the just-translated main transcript's own adapter-meta
   # sessionId rather than the bash $sid var above, since that is exactly
   # what `kb sessions capture` itself resolves as raw_sid (it prefers the
-  # transcript's own sessionId over any --session-id hint — invariant #11),
+  # transcript's own sessionId over any --session-id hint - invariant #11),
   # so the two can never disagree even under a hook-mode --session-id
   # override.
-  local sdir="${tpath%.jsonl}"
+  local sdir="${tpath%.jsonl}" rsid=""
   if [ -d "$sdir" ]; then
-    local rsid
     rsid="$(head -1 "$tmpjsonl" | jq -r '.sessionId // empty' 2>/dev/null)"
     if [ -n "$rsid" ]; then
       local subdir_out="$scratch/$rsid/subagents"
       mkdir -p "$subdir_out" 2>/dev/null
-      local f base safe subtmp
+      local f b safe subtmp
       for f in "$sdir"/*.jsonl; do
         [ -f "$f" ] || continue
-        base="$(basename "$f" .jsonl)"
-        safe="$(hook_agent_safe_name "$base" "$sdir")" || continue
-        subtmp="$(mktemp)" || continue
-        jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null
-        jq -c -s --arg file "$f" "$TRANSLATE" "$subtmp" \
-          >"$subdir_out/agent-$safe.jsonl" 2>/dev/null
+        b="$(basename "$f" .jsonl)"
+        safe="$(hook_agent_safe_name "$b" "$sdir")" || continue
+        subtmp="$scratch/sub.clean.jsonl"
+        cap_bg capt jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null \
+          || { cap_untrack "$scratch"; return 1; }
+        cap_bg capt jq -c -s --arg file "$f" "$TRANSLATE" "$subtmp" \
+          >"$subdir_out/agent-$safe.jsonl" 2>/dev/null \
+          || { cap_untrack "$scratch"; return 1; }
         rm -f "$subtmp"
         [ -s "$subdir_out/agent-$safe.jsonl" ] || rm -f "$subdir_out/agent-$safe.jsonl"
       done
@@ -351,25 +558,88 @@ capture_one() {
   fi
 
   # Trailing authoritative-edited-set snapshot (parse_session_activity reads it).
-  jq -n -c --arg sid "$sid" --argjson edited "$edited" \
+  cap_bg capt jq -n -c --arg sid "$sid" --argjson edited "$edited" \
     'select(($edited | length) > 0) |
      {sessionId: $sid, type: "file-history-snapshot",
       snapshot: {trackedFileBackups: ($edited | map({key: ., value: {}}) | from_entries)}}' \
-    >>"$tmpjsonl" 2>/dev/null
+    >>"$tmpjsonl" 2>/dev/null || { cap_untrack "$scratch"; return 1; }
 
-  hook_adapter_land "$sid" "$tmpjsonl" "${cwd:-unknown}" "$cts" omp
+  # The kb calls get their own fresh budget: conversion has its own hard
+  # deadline and must not eat the landing's.
+  hook_deadline_init
+  local rc=0
+  cap_bg hook_adapter_land "$sid" "$tmpjsonl" "${cwd:-unknown}" "$cts" omp || rc=$?
   # rc 1 = parked in the spool: park the translated subagent sidecars with it
   # so the replay folds them in (v0.45 N10).
-  if [ "$?" -eq 1 ] && [ -n "${rsid:-}" ] && [ -d "$scratch/$rsid/subagents" ]; then
+  if [ "$rc" -eq 1 ] && [ -n "${rsid:-}" ] && [ -d "$scratch/$rsid/subagents" ]; then
     hook_spool_put_sidecars "$rsid" "$scratch/$rsid/subagents" || true
   fi
-  rm -rf "$scratch"
+  cap_untrack "$scratch"
+  # Recorded ONLY for a real landing, and only for the state read BEFORE the
+  # conversion (an append during it makes the next fingerprint differ).
+  if [ "$rc" -eq 0 ] && [ -n "$base" ] && [ -n "$fp" ]; then
+    printf '%s\n' "$fp" >"$base.done.$$" 2>/dev/null && mv -f "$base.done.$$" "$base.done" 2>/dev/null
+  fi
+  [ "$rc" -eq 0 ]
 }
+
+# capture_one <session.jsonl> [sid] [cwd] [force] - the lock + coalescing
+# driver around capture_pass. force=1 (CLI backfill) waits for the lock and
+# never skips on an unchanged fingerprint.
+capture_one() {
+  local tpath="$1" sid="${2:-}" cwd="${3:-}" force="${4:-0}"
+  [ -f "$tpath" ] || return 0
+  local ldir key base g cur first=1
+  if command -v flock >/dev/null 2>&1 && ldir="$(hook_capture_lock_dir 2>/dev/null)" \
+    && key="$(hook_capture_key "$tpath" 2>/dev/null)" \
+    && mkdir -p "$ldir" 2>/dev/null && chmod 700 "$ldir" 2>/dev/null; then
+    base="$ldir/$key"
+  else
+    SECONDS=0
+    capture_pass "$tpath" "$sid" "$cwd" "$force" "" || true # no lock available: as before
+    return 0
+  fi
+  cap_req_bump "$base"
+  while :; do
+    if ! { exec 9>"$base.lock"; } 2>/dev/null; then
+      SECONDS=0
+      capture_pass "$tpath" "$sid" "$cwd" "$force" "" || true
+      return 0
+    fi
+    if [ "$first" = 1 ] && [ "$force" = 1 ]; then
+      if ! cap_bg flock -w "$CAP_LOCK_WAIT" 9; then
+        exec 9>&-
+        echo "kb-capture-omp.sh: capture of $tpath is busy - not captured" >&2
+        return 0
+      fi
+    elif ! flock -n 9; then
+      exec 9>&- # the owner will see the bumped request counter
+      return 0
+    fi
+    first=0
+    while :; do
+      g="$(cap_req_read "$base")"
+      SECONDS=0
+      capture_pass "$tpath" "$sid" "$cwd" "$force" "$base" || true
+      cur="$(cap_req_read "$base")"
+      [ "$cur" = "$g" ] && break
+    done
+    exec 9>&-
+    # A request that landed after the last check but before the release found
+    # the lock held and returned: re-check AFTER releasing, then go again.
+    cur="$(cap_req_read "$base")"
+    [ "$cur" = "$g" ] && return 0
+  done
+}
+
+trap cap_on_signal TERM INT HUP
+trap cap_cleanup EXIT
+[ "$#" -gt 0 ] || trap '' PIPE # a shutdown capture outlives omp's pipes
 
 if [ "$#" -gt 0 ]; then
   # CLI mode (backfill): sid + cwd come from each file's own session header.
   for arg in "$@"; do
-    capture_one "$arg"
+    capture_one "$arg" "" "" 1
   done
 else
   input="$(cat)"
@@ -377,6 +647,6 @@ else
   sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
   cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
   [ -n "$tpath" ] && [ -f "$tpath" ] || exit 0
-  capture_one "$tpath" "$sid" "$cwd"
+  capture_one "$tpath" "$sid" "$cwd" 0
 fi
 exit 0
