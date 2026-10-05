@@ -82,6 +82,25 @@ esac
 SHIM
 chmod +x "$TMPROOT/shim/jq"
 
+# grep shim: a call that carries the watchdog's KB_CAPTURE_RUN marker is logged
+# (so a test can count how many processes the orphan scan forks) and, with
+# GREP_SLOW set, delayed (a slow /proc on a loaded host). Everything else passes.
+REAL_GREP="$(command -v grep)"
+export REAL_GREP
+cat >"$TMPROOT/shim/grep" <<'SHIM'
+#!/usr/bin/env bash
+case " $* " in
+  *KB_CAPTURE_RUN*)
+    echo "scan $$" >>"$GREP_LOG"
+    [ -n "${GREP_SLOW:-}" ] && sleep "$GREP_SLOW"
+    ;;
+esac
+exec "$REAL_GREP" "$@"
+SHIM
+chmod +x "$TMPROOT/shim/grep"
+export GREP_LOG="$TMPROOT/grep.log"
+: >"$GREP_LOG"
+
 # fake kb: lands through the fixture stand-in unless the fail flag exists.
 cat >"$TMPROOT/kbbin/kb" <<'KB'
 #!/usr/bin/env bash
@@ -457,6 +476,45 @@ if wait_for 10 grep -q kbstart "$KB_LOG"; then
   fi
 else
   bad "the orphan kb never started"
+fi
+
+# 6b2b. The orphan scan is ONE process and never delays the TERM. The old
+#       watchdog forked tr + grep for every /proc/<pid>/environ BEFORE it sent
+#       any signal, so its cleanup time (and the time the per-session lock
+#       stayed held, and the time orphans kept burning CPU) grew with the
+#       number of processes on the host. Here the scan is made slow (GREP_SLOW):
+#       the owner's own session must be TERMed long before the scan returns,
+#       and the whole scan must be a single grep invocation.
+S8="$TMPROOT/s8.jsonl"; SID8="a8000000-0000-0000-0000-000000000008"
+mk_session "$S8" "$SID8" "scan"
+: >"$SHIM_LOG"; : >"$GREP_LOG"
+export SHIM_SLEEP=60
+hook_bg "$S8" "$SID8"; K8=$LAST_PID
+if wait_for 10 log_has_start "$S8"; then
+  sleep 0.3
+  jqpid="$(awk -v f="$S8" '$1=="start" && $3==f {print $2}' "$SHIM_LOG" | head -1)"
+  STARTED_PIDS+=($(ps -s "$K8" -o pid= | tr -d ' ' | grep -vx "$K8") $jqpid)
+  unset SHIM_SLEEP
+  export GREP_SLOW=3
+  kill -KILL "$K8" 2>/dev/null; wait "$K8" 2>/dev/null
+  t0=$(date +%s.%N); dead=""
+  for _ in $(seq 1 60); do
+    kill -0 "$jqpid" 2>/dev/null || { dead=1; break; }
+    sleep 0.05
+  done
+  t1=$(date +%s.%N)
+  if [ -n "$dead" ] && awk -v a="$t0" -v b="$t1" 'BEGIN{exit !((b-a) < 2.0)}'; then
+    ok "orphans are TERMed before the (slow) environ scan finishes"
+  else
+    bad "orphan still alive $(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')s after the owner SIGKILL while the scan was slow"
+  fi
+  wait_for 12 lock_free
+  unset GREP_SLOW
+  n_scans="$(wc -l <"$GREP_LOG" | tr -d ' ')"
+  if [ "$n_scans" -le 2 ]; then ok "the orphan scan forks O(1) processes ($n_scans), not one per /proc entry"; else bad "the orphan scan forked $n_scans greps (one per process)"; fi
+else
+  unset SHIM_SLEEP
+  bad "[scan] the long conversion never started"
 fi
 
 # 6b3. A jq data error on a malformed record must not lose the session.

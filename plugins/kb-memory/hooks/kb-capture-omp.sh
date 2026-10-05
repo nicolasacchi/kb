@@ -422,30 +422,28 @@ while alive && [ -d "$run" ]; do
   wait "$sp"
 done
 [ -d "$run" ] || exit 0
-members() {
-  ps -s "$owner" -o pid= 2>/dev/null | tr -d " "
-  local d p
-  for d in /proc/[0-9]*; do
-    p="${d#/proc/}"
-    [ "$p" = "$$" ] && continue
-    tr "\0" "\n" <"$d/environ" 2>/dev/null | grep -qx "KB_CAPTURE_RUN=$marker" && echo "$p"
-  done
-}
-pids="$(members | sort -u)"
+# TERM the owner session at once (one ps), THEN find the marker carriers:
+# ONE grep over every environ (no per-pid fork), so the scan is a single
+# process whose cost scales with the process count but never delays the TERM.
+pids="$(ps -s "$owner" -o pid= 2>/dev/null | tr -d " ")"
 for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+more="$(grep -laz -x -F "KB_CAPTURE_RUN=$marker" /proc/[0-9]*/environ 2>/dev/null \
+  | sed -n "s#^/proc/\\([0-9][0-9]*\\)/environ\$#\\1#p")"
+for p in $more; do
+  [ "$p" = "$$" ] && continue
+  case " $pids " in *" $p "*) continue ;; esac
+  pids="$pids $p"; kill -TERM "$p" 2>/dev/null
+done
+live() { # the subset of "$@" that is alive and not a zombie (ONE ps)
+  [ "$#" -gt 0 ] || return 0
+  ps -o pid=,stat= -p "$(IFS=,; echo "$*")" 2>/dev/null | awk '"'"'substr($2,1,1) != "Z" { print $1 }'"'"'
+}
 for i in $(seq 1 20); do
   sleep 0.1
-  left=""
-  for p in $pids; do
-    st="$(ps -o stat= -p "$p" 2>/dev/null | tr -d " ")"
-    [ -n "$st" ] && [ "${st#Z}" = "$st" ] && left=1
-  done
+  left="$(live $pids)"
   [ -z "$left" ] && break
 done
-for p in $pids; do
-  st="$(ps -o stat= -p "$p" 2>/dev/null | tr -d " ")"
-  [ -n "$st" ] && [ "${st#Z}" = "$st" ] && kill -KILL "$p" 2>/dev/null
-done
+for p in $left; do kill -KILL "$p" 2>/dev/null; done
 rm -rf "$run"
 '
 

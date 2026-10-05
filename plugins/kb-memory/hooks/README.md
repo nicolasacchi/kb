@@ -190,11 +190,27 @@ registering anywhere `kb-memory` is already installed. Design:
     after a fresher conversion. A request arriving in that window sees the
     recorded owner (`<lock>.owner`, pid + start time) is gone and waits for the
     lock (`KB_CAPTURE_ORPHAN_WAIT_SECS`, default 8) instead of being dropped.
-    Timing: the watchdog polls every 0.5 s, sends TERM, then polls up to 2 s for
-    the survivors before KILL, so cleanup typically takes about a second and at
-    most about 3 s (not "within a second"). The watchdog is per lock hold and is
-    stopped before the lock is released. `KB_CAPTURE_NO_WATCHDOG=1` disables only
-    the watchdog.
+    Timing: the watchdog polls every 0.5 s, TERMs the owner's session at once,
+    finds the other marker carriers with ONE `grep` over `/proc/*/environ`
+    (milliseconds on a host with ~900 processes; it was two forks per process,
+    about 2.5 s there), then polls (one `ps` per 0.1 s) up to 2 s before KILL.
+    Measured on an idle host with a `kb` that ignores TERM (the worst case): the
+    lock is free about 2.4 s after the owner SIGKILL; a cooperative orphan is
+    gone sooner. This is NOT a hard bound: it grows with host load and process
+    count, so `KB_CAPTURE_ORPHAN_WAIT_SECS` (default 8) is headroom (about 3x
+    the measured worst case), not a guarantee. A request that waits the full
+    time while the watchdog is still reaping is dropped, and the capture catches
+    up at the next trigger (turn end). Limits, stated plainly: if the watchdog
+    is SIGKILLed together with the owner (cgroup or OOM kill of both) the lock is
+    released at once and the stale-publish race this closes can recur; the reap
+    is by the run's `KB_CAPTURE_RUN` environment marker, so any process a
+    capture spawns inherits it and is reaped too; the pid lists the watchdog
+    and `kb-omp.ts`'s group KILL act on are only unsafe after a pid wrap (Linux
+    never reuses a pid that is still a live process-group id); and the `INT`
+    trap is inert if the caller started the script with SIGINT ignored
+    (`kb-omp.ts` only sends TERM). The watchdog is per lock hold and is stopped
+    before the lock is released. `KB_CAPTURE_NO_WATCHDOG=1` disables only the
+    watchdog.
   - **a malformed record never loses the session**: the translator tolerates a
     non-string tool name, non-object `arguments`, a non-string `path` and
     non-object content entries (the record degrades; the rest of the transcript
