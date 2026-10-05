@@ -476,14 +476,63 @@ pub fn author_ranges_between_for_path(
     q_path: &str,
     resolved_path: &str,
 ) -> Option<AuthorRanges> {
-    let read = |p: &ReviewPatchsetRow| -> Option<String> {
-        if !is_full_sha(&p.base_sha) || !is_full_sha(&p.tip_sha) {
-            return None;
-        }
+    author_ranges_between_for_path_memo(
+        ctx,
+        &mut RenameReadMemo::new(),
+        own,
+        later,
+        q_path,
+        resolved_path,
+    )
+}
+
+/// The rename-aware change-set texts read during ONE computation, keyed by
+/// the `(base, tip)` diff actually run. Owned by the caller's request-scoped
+/// computation and dropped with it: no cross-request cache, so no eviction
+/// policy, and the `--no-renames` `/since` memo is untouched. A failed read
+/// is remembered as `None` for the rest of the same read only.
+pub type RenameReadMemo = HashMap<(String, String), Option<String>>;
+
+/// [`author_ranges_between_for_path`] sharing `memo`, so each distinct
+/// `(base, tip)` rename-aware diff runs at most once per read however many
+/// findings and patchsets ask for it.
+pub fn author_ranges_between_for_path_memo(
+    ctx: &GitCtx,
+    memo: &mut RenameReadMemo,
+    own: &ReviewPatchsetRow,
+    later: &ReviewPatchsetRow,
+    q_path: &str,
+    resolved_path: &str,
+) -> Option<AuthorRanges> {
+    author_ranges_with_reader(memo, own, later, q_path, resolved_path, &mut |p| {
         ctx.read_with_fallback(|root| {
             crate::diff::diff_range_u0_renames(root.git_path(), &p.base_sha, &p.tip_sha)
         })
         .ok()
+    })
+}
+
+/// The memo + sha-validation core with the git read injected (the test seam
+/// that counts diff runs).
+fn author_ranges_with_reader(
+    memo: &mut RenameReadMemo,
+    own: &ReviewPatchsetRow,
+    later: &ReviewPatchsetRow,
+    q_path: &str,
+    resolved_path: &str,
+    reader: &mut dyn FnMut(&ReviewPatchsetRow) -> Option<String>,
+) -> Option<AuthorRanges> {
+    let mut read = |p: &ReviewPatchsetRow| -> Option<String> {
+        if !is_full_sha(&p.base_sha) || !is_full_sha(&p.tip_sha) {
+            return None;
+        }
+        let key = (p.base_sha.clone(), p.tip_sha.clone());
+        if let Some(hit) = memo.get(&key) {
+            return hit.clone();
+        }
+        let text = reader(p);
+        memo.insert(key, text.clone());
+        text
     };
     let from_text = read(own)?;
     let to_text = read(later)?;
@@ -1028,6 +1077,94 @@ rename to moved.txt\n";
         let r = renamed_author_ranges(&from, &edited, "a.txt", "b.txt").unwrap();
         assert_eq!(r.added.get("b.txt"), Some(&vec![(3, 3)]));
         assert_eq!(r.removed.get("a.txt"), Some(&vec![(3, 3)]));
+    }
+
+    fn ps_at(n: i64, base: char, tip: char) -> ReviewPatchsetRow {
+        ReviewPatchsetRow {
+            id: n,
+            review_id: 1,
+            ps_number: n,
+            base_sha: base.to_string().repeat(40),
+            tip_sha: tip.to_string().repeat(40),
+            captured_at: 0,
+        }
+    }
+
+    #[test]
+    fn the_rename_read_memo_runs_each_distinct_diff_once_and_matches_unmemoised() {
+        use std::collections::HashMap as M;
+        let texts: M<String, String> = [
+            ('a', rename_diff("a.txt", "a.txt", "a3", "a3-author")),
+            ('b', rename_diff("a.txt", "b.txt", "a3", "a3-author-v2")),
+            ('c', rename_diff("a.txt", "b.txt", "a3", "a3-author")),
+            // ambiguous: renamed away and re-created
+            (
+                'd',
+                format!(
+                    "{}{}",
+                    rename_diff("a.txt", "b.txt", "x", "y"),
+                    rename_diff("c.txt", "a.txt", "x", "y")
+                ),
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string().repeat(40), v))
+        .collect();
+        let own = ps_at(1, '1', 'a');
+        let laters = [ps_at(2, '2', 'b'), ps_at(3, '3', 'c'), ps_at(4, '4', 'd')];
+        let (findings, mut runs) = (25usize, 0usize);
+        let mut memo = RenameReadMemo::new();
+        let mut memoised = Vec::new();
+        for _ in 0..findings {
+            for l in &laters {
+                let resolved = if l.tip_sha.starts_with('d') {
+                    "a.txt"
+                } else {
+                    "b.txt"
+                };
+                memoised.push(author_ranges_with_reader(
+                    &mut memo,
+                    &own,
+                    l,
+                    "a.txt",
+                    resolved,
+                    &mut |p| {
+                        runs += 1;
+                        texts.get(&p.tip_sha).cloned()
+                    },
+                ));
+            }
+        }
+        // own + one per later patchset, never findings x patchsets x 2.
+        assert_eq!(runs, 1 + laters.len(), "diff runs");
+        let mut fresh_runs = 0usize;
+        let mut fresh = Vec::new();
+        for _ in 0..findings {
+            for l in &laters {
+                let resolved = if l.tip_sha.starts_with('d') {
+                    "a.txt"
+                } else {
+                    "b.txt"
+                };
+                fresh.push(author_ranges_with_reader(
+                    &mut RenameReadMemo::new(),
+                    &own,
+                    l,
+                    "a.txt",
+                    resolved,
+                    &mut |p| {
+                        fresh_runs += 1;
+                        texts.get(&p.tip_sha).cloned()
+                    },
+                ));
+            }
+        }
+        assert_eq!(fresh_runs, findings * laters.len() * 2);
+        assert_eq!(memoised, fresh, "memo must be byte-identical to unmemoised");
+        // edited / carried / ambiguous are all exercised
+        assert!(!memoised[0].as_ref().unwrap().added.is_empty());
+        assert!(memoised[1].as_ref().unwrap().added.is_empty());
+        assert!(memoised[2].is_none());
     }
 
     #[test]
