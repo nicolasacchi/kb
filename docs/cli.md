@@ -36,6 +36,12 @@ kb version [--contract] [--json]    this binary's build stamp (`kb 0.43-1-gabc
                                     it predates the verb. Bump it (and
                                     KB_HOOK_CONTRACT in kb-wake.sh) when a
                                     hook starts needing new CLI behaviour.
+kb --config F doctor --public-mirror [--json]
+                                    v0.45 N9: lint kb.toml against the
+                                    public-mirror posture of
+                                    docs/public-mirror.md (file-only, no
+                                    daemon); one line per finding, exit 1
+                                    on any, 0 clean. Excludes --hooks.
 kb doctor --hooks [--repo PATH]     v0.38 CT-C6: the provenance-chain
    [--daemon URL] [--json] [--fix]  integrity check, distinct from `kb
    [--strict]                       daemon doctor` above. v0.44 F8:
