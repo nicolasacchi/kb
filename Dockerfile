@@ -2,14 +2,15 @@
 # Multi-stage build: rust:1.96-trixie builder → debian:trixie-slim runtime.
 #
 # Outputs a single image with the `kb` binary at /usr/local/bin/kb and the
-# `kb-embedder` sidecar beside it, plus the bge-large-en-v1.5 model so
-# semantic and hybrid search work out of the box. The React SPA is built in a
+# `kb-embedder` sidecar beside it, plus TWO models (the registry default
+# bge-small-en-v1.5 and bge-large-en-v1.5) so semantic and hybrid search work
+# out of the box, with or without an `embedding_model` in kb.toml. The React SPA is built in a
 # Node stage and baked in at /usr/local/share/kb/web/dist (KB_SPA_DIST), so the
 # daemon serves the full web UI out of the box — no dist mount needed. The CLI
 # runs `kb daemon` by default; other subcommands (search, add, ...) still work
 # via `docker exec`. Track-D bake-off recommendation: bge-large for
-# technical-English corpora; image size ~1.7 GB (was ~400 MB on
-# bge-small) — see docs/research/foundation/14-embedding-bakeoff-2026-05-19.html.
+# technical-English corpora; image size ~1.8 GB (bge-large ~1.34 GB plus
+# bge-small ~130 MB; ~400 MB with bge-small alone) — see docs/research/foundation/14-embedding-bakeoff-2026-05-19.html.
 #
 # ONNX Runtime is isolated to `kb-embedder` (invariant #26) and STATICALLY
 # bundled via fastembed's `ort-download-binaries` feature — `ort-sys` fetches a
@@ -187,12 +188,18 @@ RUN --mount=type=cache,id=kb-cargo-registry,target=/usr/local/cargo/registry,sha
     && strip target/release/kb-embedder \
     && cp target/release/kb-embedder /tmp/kb-embedder
 
-# Pre-fetch the default embedding model into the image's cache so the
-# daemon serves semantic + hybrid search without a first-run download.
+# Pre-fetch BOTH embedding models into the image's cache so the daemon
+# serves semantic + hybrid search without a first-run download: the
+# registry default (bge-small-en-v1.5 — what a kb.toml with no
+# `embedding_model` resolves to, e.g. the one `kb add` writes) and
+# bge-large-en-v1.5 (opt-in via `[defaults] embedding_model`). Do not
+# change the registry default to bge-large: existing 384-dim kbs would
+# need a re-embed.
 # XDG_CACHE_HOME matches the runtime stage, so the cache tree lands at
 # the path the daemon resolves (`<XDG_CACHE_HOME>/kb/models/`).
 # Binary lives at /tmp/kb (cache-mounted target/ is gone after the RUN).
 ENV XDG_CACHE_HOME=/var/lib/kb/cache
+RUN /tmp/kb model download bge-small-en-v1.5
 RUN /tmp/kb model download bge-large-en-v1.5
 
 # --- SPA build stage --------------------------------------------------
