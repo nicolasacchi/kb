@@ -24,7 +24,7 @@ use axum::{
 use kb_core::types::KbName;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 /// Parent-origin SPA fallback. Called only when the request didn't match
 /// `/api/*` AND the Host header isn't an artifact subdomain (the
@@ -69,29 +69,89 @@ pub async fn serve(State(state): State<Arc<KbHandles>>, uri: Uri) -> Response<Bo
     }
 }
 
+/// Deadline for the permalink shell's storage lookups (the live-hit probe and,
+/// on a miss, the moves chain). The storage actor is serial, so a busy kb
+/// (bulk reindex, ingest, index build) queues these reads behind its writes;
+/// without a deadline the navigation gets no response at all for as long as
+/// that lasts. The lookups are an enhancement (OG meta, moved-path 301), so a
+/// slow one degrades to the plain shell instead of stalling the page.
+const SHELL_LOOKUP_DEADLINE: Duration = Duration::from_millis(750);
+
+/// What the permalink lookup decided for `a/{kb}/{source_rel}`.
+#[derive(Debug, PartialEq, Eq)]
+enum ShellLookup {
+    /// The path is not live but the moves log maps it: 301 here.
+    Redirect(String),
+    /// Resolved artifact: splice this `<meta>` block into the shell head.
+    Meta(String),
+    /// Unknown kb/path, lookup error, or the deadline fired: plain shell.
+    Plain,
+}
+
+/// Run `lookup` under `deadline`; a timeout is `Plain` (and logged), never an
+/// error and never a wait. Trade-off, stated plainly: if the lookup times out
+/// for a MOVED artifact, the old URL gets the plain shell instead of the 301;
+/// the SPA's `docs/by-path` fetch does not follow the moves log, so that tab
+/// shows not-found until the URL is requested again once the actor is idle
+/// (then the 301 fires). Serving the live-artifact majority a prompt shell was
+/// judged better than a 503 for every permalink during a busy spell.
+async fn lookup_with_deadline<F>(deadline: Duration, kb: &str, path: &str, lookup: F) -> ShellLookup
+where
+    F: std::future::Future<Output = ShellLookup>,
+{
+    let started = std::time::Instant::now();
+    match tokio::time::timeout(deadline, lookup).await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!(
+                kb,
+                path,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "permalink shell lookup timed out; serving plain shell (no OG meta, no moves redirect)"
+            );
+            ShellLookup::Plain
+        }
+    }
+}
+
 /// Serve the SPA shell for an artifact permalink (`/a/{kb}/{source_rel}`) with
 /// per-artifact OpenGraph + description `<meta>` injected into the static
 /// `<head>` (OG1). The permalink is a byte-for-byte static shell, so client
 /// `useDocumentTitle` is invisible to crawlers / unfurlers — we look the
 /// artifact up at request time and splice escaped meta server-side. Best-effort
-/// throughout: any miss (no dist, unknown kb, artifact not found) falls back to
-/// the plain shell — meta is an enhancement, never a failure mode.
+/// throughout: any miss (no dist, unknown kb, artifact not found) AND any slow
+/// lookup (`SHELL_LOOKUP_DEADLINE`) falls back to the plain shell — meta is an
+/// enhancement, never a failure mode.
 async fn serve_artifact_shell(
     spa_dist: &Path,
     state: &KbHandles,
     trimmed: &str,
     query: Option<&str>,
 ) -> Response<Body> {
-    // F3b — when the live doc is gone but the moves table knows a new
-    // source-rel, 301 to `/a/{kb}/{new_rel}` (preserve query string). Falls
-    // through to the plain shell when moves also misses.
-    if let Some(location) = moves_redirect_location(state, trimmed, query).await {
-        return Response::builder()
-            .status(StatusCode::MOVED_PERMANENTLY)
-            .header(header::LOCATION, location.as_str())
-            .body(Body::empty())
-            .unwrap_or_else(|_| not_found());
-    }
+    // ONE bounded lookup: F3b moves 301 when the live doc is gone but the
+    // moves table knows a new source-rel, else the OG meta for the live doc.
+    let kb_seg = trimmed
+        .strip_prefix("a/")
+        .and_then(|r| r.split_once('/'))
+        .map_or("", |(k, _)| k);
+    let decision = lookup_with_deadline(
+        SHELL_LOOKUP_DEADLINE,
+        kb_seg,
+        trimmed,
+        shell_lookup(state, trimmed, query),
+    )
+    .await;
+    let tags = match decision {
+        ShellLookup::Redirect(location) => {
+            return Response::builder()
+                .status(StatusCode::MOVED_PERMANENTLY)
+                .header(header::LOCATION, location.as_str())
+                .body(Body::empty())
+                .unwrap_or_else(|_| not_found());
+        }
+        ShellLookup::Meta(tags) => Some(tags),
+        ShellLookup::Plain => None,
+    };
 
     // Read the shell from the mtime-guarded cache (sync; the lock is released
     // before the await below). The per-request OG splice (#34) stays: we
@@ -99,58 +159,78 @@ async fn serve_artifact_shell(
     let Some(bytes) = read_shell_bytes(spa_dist) else {
         return not_found();
     };
-    let body = match artifact_meta_tags_for(state, trimmed).await {
+    let body = match tags {
         Some(tags) => inject_head_meta(&String::from_utf8_lossy(&bytes), &tags).into_bytes(),
         None => bytes.as_ref().clone(),
     };
     html_no_cache(body)
 }
 
-/// F3b — if `a/{kb}/{old_rel}` is not live but the moves log has a mapping,
-/// return the absolute-path Location for a 301. Preserves the query string.
-async fn moves_redirect_location(
-    state: &KbHandles,
-    trimmed: &str,
-    query: Option<&str>,
-) -> Option<String> {
-    let rest = trimmed.strip_prefix("a/")?;
-    let (kb_seg, source_rel) = rest.split_once('/')?;
+/// The permalink's storage lookups, folded into one future so a single
+/// deadline bounds them all: one `get_by_source_path` (shared by the live-hit
+/// check and the OG meta — it used to be issued twice), then on a miss the
+/// moves chain. NOTE: the source-rel segment is used verbatim (no
+/// percent-decode) — real artifact paths are URL-safe, and a path with escaped
+/// bytes simply misses the lookup and gets the plain shell.
+async fn shell_lookup(state: &KbHandles, trimmed: &str, query: Option<&str>) -> ShellLookup {
+    let Some(rest) = trimmed.strip_prefix("a/") else {
+        return ShellLookup::Plain;
+    };
+    let Some((kb_seg, source_rel)) = rest.split_once('/') else {
+        return ShellLookup::Plain;
+    };
     if source_rel.is_empty() {
-        return None;
+        return ShellLookup::Plain;
     }
-    let kb_name = KbName::new(kb_seg).ok()?;
-    let ctx = state.kbs.get(&kb_name)?;
-    // Live hit → no redirect (caller serves shell + OG).
+    let Ok(kb_name) = KbName::new(kb_seg) else {
+        return ShellLookup::Plain;
+    };
+    let Some(ctx) = state.kbs.get(&kb_name) else {
+        return ShellLookup::Plain;
+    };
+    // `get_by_source_path` matches the stored CANONICAL ABSOLUTE path (#27 — the
+    // `path` column holds `canonical_abs`, despite the method name), so resolve
+    // the URL's source-relative segment against the kb's source root first.
     let abs = kb_core::paths::canonical_abs(&ctx.source_path.join(source_rel));
-    if ctx
+    let doc = match ctx
         .storage
         .get_by_source_path(abs.to_string_lossy().into_owned())
         .await
         .ok()
         .flatten()
-        .is_some()
     {
-        return None;
-    }
-    let (_new_id, new_rel) = kb_core::relocate::moves_lookup(&ctx.storage, source_rel)
-        .await
-        .ok()
-        .flatten()?;
-    if new_rel == source_rel {
-        return None;
-    }
-    // Percent-encode each path segment (mirror web/src/lib/artifactHref.ts)
-    // so spaces/% in new_rel produce a valid Location header. docs.rs
-    // redirects use hex ids only — no encoding needed there.
-    let enc_rel = encode_source_rel_for_location(&new_rel);
-    let mut location = format!("/a/{kb_seg}/{enc_rel}");
-    if let Some(q) = query {
-        if !q.is_empty() {
-            location.push('?');
-            location.push_str(q);
+        // Live hit → no redirect; OG meta for it.
+        Some(d) => d,
+        None => {
+            let Some((new_id, new_rel)) = kb_core::relocate::moves_lookup(&ctx.storage, source_rel)
+                .await
+                .ok()
+                .flatten()
+            else {
+                return ShellLookup::Plain;
+            };
+            if new_rel != source_rel {
+                // Percent-encode each path segment (mirror
+                // web/src/lib/artifactHref.ts) so spaces/% in new_rel produce
+                // a valid Location header. docs.rs redirects use hex ids only
+                // — no encoding needed there.
+                let enc_rel = encode_source_rel_for_location(&new_rel);
+                let mut location = format!("/a/{kb_seg}/{enc_rel}");
+                if let Some(q) = query.filter(|q| !q.is_empty()) {
+                    location.push('?');
+                    location.push_str(q);
+                }
+                return ShellLookup::Redirect(location);
+            }
+            match ctx.storage.get_by_id(new_id).await.ok().flatten() {
+                Some(d) => d,
+                None => return ShellLookup::Plain,
+            }
         }
-    }
-    Some(location)
+    };
+    // Prefer the authored one-line `kb-summary`; else the body excerpt.
+    let description = doc.kb_summary.as_deref().or(doc.summary.as_deref());
+    ShellLookup::Meta(artifact_meta_tags(&doc.title, description))
 }
 
 /// Encode each `/`-separated segment of a source-rel for a Location path
@@ -174,45 +254,6 @@ fn percent_encode_path_segment(s: &str) -> String {
         }
     }
     out
-}
-
-/// Look the artifact up from a `a/{kb}/{source_rel}` path and build its meta
-/// tag block, or `None` if it can't be resolved. NOTE: the source-rel segment
-/// is used verbatim (no percent-decode) — real artifact paths are URL-safe, and
-/// a path with escaped bytes simply misses the lookup and gets no meta.
-async fn artifact_meta_tags_for(state: &KbHandles, trimmed: &str) -> Option<String> {
-    let rest = trimmed.strip_prefix("a/")?;
-    let (kb_seg, source_rel) = rest.split_once('/')?;
-    if source_rel.is_empty() {
-        return None;
-    }
-    let kb_name = KbName::new(kb_seg).ok()?;
-    let ctx = state.kbs.get(&kb_name)?;
-    // `get_by_source_path` matches the stored CANONICAL ABSOLUTE path (#27 — the
-    // `path` column holds `canonical_abs`, despite the method name), so resolve
-    // the URL's source-relative segment against the kb's source root first.
-    let abs = kb_core::paths::canonical_abs(&ctx.source_path.join(source_rel));
-    let doc = match ctx
-        .storage
-        .get_by_source_path(abs.to_string_lossy().into_owned())
-        .await
-        .ok()
-        .flatten()
-    {
-        Some(d) => d,
-        // Prefer OG for the redirected target when the old rel is only known
-        // via the moves table (shell still 301s above for that case).
-        None => {
-            let (new_id, _) = kb_core::relocate::moves_lookup(&ctx.storage, source_rel)
-                .await
-                .ok()
-                .flatten()?;
-            ctx.storage.get_by_id(new_id).await.ok().flatten()?
-        }
-    };
-    // Prefer the authored one-line `kb-summary`; else the body excerpt.
-    let description = doc.kb_summary.as_deref().or(doc.summary.as_deref());
-    Some(artifact_meta_tags(&doc.title, description))
 }
 
 /// Build the `<meta>` block for an artifact. All values are HTML-attribute
@@ -505,6 +546,38 @@ mod tests {
 
     const SHELL: &str =
         "<html><head><title>kb</title></head><body><div id=\"root\"></div></body></html>";
+
+    // invariant:34 deadline: a lookup that never completes (a wedged storage
+    // actor) must yield the plain shell within the deadline, not hang.
+    #[tokio::test]
+    async fn wedged_lookup_degrades_to_plain_shell_within_deadline() {
+        let started = std::time::Instant::now();
+        let out = lookup_with_deadline(
+            Duration::from_millis(50),
+            "kb",
+            "a/kb/x.html",
+            std::future::pending::<ShellLookup>(),
+        )
+        .await;
+        assert_eq!(out, ShellLookup::Plain);
+        assert!(started.elapsed() < Duration::from_millis(1500));
+    }
+
+    // invariant:34 deadline: a lookup that finishes in time is passed through
+    // untouched (OG meta and the moves redirect are not swallowed).
+    #[tokio::test]
+    async fn prompt_lookup_is_passed_through() {
+        let meta = lookup_with_deadline(Duration::from_secs(5), "kb", "p", async {
+            ShellLookup::Meta("<meta>".into())
+        })
+        .await;
+        assert_eq!(meta, ShellLookup::Meta("<meta>".into()));
+        let redir = lookup_with_deadline(Duration::from_secs(5), "kb", "p", async {
+            ShellLookup::Redirect("/a/kb/y".into())
+        })
+        .await;
+        assert_eq!(redir, ShellLookup::Redirect("/a/kb/y".into()));
+    }
 
     // invariant:34 og-meta-splice
     #[test]
