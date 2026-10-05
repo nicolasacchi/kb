@@ -339,7 +339,7 @@ capture_one() {
       for f in "$sdir"/*.jsonl; do
         [ -f "$f" ] || continue
         base="$(basename "$f" .jsonl)"
-        safe="$(hook_agent_safe_name "$base" "$subdir_out")" || continue
+        safe="$(hook_agent_safe_name "$base" "$sdir")" || continue
         subtmp="$(mktemp)" || continue
         jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null
         jq -c -s --arg file "$f" "$TRANSLATE" "$subtmp" \

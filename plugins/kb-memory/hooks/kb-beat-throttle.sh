@@ -71,9 +71,18 @@ mkdir -p "$marker_dir" 2>/dev/null || exit 0
 safe_sid="$(hook_sid_key "$sid")"
 marker="$marker_dir/beat-heartbeat-$safe_sid"
 
+# Upgrade compatibility: a heartbeat marker written under the pre-v0.45 lossy
+# name still throttles (its mtime is read), so no extra beat fires after the
+# upgrade. The new marker is always written under the unified key.
+gate="$marker"
+if [ ! -f "$marker" ]; then
+  legacy="$marker_dir/beat-heartbeat-$(hook_sid_key_lossy "$sid")"
+  [ "$legacy" != "$marker" ] && [ -f "$legacy" ] && gate="$legacy"
+fi
+
 now="$(date -u +%s)" || exit 0
-if [ -f "$marker" ]; then
-  mtime="$(stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker" 2>/dev/null || echo 0)"
+if [ -f "$gate" ]; then
+  mtime="$(stat -c %Y "$gate" 2>/dev/null || stat -f %m "$gate" 2>/dev/null || echo 0)"
   case "$mtime" in '' | *[!0-9]*) mtime=0 ;; esac
   age=$((now - mtime))
   [ "$age" -ge "$MIN_INTERVAL" ] || exit 0
