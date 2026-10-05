@@ -9,6 +9,7 @@ on:
       - "scripts/install.sh"
       - "scripts/ci/install-selftest.sh"
       - "scripts/ci/first-run-smoke.sh"
+      - "scripts/ci/first-run-hits.sh"
       - "scripts/ci/first-run-selftest.sh"
       - ".github/workflows/first-run.yml"
       - ".github/workflows/installer.yml"
@@ -18,6 +19,7 @@ on:
       - "scripts/install.sh"
       - "scripts/ci/install-selftest.sh"
       - "scripts/ci/first-run-smoke.sh"
+      - "scripts/ci/first-run-hits.sh"
       - "scripts/ci/first-run-selftest.sh"
       - ".github/workflows/first-run.yml"
 
@@ -38,6 +40,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: sh -n scripts/install.sh
       - run: bash scripts/ci/install-selftest.sh
-      - run: bash -n scripts/ci/first-run-smoke.sh scripts/ci/first-run-selftest.sh
+      - run: bash -n scripts/ci/first-run-smoke.sh scripts/ci/first-run-hits.sh scripts/ci/first-run-selftest.sh
       - name: first-run smoke selftest (fake mirror + stub daemon)
         run: bash scripts/ci/first-run-selftest.sh

@@ -7,6 +7,13 @@
 # `kb daemon doctor`. A fourth leg pulls the ghcr image anonymously and runs it.
 # scripts/ci/first-run-smoke.sh is the single source of truth for the checks.
 #
+# WHERE THE CODE COMES FROM: the harness (this workflow, first-run-smoke.sh,
+# first-run-hits.sh) runs from the workflow's OWN ref (main), never from the
+# tag, so a harness fix applies to an already-published release. Only what a
+# user gets from the tag is taken from it: a second checkout of the tag lands
+# in release/ and supplies scripts/install.sh (tarball legs) and corpus/canon
+# (docker leg). Provenance/attestation checks are install.sh's and unchanged.
+#
 # WHY `workflow_run` AND NOT a release-published trigger: the release is
 # created by release.yml with the default GITHUB_TOKEN, and events created with
 # that token never start other workflows. It is also created BEFORE the
@@ -144,16 +151,23 @@ jobs:
           install -m 0755 "/tmp/gh_${ghv}_linux_${garch}/bin/gh" /usr/local/bin/gh
           gh --version
           ldd --version 2>&1 | sed -n 1p
+      # HARNESS = this workflow's own ref (main), so a harness fix applies to an
+      # already-published tag. RELEASE = the tag, in release/: only what a user
+      # actually gets from it (scripts/install.sh, corpus/canon) is taken from there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.tag }}
+          path: release
+          persist-credentials: false
       - name: Mark workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: First-run smoke (installer from the tag, real tarball)
+      - name: First-run smoke (harness from main, installer + tarball from the tag)
         env:
           KB_VERSION: ${{ needs.resolve.outputs.version }}
           LEG: tarball-${{ matrix.name }}
           REQUIRE_PROVENANCE: ${{ matrix.require_provenance }}
+          INSTALL_SH: ${{ github.workspace }}/release/scripts/install.sh
         run: |
           set -euo pipefail
           # Retry once: release assets can lag the CDN for a moment.
@@ -194,9 +208,15 @@ jobs:
       # The step below probes 127.0.0.1:4000 because it relies on the image's own
       # default addr (its CMD and HEALTHCHECK) with --network host.
     steps:
+      # HARNESS = this workflow's own ref (main), so a harness fix applies to an
+      # already-published tag. RELEASE = the tag, in release/: only what a user
+      # actually gets from it (scripts/install.sh, corpus/canon) is taken from there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.tag }}
+          path: release
+          persist-credentials: false
       - name: Pull anonymously (no registry login on purpose)
         run: |
           for attempt in 1 2 3; do
@@ -210,7 +230,7 @@ jobs:
           T="$(mktemp -d)"
           mkdir -p "$T/config/kb" "$T/state"
           # The sample corpus is not baked into the image: mount it from the tag.
-          cp -R corpus/canon "$T/corpus"
+          cp -R release/corpus/canon "$T/corpus"
           # Keyword-only, like the tarball legs: the gate is "image boots, serves
           # the SPA, indexes and answers BM25". The image bakes bge-large but the
           # registry default (what a config without embedding_model resolves to)
@@ -240,7 +260,7 @@ jobs:
           found=0
           for i in $(seq 1 60); do
             docker exec kb kb search borrow --kb canon --mode keyword --json >search.last 2>&1 || true
-            n="$(grep -c '"source_relative"' search.last || true)"
+            n="$(bash scripts/ci/first-run-hits.sh search.last)"
             if [ "${n:-0}" -ge 1 ]; then found=1; break; fi
             sleep 3
           done
@@ -271,7 +291,7 @@ jobs:
           docker rm -f kb >/dev/null 2>&1 || true
           P="$(mktemp -d)"
           mkdir -p "$P/config/kb" "$P/state"
-          cp -R corpus/canon "$P/corpus"
+          cp -R release/corpus/canon "$P/corpus"
           printf '[kb.canon]\npath = "/corpus"\n' > "$P/config/kb/kb.toml"
           chmod -R 777 "$P/config" "$P/state"
           docker run -d --name kb --network host \
@@ -284,7 +304,7 @@ jobs:
           found=0
           for i in $(seq 1 40); do
             docker exec kb kb search borrow --kb canon --mode keyword --json >probe.last 2>&1 || true
-            n="$(grep -c '"source_relative"' probe.last || true)"
+            n="$(bash scripts/ci/first-run-hits.sh probe.last)"
             if [ "${n:-0}" -ge 1 ]; then found=1; break; fi
             sleep 3
           done
