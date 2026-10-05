@@ -493,6 +493,13 @@ pub fn author_ranges_between_for_path(
 /// is remembered as `None` for the rest of the same read only.
 pub type RenameReadMemo = HashMap<(String, String), Option<String>>;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: real rename-aware `git diff` runs on this thread, so a test
+    /// can pin that one read shares ONE memo across all its findings.
+    pub(crate) static RENAME_DIFF_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// [`author_ranges_between_for_path`] sharing `memo`, so each distinct
 /// `(base, tip)` rename-aware diff runs at most once per read however many
 /// findings and patchsets ask for it.
@@ -505,6 +512,8 @@ pub fn author_ranges_between_for_path_memo(
     resolved_path: &str,
 ) -> Option<AuthorRanges> {
     author_ranges_with_reader(memo, own, later, q_path, resolved_path, &mut |p| {
+        #[cfg(test)]
+        RENAME_DIFF_RUNS.with(|c| c.set(c.get() + 1));
         ctx.read_with_fallback(|root| {
             crate::diff::diff_range_u0_renames(root.git_path(), &p.base_sha, &p.tip_sha)
         })
