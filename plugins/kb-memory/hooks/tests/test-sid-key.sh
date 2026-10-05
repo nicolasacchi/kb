@@ -77,6 +77,39 @@ printf 'session_id=a-b\n' >"$KB_CAPTURE_SPOOL/a-b.meta"
 hook_spool_drop 'a_b'
 [ -e "$KB_CAPTURE_SPOOL/a-b.jsonl" ] && ok "a colliding id's item survives" || bad "a colliding id's item survives"
 
+echo "== beat heartbeat: a pre-upgrade lossy-named marker still throttles (no extra beat) =="
+LB="$TMPROOT/legacy-beat"; mkdir -p "$LB/cache/kb" "$LB/bin"
+cat >"$LB/bin/kb" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+chmod +x "$LB/bin/kb"
+cat >"$LB/fake-beat.sh" <<'SH'
+#!/usr/bin/env bash
+echo beat >>"$BEAT_LOG"
+SH
+chmod +x "$LB/fake-beat.sh"
+mkdir -p "$LB/hooks"; cp "$HOOKS_DIR/kb-beat-throttle.sh" "$HOOKS_DIR/kb-hook-lib.sh" "$LB/hooks/"
+cp "$LB/fake-beat.sh" "$LB/hooks/kb-beat.sh"
+: >"$LB/cache/kb/beat-heartbeat-$(hook_sid_key_lossy 'ses_old.1')"
+: >"$LB/log"
+printf '{"session_id":"ses_old.1"}' | BEAT_LOG="$LB/log" XDG_CACHE_HOME="$LB/cache" KB_SESSIONS_DIR="$TMPROOT/sessions" \
+  KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS=3600 bash "$LB/hooks/kb-beat-throttle.sh" claude >/dev/null 2>&1
+[ ! -s "$LB/log" ] && ok "legacy-named heartbeat marker throttles the first post-upgrade tool call" || bad "legacy heartbeat marker ignored (beat fired)"
+
+echo "== hook_agent_safe_name is independent of discovery order =="
+AD="$TMPROOT/agents"; mkdir -p "$AD"
+for id in 'Web UI & Tests' 'Web-UI---Tests' 'Web_UI___Tests' 'solo agent'; do : >"$AD/$id.jsonl"; done
+names_a="$(for id in 'Web UI & Tests' 'Web-UI---Tests' 'Web_UI___Tests' 'solo agent'; do printf '%s=%s\n' "$id" "$(hook_agent_safe_name "$id" "$AD")"; done | sort)"
+names_b="$(for id in 'solo agent' 'Web_UI___Tests' 'Web-UI---Tests' 'Web UI & Tests'; do printf '%s=%s\n' "$id" "$(hook_agent_safe_name "$id" "$AD")"; done | sort)"
+[ "$names_a" = "$names_b" ] && ok "agent names identical in either call order" || bad "agent names depend on call order"
+[ "$(hook_agent_safe_name 'Web-UI---Tests' "$AD")" = 'Web-UI---Tests' ] && ok "the id that is already safe keeps the plain name" || bad "self-safe id lost its plain name"
+case "$(hook_agent_safe_name 'Web UI & Tests' "$AD")" in Web-UI---Tests-????????) ok "a colliding lossy id gets the hash suffix" ;; *) bad "colliding lossy id not hashed" ;; esac
+[ "$(hook_agent_safe_name 'solo agent' "$AD")" = 'solo-agent' ] && ok "a lossy id with a unique stem keeps the plain stem" || bad "unique lossy stem was hashed"
+# a SECOND sidecar appearing later must not rename an already-named agent that is self-safe
+: >"$AD/Web-UI-.jsonl"
+[ "$(hook_agent_safe_name 'Web-UI---Tests' "$AD")" = 'Web-UI---Tests' ] && ok "adding another agent does not rename the self-safe one" || bad "self-safe name changed"
+
 echo "== no_hook_uses_lossy_key_in_any_adapter_or_throttle =="
 # Scope: EVERY hook script. The lossy `tr -c ... | cut -c1-80` pipeline may
 # appear only in the migration-recognition helper hook_sid_key_lossy() (and
@@ -85,8 +118,13 @@ echo "== no_hook_uses_lossy_key_in_any_adapter_or_throttle =="
 # name - a lossy form anywhere else fails. The single named exception is the
 # grok report lane's `safe_ulid`: a job id is a ULID (Crockford base32, already
 # [A-Z0-9]), so the map is the identity and cannot collide.
-if grep -nE "tr -c 'a-zA-Z0-9' '-' \| cut -c1-80" "$HOOKS_DIR"/*.sh \
-  | grep -vE 'hook_sid_key_lossy\(\)|hook_agent_stem\(\)|safe_ulid='; then
+# The pattern is the two halves of the lossy form separately (`tr -c[s]` over
+# the a-zA-Z0-9 class, any quoting, and any `cut -c1-80`), so a reformatted or
+# split pipeline is still caught. Allowed: the three named helpers/lines above
+# and the `safe=` stem line that FEEDS the hashed key (hook_spool_key and the
+# throttle's standalone copy, which append a hash of the full id).
+if grep -nE "(tr +-cs? +['\"]?a-zA-Z0-9|cut +-c1-80)" "$HOOKS_DIR"/*.sh \
+  | grep -vE 'hook_sid_key_lossy\(\)|hook_agent_stem\(\)|safe_ulid=|^[^:]+:[0-9]+:[[:space:]]*safe="\$\(printf .%s. "\$raw" \| tr -c .a-zA-Z0-9. .-.\)"|^[^:]+:[0-9]+:[[:space:]]*#'; then
   bad "a hook still uses the lossy session key"
 else
   ok "the only lossy form is the migration-recognition helper"
