@@ -272,7 +272,7 @@ RUN npm ci
 COPY web-code/ ./
 RUN npm run build
 
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS kb-code-runtime
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS kb-code-runtime
 ARG KB_GIT_SHA
 ARG KB_BUILD_VERSION
 # Fail closed even though this stage only labels: an unset sha must not
@@ -323,7 +323,7 @@ ENTRYPOINT ["/usr/local/bin/kb-code-server"]
 
 # --- Runtime stage ----------------------------------------------------
 
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
 
 # OCI image annotations (consumed by registries, `docker inspect`, and
 # provenance tooling). KB_GIT_SHA is re-declared here because ARGs are
