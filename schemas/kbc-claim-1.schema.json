@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kbc-claim/1",
+  "title": "kbc-claim/1 agent-prose claim",
+  "description": "One claim of the agent-prose register: the POST /api/claims write body (ClaimBody) and the claim the routes answer with (ClaimOut), which is the same object plus the per-request Ladder fields (crates/kb-code-server/src/claims.rs). Written by agents and the kb-code CLI, read by the CLI and SPA. A claim is surfaced, never scored; confidence is the author's own declaration. The `GET /api/claims` list envelope ({schema, total, returned, claims[]}) is NOT this document; validate each element of `claims`. Structural lint; the daemon is the authority.",
+  "type": "object",
+  "required": [
+    "schema",
+    "repo",
+    "subject_kind",
+    "subject",
+    "kind",
+    "body_md"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kbc-claim/1"
+    },
+    "repo": {
+      "type": "string"
+    },
+    "subject_kind": {
+      "enum": [
+        "path",
+        "sym",
+        "ent",
+        "commit",
+        "hunk",
+        "review",
+        "branch"
+      ]
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "explain",
+        "alternative",
+        "decision",
+        "story",
+        "note",
+        "answer"
+      ]
+    },
+    "body_md": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "blob_sha": {
+      "type": "string"
+    },
+    "review_id": {
+      "type": "integer"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^clm_[0-9a-f]+$"
+    },
+    "subject_path": {
+      "type": "string"
+    },
+    "current_blob": {
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "pinned",
+        "drifted",
+        "unanchored"
+      ]
+    },
+    "caption": {
+      "type": "string"
+    },
+    "refs": {
+      "type": "object"
+    },
+    "created_at": {
+      "type": "integer"
+    }
+  }
+}

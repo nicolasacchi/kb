@@ -1,0 +1,10 @@
+{
+  "name": "kb-code",
+  "version": "0.0.0",
+  "build_sha": "dev",
+  "sibling_protocol": "kb-sibling/9",
+  "sibling_major": 1,
+  "schema_epoch": 44,
+  "started_at": "2026-10-01T09:30:00+00:00",
+  "repos": []
+}

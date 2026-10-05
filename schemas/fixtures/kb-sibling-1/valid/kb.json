@@ -1,0 +1,13 @@
+{
+  "name": "kb",
+  "version": "0.45",
+  "host": "localhost",
+  "kbs": [
+    "notes"
+  ],
+  "started_at": "2026-10-01T09:30:00+00:00",
+  "build_sha": "39d1ca6",
+  "sibling_protocol": "kb-sibling/1",
+  "sibling_major": 1,
+  "schema_epoch": 45
+}

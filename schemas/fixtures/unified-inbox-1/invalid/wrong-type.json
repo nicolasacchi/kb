@@ -1,0 +1,43 @@
+{
+  "schema": "unified-inbox/1",
+  "reviews": [
+    {
+      "review_id": 1,
+      "repo": "demo",
+      "pr_number": null,
+      "title": "feature work",
+      "unresolved_findings": 1,
+      "unanswered_questions": 1,
+      "human_open": 1,
+      "verdict": null,
+      "verdict_stale": false,
+      "pr_head_drift": null,
+      "updated_at": 1767214800
+    }
+  ],
+  "annotations": [
+    {
+      "id": "ann_0123456789ab",
+      "repo": "demo",
+      "path": "a.rb",
+      "line": 1,
+      "intent": "question",
+      "author": "you",
+      "excerpt": "why does this class exist?",
+      "reply_count": 0,
+      "updated_at": 1767214800
+    }
+  ],
+  "kb": {
+    "available": false,
+    "reason": "because",
+    "desk": null,
+    "comments": null
+  },
+  "worktrees": {
+    "available": false,
+    "reason": "empty-table",
+    "items": [],
+    "truncated": false
+  }
+}

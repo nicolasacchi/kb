@@ -130,6 +130,16 @@ pub const RECALL_MARKER_SUFFIX: &str = "-->";
 /// `id` are what the row is FOR.
 pub const RECALL_MARKER_POS_RANGE: std::ops::RangeInclusive<u32> = 1..=99;
 
+/// The one rule for a `kb-recall/1` marker `id`: exactly 12 lowercase hex
+/// characters. The reader ([`parse_recall_marker`]) and `kb validate` both
+/// call this, so the two cannot diverge.
+pub fn is_recall_marker_id(id: &str) -> bool {
+    id.len() == 12
+        && id
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
 /// Caps + tunables the engine reads. All fields have documented defaults so a
 /// future wire route can expose a subset without changing the engine's
 /// contract; nothing consumes non-default values yet (W1 is kb-core-only —
@@ -2802,11 +2812,7 @@ fn parse_recall_marker(item: &str) -> Option<(String, String, Option<u32>)> {
         }
         let kb = kb?.trim();
         let id = id?;
-        let is_lower_hex = id.len() == 12
-            && id
-                .chars()
-                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
-        if kb.is_empty() || !is_lower_hex {
+        if kb.is_empty() || !is_recall_marker_id(id) {
             return None;
         }
         Some((kb.to_string(), id.to_string(), pos))
@@ -3349,6 +3355,25 @@ mod tests {
     /// CT-A3 — malformed / mangled markers all reject rather than
     /// mis-parsing (never panics): missing suffix, uppercase hex, a
     /// too-short id, an empty kb, or plain prose with no marker at all.
+    #[test]
+    fn parse_recall_marker_id_rule_is_is_recall_marker_id() {
+        for id in [
+            "a1b2c3d4e5f6",
+            "A1B2C3D4E5F6",
+            "a1b2c3d4e5f",
+            "a1b2c3d4e5f67",
+            "g1b2c3d4e5f6",
+            "0123456789ab",
+        ] {
+            let m = format!("{RECALL_MARKER_PREFIX}kb=k id={id}{RECALL_MARKER_SUFFIX}");
+            assert_eq!(
+                parse_recall_marker(&m).is_some(),
+                is_recall_marker_id(id),
+                "{id}"
+            );
+        }
+    }
+
     #[test]
     fn parse_recall_marker_rejects_malformed_or_non_hex_shapes() {
         assert_eq!(
