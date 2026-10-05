@@ -682,11 +682,18 @@ enum Cmd {
     /// why-hook, printing PASS/WARN/SKIP + a one-line fix per link so a
     /// broken link is a 30-second diagnosis instead of a silent no-op.
     Doctor {
-        /// Provenance-chain / hooks integrity check. The only mode today
-        /// (more may follow) — required so a bare `kb doctor` doesn't look
-        /// silently broken.
+        /// Provenance-chain / hooks integrity check — required (or
+        /// `--public-mirror`) so a bare `kb doctor` doesn't look silently
+        /// broken.
         #[arg(long)]
         hooks: bool,
+        /// Lint the loaded kb.toml (`--config`) against the public-mirror
+        /// posture of docs/public-mirror.md. Reads the file only (no daemon,
+        /// no network); prints one line per finding; exit 1 when there is
+        /// any, 0 when clean. `--json` emits `{ok, findings}`.
+        // Provenance: v0.45 N9
+        #[arg(long, conflicts_with_all = ["hooks", "fix", "strict", "repo", "daemon"])]
+        public_mirror: bool,
         /// Repo to check the git trailer hook + repo-keyed session marker
         /// against. Defaults to the current directory.
         #[arg(long)]
@@ -5202,14 +5209,22 @@ async fn main() -> Result<()> {
         }
         Cmd::Doctor {
             hooks,
+            public_mirror,
             repo,
             daemon,
             json,
             fix,
             strict,
         } => {
+            if public_mirror {
+                let code = commands::doctor::public_mirror(cli.config.as_ref(), json)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+                return Ok(());
+            }
             if !hooks {
-                anyhow::bail!("kb doctor needs a mode — pass --hooks (the only mode today)");
+                anyhow::bail!("kb doctor needs a mode — pass --hooks or --public-mirror");
             }
             let bearer = read_bearer();
             let code = commands::doctor::hooks(
