@@ -59,7 +59,7 @@ kb validate -                        # read stdin
 | `kbc-github-export/1` | `GET /api/reviews/{id}/export/github` body | json | `crates/kb-code-server/src/review_github_export.rs` |
 | `kbc-cmd/1` | kb-code's command registry | json | `crates/kb-code-server/commands/registry.json` |
 | `kbc-theme/1` | kb-code's theme registry | json | `crates/kb-code-server/themes/registry.json` |
-| `kb-sibling/1` | the version Hello fields of `GET /api/identity` on kb and on kb-code | json | `crates/kb-core/src/sibling.rs` |
+| `kb-sibling/1` | the version Hello fields of `GET /api/identity` on kb and on kb-code (validates current binaries only: a legacy peer without the Hello fields is grandfathered by `KbClient` but fails this schema) | json | `crates/kb-core/src/sibling.rs` |
 | `coderef/1` | `GET /api/kb/{kb}/docs/{id}/code-refs` body, kb to kb-code | json | `crates/kb-server/src/routes/coderefs.rs` |
 | `coderef-feed/1` | `GET /api/kb/{kb}/code-refs` cursor feed body, kb to kb-code | json | `crates/kb-server/src/routes/coderefs.rs` |
 | `unified-inbox/1` | `GET /api/inbox` body, kb-code daemon to its CLI and SPA | json | `crates/kb-code-server/src/unified_inbox.rs` |

@@ -3352,9 +3352,7 @@ mod tests {
         }
     }
 
-    /// CT-A3 — malformed / mangled markers all reject rather than
-    /// mis-parsing (never panics): missing suffix, uppercase hex, a
-    /// too-short id, an empty kb, or plain prose with no marker at all.
+    /// The marker's `id` accepts exactly what `is_recall_marker_id` accepts.
     #[test]
     fn parse_recall_marker_id_rule_is_is_recall_marker_id() {
         for id in [
@@ -3374,6 +3372,9 @@ mod tests {
         }
     }
 
+    /// CT-A3 — malformed / mangled markers all reject rather than
+    /// mis-parsing (never panics): missing suffix, uppercase hex, a
+    /// too-short id, an empty kb, or plain prose with no marker at all.
     #[test]
     fn parse_recall_marker_rejects_malformed_or_non_hex_shapes() {
         assert_eq!(
