@@ -184,6 +184,18 @@ fn capture_throttle_agrees_with_the_rust_capture_file_name() {
     run_with_real_kb("test-capture-throttle.sh");
 }
 
+/// v0.45 OC - the omp capture adapter's lifecycle with REAL subprocesses:
+/// per-session exclusion + request coalescing (one conversion at a time, the
+/// newest state published), independent sessions concurrent, SIGTERM and the
+/// hard deadline reap every owned descendant and leave the previous capture,
+/// lock and scratch clean, recovery, the fingerprint shortcut (in-place
+/// retitle, sidecar change, deleted capture, failed landing) and the
+/// translator's linear leaf-chain walk (byte-identical to the former reduce).
+#[test]
+fn omp_capture_lifecycle_excludes_coalesces_reaps_and_recovers() {
+    run("test-capture-omp-lifecycle.sh");
+}
+
 /// v0.45 N4 - the grok adapter's distill-pending relay on the landed path.
 #[test]
 fn grok_distill_pending_relay() {

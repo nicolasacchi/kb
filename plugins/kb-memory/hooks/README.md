@@ -21,7 +21,7 @@ opencode, Grok Build, Kimi Code) and a full extension-based wiring for omp
 | `kb-distill-nudge-codex.sh` | `Stop` (codex) | **MI-W0.3** — the codex-side twin of `kb-distill-nudge.sh`: same git-commit-without-a-successful-remember check, but greps the CODEX rollout named by `.transcript_path` instead of a Claude transcript (tool-call lines matched on `"name":"(exec_command\|shell\|local_shell)"`, then the literal substring `git commit`; the `remembered <12-hex-id>` success marker is plain text either way, so it's the same regex). Session id read from the rollout's own `session_meta.payload.id`. Once per session (its own `distill-nudged-codex-*` marker namespace under `~/.cache/kb/`). Registered in `~/.codex/hooks.json`'s `Stop` chain after the capture entry (see "Codex CLI registration" below). Test: `tests/test-distill-nudge-codex.sh`. |
 | `kb-capture-kimi.sh` | `Stop` / `SessionEnd` / `PreCompact` (Kimi Code) | Capture adapter for Kimi Code: Kimi's hook payload has no `transcript_path`, so the script derives the wire itself — `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/wd_<basename(cwd)>_<sha256(cwd)[0:12]>/<session_id>/agents/main/wire.jsonl`. Translates the wire (`turn.prompt`, `content.part` text/think, `tool.call`/`tool.result` — Kimi tool names are already Claude-shaped; Write/Edit `.args.path` → `file_path`, usage `inputOther+inputCacheRead+inputCacheCreation`/`output` → `input_tokens`/`output_tokens`) into the same Claude-shaped JSONL and writes via the SAME preferred path (`kb sessions capture`, bash fallback with `kb-harness: kimi`). CLI backfill: `kb-capture-kimi.sh <wire.jsonl>…`. Test: `tests/test-capture-kimi.sh`. |
 | `kb-distill-nudge-kimi.sh` | `Stop` (Kimi Code) | The Kimi-side twin of the distill nudge: greps the wire's `"name":"Bash"` `tool.call` lines for `git commit`, suppresses on a successful `remembered <12-hex-id>`, once per session (`distill-nudged-kimi-*` marker). On a hit it prints the one-line nudge (Stop stdout may be shown to the user) AND appends `kimi <sid> <epoch>` to the shared `~/.cache/kb/distill-pending` ledger, so the next interactive session's wake (any harness) surfaces it. Test: `tests/test-distill-nudge-kimi.sh`. |
-| `kb-capture-omp.sh` | `session_stop` / `session.compacting` / `session_shutdown` (omp, via `kb-omp.ts`) | Capture adapter for Oh My Pi (omp): translates an omp v3 session JSONL (`~/.omp/agent/sessions/<encoded-cwd>/<ts>_<sid>.jsonl`) into the same Claude-shaped JSONL. omp sessions are an append-only TREE (`id`/`parentId`), so a single backward pass from the last entry captures the LEAF CHAIN only — abandoned branch experiments never pollute the activity — and everything at-or-before a trailing `reset_boundary` (`/clear`) is cut. Tool names are canonicalized (`bash`→`Bash`, …), Write/Edit `.arguments.path` → `file_path`, per-assistant `usage{input,output,cacheRead,cacheWrite}` → summed `input_tokens`/`output_tokens`; own injected `custom_message` entries are dropped so kb's context never echoes back into the corpus. Lenient pre-clean drops torn trailing lines (crash or active append) instead of aborting. Same preferred path + fallback + overwrite contract as the other adapters. CLI backfill: `kb-capture-omp.sh <session.jsonl>…`. Test: `tests/test-capture-omp.sh`. |
+| `kb-capture-omp.sh` | `session_stop` / `session.compacting` / `session_shutdown` (omp, via `kb-omp.ts`) | Capture adapter for Oh My Pi (omp): translates an omp v3 session JSONL (`~/.omp/agent/sessions/<encoded-cwd>/<ts>_<sid>.jsonl`) into the same Claude-shaped JSONL. omp sessions are an append-only TREE (`id`/`parentId`), so a single backward pass from the last entry captures the LEAF CHAIN only — abandoned branch experiments never pollute the activity — and everything at-or-before a trailing `reset_boundary` (`/clear`) is cut. Tool names are canonicalized (`bash`→`Bash`, …), Write/Edit `.arguments.path` → `file_path`, per-assistant `usage{input,output,cacheRead,cacheWrite}` → summed `input_tokens`/`output_tokens`; own injected `custom_message` entries are dropped so kb's context never echoes back into the corpus. Lenient pre-clean drops torn trailing lines (crash or active append) instead of aborting. Same preferred path + fallback + overwrite contract as the other adapters. **Lifecycle (v0.45 OC)**: one active conversion per session file across processes, a hard deadline, and every child reaped on cancel - see "The omp capture owns its lifecycle" below. CLI backfill: `kb-capture-omp.sh <session.jsonl>…`. Tests: `tests/test-capture-omp.sh`, `tests/test-capture-omp-lifecycle.sh`, `tests/test-omp-capture-lifecycle.sh` (the `kb-omp.ts` spawn path, bun). |
 | `kb-beat.sh` | `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` (Claude Code); registered analogously for codex, Kimi Code, opencode, omp | **LSC-3** push collection for the live-sessions cockpit (design: [docs/research/kb-live-sessions-cockpit-2026-08.html](../../../docs/research/kb-live-sessions-cockpit-2026-08.html) §4/§5). One script for all harnesses: `kb-beat.sh <harness> <event>` reads the hook payload on stdin, maps it to the canonical `kb-live/1` beat (`v`, `session_id`, `harness`, `event` — one of `start\|prompt\|tool\|turn_end\|blocked\|unblocked\|end`, never a derived state — `at`, `host`, `pid`, `cwd`, `model`, `lease_secs`, optional `title`/`last_line`/`detail`), and POSTs it fire-and-forget (detached background subshell, `curl --max-time 2 --connect-timeout 1`) to `${KB_DAEMON_URL:-http://127.0.0.1:4000}${KB_BEAT_PATH:-/api/sessions/beat}`. Every failure path — no `curl`/`jq`, no daemon, the route not existing yet, malformed stdin — is silent and `exit 0`; this ships safely ahead of the server-side route. Kill switch `KB_BEAT=0`; opt out of `last_line` content with `KB_BEAT_CONTENT=0`; `KB_BEAT_DRYRUN=1` prints the JSON body to stdout instead of posting (used by `tests/test-beat.sh` and for manual sanity checks). Claude's Stop event carries `.last_assistant_message` verbatim (capped 240 chars) as `last_line`; codex resolves the canonical `session_id` from the rollout's own `session_meta.payload.id` (same ground-truth preference as every other adapter here), falling back to a bare `.session_id` if present. `KB_SESSIONS_DIR` gates it exactly like every capture hook (kb not configured for this project ⇒ no-op). Test: `tests/test-beat.sh`. |
 | `kb-beat-throttle.sh` | `PostToolUse` (Claude Code) | A min-interval gate (`KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS`, default 180s) in front of `kb-beat.sh <harness> tool`, mirroring `kb-capture-throttle.sh`'s pattern but keyed on a per-session marker file's mtime (no artifact to stat here). Exists so a single long tool call (a 20-minute build) still refreshes the session's `lease_secs` mid-turn instead of only at the next `Stop` — design §11's named mitigation for "per-tool beats would be hundreds per session." Default **ON** (unlike the capture throttle — a beat is a tiny POST, not a multi-MB re-serialize); `KB_BEAT_HEARTBEAT=0` disables just the heartbeat, `KB_BEAT=0` disables every beat. |
 
@@ -148,6 +148,61 @@ registering anywhere `kb-memory` is already installed. Design:
   subagent sidecars ride the spool too (`<spool>/<session-id>/subagents/`, where
   the capture engine already looks; removed after a successful replay or when a
   live capture lands first). Test: `tests/test-capture-adapters-spool.sh`.
+- **The omp capture owns its lifecycle (v0.45 OC)** - a growing omp session is
+  captured from three triggers (turn end, compaction, shutdown) and from
+  several omp processes at once, and a 400 MB session once left two orphaned
+  `jq` conversions burning CPU for hours. `kb-capture-omp.sh` now:
+  - **excludes** per session: an `flock` keyed on the hash of the session
+    file's realpath (`$KB_CAPTURE_LOCKS`, else `<cache>/kb/capture-locks`)
+    wraps the whole convert + land sequence (the Rust writer publishes through
+    one fixed `<out>.tmp` name, so two concurrent captures of one session would
+    interleave). A request that finds the lock held only bumps a request counter
+    and returns; the owner re-converts the live file and runs another pass until
+    no request arrived during the last one, so a newer request is coalesced,
+    never dropped, and a stale conversion can never overwrite a fresher one.
+    Different sessions never contend. CLI backfill (`kb-capture-omp.sh
+    <file>...`) waits for the lock (`KB_CAPTURE_LOCK_WAIT_SECS`, default 60) and
+    always converts.
+  - **skips only unchanged input**: a pass is skipped when the fingerprint
+    (parent inode:size:mtime-ns, a hash of the first 512 bytes = the in-place
+    title slot, the sidecar-directory listing, the adapter version) equals the
+    one recorded after the last SUCCESSFUL landing and the capture file still
+    exists. It is recorded only when `hook_adapter_land` returned 0 - spooled
+    (1) or lost (2) landings, timeouts and signals record nothing - and is read
+    BEFORE the conversion, so an append during it forces another pass. A
+    growing session is therefore never "already captured".
+  - **owns its descendants**: in hook mode it re-execs itself under `setsid`
+    (same PID, so a caller that signals the PID it spawned still reaches it),
+    runs every long child (the pre-clean and translate `jq`, the edited-set
+    pipe, the sidecar translations, the `kb` landing) in the background under
+    `timeout` and awaits it with `wait` (a foreground child would defer the
+    trap until it exited). `TERM`/`INT`/`HUP`/exit reap every process of ITS OWN
+    SESSION (not its process group: `timeout(1)` moves its child into a group
+    of its own), remove the scratch files and release the lock. A kill before
+    landing leaves the previous published capture untouched. Nothing outside the
+    script's own session is signalled.
+  - **bounds a pass** with `KB_CAPTURE_HARD_SECS` (default 120, the same value
+    `kb-omp.ts` always passed as its timeout - this makes that timeout real):
+    each child is capped at what is left of it. The `kb` landing gets its own
+    fresh `KB_CAPTURE_BUDGET_SECS` after the conversion instead of what the
+    conversion left over. A pass cannot finish a session whose TRANSLATION
+    exceeds the 48 MiB capture cap (`kb sessions capture` refuses it and so
+    does the spool); that outcome is reported on stderr and never recorded as
+    captured. The cap itself is unchanged.
+  - **translates in linear time**: the leaf-chain walk used to carry the growing
+    chain array in a `reduce` state (O(chain^2): 38 s at 20k records, 3 min at
+    40k); it is now a `foreach` that collects the chain, byte-identical output
+    (pinned against the former program on every fixture, five edge cases and a
+    linked synthetic chain).
+  `kb-omp.ts` spawns the script OWNED (`detached`: its own session and process
+  group, never omp's) and, on its timeout (`KB_CAPTURE_TIMEOUT_MS`, default
+  120 s) or an aborted `session_stop` signal, sends SIGTERM to that pid first (so
+  the trap runs) and SIGKILLs only the group it created after 3 s. `run()`'s
+  behaviour for every other hook and tool is unchanged. A shutdown-triggered
+  capture is detached on purpose: omp gives `session_shutdown` 2 s and then
+  exits, so the capture outlives it and is bounded by the hard deadline alone.
+  Tests: `tests/test-capture-omp-lifecycle.sh` (real subprocesses; run by
+  `hook_shell.rs`), `tests/test-omp-capture-lifecycle.sh` (bun lane).
 - **One per-session key (v0.45 N4)** - every per-session file name (capture
   file, spool item, throttle lookup, markers) derives from `hook_sid_key`, and
   `kb sessions capture` (`sanitize_sid`) uses the identical algorithm: a plain
