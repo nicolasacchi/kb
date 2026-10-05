@@ -58,22 +58,27 @@ test.describe("open in a new tab (inside kb)", () => {
     // document is `about:blank` — which is ALREADY `load`ed. Measured over
     // 5 ctrl+clicks against a plain static server: `newPage.url()` is
     // `"about:blank"` both immediately after `waitForEvent("page")` AND
-    // after `await waitForLoadState()`. So that await is a no-op here and
-    // the `toHaveURL` below is really "assert the tab's address in the
+    // after `await waitForLoadState()`. So that await was a no-op here and
+    // the old assertion was really "assert the tab's address in the
     // same tick the tab was created" — which is why CI saw
     // `Received string: ""` on a loaded runner and passed on retry.
     // `waitForURL` is the primitive that actually waits for the navigation
-    // to commit; the `toHaveURL` after it stays as the real assertion.
+    // to commit; the URL is then read synchronously with `newPage.url()`.
     // `waitUntil: "commit"` (not the default "load"): these tests assert
     // only the URL the new tab opened. The artifact reader page (SPA shell
     // + artifact iframe + SSE) can take longer than the 10 s default to
     // fire `load` on a loaded CI runner, which timed out even though the
     // correct URL had already committed. Every waitForURL below on a
     // newly opened tab uses the same option for the same reason.
+    // The assertion after it reads `newPage.url()` instead of using
+    // `expect(newPage).toHaveURL(...)`: `toHaveURL` first waits for the
+    // tab's pending navigation to FINISH, so it hit the same slow `load`
+    // and failed with `Received string: ""` even after the commit (main CI,
+    // 2026-10-05).
     await newPage.waitForURL(/\/a\/canon\/[^/]+\.html(\?|$)/, {
       waitUntil: "commit",
     });
-    await expect(newPage).toHaveURL(/\/a\/canon\/[^/]+\.html(\?|$)/);
+    expect(newPage.url()).toMatch(/\/a\/canon\/[^/]+\.html(\?|$)/);
     // The modified click must NOT close the palette in the original tab.
     await expect(dialog).toBeVisible();
   });
@@ -106,9 +111,7 @@ test.describe("open in a new tab (inside kb)", () => {
       artifactUrlRe("canon", pm[1].source_relative),
       { waitUntil: "commit" },
     );
-    await expect(newPage).toHaveURL(
-      artifactUrlRe("canon", pm[1].source_relative),
-    );
+    expect(newPage.url()).toMatch(artifactUrlRe("canon", pm[1].source_relative));
     // Original tab stays on pm[0].
     await expect(page).toHaveURL(artifactUrlRe("canon", pm[0].source_relative));
   });
@@ -138,7 +141,7 @@ test.describe("open in a new tab (inside kb)", () => {
     await newPage.waitForURL(/\/a\/canon\/[^/]+/, {
       waitUntil: "commit",
     });
-    await expect(newPage).toHaveURL(/\/a\/canon\/[^/]+/);
+    expect(newPage.url()).toMatch(/\/a\/canon\/[^/]+/);
   });
 
   test("a top-level artifact load referred from an artifact bounces to the kb wrapper", async ({
