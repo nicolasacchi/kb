@@ -196,6 +196,23 @@ hook_sid_key() { hook_spool_key "$1"; }
 # The pre-v0.44 lossy key. Kept ONLY so a cleanup can recognise legacy files.
 hook_sid_key_lossy() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
 
+# hook_marker_seen <path-prefix> <raw-session-id>
+# True when a once-per-session marker exists under the unified key OR (upgrade
+# compatibility) under the pre-v0.45 lossy name, so a session nudged/waked
+# before the upgrade is not nudged a second time. Markers are empty files, so
+# the legacy name cannot be verified against an embedded id: a colliding id
+# (e.g. "a_b" vs "a-b") may inherit the other's legacy marker, which at worst
+# suppresses one nudge - the failure direction the marker already had.
+# New markers are always written under the unified key.
+hook_marker_seen() {
+  local prefix="$1" raw="$2" key legacy
+  key="$(hook_sid_key "$raw")"
+  [ -f "${prefix}${key}" ] && return 0
+  legacy="$(hook_sid_key_lossy "$raw")"
+  [ "$legacy" != "$key" ] && [ -f "${prefix}${legacy}" ] && return 0
+  return 1
+}
+
 # hook_spool_put <transcript> <raw-session-id> [cwd] [stamp] [harness]
 # `stamp` (compact UTC, the session's true start time) and `harness` ride the
 # .meta so a replayed capture keeps its start-time filename (v0.45 N4); the
@@ -236,6 +253,8 @@ hook_spool_drop() {
   dir="$(hook_spool_dir)" || return 0
   key="$(hook_spool_key "$1")"
   rm -f "$dir/$key.jsonl" "$dir/$key.meta"
+  # Parked subagent sidecars of this session (hook_spool_put_sidecars).
+  case "$1" in "" | *[!A-Za-z0-9_-]*) ;; *) rm -rf "${dir:?}/$1" ;; esac
   # A spool item written before the hashed key existed sits under the lossy
   # name. For a non-plain id that name differs from `key`; drop it too, but
   # ONLY when its .meta records exactly this raw id (a colliding id's item
@@ -245,6 +264,59 @@ hook_spool_drop() {
     && grep -qxF "session_id=$1" "$dir/$legacy.meta" 2>/dev/null; then
     rm -f "$dir/$legacy.jsonl" "$dir/$legacy.meta"
   fi
+}
+
+# hook_spool_put_sidecars <raw-session-id> <subagents-dir>
+# Park an adapter's translated subagent sidecars (agent-*.jsonl) next to its
+# spooled main transcript, at <spool>/<raw-session-id>/subagents/ - exactly
+# where `kb sessions capture` looks for them (transcript.parent()/<raw sid>/
+# subagents), so a replay folds them into the capture with no further wiring.
+# Only a plain id ([A-Za-z0-9_-]) is accepted as a directory name; anything
+# else is refused (the main transcript still replays, sidecars are skipped).
+# `kb sessions capture --replay-spool` removes the dir after a successful
+# replay; hook_spool_drop removes it when a live capture lands first.
+hook_spool_put_sidecars() {
+  local raw="$1" src="$2" dir
+  case "$raw" in "" | *[!A-Za-z0-9_-]*) return 1 ;; esac
+  [ -d "$src" ] || return 1
+  dir="$(hook_spool_dir)" || return 1
+  (
+    umask 077
+    mkdir -p "$dir" && chmod 700 "$dir" || exit 1
+    rm -rf "${dir:?}/$raw"
+    mkdir -p "$dir/$raw/subagents" || exit 1
+    cp "$src"/*.jsonl "$dir/$raw/subagents/" 2>/dev/null || true
+  )
+}
+
+# hook_short_hash <string> - first 8 hex of sha256 (cksum fallback).
+hook_short_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -c1-8
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | cut -c1-8
+  else
+    printf '%s' "$1" | cksum | tr ' ' '-'
+  fi
+}
+
+# hook_agent_safe_name <agent-id> <staging-dir>
+# The readable file-name stem for a subagent sidecar (omp: agent-<stem>.jsonl).
+# NOT a session key: it names an agent, so it keeps the readable lossy form,
+# but two different agent ids that map to the same stem ("Web UI & Tests" vs
+# "Web-UI---Tests") are told apart - ONLY on collision the later id gets a
+# short hash of its full id appended. `<staging-dir>/.src-<stem>` records which
+# id owns a stem. Empty stem => returns 1 (caller skips the agent).
+hook_agent_stem() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+hook_agent_safe_name() {
+  local base="$1" dir="$2" stem
+  stem="$(hook_agent_stem "$base")"
+  [ -n "$stem" ] || return 1
+  if [ -e "$dir/.src-$stem" ] && [ "$(cat "$dir/.src-$stem")" != "$base" ]; then
+    stem="$stem-$(hook_short_hash "$base")"
+  fi
+  printf '%s' "$base" >"$dir/.src-$stem"
+  printf '%s' "$stem"
 }
 
 # True when the spool holds at least one item.
