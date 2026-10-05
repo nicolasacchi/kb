@@ -190,8 +190,24 @@ login, which is itself the "a stranger can pull it" check), mounts the tag's
   runner; it gates on keyword search only. The install step (download and
   verify) is retried once after 30 s for CDN lag; a failure in any later step is
   not retried.
+- **`kb add` rewrites the whole config.** It re-serialises every section, so a
+  fresh `kb.toml` already holds `[server] addr = "127.0.0.1:4000"` and
+  `[defaults] disable_embedder_fallback = false`. The smoke therefore replaces
+  those keys in place (`set_toml_key`) instead of appending sections, and the
+  selftest's stub `kb add` mirrors that shape (plus a minimal-config variant).
 - **Docker leg.** It probes `127.0.0.1:4000` with `--network host`, relying on
   the image's own default address (the same one its CMD and HEALTHCHECK use).
+  The gating run is keyword-only (`disable_embedder_fallback = true`), like the
+  tarball legs. A second, non-gating step then runs the image with the minimal
+  config `kb add` documents (no `embedding_model`) and reports whether keyword
+  search finds the corpus; note the image bakes `bge-large-en-v1.5` while the
+  registry default a config without `embedding_model` resolves to is
+  `bge-small-en-v1.5`, so that path fetches a model at boot. On failure both
+  steps print the last `kb search` output and `kb status`.
+- **Shell pipes.** Workflow and smoke steps run under `set -o pipefail`; a
+  reader that exits early (`| head`, `| grep -q`) SIGPIPEs the writer and fails
+  the step with 141 (it killed the fedora leg on `ldd --version | head -n1`).
+  The selftest lints for it.
 - **Not covered.** musl/Alpine and glibc older than 2.39 (unsupported, the
   installer says so), hybrid/semantic search (needs a model download), macOS,
   and kb-code.

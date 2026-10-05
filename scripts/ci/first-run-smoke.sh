@@ -137,19 +137,37 @@ cp -R "$corpus_src" "$corpus"
 cfg="$KB_HOME/config/kb.toml"
 [ -f "$cfg" ] || fail "kb add did not write $cfg"
 grep -q '^\[kb\.canon\]' "$cfg" || fail "no [kb.canon] section in $cfg"
-# spare loopback port (default 4000 is often taken on a dev box)
-if ! grep -q '^\[server\]' "$cfg"; then
-  printf '\n[server]\naddr = "127.0.0.1:%s"\n' "$port" >>"$cfg"
-else
-  fail "kb add wrote a [server] section; the smoke cannot pick a spare port"
+# `kb add` re-serialises the WHOLE config, so a fresh kb.toml already carries
+# `[server] addr = "127.0.0.1:4000"`, `[server] parent_origin` and
+# `[defaults] disable_embedder_fallback = false`. Set (not append) the keys we
+# need: a spare loopback port (4000 is often taken), and no embedder fallback.
+# The tarball ships no embedding model; without the override the daemon falls
+# back to the registry default (bge-small) and downloads it, which would eat
+# the INDEX_WAIT budget on a clean runner. Keyword search is all we gate on.
+# set_toml_key <file> <section> <key> <toml-value>: replace the key inside the
+# section, add it under the header, or append the section, in that order.
+set_toml_key() {
+  awk -v sec="$2" -v key="$3" -v val="$4" '
+    BEGIN { hdr = "[" sec "]" }
+    $0 ~ /^\[/ {
+      if (insec && !done) { print key " = " val; done = 1 }
+      insec = ($0 == hdr); seen = seen || insec
+      print; next
+    }
+    insec && $0 ~ ("^" key "[ \t]*=") { if (!done) { print key " = " val; done = 1 } ; next }
+    { print }
+    END {
+      if (insec && !done) { print key " = " val }
+      else if (!seen) { print ""; print hdr; print key " = " val }
+    }' "$1" >"$1.new" && mv "$1.new" "$1"
+}
+set_toml_key "$cfg" server addr "\"127.0.0.1:$port\""
+if grep -q '^parent_origin' "$cfg"; then
+  set_toml_key "$cfg" server parent_origin "\"http://localhost:$port\""
 fi
-# The tarball ships no embedding model. Without this the daemon falls back to the
-# registry default (bge-small) and may try to download it at boot/index time, which
-# would eat the INDEX_WAIT budget on a clean runner. Keyword search is all we gate on.
-if grep -q '^\[defaults\]' "$cfg"; then
-  fail "kb add wrote a [defaults] section; the smoke cannot disable the embedder fallback"
-fi
-printf '\n[defaults]\ndisable_embedder_fallback = true\n' >>"$cfg"
+set_toml_key "$cfg" defaults disable_embedder_fallback true
+grep -q "^addr = \"127.0.0.1:$port\"\$" "$cfg" || fail "could not set [server] addr in $cfg"
+grep -q '^disable_embedder_fallback = true$' "$cfg" || fail "could not set [defaults] disable_embedder_fallback in $cfg"
 ok
 
 # 4. start the daemon, wait for /healthz
@@ -178,10 +196,19 @@ code="$(curl -sS --max-time 10 -o "$tmp/root.html" -w '%{http_code}' "$url/" 2>"
 grep -q '<div id="root"' "$tmp/root.html" || fail "GET / is not the SPA shell (no <div id=\"root\")"
 ok
 
-# search helper: prints the hit count for $1 (keyword mode: BM25, no model)
+# search helper: prints the hit count for $1 (keyword mode: BM25, no model).
+# The last raw output (stdout+stderr) is kept in $tmp/search.last so a failing
+# leg can show WHY it saw nothing (empty index vs unreachable daemon vs error).
 hits() {
-  "$kb" search "$1" --kb canon --mode keyword --json --daemon "$url" 2>/dev/null \
-    | grep -c '"source_relative"' || true
+  "$kb" search "$1" --kb canon --mode keyword --json --daemon "$url" >"$tmp/search.last" 2>&1
+  grep -c '"source_relative"' "$tmp/search.last" || true
+}
+search_diag() {
+  echo "---- last kb search output ----"
+  head -c 2000 "$tmp/search.last" 2>/dev/null || true
+  echo "---- kb status ----"
+  "$kb" status --daemon "$url" 2>&1 | sed -n '1,30p' || true
+  echo "---- end diagnostics ----"
 }
 
 # 6. keyword search finds the seeded corpus once indexing completes
@@ -193,7 +220,7 @@ while [ "$i" -lt "$index_wait" ]; do
   if [ "${h:-0}" -ge 1 ]; then found=1; break; fi
   sleep 2; i=$((i + 2))
 done
-if [ "$found" != 1 ]; then tail_log; fail "keyword search for '$term' returned 0 hits within ${index_wait}s"; fi
+if [ "$found" != 1 ]; then tail_log; search_diag; fail "keyword search for '$term' returned 0 hits within ${index_wait}s"; fi
 ok
 
 # 7. the watcher indexes a file written while the daemon runs
@@ -207,7 +234,7 @@ while [ "$i" -lt "$watch_wait" ]; do
   if [ "${h:-0}" -ge 1 ]; then found=1; break; fi
   sleep 2; i=$((i + 2))
 done
-if [ "$found" != 1 ]; then tail_log; fail "new file not searchable within ${watch_wait}s"; fi
+if [ "$found" != 1 ]; then tail_log; search_diag; fail "new file not searchable within ${watch_wait}s"; fi
 ok
 
 # 8. daemon doctor must be healthy; `doctor --hooks` is informational only

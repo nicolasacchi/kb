@@ -143,7 +143,7 @@ jobs:
           tar -xzf /tmp/gh.tgz -C /tmp
           install -m 0755 "/tmp/gh_${ghv}_linux_${garch}/bin/gh" /usr/local/bin/gh
           gh --version
-          ldd --version | head -n1
+          ldd --version 2>&1 | sed -n 1p
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.tag }}
@@ -211,7 +211,15 @@ jobs:
           mkdir -p "$T/config/kb" "$T/state"
           # The sample corpus is not baked into the image: mount it from the tag.
           cp -R corpus/canon "$T/corpus"
+          # Keyword-only, like the tarball legs: the gate is "image boots, serves
+          # the SPA, indexes and answers BM25". The image bakes bge-large but the
+          # registry default (what a config without embedding_model resolves to)
+          # is bge-small, so without this the daemon fetches a model at boot; the
+          # "default config" step below probes that path separately, non-gating.
           cat > "$T/config/kb/kb.toml" <<'TOML'
+          [defaults]
+          disable_embedder_fallback = true
+
           [kb.canon]
           path = "/corpus"
           TOML
@@ -231,11 +239,16 @@ jobs:
           [ "$code" = 200 ] && grep -q '<div id="root"' root.html
           found=0
           for i in $(seq 1 60); do
-            n="$(docker exec kb kb search borrow --kb canon --mode keyword --json 2>/dev/null | grep -c '"source_relative"' || true)"
+            docker exec kb kb search borrow --kb canon --mode keyword --json >search.last 2>&1 || true
+            n="$(grep -c '"source_relative"' search.last || true)"
             if [ "${n:-0}" -ge 1 ]; then found=1; break; fi
             sleep 3
           done
-          [ "$found" = 1 ]
+          if [ "$found" != 1 ]; then
+            echo "---- last kb search output ----"; sed -n '1,40p' search.last
+            echo "---- kb status ----"; docker exec kb kb status 2>&1 | sed -n '1,40p' || true
+            exit 1
+          fi
           docker exec kb kb daemon doctor
           for i in $(seq 1 30); do
             st="$(docker inspect --format '{{.State.Health.Status}}' kb)"
@@ -247,6 +260,41 @@ jobs:
       - name: Container logs
         if: failure()
         run: docker logs kb 2>&1 | tail -n 150
+      - name: Default config (no embedding_model, as the quickstart writes it) - non-gating probe
+        # Answers "does the image index with the config `kb add` produces?" on
+        # every run. It does not gate: an embedder-backed first index depends on
+        # a model fetch the keyword gate above deliberately avoids.
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          docker rm -f kb >/dev/null 2>&1 || true
+          P="$(mktemp -d)"
+          mkdir -p "$P/config/kb" "$P/state"
+          cp -R corpus/canon "$P/corpus"
+          printf '[kb.canon]\npath = "/corpus"\n' > "$P/config/kb/kb.toml"
+          chmod -R 777 "$P/config" "$P/state"
+          docker run -d --name kb --network host \
+            -v "$P/config:/var/lib/kb/config" -v "$P/state:/var/lib/kb/state" \
+            -v "$P/corpus:/corpus:ro" "$IMAGE" >/dev/null
+          for i in $(seq 1 60); do
+            curl -fsS --max-time 3 http://127.0.0.1:4000/healthz >/dev/null 2>&1 && break
+            sleep 2
+          done
+          found=0
+          for i in $(seq 1 40); do
+            docker exec kb kb search borrow --kb canon --mode keyword --json >probe.last 2>&1 || true
+            n="$(grep -c '"source_relative"' probe.last || true)"
+            if [ "${n:-0}" -ge 1 ]; then found=1; break; fi
+            sleep 3
+          done
+          echo "default-config keyword hits found=$found after ~$((i * 3))s"
+          if [ "$found" != 1 ]; then
+            sed -n '1,40p' probe.last
+            docker exec kb kb status 2>&1 | sed -n '1,40p' || true
+            docker logs kb 2>&1 | grep -v 'lance::dataset::scanner' | tail -n 60 || true
+            exit 1
+          fi
       - name: Cleanup
         if: always()
         run: docker rm -f kb >/dev/null 2>&1 || true
