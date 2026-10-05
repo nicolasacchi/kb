@@ -80,14 +80,15 @@ recall_args=()
 # lanes together stay under the hooks.json timeout. Standalone copy without
 # the lib: unbounded calls, as before H1.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # No shared lib => no unified session key: fail open (nothing to do).
+  exit 0
   hook_deadline_init() { :; }
   run_to() { shift; "$@"; }
   hook_export_identity() { :; }
 }
 hook_deadline_init
 marker="$marker_dir/waked-kimi-$(hook_sid_key "$sid")"
-[ -f "$marker" ] && exit 0
+hook_marker_seen "$marker_dir/waked-kimi-" "$sid" && exit 0
 # v0.44 X4 — attribute every shell `kb` write of this session.
 hook_export_identity "$sid" kimi
 index="$(run_to 5 kb recall '' "${extra[@]}" "${recall_args[@]}" --limit 10 --json 2>/dev/null \

@@ -258,6 +258,8 @@ TRANSLATE='
   # Standalone copy without the lib: capture only, no spool, never any HTML.
   run_to() { shift; "$@"; }
   hook_deadline_init() { :; }
+  hook_agent_safe_name() { return 1; }
+  hook_spool_put_sidecars() { return 1; }
   hook_adapter_land() {
     command -v kb >/dev/null 2>&1 || { echo "kb-capture-omp.sh: kb not found - session $1 not captured" >&2; return 0; }
     kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
@@ -337,8 +339,7 @@ capture_one() {
       for f in "$sdir"/*.jsonl; do
         [ -f "$f" ] || continue
         base="$(basename "$f" .jsonl)"
-        safe="$(printf '%s' "$base" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80)"
-        [ -n "$safe" ] || continue
+        safe="$(hook_agent_safe_name "$base" "$subdir_out")" || continue
         subtmp="$(mktemp)" || continue
         jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null
         jq -c -s --arg file "$f" "$TRANSLATE" "$subtmp" \
@@ -357,6 +358,11 @@ capture_one() {
     >>"$tmpjsonl" 2>/dev/null
 
   hook_adapter_land "$sid" "$tmpjsonl" "${cwd:-unknown}" "$cts" omp
+  # rc 1 = parked in the spool: park the translated subagent sidecars with it
+  # so the replay folds them in (v0.45 N10).
+  if [ "$?" -eq 1 ] && [ -n "${rsid:-}" ] && [ -d "$scratch/$rsid/subagents" ]; then
+    hook_spool_put_sidecars "$rsid" "$scratch/$rsid/subagents" || true
+  fi
   rm -rf "$scratch"
 }
 

@@ -144,9 +144,10 @@ registering anywhere `kb-memory` is already installed. Design:
   translation is parked in the same private spool as above (the `.meta` records
   `session_id`, `stamp`, `harness`) and lands scrubbed on the next success or
   `--replay-spool`, the filename still carrying the session's true start time.
-  A `kb` too old to know `--stamp` is retried once without it. omp's staged
-  subagent sidecars are folded in by the live capture only; the spool keeps the
-  main transcript. Test: `tests/test-capture-adapters-spool.sh`.
+  A `kb` too old to know `--stamp` is retried once without it. omp's translated
+  subagent sidecars ride the spool too (`<spool>/<session-id>/subagents/`, where
+  the capture engine already looks; removed after a successful replay or when a
+  live capture lands first). Test: `tests/test-capture-adapters-spool.sh`.
 - **One per-session key (v0.45 N4)** - every per-session file name (capture
   file, spool item, throttle lookup, markers) derives from `hook_sid_key`, and
   `kb sessions capture` (`sanitize_sid`) uses the identical algorithm: a plain
@@ -157,7 +158,12 @@ registering anywhere `kb-memory` is already installed. Design:
   `sanitize_sid_matches_hook_spool_key_golden_table`). Captures written under
   the old lossy name are never renamed: the throttle and the capture engine
   still recognise one, but only when the id embedded in the file equals the raw
-  id.
+  id. The once-per-session markers (distill nudge, kimi wake, beat heartbeat)
+  use the same key; the nudge/wake gates also honour a marker left under the old
+  lossy name (`hook_marker_seen`), so an upgrade never double-fires. The omp
+  sidecar file name (`agent-<name>.jsonl`) stays readable and gains a short hash
+  ONLY when two different agent ids map to the same name. A hook run without
+  the shared lib fails open rather than carrying a copy of a key algorithm.
 - **Every `kb` call in the capture and harvest hooks is bounded** - the
   `kb-capture*.sh` adapters and `kb-slate-harvest.sh` source `kb-hook-lib.sh`
   and run each `kb` call under `run_to` inside `KB_CAPTURE_BUDGET_SECS`

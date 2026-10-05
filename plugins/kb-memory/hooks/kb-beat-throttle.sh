@@ -48,7 +48,8 @@ MIN_INTERVAL="${KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS:-180}"
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # No shared lib => no unified session key: fail open (no heartbeat).
+  exit 0
 }
 BEAT_SH="$HOOK_DIR/kb-beat.sh"
 

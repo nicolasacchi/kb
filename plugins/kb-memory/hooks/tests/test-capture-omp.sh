@@ -292,6 +292,58 @@ else
   echo "skip - no real kb on PATH or in KB_BIN_DIR, cannot exercise the real capture engine" >&2
 fi
 
+
+echo
+echo "== N10: sidecar agent names (collision-only disambiguator) + spooled sidecars =="
+N10_ROOT="$TMPROOT/n10"
+mkdir -p "$N10_ROOT/parent-session" "$N10_ROOT/bin" "$N10_ROOT/rec" "$N10_ROOT/spool"
+cp "$SCRIPT_DIR/fixtures/omp-subagent.jsonl" "$N10_ROOT/parent-session/Web UI & Tests.jsonl"
+cp "$SCRIPT_DIR/fixtures/omp-subagent.jsonl" "$N10_ROOT/parent-session/Web-UI---Tests.jsonl"
+cp "$SCRIPT_DIR/fixtures/omp-subagent.jsonl" "$N10_ROOT/parent-session/Plain.jsonl"
+N10_SESSION="$N10_ROOT/parent-session.jsonl"
+jq -nc '{type:"session",version:3,id:"n10sid1",timestamp:"2026-08-24T11:00:00.000Z",cwd:"/tmp/kb-omp-fixture"}' >"$N10_SESSION"
+jq -nc '{type:"message",id:"p1",parentId:null,timestamp:"2026-08-24T11:00:01.000Z",message:{role:"user",content:[{type:"text",text:"delegate"}]}}' >>"$N10_SESSION"
+# A kb that records the staged scratch tree it was handed (or fails, per env).
+cat >"$N10_ROOT/bin/kb" <<'KB'
+#!/usr/bin/env bash
+[ "${N10_KB_FAIL:-}" = 1 ] && exit 1
+while [ $# -gt 0 ]; do
+  [ "$1" = --transcript ] && { t="$2"; break; }
+  shift
+done
+[ -n "${t:-}" ] && cp -R "$(dirname "$t")/." "$N10_REC/"
+exit 0
+KB
+chmod +x "$N10_ROOT/bin/kb"
+export N10_REC="$N10_ROOT/rec"
+(
+  export PATH="$N10_ROOT/bin:$PATH" KB_SESSIONS_DIR="$N10_ROOT/out" KB_CAPTURE_SPOOL="$N10_ROOT/spool"
+  mkdir -p "$KB_SESSIONS_DIR"
+  "$CAPTURE" "$N10_SESSION" >/dev/null 2>&1
+)
+agents="$(ls "$N10_ROOT/rec/n10sid1/subagents" 2>/dev/null | grep '^agent-.*\.jsonl$' | sort)"
+[ "$(printf '%s\n' "$agents" | wc -l | tr -d ' ')" = 3 ] \
+  && ok "three agents with colliding safe names stay three distinct files" \
+  || bad "agent files collided or went missing: $agents"
+printf '%s\n' "$agents" | grep -qx 'agent-Plain.jsonl' \
+  && ok "a non-colliding agent keeps its readable name" || bad "readable name changed: $agents"
+printf '%s\n' "$agents" | grep -qx 'agent-Web-UI---Tests.jsonl' \
+  && ok "the first of two colliding ids keeps the readable name" || bad "first colliding id lost its readable name: $agents"
+printf '%s\n' "$agents" | grep -qE '^agent-Web-UI---Tests-[0-9a-f]{8}\.jsonl$' \
+  && ok "the second colliding id gets a short-hash disambiguator" || bad "second colliding id not disambiguated: $agents"
+
+# Failed capture: the translated sidecars ride into the spool next to the main item.
+(
+  export PATH="$N10_ROOT/bin:$PATH" KB_SESSIONS_DIR="$N10_ROOT/out2" KB_CAPTURE_SPOOL="$N10_ROOT/spool" N10_KB_FAIL=1
+  mkdir -p "$KB_SESSIONS_DIR"
+  "$CAPTURE" "$N10_SESSION" >/dev/null 2>&1
+)
+if [ -s "$N10_ROOT/spool/n10sid1.jsonl" ] && ls "$N10_ROOT/spool/n10sid1/subagents"/agent-*.jsonl >/dev/null 2>&1; then
+  ok "failed capture spools the main transcript AND its translated sidecars"
+else
+  bad "spool lacks main transcript or sidecars: $(find "$N10_ROOT/spool" | tr '\n' ' ')"
+fi
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

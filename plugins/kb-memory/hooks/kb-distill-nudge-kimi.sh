@@ -45,7 +45,8 @@ command -v jq >/dev/null 2>&1 || exit 0
 # Call only after the commit-without-remember check. Slate stdout is
 # discarded so it cannot corrupt the plain-text nudge. Never blocks.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
-  hook_sid_key() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
+  # No shared lib => no unified session key: fail open (nothing to do).
+  exit 0
   # Standalone copy without the shared lib: fail open (no distill ask).
   post_distill_ask() { return 0; }
 }
@@ -62,7 +63,7 @@ tpath="$home/sessions/$wdkey/$sid/agents/main/wire.jsonl"
 
 marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
 marker="$marker_dir/distill-nudged-kimi-$(hook_sid_key "$sid")"
-[ -f "$marker" ] && exit 0
+hook_marker_seen "$marker_dir/distill-nudged-kimi-" "$sid" && exit 0
 
 grep '"tool.call"' "$tpath" 2>/dev/null \
   | grep '"name":"Bash"' \
