@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Anchor,
@@ -49,6 +49,7 @@ import type { ReadingSummary } from "../api/reading";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { artifactOrigin } from "../lib/artifactHost";
 import { artifactHref } from "../lib/artifactHref";
+import { canonicalArtifactLocation } from "../lib/canonicalArtifactLocation";
 import { childFolders } from "../lib/folderTree";
 import { parseAtParam } from "../lib/memento";
 import { formatPane2, parsePane2, samePane, type PaneLoc } from "../lib/paneUrl";
@@ -89,6 +90,7 @@ export default function Detail() {
   const relPath = params["*"] ?? "";
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const routeLoc = useLocation();
   // Z4 — one-shot gate for the inbox `?panel=comments` deep-link (consumed
   // once on mount, then stripped from the URL so the action-model owns panel
   // state thereafter — invariant #30).
@@ -130,6 +132,21 @@ export default function Detail() {
   // until the by-path fetch lands (or if it 404s). Everything downstream
   // (iframe origin, history, review, sibling nav) keys on this.
   const id = doc?.id ?? null;
+  // N13 — the by-path lookup follows the moves log, so a stale `<rel>` can
+  // resolve to a moved doc. Replace (not push: one history entry, #20) the URL
+  // with the live path, keeping query + hash; the scroll key (#31) is derived
+  // from the new URL, so the restore slot follows the live path.
+  useEffect(() => {
+    if (!kb || !doc) return;
+    const target = canonicalArtifactLocation(
+      kb,
+      relPath,
+      doc.source_relative,
+      routeLoc.search,
+      routeLoc.hash,
+    );
+    if (target) navigate(target, { replace: true });
+  }, [kb, relPath, doc, routeLoc.search, routeLoc.hash, navigate]);
   const error = docQuery.error ? String(docQuery.error) : null;
   const [annotateMode, setAnnotateMode] = useState(false);
   // Panel visibility — decoupled from the pencil (annotateMode). Persists
