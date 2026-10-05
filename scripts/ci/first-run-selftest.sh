@@ -72,7 +72,13 @@ case "$1" in
     mkdir -p "$KB_HOME/config"
     kbname=default; p="$2"
     [ "$3" = "--kb" ] && kbname="$4"
-    printf '[kb.%s]\npath = "%s"\n' "$kbname" "$p" > "$cfg" ;;
+    if [ "${STUB_ADD:-}" = minimal ]; then
+      printf '[kb.%s]\npath = "%s"\n' "$kbname" "$p" > "$cfg"
+    else
+      # Mirrors the real `kb add` (v0.45): it re-serialises the WHOLE config, so
+      # [server] and [defaults] are present with their defaults on a fresh file.
+      printf '[daemon]\n\n[server]\naddr = "127.0.0.1:4000"\nmdns = false\nparent_origin = "http://localhost:4000"\n\n[defaults]\ndisable_embedder_fallback = false\n\n[kb.%s]\npath = "%s"\nskip_patterns = []\n\n[kb.%s.ui]\n' "$kbname" "$p" "$kbname" > "$cfg"
+    fi ;;
   daemon)
     case "$2" in
       stop) kill "$(cat "$KB_HOME/state/kb-daemon.pid" 2>/dev/null)" 2>/dev/null || exit 1 ;;
@@ -83,6 +89,9 @@ case "$1" in
         port="$(sed -n 's/^addr = "127.0.0.1:\([0-9]*\)"/\1/p' "$cfg")"
         corpus="$(sed -n 's/^path = "\(.*\)"/\1/p' "$cfg")"
         echo "stub daemon booting on $port"
+        if [ "$port" = 4000 ] || [ -z "$port" ]; then
+          echo "stub-daemon-log: refusing to bind port '$port' (smoke must move [server] addr off 4000)"; exit 5
+        fi
         if ! grep -q '^disable_embedder_fallback = true' "$cfg"; then
           echo "stub-daemon-log: embedder fallback not disabled; would download a model"; exit 3
         fi
@@ -95,6 +104,7 @@ case "$1" in
     q="$2"; url=""
     while [ $# -gt 0 ]; do [ "$1" = "--daemon" ] && url="$2"; shift; done
     curl -fsS --max-time 5 "$url/api/search?q=$q" ;;
+  status) echo "stub status" ;;
   doctor) echo "PASS stub hooks" ;;
   *) echo "stub kb: unsupported: $*" >&2; exit 2 ;;
 esac
@@ -127,6 +137,12 @@ if [ "$rc" = 0 ] && grep -q '^RESULT selftest-happy PASS$' "$work/happy.out"; th
   else fail "first_run_selftest_happy_path: steps not ok:$missing"; cat "$work/happy.out"; fi
 else fail "first_run_selftest_happy_path rc=$rc"; cat "$work/happy.out"; fi
 dead "$work/happy.pid" || fail "happy path left the daemon running"
+
+# 1b. a config with NO [server]/[defaults] sections (older `kb add` shape) also works
+run_smoke minimal STUB_ADD=minimal
+if [ "$rc" = 0 ] && grep -q '^RESULT selftest-minimal PASS$' "$work/minimal.out"; then pass first_run_selftest_minimal_config_shape
+else fail "first_run_selftest_minimal_config_shape rc=$rc"; cat "$work/minimal.out"; fi
+dead "$work/minimal.pid" || fail "minimal run left the daemon running"
 
 # 2. daemon never healthy -> fails within its timeout, log tail printed
 start=$SECONDS
@@ -199,6 +215,17 @@ nolint 'secrets\.'
 nolint 'pull_request_target'
 nolint 'self-hosted'
 nolint 'KB_INSECURE_SKIP_VERIFY'
+# A reader that exits early (`| head`, `| grep -q`) SIGPIPEs the writer; under
+# `set -o pipefail` that is exit 141 and killed the fedora leg on `ldd --version
+# | head -n1`. Keep early-exit readers off pipes in the workflow and the smoke.
+for f in "$wf" "$smoke"; do
+  if grep -vE '^\s*#' "$f" | grep -nE '\|\s*(head|grep -[a-zA-Z]*q)\b' >"$work/sigpipe.out"; then
+    # `|| true`-guarded diagnostics in the smoke are tolerated; flag the rest.
+    if grep -vE '\|\| *true' "$work/sigpipe.out" | grep -q .; then
+      fail "first_run_no_sigpipe_pipes: early-exit pipe in $(basename "$f"):"; cat "$work/sigpipe.out"
+    fi
+  fi
+done
 [ "$lint_ok" = 1 ] && pass first_run_workflow_triggers
 
 if [ "$fails" -ne 0 ]; then echo "first-run selftest: $fails FAILED" >&2; exit 1; fi
