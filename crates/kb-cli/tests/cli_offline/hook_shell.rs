@@ -142,6 +142,15 @@ fn capture_hook_spools_instead_of_embedding_raw_and_replays_scrubbed() {
     );
 }
 
+/// v0.45 N10 - omp sidecar agent names stay readable and gain a short hash
+/// only on collision; a failed capture parks the translated sidecars in the
+/// spool beside the main transcript. Needs the REAL `kb` binary for the
+/// sidecar-digest block.
+#[test]
+fn omp_sidecar_names_disambiguate_only_on_collision_and_spool_with_the_item() {
+    run_with_real_kb("test-capture-omp.sh");
+}
+
 /// Run `script` with `KB_BIN_DIR` pointing at the freshly built `kb`.
 fn run_with_real_kb(script: &str) {
     let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
