@@ -1,0 +1,51 @@
+{
+  "schema": "kb-session-bundle/1",
+  "title": "Add a status filter",
+  "cwd": "/home/u/proj",
+  "all_cwds": [
+    "/home/u/proj"
+  ],
+  "git_branch": "main",
+  "model": "claude-opus-4-8",
+  "cc_version": "1.2.3",
+  "started_at": 1700000000,
+  "ended_at": 1700000100,
+  "message_count": 12,
+  "token_total": 4200,
+  "tool_calls": 7,
+  "error_count": 1,
+  "files_read_count": 1,
+  "files_edited_count": 1,
+  "files": [
+    {
+      "path": "src/a.rs",
+      "action": "edit"
+    }
+  ],
+  "decisions": [
+    {
+      "kind": "plan",
+      "prompt": "ok?",
+      "answer": "yes"
+    }
+  ],
+  "commits": [
+    {
+      "kind": "commit",
+      "sha": "deadbeef",
+      "subject": "wip"
+    }
+  ],
+  "research": [
+    {
+      "kind": "web",
+      "query": "retry budget"
+    }
+  ],
+  "origin": {
+    "source_relative": "session-20261101T101010Z-abc-123.html",
+    "exporter_version": "0.45"
+  },
+  "scrubbed": false,
+  "redactions_applied": 0
+}

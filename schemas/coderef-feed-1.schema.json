@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/coderef-feed/1",
+  "title": "coderef-feed/1 code-refs corpus feed",
+  "description": "GET /api/kb/{kb}/code-refs: the corpus cursor feed kb-code's doc-lens sync pages over (crates/kb-server/src/routes/coderefs.rs, CodeRefsFeedResponse); also the `?by_target=` reverse resolution. next_cursor is omitted, never null, on the last page. Structural lint; the daemon is the authority.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kb",
+    "docs"
+  ],
+  "properties": {
+    "schema": {
+      "const": "coderef-feed/1"
+    },
+    "kb": {
+      "type": "string"
+    },
+    "docs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/doc"
+      }
+    },
+    "next_cursor": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "doc": {
+      "type": "object",
+      "required": [
+        "doc_id",
+        "doc_path",
+        "title",
+        "doc_hash",
+        "extracted_at",
+        "never_scanned",
+        "code_rev",
+        "ref_count",
+        "ungrouped_count",
+        "truncated",
+        "groups",
+        "refs"
+      ],
+      "properties": {
+        "doc_id": {
+          "type": "string"
+        },
+        "doc_path": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "doc_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "extracted_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "never_scanned": {
+          "type": "boolean"
+        },
+        "code_rev": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/code_rev"
+            }
+          ]
+        },
+        "ref_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ungrouped_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/group"
+          }
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          }
+        }
+      }
+    },
+    "code_rev": {
+      "type": "object",
+      "required": [
+        "label",
+        "sha",
+        "dirty"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "sha": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "required": [
+        "ordinal",
+        "key",
+        "label",
+        "anchor"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "anchor": {
+          "type": "string"
+        }
+      }
+    },
+    "ref": {
+      "type": "object",
+      "required": [
+        "ordinal",
+        "group",
+        "kind",
+        "raw",
+        "path_hint",
+        "line_start",
+        "line_end",
+        "line_spans",
+        "symbol_container",
+        "symbol_member",
+        "context",
+        "context_tokens",
+        "declared"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "raw": {
+          "type": "string"
+        },
+        "path_hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line_start": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "line_end": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "line_spans": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol_container": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbol_member": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "type": "string"
+        },
+        "context_tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "declared": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

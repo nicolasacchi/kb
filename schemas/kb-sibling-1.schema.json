@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kb-sibling/1",
+  "title": "kb-sibling/1 version Hello",
+  "description": "The version Hello both daemons carry on GET /api/identity (crates/kb-core/src/sibling.rs; assembled by crates/kb-server/src/routes/identity.rs and crates/kb-code-server/src/routes.rs). A sibling client compares sibling_protocol EXACTLY and fails closed on a different major. The rest of the identity body is open. A legacy peer that predates the Hello omits these fields; this schema describes a current binary. Structural lint; the daemon is the authority.",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "build_sha",
+    "sibling_protocol",
+    "sibling_major",
+    "schema_epoch",
+    "started_at"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string"
+    },
+    "build_sha": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sibling_protocol": {
+      "const": "kb-sibling/1"
+    },
+    "sibling_major": {
+      "const": 1
+    },
+    "schema_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "started_at": {
+      "type": "string"
+    }
+  }
+}

@@ -166,6 +166,8 @@ async fn a_claim_round_trips_and_rides_the_ladder() {
         resp.text().await.unwrap()
     );
     let created: serde_json::Value = resp.json().await.unwrap();
+    // v0.45 N8 — the real answer conforms to the registered claim schema.
+    crate::common::assert_conforms("kbc-claim/1", &created);
     assert_eq!(created["state"], "unanchored");
     assert_eq!(created["confidence"], 0.7);
     assert_eq!(created["evidence"][0], "code:order.rb:3");
@@ -190,6 +192,7 @@ async fn a_claim_round_trips_and_rides_the_ladder() {
         .await
         .unwrap();
     let drifted: serde_json::Value = resp.json().await.unwrap();
+    crate::common::assert_conforms("kbc-claim/1", &drifted);
     // With no indexed blob for the path yet, the honest answer is still
     // `drifted` — the claim named bytes this daemon cannot confirm.
     assert_eq!(drifted["state"], "drifted");
@@ -211,6 +214,10 @@ async fn a_claim_round_trips_and_rides_the_ladder() {
     assert_eq!(body["total"], 2);
     assert_eq!(body["returned"], 2);
     assert_eq!(body["claims"].as_array().unwrap().len(), 2);
+    // The list envelope is not a claim; each element of `claims` is.
+    for c in body["claims"].as_array().unwrap() {
+        crate::common::assert_conforms("kbc-claim/1", c);
+    }
 
     // Paging reports what it is a page OF.
     let page: serde_json::Value = client

@@ -1,0 +1,26 @@
+{
+  "schema": "kbc-claim/1",
+  "repo": "demo",
+  "subject_kind": "path",
+  "subject": "order.rb",
+  "kind": "explain",
+  "body_md": "cents everywhere; the float column stays for one release.",
+  "confidence": 0.7,
+  "evidence": [
+    "code:order.rb:3",
+    "finding:f-1"
+  ],
+  "session_id": "sess-1",
+  "model": "claude",
+  "blob_sha": "0000000000000000000000000000000000000000",
+  "review_id": 1,
+  "id": "clm_0123456789ab",
+  "subject_path": "order.rb",
+  "state": "drifted",
+  "caption": "written against 0000, the file is now 1111",
+  "refs": {
+    "refs": [],
+    "truncated": false
+  },
+  "created_at": 1767214800
+}

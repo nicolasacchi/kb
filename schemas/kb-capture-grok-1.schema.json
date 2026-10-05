@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kb-capture-grok/1",
+  "title": "kb-capture-grok/1 adapter-meta line",
+  "description": "The first line of a captured grok transcript, written by plugins/kb-memory/hooks/kb-capture-grok.sh and read by the kb daemon's session engine (kb_core::sessions: `harness` rung 1 of the harness ladder, `job_ulid` for the by-job join). One JSON object per capture; the optional keys are omitted, never null, when the adapter had no value. Validate the file's first line (kind jsonl-head). Structural lint; the daemon is the authority.",
+  "type": "object",
+  "required": [
+    "sessionId",
+    "type",
+    "adapter",
+    "harness",
+    "driver",
+    "session_dir",
+    "grok_version",
+    "timestamp"
+  ],
+  "properties": {
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "const": "adapter-meta"
+    },
+    "adapter": {
+      "const": "kb-capture-grok/1"
+    },
+    "harness": {
+      "const": "grok"
+    },
+    "driver": {
+      "const": "grokclaude"
+    },
+    "session_dir": {
+      "type": "string"
+    },
+    "grok_version": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string"
+    },
+    "job_ulid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "round": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cwd": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sandbox_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_title": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

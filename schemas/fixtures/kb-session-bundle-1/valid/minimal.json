@@ -1,0 +1,13 @@
+{
+  "schema": "kb-session-bundle/1",
+  "session_id": "abc-123",
+  "message_count": 12,
+  "token_total": 4200,
+  "tool_calls": 7,
+  "error_count": 1,
+  "files_read_count": 1,
+  "files_edited_count": 1,
+  "origin": {},
+  "scrubbed": false,
+  "redactions_applied": 0
+}

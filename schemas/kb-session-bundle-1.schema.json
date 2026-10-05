@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nicolasacchi/kb/schemas/kb-session-bundle/1",
+  "title": "kb-session-bundle/1 portable session manifest",
+  "description": "manifest.json inside a `<sid>.kbsession.zip` session bundle (`kb sessions export`, then `kb sessions import` on another machine; crates/kb-core/src/session_bundle.rs, BundleManifest). Optional scalars are omitted when absent; empty lists are omitted. Extract the entry first: `unzip -p x.kbsession.zip manifest.json | kb validate -`. Structural lint; serde is the authority.",
+  "type": "object",
+  "required": [
+    "schema",
+    "session_id",
+    "message_count",
+    "token_total",
+    "tool_calls",
+    "error_count",
+    "files_read_count",
+    "files_edited_count",
+    "origin",
+    "scrubbed",
+    "redactions_applied"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kb-session-bundle/1"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "first_user_prompt": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "all_cwds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "git_branch": {
+      "type": "string"
+    },
+    "git_remote": {
+      "type": "string"
+    },
+    "git_head_sha": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "cc_version": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "integer"
+    },
+    "ended_at": {
+      "type": "integer"
+    },
+    "message_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "token_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tool_calls": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "error_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "files_read_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "files_edited_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "action"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "read",
+              "write",
+              "edit"
+            ]
+          }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "prompt"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "research": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "query"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "kb": {
+          "type": "string"
+        },
+        "source_relative": {
+          "type": "string"
+        },
+        "exporter_version": {
+          "type": "string"
+        }
+      }
+    },
+    "scrubbed": {
+      "type": "boolean"
+    },
+    "redactions_applied": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

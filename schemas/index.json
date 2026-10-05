@@ -80,6 +80,55 @@
       "carrier": "kb-code theme registry"
     },
     {
+      "id": "kb-sibling/1",
+      "kind": "json",
+      "file": "kb-sibling-1.schema.json",
+      "owner": "crates/kb-core/src/sibling.rs",
+      "carrier": "version Hello fields of GET /api/identity on kb and kb-code (a sibling client handshakes on them)"
+    },
+    {
+      "id": "coderef/1",
+      "kind": "json",
+      "file": "coderef-1.schema.json",
+      "owner": "crates/kb-server/src/routes/coderefs.rs",
+      "carrier": "GET /api/kb/{kb}/docs/{id}/code-refs body (kb to kb-code doc-lens)"
+    },
+    {
+      "id": "coderef-feed/1",
+      "kind": "json",
+      "file": "coderef-feed-1.schema.json",
+      "owner": "crates/kb-server/src/routes/coderefs.rs",
+      "carrier": "GET /api/kb/{kb}/code-refs cursor feed body (kb to kb-code doc-lens sync)"
+    },
+    {
+      "id": "unified-inbox/1",
+      "kind": "json",
+      "file": "unified-inbox-1.schema.json",
+      "owner": "crates/kb-code-server/src/unified_inbox.rs",
+      "carrier": "GET /api/inbox body (kb-code daemon to kb-code CLI and SPA)"
+    },
+    {
+      "id": "kbc-claim/1",
+      "kind": "json",
+      "file": "kbc-claim-1.schema.json",
+      "owner": "crates/kb-code-server/src/claims.rs",
+      "carrier": "one agent-prose claim: POST /api/claims body and the claim the routes answer with"
+    },
+    {
+      "id": "kb-capture-grok/1",
+      "kind": "jsonl-head",
+      "file": "kb-capture-grok-1.schema.json",
+      "owner": "plugins/kb-memory/hooks/kb-capture-grok.sh",
+      "carrier": "adapter-meta first line of a captured grok transcript (capture hook to kb daemon)"
+    },
+    {
+      "id": "kb-session-bundle/1",
+      "kind": "json",
+      "file": "kb-session-bundle-1.schema.json",
+      "owner": "crates/kb-core/src/session_bundle.rs",
+      "carrier": "manifest.json entry of a <sid>.kbsession.zip session bundle (machine to machine)"
+    },
+    {
       "id": "kb-recall/1",
       "kind": "text",
       "file": null,
