@@ -2584,7 +2584,23 @@ plain shell, never a failure); description prefers the authored `kb-summary`
 else the body excerpt; the splice only touches the parent `<head>` (the
 kb-prompt `<template>` #5 is never in the shell); source-rel is used verbatim
 (URL-safe paths — an escaped path just misses the lookup). The XSS-critical
-splice/escape is pure-function unit-pinned in `spa.rs` tests.
+splice/escape is pure-function unit-pinned in `spa.rs` tests. **Slow is a miss
+too (v0.45 N12):** the permalink's storage reads (the single
+`get_by_source_path`, then the moves chain on a miss) are ONE future bounded by
+`SHELL_LOOKUP_DEADLINE` (750 ms); the storage actor is serial, so without it a
+busy kb (bulk reindex, ingest) left the navigation with no response at all. On
+timeout the plain shell is served and a `warn` is logged. Trade-off: a MOVED
+artifact whose lookup times out gets the plain shell at the OLD url instead of
+the 301, and the SPA does not recover it client-side (`docs/by-path` does not
+follow the moves log, so that tab shows not-found); re-requesting the URL once
+the actor is idle yields the 301. A 503 for every permalink during a busy spell
+was rejected as worse for the common (live artifact) case. Pinned by
+`wedged_lookup_degrades_to_plain_shell_within_deadline` and
+`prompt_lookup_is_passed_through` (the deadline helper, driven by a never-ready
+future — the actor's wedge message is `#[cfg(test)]` inside kb-core and not
+reachable from kb-server), with `spa_permalink_injects_og_meta_for_real_artifact`
+and `relocate_redirects_spa_lookup_and_docs` keeping the idle-actor OG + 301
+paths green.
 
 ### 35. Reader→gallery deep-links go through ONE builder; the gallery filter grammar is SPA↔wire↔server lock-step (v0.22)
 
