@@ -72,6 +72,9 @@ case " $* " in
     "$REAL_JQ" "$@"
     rc=$?
     echo "end $$ $file" >>"$SHIM_LOG"
+    # SHIM_TRANSLATE_RC: the translation emitted its records, then jq died with
+    # a data-error exit status (as it does on a record it cannot index).
+    [ -n "${SHIM_TRANSLATE_RC:-}" ] && [ "$rc" = 0 ] && rc="$SHIM_TRANSLATE_RC"
     exit "$rc"
     ;;
   *) exec "$REAL_JQ" "$@" ;;
@@ -83,6 +86,12 @@ chmod +x "$TMPROOT/shim/jq"
 cat >"$TMPROOT/kbbin/kb" <<'KB'
 #!/usr/bin/env bash
 if [ -e "$KB_FAIL_FLAG" ] && [ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ]; then exit 1; fi
+if [ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ]; then
+  echo "kbstart $$" >>"$KB_LOG"
+  # A kb that is mid-write and ignores TERM (only KILL stops it) for a while,
+  # then publishes what it was started with.
+  if [ -n "${KB_ORPHAN_STALL:-}" ]; then trap '' TERM; sleep "$KB_ORPHAN_STALL"; fi
+fi
 if [ -n "${SIDECAR_DUMP:-}" ] && [ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ]; then
   prev=""
   for a in "$@"; do
@@ -96,6 +105,8 @@ chmod +x "$TMPROOT/kbbin/kb"
 export FAKE_CAPTURE_KB="$FIX/fake-capture-kb.sh"
 export KB_FAIL_FLAG="$TMPROOT/kb-fail"
 export SHIM_LOG="$TMPROOT/shim.log"
+export KB_LOG="$TMPROOT/kb.log"
+: >"$KB_LOG"
 export PATH="$TMPROOT/shim:$TMPROOT/kbbin:$PATH"
 : >"$SHIM_LOG"
 
@@ -394,8 +405,10 @@ kill_case() { # <label> <owner|group>
   if [ "$how" = group ]; then kill -KILL -- "-$K" 2>/dev/null; else kill -KILL "$K" 2>/dev/null; fi
   wait "$K" 2>/dev/null
   unset SHIM_SLEEP
-  # (1) the lock is free at once although the orphaned jq may still run
-  if wait_for 3 lock_free; then ok "[$label] SIGKILL: the lock is released with the owner (children do not hold it)"; else bad "[$label] SIGKILL: the lock is still held"; fi
+  # (1) the lock is NOT free while an orphan may still run: the watchdog holds
+  #     it until every survivor is dead, then releases it
+  if lock_free; then bad "[$label] SIGKILL: the lock was free at once, while the orphaned conversion could still run"; else ok "[$label] SIGKILL: the lock stays held by the watchdog while the orphans are alive"; fi
+  if wait_for 8 lock_free; then ok "[$label] SIGKILL: the lock is released once the orphans are reaped"; else bad "[$label] SIGKILL: the lock was never released"; fi
   # (2) a request arriving in that window is served, not dropped
   append_marker "$S" "KILL-WINDOW-$label"
   hook_fg "$S" "$sid"
@@ -417,6 +430,71 @@ kill_case() { # <label> <owner|group>
 kill_case owner owner
 kill_case group group
 
+# 6b2. The stale-publish race: after an owner SIGKILL an orphaned `kb` (here:
+#      one that ignores TERM for a while, as a kb mid-write would) must not be
+#      able to publish AFTER a fresher conversion. The watchdog holds the lock
+#      until the orphan is dead, so a new request only starts once the orphan
+#      has finished or been killed - and its (newer) publication is the last.
+S7="$TMPROOT/s7.jsonl"; SID7="a7000000-0000-0000-0000-000000000007"
+mk_session "$S7" "$SID7" "stale"
+append_marker "$S7" "MARK0"
+: >"$KB_LOG"
+KB_ORPHAN_STALL=1.5 hook_bg "$S7" "$SID7"; K7=$LAST_PID
+if wait_for 10 grep -q kbstart "$KB_LOG"; then
+  sleep 0.2
+  members="$(ps -s "$K7" -o pid= | tr -d ' ' | grep -vx "$K7" | tr '\n' ' ')"
+  STARTED_PIDS+=($members)
+  kill -KILL "$K7" 2>/dev/null; wait "$K7" 2>/dev/null
+  append_marker "$S7" "MARK9"
+  hook_fg "$S7" "$SID7"
+  sleep 3 # long enough for any orphan to wake up and publish
+  h="$(html_of "$SID7")"
+  # (MARK9 is only in the newer transcript; the stale one ends at MARK0)
+  if [ -n "$h" ] && grep -q MARK9 "$h"; then
+    ok "an orphaned conversion cannot publish after a fresher one (final capture holds the newest state)"
+  else
+    bad "stale orphan overwrote the fresh capture (html: ${h:-none})"
+  fi
+else
+  bad "the orphan kb never started"
+fi
+
+# 6b3. A jq data error on a malformed record must not lose the session.
+mal_session() { # <path> <sid> <bad-toolcall-json-fragment>
+  local path="$1" sid="$2" bad="$3" last
+  mk_session "$path" "$sid" "mal"
+  last="$("$REAL_JQ" -r 'select(.id != null) | .id' "$path" | tail -1)"
+  printf '{"type":"message","id":"w1","parentId":"%s","timestamp":"2026-08-24T10:08:00.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"write","arguments":{"path":"/tmp/good-path.txt","content":"x"}}]}}\n' "$last" >>"$path"
+  printf '{"type":"message","id":"w2","parentId":"w1","timestamp":"2026-08-24T10:08:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c2",%s}]}}\n' "$bad" >>"$path"
+  printf '{"type":"message","id":"w3","parentId":"w2","timestamp":"2026-08-24T10:08:02.000Z","message":{"role":"user","content":[{"type":"text","text":"AFTER-BAD-RECORD"}]}}\n' >>"$path"
+}
+n=0
+for bad in '"name":"write","arguments":"oops"' '"name":"write","arguments":[1]' '"name":7,"arguments":{}' '"name":"write","arguments":{"path":5}'; do
+  n=$((n + 1))
+  SM="$TMPROOT/m$n.jsonl"; SIDM="a8000000-0000-0000-0000-00000000008$n"
+  mal_session "$SM" "$SIDM" "$bad"
+  hook_fg "$SM" "$SIDM"
+  h="$(html_of "$SIDM")"
+  if [ -n "$h" ] && grep -q AFTER-BAD-RECORD "$h" && grep -q 'good-path.txt' "$h"; then
+    ok "malformed record #$n ($bad): the capture still lands, complete, with the edited-set snapshot"
+  else
+    bad "malformed record #$n ($bad) lost or truncated the capture (html: ${h:-none})"
+  fi
+done
+# Even a data error the translator does NOT guard against lands the partial
+# output (jq -s streams): only a deadline kill / TERM drops the pass.
+SM="$TMPROOT/m5.jsonl"; SIDM="a8000000-0000-0000-0000-000000000085"
+mk_session "$SM" "$SIDM" "partial"
+append_marker "$SM" "PARTIAL-MARK"
+SHIM_TRANSLATE_RC=5 hook_fg "$SM" "$SIDM"
+h="$(html_of "$SIDM")"
+if [ -n "$h" ] && grep -q PARTIAL-MARK "$h"; then
+  ok "a translator data-error exit still lands what was translated"
+else
+  bad "a translator data-error exit dropped the whole session (html: ${h:-none})"
+fi
+
+# ---------------------------------------------------------------------------
 # 6c. One poisoned subagent sidecar must not take the whole capture down: the
 #     main transcript and the healthy sidecars still land.
 S6="$TMPROOT/s6.jsonl"; SID6="a6000000-0000-0000-0000-000000000006"
@@ -432,9 +510,8 @@ for poison in '{"type":"message","id":"p1","parentId":null,"message":"str"}' '[1
   rm -f "$(html_of "$SID6")"; : >"$TMPROOT/sidecars.txt"
   append_marker "$S6" "POISON-$n"
   SIDECAR_DUMP="$TMPROOT/sidecars.txt" hook_fg "$S6" "$SID6"
-  if grep -q "POISON-$n" "$(html_of "$SID6")" 2>/dev/null && grep -q 'agent-Alpha.jsonl' "$TMPROOT/sidecars.txt" \
-    && ! grep -q 'agent-Poison.jsonl' "$TMPROOT/sidecars.txt"; then
-    ok "poison sidecar #$n is dropped; the main transcript and the healthy sidecar still land"
+  if grep -q "POISON-$n" "$(html_of "$SID6")" 2>/dev/null && grep -q 'agent-Alpha.jsonl' "$TMPROOT/sidecars.txt"; then
+    ok "poison sidecar #$n cannot break the capture; the main transcript and the healthy sidecar still land"
   else
     bad "poison sidecar #$n broke the capture (html: $(html_of "$SID6"), sidecars: $(tr '\n' ' ' <"$TMPROOT/sidecars.txt"))"
   fi

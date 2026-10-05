@@ -181,12 +181,28 @@ registering anywhere `kb-memory` is already installed. Design:
     of its own), remove the scratch files and release the lock. A kill before
     landing leaves the previous published capture untouched. Nothing outside the
     script's own session is signalled.
-  - **survives its own SIGKILL**: no trap runs on an untrappable kill, so the
-    children never inherit the lock fd (the lock dies with the owner and the
-    next request takes it and publishes), and a small watchdog in a session of
-    its own reaps whatever still carries the run's `KB_CAPTURE_RUN` marker (or
-    the owner's session) and removes the run's scratch directory within about a
-    second. `KB_CAPTURE_NO_WATCHDOG=1` disables only the watchdog.
+  - **survives its own SIGKILL**: no trap runs on an untrappable kill, so a
+    small watchdog in a session of its own reaps whatever still carries the
+    run's `KB_CAPTURE_RUN` marker (or the owner's session) and removes the run's
+    scratch directory. The watchdog INHERITS the per-session lock (the
+    conversion children do not), so the lock outlives a killed owner until the
+    orphans are dead: no new owner starts, and no orphaned `kb` can publish
+    after a fresher conversion. A request arriving in that window sees the
+    recorded owner (`<lock>.owner`, pid + start time) is gone and waits for the
+    lock (`KB_CAPTURE_ORPHAN_WAIT_SECS`, default 8) instead of being dropped.
+    Timing: the watchdog polls every 0.5 s, sends TERM, then polls up to 2 s for
+    the survivors before KILL, so cleanup typically takes about a second and at
+    most about 3 s (not "within a second"). The watchdog is per lock hold and is
+    stopped before the lock is released. `KB_CAPTURE_NO_WATCHDOG=1` disables only
+    the watchdog.
+  - **a malformed record never loses the session**: the translator tolerates a
+    non-string tool name, non-object `arguments`, a non-string `path` and
+    non-object content entries (the record degrades; the rest of the transcript
+    is kept; well-formed input is byte-identical). Should `jq` still exit with a
+    data error, the records it already emitted (`jq -s` streams) are landed, the
+    edited-set snapshot falls back to empty / is skipped, and only a deadline
+    kill or TERM (rc 124/137/143) aborts the pass, so a session is never retried
+    forever on a record it cannot parse.
   - **drops a poisoned subagent sidecar** instead of failing the pass: a
     sidecar whose translation errors is skipped (the main transcript and the
     healthy sidecars still land); only a deadline kill or a TERM aborts.

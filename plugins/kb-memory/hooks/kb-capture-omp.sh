@@ -168,24 +168,28 @@ TRANSLATE='
    + (if $ttitle != "" then {aiTitle: $ttitle} else {} end)),
   ($live[] |
    if .type == "message" then
-     (.message // {}) as $m |
+     ((.message // {}) | if type == "object" then . else {} end) as $m |
      (.timestamp // ($m.timestamp | ms2iso) // "unknown") as $ts |
      if $m.role == "user" then
-       ([$m.content[]? | select(.type == "text") | .text] | join("\n")) as $t |
+       ([$m.content[]? | objects | select(.type == "text") | .text | if type == "object" or type == "array" then tojson else . end] | join("\n")) as $t |
        select($t != "") |
        {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
         message: {role: "user", content: [{type: "text", text: $t}]}}
      elif $m.role == "assistant" then
-       ([$m.content[]? |
+       ([$m.content[]? | objects |
          if .type == "text" and ((.text // "") != "") then
            {type: "text", text: .text}
          elif .type == "thinking" and ((.thinking // "") != "") then
            {type: "thinking", thinking: .thinking}
          elif .type == "toolCall" then
-           ((.name // "tool") | canon) as $tn |
-           ((.arguments // {}) as $a |
+           # A malformed record (non-string name, non-object arguments, a
+           # non-string path) must not abort the translation: it degrades to a
+           # tool_use that keeps what it can ({arguments: <raw>} for a non-object).
+           ((.name // "tool") | if type == "string" then . else "tool" end | canon) as $tn |
+           ((.arguments // {}) as $a0 |
+            (if ($a0 | type) == "object" then $a0 else {arguments: $a0} end) as $a |
             if (($tn | ascii_downcase) == "write"
-                or ($tn | ascii_downcase) == "edit") and ($a | has("path"))
+                or ($tn | ascii_downcase) == "edit") and (($a.path | type) == "string")
             then ($a + {file_path: $a.path})
             else $a end) as $args |
            {type: "tool_use", id: (.id // ""), name: $tn, input: $args}
@@ -200,7 +204,7 @@ TRANSLATE='
        {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "assistant",
         message: $am}
      elif $m.role == "toolResult" then
-       (([$m.content[]? | (.text // "")] | join("\n")) | .[0:2000]) as $o |
+       (([$m.content[]? | objects | (.text // "") | if type == "object" or type == "array" then tojson else . end] | join("\n")) | .[0:2000]) as $o |
        ($intents[$m.toolCallId // ""] // "") as $intent |
        (if $intent != "" then "[intent] " + ($intent[0:500]) + "\n" + $o else $o end) as $ofinal |
        {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
@@ -331,6 +335,7 @@ KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 #                 per pass: each child is capped at what is left of it.
 CAP_HARD="${KB_CAPTURE_HARD_SECS:-120}"
 CAP_LOCK_WAIT="${KB_CAPTURE_LOCK_WAIT_SECS:-60}"
+CAP_ORPHAN_WAIT="${KB_CAPTURE_ORPHAN_WAIT_SECS:-8}"
 CAP_VERSION="kb-capture-omp/1+oc1"
 CAP_TMP=()
 CAP_CLEANED=""
@@ -387,13 +392,18 @@ cap_reap() {
 # group-kill backstop) runs no trap, and `timeout(1)` moves its child into a
 # process group of its own, so even a group-wide kill misses jq/kb. Two things
 # make that case safe anyway:
-#   1. children never inherit the lock fd (cap_bg closes fd 9 for them), so the
-#      per-session lock dies WITH the owner and the next request takes it;
-#   2. a tiny watchdog, in a session of its own (it survives a kill of ours),
+#   1. a tiny watchdog, in a session of its own (it survives a kill of ours),
 #      polls the owner. When the owner is gone it reaps every process still
 #      carrying this run's KB_CAPTURE_RUN marker (plus the owner's session),
-#      then removes the run's scratch directory.
-# Normal exits and trapped signals stop the watchdog themselves.
+#      then removes the run's scratch directory;
+#   2. the watchdog INHERITS the per-session lock (fd 9; the conversion
+#      children do not - cap_bg closes it for them). So the lock outlives a
+#      SIGKILLed owner until the orphans are dead: no new owner can start, and
+#      no orphan can publish after a fresher conversion, while it is held.
+#      A request arriving in that window sees the recorded owner is dead and
+#      waits (bounded) for the lock instead of dropping its request.
+# The watchdog is per lock HOLD (capture_one stops it before releasing the
+# lock); normal exits and trapped signals stop it themselves.
 CAP_RUN=""
 CAP_WD=""
 CAP_WD_SRC='
@@ -408,7 +418,7 @@ alive() {
 sp=""
 trap '"'"'[ -n "$sp" ] && kill "$sp" 2>/dev/null; exit 0'"'"' TERM
 while alive && [ -d "$run" ]; do
-  sleep 0.5 & sp=$!
+  sleep 0.5 9>&- & sp=$!
   wait "$sp"
 done
 [ -d "$run" ] || exit 0
@@ -423,7 +433,15 @@ members() {
 }
 pids="$(members | sort -u)"
 for p in $pids; do kill -TERM "$p" 2>/dev/null; done
-sleep 2
+for i in $(seq 1 20); do
+  sleep 0.1
+  left=""
+  for p in $pids; do
+    st="$(ps -o stat= -p "$p" 2>/dev/null | tr -d " ")"
+    [ -n "$st" ] && [ "${st#Z}" = "$st" ] && left=1
+  done
+  [ -z "$left" ] && break
+done
 for p in $pids; do
   st="$(ps -o stat= -p "$p" 2>/dev/null | tr -d " ")"
   [ -n "$st" ] && [ "${st#Z}" = "$st" ] && kill -KILL "$p" 2>/dev/null
@@ -443,8 +461,24 @@ cap_run_init() { # once per process: the run dir + the watchdog
   start="$(ps -o lstart= -p "$$" 2>/dev/null)"
   [ -n "$start" ] || return 0
   env -u KB_CAPTURE_RUN setsid "${BASH:-bash}" -c "$CAP_WD_SRC" cap-watchdog \
-    "$$" "$KB_CAPTURE_RUN" "$CAP_RUN" "$start" 9>&- </dev/null >/dev/null 2>&1 &
+    "$$" "$KB_CAPTURE_RUN" "$CAP_RUN" "$start" </dev/null >/dev/null 2>&1 &
   CAP_WD=$!
+  return 0
+}
+
+# Stop this lock hold's watchdog (it holds the lock fd, so it must be GONE
+# before the lock is released) and drop the run dir.
+cap_wd_stop() {
+  local i
+  if [ -n "$CAP_WD" ]; then
+    kill -TERM "$CAP_WD" 2>/dev/null
+    for i in $(seq 1 40); do cap_alive "$CAP_WD" || break; sleep 0.05; done
+    cap_alive "$CAP_WD" && kill -KILL "$CAP_WD" 2>/dev/null
+    wait "$CAP_WD" 2>/dev/null
+    CAP_WD=""
+  fi
+  [ -n "$CAP_RUN" ] && rm -rf "$CAP_RUN" 2>/dev/null
+  CAP_RUN=""
   return 0
 }
 
@@ -458,13 +492,8 @@ cap_cleanup() {
     [ -n "${CAP_TMP[$i]}" ] && rm -rf "${CAP_TMP[$i]}" 2>/dev/null
     i=$((i + 1))
   done
+  cap_wd_stop
   { exec 9>&-; } 2>/dev/null
-  if [ -n "$CAP_WD" ]; then
-    kill -TERM "$CAP_WD" 2>/dev/null
-    for i in $(seq 1 40); do kill -0 "$CAP_WD" 2>/dev/null || break; sleep 0.05; done
-    kill -KILL "$CAP_WD" 2>/dev/null
-  fi
-  [ -n "$CAP_RUN" ] && rm -rf "$CAP_RUN" 2>/dev/null
   return 0
 }
 cap_on_signal() { cap_cleanup; exit 143; }
@@ -513,14 +542,19 @@ capt() {
 # The authoritative edited-set (lenient: a torn trailing line is skipped).
 cap_edited_set() {
   capt grep '"toolCall"' "$1" 2>/dev/null \
-    | capt jq -R -c 'fromjson? | select(.type == "message") | .message.content[]?
+    | capt jq -R -c 'fromjson? | objects | select(.type == "message")
+             | (.message | objects | .content | arrays | .[] | objects)
              | select(.type == "toolCall")
-             | select(((.name // "") | ascii_downcase) == "write"
-                      or ((.name // "") | ascii_downcase) == "edit")
-             | [.arguments.path // .arguments.file_path // empty]' 2>/dev/null \
+             | select(((.name // "") | tostring | ascii_downcase) == "write"
+                      or ((.name // "") | tostring | ascii_downcase) == "edit")
+             | [(.arguments | objects | (.path // .file_path // empty) | strings)]' 2>/dev/null \
     | capt jq -s -c 'add // [] | unique'
-  local st=("${PIPESTATUS[@]}")
-  [ "${st[0]}" -le 1 ] && [ "${st[1]}" -eq 0 ] && [ "${st[2]}" -eq 0 ]
+  local st=("${PIPESTATUS[@]}") s
+  # Only a deadline kill / TERM fails the pass. A data error in the edited-set
+  # extraction loses the snapshot (callers fall back to []), never the capture.
+  for s in "${st[@]}"; do cap_fatal_rc "$s" && return 124; done
+  [ "${st[2]}" -eq 0 ] || return 1
+  return 0
 }
 
 # Input fingerprint (see the header). rc 1 = cannot be computed (never skip).
@@ -545,6 +579,23 @@ cap_req_bump() { # <base>
     printf '%s\n' "$((n + 1))" >"$1.req"
   ) 8>"$1.reqlock" 9>&- 2>/dev/null
   return 0
+}
+# The lock owner's identity (pid|start time), so a request that finds the lock
+# held can tell a live owner (coalesce and return) from a SIGKILLed one whose
+# watchdog is still reaping (wait for the lock, then serve the request).
+cap_owner_write() { # <base>
+  printf '%s|%s\n' "$$" "$(ps -o lstart= -p "$$" 2>/dev/null)" >"$1.owner" 2>/dev/null
+  return 0
+}
+cap_owner_dead() { # <base>: rc 0 only when the recorded owner is provably gone
+  local rec pid start st lst
+  rec="$(cat "$1.owner" 2>/dev/null)"
+  pid="${rec%%|*}"; start="${rec#*|}"
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  st="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ] || return 0
+  lst="$(ps -o lstart= -p "$pid" 2>/dev/null)"
+  [ "$lst" != "$start" ]
 }
 cap_req_read() { local n; n="$(cat "$1.req" 2>/dev/null)"; printf '%s' "${n:-0}"; }
 
@@ -584,15 +635,18 @@ capture_pass() {
   # staged at <scratch>/<raw-session-id>/subagents/ beside the main
   # translated transcript - exactly the shape sessions_capture.rs's sidecar
   # walk resolves (transcript.parent().join(&raw_sid).join("subagents")).
-  local scratch tmpclean tmpjsonl edited
+  local scratch tmpclean tmpjsonl edited erc trc srcrc
   cap_run_init
   scratch="$(mktemp -d "${CAP_RUN:-${TMPDIR:-/tmp}}/p.XXXXXX")" || return 1
   cap_track "$scratch"
   tmpclean="$scratch/clean.jsonl"
   tmpjsonl="$scratch/transcript.jsonl"
 
-  cap_bg cap_edited_set "$tpath" >"$scratch/edited.json" || { cap_untrack "$scratch"; return 1; }
-  edited="$(cat "$scratch/edited.json" 2>/dev/null)"
+  cap_bg cap_edited_set "$tpath" >"$scratch/edited.json"
+  erc=$?
+  cap_fatal_rc "$erc" && { cap_untrack "$scratch"; return 1; }
+  edited=""
+  [ "$erc" -eq 0 ] && edited="$(cat "$scratch/edited.json" 2>/dev/null)"
   [ -n "$edited" ] || edited='[]'
 
   # Lenient pre-clean (same policy as omp's own loader): drop unparsable
@@ -601,9 +655,13 @@ capture_pass() {
   if ! cap_bg capt jq -R -c 'fromjson? // empty' "$tpath" >"$tmpclean" 2>/dev/null; then
     cap_untrack "$scratch"; return 1
   fi
-  if ! cap_bg capt jq -c -s --arg file "$tpath" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null; then
-    cap_untrack "$scratch"; return 1
-  fi
+  # jq -s streams its output, so a data error part-way through leaves every
+  # record translated before it in $tmpjsonl: that partial transcript is landed
+  # (as the former script did) rather than the whole session being lost and
+  # retried forever. Only a deadline kill / TERM aborts the pass.
+  cap_bg capt jq -c -s --arg file "$tpath" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null
+  trc=$?
+  if cap_fatal_rc "$trc"; then cap_untrack "$scratch"; return 1; fi
   rm -f "$tmpclean"
   if [ ! -s "$tmpjsonl" ]; then cap_untrack "$scratch"; return 0; fi
 
@@ -623,7 +681,7 @@ capture_pass() {
     if [ -n "$rsid" ]; then
       local subdir_out="$scratch/$rsid/subagents"
       mkdir -p "$subdir_out" 2>/dev/null
-      local f b safe subtmp srcrc
+      local f b safe subtmp
       for f in "$sdir"/*.jsonl; do
         [ -f "$f" ] || continue
         b="$(basename "$f" .jsonl)"
@@ -656,7 +714,11 @@ capture_pass() {
     'select(($edited | length) > 0) |
      {sessionId: $sid, type: "file-history-snapshot",
       snapshot: {trackedFileBackups: ($edited | map({key: ., value: {}}) | from_entries)}}' \
-    >>"$tmpjsonl" 2>/dev/null || { cap_untrack "$scratch"; return 1; }
+    >>"$tmpjsonl" 2>/dev/null
+  srcrc=$?
+  # The snapshot is optional: a failure other than a deadline kill / TERM only
+  # drops it (jq emits the line whole, so nothing partial is appended).
+  if cap_fatal_rc "$srcrc"; then cap_untrack "$scratch"; return 1; fi
 
   # The kb calls get their own fresh budget: conversion has its own hard
   # deadline and must not eat the landing's.
@@ -707,9 +769,17 @@ capture_one() {
         return 0
       fi
     elif ! flock -n 9; then
-      exec 9>&- # the owner will see the bumped request counter
-      return 0
+      # A live owner will see the bumped request counter: return. A dead one
+      # (SIGKILLed; its watchdog still holds the lock while it reaps the
+      # orphans) will not: wait for the lock and serve the request ourselves.
+      if cap_owner_dead "$base" && cap_bg_lock flock -w "$CAP_ORPHAN_WAIT" 9; then
+        :
+      else
+        exec 9>&-
+        return 0
+      fi
     fi
+    cap_owner_write "$base"
     first=0
     while :; do
       g="$(cap_req_read "$base")"
@@ -718,6 +788,7 @@ capture_one() {
       cur="$(cap_req_read "$base")"
       [ "$cur" = "$g" ] && break
     done
+    cap_wd_stop # the watchdog holds the lock fd too: it must be gone first
     exec 9>&-
     # A request that landed after the last check but before the release found
     # the lock held and returned: re-check AFTER releasing, then go again.
