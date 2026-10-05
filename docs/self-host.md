@@ -284,9 +284,12 @@ SPA carry the same build stamp and the drift banner stays quiet.)
 (`git describe --tags --match 'v[0-9]*' --always`, leading `v` stripped,
 falling back to the sha if describe fails).
 
-As of v0.14 (track D) the image **bakes in the bge-large-en-v1.5
-model**, so semantic and hybrid search work without a first-run
-download and benefit from the bake-off's Recall@1 win. ONNX Runtime is
+The image **bakes in two models**: the registry default
+`bge-small-en-v1.5` (what a `kb.toml` with no `embedding_model` uses,
+including the one `kb add` writes) and `bge-large-en-v1.5` (opt-in, the
+bake-off's Recall@1 win). Semantic and hybrid search therefore work
+without a first-run download, offline, with either the default config or
+`[defaults] embedding_model = "bge-large-en-v1.5"`. ONNX Runtime is
 **statically linked into `kb-embedder` at build time** (fastembed's
 `ort-download-binaries`; `ort-sys` fetches a known-good ORT from a CDN
 during `cargo build`), so the runtime stage carries no `libonnxruntime`
@@ -295,11 +298,10 @@ CPU provider links OpenMP). The builder pre-fetches the model into the
 image cache. For an offline/air-gapped Docker build, pass
 `ORT_LIB_PATH=<dir>` into the builder so
 `ort-sys` links a local ONNX Runtime instead of reaching the CDN. Cost:
-the image is ~1.7 GB (mostly the ~1.34 GB bge-large model). To bake a smaller model instead —
-e.g. ship a bge-small image for a memory-constrained deployment —
-edit the `kb model download bge-large-en-v1.5` line in `Dockerfile`
-to name the model you want, and adjust the kb.toml `[defaults]
-embedding_model` accordingly.
+the image is ~1.8 GB (the ~1.34 GB bge-large model plus ~130 MB for
+bge-small). To bake fewer models instead — e.g. a bge-small-only image
+for a memory-constrained deployment — delete the
+`kb model download bge-large-en-v1.5` line in `Dockerfile`.
 
 ```bash
 KB_GIT_SHA=$(git rev-parse --short HEAD)
@@ -326,11 +328,13 @@ Linux use `--network host` instead of `-p` (see the
 
 Mount a `kb.toml` under `/var/lib/kb/config/kb/` whose `[kb.<name>]`
 sections point at corpus paths visible inside the container (e.g.
-`/corpus`). Either set `[defaults] embedding_model = "bge-large-en-v1.5"`
-once to apply the baked-in model to every kb, or pin per-kb via
-`[kb.<name>].embedding_model = "bge-large-en-v1.5"`. `kb model list`
-inside the container reports the resolved daemon default + flags
-`bge-large-en-v1.5` as `downloaded`. A dockerised Traefik reaching the daemon over the
+`/corpus`). A kb with no `embedding_model` uses the baked
+`bge-small-en-v1.5` (384-dim). To use the baked `bge-large-en-v1.5`
+instead, set `[defaults] embedding_model = "bge-large-en-v1.5"` once
+for every kb, or pin per-kb via `[kb.<name>].embedding_model`. Switching
+the model of an existing kb changes the vector dimension and re-embeds
+it. `kb model list` inside the container reports the resolved daemon
+default and flags both baked models as `downloaded`. A dockerised Traefik reaching the daemon over the
 docker bridge connects from a non-loopback peer, so bearer auth + rate
 limiting apply unconditionally — list that bridge IP in
 `trusted_proxies` (above) if you want the daemon to honour the proxy's
@@ -343,9 +347,11 @@ The bake-off at
 benchmarks bge-small vs bge-base vs bge-large on kb's own design
 corpus. On technical-English prose, bge-large lifts hybrid Recall@1 by
 +15.6pp over bge-small; bge-base barely moves the needle. The Docker
-image bakes in bge-large (the bake-off-recommended pick, ~1.34 GB);
-ship a bge-small image instead for memory-constrained deployments by
-editing the model name in `Dockerfile` and `kb.toml`.
+image bakes in both bge-small (the registry default, ~130 MB) and
+bge-large (the bake-off-recommended pick, ~1.34 GB); opt into bge-large
+with `[defaults] embedding_model = "bge-large-en-v1.5"` (this re-embeds
+an existing kb). For a memory-constrained image, delete the bge-large
+`kb model download` line in `Dockerfile`.
 
 Three layers compose to pick the model at daemon startup (highest
 precedence first):

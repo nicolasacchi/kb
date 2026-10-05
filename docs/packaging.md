@@ -213,9 +213,9 @@ login, which is itself the "a stranger can pull it" check), mounts the tag's
   The gating run is keyword-only (`disable_embedder_fallback = true`), like the
   tarball legs. A second, non-gating step then runs the image with the minimal
   config `kb add` documents (no `embedding_model`) and reports whether keyword
-  search finds the corpus; note the image bakes `bge-large-en-v1.5` while the
-  registry default a config without `embedding_model` resolves to is
-  `bge-small-en-v1.5`, so that path fetches a model at boot. On failure both
+  search finds the corpus; the image bakes both `bge-small-en-v1.5` (the
+  registry default a config without `embedding_model` resolves to) and
+  `bge-large-en-v1.5`, so that path needs no model download at boot. On failure both
   steps print the last `kb search` output and `kb status`.
 - **Shell pipes.** Workflow and smoke steps run under `set -o pipefail`; a
   reader that exits early (`| head`, `| grep -q`) SIGPIPEs the writer and fails
