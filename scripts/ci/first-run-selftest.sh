@@ -30,7 +30,7 @@ printf '#!/bin/sh\nexit 0\n' > "$src/kb-embedder"
 
 # --- the responder: /healthz, /, /api/search over the kb's path ---------------
 cat > "$work/stub-server.py" <<'PY'
-import http.server, json, os, sys, re, urllib.parse
+import hashlib, http.server, json, os, sys, re, urllib.parse
 port, corpus = int(sys.argv[1]), sys.argv[2]
 mode = os.environ.get("STUB_MODE", "ok")
 pidfile = os.path.join(os.environ["KB_HOME"], "state", "kb-daemon.pid")
@@ -55,7 +55,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if mode != "nohits":
                 for f in sorted(os.listdir(corpus)):
                     if q and q in open(os.path.join(corpus, f)).read().lower():
-                        hits.append({"id": f, "source_relative": f})
+                        hits.append({"id": hashlib.md5(f.encode()).hexdigest()[:12], "title": f, "path": "/corpus/" + f, "kb_category": None})
             return self.send(200, json.dumps({"hits": hits}), "application/json")
         self.send(404, "nope", "text/plain")
 http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
@@ -103,7 +103,14 @@ case "$1" in
   search)
     q="$2"; url=""
     while [ $# -gt 0 ]; do [ "$1" = "--daemon" ] && url="$2"; shift; done
-    curl -fsS --max-time 5 "$url/api/search?q=$q" ;;
+    # Emit EXACTLY what the real CLI prints: `print_hits_json` in
+    # crates/kb-cli/src/commands/search.rs = serde_json::to_string_pretty of
+    # {"hits":[{id,kb_category,path,title}],"ms","source"} (keys sorted).
+    # There is no `source_relative`; do not invent fields here.
+    curl -fsS --max-time 5 "$url/api/search?q=$q" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(json.dumps({"hits": d["hits"], "ms": 4, "source": sys.argv[1]}, indent=2, sort_keys=True))' "$url" ;;
   status) echo "stub status" ;;
   doctor) echo "PASS stub hooks" ;;
   *) echo "stub kb: unsupported: $*" >&2; exit 2 ;;
@@ -196,6 +203,32 @@ if [ "$rc" != 0 ] && grep -q 'STEP 1/8 install ... FAIL: REQUIRE_PROVENANCE' "$w
   pass first_run_selftest_require_provenance_fails_without_gh
 else fail "REQUIRE_PROVENANCE not enforced rc=$rc"; cat "$work/noprov.out"; fi
 
+# 6c. the hit predicate counts the REAL `kb search --json` shape. The golden is
+# the shape from crates/kb-cli/src/commands/search.rs (print_hits_json).
+hitsh="$here/first-run-hits.sh"
+cat > "$work/real-hits.json" <<'JSON'
+{
+  "hits": [
+    {"id": "07a5501697a0", "kb_category": null, "path": "/corpus/fullscreen-viz.html", "title": "Visualizing the Borrow Checker"},
+    {"id": "17a5501697a1", "kb_category": "note", "path": "/corpus/b.html", "title": "B"},
+    {"id": "27a5501697a2", "kb_category": null, "path": "/corpus/c.html", "title": "C"},
+    {"id": "37a5501697a3", "kb_category": null, "path": "/corpus/d.html", "title": "D"}
+  ],
+  "ms": 4,
+  "source": "http://127.0.0.1:4000"
+}
+JSON
+printf '{\n  "hits": [],\n  "ms": 1,\n  "source": "x"\n}\n' > "$work/empty-hits.json"
+printf 'Error: connection refused (id: not a hit)\n' > "$work/err-hits.txt"
+if [ "$(bash "$hitsh" "$work/real-hits.json")" = 4 ] && [ "$(bash "$hitsh" "$work/empty-hits.json")" = 0 ] \
+   && [ "$(bash "$hitsh" "$work/err-hits.txt")" = 0 ] && [ "$(bash "$hitsh" "$work/missing")" = 0 ]; then
+  pass first_run_selftest_hit_predicate_counts_real_shape
+else fail "first_run_selftest_hit_predicate_counts_real_shape: helper miscounts the real shape"; fi
+# No harness file may look for a field the real output lacks.
+if grep -n 'source_relative' "$smoke" "$hitsh" "$repo/.github/workflows/first-run.yml" | grep -vE ':[0-9]+:\s*#' ; then
+  fail "first_run_selftest_no_phantom_field: harness references source_relative (not in the real output)"
+else pass first_run_selftest_no_phantom_field; fi
+
 # 7. workflow shape lint (no yaml parser needed)
 wf="$repo/.github/workflows/first-run.yml"
 code="$(grep -vE '^\s*#' "$wf")"
@@ -215,6 +248,15 @@ nolint 'secrets\.'
 nolint 'pull_request_target'
 nolint 'self-hosted'
 nolint 'KB_INSECURE_SKIP_VERIFY'
+# Harness from main, release bits from the tag: the tag may only be checked out
+# into release/ (a bare tag checkout would run the TAG's harness again), and
+# every leg must have one default-ref checkout plus one tag checkout.
+[ "$(echo "$code" | grep -cE '^\s+ref: \$\{\{ needs\.resolve\.outputs\.tag \}\}$')" = 2 ] \
+  && [ "$(echo "$code" | grep -cE '^\s+path: release$')" = 2 ] \
+  && [ "$(echo "$code" | grep -cE 'uses: actions/checkout@')" = 4 ] \
+  || { fail "first_run_workflow_harness_from_main: tag must be checked out only into release/ beside a default-ref checkout"; lint_ok=0; }
+lint 'INSTALL_SH: \$\{\{ github\.workspace \}\}/release/scripts/install\.sh'
+lint 'cp -R release/corpus/canon'
 # A reader that exits early (`| head`, `| grep -q`) SIGPIPEs the writer; under
 # `set -o pipefail` that is exit 141 and killed the fedora leg on `ldd --version
 # | head -n1`. Keep early-exit readers off pipes in the workflow and the smoke.

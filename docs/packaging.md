@@ -150,7 +150,8 @@ afterwards), and delete only the unreferenced ones.
 
 `.github/workflows/first-run.yml` answers one question after every release:
 does the PUBLISHED artifact work for a stranger? It installs the tag with the
-tag's own `scripts/install.sh` (checksum verified, build provenance verified
+tag's own `scripts/install.sh` (fetched by a second checkout of the tag into
+`release/`) (checksum verified, build provenance verified
 with an upstream `gh`), starts `kb daemon` on a spare loopback port against a
 copy of the sample corpus, then checks that the SPA is served from
 `<bin>/../share/kb/web/dist` with no environment variable, that keyword
@@ -166,6 +167,18 @@ Legs: tarball on `debian:trixie` (provenance REQUIRED), `ubuntu:24.04`,
 login, which is itself the "a stranger can pull it" check), mounts the tag's
 `corpus/canon`, and requires the image HEALTHCHECK to report healthy.
 
+- **Harness from main, release from the tag.** Each leg checks out the
+  workflow's own ref (main) for the harness (the workflow, `first-run-smoke.sh`,
+  `first-run-hits.sh`) and the tag into `release/` for what a user would get
+  (`scripts/install.sh`, `corpus/canon`; the tarball and image are the tag's by
+  construction). A harness fix therefore applies to an already-published tag; a
+  re-dispatch of `first-run.yml -f tag=<tag>` after merging is enough.
+- **Hit predicate.** `scripts/ci/first-run-hits.sh` counts the `"id"` entries of
+  the real `kb search --json` shape (`print_hits_json` in
+  `crates/kb-cli/src/commands/search.rs`: `hits[]` of `id`, `kb_category`,
+  `path`, `title`); there is no `source_relative`. It uses grep only, since not
+  every leg's container has `jq`. The selftest's stub emits that exact shape and
+  pins the helper against a golden, an empty result and an error output.
 - **Trigger.** `workflow_run` of the `release` workflow (tag-push runs that
   succeeded) and `workflow_dispatch`. It is not a release-published trigger:
   the release is created with the default `GITHUB_TOKEN`, which never starts
