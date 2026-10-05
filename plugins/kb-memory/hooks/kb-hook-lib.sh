@@ -300,22 +300,31 @@ hook_short_hash() {
   fi
 }
 
-# hook_agent_safe_name <agent-id> <staging-dir>
+# hook_agent_safe_name <agent-id> <agents-src-dir>
 # The readable file-name stem for a subagent sidecar (omp: agent-<stem>.jsonl).
-# NOT a session key: it names an agent, so it keeps the readable lossy form,
-# but two different agent ids that map to the same stem ("Web UI & Tests" vs
-# "Web-UI---Tests") are told apart - ONLY on collision the later id gets a
-# short hash of its full id appended. `<staging-dir>/.src-<stem>` records which
-# id owns a stem. Empty stem => returns 1 (caller skips the agent).
+# NOT a session key: it names an agent, so it keeps the readable lossy form.
+# Two different agent ids can map to the same stem ("Web UI & Tests" vs
+# "Web-UI---Tests"). The choice depends ONLY on the SET of ids found as
+# `<agents-src-dir>/*.jsonl`, never on discovery order: an id that already is
+# its own stem keeps the plain name; any other id whose stem is shared with a
+# different id gets `-<8 hex of sha256(id)>` appended; an id with a unique stem
+# keeps the plain stem. Empty stem => returns 1 (caller skips the agent).
 hook_agent_stem() { printf '%s' "$1" | tr -c 'a-zA-Z0-9' '-' | cut -c1-80; }
 hook_agent_safe_name() {
-  local base="$1" dir="$2" stem
+  local base="$1" dir="$2" stem f other
   stem="$(hook_agent_stem "$base")"
   [ -n "$stem" ] || return 1
-  if [ -e "$dir/.src-$stem" ] && [ "$(cat "$dir/.src-$stem")" != "$base" ]; then
-    stem="$stem-$(hook_short_hash "$base")"
-  fi
-  printf '%s' "$base" >"$dir/.src-$stem"
+  # Already its own stem: nothing else can claim the plain name from it.
+  [ "$stem" = "$base" ] && { printf '%s' "$stem"; return 0; }
+  for f in "$dir"/*.jsonl; do
+    [ -f "$f" ] || continue
+    other="$(basename "$f" .jsonl)"
+    [ "$other" = "$base" ] && continue
+    if [ "$(hook_agent_stem "$other")" = "$stem" ]; then
+      printf '%s-%s' "$stem" "$(hook_short_hash "$base")"
+      return 0
+    fi
+  done
   printf '%s' "$stem"
 }
 

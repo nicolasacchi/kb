@@ -77,14 +77,11 @@ recall_args=()
 # coreutils the call runs unwrapped.
 # Shared deadline helpers (kb-hook-lib.sh): every call is capped at
 # min(its own cap, what is left of KB_HOOK_BUDGET_SECS, default 13) so the
-# lanes together stay under the hooks.json timeout. Standalone copy without
-# the lib: unbounded calls, as before H1.
+# lanes together stay under the hooks.json timeout. Without the lib the hook
+# exits (fail open), see below.
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
   # No shared lib => no unified session key: fail open (nothing to do).
   exit 0
-  hook_deadline_init() { :; }
-  run_to() { shift; "$@"; }
-  hook_export_identity() { :; }
 }
 hook_deadline_init
 marker="$marker_dir/waked-kimi-$(hook_sid_key "$sid")"

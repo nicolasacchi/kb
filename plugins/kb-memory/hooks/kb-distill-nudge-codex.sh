@@ -47,8 +47,6 @@ command -v jq >/dev/null 2>&1 || exit 0
 . "$(dirname "$0")/kb-hook-lib.sh" 2>/dev/null || {
   # No shared lib => no unified session key: fail open (nothing to do).
   exit 0
-  # Standalone copy without the shared lib: fail open (no distill ask).
-  post_distill_ask() { return 0; }
 }
 
 input="$(cat)"
