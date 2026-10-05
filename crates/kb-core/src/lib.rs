@@ -43,6 +43,7 @@ pub mod parser;
 pub mod paths;
 pub mod posture;
 pub mod procrustes;
+pub mod public_mirror;
 pub mod query;
 pub mod reading;
 pub mod relocate;
