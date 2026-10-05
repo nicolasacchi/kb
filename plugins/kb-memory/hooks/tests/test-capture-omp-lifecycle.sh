@@ -83,6 +83,13 @@ chmod +x "$TMPROOT/shim/jq"
 cat >"$TMPROOT/kbbin/kb" <<'KB'
 #!/usr/bin/env bash
 if [ -e "$KB_FAIL_FLAG" ] && [ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ]; then exit 1; fi
+if [ -n "${SIDECAR_DUMP:-}" ] && [ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ]; then
+  prev=""
+  for a in "$@"; do
+    [ "$prev" = "--transcript" ] && ls "$(dirname "$a")"/*/subagents 2>/dev/null >>"$SIDECAR_DUMP"
+    prev="$a"
+  done
+fi
 exec bash "$FAKE_CAPTURE_KB" "$@"
 KB
 chmod +x "$TMPROOT/kbbin/kb"
@@ -365,6 +372,73 @@ if [ "$(starts "$S5")" -gt "$n_before" ] && grep -q AFTER-FAIL "$(html_of "$SID5
 else
   bad "a failed landing was treated as done"
 fi
+
+# ---------------------------------------------------------------------------
+# 6b. SIGKILL of the capture itself (an external kill, the OOM killer, the
+#     caller's group-kill backstop): no trap runs, and timeout(1) regroups its
+#     child, so a group kill misses jq. The lock must still die with the owner,
+#     the watchdog must reap the survivors + remove the scratch, and a request
+#     that arrives meanwhile must NOT be lost.
+kill_case() { # <label> <owner|group>
+  local label="$1" how="$2" S sid K members shim_pids q left
+  S="$TMPROOT/k-$label.jsonl"; sid="$(printf 'b%s0000-0000-0000-0000-000000000009' "$label" | cut -c1-36)"
+  mk_session "$S" "$sid" "kill-$label"
+  : >"$SHIM_LOG"
+  export SHIM_SLEEP=60
+  hook_bg "$S" "$sid"; K=$LAST_PID
+  if ! wait_for 10 log_has_start "$S"; then bad "[$label] the long conversion never started"; unset SHIM_SLEEP; return; fi
+  sleep 0.3
+  members="$(ps -s "$K" -o pid= | tr -d ' ' | grep -vx "$K" | tr '\n' ' ')"
+  shim_pids="$(awk -v f="$S" '$1=="start" && $3==f {print $2}' "$SHIM_LOG")"
+  STARTED_PIDS+=($members $shim_pids)
+  if [ "$how" = group ]; then kill -KILL -- "-$K" 2>/dev/null; else kill -KILL "$K" 2>/dev/null; fi
+  wait "$K" 2>/dev/null
+  unset SHIM_SLEEP
+  # (1) the lock is free at once although the orphaned jq may still run
+  if wait_for 3 lock_free; then ok "[$label] SIGKILL: the lock is released with the owner (children do not hold it)"; else bad "[$label] SIGKILL: the lock is still held"; fi
+  # (2) a request arriving in that window is served, not dropped
+  append_marker "$S" "KILL-WINDOW-$label"
+  hook_fg "$S" "$sid"
+  if grep -q "KILL-WINDOW-$label" "$(html_of "$sid")" 2>/dev/null; then
+    ok "[$label] SIGKILL: the next request publishes the newest state (not lost)"
+  else
+    bad "[$label] SIGKILL: the request after the kill was lost"
+  fi
+  # (3) the watchdog reaps every survivor and removes the scratch
+  for _ in $(seq 1 100); do
+    left=""
+    for q in $members $shim_pids; do kill -0 "$q" 2>/dev/null && left="$left $q"; done
+    [ -z "$left" ] && no_scratch && break
+    sleep 0.1
+  done
+  if [ -z "$left" ]; then ok "[$label] SIGKILL: no orphaned jq/timeout/sleep survives"; else bad "[$label] SIGKILL: orphans survived:$left"; fi
+  if no_scratch; then ok "[$label] SIGKILL: scratch removed"; else bad "[$label] SIGKILL: scratch leaked: $(ls "$TMPDIR")"; fi
+}
+kill_case owner owner
+kill_case group group
+
+# 6c. One poisoned subagent sidecar must not take the whole capture down: the
+#     main transcript and the healthy sidecars still land.
+S6="$TMPROOT/s6.jsonl"; SID6="a6000000-0000-0000-0000-000000000006"
+mk_session "$S6" "$SID6" "six"
+mkdir -p "${S6%.jsonl}"
+cp "$FIX/omp-subagent.jsonl" "${S6%.jsonl}/Alpha.jsonl"
+n=0
+for poison in '{"type":"message","id":"p1","parentId":null,"message":"str"}' '[1,2]' '"justastring"' \
+  '{"type":"message","id":"p1","parentId":null,"message":{"role":"assistant","content":[1,"a"]}}' \
+  '{"type":"compaction","id":"p1","parentId":null,"summary":5}'; do
+  n=$((n + 1))
+  printf '%s\n' "$poison" >"${S6%.jsonl}/Poison.jsonl"
+  rm -f "$(html_of "$SID6")"; : >"$TMPROOT/sidecars.txt"
+  append_marker "$S6" "POISON-$n"
+  SIDECAR_DUMP="$TMPROOT/sidecars.txt" hook_fg "$S6" "$SID6"
+  if grep -q "POISON-$n" "$(html_of "$SID6")" 2>/dev/null && grep -q 'agent-Alpha.jsonl' "$TMPROOT/sidecars.txt" \
+    && ! grep -q 'agent-Poison.jsonl' "$TMPROOT/sidecars.txt"; then
+    ok "poison sidecar #$n is dropped; the main transcript and the healthy sidecar still land"
+  else
+    bad "poison sidecar #$n broke the capture (html: $(html_of "$SID6"), sidecars: $(tr '\n' ' ' <"$TMPROOT/sidecars.txt"))"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # 7. Translator: the linear leaf-chain walk is byte-identical to the former

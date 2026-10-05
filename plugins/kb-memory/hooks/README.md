@@ -181,6 +181,15 @@ registering anywhere `kb-memory` is already installed. Design:
     of its own), remove the scratch files and release the lock. A kill before
     landing leaves the previous published capture untouched. Nothing outside the
     script's own session is signalled.
+  - **survives its own SIGKILL**: no trap runs on an untrappable kill, so the
+    children never inherit the lock fd (the lock dies with the owner and the
+    next request takes it and publishes), and a small watchdog in a session of
+    its own reaps whatever still carries the run's `KB_CAPTURE_RUN` marker (or
+    the owner's session) and removes the run's scratch directory within about a
+    second. `KB_CAPTURE_NO_WATCHDOG=1` disables only the watchdog.
+  - **drops a poisoned subagent sidecar** instead of failing the pass: a
+    sidecar whose translation errors is skipped (the main transcript and the
+    healthy sidecars still land); only a deadline kill or a TERM aborts.
   - **bounds a pass** with `KB_CAPTURE_HARD_SECS` (default 120, the same value
     `kb-omp.ts` always passed as its timeout - this makes that timeout real):
     each child is capped at what is left of it. The `kb` landing gets its own

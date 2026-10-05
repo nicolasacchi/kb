@@ -113,6 +113,11 @@ function terminateOwned(child: ReturnType<typeof spawn>) {
     process.kill(pid, "SIGTERM");
   } catch {}
   const t = setTimeout(() => {
+    // Deliberately NOT cancelled when the script exits on the TERM: a script
+    // that died without reaping leaves same-group stragglers this still
+    // catches (ESRCH, swallowed, when the group is already gone). Members that
+    // timeout(1) regrouped are beyond any group kill; the script's own session
+    // reaping and its survivor watchdog (kb-capture-omp.sh) cover those.
     // `detached: true` made the child a group leader (pgid == pid), so -pid
     // addresses exactly the group this call created and nothing of omp's.
     try {

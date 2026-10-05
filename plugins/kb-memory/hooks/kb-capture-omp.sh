@@ -378,7 +378,73 @@ cap_reap() {
     [ -z "$alive" ] && return 0
     sleep 0.1
   done
-  for p in $pids; do kill -KILL "$p" 2>/dev/null; done
+  for p in $pids; do cap_alive "$p" && kill -KILL "$p" 2>/dev/null; done
+  return 0
+}
+
+# --- survivor watchdog -------------------------------------------------------
+# A SIGKILL of this script (an external kill, the OOM killer, the caller's
+# group-kill backstop) runs no trap, and `timeout(1)` moves its child into a
+# process group of its own, so even a group-wide kill misses jq/kb. Two things
+# make that case safe anyway:
+#   1. children never inherit the lock fd (cap_bg closes fd 9 for them), so the
+#      per-session lock dies WITH the owner and the next request takes it;
+#   2. a tiny watchdog, in a session of its own (it survives a kill of ours),
+#      polls the owner. When the owner is gone it reaps every process still
+#      carrying this run's KB_CAPTURE_RUN marker (plus the owner's session),
+#      then removes the run's scratch directory.
+# Normal exits and trapped signals stop the watchdog themselves.
+CAP_RUN=""
+CAP_WD=""
+CAP_WD_SRC='
+owner="$1"; marker="$2"; run="$3"; start="$4"
+alive() {
+  local st lst
+  st="$(ps -o stat= -p "$owner" 2>/dev/null | tr -d " ")"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ] || return 1
+  lst="$(ps -o lstart= -p "$owner" 2>/dev/null)"
+  [ "$lst" = "$start" ]
+}
+sp=""
+trap '"'"'[ -n "$sp" ] && kill "$sp" 2>/dev/null; exit 0'"'"' TERM
+while alive && [ -d "$run" ]; do
+  sleep 0.5 & sp=$!
+  wait "$sp"
+done
+[ -d "$run" ] || exit 0
+members() {
+  ps -s "$owner" -o pid= 2>/dev/null | tr -d " "
+  local d p
+  for d in /proc/[0-9]*; do
+    p="${d#/proc/}"
+    [ "$p" = "$$" ] && continue
+    tr "\0" "\n" <"$d/environ" 2>/dev/null | grep -qx "KB_CAPTURE_RUN=$marker" && echo "$p"
+  done
+}
+pids="$(members | sort -u)"
+for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+sleep 2
+for p in $pids; do
+  st="$(ps -o stat= -p "$p" 2>/dev/null | tr -d " ")"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ] && kill -KILL "$p" 2>/dev/null
+done
+rm -rf "$run"
+'
+
+cap_run_init() { # once per process: the run dir + the watchdog
+  [ -z "$CAP_RUN" ] || return 0
+  CAP_RUN="$(mktemp -d)" || { CAP_RUN=""; return 0; }
+  export KB_CAPTURE_RUN="$$.$RANDOM$RANDOM"
+  if [ -n "${KB_CAPTURE_NO_WATCHDOG:-}" ] || ! command -v setsid >/dev/null 2>&1 \
+    || ! command -v ps >/dev/null 2>&1; then
+    return 0
+  fi
+  local start
+  start="$(ps -o lstart= -p "$$" 2>/dev/null)"
+  [ -n "$start" ] || return 0
+  env -u KB_CAPTURE_RUN setsid "${BASH:-bash}" -c "$CAP_WD_SRC" cap-watchdog \
+    "$$" "$KB_CAPTURE_RUN" "$CAP_RUN" "$start" 9>&- </dev/null >/dev/null 2>&1 &
+  CAP_WD=$!
   return 0
 }
 
@@ -393,6 +459,12 @@ cap_cleanup() {
     i=$((i + 1))
   done
   { exec 9>&-; } 2>/dev/null
+  if [ -n "$CAP_WD" ]; then
+    kill -TERM "$CAP_WD" 2>/dev/null
+    for i in $(seq 1 40); do kill -0 "$CAP_WD" 2>/dev/null || break; sleep 0.05; done
+    kill -KILL "$CAP_WD" 2>/dev/null
+  fi
+  [ -n "$CAP_RUN" ] && rm -rf "$CAP_RUN" 2>/dev/null
   return 0
 }
 cap_on_signal() { cap_cleanup; exit 143; }
@@ -409,13 +481,23 @@ cap_untrack() { # rm now and forget
 
 # Run "$@" in the background and wait for it. `wait` is interruptible by a
 # trapped signal; a foreground child is not.
+# The child does NOT inherit the lock fd (9): the lock must die with the owner.
 cap_bg() {
-  "$@" &
+  "$@" 9>&- &
   local p=$!
   wait "$p"
   local rc=$?
   return "$rc"
 }
+# Same, but keeps fd 9: only for `flock ... 9` itself.
+cap_bg_lock() {
+  "$@" &
+  local p=$!
+  wait "$p"
+  return $?
+}
+# A deadline kill / TERM is fatal for the pass; any other failure is not.
+cap_fatal_rc() { [ "$1" = 124 ] || [ "$1" = 137 ] || [ "$1" = 143 ]; }
 
 # Cap an EXTERNAL command at what is left of this pass's hard deadline.
 capt() {
@@ -461,7 +543,7 @@ cap_req_bump() { # <base>
     n="$(cat "$1.req" 2>/dev/null)"
     case "$n" in '' | *[!0-9]*) n=0 ;; esac
     printf '%s\n' "$((n + 1))" >"$1.req"
-  ) 8>"$1.reqlock" 2>/dev/null
+  ) 8>"$1.reqlock" 9>&- 2>/dev/null
   return 0
 }
 cap_req_read() { local n; n="$(cat "$1.req" 2>/dev/null)"; printf '%s' "${n:-0}"; }
@@ -503,7 +585,8 @@ capture_pass() {
   # translated transcript - exactly the shape sessions_capture.rs's sidecar
   # walk resolves (transcript.parent().join(&raw_sid).join("subagents")).
   local scratch tmpclean tmpjsonl edited
-  scratch="$(mktemp -d)" || return 1
+  cap_run_init
+  scratch="$(mktemp -d "${CAP_RUN:-${TMPDIR:-/tmp}}/p.XXXXXX")" || return 1
   cap_track "$scratch"
   tmpclean="$scratch/clean.jsonl"
   tmpjsonl="$scratch/transcript.jsonl"
@@ -540,17 +623,28 @@ capture_pass() {
     if [ -n "$rsid" ]; then
       local subdir_out="$scratch/$rsid/subagents"
       mkdir -p "$subdir_out" 2>/dev/null
-      local f b safe subtmp
+      local f b safe subtmp srcrc
       for f in "$sdir"/*.jsonl; do
         [ -f "$f" ] || continue
         b="$(basename "$f" .jsonl)"
         safe="$(hook_agent_safe_name "$b" "$sdir")" || continue
         subtmp="$scratch/sub.clean.jsonl"
-        cap_bg capt jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null \
-          || { cap_untrack "$scratch"; return 1; }
+        # A sidecar that cannot be translated is dropped (the main transcript
+        # and the healthy sidecars still land); only a deadline kill or a
+        # TERM aborts the pass.
+        cap_bg capt jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null
+        srcrc=$?
+        if [ "$srcrc" -ne 0 ]; then
+          cap_fatal_rc "$srcrc" && { cap_untrack "$scratch"; return 1; }
+          rm -f "$subtmp" "$subdir_out/agent-$safe.jsonl"; continue
+        fi
         cap_bg capt jq -c -s --arg file "$f" "$TRANSLATE" "$subtmp" \
-          >"$subdir_out/agent-$safe.jsonl" 2>/dev/null \
-          || { cap_untrack "$scratch"; return 1; }
+          >"$subdir_out/agent-$safe.jsonl" 2>/dev/null
+        srcrc=$?
+        if [ "$srcrc" -ne 0 ]; then
+          cap_fatal_rc "$srcrc" && { cap_untrack "$scratch"; return 1; }
+          rm -f "$subtmp" "$subdir_out/agent-$safe.jsonl"; continue
+        fi
         rm -f "$subtmp"
         [ -s "$subdir_out/agent-$safe.jsonl" ] || rm -f "$subdir_out/agent-$safe.jsonl"
       done
@@ -607,7 +701,7 @@ capture_one() {
       return 0
     fi
     if [ "$first" = 1 ] && [ "$force" = 1 ]; then
-      if ! cap_bg flock -w "$CAP_LOCK_WAIT" 9; then
+      if ! cap_bg_lock flock -w "$CAP_LOCK_WAIT" 9; then
         exec 9>&-
         echo "kb-capture-omp.sh: capture of $tpath is busy - not captured" >&2
         return 0
