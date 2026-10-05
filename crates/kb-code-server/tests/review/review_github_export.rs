@@ -202,7 +202,10 @@ async fn export_github(
         "{}",
         resp.text().await.unwrap()
     );
-    resp.json().await.unwrap()
+    let body: serde_json::Value = resp.json().await.unwrap();
+    // v0.45 N8 — every real export body conforms to the registered schema.
+    crate::common::assert_conforms("kbc-github-export/1", &body);
+    body
 }
 
 async fn publish_finding(

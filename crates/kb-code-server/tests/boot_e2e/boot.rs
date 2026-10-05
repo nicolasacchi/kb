@@ -72,6 +72,8 @@ async fn boot_serves_identity_and_healthz() {
     // invariant:2 kb-sibling/1 Hello — kb-code mirrors kb's identity
     // fields so the contract is checkable in BOTH directions.
     assert_eq!(body["sibling_protocol"].as_str(), Some("kb-sibling/1"));
+    // v0.45 N8 — the real body conforms to the registered Hello schema.
+    crate::common::assert_conforms("kb-sibling/1", &body);
     assert_eq!(body["sibling_major"].as_u64(), Some(1));
     assert_eq!(
         body["schema_epoch"].as_u64(),

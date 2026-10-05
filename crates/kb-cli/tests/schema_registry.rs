@@ -6,7 +6,9 @@
 //! therefore PRODUCED by the real code (`save_atomic`, `md::to_markdown`,
 //! `Post::mint`, `Proposal`) and validated through the shipped binary; the
 //! kb-code contracts (not linkable from this crate) are pinned by their
-//! committed goldens and registries plus hand-written fixtures.
+//! committed goldens and registries plus hand-written fixtures (and, since
+//! v0.45 N8, by `crates/kb-code-server/tests/schema_drift.rs`, which
+//! serializes real kb-code-server values).
 //!
 //! Every test here fails without the registry: delete a schema, widen one so
 //! an invalid fixture passes, or add a `kb-comments/3` constant without a
@@ -488,6 +490,315 @@ fn recall_marker_goldens_match_grammar() {
     assert_eq!(check("<!--kb-recall/1 kb=kb id=a1b2c3-->"), 1);
 }
 
+// --- cross-boundary wire contracts (v0.45 N8) -----------------------------------
+//
+// kb -> kb-code and kb-code -> kb-code-cli bodies. Where the type lives in
+// kb-core / kb-server it is serialized here from the REAL struct; the kb-code
+// side of the registry is covered by `crates/kb-code-server/tests/schema_drift.rs`
+// and the route tests there.
+
+fn schema_value(id: &str) -> Value {
+    serde_json::from_str(&read(
+        &schemas_dir().join(format!("{}.schema.json", dashed(id))),
+    ))
+    .unwrap()
+}
+
+fn str_set(v: &Value) -> BTreeSet<String> {
+    v.as_array()
+        .expect("array")
+        .iter()
+        .map(|x| x.as_str().expect("string").to_string())
+        .collect()
+}
+
+fn obj_keys(v: &Value) -> BTreeSet<String> {
+    v.as_object().expect("object").keys().cloned().collect()
+}
+
+fn write_tmp(dir: &Path, name: &str, v: &Value) -> PathBuf {
+    let p = dir.join(name);
+    std::fs::write(&p, serde_json::to_string_pretty(v).unwrap()).unwrap();
+    p
+}
+
+#[test]
+fn sibling_hello_from_kb_identity_validates() {
+    use kb_server::routes::identity::IdentityResponse;
+    let body = IdentityResponse {
+        name: "kb".into(),
+        version: "0.45",
+        host: "localhost".into(),
+        kbs: vec!["notes".into()],
+        started_at: "2026-10-01T09:30:00+00:00".into(),
+        artifact_host_suffix: ".artifacts.localhost".into(),
+        parent_origin: "http://localhost:4000".into(),
+        build_sha: "39d1ca6",
+        user: "operator".into(),
+        identity_source: "loopback",
+        operator: "operator".into(),
+        sibling_protocol: kb_core::sibling::SIBLING_PROTOCOL,
+        sibling_major: kb_core::sibling::SIBLING_MAJOR,
+        schema_epoch: kb_core::storage::sqlite::schema_epoch(),
+    };
+    let v = serde_json::to_value(&body).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = validate_ok(&write_tmp(dir.path(), "identity.json", &v), None);
+    assert!(out.contains("kb-sibling/1"), "{out}");
+    // The Hello fields the schema requires are exactly the fields the Rust
+    // struct emits for them: a rename in IdentityResponse fails here.
+    let schema = schema_value("kb-sibling/1");
+    let emitted = obj_keys(&v);
+    for k in str_set(&schema["required"]) {
+        assert!(
+            emitted.contains(&k),
+            "kb-sibling/1 requires `{k}`; kb does not emit it"
+        );
+    }
+    // The wire constants are the schema's constants.
+    assert_eq!(
+        schema["properties"]["sibling_protocol"]["const"],
+        json!(kb_core::sibling::SIBLING_PROTOCOL)
+    );
+    assert_eq!(
+        schema["properties"]["sibling_major"]["const"],
+        json!(kb_core::sibling::SIBLING_MAJOR)
+    );
+}
+
+/// `required` of an object schema equals the keys a real value carries, and
+/// every carried key is declared: the schema and the struct move together.
+fn assert_same_keys(id: &str, schema_ptr: &str, real: &Value) {
+    let schema = schema_value(id);
+    let node = schema
+        .pointer(schema_ptr)
+        .unwrap_or_else(|| panic!("{id}: no {schema_ptr}"));
+    let required = str_set(&node["required"]);
+    let declared = obj_keys(&node["properties"]);
+    let emitted = obj_keys(real);
+    assert_eq!(
+        required, emitted,
+        "{id} {schema_ptr}: `required` and the keys the Rust type always emits disagree"
+    );
+    assert!(
+        emitted.is_subset(&declared),
+        "{id} {schema_ptr}: undeclared keys {:?}",
+        emitted.difference(&declared).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn coderef_and_feed_from_real_kb_server_types_validate() {
+    use kb_server::routes::coderefs::{
+        CodeRefGroupOut, CodeRefOut, CodeRefsDocOut, CodeRefsFeedResponse, CodeRefsResponse,
+        CodeRevOut,
+    };
+    let doc = || CodeRefsDocOut {
+        doc_id: "0123456789ab".into(),
+        doc_path: "notes/retry.html".into(),
+        title: "Retry budget".into(),
+        doc_hash: Some("blake3:abc123".into()),
+        extracted_at: Some(1_767_214_800),
+        never_scanned: false,
+        code_rev: Some(CodeRevOut {
+            label: "main".into(),
+            sha: "0123456789abcdef0123456789abcdef01234567".into(),
+            dirty: false,
+        }),
+        ref_count: 1,
+        ungrouped_count: 0,
+        truncated: false,
+        groups: vec![CodeRefGroupOut {
+            ordinal: 0,
+            key: "retry".into(),
+            label: "Retry".into(),
+            anchor: "retry".into(),
+        }],
+        refs: vec![CodeRefOut {
+            ordinal: 0,
+            group: Some("retry".into()),
+            kind: "path".into(),
+            raw: "src/retry.rs:10".into(),
+            path_hint: Some("src/retry.rs".into()),
+            line_start: Some(10),
+            line_end: None,
+            line_spans: None,
+            symbol_container: None,
+            symbol_member: None,
+            context: "see src/retry.rs:10".into(),
+            context_tokens: vec!["see".into()],
+            declared: false,
+        }],
+    };
+    let dir = tempfile::tempdir().unwrap();
+
+    let single = serde_json::to_value(CodeRefsResponse {
+        schema: "coderef/1",
+        kb: "notes".into(),
+        doc: doc(),
+    })
+    .unwrap();
+    let out = validate_ok(&write_tmp(dir.path(), "single.json", &single), None);
+    assert!(out.contains("coderef/1"), "{out}");
+
+    let feed = serde_json::to_value(CodeRefsFeedResponse {
+        schema: "coderef-feed/1",
+        kb: "notes".into(),
+        docs: vec![doc()],
+        next_cursor: Some("1767214800:0123456789ab".into()),
+    })
+    .unwrap();
+    let out = validate_ok(&write_tmp(dir.path(), "feed.json", &feed), None);
+    assert!(out.contains("coderef-feed/1"), "{out}");
+
+    // The last page omits `next_cursor` (never null) and still conforms.
+    let last = serde_json::to_value(CodeRefsFeedResponse {
+        schema: "coderef-feed/1",
+        kb: "notes".into(),
+        docs: vec![],
+        next_cursor: None,
+    })
+    .unwrap();
+    assert!(last.get("next_cursor").is_none());
+    validate_ok(&write_tmp(dir.path(), "last.json", &last), None);
+
+    // Key parity: a field added to, or renamed in, a wire struct without the
+    // schema following fails here (every field of these structs is always
+    // emitted, so `required` must equal the emitted key set).
+    let d = &feed["docs"][0];
+    assert_same_keys("coderef-feed/1", "/$defs/doc", d);
+    assert_same_keys("coderef-feed/1", "/$defs/code_rev", &d["code_rev"]);
+    assert_same_keys("coderef-feed/1", "/$defs/group", &d["groups"][0]);
+    assert_same_keys("coderef-feed/1", "/$defs/ref", &d["refs"][0]);
+    let mut single_minus_envelope = single.clone();
+    single_minus_envelope
+        .as_object_mut()
+        .unwrap()
+        .remove("schema");
+    single_minus_envelope.as_object_mut().unwrap().remove("kb");
+    assert_same_keys("coderef/1", "/$defs/doc", &single_minus_envelope);
+}
+
+#[test]
+fn grok_adapter_meta_template_schema_and_reader_agree() {
+    let dir = root().join("schemas/fixtures/kb-capture-grok-1/valid");
+    // The reader: the fixture's head line is what kb_core's session engine
+    // attributes to grok and joins by job.
+    let job = read(&dir.join("job-capture.jsonl"));
+    let act = kb_core::sessions::parse_session_activity(&job);
+    assert_eq!(act.harness.as_deref(), Some("grok"));
+    assert!(
+        act.research
+            .iter()
+            .any(|r| r.kind == "grok_job" && r.query == "01KY9XHCWKWBJSFDHW70G56HYY"),
+        "{:?}",
+        act.research
+            .iter()
+            .map(|r| (&r.kind, &r.query))
+            .collect::<Vec<_>>()
+    );
+    for f in ["job-capture.jsonl", "direct-capture.jsonl"] {
+        let out = validate_ok(&dir.join(f), None);
+        assert!(out.contains("kb-capture-grok/1"), "{out}");
+    }
+
+    // The writer: every key the hook's jq template can emit is a declared
+    // property of the schema, and every declared property is emitted.
+    let script = read(&root().join("plugins/kb-memory/hooks/kb-capture-grok.sh"));
+    let start = script
+        .find("{sessionId: $sid, type: \"adapter-meta\"")
+        .expect("the adapter-meta jq template moved; update this test");
+    let end = start
+        + script[start..]
+            .find("| with_entries")
+            .expect("template end");
+    let template = &script[start..end];
+    let mut keys = BTreeSet::new();
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // `key:` at the start of a token, outside the quoted string values.
+        if bytes[i] == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += 1;
+            }
+        } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            let st = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if bytes.get(i) == Some(&b':') {
+                keys.insert(template[st..i].to_string());
+            }
+            continue;
+        }
+        i += 1;
+    }
+    let schema = schema_value("kb-capture-grok/1");
+    assert_eq!(
+        keys,
+        obj_keys(&schema["properties"]),
+        "kb-capture-grok.sh's adapter-meta record and schemas/kb-capture-grok-1.schema.json disagree"
+    );
+    // The template's unconditional keys are the schema's required ones.
+    let optional: BTreeSet<String> = [
+        "job_ulid",
+        "job_type",
+        "round",
+        "cwd",
+        "agent_name",
+        "sandbox_profile",
+        "reasoning_effort",
+        "generated_title",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let always: BTreeSet<String> = keys.difference(&optional).cloned().collect();
+    assert_eq!(always, str_set(&schema["required"]));
+}
+
+#[test]
+fn session_bundle_manifest_from_real_code_validates() {
+    use kb_core::session_bundle::{BundleManifest, BundleOrigin};
+    let jsonl = concat!(
+        r#"{"sessionId":"abc-123","cwd":"/home/u/proj","gitBranch":"main","type":"user","message":{"role":"user","content":[{"type":"text","text":"add a status filter"}]}}"#,
+        "\n",
+    );
+    let act = kb_core::sessions::parse_session_activity(jsonl);
+    let m = BundleManifest::from_activity(
+        "abc-123".into(),
+        Some(1_700_000_000),
+        Some("1.2.3".into()),
+        BundleOrigin {
+            kb: Some("sessions".into()),
+            source_relative: Some("session-20261101T101010Z-abc-123.html".into()),
+            exporter_version: Some("0.45".into()),
+        },
+        &act,
+    );
+    let v = serde_json::to_value(&m).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = validate_ok(&write_tmp(dir.path(), "manifest.json", &v), None);
+    assert!(out.contains("kb-session-bundle/1"), "{out}");
+    assert_eq!(v["schema"], json!(kb_core::session_bundle::BUNDLE_SCHEMA));
+
+    // Two-way parity: the keys serde requires of the manifest are the schema's
+    // `required`, and everything the type can emit is a declared property.
+    let schema = schema_value("kb-session-bundle/1");
+    let mut required = BTreeSet::new();
+    for k in obj_keys(&v) {
+        let mut cut = v.clone();
+        cut.as_object_mut().unwrap().remove(&k);
+        if serde_json::from_value::<BundleManifest>(cut).is_err() {
+            required.insert(k);
+        }
+    }
+    assert_eq!(required, str_set(&schema["required"]));
+    assert!(obj_keys(&v).is_subset(&obj_keys(&schema["properties"])));
+}
+
 // --- no contract constant without a registry entry -----------------------------
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -602,6 +913,21 @@ fn every_schema_const_in_code_has_a_registry_entry() {
             "EXPORT_SCHEMA",
             "kbc-github-export/1",
         ),
+        (
+            "crates/kb-code-server/src/unified_inbox.rs",
+            "SCHEMA",
+            "unified-inbox/1",
+        ),
+        (
+            "crates/kb-code-cli/src/inbox.rs",
+            "SCHEMA",
+            "unified-inbox/1",
+        ),
+        (
+            "crates/kb-code-server/src/claims.rs",
+            "SCHEMA",
+            "kbc-claim/1",
+        ),
     ];
     for (file, name, id) in anchored {
         assert!(
@@ -631,7 +957,37 @@ fn every_schema_const_in_code_has_a_registry_entry() {
         "\"kbc-theme/1\"",
     );
     literal("crates/kb-core/src/sessions/view.rs", "<!--kb-recall/1 ");
-    for id in ["kbc-findings/2", "kbc-cmd/1", "kbc-theme/1", "kb-recall/1"] {
+    literal(
+        "crates/kb-core/src/sibling.rs",
+        "SIBLING_PROTOCOL: &str = \"kb-sibling/1\"",
+    );
+    literal(
+        "crates/kb-server/src/routes/coderefs.rs",
+        "schema: \"coderef/1\"",
+    );
+    literal(
+        "crates/kb-server/src/routes/coderefs.rs",
+        "schema: \"coderef-feed/1\"",
+    );
+    literal(
+        "crates/kb-core/src/session_bundle.rs",
+        "BUNDLE_SCHEMA: &str = \"kb-session-bundle/1\"",
+    );
+    literal(
+        "plugins/kb-memory/hooks/kb-capture-grok.sh",
+        "adapter: \"kb-capture-grok/1\"",
+    );
+    for id in [
+        "kbc-findings/2",
+        "kbc-cmd/1",
+        "kbc-theme/1",
+        "kb-recall/1",
+        "kb-sibling/1",
+        "coderef/1",
+        "coderef-feed/1",
+        "kb-capture-grok/1",
+        "kb-session-bundle/1",
+    ] {
         assert!(ids.contains(id), "{id} is not registered");
     }
 }

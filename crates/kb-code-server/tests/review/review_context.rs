@@ -134,6 +134,8 @@ async fn the_bundle_carries_the_routes_own_compositions_and_never_a_denylisted_b
     assert_eq!(st, 200, "{text}");
     let body: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(body["schema"], "kbc-review-context/1");
+    // v0.45 N8 — the real route body conforms to the registered schema.
+    crate::common::assert_conforms("kbc-review-context/1", &body);
     assert_eq!(body["review_id"], id);
     assert_eq!(body["ps"], 1);
     assert_eq!(body["header"]["title"], "ctx");

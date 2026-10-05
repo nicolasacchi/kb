@@ -1,0 +1,17 @@
+{
+  "schema": "kbc-claim/1",
+  "repo": "demo",
+  "subject_kind": "path",
+  "subject": "order.rb",
+  "kind": "explain",
+  "body_md": "cents everywhere; the float column stays for one release.",
+  "confidence": 0.7,
+  "evidence": [
+    "code:order.rb:3",
+    "finding:f-1"
+  ],
+  "session_id": "sess-1",
+  "model": "claude",
+  "blob_sha": "0000000000000000000000000000000000000000",
+  "review_id": 1
+}

@@ -211,6 +211,8 @@ async fn unified_inbox_composes_reviews_and_annotations_lanes_and_filters_intent
         .unwrap();
 
     assert_eq!(body["schema"], "unified-inbox/1");
+    // v0.45 N8 — the real route body conforms to the registered schema.
+    crate::common::assert_conforms("unified-inbox/1", &body);
 
     let reviews = body["reviews"].as_array().unwrap();
     assert_eq!(reviews.len(), 1);
