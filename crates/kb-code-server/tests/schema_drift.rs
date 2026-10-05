@@ -14,7 +14,10 @@
 //! * the json!-built route bodies (`kbc-github-export/1`, `unified-inbox/1`,
 //!   the review-context route envelope, the identity Hello) are validated
 //!   inside the route tests that fetch them (`tests/review/*`,
-//!   `tests/boot_e2e/boot.rs`).
+//!   `tests/boot_e2e/boot.rs`), NOT in this file. The one review-context check
+//!   here (`review_context_bundle_from_the_real_assembler_conforms`) runs the
+//!   real `assemble` output under a hand-stamped envelope, so the route's own
+//!   envelope is covered only by its route test.
 //!
 //! A field renamed, or added as required, in Rust without the schema following
 //! fails a named test below.
