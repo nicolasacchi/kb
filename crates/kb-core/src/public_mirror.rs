@@ -65,6 +65,9 @@ fn addr_host(addr: &str) -> &str {
     }
 }
 
+/// A deliberately conservative PREFIX heuristic: a name such as
+/// `memory-bank-docs` is flagged too. There is no per-rule silence; rename the
+/// corpus (or its `default_search_category`) to something neutral.
 fn is_private_name(s: &str) -> bool {
     let s = s.to_ascii_lowercase();
     s.starts_with("memory") || s.starts_with("session")
@@ -111,7 +114,11 @@ pub fn public_mirror_findings(cfg: &KbConfig) -> Vec<Finding> {
             ));
         }
         let p = kb.path.to_string_lossy();
-        if p.starts_with("/home/") || p.starts_with("/Users/") || p.starts_with("/root") {
+        if p.starts_with("/home/")
+            || p.starts_with("/Users/")
+            || p == "/root"
+            || p.starts_with("/root/")
+        {
             out.push(f(
                 "home-path",
                 format!("[kb.{name}] path"),
@@ -292,6 +299,15 @@ strip_kb_prompt = true
     fn home_path() {
         let t = good_with("/srv/public-docs", "/home/someone/docs");
         assert_eq!(rules(&t), vec!["home-path"]);
+        for bad in ["/root", "/root/docs", "/Users/someone/docs"] {
+            let t = good_with("/srv/public-docs", bad);
+            assert_eq!(rules(&t), vec!["home-path"], "{bad}");
+        }
+        // `/root` is a directory, not a string prefix.
+        for ok in ["/rootfs/docs", "/rootless-docs", "/srv/root/docs"] {
+            let t = good_with("/srv/public-docs", ok);
+            assert!(rules(&t).is_empty(), "{ok}");
+        }
     }
 
     #[test]
