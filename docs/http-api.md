@@ -86,7 +86,12 @@ GET  /api/kb/{kb}/docs/{id}                 single artifact metadata. A MOVED
                                             old id 301s to the new id via the
                                             moves chain (F3).
 GET  /api/kb/{kb}/docs/by-path/{*path}      resolve a source-relative path to
-                                            the artifact (path-based permalink)
+                                            the artifact (path-based permalink).
+                                            A MOVED old path follows the moves
+                                            chain and answers 200 with the LIVE
+                                            doc (its `source_relative` differs
+                                            from the request; the SPA uses that
+                                            to replace the URL). Unknown: 404.
 POST /api/kb/{kb}/docs/{id}/move            move/rename ONE artifact. Body:
                                             {to: source-rel path}. Runs the
                                             relocate engine (id changes with the

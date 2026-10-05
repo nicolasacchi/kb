@@ -362,6 +362,23 @@ pub async fn get_by_path(
             }
         }
     }
+    // F3b — moves-table fallback (twin of `get`'s by-id fallback and the
+    // permalink shell): an OLD source-rel resolves through the newest-wins
+    // chain to the live doc. Answered as 200 with the live doc (not a 301):
+    // the SPA's fetch would follow a redirect invisibly and never learn the
+    // path moved, whereas the 200 body's `source_relative` differs from the
+    // requested path, which is exactly what lets the SPA canonicalise the URL.
+    match kb_core::relocate::moves_lookup(&ctx.storage, &q_norm).await {
+        Ok(Some((new_id, _new_rel))) => match ctx.storage.get_by_id(new_id).await {
+            Ok(Some(row)) => {
+                return Json(single_doc_response_with_first_seen(ctx, row).await).into_response();
+            }
+            Ok(None) => {}
+            Err(e) => return error_to_problem_json(&e),
+        },
+        Ok(None) => {}
+        Err(e) => return error_to_problem_json(&e),
+    }
     error_to_problem_json(&kb_core::Error::NotFound(format!("doc at path {q_norm}")))
 }
 

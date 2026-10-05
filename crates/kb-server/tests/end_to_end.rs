@@ -21793,6 +21793,61 @@ async fn relocate_redirects_spa_lookup_and_docs() {
     assert_eq!(loc, format!("/api/kb/smoke/docs/{new_id}"));
 }
 
+/// v0.45 N13 — `GET …/docs/by-path/{old_rel}` follows the moves log: an old
+/// source-rel resolves to the live doc (200, `source_relative` = the new
+/// rel); a never-existing path still 404s.
+#[tokio::test]
+async fn relocate_by_path_follows_moves() {
+    let (_tmp, addr) = boot_with_spa().await;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let doc = wait_for_doc(&client, addr, "smoke", |d| {
+        d["source_relative"].as_str() == Some("cost-of-abstraction.html")
+    })
+    .await;
+    let old_id = doc["id"].as_str().unwrap().to_string();
+    let old_rel = "cost-of-abstraction.html";
+
+    // Before the move: the old path is live.
+    let r = client
+        .get(url(addr, &format!("/api/kb/smoke/docs/by-path/{old_rel}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let r = client
+        .post(url(addr, &format!("/api/kb/smoke/docs/{old_id}/move")))
+        .json(&serde_json::json!({ "to": "moved/cost.html" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "{}", r.text().await.unwrap_or_default());
+    let body: serde_json::Value = r.json().await.unwrap();
+    let new_id = body["new_id"].as_str().unwrap().to_string();
+    let new_rel = body["new_source_rel"].as_str().unwrap().to_string();
+
+    let r = client
+        .get(url(addr, &format!("/api/kb/smoke/docs/by-path/{old_rel}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "old rel must follow the moves log");
+    let d: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(d["id"].as_str(), Some(new_id.as_str()));
+    assert_eq!(d["source_relative"].as_str(), Some(new_rel.as_str()));
+
+    let r = client
+        .get(url(addr, "/api/kb/smoke/docs/by-path/never/existed.html"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "unknown path stays 404");
+}
+
 /// F3c T8 — SPA 301 Location percent-encodes path segments (space → %20);
 /// requesting the encoded new URL still serves the shell.
 #[tokio::test]
