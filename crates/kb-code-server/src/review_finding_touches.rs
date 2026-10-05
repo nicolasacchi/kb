@@ -55,8 +55,8 @@
 //! with the rename-aware `diff::diff_range_u0_renames`. That read is memoised
 //! per `(base, tip)` in a map owned by ONE `compute_touched_in` call (no
 //! cross-request cache), so a read runs at most one such diff per distinct
-//! patchset change set (at most one per patchset plus the earlier one),
-//! not two per renamed (finding, patchset) pair. The `--no-renames` `/since`
+//! patchset change set (the earlier one, shared by every finding on the same
+//! own patchset, plus one per later patchset), not two per renamed (finding, patchset) pair. The `--no-renames` `/since`
 //! reader and its memo are untouched.
 //!
 //! # The cap
@@ -1124,6 +1124,57 @@ mod tests {
         assert_eq!(e.len(), 1, "{e:?}");
         assert_eq!(e[0].ps, 2);
         assert_eq!(e[0].overlap, OVERLAP_EXACT);
+    }
+
+    /// N11 polish - `compute_touched_in` shares ONE rename-read memo across
+    /// every finding of a read. 5 findings x 2 later patchsets on the same
+    /// renamed file must run the rename-aware diff once per distinct
+    /// (base, tip) - the earlier change set plus each later one = 3 - not
+    /// per finding. A fresh memo per finding makes this 15.
+    #[test]
+    fn compute_touched_in_shares_one_rename_memo_across_findings() {
+        let (tmp, c0, ps1_tip, main_head, _ps2_tip) = rebase_fixture(false);
+        let d = tmp.path();
+        git(d, &["checkout", "-q", "feature2"]);
+        git(d, &["mv", "a.txt", "b.txt"]);
+        let cur = std::fs::read_to_string(d.join("b.txt")).unwrap();
+        std::fs::write(
+            d.join("b.txt"),
+            cur.replace("a3-author\n", "a3-author-v2\n"),
+        )
+        .unwrap();
+        git(d, &["add", "b.txt"]);
+        git(d, &["commit", "-aq", "-m", "rename and re-edit"]);
+        let ps2_tip = git_out(d, &["rev-parse", "HEAD"]);
+        std::fs::write(d.join("extra.txt"), "x\n").unwrap();
+        git(d, &["add", "extra.txt"]);
+        git(d, &["commit", "-aq", "-m", "unrelated follow-up"]);
+        let ps3_tip = git_out(d, &["rev-parse", "HEAD"]);
+        let patchsets = vec![
+            ps_row(1, 1, 1, &c0, &ps1_tip),
+            ps_row(2, 1, 2, &main_head, &ps2_tip),
+            ps_row(3, 1, 3, &main_head, &ps3_tip),
+        ];
+        let queries: Vec<TouchedInQuery> = (0..5)
+            .map(|i| TouchedInQuery {
+                finding_id: 90 + i,
+                own_ps: 1,
+                path: "a.txt".to_string(),
+                lines: vec![3],
+            })
+            .collect();
+        let ctx = GitCtx::work_tree_only(crate::git::roots::WorkTreeRoot::user_clone(d));
+        review_since::RENAME_DIFF_RUNS.with(|c| c.set(0));
+        let out = compute_touched_in(&ctx, &patchsets, &queries);
+        let runs = review_since::RENAME_DIFF_RUNS.with(|c| c.get());
+        assert_eq!(
+            runs, 3,
+            "rename-aware diff runs for 5 findings x 2 patchsets"
+        );
+        for q in &queries {
+            let e = &out[&q.finding_id].entries;
+            assert!(!e.is_empty(), "{e:?}");
+        }
     }
 
     /// N6 - rename plus upstream movement only (finding on line 3, the
