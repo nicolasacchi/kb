@@ -329,7 +329,10 @@ registering anywhere `kb-memory` is already installed. Design:
     on the first meta; if TRANSLATE is ever edited so one no longer applies the
     script warns and falls back, it never drifts). More work than one pass may
     do re-runs passes (the coalescing loop) until caught up; nothing is
-    recorded as done until every part is landed.
+    recorded as done until every part is landed. A catch-up that outlasts the
+    caller's own timeout (`KB_CAPTURE_TIMEOUT_MS`, 120 s in `kb-omp.ts`) is cut
+    by it like any capture and RESUMES at the next trigger: progress is
+    persisted per landed part, never restarted.
   - **Landed means rc 0**: the script's own table (`<lock-base>.seg`: part,
     id, input key) is committed tmp+rename after each part that landed with rc
     0, so `kill -9` mid catch-up loses at most the part in flight. A part that
