@@ -2392,6 +2392,25 @@ enum SessionsAction {
         #[arg(long = "no-write")]
         no_write: bool,
     },
+    /// Remove ONE continuation part (`<raw-id>-p<NN>`, NN >= 2) of a segmented
+    /// omp session from the sessions corpus, after verifying the file really
+    /// is that part (its embedded `sessionId` and `segmentOf`). The daemon's
+    /// own delete cascade clears the index rows when the file leaves; the
+    /// adapter never removes corpus files itself. Idempotent. Filesystem-only.
+    // Provenance: v0.46 SEG-PR2
+    DropPart {
+        /// The part's session id, `<segment-of>-p<NN>`.
+        #[arg(long = "session-id")]
+        session_id: String,
+        /// The raw session id the part belongs to.
+        #[arg(long = "segment-of")]
+        segment_of: String,
+        /// Sessions-corpus source dir. Defaults to `$KB_SESSIONS_DIR`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Re-scrub captures already on disk (every lane: transcript, structured
     /// digest blocks, sidecar text). Dry run by default — reports per-lane
     /// counts and writes nothing; `--apply` rewrites only the captures that
@@ -6029,6 +6048,12 @@ async fn main() -> Result<()> {
                 print_chain,
                 no_write,
             ),
+            SessionsAction::DropPart {
+                session_id,
+                segment_of,
+                out,
+                json,
+            } => commands::sessions_capture::run_drop_part(out, &session_id, &segment_of, json),
             SessionsAction::Rescrub {
                 dir,
                 apply,
