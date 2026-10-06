@@ -333,6 +333,7 @@ mod tests {
             "/api/reviews/7/verdict/published",
             "/api/reviews/7/findings/f-abc/disposition",
             "/api/reviews/7/findings/f-abc/published",
+            "/api/reviews/7/findings/f-abc/reanchor",
             "/api/boards/checkout-flow/accept",
             "/api/boards/checkout-flow/archive",
             "/api/boards/checkout-flow",

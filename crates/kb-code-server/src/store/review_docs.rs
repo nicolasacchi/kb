@@ -4,7 +4,6 @@
 //! the helpers it shares stay in the parent module; this child can
 //! call them. Public paths stay `crate::store`.
 use super::*;
-use std::collections::HashSet;
 
 impl Store {
     /// The newest revision of this review's document at `ps_number`, or
@@ -70,7 +69,7 @@ impl Store {
         mode: FindingsImportMode,
         report_json: &str,
         verdict: Option<(&str, Option<&str>)>,
-        stale_anchor_ids: &HashSet<String>,
+        repairs: &AnchorRepairs,
         now: i64,
     ) -> Result<ComposeDocOutcome> {
         let review_id = doc.review_id;
@@ -87,7 +86,7 @@ impl Store {
             findings,
             mode,
             FindingIdentity::Fingerprint,
-            stale_anchor_ids,
+            repairs,
             now,
         )?;
 

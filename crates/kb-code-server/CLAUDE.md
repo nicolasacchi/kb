@@ -1089,19 +1089,31 @@ invariant #2 records).
     which was written for an UNCHANGED claim:* when a re-import/compose of
     an `import`-origin finding changes its `location_*` (path/kind/lines/
     removed), OR the linked annotation has no anchor at all, OR the stored
-    anchor no longer resolves to the CLAIMED lines at the target patchset
-    (orphaned, or resolved elsewhere — the route reads the blobs BEFORE the
-    transaction, `review_findings::stale_anchor_ids`, and hands the
-    annotation ids in; never git I/O under the store lock), the anchor
+    anchor does NOT resolve EXACTLY at the target patchset (orphaned, or
+    only fuzzy — the route reads the blobs BEFORE the transaction,
+    `review_findings::probe_anchors`, and hands the annotation ids in as
+    `store::AnchorRepairs`; never git I/O under the store lock), the anchor
     (+ path, side, bound `ps_number` — so later patchsets carry forward from
     the patchset the anchor text came from, `own_ps` moves with it; replies
-    follow) is re-derived from the target patchset in the SAME transaction
-    (`reconcile_findings_import_on`). The third trigger exists because an
-    earlier compose may already have moved `location_*` while leaving the
-    anchor: a re-compose with that same, already-updated claim sees no
-    change and would leave the orphan forever. An anchor that still agrees
-    with the claim (carry-forward worked) is never rewritten, so a finding
-    keeps its original `own_ps`; `manual` rows stay untouched.
+    follow) is re-derived from the claim at the target patchset in the SAME
+    transaction (`reconcile_findings_import_on`). The stale-anchor trigger
+    exists because an earlier compose may already have moved `location_*`
+    while leaving the anchor: a re-compose with that same, already-updated
+    claim sees no change and would leave the orphan forever.
+    **A verified anchor beats a resent claim.** When the stored anchor
+    resolves EXACT at the target patchset but to lines other than the
+    claim (ps2 inserted lines above, carry-forward moved the anchor, and
+    the agent resends its stale pre-insertion numbers), the anchor is KEPT —
+    never rewritten from the claim, `own_ps` unchanged — and the response's
+    `anchor_warnings[]` gains `{kind: "claim_disagrees_with_anchor", slug,
+    anchor_line, anchor_line_end, claimed_lines}` so the agent can correct
+    its claim or use the explicit reanchor route. The saved claim
+    (`location_*`) stays the agent's value (it is the saved claim, as
+    today); the view's `resolution` is computed from the anchor, so the two
+    can differ until one is corrected. A CHANGED claim always re-derives (it
+    is an explicit new statement). An anchor that agrees with the claim is
+    never rewritten, so a finding keeps its original `own_ps`; `manual`
+    rows stay untouched.
     An anchor that cannot be derived (blob over the cap / path absent /
     cited line past EOF) is NEVER stored as an empty snippet: the anchor is
     persisted as SQL NULL (`store::UNANCHORED`), the finding is still

@@ -2396,3 +2396,136 @@ async fn the_reanchor_route_repairs_a_stale_anchor_without_a_compose() {
     assert!(comments.contains(&"f-a".to_string()), "{comments:?}");
     assert!(!skipped.contains(&"f-a".to_string()), "{skipped:?}");
 }
+
+// --- v0.47 FA review round: a verified anchor beats a stale resent claim ----
+
+/// ps2 inserts two lines ABOVE the code: every ps1 line number is off by two.
+const LIMITER_PS2_INSERTED_ABOVE: &str = "-- header a\n\
+-- header b\n\
+local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local n = redis.call('INCR', key)\n\
+if n == 1 then\n\
+  redis.call('EXPIRE', key, ARGV[2])\n\
+end\n\
+return n <= limit\n";
+
+fn assert_kept_exact_anchor_and_warning(
+    listed: &serde_json::Value,
+    warnings: &serde_json::Value,
+    context: &str,
+) {
+    let fa = finding_by_slug(listed, "f-a");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{context}: {fa}");
+    assert_eq!(fa["resolution"]["line"], 5, "{context}: {fa}");
+    assert_eq!(fa["resolution"]["line_end"], 7, "{context}: {fa}");
+    assert_eq!(fa["resolution"]["confidence"], "exact", "{context}: {fa}");
+    assert_eq!(
+        fa["own_ps"], 1,
+        "{context}: the verified anchor was NOT rewritten: {fa}"
+    );
+    // The saved claim stays the agent's; the view resolves from the anchor.
+    assert_eq!(fa["location"]["lines"], serde_json::json!([3, 5]), "{fa}");
+    let w = warnings
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["kind"] == "claim_disagrees_with_anchor")
+        .unwrap_or_else(|| panic!("{context}: no claim_disagrees_with_anchor in {warnings}"));
+    assert_eq!(w["slug"], "f-a", "{w}");
+    assert_eq!(w["anchor_line"], 5, "{w}");
+    assert_eq!(w["anchor_line_end"], 7, "{w}");
+    assert_eq!(w["claimed_lines"], serde_json::json!([3, 5]), "{w}");
+}
+
+/// RULING: ps1 claim 3-5; ps2 inserts lines above, so carry-forward resolves
+/// the anchor EXACT at 5-7. An agent re-composing at ps2 with its STALE claim
+/// 3-5 must NOT turn that into a confidently wrong anchor: the anchor is
+/// kept (own_ps stays 1) and a per-slug warning names both positions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compose_with_a_stale_claim_keeps_the_exact_carried_anchor_and_warns() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_INSERTED_ABOVE, 3, 5).await;
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["resolution"]["line"], 5, "precondition: {before}");
+    assert_eq!(
+        before["resolution"]["line_end"], 7,
+        "precondition: {before}"
+    );
+    assert_eq!(before["resolution"]["confidence"], "exact", "{before}");
+
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 3, 5)]).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_kept_exact_anchor_and_warning(&listed, &body["anchor_warnings"], "compose");
+}
+
+/// The same ruling through `findings/import` (the reconcile is shared; the
+/// response carries the warning at the top level).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_import_with_a_stale_claim_keeps_the_exact_carried_anchor_and_warns() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_INSERTED_ABOVE, 3, 5).await;
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [range_finding("f-a", 3, 5)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_kept_exact_anchor_and_warning(&listed, &body["anchor_warnings"], "import");
+}
+
+/// An anchor that resolves only FUZZILY at the target patchset (a line over
+/// the 200-char snippet cap matches as a prefix, never as an exact text) is
+/// not "verified": it is re-derived from the claim, so the finding is
+/// raised-against the target patchset from then on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_anchor_that_resolves_only_fuzzily_is_re_derived_from_the_claim() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let long = format!("-- {}", "word ".repeat(60));
+    let ps1 = format!("local a = 1\n{long}\nlocal b = 2\n");
+    let repo_tmp = fixture_repo_with(&[("long.lua", ps1.as_bytes())]);
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let batch = serde_json::json!({
+        "schema": "kbc-findings/1",
+        "findings": [finding_at("f-a", "long.lua", 2)],
+    });
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["resolution"]["orphaned"], false, "{before}");
+    assert_eq!(
+        before["resolution"]["confidence"], "fuzzy",
+        "precondition (long line => prefix match, never exact): {before}"
+    );
+    assert_eq!(before["own_ps"], 1, "{before}");
+
+    std::fs::write(
+        repo_tmp.path().join("long.lua"),
+        format!("{ps1}local c = 3\n"),
+    )
+    .unwrap();
+    git(repo_tmp.path(), &["add", "-A"]);
+    git(repo_tmp.path(), &["commit", "-q", "-m", "ps2 append"]);
+    assert_eq!(snapshot(&client, &base, id).await, 2);
+
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["own_ps"], 2, "re-derived at the target patchset: {fa}");
+    assert_eq!(fa["resolution"]["line"], 2, "{fa}");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
+    assert_eq!(body["anchor_warnings"], serde_json::json!([]), "{body}");
+}

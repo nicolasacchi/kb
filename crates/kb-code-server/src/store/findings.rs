@@ -4,7 +4,7 @@
 //! the helpers it shares stay in the parent module; this child can
 //! call them. Public paths stay `crate::store`.
 use super::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 impl Store {
     // -- Findings (V0024) -----------------------------------------------
@@ -350,15 +350,15 @@ impl Store {
             author,
             findings,
             mode,
-            &HashSet::new(),
+            &AnchorRepairs::default(),
             now,
         )
     }
 
     /// [`Self::reconcile_findings_import`] plus v0.47 FA's repair set:
-    /// `stale_anchor_ids` names the linked-annotation ids of existing,
+    /// `repairs.stale` names the linked-annotation ids of existing,
     /// un-pinned, import-origin findings whose stored anchor does NOT
-    /// resolve to their claimed lines at THIS patchset (the caller read the
+    /// resolve EXACTLY at THIS patchset (orphaned or fuzzy; the caller read the
     /// blobs BEFORE this call — the store never does git I/O, and never
     /// under its connection lock). Such a finding has its anchor re-derived
     /// from the incoming (target-patchset) anchor even though its claimed
@@ -374,7 +374,7 @@ impl Store {
         author: &str,
         findings: &[ImportedFinding],
         mode: FindingsImportMode,
-        stale_anchor_ids: &HashSet<String>,
+        repairs: &AnchorRepairs,
         now: i64,
     ) -> Result<FindingsImportOutcome> {
         let mut conn = self.lock();
@@ -389,7 +389,7 @@ impl Store {
             findings,
             mode,
             FindingIdentity::Slug,
-            stale_anchor_ids,
+            repairs,
             now,
         )?;
         tx.commit()?;
@@ -443,7 +443,7 @@ impl Store {
             findings,
             mode,
             FindingIdentity::Slug,
-            &HashSet::new(),
+            &AnchorRepairs::default(),
             now,
         )?;
 
@@ -721,6 +721,34 @@ pub struct FindingsImportOutcome {
     pub updated: Vec<String>,
     pub superseded: Vec<String>,
     pub unchanged: Vec<String>,
+    /// v0.47 FA — existing, un-pinned import findings whose RESENT claim is
+    /// unchanged but disagrees with an anchor that resolves EXACT at the
+    /// target patchset to other lines. The anchor is the verified position
+    /// and is kept; the caller reports each as an `anchor_warnings[]` entry.
+    pub claim_disagreements: Vec<ClaimDisagreement>,
+}
+
+/// One [`FindingsImportOutcome::claim_disagreements`] entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimDisagreement {
+    pub slug: String,
+    /// The saved/resent claim (`location_lines` JSON, as stored).
+    pub claimed_lines: Option<String>,
+    pub anchor_line: u32,
+    pub anchor_line_end: Option<u32>,
+}
+
+/// v0.47 FA — what the caller learned (blob reads, BEFORE the transaction)
+/// about existing import findings' anchors at the target patchset, keyed by
+/// linked-annotation id.
+#[derive(Debug, Clone, Default)]
+pub struct AnchorRepairs {
+    /// Anchor does NOT resolve exactly at the target patchset (orphaned or
+    /// only fuzzy): re-derive it from the claim.
+    pub stale: HashSet<String>,
+    /// Anchor resolves EXACT at the target patchset, but not to the claimed
+    /// lines: the anchor is kept (verified), the disagreement is reported.
+    pub exact_elsewhere: HashMap<String, (u32, Option<u32>)>,
 }
 
 /// The `annotations` anchor fields [`derive_finding_anchor`] produces for
@@ -1176,7 +1204,7 @@ pub(super) fn reconcile_findings_import_on(
     findings: &[ImportedFinding],
     mode: FindingsImportMode,
     identity: FindingIdentity,
-    stale_anchor_ids: &HashSet<String>,
+    repairs: &AnchorRepairs,
     now: i64,
 ) -> Result<FindingsImportOutcome> {
     let existing_rows: Vec<ReviewFindingRow> = {
@@ -1365,13 +1393,25 @@ pub(super) fn reconcile_findings_import_on(
                 };
                 // A second trigger, for a claim that is ALREADY the new one
                 // (an earlier compose updated `location_*` but not the
-                // anchor): the caller proved this anchor no longer resolves
-                // to the claimed lines at this patchset
-                // (`stale_anchor_ids`). Never fires when the anchor and the
-                // claim agree (the carry-forward worked), never for a pinned
-                // row, and never to write an anchor that could not be
-                // derived (`f.anchor` empty).
-                let anchor_stale = stale_anchor_ids.contains(&cur.annotation_id);
+                // anchor): the caller proved this anchor does not resolve
+                // EXACTLY at this patchset (`repairs.stale`: orphaned or
+                // fuzzy). Never fires when the anchor resolves exact — even
+                // to lines other than the claim: that anchor is the verified
+                // position and is KEPT (the disagreement is reported via
+                // `claim_disagreements`; the saved claim stays the agent's) —
+                // never for a pinned row, and never to write an anchor that
+                // could not be derived (`f.anchor` empty).
+                let anchor_stale = repairs.stale.contains(&cur.annotation_id);
+                if cur.reanchor_json.is_none() && !location_changed {
+                    if let Some((l, le)) = repairs.exact_elsewhere.get(&cur.annotation_id) {
+                        outcome.claim_disagreements.push(ClaimDisagreement {
+                            slug: cur.slug.clone(),
+                            claimed_lines: cur.location_lines.clone(),
+                            anchor_line: *l,
+                            anchor_line_end: *le,
+                        });
+                    }
+                }
                 let rewrite_anchor = cur.reanchor_json.is_none()
                     && (location_changed
                         || ((anchor_missing || anchor_stale) && !f.anchor.is_empty()));

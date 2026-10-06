@@ -1017,27 +1017,27 @@ pub(crate) fn compose_finding_view(
 
 // --- routes --------------------------------------------------------------
 
-/// v0.47 FA — which existing import-origin findings carry an anchor that no
-/// longer resolves to what their (saved) claim says, at `target_ps`: the
-/// linked-annotation ids the reconcile must re-derive even though the
-/// claimed location is unchanged. This is the repair for a claim an EARLIER
-/// compose already moved (`location_*` is the ps2 claim; the anchor still
-/// holds ps1 text and orphans).
+/// v0.47 FA — probe the anchors of existing import-origin findings at
+/// `target_ps`, BEFORE the reconcile transaction (blob reads never happen
+/// under the store lock). Per finding (pinned/human-re-anchored rows and
+/// rows with nothing to compare are skipped):
 ///
-/// A finding is NOT stale when its anchor resolves (any confidence) to
-/// exactly the claimed line / range at the target blob — the carry-forward
-/// worked and agrees with the claim, so nothing is rewritten and the
-/// finding keeps its original `own_ps`. Stale = orphaned, or resolved
-/// somewhere other than the claim. Pinned (human re-anchored) rows are never
-/// listed. Runs BEFORE the reconcile transaction (blob reads never happen
-/// under the store lock, same shape as `compose_finding_view`'s closure).
-fn stale_anchor_ids(
+/// * anchor orphaned, or resolving only FUZZILY -> `stale`: re-derive it from
+///   the claim (the repair for a claim an earlier compose moved while the
+///   anchor kept ps1 text);
+/// * anchor resolves EXACT to the claimed line / range -> nothing (the
+///   carry-forward worked; `own_ps` is kept);
+/// * anchor resolves EXACT to OTHER lines -> `exact_elsewhere`: the anchor is
+///   the verified position and is KEPT. A resent claim that merely repeats a
+///   stale pre-insertion line number must not turn a correct carried-forward
+///   anchor into a confidently wrong one; the reconcile reports it instead.
+fn probe_anchors(
     store: &Store,
     git: &GitCtx,
     review_id: i64,
     target_ps: &ReviewPatchsetRow,
-) -> Result<std::collections::HashSet<String>, ApiError> {
-    let mut stale = std::collections::HashSet::new();
+) -> Result<store::AnchorRepairs, ApiError> {
+    let mut repairs = store::AnchorRepairs::default();
     let mut cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for row in store.list_review_findings(review_id, None, true)? {
         if row.origin != store::FINDING_ORIGIN_IMPORT || row.reanchor_json.is_some() {
@@ -1062,20 +1062,59 @@ fn stale_anchor_ids(
             .clone();
         let r =
             review_comments::resolve_for_ps_with_content(&ann, target_ps, &sha, text.as_deref());
-        let agrees = !r.orphaned
-            && match row.location_kind.as_str() {
-                store::LOCATION_KIND_WHOLE_FILE => true,
-                store::LOCATION_KIND_RANGE => {
-                    r.line == claimed.iter().min().map(|n| *n as u32)
-                        && r.line_end == claimed.iter().max().map(|n| *n as u32)
-                }
-                _ => r.line == claimed.first().map(|n| *n as u32),
-            };
+        if r.orphaned {
+            repairs.stale.insert(row.annotation_id.clone());
+            continue;
+        }
+        if row.location_kind == store::LOCATION_KIND_WHOLE_FILE {
+            continue;
+        }
+        if r.confidence != Some("exact") {
+            repairs.stale.insert(row.annotation_id.clone());
+            continue;
+        }
+        let agrees = match row.location_kind.as_str() {
+            store::LOCATION_KIND_RANGE => {
+                r.line == claimed.iter().min().map(|n| *n as u32)
+                    && r.line_end == claimed.iter().max().map(|n| *n as u32)
+            }
+            _ => r.line == claimed.first().map(|n| *n as u32),
+        };
         if !agrees {
-            stale.insert(row.annotation_id.clone());
+            if let Some(l) = r.line {
+                repairs
+                    .exact_elsewhere
+                    .insert(row.annotation_id.clone(), (l, r.line_end));
+            }
         }
     }
-    Ok(stale)
+    Ok(repairs)
+}
+
+/// Per-slug `anchor_warnings[]` entries for the reconcile's kept-anchor
+/// disagreements (see [`probe_anchors`]).
+fn claim_disagreement_warnings(outcome: &store::FindingsImportOutcome) -> Vec<serde_json::Value> {
+    outcome
+        .claim_disagreements
+        .iter()
+        .map(|d| {
+            let claimed: Option<serde_json::Value> = d
+                .claimed_lines
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
+            serde_json::json!({
+                "slug": d.slug,
+                "kind": "claim_disagrees_with_anchor",
+                "anchor_line": d.anchor_line,
+                "anchor_line_end": d.anchor_line_end,
+                "claimed_lines": claimed,
+                "detail": "the stored anchor resolves exactly at the target patchset to \
+                           different lines than the resent claim; the verified anchor was \
+                           kept. Correct the claim, or POST \
+                           /api/reviews/{id}/findings/{slug}/reanchor to move it.",
+            })
+        })
+        .collect()
 }
 
 /// `POST /api/reviews/{id}/findings/import` — LOOPBACK-ONLY (design doc §2
@@ -1188,7 +1227,7 @@ pub async fn import_findings_route(
     let outcome = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
-            let stale = stale_anchor_ids(store, &git_for_repair, id, &target_ps_c)?;
+            let repairs = probe_anchors(store, &git_for_repair, id, &target_ps_c)?;
             Ok(store.reconcile_findings_import_repairing(
                 id,
                 repo_id,
@@ -1197,13 +1236,14 @@ pub async fn import_findings_route(
                 &author_c,
                 &imported,
                 mode,
-                &stale,
+                &repairs,
                 now,
             )?)
         })
         .await?;
 
     emit_findings_review_changed(&state.bus, id, &review.repo, "findings_import", None);
+    anchor_warnings.extend(claim_disagreement_warnings(&outcome));
 
     Ok((
         StatusCode::OK,
@@ -1733,7 +1773,7 @@ async fn compose_document(
     let outcome = state
         .store
         .run_blocking(move |store| -> Result<_, ApiError> {
-            let stale = stale_anchor_ids(store, &git_for_repair, id, &target_ps_c)?;
+            let repairs = probe_anchors(store, &git_for_repair, id, &target_ps_c)?;
             Ok(store.compose_review_doc(
                 &new_row,
                 repo_id,
@@ -1745,7 +1785,7 @@ async fn compose_document(
                 verdict_state
                     .as_deref()
                     .map(|s| (s, verdict_note.as_deref())),
-                &stale,
+                &repairs,
                 now,
             )?)
         })
@@ -1754,6 +1794,7 @@ async fn compose_document(
     // ONE event for the whole transaction — never three, and never one per
     // finding (the same rule V70-R's own `compose` follows).
     emit_review_changed(&state.bus, id, &review.repo, "compose", false);
+    anchor_warnings.extend(claim_disagreement_warnings(&outcome.findings));
 
     let (doc_out, _, _) =
         doc_routes::load_doc_out(&state, id, Some(&target_ps.ps_number.to_string()), true).await?;
