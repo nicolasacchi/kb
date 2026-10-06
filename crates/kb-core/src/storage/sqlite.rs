@@ -106,6 +106,14 @@ fn served_artifact_pred(artifact_col: &str) -> String {
 /// two can never disagree. Only the NEWEST capture covers: a stale
 /// capture's rows are invisible to readers and must not hide a serve.
 ///
+/// V0045/seg1 — a live serve is stamped with the harness's RAW session id,
+/// but a segmented session's later turns are captured under the part ids
+/// (`<raw>-pNN`, each with its own `is_newest` capture). Coverage therefore
+/// looks across the whole chain: the raw id's newest capture AND every
+/// part whose `segment_of` is that raw id. For an unsegmented session the
+/// chain is the session itself, so the predicate is exactly the pre-V0045
+/// one.
+///
 /// `outer` is the range variable (or table name) of the `memory_recalls`
 /// row being tested; the inner scan is aliased `cap`/`s9`. Coverage matches
 /// on `(memory_kb, memory_id)`, never `memory_id` alone: ids are a hash of the
@@ -115,12 +123,15 @@ fn served_uncovered_pred(outer: &str) -> String {
     format!(
         "({outer}.artifact_id LIKE 'served-%' AND NOT EXISTS (\
             SELECT 1 FROM memory_recalls cap \
-            WHERE cap.session_id = {outer}.session_id \
+            WHERE cap.session_id IN (SELECT sg.session_id FROM sessions sg \
+                                     WHERE sg.is_newest = 1 \
+                                       AND (sg.session_id = {outer}.session_id \
+                                            OR sg.segment_of = {outer}.session_id)) \
               AND cap.memory_kb = {outer}.memory_kb \
               AND cap.memory_id = {outer}.memory_id \
               AND cap.artifact_id NOT LIKE 'served-%' \
               AND cap.artifact_id = (SELECT s9.artifact_id FROM sessions s9 \
-                                     WHERE s9.session_id = {outer}.session_id \
+                                     WHERE s9.session_id = cap.session_id \
                                        AND s9.is_newest = 1 LIMIT 1) \
               AND (cap.pos IS NULL OR {outer}.pos = cap.pos) \
               AND (cap.recalled_at IS NULL OR {outer}.recalled_at IS NULL \
@@ -145,8 +156,10 @@ fn drop_served_recalls_if_no_capture(
     tx: &rusqlite::Transaction<'_>,
     session_id: &str,
 ) -> Result<usize> {
+    // V0045/seg1 — serve rows carry the RAW id, so a chain that still has any
+    // part (even with its part-1 capture replaced mid re-plan) keeps them.
     let remaining: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+        "SELECT COUNT(*) FROM sessions WHERE session_id = ?1 OR segment_of = ?1",
         params![session_id],
         |r| r.get(0),
     )?;
@@ -3976,10 +3989,10 @@ impl Db {
                  subagent_files_edited, subagent_launched_unstatted,
                  project_key, repo_root, harness, cc_version,
                  last_assistant_text, all_cwds, commit_count, user_turns,
-                 active_secs, substance, is_newest)
+                 active_secs, substance, segment_of, segment_idx, is_newest)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, 0)
+                     ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, 0)
              ON CONFLICT(artifact_id) DO UPDATE SET
                 session_id                  = excluded.session_id,
                 started_at                  = excluded.started_at,
@@ -4010,7 +4023,9 @@ impl Db {
                 commit_count                = excluded.commit_count,
                 user_turns                  = excluded.user_turns,
                 active_secs                 = excluded.active_secs,
-                substance                   = excluded.substance",
+                substance                   = excluded.substance,
+                segment_of                  = excluded.segment_of,
+                segment_idx                 = excluded.segment_idx",
             params![
                 row.artifact_id,
                 row.session_id,
@@ -4043,6 +4058,8 @@ impl Db {
                 row.user_turns,
                 row.active_secs,
                 row.substance,
+                row.segment_of,
+                row.segment_idx,
             ],
         )?;
         recompute_is_newest(&tx, &row.session_id)?;
@@ -4104,20 +4121,25 @@ impl Db {
         // PF-R1 (V0040) — read the row's session_id BEFORE the delete so its
         // capture group's `is_newest` flag can be re-derived after: the
         // deleted row may have been the group's currently-flagged newest.
-        let session_id: Option<String> = tx
+        let session_id: Option<(String, Option<String>)> = tx
             .query_row(
-                "SELECT session_id FROM sessions WHERE artifact_id = ?1",
+                "SELECT session_id, segment_of FROM sessions WHERE artifact_id = ?1",
                 params![artifact_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
         let n = tx.execute(
             "DELETE FROM sessions WHERE artifact_id = ?1",
             params![artifact_id],
         )?;
-        if let Some(sid) = session_id {
+        if let Some((sid, raw)) = session_id {
             recompute_is_newest(&tx, &sid)?;
             drop_served_recalls_if_no_capture(&tx, &sid)?;
+            // V0045/seg1 — serve rows carry the chain's RAW id: deleting the
+            // chain's last remaining part must reclaim them too.
+            if let Some(raw) = raw {
+                drop_served_recalls_if_no_capture(&tx, &raw)?;
+            }
         }
         tx.commit()?;
         Ok(n)
@@ -4435,7 +4457,7 @@ impl Db {
     pub fn session_commits_by_sha_prefix(&self, prefix: &str) -> Result<Vec<SessionCommitMatch>> {
         let like = format!("{prefix}%");
         let sql = format!(
-            "SELECT {}, s.title, s.first_user_prompt
+            "SELECT {}, s.title, s.first_user_prompt, s.segment_of
              FROM session_commits sc
              JOIN sessions s ON s.artifact_id = sc.artifact_id_session
              WHERE (sc.sha LIKE ?1 OR sc.sha_full LIKE ?1)
@@ -4453,6 +4475,7 @@ impl Db {
                     started_at,
                     title: r.get(13)?,
                     first_user_prompt: r.get(14)?,
+                    segment_of: r.get(15)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -4668,11 +4691,18 @@ impl Db {
             // same pos (a pre-MR1 capture row has no pos and matches on
             // memory alone) and a serve time within `SERVE_CAPTURE_SLACK_SECS`
             // of the capture row's turn ts (a capture row without a ts
-            // matches on identity alone).
+            // matches on identity alone). V0045/seg1 — a live serve carries
+            // the harness's RAW session id while a segmented session's
+            // later turns are captured under part ids, so a part's capture
+            // also retires the serves stamped with its chain's raw id.
             let mut retire = tx.prepare_cached(
                 "DELETE FROM memory_recalls
                  WHERE artifact_id LIKE 'served-%'
-                   AND session_id = ?1 AND memory_kb = ?6 AND memory_id = ?2
+                   AND (session_id = ?1
+                        OR session_id IN (SELECT segment_of FROM sessions
+                                           WHERE session_id = ?1
+                                             AND segment_of IS NOT NULL))
+                   AND memory_kb = ?6 AND memory_id = ?2
                    AND (?3 IS NULL OR pos = ?3)
                    AND (?4 IS NULL OR recalled_at IS NULL
                         OR ABS(recalled_at - ?4) <= ?5)",
@@ -5235,7 +5265,7 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance
+                    active_secs, substance, segment_of, segment_idx
              FROM sessions
              WHERE session_id IN ({placeholders})
              ORDER BY started_at DESC, artifact_id ASC"
@@ -5277,7 +5307,7 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance
+                    active_secs, substance, segment_of, segment_idx
              FROM sessions
              WHERE artifact_id IN ({placeholders})"
         );
@@ -5335,7 +5365,7 @@ impl Db {
     // kb-server boot path takes the same call on an 8-input fn, see its
     // "Eight inputs" comment).
     #[allow(clippy::too_many_arguments)]
-    pub fn sessions_list(
+    pub fn sessions_list_with(
         &self,
         limit: u32,
         before: Option<i64>,
@@ -5345,6 +5375,7 @@ impl Db {
         project: &crate::sessions::ProjectFilter,
         substance: &[String],
         harness: &[String],
+        collapse_logical: bool,
     ) -> Result<Vec<SessionRow>> {
         const COLS: &str = "artifact_id, session_id, started_at, ended_at,
                             message_count, first_user_prompt, source_relative,
@@ -5354,7 +5385,7 @@ impl Db {
                             subagent_files_edited, subagent_launched_unstatted,
                             project_key, repo_root, harness, cc_version,
                             last_assistant_text, all_cwds, commit_count, user_turns,
-                            active_secs, substance";
+                            active_secs, substance, segment_of, segment_idx";
         // Build the WHERE dynamically: the optional keyset cursor and the
         // optional folder (A1) filter are ANDed; placeholder indices are
         // assigned in bind order so the two stay in lockstep. The folder
@@ -5373,6 +5404,20 @@ impl Db {
         // flag directly rather than going through `newest_capture_pred`'s
         // subquery.
         conds.push("is_newest = 1".to_string());
+        // V0045/seg1 — opt-in `?collapse=logical`: keep only the LAST part of
+        // each segmented session (the chain's highest `segment_idx`; part 1's
+        // NULL idx reads as 1). A pure WHERE term with no bind params, so the
+        // keyset cursor stays coherent. OFF by default: nothing is hidden
+        // silently, every part is its own row.
+        if collapse_logical {
+            conds.push(
+                "NOT EXISTS (SELECT 1 FROM sessions sx \
+                  WHERE sx.is_newest = 1 \
+                    AND sx.segment_of = COALESCE(sessions.segment_of, sessions.session_id) \
+                    AND sx.segment_idx > COALESCE(sessions.segment_idx, 1))"
+                    .to_string(),
+            );
+        }
         match (before, before_id) {
             (Some(b), Some(id)) => {
                 binds.push(Box::new(b));
@@ -5503,6 +5548,25 @@ impl Db {
         Ok(rows)
     }
 
+    /// [`Self::sessions_list_with`] with the default (show every part)
+    /// segment posture — the signature every pre-V0045 caller uses.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sessions_list(
+        &self,
+        limit: u32,
+        before: Option<i64>,
+        before_id: Option<String>,
+        folder: Option<&str>,
+        q: Option<&str>,
+        project: &crate::sessions::ProjectFilter,
+        substance: &[String],
+        harness: &[String],
+    ) -> Result<Vec<SessionRow>> {
+        self.sessions_list_with(
+            limit, before, before_id, folder, q, project, substance, harness, false,
+        )
+    }
+
     /// Distinct working directories (the A1 folder facet) for this kb, with
     /// per-folder rollups (count, activity span, files edited, tokens) — the
     /// P6 per-project timeline header stats. Newest-active first. Rows with no
@@ -5515,7 +5579,7 @@ impl Db {
     pub fn sessions_folders(&self) -> Result<Vec<FolderStats>> {
         // PF-R1 (V0040) — self-referential, reads the materialized flag
         // directly (see `sessions_list`'s identical note).
-        let sql = "SELECT cwd, COUNT(*), MAX(started_at), MIN(started_at),
+        let sql = "SELECT cwd, COUNT(DISTINCT COALESCE(segment_of, session_id)), MAX(started_at), MIN(started_at),
                     COALESCE(SUM(files_edited_count), 0), COALESCE(SUM(token_total), 0)
              FROM sessions
              WHERE cwd IS NOT NULL AND cwd <> ''
@@ -5556,7 +5620,8 @@ impl Db {
                     (SELECT COUNT(DISTINCT mr.turn_id) FROM memory_recalls mr
                       WHERE mr.artifact_id = s.artifact_id AND mr.turn_id IS NOT NULL),
                     (SELECT COUNT(DISTINCT mr.recalled_at) FROM memory_recalls mr
-                      WHERE mr.session_id = s.session_id AND {served})
+                      WHERE mr.session_id = s.session_id AND {served}),
+                    COALESCE(s.segment_of, s.session_id)
                FROM sessions s
               WHERE s.is_newest = 1 AND s.started_at >= ?1
               ORDER BY s.started_at DESC, s.artifact_id ASC",
@@ -5571,6 +5636,7 @@ impl Db {
                     user_turns: r.get::<_, i64>(2)?.max(0) as u64,
                     landed_turns: r.get::<_, i64>(3)?.max(0) as u64,
                     lost_turns: r.get::<_, i64>(4)?.max(0) as u64,
+                    logical_id: r.get(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -5590,10 +5656,11 @@ impl Db {
         // directly (see `sessions_list`'s identical note).
         let sql = "SELECT COALESCE(project_key, cwd) AS key,
                     MIN(repo_root), MIN(cwd),
-                    COUNT(*), MAX(started_at), MIN(started_at),
+                    COUNT(DISTINCT COALESCE(segment_of, session_id)), MAX(started_at), MIN(started_at),
                     COALESCE(SUM(files_edited_count), 0), COALESCE(SUM(token_total), 0),
                     COALESCE(SUM(commit_count), 0),
-                    SUM(CASE WHEN error_count > 0 THEN 1 ELSE 0 END),
+                    COUNT(DISTINCT CASE WHEN error_count > 0
+                                        THEN COALESCE(segment_of, session_id) END),
                     COALESCE(SUM(active_secs), 0)
              FROM sessions
              WHERE (project_key IS NOT NULL OR (cwd IS NOT NULL AND cwd <> ''))
@@ -5629,7 +5696,7 @@ impl Db {
     pub fn sessions_projects_harness_mix(&self) -> Result<Vec<ProjectHarnessRow>> {
         // PF-R1 (V0040) — self-referential, reads the materialized flag
         // directly (see `sessions_list`'s identical note).
-        let sql = "SELECT COALESCE(project_key, cwd) AS key, harness, COUNT(*)
+        let sql = "SELECT COALESCE(project_key, cwd) AS key, harness, COUNT(DISTINCT COALESCE(segment_of, session_id))
              FROM sessions
              WHERE (project_key IS NOT NULL OR (cwd IS NOT NULL AND cwd <> ''))
                AND is_newest = 1
@@ -5683,7 +5750,7 @@ impl Db {
         );
         let sql = format!(
             "SELECT s.cwd, r.kind, r.query,
-                    COUNT(*), COUNT(DISTINCT r.session_id), MAX(s.started_at),
+                    COUNT(*), COUNT(DISTINCT COALESCE(s.segment_of, r.session_id)), MAX(s.started_at),
                     MIN(s.project_key)
              FROM session_research r
              JOIN sessions s ON s.artifact_id = r.artifact_id_session
@@ -5827,7 +5894,7 @@ impl Db {
                 SELECT
                     COALESCE(SUM(CASE WHEN c.kind IN ('kb_search','web') THEN 1 ELSE 0 END), 0)
                         AS searched_events,
-                    COUNT(DISTINCT CASE WHEN c.kind IN ('kb_search','web') THEN c.session_id END)
+                    COUNT(DISTINCT CASE WHEN c.kind IN ('kb_search','web') THEN COALESCE(s.segment_of, c.session_id) END)
                         AS searched_sessions,
                     COALESCE(SUM(CASE WHEN c.kind = 'artifact_open' THEN 1 ELSE 0 END), 0)
                         AS opened_events_research
@@ -5840,11 +5907,11 @@ impl Db {
                 SELECT
                     COALESCE(SUM(CASE WHEN c.action = 'read' THEN 1 ELSE 0 END), 0)
                         AS opened_events_files,
-                    COUNT(DISTINCT CASE WHEN c.action = 'read' THEN c.session_id END)
+                    COUNT(DISTINCT CASE WHEN c.action = 'read' THEN COALESCE(s.segment_of, c.session_id) END)
                         AS opened_sessions,
                     COUNT(DISTINCT CASE WHEN c.action IN ('edit','write') THEN c.path END)
                         AS edited_events,
-                    COUNT(DISTINCT CASE WHEN c.action IN ('edit','write') THEN c.session_id END)
+                    COUNT(DISTINCT CASE WHEN c.action IN ('edit','write') THEN COALESCE(s.segment_of, c.session_id) END)
                         AS edited_sessions
                 FROM session_files c
                 JOIN sessions s ON s.artifact_id = c.artifact_id_session
@@ -5854,7 +5921,7 @@ impl Db {
              commits_agg AS (
                 SELECT
                     COUNT(*) AS committed_events,
-                    COUNT(DISTINCT c.session_id) AS committed_sessions
+                    COUNT(DISTINCT COALESCE(s.segment_of, c.session_id)) AS committed_sessions
                 FROM session_commits c
                 JOIN sessions s ON s.artifact_id = c.artifact_id_session
                 WHERE (?1 IS NULL OR s.cwd = ?1) AND {project_pred}
@@ -5895,13 +5962,16 @@ impl Db {
     /// (the route loads each artifact's review file — comments live in
     /// `.review/*`, not sqlite, #6). `folder = None` spans every project.
     /// Newest capture only (#11) — multi-capture re-records the same edges.
+    /// V0045/seg1 — the first column is the LOGICAL session id
+    /// (`COALESCE(segment_of, session_id)`), so a segmented session that
+    /// touched one artifact in several parts counts as one commenting session.
     #[allow(clippy::type_complexity)]
     pub fn session_files_in_folder(
         &self,
         folder: Option<&str>,
     ) -> Result<Vec<(String, String, String)>> {
         let sql = format!(
-            "SELECT DISTINCT f.session_id, f.target_kb, f.target_artifact_id
+            "SELECT DISTINCT COALESCE(s.segment_of, f.session_id), f.target_kb, f.target_artifact_id
              FROM session_files f
              JOIN sessions s ON s.artifact_id = f.artifact_id_session
              WHERE f.in_corpus = 1 AND f.target_kb IS NOT NULL
@@ -5938,7 +6008,7 @@ impl Db {
                     subagent_files_edited, subagent_launched_unstatted,
                     project_key, repo_root, harness, cc_version,
                     last_assistant_text, all_cwds, commit_count, user_turns,
-                    active_secs, substance
+                    active_secs, substance, segment_of, segment_idx
              FROM sessions
              WHERE session_id = ?1
              ORDER BY started_at DESC, artifact_id ASC
@@ -5948,6 +6018,81 @@ impl Db {
             .query_row(params![session_id], Self::map_session_row)
             .optional()?;
         Ok(row)
+    }
+
+    /// V0045/seg1 — every NEWEST-capture part of the logical session that
+    /// `session_id` belongs to, in chain order (part 1 first, then by
+    /// `segment_idx`, then id). `session_id` may be the raw id (part 1 or an
+    /// ordinary session) OR any part id. Empty when no capture of that id
+    /// exists. Derived at read time from `segment_of`/`is_newest`; nothing
+    /// about the chain is stored beyond the two columns. For an ordinary
+    /// session this is a one-element vec.
+    pub fn sessions_chain(&self, session_id: &str) -> Result<Vec<SegmentPart>> {
+        let key: String = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(segment_of, session_id) FROM sessions \
+                 WHERE session_id = ?1 AND is_newest = 1",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            // No capture of this id: it can still be the RAW id of a chain
+            // whose part 1 was never captured/was deleted — look for parts.
+            .unwrap_or_else(|| session_id.to_string());
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT session_id, artifact_id, 1 AS idx, started_at, ended_at, segment_of
+               FROM sessions
+              WHERE is_newest = 1 AND segment_of IS NULL AND session_id = ?1
+             UNION ALL
+             SELECT session_id, artifact_id, COALESCE(segment_idx, 1), started_at, ended_at,
+                    segment_of
+               FROM sessions
+              WHERE is_newest = 1 AND segment_of = ?1
+             ORDER BY 3 ASC, 1 ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![key], |r| {
+                Ok(SegmentPart {
+                    session_id: r.get(0)?,
+                    artifact_id: r.get(1)?,
+                    idx: r.get(2)?,
+                    started_at: r.get(3)?,
+                    ended_at: r.get(4)?,
+                    segment_of: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// V0045/seg1 — how many NEWEST-capture parts each logical session key
+    /// has. `keys` are `COALESCE(segment_of, session_id)` values; the answer
+    /// omits a key with no capture. A plain session answers 1. Two indexed
+    /// lookups (the partial unique `is_newest` index and
+    /// `idx_sessions_segment_of`), one round trip.
+    pub fn sessions_segment_counts(&self, keys: &[String]) -> Result<Vec<(String, u32)>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ph = vec!["?"; keys.len()].join(",");
+        let sql = format!(
+            "SELECT k, COUNT(*) FROM (
+                 SELECT session_id AS k FROM sessions
+                  WHERE is_newest = 1 AND segment_of IS NULL AND session_id IN ({ph})
+                 UNION ALL
+                 SELECT segment_of AS k FROM sessions
+                  WHERE is_newest = 1 AND segment_of IN ({ph})
+             ) GROUP BY k ORDER BY k"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(keys.iter().chain(keys.iter())),
+                |r| Ok((r.get::<_, String>(0)?, i64_as_u32_sat(r.get(1)?))),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     /// Map a `sessions` row in the canonical column order shared by
@@ -5988,6 +6133,8 @@ impl Db {
             user_turns: i64_as_u32_sat(r.get::<_, i64>(28)?),
             active_secs: r.get(29)?,
             substance: r.get(30)?,
+            segment_of: r.get(31)?,
+            segment_idx: r.get(32)?,
         })
     }
 
@@ -6517,25 +6664,30 @@ impl Db {
                     // session_id BEFORE the delete (the row being removed
                     // may be its group's currently-flagged newest capture)
                     // so the group can be re-derived after.
-                    let sessions_group: Option<String> = if step.table == "sessions" {
-                        tx.query_row(
-                            "SELECT session_id FROM sessions WHERE artifact_id = ?1",
+                    let sessions_group: Option<(String, Option<String>)> =
+                        if step.table == "sessions" {
+                            tx.query_row(
+                            "SELECT session_id, segment_of FROM sessions WHERE artifact_id = ?1",
                             params![artifact_id],
-                            |r| r.get(0),
+                            |r| Ok((r.get(0)?, r.get(1)?)),
                         )
                         .optional()?
-                    } else {
-                        None
-                    };
+                        } else {
+                            None
+                        };
                     let n = tx.execute(
                         &format!("DELETE FROM {} WHERE artifact_id = ?1", step.table),
                         params![artifact_id],
                     )?;
                     if step.table == "sessions" {
                         out.sessions_removed = n;
-                        if let Some(sid) = sessions_group {
+                        if let Some((sid, raw)) = sessions_group {
                             recompute_is_newest(&tx, &sid)?;
                             out.total_rows += drop_served_recalls_if_no_capture(&tx, &sid)?;
+                            // V0045/seg1 — see `sessions_delete`.
+                            if let Some(raw) = raw {
+                                out.total_rows += drop_served_recalls_if_no_capture(&tx, &raw)?;
+                            }
                         }
                     }
                     out.total_rows += n;
@@ -7404,6 +7556,15 @@ pub struct SessionRow {
     /// every reader MUST treat `None` as `"substantive"` (never hide
     /// un-backfilled history behind a husk filter).
     pub substance: Option<String>,
+    /// V0045/seg1 — the raw (part-1) session id this capture is a
+    /// continuation part of, from the adapter-meta line's `segmentOf`.
+    /// `None` for every ordinary session AND for part 1 itself (part 1
+    /// keeps the bare raw id and is never rewritten to add metadata).
+    /// SURFACED, never scored, never joined on by a per-session read.
+    pub segment_of: Option<String>,
+    /// V0045/seg1 — 1-based part index from the adapter-meta line's
+    /// `segmentIdx` (`None` for ordinary sessions and part 1).
+    pub segment_idx: Option<i64>,
 }
 
 /// One row from the `session_decisions` table (V0018/S9) — a steering moment.
@@ -7423,6 +7584,11 @@ pub struct SessionDecisionRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecallCoverageRow {
     pub session_id: String,
+    /// V0045/seg1 — `COALESCE(segment_of, session_id)`: the logical session
+    /// this capture belongs to. Turn sums are per-part (disjoint slices,
+    /// additive); only the SESSION count and the live-registry exclusion
+    /// (which knows the raw id) group by it.
+    pub logical_id: String,
     pub harness: String,
     pub user_turns: u64,
     pub landed_turns: u64,
@@ -7539,6 +7705,24 @@ pub struct SessionCommitMatch {
     pub started_at: i64,
     pub title: Option<String>,
     pub first_user_prompt: Option<String>,
+    /// V0045/seg1 — the owning capture's `segment_of` (raw id of a segmented
+    /// session's part 1; `None` for ordinary sessions and part 1 itself).
+    pub segment_of: Option<String>,
+}
+
+/// V0045/seg1 — one part of a segmented session's chain, as resolved by
+/// [`Db::sessions_chain`]. Part 1 (the bare raw id, never rewritten with
+/// metadata) reads as `idx = 1`; later parts carry their stored
+/// `segment_idx`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentPart {
+    pub session_id: String,
+    pub artifact_id: String,
+    pub idx: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+    /// The stored `segment_of` (`None` for part 1 / an ordinary session).
+    pub segment_of: Option<String>,
 }
 
 /// kb-code Wave 0 (W0.6) — one row of the `commit-map` bulk feed
@@ -10336,6 +10520,8 @@ mod tests {
             user_turns: 5,
             active_secs: 300,
             substance: Some("substantive".into()),
+            segment_of: None,
+            segment_idx: None,
         }
     }
 
@@ -14593,6 +14779,8 @@ mod tests {
             user_turns: 0,
             active_secs: 0,
             substance: None,
+            segment_of: None,
+            segment_idx: None,
         })
         .unwrap();
         db.session_files_replace(
@@ -16146,6 +16334,620 @@ mod tests {
             ),
             1,
             "a live serve names no artifact — the sweep must never reclaim it",
+        );
+    }
+
+    // --- V0045/seg1 — segmented capture: the read side -------------------
+    //
+    // Fixture: a 3-part chain (`chain-x` = part 1 under the bare raw id,
+    // `chain-x-p02`, `chain-x-p03`) plus an ordinary `solo`, with child rows
+    // in every NEWEST capture and a STALE earlier capture of part 2. Every
+    // assertion below is one reader that must count the chain ONCE (the unit
+    // each per-session read aggregates stays `session_id`; parts are
+    // DISJOINT slices, so event totals add).
+
+    fn seg_part(aid: &str, sid: &str, ts: i64, of: Option<&str>, idx: Option<i64>) -> SessionRow {
+        let mut r = session_row(aid, sid, ts);
+        r.segment_of = of.map(String::from);
+        r.segment_idx = idx;
+        r
+    }
+
+    fn seg_children(db: &mut Db, aid: &str, sid: &str, part: u32) {
+        db.session_research_replace(
+            aid,
+            &[SessionResearchRow {
+                artifact_id_session: aid.into(),
+                session_id: sid.into(),
+                seq: 0,
+                kind: "kb_search".into(),
+                query: "alpha".into(),
+            }],
+        )
+        .unwrap();
+        let file = |path: &str, action: &str, in_corpus: bool| SessionFileRow {
+            artifact_id_session: aid.into(),
+            session_id: sid.into(),
+            path: path.into(),
+            basename: path.rsplit('/').next().unwrap().into(),
+            action: action.into(),
+            in_corpus,
+            target_kb: in_corpus.then(|| "docs".to_string()),
+            target_artifact_id: in_corpus.then(|| "art-shared".to_string()),
+            via_subagent: false,
+        };
+        db.session_files_replace(
+            aid,
+            &[
+                file("/p/shared.rs", "edit", false),
+                file(&format!("/p/r-{part}.rs"), "read", false),
+                file("/p/doc.html", "read", true),
+            ],
+        )
+        .unwrap();
+        db.session_commits_replace(
+            aid,
+            &[commit_row(
+                aid,
+                sid,
+                0,
+                Some(&format!("cafe{part:04}")),
+                Some(&format!("cafe{part:04}{}", "0".repeat(32))),
+            )],
+        )
+        .unwrap();
+    }
+
+    fn seg_fixture() -> Db {
+        let mut db = db();
+        // STALE earlier capture of part 2 (older started_at → not newest).
+        db.sessions_upsert(&seg_part(
+            "cx-2-old",
+            "chain-x-p02",
+            1_700_001_900,
+            Some("chain-x"),
+            Some(2),
+        ))
+        .unwrap();
+        seg_children(&mut db, "cx-2-old", "chain-x-p02", 99);
+        db.session_research_replace(
+            "cx-2-old",
+            &[SessionResearchRow {
+                artifact_id_session: "cx-2-old".into(),
+                session_id: "chain-x-p02".into(),
+                seq: 0,
+                kind: "kb_search".into(),
+                query: "stale-only".into(),
+            }],
+        )
+        .unwrap();
+        let live: [(&str, &str, i64, Option<&str>, Option<i64>, u32); 4] = [
+            ("cx-1", "chain-x", 1_700_001_000, None, None, 1),
+            (
+                "cx-2",
+                "chain-x-p02",
+                1_700_002_000,
+                Some("chain-x"),
+                Some(2),
+                2,
+            ),
+            (
+                "cx-3",
+                "chain-x-p03",
+                1_700_003_000,
+                Some("chain-x"),
+                Some(3),
+                3,
+            ),
+            ("solo-1", "solo", 1_700_002_500, None, None, 4),
+        ];
+        for (aid, sid, ts, of, idx, part) in live {
+            db.sessions_upsert(&seg_part(aid, sid, ts, of, idx))
+                .unwrap();
+            seg_children(&mut db, aid, sid, part);
+        }
+        db
+    }
+
+    #[test]
+    fn migration_v0045_is_additive_and_bumps_the_epoch() {
+        // The columns exist and are NULL on a row that never set them.
+        let mut db = db();
+        db.sessions_upsert(&session_row("plain", "sid-plain", 1_700_000_000))
+            .unwrap();
+        let (of, idx): (Option<String>, Option<i64>) = db
+            .conn
+            .query_row(
+                "SELECT segment_of, segment_idx FROM sessions WHERE artifact_id = 'plain'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (of, idx),
+            (None, None),
+            "no backfill: ordinary rows stay NULL"
+        );
+        // The partial index exists.
+        let idx_n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'index' AND name = 'idx_sessions_segment_of'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_n, 1);
+        // The epoch is exactly the highest embedded migration: V0045 is in,
+        // and a volume this binary migrated sits AT it — the number an older
+        // binary (epoch 44) compares against and refuses to boot over.
+        assert!(
+            schema_epoch() >= 45,
+            "V0045 must be embedded, epoch is {}",
+            schema_epoch()
+        );
+        assert_eq!(
+            crate::sibling::volume_epoch(&db.conn).unwrap(),
+            Some(schema_epoch())
+        );
+        let older_binary_epoch = 44u32;
+        assert!(
+            crate::sibling::volume_epoch(&db.conn).unwrap().unwrap() > older_binary_epoch,
+            "a migrated volume is AHEAD of a V0044 binary: refuse_if_volume_ahead must refuse it"
+        );
+    }
+
+    #[test]
+    fn segmented_upsert_roundtrips_and_keeps_one_newest_per_session_id() {
+        let db = seg_fixture();
+        let p2 = db.sessions_get("chain-x-p02").unwrap().unwrap();
+        assert_eq!(p2.artifact_id, "cx-2", "the newest capture of part 2");
+        assert_eq!(p2.segment_of.as_deref(), Some("chain-x"));
+        assert_eq!(p2.segment_idx, Some(2));
+        let p1 = db.sessions_get("chain-x").unwrap().unwrap();
+        assert_eq!((p1.segment_of, p1.segment_idx), (None, None));
+        // The partial UNIQUE index holds: exactly one flagged row per id.
+        let bad: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT session_id FROM sessions \
+                  GROUP BY session_id HAVING SUM(is_newest) <> 1)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bad, 0);
+        // A re-capture that changes nothing but the chain link rewrites it.
+        let mut again = seg_part(
+            "cx-3",
+            "chain-x-p03",
+            1_700_003_000,
+            Some("chain-x"),
+            Some(3),
+        );
+        again.segment_idx = Some(4);
+        let mut db = db;
+        db.sessions_upsert(&again).unwrap();
+        assert_eq!(
+            db.sessions_get("chain-x-p03").unwrap().unwrap().segment_idx,
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn list_shows_every_part_once_and_collapse_logical_keeps_the_last() {
+        let db = seg_fixture();
+        let ids = |rows: Vec<SessionRow>| -> Vec<String> {
+            rows.into_iter().map(|r| r.session_id).collect()
+        };
+        let all = db
+            .sessions_list(100, None, None, None, None, &Default::default(), &[], &[])
+            .unwrap();
+        assert_eq!(
+            ids(all),
+            ["chain-x-p03", "solo", "chain-x-p02", "chain-x"],
+            "default: every part is its own row, each exactly once (the stale capture never lists)"
+        );
+        let collapsed = db
+            .sessions_list_with(
+                100,
+                None,
+                None,
+                None,
+                None,
+                &Default::default(),
+                &[],
+                &[],
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            ids(collapsed),
+            ["chain-x-p03", "solo"],
+            "collapse=logical keeps only the LAST part of each chain"
+        );
+        // The keyset cursor stays coherent over the collapsed set.
+        let page1 = db
+            .sessions_list_with(
+                1,
+                None,
+                None,
+                None,
+                None,
+                &Default::default(),
+                &[],
+                &[],
+                true,
+            )
+            .unwrap();
+        assert_eq!(page1.len(), 1);
+        let page2 = db
+            .sessions_list_with(
+                1,
+                Some(page1[0].started_at),
+                Some(page1[0].artifact_id.clone()),
+                None,
+                None,
+                &Default::default(),
+                &[],
+                &[],
+                true,
+            )
+            .unwrap();
+        assert_eq!(ids(page2), ["solo"]);
+    }
+
+    #[test]
+    fn chain_and_segment_counts_are_derived_at_read_time() {
+        let mut db = seg_fixture();
+        assert_eq!(
+            db.sessions_segment_counts(&["chain-x".into(), "solo".into(), "ghost".into()])
+                .unwrap(),
+            vec![("chain-x".to_string(), 3), ("solo".to_string(), 1)],
+            "the stale capture of part 2 is not a 4th part"
+        );
+        let ids = |db: &Db, sid: &str| -> Vec<(String, i64)> {
+            db.sessions_chain(sid)
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.session_id, p.idx))
+                .collect()
+        };
+        let want = vec![
+            ("chain-x".to_string(), 1),
+            ("chain-x-p02".to_string(), 2),
+            ("chain-x-p03".to_string(), 3),
+        ];
+        assert_eq!(ids(&db, "chain-x"), want, "from the raw id");
+        assert_eq!(ids(&db, "chain-x-p02"), want, "from any part id");
+        assert_eq!(ids(&db, "solo"), vec![("solo".to_string(), 1)]);
+        assert!(ids(&db, "ghost").is_empty());
+        // Part 1 deleted (a re-plan): the raw id still resolves the parts.
+        db.sessions_delete("cx-1").unwrap();
+        assert_eq!(
+            ids(&db, "chain-x"),
+            vec![
+                ("chain-x-p02".to_string(), 2),
+                ("chain-x-p03".to_string(), 3)
+            ]
+        );
+    }
+
+    // invariant:11 segmented chain: logical counts once, events sum
+    #[test]
+    fn every_session_counting_reader_counts_a_chain_once_and_sums_events() {
+        let db = seg_fixture();
+        // Folder facet: 2 logical sessions in the one cwd; edited totals are
+        // the SUM over the 4 newest captures (disjoint slices).
+        let folders = db.sessions_folders().unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].count, 2, "chain-x counts once");
+        assert_eq!(folders[0].edited_total, 4 * 2);
+        assert_eq!(folders[0].token_total, 4 * 12_345);
+        // Projects home.
+        let proj = db.sessions_projects_stats().unwrap();
+        assert_eq!(proj.len(), 1);
+        assert_eq!(proj[0].count, 2);
+        assert_eq!(
+            proj[0].error_sessions, 2,
+            "two LOGICAL sessions had errors, not four parts"
+        );
+        assert_eq!(proj[0].commit_total, 4);
+        assert_eq!(proj[0].token_total, 4 * 12_345);
+        assert_eq!(proj[0].active_secs_total, 4 * 300);
+        let mix = db.sessions_projects_harness_mix().unwrap();
+        assert_eq!(mix.len(), 1);
+        assert_eq!(mix[0].count, 2);
+        // Research rollup: 4 events, 2 logical sessions; the stale capture's
+        // query never appears.
+        let roll = db.sessions_research_rollup(&[]).unwrap();
+        assert_eq!(roll.len(), 1, "{roll:?}");
+        assert_eq!(
+            (roll[0].query.as_str(), roll[0].count, roll[0].sessions),
+            ("alpha", 4, 2)
+        );
+        // Funnel: events sum across parts, sessions count logically.
+        let f = db
+            .sessions_funnel_counts(None, &Default::default(), &[])
+            .unwrap();
+        assert_eq!((f.searched_events, f.searched_sessions), (4, 2));
+        assert_eq!((f.opened_events, f.opened_sessions), (8, 2));
+        assert_eq!((f.edited_events, f.edited_sessions), (1, 2));
+        assert_eq!((f.committed_events, f.committed_sessions), (4, 2));
+        // The funnel's `commented` input: one row per logical session.
+        let mut touched = db.session_files_in_folder(None).unwrap();
+        touched.sort();
+        assert_eq!(
+            touched,
+            vec![
+                (
+                    "chain-x".to_string(),
+                    "docs".to_string(),
+                    "art-shared".to_string()
+                ),
+                (
+                    "solo".to_string(),
+                    "docs".to_string(),
+                    "art-shared".to_string()
+                ),
+            ]
+        );
+        // Recall coverage keeps one row per capture but names the logical id.
+        let cov = db.sessions_recall_coverage(0).unwrap();
+        assert_eq!(cov.len(), 4);
+        assert_eq!(
+            cov.iter().filter(|r| r.logical_id == "chain-x").count(),
+            3,
+            "all three parts carry the chain's raw id as their logical id"
+        );
+    }
+
+    #[test]
+    fn per_session_child_reads_stay_scoped_to_one_part() {
+        let db = seg_fixture();
+        // for_session reads never join on the chain: each part reads its own
+        // newest capture's rows, once.
+        assert_eq!(
+            db.session_commits_for_session("chain-x-p02").unwrap().len(),
+            1
+        );
+        assert_eq!(
+            db.session_files_for_session("chain-x-p02").unwrap().len(),
+            3
+        );
+        let research = db.session_research_for_session("chain-x-p02").unwrap();
+        assert_eq!(
+            research
+                .iter()
+                .map(|r| r.query.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha"],
+            "the stale capture's `stale-only` row is invisible"
+        );
+        assert_eq!(db.session_commits_for_session("chain-x").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn by_commit_resolves_a_trailer_sid_to_the_part_that_holds_the_commit() {
+        let db = seg_fixture();
+        let hits = db.session_commits_by_sha_prefix("cafe0003").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].commit.session_id, "chain-x-p03");
+        // A `Kb-Session:` trailer carries the RAW id; the match names it.
+        assert_eq!(hits[0].segment_of.as_deref(), Some("chain-x"));
+        // Part 1's own commit carries no chain link.
+        let first = db.session_commits_by_sha_prefix("cafe0001").unwrap();
+        assert_eq!(first[0].commit.session_id, "chain-x");
+        assert_eq!(first[0].segment_of, None);
+    }
+
+    #[test]
+    fn a_live_serve_stamped_with_the_raw_id_is_covered_by_a_part_capture() {
+        let mut db = seg_fixture();
+        let serve = |memory_id: &str, pos: u32| ServedRecallRow {
+            memory_kb: "notes".into(),
+            memory_id: memory_id.into(),
+            pos,
+            title: "t".into(),
+            injected_chars: 1,
+            served_at: 1_700_002_100,
+        };
+        // READ-time coverage: the capture of part 2 lands FIRST, the serve
+        // (raw id) arrives after it.
+        db.memory_recalls_replace(
+            "cx-2",
+            &[memory_recall_row(
+                "notes",
+                "aaaaaaaaaaaa",
+                "chain-x-p02",
+                "t-1",
+                Some(1_700_002_100),
+                "cx-2",
+            )],
+        )
+        .unwrap();
+        db.memory_recalls_append(
+            "chain-x",
+            &[serve("aaaaaaaaaaaa", 1), serve("bbbbbbbbbbbb", 2)],
+        )
+        .unwrap();
+        let raw_view = db.memory_recalls_for_session("chain-x").unwrap();
+        let served: Vec<&str> = raw_view
+            .iter()
+            .filter(|r| r.artifact_id.starts_with("served-"))
+            .map(|r| r.memory_id.as_str())
+            .collect();
+        assert_eq!(
+            served,
+            ["bbbbbbbbbbbb"],
+            "the serve the part-2 capture covers is NOT counted twice; the uncovered one stays"
+        );
+        let part_view = db.memory_recalls_for_session("chain-x-p02").unwrap();
+        assert_eq!(part_view.len(), 1);
+        assert_eq!(part_view[0].artifact_id, "cx-2");
+        // WRITE-time retire: a serve already in the ledger is retired by the
+        // capture that covers it.
+        db.memory_recalls_append("chain-x", &[serve("cccccccccccc", 3)])
+            .unwrap();
+        let raw_n = |db: &Db, mem: &str| -> i64 {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memory_recalls \
+                     WHERE memory_id = ?1 AND artifact_id LIKE 'served-%'",
+                    params![mem],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(raw_n(&db, "cccccccccccc"), 1);
+        db.memory_recalls_replace(
+            "cx-3",
+            &[memory_recall_row(
+                "notes",
+                "cccccccccccc",
+                "chain-x-p03",
+                "t-3",
+                Some(1_700_002_100),
+                "cx-3",
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            raw_n(&db, "cccccccccccc"),
+            0,
+            "the part's capture retired the raw-id serve"
+        );
+        // Serve rows survive while ANY part remains, and go with the last.
+        assert_eq!(raw_n(&db, "bbbbbbbbbbbb"), 1);
+        db.sessions_delete("cx-1").unwrap();
+        db.sessions_delete("cx-2").unwrap();
+        db.sessions_delete("cx-2-old").unwrap();
+        assert_eq!(
+            raw_n(&db, "bbbbbbbbbbbb"),
+            1,
+            "part 3 still holds the chain"
+        );
+        db.sessions_delete("cx-3").unwrap();
+        assert_eq!(
+            raw_n(&db, "bbbbbbbbbbbb"),
+            0,
+            "the last part's delete reclaims the raw-id serves"
+        );
+    }
+
+    #[test]
+    fn memory_recalled_by_and_session_ledger_are_unchanged_for_unsegmented_sessions() {
+        // The widening is read-side and only fires with a chain: with none,
+        // `served_uncovered_pred` is exactly the pre-V0045 predicate, so an
+        // ordinary session's decomposition is byte-identical.
+        let mut db = db();
+        db.sessions_upsert(&session_row("cap-1", "sid-a", 1_700_000_000))
+            .unwrap();
+        db.memory_recalls_replace(
+            "cap-1",
+            &[memory_recall_row(
+                "notes",
+                "aaaaaaaaaaaa",
+                "sid-a",
+                "t-1",
+                Some(100),
+                "cap-1",
+            )],
+        )
+        .unwrap();
+        db.memory_recalls_append(
+            "sid-a",
+            &[
+                ServedRecallRow {
+                    memory_kb: "notes".into(),
+                    memory_id: "aaaaaaaaaaaa".into(),
+                    pos: 1,
+                    title: "t".into(),
+                    injected_chars: 1,
+                    served_at: 150,
+                },
+                ServedRecallRow {
+                    memory_kb: "notes".into(),
+                    memory_id: "zzzzzzzzzzzz".into(),
+                    pos: 2,
+                    title: "t".into(),
+                    injected_chars: 1,
+                    served_at: 150,
+                },
+            ],
+        )
+        .unwrap();
+        let rows = db.memory_recalls_for_session("sid-a").unwrap();
+        let mut got: Vec<(String, String)> = rows
+            .iter()
+            .map(|r| (r.memory_id.clone(), r.artifact_id.clone()))
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("aaaaaaaaaaaa".to_string(), "cap-1".to_string()),
+                ("zzzzzzzzzzzz".to_string(), "served-sid-a-150-2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn cascade_relocate_keeps_the_segment_columns() {
+        let mut db = seg_fixture();
+        let mid = db
+            .moves_insert_intent("cx-3", "cx-3-moved", "old.html", "new.html", 1_000)
+            .unwrap();
+        db.cascade_relocate_doc("cx-3", "cx-3-moved", "old.html", "new.html", mid, 1_001)
+            .unwrap();
+        let p3 = db.sessions_get("chain-x-p03").unwrap().unwrap();
+        assert_eq!(p3.artifact_id, "cx-3-moved");
+        assert_eq!(
+            (p3.segment_of.as_deref(), p3.segment_idx),
+            (Some("chain-x"), Some(3))
+        );
+        assert_eq!(
+            db.sessions_segment_counts(&["chain-x".into()]).unwrap()[0].1,
+            3
+        );
+    }
+
+    #[test]
+    fn cascade_delete_of_the_last_part_reclaims_raw_id_serves() {
+        let mut db = db();
+        db.sessions_upsert(&seg_part(
+            "only-p02",
+            "ch-p02",
+            1_700_000_000,
+            Some("ch"),
+            Some(2),
+        ))
+        .unwrap();
+        db.memory_recalls_append(
+            "ch",
+            &[ServedRecallRow {
+                memory_kb: "notes".into(),
+                memory_id: "aaaaaaaaaaaa".into(),
+                pos: 1,
+                title: "t".into(),
+                injected_chars: 1,
+                served_at: 1,
+            }],
+        )
+        .unwrap();
+        let n = |db: &Db| -> i64 {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM memory_recalls", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(n(&db), 1);
+        db.cascade_delete_doc("only-p02", crate::cascade::CascadeMode::Full)
+            .unwrap();
+        assert_eq!(
+            n(&db),
+            0,
+            "the chain's last part is gone, so are its raw-id serves"
         );
     }
 }

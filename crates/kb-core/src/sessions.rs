@@ -298,6 +298,16 @@ pub struct SessionActivity {
     /// separate passes over the same bytes, deliberately not unified (they
     /// serve different engines; see the module docs).
     pub harness: Option<String>,
+    /// V0045/seg1 — the FIRST `adapter-meta` record's `segmentOf`: the raw
+    /// (part-1) session id this capture is a continuation part of. `None`
+    /// for an ordinary session and for part 1 (which keeps the bare raw id
+    /// and is never rewritten to carry metadata). An older parser simply
+    /// never reads the key (adapter-meta is read key-by-key; unknown pairs
+    /// are ignored) — pinned by `parse_ignores_segment_keys_for_old_fields`.
+    pub segment_of: Option<String>,
+    /// V0045/seg1 — the same record's `segmentIdx` (1-based part index; a
+    /// JSON number or a numeric string). `None` unless `segment_of` is set.
+    pub segment_idx: Option<i64>,
     /// V0029 — first non-empty top-level `version` field across the JSONL
     /// (the `first_transcript_field(jsonl, "version")` rule, computed inline
     /// here instead of via a second pass over the transcript).
@@ -737,6 +747,28 @@ fn parse_session_activity_full(jsonl: &str) -> (SessionActivity, Option<String>)
                 if !h.trim().is_empty() {
                     act.harness = Some(h.trim().to_string());
                 }
+            }
+        }
+
+        // V0045/seg1 — segmented capture: the first adapter-meta record's
+        // `segmentOf` + `segmentIdx` (a continuation part of a long session).
+        // Both must be present and well-formed (non-empty id, idx >= 1) or
+        // BOTH are ignored: a half-written chain link is never guessed at.
+        if act.segment_of.is_none()
+            && v.get("type").and_then(|x| x.as_str()) == Some("adapter-meta")
+        {
+            let of = v
+                .get("segmentOf")
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|x| !x.is_empty());
+            let idx = v.get("segmentIdx").and_then(|x| {
+                x.as_i64()
+                    .or_else(|| x.as_str().and_then(|t| t.trim().parse::<i64>().ok()))
+            });
+            if let (Some(of), Some(idx)) = (of, idx.filter(|i| *i >= 1)) {
+                act.segment_of = Some(of.to_string());
+                act.segment_idx = Some(idx);
             }
         }
 
@@ -3718,6 +3750,81 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1, "{:?}", act.research);
         assert_eq!(hits[0].query, "01KY9XHCWKWBJSFDHW70G56HYY");
+    }
+
+    /// V0045/seg1 — the adapter-meta `segmentOf`/`segmentIdx` pair is read
+    /// into the two new fields and NOTHING else changes: an old parser (which
+    /// never reads the keys) and this one agree on every pre-existing field,
+    /// which is what makes the keys safe to emit before every daemon is
+    /// upgraded.
+    #[test]
+    fn parse_reads_segment_keys_and_changes_no_other_field() {
+        let body = concat!(
+            r#"{"sessionId":"S1-p02","type":"user","message":{"role":"user","content":[{"type":"text","text":"keep going"}]}}"#,
+            "\n",
+        );
+        let with = format!(
+            "{}\n{body}",
+            r#"{"sessionId":"S1-p02","type":"adapter-meta","adapter":"kb-capture-omp/1","harness":"omp","segmentOf":"S1","segmentIdx":2,"rawSessionId":"S1"}"#
+        );
+        let without = format!(
+            "{}\n{body}",
+            r#"{"sessionId":"S1-p02","type":"adapter-meta","adapter":"kb-capture-omp/1","harness":"omp"}"#
+        );
+        let a = parse_session_activity(&with);
+        let b = parse_session_activity(&without);
+        assert_eq!(a.segment_of.as_deref(), Some("S1"));
+        assert_eq!(a.segment_idx, Some(2));
+        assert_eq!(b.segment_of, None);
+        assert_eq!(b.segment_idx, None);
+        assert_eq!(a.harness.as_deref(), Some("omp"));
+        let mut a_stripped = a.clone();
+        a_stripped.segment_of = None;
+        a_stripped.segment_idx = None;
+        assert_eq!(
+            format!("{a_stripped:?}"),
+            format!("{b:?}"),
+            "the segment keys must not perturb any pre-existing parsed field"
+        );
+    }
+
+    /// A half-written link (id without idx, idx < 1, blank id) is dropped
+    /// whole; a numeric-string idx is accepted; only the FIRST adapter-meta
+    /// record counts.
+    #[test]
+    fn parse_segment_keys_are_all_or_nothing_and_first_record_wins() {
+        let one = |meta: &str| parse_session_activity(&format!("{meta}\n"));
+        let m = |extra: &str| {
+            format!(r#"{{"sessionId":"X-p02","type":"adapter-meta","harness":"omp"{extra}}}"#)
+        };
+        let a = one(&m(r#","segmentOf":"X""#));
+        assert_eq!((a.segment_of, a.segment_idx), (None, None));
+        let a = one(&m(r#","segmentIdx":2"#));
+        assert_eq!((a.segment_of, a.segment_idx), (None, None));
+        let a = one(&m(r#","segmentOf":"X","segmentIdx":0"#));
+        assert_eq!((a.segment_of, a.segment_idx), (None, None));
+        let a = one(&m(r#","segmentOf":"  ","segmentIdx":2"#));
+        assert_eq!((a.segment_of, a.segment_idx), (None, None));
+        let a = one(&m(r#","segmentOf":"X","segmentIdx":"3""#));
+        assert_eq!(
+            (a.segment_of.as_deref(), a.segment_idx),
+            (Some("X"), Some(3))
+        );
+        let two = format!(
+            "{}\n{}\n",
+            m(r#","segmentOf":"X","segmentIdx":2"#),
+            m(r#","segmentOf":"Y","segmentIdx":9"#)
+        );
+        let a = parse_session_activity(&two);
+        assert_eq!(
+            (a.segment_of.as_deref(), a.segment_idx),
+            (Some("X"), Some(2))
+        );
+        // A non-adapter-meta record carrying the same keys is not a link.
+        let a = parse_session_activity(
+            r#"{"sessionId":"X-p02","type":"user","segmentOf":"X","segmentIdx":2,"message":{"role":"user","content":"hi"}}"#,
+        );
+        assert_eq!((a.segment_of, a.segment_idx), (None, None));
     }
 
     #[test]
