@@ -153,10 +153,15 @@ fn omp_sidecar_names_disambiguate_only_on_collision_and_spool_with_the_item() {
 
 /// Run `script` with `KB_BIN_DIR` pointing at the freshly built `kb`.
 fn run_with_real_kb(script: &str) {
+    run_with_real_kb_env(script, &[]);
+}
+
+fn run_with_real_kb_env(script: &str, env: &[(&str, &str)]) {
     let kb = PathBuf::from(env!("CARGO_BIN_EXE_kb"));
     let out = Command::new("bash")
         .arg(tests_dir().join(script))
         .env("KB_BIN_DIR", kb.parent().unwrap())
+        .envs(env.iter().copied())
         .output()
         .expect("bash is required to run the hook shell tests");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -208,4 +213,29 @@ fn spool_replay_never_overwrites_a_fresher_capture() {
 #[test]
 fn grok_distill_pending_relay() {
     run("test-grok-distill-pending.sh");
+}
+
+/// v0.46 SEG-PR2 - segmented omp capture (flag-gated): a long session lands as
+/// an ordered chain of ordinary sessions planned by the REAL
+/// `kb sessions segment-plan`; frozen parts convert once, kill -9 mid catch-up
+/// resumes, rc 1/2 never record landed, a fork/rewind or /clear re-lands in
+/// place and deletes orphan parts through the REAL `kb sessions drop-part`, a
+/// sidecar change re-lands only its part, the size cap halves the target, the
+/// spool is capped, TERM reaps every descendant, and below the threshold the
+/// capture is byte-identical to the pre-segmentation golden.
+#[test]
+fn omp_segmented_capture_lands_a_chain_resumes_and_drops_orphans() {
+    run_with_real_kb("test-capture-omp-segments.sh");
+}
+
+/// v0.46 SEG-PR2 - the scale gate at a CI-sized session: a linked synthetic
+/// chain of ~16 MiB with 2 MiB parts, run under `ulimit -v`; asserts that one
+/// appended turn converts at most the live tail and costs far less than the
+/// catch-up. (The production-size numbers are measured by hand; see the PR.)
+#[test]
+fn omp_segmented_capture_per_turn_cost_does_not_scale_with_the_session() {
+    run_with_real_kb_env(
+        "test-capture-omp-segments-scale.sh",
+        &[("SEG_SCALE_MB", "16"), ("SEG_SCALE_TARGET", "2097152")],
+    );
 }
