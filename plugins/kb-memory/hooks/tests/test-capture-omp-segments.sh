@@ -62,6 +62,12 @@ else
   echo "== segmented omp capture (v0.46 SEG-PR2): offline stand-ins (planner=${REAL_PLANNER:-fake} drop-part=${REAL_DROP:-fake}) =="
 fi
 
+# CI builds kb from source: there the REAL planner and drop-part are mandatory,
+# or the lane would silently pin only the offline stand-ins.
+if [ -n "${CI:-}" ] && { [ -z "$REAL_PLANNER" ] || [ -z "$REAL_DROP" ]; }; then
+  bad "CI must run against the real planner and drop-part (planner=${REAL_PLANNER:-missing} drop-part=${REAL_DROP:-missing}; KB_BIN_DIR=${KB_BIN_DIR:-unset})"
+fi
+
 mkdir -p "$TMPROOT/kbbin" "$TMPROOT/tmp" "$TMPROOT/home"
 export TMPDIR="$TMPROOT/tmp" HOME="$TMPROOT/home"
 export XDG_CACHE_HOME="$TMPROOT/home/.cache"

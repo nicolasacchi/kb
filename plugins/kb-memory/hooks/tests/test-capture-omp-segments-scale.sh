@@ -47,6 +47,9 @@ REAL_PLANNER=""
 [ -n "$REAL_KB" ] && "$REAL_KB" sessions segment-plan --help >/dev/null 2>&1 && REAL_PLANNER=1
 export REAL_KB REAL_PLANNER
 
+if [ -n "${CI:-}" ] && [ -z "$REAL_PLANNER" ]; then
+  bad "CI must run against the real planner (KB_BIN_DIR=${KB_BIN_DIR:-unset})"
+fi
 mkdir -p "$TMPROOT/kbbin" "$TMPROOT/tmp" "$TMPROOT/home" "$TMPROOT/sessions"
 export TMPDIR="$TMPROOT/tmp" HOME="$TMPROOT/home" XDG_CACHE_HOME="$TMPROOT/home/.cache" XDG_CONFIG_HOME="$TMPROOT/home/.config"
 unset KB_CACHE_DIR KB_STATE_DIR KB_CONFIG_DIR
