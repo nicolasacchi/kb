@@ -638,6 +638,25 @@ pub fn recollect_order(candidates: &mut [RecollectCandidate], now_unix: i64) {
     });
 }
 
+/// Is a `segmentOf`/`segmentIdx` pair consistent with the part's own
+/// `sessionId`? The part id must be exactly `<segmentOf>-p<digits>` with the
+/// digits equal to `idx`, `idx >= 2` (part 1 carries no keys), and `segmentOf`
+/// must not be the part id itself.
+pub(crate) fn segment_link_is_wellformed(session_id: Option<&str>, of: &str, idx: i64) -> bool {
+    let Some(sid) = session_id.map(str::trim) else {
+        return false;
+    };
+    if idx < 2 || sid == of {
+        return false;
+    }
+    let Some(rest) = sid.strip_prefix(of).and_then(|r| r.strip_prefix("-p")) else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest.bytes().all(|b| b.is_ascii_digit())
+        && rest.parse::<i64>().ok() == Some(idx)
+}
+
 /// Pure: extract the rich activity picture from the unescaped JSONL
 /// transcript. Deterministic given the bytes — no clock, no I/O, no corpus
 /// knowledge. This is the ONE parser both the index row and the render
@@ -767,8 +786,23 @@ fn parse_session_activity_full(jsonl: &str) -> (SessionActivity, Option<String>)
                     .or_else(|| x.as_str().and_then(|t| t.trim().parse::<i64>().ok()))
             });
             if let (Some(of), Some(idx)) = (of, idx.filter(|i| *i >= 1)) {
-                act.segment_of = Some(of.to_string());
-                act.segment_idx = Some(idx);
+                // The keys are untrusted transcript content: they must agree
+                // with the record's own `sessionId`, the part id the capture
+                // pipeline minted (`<raw>-p<NN>`, NN >= 2), or both are
+                // ignored. A forged link (a self-reference, a foreign chain,
+                // a part number that contradicts the id) would otherwise
+                // widen raw-id reads and re-group counts onto another chain.
+                if segment_link_is_wellformed(v.get("sessionId").and_then(|x| x.as_str()), of, idx)
+                {
+                    act.segment_of = Some(of.to_string());
+                    act.segment_idx = Some(idx);
+                } else {
+                    tracing::debug!(
+                        segment_of = of,
+                        segment_idx = idx,
+                        "ignoring a segment link that disagrees with the record's sessionId"
+                    );
+                }
             }
         }
 
@@ -3805,10 +3839,10 @@ mod tests {
         assert_eq!((a.segment_of, a.segment_idx), (None, None));
         let a = one(&m(r#","segmentOf":"  ","segmentIdx":2"#));
         assert_eq!((a.segment_of, a.segment_idx), (None, None));
-        let a = one(&m(r#","segmentOf":"X","segmentIdx":"3""#));
+        let a = one(&m(r#","segmentOf":"X","segmentIdx":"2""#));
         assert_eq!(
             (a.segment_of.as_deref(), a.segment_idx),
-            (Some("X"), Some(3))
+            (Some("X"), Some(2))
         );
         let two = format!(
             "{}\n{}\n",
@@ -3825,6 +3859,53 @@ mod tests {
             r#"{"sessionId":"X-p02","type":"user","segmentOf":"X","segmentIdx":2,"message":{"role":"user","content":"hi"}}"#,
         );
         assert_eq!((a.segment_of, a.segment_idx), (None, None));
+    }
+
+    /// Segment keys are untrusted transcript content (v0.46 SEG-PR1 polish):
+    /// a link that contradicts the record's own `sessionId` is ignored whole,
+    /// and an unsegmented session parses byte-identically to before.
+    #[test]
+    fn parse_ignores_segment_keys_that_contradict_the_session_id() {
+        let meta = |sid: &str, extra: &str| {
+            format!(r#"{{"sessionId":"{sid}","type":"adapter-meta","harness":"omp"{extra}}}"#)
+        };
+        let seg = |of: &str, idx: &str| format!(r#","segmentOf":"{of}","segmentIdx":{idx}"#);
+        let keys = |sid: &str, extra: &str| {
+            let a = parse_session_activity(&format!("{}\n", meta(sid, extra)));
+            (a.segment_of, a.segment_idx)
+        };
+        // well-formed: accepted (control for the rejections below)
+        assert_eq!(
+            keys("X-p02", &seg("X", "2")),
+            (Some("X".to_string()), Some(2))
+        );
+        assert_eq!(
+            keys("X-p12", &seg("X", "12")),
+            (Some("X".to_string()), Some(12))
+        );
+        // segmentOf == the record's own sessionId (a self-reference)
+        assert_eq!(keys("X", &seg("X", "2")), (None, None));
+        assert_eq!(keys("X-p02", &seg("X-p02", "2")), (None, None));
+        // the part id does not start with `<segmentOf>-p`
+        assert_eq!(keys("Y-p02", &seg("X", "2")), (None, None));
+        assert_eq!(keys("X-q02", &seg("X", "2")), (None, None));
+        assert_eq!(keys("X02", &seg("X", "2")), (None, None));
+        // idx < 2 (part 1 carries no keys)
+        assert_eq!(keys("X-p01", &seg("X", "1")), (None, None));
+        // idx contradicts the `-pNN` suffix, or the suffix is not a number
+        assert_eq!(keys("X-p02", &seg("X", "3")), (None, None));
+        assert_eq!(keys("X-p0a", &seg("X", "2")), (None, None));
+        assert_eq!(keys("X-p", &seg("X", "2")), (None, None));
+        // no sessionId on the record at all
+        let a = parse_session_activity(&format!(
+            "{}\n",
+            r#"{"type":"adapter-meta","segmentOf":"X","segmentIdx":2}"#
+        ));
+        assert_eq!((a.segment_of, a.segment_idx), (None, None));
+        // rejection changes no other parsed field
+        let bad = parse_session_activity(&format!("{}\n", meta("X-p02", &seg("Y", "2"))));
+        let plain = parse_session_activity(&format!("{}\n", meta("X-p02", "")));
+        assert_eq!(format!("{bad:?}"), format!("{plain:?}"));
     }
 
     #[test]

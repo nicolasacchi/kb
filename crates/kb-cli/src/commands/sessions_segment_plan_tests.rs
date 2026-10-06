@@ -279,30 +279,139 @@ fn dmodel_is_the_last_model_change_on_the_live_chain() {
 // --- cut rules ---------------------------------------------------------------------
 
 #[test]
-fn a_cut_is_never_legal_while_a_tool_call_is_pending() {
-    // T=2000, half=1000. Boundaries in the window: u1 at 1100 (legal) and the
-    // interjected user at 1540 while call c1 has no result yet (illegal).
-    // Ignoring the pending rule, the LAST candidate (1540) would win.
+fn a_call_result_pair_is_never_split_by_a_non_hard_cut() {
+    // omp records no user message between a tool call and its result (queued
+    // steering is parked until the batch ends), so cuts - which only fall
+    // before user messages - cannot split a pair. T=2000, half=1000: u1@1100
+    // and u2@1840 are the window candidates; the pair c1 spans 1300..1740.
     let mut g = Gen::new();
     g.user(600);
     g.assistant(500);
-    let u1 = g.user(200);
+    g.user(200); // u1
     g.call("c1", 240);
-    g.user(200); // steering message while c1 is pending
     g.result("c1", 200);
+    g.assistant(100);
+    let u2 = g.user(200);
     g.assistant(800);
     let fx = Fx::new();
     fx.write(&g);
     let r = fx.plan(2000);
     assert_eq!(r.parts.len(), 2, "{:?}", shapes(&r));
     assert_eq!(r.parts[0].cut, "user");
+    assert_eq!(r.parts[1].first_id, jid(&u2));
+    assert_pairs_whole(&r);
+}
+
+/// Every part holds the `toolCall` ids and the `toolResult` ids of the same
+/// set of calls (no call separated from its result by a part boundary).
+fn assert_pairs_whole(r: &PlanResult) {
+    for p in &r.parts {
+        let mut calls: Vec<String> = Vec::new();
+        let mut results: Vec<String> = Vec::new();
+        for &i in &r.live[p.lo..p.hi] {
+            let e = &r.entries[i];
+            match e.kind {
+                Kind::Assistant if !e.aux.is_empty() => {
+                    calls.extend(serde_json::from_str::<Vec<String>>(&e.aux).unwrap());
+                }
+                Kind::ToolResult => results.push(serde_json::from_str::<String>(&e.aux).unwrap()),
+                _ => {}
+            }
+        }
+        calls.sort();
+        results.sort();
+        assert_eq!(
+            calls, results,
+            "part {} splits a call from its result",
+            p.idx
+        );
+    }
+}
+
+#[test]
+fn an_unanswered_call_followed_by_a_user_message_leaves_a_legal_cut() {
+    // T=2000, half=1000. c1 was interrupted (no result is ever recorded) and
+    // the user then typed u1 at 1100. With "pending forever" u1 and every
+    // later cut were illegal and the 2400-byte chain stayed one live part.
+    let mut g = Gen::new();
+    g.user(600);
+    g.call("c1", 500); // interrupted: never answered
+    let u1 = g.user(200);
+    g.assistant(1100);
+    let fx = Fx::new();
+    fx.write(&g);
+    let r = fx.plan(2000);
+    assert_eq!(r.parts.len(), 2, "{:?}", shapes(&r));
+    assert_eq!(r.parts[0].cut, "user");
     assert_eq!(r.parts[0].bytes, 1100);
-    assert_eq!(
-        r.parts[1].first_id,
-        jid(&u1),
-        "cut must be the legal user u1"
+    assert_eq!(r.parts[1].first_id, jid(&u1));
+    assert!(r.parts[0].frozen);
+    // a LATER pair after the interrupted call is still kept whole
+    let mut g2 = Gen::new();
+    g2.user(600);
+    g2.call("c1", 500);
+    g2.user(200);
+    g2.call("c2", 240);
+    g2.result("c2", 200);
+    g2.assistant(100);
+    g2.user(200);
+    g2.assistant(800);
+    let fx2 = Fx::new();
+    fx2.write(&g2);
+    let r2 = fx2.plan(2000);
+    assert!(r2.parts.len() >= 2, "{:?}", shapes(&r2));
+    assert!(
+        r2.parts.iter().all(|p| p.cut != "hard"),
+        "{:?}",
+        shapes(&r2)
     );
-    assert!(r.parts[0].frozen && !r.parts[1].frozen);
+    // every recorded result sits in the same part as its call
+    for p in &r2.parts {
+        let mut calls: Vec<String> = Vec::new();
+        let mut results: Vec<String> = Vec::new();
+        for &i in &r2.live[p.lo..p.hi] {
+            let e = &r2.entries[i];
+            match e.kind {
+                Kind::Assistant if !e.aux.is_empty() => {
+                    calls.extend(serde_json::from_str::<Vec<String>>(&e.aux).unwrap());
+                }
+                Kind::ToolResult => results.push(serde_json::from_str::<String>(&e.aux).unwrap()),
+                _ => {}
+            }
+        }
+        for r in &results {
+            assert!(calls.contains(r), "part {} orphans result {r}", p.idx);
+        }
+    }
+}
+
+#[test]
+fn pair_heavy_sessions_cut_only_before_users_and_never_split_a_pair() {
+    let mut g = Gen::new();
+    let mut rng = Rng(0x1234_5678_9abc_def1);
+    let mut calls = 0u64;
+    for _ in 0..90 {
+        match rng.below(4) {
+            0 => {
+                g.user(150 + rng.below(400) as usize);
+            }
+            1 | 2 => {
+                calls += 1;
+                let c = format!("k{calls}");
+                g.call(&c, 240 + rng.below(300) as usize);
+                g.result(&c, 200 + rng.below(500) as usize);
+            }
+            _ => {
+                g.assistant(150 + rng.below(500) as usize);
+            }
+        }
+    }
+    let fx = Fx::new();
+    fx.write(&g);
+    let r = fx.plan(2500);
+    assert!(r.parts.len() >= 3, "{}", r.parts.len());
+    assert!(r.parts.iter().all(|p| p.cut != "hard"), "{:?}", shapes(&r));
+    assert_pairs_whole(&r);
 }
 
 #[test]
@@ -423,9 +532,11 @@ fn grow(g: &mut Gen, rng: &mut Rng, calls: &mut u64) {
             let c = format!("call{calls}");
             g.call(&c, 240 + rng.below(400) as usize);
             if rng.below(4) == 0 {
+                // interrupted: the call is never answered, a user message follows
                 g.user(150 + rng.below(200) as usize);
+            } else {
+                g.result(&c, 200 + rng.below(600) as usize);
             }
-            g.result(&c, 200 + rng.below(600) as usize);
         }
         4 => {
             g.compaction(200 + rng.below(300) as usize);
@@ -1067,4 +1178,147 @@ fn concatenated_part_translations_equal_the_full_translation() {
     }
     assert!(!whole.is_empty());
     assert_eq!(joined, whole);
+}
+
+// --- user-message parity with TRANSLATE (v0.46 SEG-PR1 polish) -----------------------------
+
+/// `content` shapes whose TRANSLATE verdict (jq `join("\n") != ""`) is NOT
+/// "an array with a non-empty text string": the planner must agree on each.
+fn user_content_variants() -> Vec<(Value, bool)> {
+    vec![
+        (json!([{"type": "text", "text": "hello"}]), true),
+        (json!([{"type": "text", "text": ""}]), false),
+        (json!([{"type": "text"}]), false),
+        (json!([{"type": "text", "text": null}]), false),
+        // two empty parts join to "\n": TRANSLATE emits the record
+        (
+            json!([{"type": "text", "text": ""}, {"type": "text", "text": ""}]),
+            true,
+        ),
+        (
+            json!([{"type": "text", "text": null}, {"type": "text"}]),
+            true,
+        ),
+        (
+            json!([{"type": "text", "text": ""}, {"type": "image"}]),
+            false,
+        ),
+        (json!([{"type": "text", "text": false}]), true),
+        (json!([{"type": "text", "text": {}}]), true),
+        (json!({"a": {"type": "text", "text": "x"}}), true),
+        (json!("plain string"), false),
+        (json!([]), false),
+    ]
+}
+
+#[test]
+fn user_classification_matches_translate_on_empty_text_part_variants() {
+    for (content, expect) in user_content_variants() {
+        let rec = json!({"type": "message", "id": "u", "parentId": null,
+            "message": {"role": "user", "content": content}});
+        let (kind, ..) = classify(&rec).unwrap();
+        assert_eq!(kind == Kind::User, expect, "{content}");
+    }
+}
+
+#[test]
+fn user_classification_matches_the_translate_program_itself() {
+    if !jq_available() {
+        return;
+    }
+    // One session whose chain holds every variant; TRANSLATE emits a
+    // `type:"user"` text record for exactly the planner's `Kind::User` ones.
+    let mut g = Gen::new();
+    let variants = user_content_variants();
+    for (content, _) in &variants {
+        let content = content.clone();
+        g.chain(
+            &move |_| json!({"type": "message", "message": {"role": "user", "content": content.clone()}}),
+            400,
+        );
+    }
+    let fx = Fx::new();
+    fx.write(&g);
+    let r = fx.plan(1 << 20);
+    let planner_users: Vec<bool> = r
+        .live
+        .iter()
+        .map(|&i| r.entries[i].kind == Kind::User)
+        .collect();
+    let out = jq_slurp(&translate_program(), &jq_clean(&fx.src()), "F");
+    let emitted: Vec<Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|v| v["type"] == "user")
+        .collect();
+    assert_eq!(
+        emitted.len(),
+        planner_users.iter().filter(|b| **b).count(),
+        "TRANSLATE and the planner disagree on which user messages exist"
+    );
+    assert_eq!(
+        planner_users,
+        variants.iter().map(|(_, e)| *e).collect::<Vec<_>>()
+    );
+}
+
+// --- per-part dmodel ------------------------------------------------------------------------
+
+#[test]
+fn each_part_carries_the_model_in_force_at_its_start_not_the_final_one() {
+    // T=2000. user600+asst400+modelA100 = 1100, then u1 (legal cut), then a
+    // later model change C inside part 2.
+    let mut g = Gen::new();
+    g.user(600);
+    g.assistant(400);
+    g.chain(&|_| json!({"type": "model_change", "model": "prov/a"}), 100);
+    let u1 = g.user(200);
+    g.chain(&|_| json!({"type": "model_change", "model": "prov/c"}), 100);
+    g.assistant(900);
+    let fx = Fx::new();
+    fx.write(&g);
+    let r = fx.plan(2000);
+    assert_eq!(r.parts.len(), 2, "{:?}", shapes(&r));
+    assert_eq!(r.parts[1].first_id, jid(&u1));
+    assert_eq!(r.json["dmodel"], "prov/c", "the document value is the LAST");
+    let pj = &r.json["parts"];
+    assert_eq!(
+        pj[0]["dmodel"], "omp",
+        "no model change yet at part 1's start"
+    );
+    assert_eq!(
+        pj[1]["dmodel"], "prov/a",
+        "model C comes after part 2's start"
+    );
+    // appending a further model change moves the document value only
+    let before = r.json["parts"][0]["dmodel"].clone();
+    let n = g.lines.len();
+    g.chain(&|_| json!({"type": "model_change", "model": "prov/d"}), 100);
+    append_new_lines(&fx.src(), &g, n);
+    let r2 = fx.plan(2000);
+    assert_eq!(r2.json["dmodel"], "prov/d");
+    assert_eq!(r2.json["parts"][0]["dmodel"], before);
+    assert_eq!(r2.json["parts"][1]["dmodel"], "prov/a");
+    assert_eq!(r2.parts[0].dmodel, json!("omp"));
+}
+
+#[test]
+fn a_falsy_last_model_at_a_part_start_falls_back_to_omp_like_jq() {
+    let mut g = Gen::new();
+    g.chain(&|_| json!({"type": "model_change", "model": "prov/a"}), 100);
+    g.user(600);
+    g.assistant(400);
+    g.chain(&|_| json!({"type": "model_change", "model": null}), 100);
+    g.user(200);
+    g.assistant(1200);
+    let fx = Fx::new();
+    fx.write(&g);
+    let r = fx.plan(2000);
+    assert_eq!(r.parts.len(), 2, "{:?}", shapes(&r));
+    // part 1 starts AT the first model change (inclusive); part 2's last model
+    // change before its start is null, so jq's `last // "omp"` gives "omp" -
+    // the earlier prov/a is not consulted.
+    assert_eq!(r.parts[0].dmodel, json!("prov/a"));
+    assert_eq!(r.parts[1].dmodel, json!("omp"));
 }
