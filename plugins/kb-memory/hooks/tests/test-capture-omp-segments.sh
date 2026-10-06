@@ -347,6 +347,22 @@ else
   bad "one appended turn: $(grep -E '^(convert|land)' "$KB_CAPTURE_TRACE" | tr '\n' ' ')"
 fi
 
+# Part 1 is re-landed SMALLER at its first freeze: a session captured whole
+# before segmentation keeps its artifact (same file) and loses the later turns
+# to the -pNN parts.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+KB_CAPTURE_SEGMENTS=0 hook_fg
+whole="$(html_of "$SID")"; whole_size="$(stat -c %s "$whole")"
+rm -f "$KB_CAPTURE_LOCKS"/*.done
+hook_fg
+if [ "$(html_of "$SID")" = "$whole" ] && [ "$(stat -c %s "$whole")" -lt "$whole_size" ] \
+  && pre_of "$whole" | grep -q 'TURN-t00001' && ! pre_of "$whole" | grep -q 'TURN-t00060' && [ "$(n_parts)" -ge 4 ]; then
+  ok "an already-captured whole session: the bare-id artifact is re-landed in place, smaller ($whole_size -> $(stat -c %s "$whole") bytes), the rest arrives as -pNN"
+else
+  bad "part 1 re-land: same file=$([ "$(html_of "$SID")" = "$whole" ] && echo y || echo n) size $whole_size -> $(stat -c %s "$whole") parts=$(n_parts)"
+fi
+
 # ---------------------------------------------------------------------------
 # 3. The concatenated parts equal the single-capture translation (single model).
 fresh
