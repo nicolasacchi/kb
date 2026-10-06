@@ -1,0 +1,7 @@
+{"type":"session","id":"s","cwd":"/c"}
+{"type":"message","id":"a","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"1"}]}}
+{"type":"message","id":"a","parentId":"a","message":{"role":"user","content":[{"type":"text","text":"2dup"}]}}
+{"type":"message","id":"c","parentId":"a","message":{"role":"user","content":[{"type":"text","text":"3"}]}}
+{"type":"reset_boundary","id":"r","parentId":"c"}
+{"type":"message","id":"d","parentId":"r","message":{"role":"user","content":[{"type":"text","text":"after"}]}}
+{"type":"torn

@@ -87,7 +87,51 @@ type RunOptions = {
   /** Object payloads are JSON-encoded for the shell hooks' stdin contract. */
   input?: unknown;
   timeoutMs?: number;
+  /**
+   * OWNED mode (capture only, v0.45 OC): spawn the child detached - it leads
+   * its OWN session and process group, never omp's - and on timeout
+   * terminate what it owns instead of just closing the pipes. The script is
+   * asked to stop FIRST (SIGTERM to its pid: kb-capture-omp.sh traps it and
+   * reaps every process of its own session, including `timeout(1)`'s regrouped
+   * children), then, after OWNED_GRACE_MS, its process group is SIGKILLed as a
+   * backstop. Only ever the pid/pgid this call spawned. Other hooks and native
+   * tools keep the plain behaviour below.
+   */
+  owned?: boolean;
+  /**
+   * Owned mode only: aborting makes the CALLER stop waiting (the promise
+   * settles with code 124) and nothing else - the child is NOT terminated. It
+   * keeps running detached, still bounded by `timeoutMs` (while this process
+   * lives); otherwise only by the script's own deadlines (KB_CAPTURE_HARD_SECS
+   * per conversion pass plus the landing's KB_HOOK_BUDGET_SECS, about +25 s).
+   */
+  signal?: AbortSignal;
 };
+
+/** How long an owned child gets to clean up after SIGTERM before its group is SIGKILLed. */
+const OWNED_GRACE_MS = 3_000;
+
+/** Terminate an OWNED child: TERM the pid (trap runs), SIGKILL its own group later. */
+function terminateOwned(child: ReturnType<typeof spawn>) {
+  const pid = child.pid;
+  if (!pid) return;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {}
+  const t = setTimeout(() => {
+    // Deliberately NOT cancelled when the script exits on the TERM: a script
+    // that died without reaping leaves same-group stragglers this still
+    // catches (ESRCH, swallowed, when the group is already gone). Members that
+    // timeout(1) regrouped are beyond any group kill; the script's own session
+    // reaping and its survivor watchdog (kb-capture-omp.sh) cover those.
+    // `detached: true` made the child a group leader (pgid == pid), so -pid
+    // addresses exactly the group this call created and nothing of omp's.
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {}
+  }, OWNED_GRACE_MS);
+  (t as any)?.unref?.();
+}
 
 function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<{
   code: number;
@@ -99,7 +143,7 @@ function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<{
   let child: ReturnType<typeof spawn>;
   try {
     // argv array, no shell — arguments are never re-parsed by a shell.
-    child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], detached: opts.owned === true });
   } catch {
     resolve({ code: 1, stdout: "", stderr: "" });
     return promise;
@@ -107,10 +151,13 @@ function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<{
   let stdout = "";
   let stderr = "";
   let done = false;
+  // `done` = the caller has its answer; `released` = the child is detached on
+  // an abort (still running, still bounded by the timer below).
+  let released = false;
   const finish = (code: number) => {
+    clearTimeout(timer);
     if (done) return;
     done = true;
-    clearTimeout(timer);
     resolve({ code, stdout, stderr });
   };
   // A HARD deadline, not just a kill. `close` fires only once every stdio
@@ -122,9 +169,12 @@ function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<{
   // silently costs the whole injection. Kill, then resolve with whatever
   // has arrived; a surviving grandchild is left to finish on its own.
   const timer = setTimeout(() => {
-    try {
-      child.kill("SIGTERM");
-    } catch {}
+    if (opts.owned) terminateOwned(child);
+    else {
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+    }
     finish(124);
     // Release OUR end of the pipes and stop the child from holding the
     // event loop open — otherwise a surviving grandchild could delay a
@@ -135,13 +185,36 @@ function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<{
       child.unref();
     } catch {}
   }, opts.timeoutMs ?? 20_000);
+  if (opts.owned && opts.signal) {
+    // The session_stop budget (30 s) aborting is NOT a reason to lose the
+    // capture (operator ruling): the handler just stops waiting. The child
+    // keeps its pipes (closing them could SIGPIPE the script mid-landing), is
+    // still killed by the TIMEOUT above while this process lives, and by its
+    // own deadlines regardless (HARD_SECS per conversion pass plus the landing
+    // budget, about +25 s). Unref'd so it never holds
+    // a headless `omp -p` open.
+    const onAbort = () => {
+      if (done) return;
+      released = true;
+      done = true;
+      resolve({ code: 124, stdout, stderr });
+      try {
+        (timer as any)?.unref?.();
+        child.unref();
+        (child.stdout as any)?.unref?.();
+        (child.stderr as any)?.unref?.();
+      } catch {}
+    };
+    if (opts.signal.aborted) onAbort();
+    else opts.signal.addEventListener("abort", onAbort, { once: true });
+  }
   child.stdout?.on("data", (d) => {
-    stdout += String(d);
+    if (!released) stdout += String(d);
   });
   // Bounded: a runaway stderr must not grow without limit, but the first
   // few KiB are the only part any error message here ever reads.
   child.stderr?.on("data", (d) => {
-    if (stderr.length < 8_192) stderr += String(d);
+    if (!released && stderr.length < 8_192) stderr += String(d);
   });
   child.on("close", (code) => finish(code ?? 1));
   child.on("error", () => finish(1));
@@ -498,11 +571,27 @@ export default function kbMemoryOmp(pi: {
     }).catch(() => {});
   }
 
-  async function capture(info: Awaited<ReturnType<typeof sessionInfo>>) {
+  /**
+   * Capture the session (v0.45 OC). The shell adapter serialises per session
+   * file (flock + request coalescing), is its own session leader and reaps
+   * everything it spawned on TERM/timeout; this side spawns it OWNED (own
+   * process group, never omp's) and cancels it on timeout. `signal` (the
+   * session_stop abort) only stops the WAITING: the capture keeps running
+   * detached and lands, bounded by its own deadlines (KB_CAPTURE_HARD_SECS
+   * per conversion pass plus the landing budget, about +25 s).
+   * `KB_CAPTURE_TIMEOUT_MS` overrides the 120 s default (tests).
+   */
+  async function capture(
+    info: Awaited<ReturnType<typeof sessionInfo>>,
+    signal?: AbortSignal,
+  ) {
     if (!HOOKS || !info.sid || !info.file) return;
+    const envMs = Number(process.env.KB_CAPTURE_TIMEOUT_MS);
     await run(join(HOOKS, "kb-capture-omp.sh"), [], {
       input: { session_file: info.file, session_id: info.sid, cwd: info.cwd },
-      timeoutMs: 120_000,
+      timeoutMs: Number.isFinite(envMs) && envMs > 0 ? envMs : 120_000,
+      owned: true,
+      signal,
     }).catch(() => {});
   }
 
@@ -1685,7 +1774,7 @@ export default function kbMemoryOmp(pi: {
       // eating the continuation below. Capture's own await is bounded for
       // the same reason: past the budget the runner discards our return
       // anyway, while the capture child keeps running either way.
-      const capturing = capture(info);
+      const capturing = capture(info, event?.signal);
       const nudge = info.file
         ? await run(join(HOOKS, "kb-distill-nudge-omp.sh"), [], {
             input: { session_file: info.file, session_id: info.sid, cwd: info.cwd },

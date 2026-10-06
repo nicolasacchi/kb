@@ -1,0 +1,5 @@
+{"type":"session","id":"s","cwd":"/c","timestamp":"2026-01-01T00:00:00Z"}
+{"type":"message","id":"a","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"message","id":"a","parentId":"a","message":{"role":"user","content":[{"type":"text","text":"dup"}]}}
+{"type":"message","id":"b","parentId":"zz","message":{"role":"user","content":[{"type":"text","text":"orphan"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"noid last"}]}}
