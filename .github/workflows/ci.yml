@@ -1416,6 +1416,9 @@ jobs:
         run: |
           bun --version
           bash plugins/kb-memory/hooks/tests/test-omp-slate.sh
+          # v0.45 OC - the capture spawn path: owned (own process group),
+          # terminated on timeout/abort, omp's group never signalled.
+          bash plugins/kb-memory/hooks/tests/test-omp-capture-lifecycle.sh
 
   supply-chain:
     permissions:

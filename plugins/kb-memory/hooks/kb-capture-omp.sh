@@ -21,8 +21,10 @@
 # private capture spool (kb-hook-lib.sh hook_adapter_land) and replayed
 # through the same scrubbed path by the next successful capture; this adapter
 # NEVER writes HTML itself, so nothing raw can reach the corpus. The spool
-# keeps the main transcript only: staged subagent sidecars are folded into the
-# capture by the live `kb sessions capture` call and are not spooled.
+# replay never overwrites a fresher capture of the same session (the Rust
+# writer drops a stale spooled snapshot; see README). Staged subagent sidecars
+# are folded into the capture by the live `kb sessions capture` call and are
+# parked beside the main transcript only when the landing fails.
 #
 # omp JSONL → Claude-shape mapping (verified against a live v3 session file):
 #   fixed-width 256-byte title slot line    → dropped from the body, but its
@@ -104,6 +106,22 @@ set -u
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
+# Hook mode: become a session leader so everything this capture spawns is
+# ours to reap (see "lifecycle" below) and a caller's group-wide signal or
+# a terminal never reaches us by accident. `setsid` from a non-leader keeps
+# the PID, so a caller that signals the PID it spawned (the pre-OC
+# kb-omp.ts: SIGTERM to the shell only) still reaches this script, whose
+# trap then reaps its own session. stdin passes through the exec.
+if [ "$#" -eq 0 ] && [ -z "${KB_CAPTURE_ISOLATED:-}" ] \
+  && command -v setsid >/dev/null 2>&1 && command -v ps >/dev/null 2>&1; then
+  _sid="$(ps -o sid= -p "$$" 2>/dev/null | tr -d ' ')"
+  _pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
+  if [ -n "$_sid" ] && [ "$_sid" != "$$" ] && [ "$_pgid" != "$$" ]; then
+    export KB_CAPTURE_ISOLATED=1
+    exec setsid "${BASH:-bash}" "$0"
+  fi
+fi
+
 TRANSLATE='
   def ms2iso: if (. | type) == "number" then ((. / 1000) | todate) else null end;
   def canon:
@@ -122,11 +140,18 @@ TRANSLATE='
   (if ($hdr.id // "") != "" then $hdr.id else ($es[0].id // "unknown") end) as $sid |
   ($hdr.cwd // "unknown") as $cwd |
   (($hdr.title // "")) as $stitle |
-  (reduce range(($n - 1); -1; -1) as $i (
-     {cur: ($es[$n - 1].id // null), keep: []};
+  # Linear walk (v0.45 OC): only the scalar cursor lives in the loop state and
+  # the chain is COLLECTED by foreach. The earlier reduce carried the growing
+  # `keep` array in its state and prepended to it, copying the whole array on
+  # every kept record (O(chain^2): ~38 s at 20k records, ~3 min at 40k).
+  # Semantics are unchanged: a null cursor stops the walk, and the first
+  # backward match wins on a duplicate id.
+  ([foreach range(($n - 1); -1; -1) as $i (
+     {cur: ($es[$n - 1].id // null), hit: false};
      if .cur != null and ($es[$i].id // null) == .cur
-     then {cur: ($es[$i].parentId // null), keep: ([$es[$i]] + .keep)}
-     else . end)).keep as $chain |
+     then {cur: ($es[$i].parentId // null), hit: true}
+     else {cur: .cur, hit: false} end;
+     if .hit then $es[$i] else empty end)] | reverse) as $chain |
   # /clear boundary: everything at-or-before the LAST reset_boundary is hidden
   ([ $chain | to_entries[] | select(.value.type == "reset_boundary") | .key ]
    | last // -1) as $rb |
@@ -145,24 +170,28 @@ TRANSLATE='
    + (if $ttitle != "" then {aiTitle: $ttitle} else {} end)),
   ($live[] |
    if .type == "message" then
-     (.message // {}) as $m |
+     ((.message // {}) | if type == "object" then . else {} end) as $m |
      (.timestamp // ($m.timestamp | ms2iso) // "unknown") as $ts |
      if $m.role == "user" then
-       ([$m.content[]? | select(.type == "text") | .text] | join("\n")) as $t |
+       ([$m.content[]? | objects | select(.type == "text") | .text | if type == "object" or type == "array" then tojson else . end] | join("\n")) as $t |
        select($t != "") |
        {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
         message: {role: "user", content: [{type: "text", text: $t}]}}
      elif $m.role == "assistant" then
-       ([$m.content[]? |
+       ([$m.content[]? | objects |
          if .type == "text" and ((.text // "") != "") then
            {type: "text", text: .text}
          elif .type == "thinking" and ((.thinking // "") != "") then
            {type: "thinking", thinking: .thinking}
          elif .type == "toolCall" then
-           ((.name // "tool") | canon) as $tn |
-           ((.arguments // {}) as $a |
+           # A malformed record (non-string name, non-object arguments, a
+           # non-string path) must not abort the translation: it degrades to a
+           # tool_use that keeps what it can ({arguments: <raw>} for a non-object).
+           ((.name // "tool") | if type == "string" then . else "tool" end | canon) as $tn |
+           ((.arguments // {}) as $a0 |
+            (if ($a0 | type) == "object" then $a0 else {arguments: $a0} end) as $a |
             if (($tn | ascii_downcase) == "write"
-                or ($tn | ascii_downcase) == "edit") and ($a | has("path"))
+                or ($tn | ascii_downcase) == "edit") and (($a.path | type) == "string")
             then ($a + {file_path: $a.path})
             else $a end) as $args |
            {type: "tool_use", id: (.id // ""), name: $tn, input: $args}
@@ -177,7 +206,7 @@ TRANSLATE='
        {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "assistant",
         message: $am}
      elif $m.role == "toolResult" then
-       (([$m.content[]? | (.text // "")] | join("\n")) | .[0:2000]) as $o |
+       (([$m.content[]? | objects | (.text // "") | if type == "object" or type == "array" then tojson else . end] | join("\n")) | .[0:2000]) as $o |
        ($intents[$m.toolCallId // ""] // "") as $intent |
        (if $intent != "" then "[intent] " + ($intent[0:500]) + "\n" + $o else $o end) as $ofinal |
        {sessionId: $sid, timestamp: $ts, cwd: $cwd, type: "user",
@@ -249,7 +278,6 @@ TRANSLATE='
   end
 '
 
-# capture_one <session.jsonl> [sid] [cwd] — sid/cwd default to the header's.
 # v0.44 X6 (INT4) - every `kb` call is bounded by the shared hook deadline
 # (kb-hook-lib.sh run_to), so a hung daemon/CLI can never hang the session
 # end; the harness timeout is the last resort, not the design. A standalone
@@ -260,6 +288,8 @@ TRANSLATE='
   hook_deadline_init() { :; }
   hook_agent_safe_name() { return 1; }
   hook_spool_put_sidecars() { return 1; }
+  hook_capture_lock_dir() { return 1; }
+  hook_capture_key() { return 1; }
   hook_adapter_land() {
     command -v kb >/dev/null 2>&1 || { echo "kb-capture-omp.sh: kb not found - session $1 not captured" >&2; return 0; }
     kb sessions capture --transcript "$2" --session-id "$1" ${4:+--stamp "$4"} \
@@ -270,12 +300,313 @@ TRANSLATE='
 }
 KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
 
-capture_one() {
+
+# --- lifecycle (v0.45 OC) ----------------------------------------------------
+# A growing session is captured from three triggers (every turn end, a
+# compaction, shutdown), from several omp processes at once, and a large one
+# can take minutes. This script therefore owns its lifecycle:
+#   * EXCLUSION   one active conversion per canonical session file, across
+#                 processes (flock, key = hash of the realpath). A request that
+#                 finds the lock held only BUMPS a request counter and returns;
+#                 the owner re-reads the source afresh and runs another pass
+#                 until no request arrived during the last one (coalescing,
+#                 never a silent drop). Independent sessions never contend.
+#   * FRESHNESS   only the lock holder publishes, strictly in order, and it
+#                 re-converts the live file on every pass, so a stale
+#                 conversion cannot overwrite a fresher one. A pass is skipped
+#                 only when the input fingerprint (parent inode:size:mtime-ns,
+#                 a hash of the first 512 bytes = the in-place title slot, the
+#                 sidecar listing, this script's version) equals the one
+#                 recorded after the last SUCCESSFUL landing AND the capture
+#                 file still exists. The fingerprint is taken BEFORE reading, so
+#                 an append during conversion forces another pass; it is
+#                 recorded only when hook_adapter_land returned 0 (rc 1 = only
+#                 parked in the spool, rc 2 = lost), so failed work is never
+#                 recorded as captured. CLI backfill never skips.
+#   * OWNERSHIP   in hook mode the script makes itself a session leader
+#                 (setsid; same PID, so a caller that signals the PID it spawned
+#                 still reaches us). Every long child runs in the background
+#                 under `timeout` (the remaining hard deadline) and is awaited
+#                 with `wait`, which a trapped signal interrupts - a foreground
+#                 child would defer the trap until it exited. TERM/INT/HUP and
+#                 EXIT reap every process of OUR session (not our process
+#                 group: timeout(1) moves its child into a group of its own),
+#                 remove the scratch files and release the lock. Nothing
+#                 outside our session is ever signalled.
+#   * DEADLINE    KB_CAPTURE_HARD_SECS (default 120, the caller's own timeout)
+#                 per pass: each child is capped at what is left of it.
+CAP_HARD="${KB_CAPTURE_HARD_SECS:-120}"
+CAP_LOCK_WAIT="${KB_CAPTURE_LOCK_WAIT_SECS:-60}"
+CAP_ORPHAN_WAIT="${KB_CAPTURE_ORPHAN_WAIT_SECS:-8}"
+CAP_VERSION="kb-capture-omp/1+oc1"
+CAP_TMP=()
+CAP_CLEANED=""
+CAP_HAVE_TIMEOUT=""
+command -v timeout >/dev/null 2>&1 && CAP_HAVE_TIMEOUT=1
+
+# Pids of every process this script owns (never $$ itself).
+cap_owned_pids() {
+  command -v ps >/dev/null 2>&1 || return 0
+  local mysid
+  mysid="$(ps -o sid= -p "$$" 2>/dev/null | tr -d ' ')"
+  if [ "$mysid" = "$$" ]; then
+    ps -s "$$" -o pid= 2>/dev/null | tr -d ' ' | grep -vx "$$"
+  else
+    # Not a session leader (setsid unavailable / CLI mode): our descendants.
+    ps -e -o pid=,ppid= 2>/dev/null | awk -v root="$$" '
+      { pp[$1] = $2 }
+      END {
+        mark[root] = 1; changed = 1
+        while (changed) {
+          changed = 0
+          for (p in pp) if (!(p in mark) && (pp[p] in mark)) { mark[p] = 1; changed = 1; print p }
+        }
+      }'
+  fi
+  return 0
+}
+
+cap_alive() { # alive and not a zombie
+  local st
+  st="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ]
+}
+
+cap_reap() {
+  local pids p i alive
+  pids="$(cap_owned_pids)"
+  [ -n "$pids" ] || return 0
+  for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+  for i in $(seq 1 25); do
+    alive=""
+    for p in $pids; do
+      if cap_alive "$p"; then alive=1; break; fi
+    done
+    [ -z "$alive" ] && return 0
+    sleep 0.1
+  done
+  for p in $pids; do cap_alive "$p" && kill -KILL "$p" 2>/dev/null; done
+  return 0
+}
+
+# --- survivor watchdog -------------------------------------------------------
+# A SIGKILL of this script (an external kill, the OOM killer, the caller's
+# group-kill backstop) runs no trap, and `timeout(1)` moves its child into a
+# process group of its own, so even a group-wide kill misses jq/kb. Two things
+# make that case safe anyway:
+#   1. a tiny watchdog, in a session of its own (it survives a kill of ours),
+#      polls the owner. When the owner is gone it reaps every process still
+#      carrying this run's KB_CAPTURE_RUN marker (plus the owner's session),
+#      then removes the run's scratch directory;
+#   2. the watchdog INHERITS the per-session lock (fd 9; the conversion
+#      children do not - cap_bg closes it for them). So the lock outlives a
+#      SIGKILLed owner until the orphans are dead: no new owner can start, and
+#      no orphan can publish after a fresher conversion, while it is held.
+#      A request arriving in that window sees the recorded owner is dead and
+#      waits (bounded) for the lock instead of dropping its request.
+# The watchdog is per lock HOLD (capture_one stops it before releasing the
+# lock); normal exits and trapped signals stop it themselves.
+CAP_RUN=""
+CAP_WD=""
+CAP_WD_SRC='
+owner="$1"; marker="$2"; run="$3"; start="$4"
+alive() {
+  local st lst
+  st="$(ps -o stat= -p "$owner" 2>/dev/null | tr -d " ")"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ] || return 1
+  lst="$(ps -o lstart= -p "$owner" 2>/dev/null)"
+  [ "$lst" = "$start" ]
+}
+sp=""
+trap '"'"'[ -n "$sp" ] && kill "$sp" 2>/dev/null; exit 0'"'"' TERM
+while alive && [ -d "$run" ]; do
+  sleep 0.5 9>&- & sp=$!
+  wait "$sp"
+done
+[ -d "$run" ] || exit 0
+# TERM the owner session at once (one ps), THEN find the marker carriers:
+# ONE grep over every environ (no per-pid fork), so the scan is a single
+# process whose cost scales with the process count but never delays the TERM.
+pids="$(ps -s "$owner" -o pid= 2>/dev/null | tr -d " ")"
+for p in $pids; do kill -TERM "$p" 2>/dev/null; done
+more="$(grep -laz -x -F "KB_CAPTURE_RUN=$marker" /proc/[0-9]*/environ 2>/dev/null \
+  | sed -n "s#^/proc/\\([0-9][0-9]*\\)/environ\$#\\1#p")"
+for p in $more; do
+  [ "$p" = "$$" ] && continue
+  case " $pids " in *" $p "*) continue ;; esac
+  pids="$pids $p"; kill -TERM "$p" 2>/dev/null
+done
+live() { # the subset of "$@" that is alive and not a zombie (ONE ps)
+  [ "$#" -gt 0 ] || return 0
+  ps -o pid=,stat= -p "$(IFS=,; echo "$*")" 2>/dev/null | awk '"'"'substr($2,1,1) != "Z" { print $1 }'"'"'
+}
+for i in $(seq 1 20); do
+  sleep 0.1
+  left="$(live $pids)"
+  [ -z "$left" ] && break
+done
+for p in $left; do kill -KILL "$p" 2>/dev/null; done
+rm -rf "$run"
+'
+
+cap_run_init() { # once per process: the run dir + the watchdog
+  [ -z "$CAP_RUN" ] || return 0
+  CAP_RUN="$(mktemp -d)" || { CAP_RUN=""; return 0; }
+  export KB_CAPTURE_RUN="$$.$RANDOM$RANDOM"
+  if [ -n "${KB_CAPTURE_NO_WATCHDOG:-}" ] || ! command -v setsid >/dev/null 2>&1 \
+    || ! command -v ps >/dev/null 2>&1; then
+    return 0
+  fi
+  local start
+  start="$(ps -o lstart= -p "$$" 2>/dev/null)"
+  [ -n "$start" ] || return 0
+  env -u KB_CAPTURE_RUN setsid "${BASH:-bash}" -c "$CAP_WD_SRC" cap-watchdog \
+    "$$" "$KB_CAPTURE_RUN" "$CAP_RUN" "$start" </dev/null >/dev/null 2>&1 &
+  CAP_WD=$!
+  return 0
+}
+
+# Stop this lock hold's watchdog (it holds the lock fd, so it must be GONE
+# before the lock is released) and drop the run dir.
+cap_wd_stop() {
+  local i
+  if [ -n "$CAP_WD" ]; then
+    kill -TERM "$CAP_WD" 2>/dev/null
+    for i in $(seq 1 40); do cap_alive "$CAP_WD" || break; sleep 0.05; done
+    cap_alive "$CAP_WD" && kill -KILL "$CAP_WD" 2>/dev/null
+    wait "$CAP_WD" 2>/dev/null
+    CAP_WD=""
+  fi
+  [ -n "$CAP_RUN" ] && rm -rf "$CAP_RUN" 2>/dev/null
+  CAP_RUN=""
+  return 0
+}
+
+cap_cleanup() {
+  [ -z "$CAP_CLEANED" ] || return 0
+  CAP_CLEANED=1
+  trap '' TERM INT HUP
+  cap_reap
+  local i=0
+  while [ "$i" -lt "${#CAP_TMP[@]}" ]; do
+    [ -n "${CAP_TMP[$i]}" ] && rm -rf "${CAP_TMP[$i]}" 2>/dev/null
+    i=$((i + 1))
+  done
+  cap_wd_stop
+  { exec 9>&-; } 2>/dev/null
+  return 0
+}
+cap_on_signal() { cap_cleanup; exit 143; }
+
+cap_track() { CAP_TMP+=("$1"); }
+cap_untrack() { # rm now and forget
+  local i=0
+  while [ "$i" -lt "${#CAP_TMP[@]}" ]; do
+    [ "${CAP_TMP[$i]}" = "$1" ] && CAP_TMP[$i]=""
+    i=$((i + 1))
+  done
+  rm -rf "$1" 2>/dev/null
+}
+
+# Run "$@" in the background and wait for it. `wait` is interruptible by a
+# trapped signal; a foreground child is not.
+# The child does NOT inherit the lock fd (9): the lock must die with the owner.
+cap_bg() {
+  "$@" 9>&- &
+  local p=$!
+  wait "$p"
+  local rc=$?
+  return "$rc"
+}
+# Same, but keeps fd 9: only for `flock ... 9` itself.
+cap_bg_lock() {
+  "$@" &
+  local p=$!
+  wait "$p"
+  return $?
+}
+# A deadline kill / TERM is fatal for the pass; any other failure is not.
+cap_fatal_rc() { [ "$1" = 124 ] || [ "$1" = 137 ] || [ "$1" = 143 ]; }
+
+# Cap an EXTERNAL command at what is left of this pass's hard deadline.
+capt() {
+  local left=$((CAP_HARD - SECONDS))
+  [ "$left" -gt 0 ] || return 124
+  if [ -n "$CAP_HAVE_TIMEOUT" ]; then
+    timeout -k 2 "$left" "$@"
+  else
+    "$@"
+  fi
+}
+
+# The authoritative edited-set (lenient: a torn trailing line is skipped).
+cap_edited_set() {
+  capt grep '"toolCall"' "$1" 2>/dev/null \
+    | capt jq -R -c 'fromjson? | objects | select(.type == "message")
+             | (.message | objects | .content | arrays | .[] | objects)
+             | select(.type == "toolCall")
+             | select(((.name // "") | tostring | ascii_downcase) == "write"
+                      or ((.name // "") | tostring | ascii_downcase) == "edit")
+             | [(.arguments | objects | (.path // .file_path // empty) | strings)]' 2>/dev/null \
+    | capt jq -s -c 'add // [] | unique'
+  local st=("${PIPESTATUS[@]}") s
+  # Only a deadline kill / TERM fails the pass. A data error in the edited-set
+  # extraction loses the snapshot (callers fall back to []), never the capture.
+  for s in "${st[@]}"; do cap_fatal_rc "$s" && return 124; done
+  [ "${st[2]}" -eq 0 ] || return 1
+  return 0
+}
+
+# Input fingerprint (see the header). rc 1 = cannot be computed (never skip).
+cap_fingerprint() {
+  local f="$1" sdir="${1%.jsonl}" a b c=""
+  a="$(stat -c '%i:%s:%.9Y' -- "$f" 2>/dev/null)" || return 1
+  [ -n "$a" ] || return 1
+  b="$(head -c 512 -- "$f" 2>/dev/null | cksum)"
+  if [ -d "$sdir" ]; then
+    c="$(find "$sdir" -maxdepth 1 -name '*.jsonl' -printf '%f %s %T@ %i\n' 2>/dev/null | LC_ALL=C sort)"
+  fi
+  printf '%s\n%s\n%s\n%s\n' "$CAP_VERSION" "$a" "$b" "$c" | { sha256sum 2>/dev/null || cksum; } | cut -d' ' -f1-2
+}
+
+cap_capture_exists() { compgen -G "$KB_SESSIONS_DIR/session-*-$(hook_sid_key "$1").html" >/dev/null 2>&1; }
+
+cap_req_bump() { # <base>
+  (
+    flock 8 || exit 0
+    n="$(cat "$1.req" 2>/dev/null)"
+    case "$n" in '' | *[!0-9]*) n=0 ;; esac
+    printf '%s\n' "$((n + 1))" >"$1.req"
+  ) 8>"$1.reqlock" 9>&- 2>/dev/null
+  return 0
+}
+# The lock owner's identity (pid|start time), so a request that finds the lock
+# held can tell a live owner (coalesce and return) from a SIGKILLed one whose
+# watchdog is still reaping (wait for the lock, then serve the request).
+cap_owner_write() { # <base>
+  printf '%s|%s\n' "$$" "$(ps -o lstart= -p "$$" 2>/dev/null)" >"$1.owner" 2>/dev/null
+  return 0
+}
+cap_owner_dead() { # <base>: rc 0 only when the recorded owner is provably gone
+  local rec pid start st lst
+  rec="$(cat "$1.owner" 2>/dev/null)"
+  pid="${rec%%|*}"; start="${rec#*|}"
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  st="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] && [ "${st#Z}" = "$st" ] || return 0
+  lst="$(ps -o lstart= -p "$pid" 2>/dev/null)"
+  [ "$lst" != "$start" ]
+}
+cap_req_read() { local n; n="$(cat "$1.req" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+
+# capture_pass <session.jsonl> [sid] [cwd] [force] [lock-base] - ONE conversion
+# + landing. rc 0 = captured or legitimately skipped, 1 = not captured.
+capture_pass() {
   hook_deadline_init # per-session budget (a backfill runs many)
-  local tpath="$1" sid="${2:-}" cwd="${3:-}"
+  local tpath="$1" sid="${2:-}" cwd="${3:-}" force="${4:-0}" base="${5:-}"
   [ -f "$tpath" ] || return 0
 
-  local hdr created cts edited
+  local hdr created cts fp=""
   hdr="$(head -c 262144 "$tpath" \
     | jq -c 'select(.type == "session") | {id, cwd, timestamp}' 2>/dev/null | head -1)"
   # Caller-provided sid (hook mode / TS) wins; CLI mode falls back to the
@@ -292,58 +623,86 @@ capture_one() {
   cts="$(date -u -d "$created" +%Y%m%dT%H%M%SZ 2>/dev/null)"
   [ -n "${cts:-}" ] || cts="$(date -u +%Y%m%dT%H%M%SZ)"
 
-  edited="$(grep '"toolCall"' "$tpath" 2>/dev/null \
-    | jq -c 'select(.type == "message") | .message.content[]?
-             | select(.type == "toolCall")
-             | select(((.name // "") | ascii_downcase) == "write"
-                      or ((.name // "") | ascii_downcase) == "edit")
-             | [.arguments.path // .arguments.file_path // empty]' 2>/dev/null \
-    | jq -s -c 'add // [] | unique')"
-  [ -n "$edited" ] || edited='[]'
+  if [ -n "$base" ]; then
+    fp="$(cap_fingerprint "$tpath")" || fp=""
+    if [ "$force" != 1 ] && [ -n "$fp" ] \
+      && [ "$(cat "$base.done" 2>/dev/null)" = "$fp" ] && cap_capture_exists "$sid"; then
+      return 0 # nothing changed since the last successful landing
+    fi
+  fi
 
-  # OK4 — a scratch DIR (not a bare file), so a sibling subagent dir can be
+  # OK4 - a scratch DIR (not a bare file), so a sibling subagent dir can be
   # staged at <scratch>/<raw-session-id>/subagents/ beside the main
-  # translated transcript — exactly the shape sessions_capture.rs's sidecar
+  # translated transcript - exactly the shape sessions_capture.rs's sidecar
   # walk resolves (transcript.parent().join(&raw_sid).join("subagents")).
-  local scratch tmpclean tmpjsonl
-  scratch="$(mktemp -d)" || return 0
-  tmpclean="$(mktemp)" || { rm -rf "$scratch"; return 0; }
+  local scratch tmpclean tmpjsonl edited erc trc srcrc
+  cap_run_init
+  scratch="$(mktemp -d "${CAP_RUN:-${TMPDIR:-/tmp}}/p.XXXXXX")" || return 1
+  cap_track "$scratch"
+  tmpclean="$scratch/clean.jsonl"
   tmpjsonl="$scratch/transcript.jsonl"
 
-  # Lenient pre-clean (same policy as omp's own loader): drop unparsable
-  # lines instead of aborting — a torn trailing line from a crash or an
-  # active append must never kill the whole capture.
-  jq -R -c 'fromjson? // empty' "$tpath" >"$tmpclean" 2>/dev/null
-  jq -c -s --arg file "$tpath" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null
-  rm -f "$tmpclean"
-  if [ ! -s "$tmpjsonl" ]; then rm -rf "$scratch"; return 0; fi
+  cap_bg cap_edited_set "$tpath" >"$scratch/edited.json"
+  erc=$?
+  cap_fatal_rc "$erc" && { cap_untrack "$scratch"; return 1; }
+  edited=""
+  [ "$erc" -eq 0 ] && edited="$(cat "$scratch/edited.json" 2>/dev/null)"
+  [ -n "$edited" ] || edited='[]'
 
-  # OK4 — subagent sidecars: <session-file-stem>/ is omp's own on-disk
+  # Lenient pre-clean (same policy as omp's own loader): drop unparsable
+  # lines instead of aborting - a torn trailing line from a crash or an
+  # active append must never kill the whole capture.
+  if ! cap_bg capt jq -R -c 'fromjson? // empty' "$tpath" >"$tmpclean" 2>/dev/null; then
+    cap_untrack "$scratch"; return 1
+  fi
+  # jq -s streams its output, so a data error part-way through leaves every
+  # record translated before it in $tmpjsonl: that partial transcript is landed
+  # (as the former script did) rather than the whole session being lost and
+  # retried forever. Only a deadline kill / TERM aborts the pass.
+  cap_bg capt jq -c -s --arg file "$tpath" "$TRANSLATE" "$tmpclean" >"$tmpjsonl" 2>/dev/null
+  trc=$?
+  if cap_fatal_rc "$trc"; then cap_untrack "$scratch"; return 1; fi
+  rm -f "$tmpclean"
+  if [ ! -s "$tmpjsonl" ]; then cap_untrack "$scratch"; return 0; fi
+
+  # OK4 - subagent sidecars: <session-file-stem>/ is omp's own on-disk
   # convention for a Task-tool delegation's per-agent JSONL (verified live:
-  # ~/.omp/agent/sessions/<cwd>/<ts>_<sid>/<AgentName>.jsonl — no
+  # ~/.omp/agent/sessions/<cwd>/<ts>_<sid>/<AgentName>.jsonl - no
   # subagents/ level, no agent- prefix, unlike Claude Code). raw_sid is read
   # back off the just-translated main transcript's own adapter-meta
   # sessionId rather than the bash $sid var above, since that is exactly
   # what `kb sessions capture` itself resolves as raw_sid (it prefers the
-  # transcript's own sessionId over any --session-id hint — invariant #11),
+  # transcript's own sessionId over any --session-id hint - invariant #11),
   # so the two can never disagree even under a hook-mode --session-id
   # override.
-  local sdir="${tpath%.jsonl}"
+  local sdir="${tpath%.jsonl}" rsid=""
   if [ -d "$sdir" ]; then
-    local rsid
     rsid="$(head -1 "$tmpjsonl" | jq -r '.sessionId // empty' 2>/dev/null)"
     if [ -n "$rsid" ]; then
       local subdir_out="$scratch/$rsid/subagents"
       mkdir -p "$subdir_out" 2>/dev/null
-      local f base safe subtmp
+      local f b safe subtmp
       for f in "$sdir"/*.jsonl; do
         [ -f "$f" ] || continue
-        base="$(basename "$f" .jsonl)"
-        safe="$(hook_agent_safe_name "$base" "$sdir")" || continue
-        subtmp="$(mktemp)" || continue
-        jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null
-        jq -c -s --arg file "$f" "$TRANSLATE" "$subtmp" \
+        b="$(basename "$f" .jsonl)"
+        safe="$(hook_agent_safe_name "$b" "$sdir")" || continue
+        subtmp="$scratch/sub.clean.jsonl"
+        # A sidecar that cannot be translated is dropped (the main transcript
+        # and the healthy sidecars still land); only a deadline kill or a
+        # TERM aborts the pass.
+        cap_bg capt jq -R -c 'fromjson? // empty' "$f" >"$subtmp" 2>/dev/null
+        srcrc=$?
+        if [ "$srcrc" -ne 0 ]; then
+          cap_fatal_rc "$srcrc" && { cap_untrack "$scratch"; return 1; }
+          rm -f "$subtmp" "$subdir_out/agent-$safe.jsonl"; continue
+        fi
+        cap_bg capt jq -c -s --arg file "$f" "$TRANSLATE" "$subtmp" \
           >"$subdir_out/agent-$safe.jsonl" 2>/dev/null
+        srcrc=$?
+        if [ "$srcrc" -ne 0 ]; then
+          cap_fatal_rc "$srcrc" && { cap_untrack "$scratch"; return 1; }
+          rm -f "$subtmp" "$subdir_out/agent-$safe.jsonl"; continue
+        fi
         rm -f "$subtmp"
         [ -s "$subdir_out/agent-$safe.jsonl" ] || rm -f "$subdir_out/agent-$safe.jsonl"
       done
@@ -351,25 +710,101 @@ capture_one() {
   fi
 
   # Trailing authoritative-edited-set snapshot (parse_session_activity reads it).
-  jq -n -c --arg sid "$sid" --argjson edited "$edited" \
+  cap_bg capt jq -n -c --arg sid "$sid" --argjson edited "$edited" \
     'select(($edited | length) > 0) |
      {sessionId: $sid, type: "file-history-snapshot",
       snapshot: {trackedFileBackups: ($edited | map({key: ., value: {}}) | from_entries)}}' \
     >>"$tmpjsonl" 2>/dev/null
+  srcrc=$?
+  # The snapshot is optional: a failure other than a deadline kill / TERM only
+  # drops it (jq emits the line whole, so nothing partial is appended).
+  if cap_fatal_rc "$srcrc"; then cap_untrack "$scratch"; return 1; fi
 
-  hook_adapter_land "$sid" "$tmpjsonl" "${cwd:-unknown}" "$cts" omp
+  # The kb calls get their own fresh budget: conversion has its own hard
+  # deadline and must not eat the landing's.
+  hook_deadline_init
+  local rc=0
+  cap_bg hook_adapter_land "$sid" "$tmpjsonl" "${cwd:-unknown}" "$cts" omp || rc=$?
   # rc 1 = parked in the spool: park the translated subagent sidecars with it
   # so the replay folds them in (v0.45 N10).
-  if [ "$?" -eq 1 ] && [ -n "${rsid:-}" ] && [ -d "$scratch/$rsid/subagents" ]; then
+  if [ "$rc" -eq 1 ] && [ -n "${rsid:-}" ] && [ -d "$scratch/$rsid/subagents" ]; then
     hook_spool_put_sidecars "$rsid" "$scratch/$rsid/subagents" || true
   fi
-  rm -rf "$scratch"
+  cap_untrack "$scratch"
+  # Recorded ONLY for a real landing, and only for the state read BEFORE the
+  # conversion (an append during it makes the next fingerprint differ).
+  if [ "$rc" -eq 0 ] && [ -n "$base" ] && [ -n "$fp" ]; then
+    printf '%s\n' "$fp" >"$base.done.$$" 2>/dev/null && mv -f "$base.done.$$" "$base.done" 2>/dev/null
+  fi
+  [ "$rc" -eq 0 ]
 }
+
+# capture_one <session.jsonl> [sid] [cwd] [force] - the lock + coalescing
+# driver around capture_pass. force=1 (CLI backfill) waits for the lock and
+# never skips on an unchanged fingerprint.
+capture_one() {
+  local tpath="$1" sid="${2:-}" cwd="${3:-}" force="${4:-0}"
+  [ -f "$tpath" ] || return 0
+  local ldir key base g cur first=1
+  if command -v flock >/dev/null 2>&1 && ldir="$(hook_capture_lock_dir 2>/dev/null)" \
+    && key="$(hook_capture_key "$tpath" 2>/dev/null)" \
+    && mkdir -p "$ldir" 2>/dev/null && chmod 700 "$ldir" 2>/dev/null; then
+    base="$ldir/$key"
+  else
+    SECONDS=0
+    capture_pass "$tpath" "$sid" "$cwd" "$force" "" || true # no lock available: as before
+    return 0
+  fi
+  cap_req_bump "$base"
+  while :; do
+    if ! { exec 9>"$base.lock"; } 2>/dev/null; then
+      SECONDS=0
+      capture_pass "$tpath" "$sid" "$cwd" "$force" "" || true
+      return 0
+    fi
+    if [ "$first" = 1 ] && [ "$force" = 1 ]; then
+      if ! cap_bg_lock flock -w "$CAP_LOCK_WAIT" 9; then
+        exec 9>&-
+        echo "kb-capture-omp.sh: capture of $tpath is busy - not captured" >&2
+        return 0
+      fi
+    elif ! flock -n 9; then
+      # A live owner will see the bumped request counter: return. A dead one
+      # (SIGKILLed; its watchdog still holds the lock while it reaps the
+      # orphans) will not: wait for the lock and serve the request ourselves.
+      if cap_owner_dead "$base" && cap_bg_lock flock -w "$CAP_ORPHAN_WAIT" 9; then
+        :
+      else
+        exec 9>&-
+        return 0
+      fi
+    fi
+    cap_owner_write "$base"
+    first=0
+    while :; do
+      g="$(cap_req_read "$base")"
+      SECONDS=0
+      capture_pass "$tpath" "$sid" "$cwd" "$force" "$base" || true
+      cur="$(cap_req_read "$base")"
+      [ "$cur" = "$g" ] && break
+    done
+    cap_wd_stop # the watchdog holds the lock fd too: it must be gone first
+    exec 9>&-
+    # A request that landed after the last check but before the release found
+    # the lock held and returned: re-check AFTER releasing, then go again.
+    cur="$(cap_req_read "$base")"
+    [ "$cur" = "$g" ] && return 0
+  done
+}
+
+trap cap_on_signal TERM INT HUP
+trap cap_cleanup EXIT
+[ "$#" -gt 0 ] || trap '' PIPE # a shutdown capture outlives omp's pipes
 
 if [ "$#" -gt 0 ]; then
   # CLI mode (backfill): sid + cwd come from each file's own session header.
   for arg in "$@"; do
-    capture_one "$arg"
+    capture_one "$arg" "" "" 1
   done
 else
   input="$(cat)"
@@ -377,6 +812,6 @@ else
   sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
   cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
   [ -n "$tpath" ] && [ -f "$tpath" ] || exit 0
-  capture_one "$tpath" "$sid" "$cwd"
+  capture_one "$tpath" "$sid" "$cwd" 0
 fi
 exit 0

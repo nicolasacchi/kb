@@ -348,7 +348,9 @@ hook_spool_pending() {
 # is dropped and any other pending items are replayed. On failure, or with no
 # `kb`, the UNSCRUBBED translation is parked in the private spool (0700/0600,
 # outside every corpus) for the next success / `--replay-spool`. NOTHING raw
-# is ever written to the corpus. Returns 0 = landed in the corpus, 1 = spooled,
+# is ever written to the corpus. The replay covers EVERY session's items while
+# the caller holds only its own session's lock, so the Rust writer (not this
+# lock) refuses to publish a spooled snapshot over a fresher capture. Returns 0 = landed in the corpus, 1 = spooled,
 # 2 = neither (stderr says why). Callers that only run inside a hook ignore it:
 # a hook never fails a turn.
 # Needs KB_SESSIONS_DIR; cwd/stamp/harness may be empty.
@@ -394,4 +396,46 @@ hook_adapter_land() {
   fi
   echo "kb-hook-lib: ${harness:-adapter} capture failed and the transcript could not be spooled (session $sid)" >&2
   return 2
+}
+
+# --- capture locks (v0.45 OC) -----------------------------------------------
+# Per-session cross-process exclusion for a capture adapter (kb-capture-omp.sh).
+# A growing session is captured from several triggers (every turn end, a
+# compaction, shutdown) and from several omp processes at once; the Rust writer
+# publishes through ONE fixed `<out>.tmp` name, so two concurrent captures of a
+# session interleave and a stale one can rename after a fresher one. The lock
+# therefore wraps the whole convert + land sequence, keyed on the canonical
+# path of the session file (NOT on a session id the caller supplied).
+#   $KB_CAPTURE_LOCKS > $KB_CACHE_DIR/capture-locks >
+#   $XDG_CACHE_HOME/kb/capture-locks > $HOME/.cache/kb/capture-locks
+
+hook_capture_lock_dir() {
+  if [ -n "${KB_CAPTURE_LOCKS:-}" ]; then
+    printf '%s' "$KB_CAPTURE_LOCKS"
+  elif [ -n "${KB_CACHE_DIR:-}" ]; then
+    printf '%s/capture-locks' "$KB_CACHE_DIR"
+  elif [ -n "${XDG_CACHE_HOME:-}" ]; then
+    printf '%s/kb/capture-locks' "$XDG_CACHE_HOME"
+  elif [ -n "${HOME:-}" ]; then
+    printf '%s/.cache/kb/capture-locks' "$HOME"
+  else
+    return 1
+  fi
+}
+
+# hook_capture_key <path> - 24 hex of sha256(realpath). Fails (rc 1) when the
+# path cannot be canonicalised or hashed: the caller then runs unlocked.
+hook_capture_key() {
+  local rp h
+  rp="$(realpath -- "$1" 2>/dev/null || readlink -f -- "$1" 2>/dev/null)" || return 1
+  [ -n "$rp" ] || return 1
+  if command -v sha256sum >/dev/null 2>&1; then
+    h="$(printf '%s' "$rp" | sha256sum | cut -c1-24)"
+  elif command -v shasum >/dev/null 2>&1; then
+    h="$(printf '%s' "$rp" | shasum -a 256 | cut -c1-24)"
+  else
+    return 1
+  fi
+  [ -n "$h" ] || return 1
+  printf '%s' "$h"
 }
