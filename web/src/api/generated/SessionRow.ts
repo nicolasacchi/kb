@@ -118,4 +118,23 @@ user_turns: number,
  * the S7 gallery card both need it here rather than a second
  * `/commits` fetch per row.
  */
-commit_count: number, };
+commit_count: number, 
+/**
+ * V0045/seg1 — the raw (part-1) session id this row is a continuation
+ * PART of (a harness session whose translation outgrew the segment
+ * target is captured as an ordered chain of ordinary sessions). Absent
+ * for ordinary sessions and for part 1 itself. Surfaced, never scored.
+ */
+segment_of?: string, 
+/**
+ * V0045/seg1 — 1-based part index. Stored for part k>=2; DERIVED as 1
+ * for part 1 of a chain that has more than one part (part 1 is never
+ * rewritten to carry metadata). Absent for ordinary sessions.
+ */
+segment_idx?: number, 
+/**
+ * V0045/seg1 — DERIVED at read time: how many newest-capture parts the
+ * logical session has (`segment_of = ? AND is_newest = 1`, plus part
+ * 1). Absent for ordinary sessions; nothing about it is stored.
+ */
+segment_count?: number, };

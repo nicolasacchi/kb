@@ -2419,6 +2419,12 @@ enum SessionsAction {
         // Provenance: v0.44 F10
         #[arg(long)]
         since: Option<String>,
+        /// `logical` keeps only the LAST part of each segmented
+        /// session (one row per long session); default shows every part with
+        /// its `[part k/N]` chip. Opt-in — nothing is hidden silently.
+        // Provenance: V0045/seg1
+        #[arg(long)]
+        collapse: Option<String>,
     },
     /// Recall-hook coverage per harness over a trailing window:
     /// user turns vs turns where a memory injection landed vs serves that
@@ -2794,6 +2800,23 @@ enum SessionsAction {
         daemon: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    /// V0045/seg1 — print one session's decoded transcript JSONL
+    /// (`GET /{sid}/raw`); with `--chain`, a segmented session's WHOLE chain
+    /// concatenated in part order (continuation parts drop their own
+    /// adapter-meta header line; every other byte is verbatim).
+    // Provenance: V0045/seg1
+    Recover {
+        session_id: String,
+        /// Concatenate every part of the segmented chain `session_id`
+        /// belongs to (any member id resolves the whole chain).
+        #[arg(long)]
+        chain: bool,
+        /// Write to this file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        daemon: Option<String>,
     },
     /// Print a deterministic resume-context block (goal + branch + edited
     /// files + decisions) to pick up where a session left off.
@@ -5974,6 +5997,7 @@ async fn main() -> Result<()> {
                 harness,
                 undistilled,
                 since,
+                collapse,
             } => {
                 let bearer = read_bearer();
                 commands::sessions::list(
@@ -5988,6 +6012,23 @@ async fn main() -> Result<()> {
                     harness.as_deref(),
                     undistilled,
                     since.as_deref(),
+                    collapse.as_deref(),
+                )
+                .await
+            }
+            SessionsAction::Recover {
+                session_id,
+                chain,
+                out,
+                daemon,
+            } => {
+                let bearer = read_bearer();
+                commands::sessions::recover(
+                    &session_id,
+                    chain,
+                    out.as_deref(),
+                    daemon.as_deref(),
+                    bearer.as_deref(),
                 )
                 .await
             }
@@ -6113,6 +6154,7 @@ async fn main() -> Result<()> {
                     substance.as_deref(),
                     harness.as_deref(),
                     false,
+                    None,
                     None,
                 )
                 .await
