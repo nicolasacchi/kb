@@ -111,6 +111,13 @@ any, pins its shape.
      `kb-capture-grok/1`, each with its own key set in its own jq template.
      Register them with the same template-versus-schema parity test the grok
      one has.
+   - `segment-plan/1`: `kb sessions segment-plan` to the omp capture adapter's
+     shell, two processes. Built with `json!` in
+     `crates/kb-cli/src/commands/sessions_segment_plan.rs`; the field set is
+     documented in `docs/cli.md` and pinned by that module's tests (chain
+     equivalence against the adapter's own jq program, frozen-range stability,
+     divergence, checkpoint tamper). Register it when the adapter (a later
+     release) starts to read it and a shell-side schema check is worth having.
    - `kbc-review/1`: the agent-authored review document (YAML
      front matter plus a JSON block, parsed by `review_doc`). `kb validate` has
      no front-matter-document kind yet.

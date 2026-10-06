@@ -2361,6 +2361,37 @@ enum SessionsAction {
     /// capture adapters pipe their translated transcript through this before
     /// embedding it. Filesystem/stdio only.
     Scrub,
+    /// Plan segmented capture of a long omp session: stream
+    /// the source JSONL once, resolve its leaf chain with the adapter's own
+    /// TRANSLATE rules, and cut the chain into ordered parts at legal user
+    /// boundaries (16 MiB raw target). Prints a `segment-plan/1` JSON
+    /// document, or with `--emit N` the raw lines of part N. Filesystem
+    /// only; nothing emits segments yet.
+    // Provenance: v0.46 SEG-B
+    SegmentPlan {
+        /// The omp session JSONL.
+        #[arg(long)]
+        source: PathBuf,
+        /// Checkpoint file (read, validated, rewritten atomically). Derived
+        /// data: deleting it only costs a rebuild.
+        #[arg(long)]
+        state: PathBuf,
+        /// Raw bytes per part. Default 16 MiB, or `$KB_CAPTURE_SEGMENT_BYTES`.
+        #[arg(long = "target-bytes")]
+        target_bytes: Option<u64>,
+        /// Adapter version stamp; a change invalidates the checkpoint.
+        #[arg(long = "adapter-ver", default_value = "")]
+        adapter_ver: String,
+        /// Print the raw source lines of part N (1-based) instead of the plan.
+        #[arg(long)]
+        emit: Option<usize>,
+        /// Add `chain_ids` (the ordered live-chain entry ids) to the plan.
+        #[arg(long = "print-chain")]
+        print_chain: bool,
+        /// Do not write the checkpoint.
+        #[arg(long = "no-write")]
+        no_write: bool,
+    },
     /// Re-scrub captures already on disk (every lane: transcript, structured
     /// digest blocks, sidecar text). Dry run by default — reports per-lane
     /// counts and writes nothing; `--apply` rewrites only the captures that
@@ -5981,6 +6012,23 @@ async fn main() -> Result<()> {
                 .await
             }
             SessionsAction::Scrub => commands::sessions_scrub::run_filter(),
+            SessionsAction::SegmentPlan {
+                source,
+                state,
+                target_bytes,
+                adapter_ver,
+                emit,
+                print_chain,
+                no_write,
+            } => commands::sessions_segment_plan::run(
+                source,
+                state,
+                target_bytes,
+                adapter_ver,
+                emit,
+                print_chain,
+                no_write,
+            ),
             SessionsAction::Rescrub {
                 dir,
                 apply,
