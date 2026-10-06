@@ -660,6 +660,9 @@ cap_stage_sidecar() { # <src.jsonl> <out-file> <scratch clean file>
 #   * more work than one pass may do sets CAP_MORE and capture_one runs another
 #     pass; nothing is recorded as done until every part is landed.
 CAP_MORE=""
+CAP_SC_NEW=0       # sidecars translated THIS pass (progress that survives a deadline kill)
+CAP_PART_NEW=0     # ... and by the part being converted now
+CAP_STAGE_LIMIT=0  # $SECONDS mark after which no further sidecar is started
 CAP_SEG_SINGLE=""
 CAP_SEG_PROBED=""
 CAP_SEG_WARNED=""
@@ -850,6 +853,169 @@ cap_seg_spool_room() { # <raw id> <part id>
   [ "$(hook_spool_count_group "$1")" -lt "$cap" ]
 }
 
+# --- sidecar placement + the per-sidecar translation cache (v0.48 SEG-PERF) ---
+# The first timestamp of every sidecar is read ONCE (per path/size/mtime/inode)
+# into <lock-base>.sc.tsv. A real omp sidecar starts with the fixed-width TITLE
+# SLOT ({"type":"title", ..., "updatedAt"} - no "timestamp"), then the session
+# header (line 2, "timestamp"), so the first THREE lines are read: the first
+# "timestamp" (header; else a message's), else the slot's "updatedAt". The
+# placement rule is the old one: the last part that starts strictly before it
+# (a tie goes to the earlier part). A sidecar with no readable timestamp is
+# placed by its mtime (the subagent's END time - closer than the tail); only
+# a file that cannot even be stat'ed goes to the tail, and it is counted.
+CAP_SC_AWK='
+function iso2epoch(s,  y, m, d, H, M, S, r, off, sg, oh, om, era, yoe, doy, doe) {
+  if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][T ][0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) return ""
+  y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+  H = substr(s, 12, 2) + 0; M = substr(s, 15, 2) + 0; S = substr(s, 18, 2) + 0
+  if (m < 1 || m > 12 || d < 1 || d > 31) return ""
+  r = substr(s, 20); off = 0
+  sub(/^\.[0-9]+/, "", r)
+  if (r ~ /^[+-][0-9][0-9]:?[0-9][0-9]$/) {
+    sg = (substr(r, 1, 1) == "-") ? -1 : 1
+    oh = substr(r, 2, 2) + 0
+    om = (index(r, ":") > 0) ? substr(r, 5, 2) + 0 : substr(r, 4, 2) + 0
+    off = sg * (oh * 3600 + om * 60)
+  }
+  if (m <= 2) y--
+  era = int(y / 400); yoe = y - era * 400
+  doy = int((153 * (m + ((m > 2) ? -3 : 9)) + 2) / 5) + d - 1
+  doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+  return (era * 146097 + doe - 719468) * 86400 + H * 3600 + M * 60 + S - off
+}
+function firstts(p,  n, line, ts, up, ms, v) {
+  ts = ""; up = ""; ms = ""; n = 0
+  while (n < 3 && (getline line < p) > 0) {
+    n++
+    if (ts == "" && match(line, /"timestamp": ?"[^"]*"/)) {
+      v = substr(line, RSTART, RLENGTH); sub(/^"timestamp": ?"/, "", v); sub(/"$/, "", v); ts = iso2epoch(v)
+    }
+    if (up == "" && match(line, /"updatedAt": ?"[^"]*"/)) {
+      v = substr(line, RSTART, RLENGTH); sub(/^"updatedAt": ?"/, "", v); sub(/"$/, "", v); up = iso2epoch(v)
+    }
+    if (ms == "" && match(line, /"timestamp": ?[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]+/)) {
+      v = substr(line, RSTART, RLENGTH); sub(/^"timestamp": ?/, "", v); ms = int(v / 1000)
+    }
+  }
+  close(p)
+  if (ts != "") return ts
+  if (up != "") return up
+  return ms
+}
+BEGIN {
+  FS = "\t"
+  m = split(eps, E, " ")
+  for (q = 1; q <= m; q++) { split(E[q], kv, ":"); EP[kv[1] + 0] = kv[2] + 0 }
+  while ((getline ln < cache) > 0) { split(ln, f, "\t"); csig[f[1]] = f[2] "|" f[3] "|" f[4]; cts[f[1]] = f[5] }
+  close(cache)
+  nts = 0; nmt = 0; nun = 0; tot = 0
+}
+{
+  p = $1; sig = $2 "|" $3 "|" $4; tot++
+  if ((p in csig) && csig[p] == sig) ts = cts[p]; else ts = firstts(p)
+  s = ""; src = "none"
+  if (ts != "") { s = ts + 0; src = "ts"; nts++ }
+  else if (int($3) > 0) { s = int($3); src = "mtime"; nmt++ }
+  else nun++
+  i = 1
+  if (src == "none") i = nparts
+  else for (j = 2; j <= nparts; j++) if ((j in EP) && EP[j] < s) i = j
+  print i "\t" p "\t" $2 "\t" $3 "\t" $4 "\t" src > asg
+  print p "\t" $2 "\t" $3 "\t" $4 "\t" ts > newcache
+}
+END { printf "total=%d ts=%d mtime=%d unplaced=%d\n", tot, nts, nmt, nun }
+'
+
+# <sdir> <lock-base> <n parts>: writes $CAP_RUN/sc.asg (part, path, size, mtime,
+# inode, source) + refreshes <base>.sc.tsv; prints the counters. Runs under
+# cap_bg (one find + one awk: no fork per sidecar).
+cap_sc_compute() {
+  local sdir="$1" base="$2" nn="$3" j eps=""
+  for ((j = 2; j <= nn; j++)); do [ -n "${EP[$j]:-}" ] && eps="$eps $j:${EP[$j]}"; done
+  : >"$CAP_RUN/sc.asg"; : >"$CAP_RUN/sc.newtab"
+  capt find "$sdir" -maxdepth 1 -type f -name '*.jsonl' -printf '%p\t%s\t%T@\t%i\n' 2>/dev/null \
+    | LC_ALL=C sort \
+    | capt awk -v eps="$eps" -v nparts="$nn" -v cache="$base.sc.tsv" -v asg="$CAP_RUN/sc.asg" \
+      -v newcache="$CAP_RUN/sc.newtab" "$CAP_SC_AWK"
+}
+
+# Fill SCF[part] (newline-separated paths), SCL[part] (their stat lines), SAFE[path]
+# and SCK[path] (the cache key: inode.size.mtime) for the sidecars of $sdir.
+# Caller's arrays (dynamic scope): EP SCF SCL SAFE SCK KEYS. rc 1 = fatal.
+cap_seg_assign_sidecars() { # <sdir> <lock-base> <n parts>
+  local sdir="$1" base="$2" nn="$3" line i path size mt ino src b safe counts
+  cap_bg cap_sc_compute "$sdir" "$base" "$nn" >"$CAP_RUN/sc.counts"
+  cap_fatal_rc "$?" && return 1
+  counts="$(cat "$CAP_RUN/sc.counts" 2>/dev/null)"
+  [ -s "$CAP_RUN/sc.newtab" ] && mv -f "$CAP_RUN/sc.newtab" "$base.sc.tsv" 2>/dev/null
+  while IFS=$'\t' read -r i path size mt ino src; do
+    [ -n "$path" ] || continue
+    SCF[$i]+="$path"$'\n'
+    SCL[$i]+="$path $size $mt $ino"$'\n'
+    SCK[$path]="$ino.$size.$mt.$CAP_TV"
+    b="$(basename "$path" .jsonl)"
+    if [[ "$b" =~ ^[A-Za-z0-9-]{1,80}$ ]]; then safe="$b"; else safe="$(hook_agent_safe_name "$b" "$sdir")" || safe=""; fi
+    [ -n "$safe" ] && SAFE[$path]="$safe"
+  done <"$CAP_RUN/sc.asg"
+  for i in "${!SCL[@]}"; do
+    KEYS[$i]="${KEYS[$i]}|s:$(printf '%s' "${SCL[$i]}" | cksum | cut -d' ' -f1)-${#SCL[$i]}"
+  done
+  cap_trace "sidecars $counts"
+  local tot nm nu
+  tot="${counts#total=}"; tot="${tot%% *}"
+  nm="${counts#*mtime=}"; nm="${nm%% *}"
+  nu="${counts#*unplaced=}"
+  case "$tot$nm$nu" in *[!0-9]*) return 0 ;; esac
+  if [ $((nm + nu)) -gt 20 ] && [ $(((nm + nu) * 4)) -gt "$tot" ]; then
+    echo "kb-capture-omp.sh: $((nm + nu)) of $tot subagent sidecars of $rawsid have no readable timestamp (placed by mtime / the tail) - the omp file format may have changed" >&2
+  fi
+  return 0
+}
+
+# Drop cache entries whose sidecar is gone or changed (keeps only the current key
+# of each safe name). Caller's SAFE/SCK; $1 = cache dir.
+cap_sc_prune() {
+  local scdir="$1" f keep="$CAP_RUN/sc.keep" p
+  [ -d "$scdir" ] || return 0
+  : >"$keep"
+  for p in "${!SAFE[@]}"; do printf '%s\n' "${SAFE[$p]}.${SCK[$p]}" >>"$keep"; done
+  while IFS= read -r f; do
+    [ -n "$f" ] && rm -f -- "${scdir:?}/$f"
+  done < <(find "$scdir" -maxdepth 1 -type f -printf '%f\n' 2>/dev/null \
+    | awk 'NR == FNR { k[$0] = 1; next } { n = $0; sub(/\.jsonl$/, "", n); sub(/\.none$/, "", n); if (!(n in k)) print $0 }' "$keep" -)
+  return 0
+}
+
+# Stage ONE sidecar of a part into <dest>: from the translation cache when its
+# (inode, size, mtime) entry exists - an unchanged sidecar is never translated
+# twice, whatever else about its part changed - else translate it now and keep
+# the result. rc 0 ok (or dropped as untranslatable: remembered by a `.none`
+# marker), 1 deadline kill / TERM, 6 out of time (progress is cached; the first
+# sidecar of a part always translates, so a squeezed deadline still advances).
+cap_sc_stage() { # <src> <safe> <dest>
+  local f="$1" safe="$2" dest="$3" c rc
+  c="${scdir:?}/$safe.${SCK[$f]}"
+  if [ -s "$c.jsonl" ]; then
+    ln -f "$c.jsonl" "$dest" 2>/dev/null || cp -f "$c.jsonl" "$dest" 2>/dev/null || true
+    return 0
+  fi
+  [ -e "$c.none" ] && return 0
+  if [ "$SECONDS" -ge "$CAP_STAGE_LIMIT" ] && [ "$CAP_PART_NEW" -gt 0 ]; then return 6; fi
+  rm -f -- "$scdir/$safe".*.jsonl "$scdir/$safe".*.none 2>/dev/null
+  cap_trace "translate sidecar=$safe"
+  rc=0
+  cap_stage_sidecar "$f" "$c.tmp.$$" "$CAP_RUN/sub.clean.jsonl" || rc=$?
+  if [ "$rc" -ne 0 ]; then rm -f -- "$c.tmp.$$"; return 1; fi
+  CAP_SC_NEW=$((CAP_SC_NEW + 1)); CAP_PART_NEW=$((CAP_PART_NEW + 1))
+  if [ -s "$c.tmp.$$" ]; then
+    mv -f "$c.tmp.$$" "$c.jsonl" 2>/dev/null || return 0
+    ln -f "$c.jsonl" "$dest" 2>/dev/null || cp -f "$c.jsonl" "$dest" 2>/dev/null || true
+  else
+    rm -f -- "$c.tmp.$$"; : >"$c.none"
+  fi
+  return 0
+}
+
 # Convert part $1 into <lock-base>.parts/NN/ (transcript.jsonl, the part's own
 # sidecars under <part id>/subagents/, and `key` written LAST - a directory
 # without it is a torn conversion and is redone). Arrays/vars are the caller's
@@ -901,16 +1067,17 @@ cap_seg_convert() {
   trc=$?
   rm -f "$raw"
   if cap_fatal_rc "$trc" || [ ! -s "$tmp" ]; then rm -rf -- "${d:?}"; return 1; fi
-  # Subagent sidecars assigned to THIS part.
+  # Subagent sidecars assigned to THIS part (translation cache: cap_sc_stage).
   if [ -n "${SCF[$k]:-}" ]; then
-    local f b safe so="$d/$pid/subagents"
+    local f safe so="$d/$pid/subagents" scrc
     mkdir -p "$so" 2>/dev/null
     while IFS= read -r f; do
       [ -f "$f" ] || continue
-      b="$(basename "$f" .jsonl)"
-      safe="$(hook_agent_safe_name "$b" "$sdir")" || continue
-      cap_stage_sidecar "$f" "$so/agent-$safe.jsonl" "$CAP_RUN/sub.clean.jsonl" \
-        || { rm -rf -- "${d:?}"; return 1; }
+      safe="${SAFE[$f]:-}"
+      [ -n "$safe" ] || continue
+      cap_sc_stage "$f" "$safe" "$so/agent-$safe.jsonl"
+      scrc=$?
+      if [ "$scrc" -ne 0 ]; then rm -rf -- "${d:?}"; return "$scrc"; fi
     done <<<"${SCF[$k]}"
   fi
   cap_bg capt jq -n -c --arg sid "$snapsid" --argjson edited "$edited" \
@@ -952,6 +1119,20 @@ cap_seg_do_part() {
     return 4
   fi
   if [ "$(cat "$d/key" 2>/dev/null)" != "${KEYS[$k]}" ] || [ ! -s "$d/transcript.jsonl" ]; then
+    # No sidecar is STARTED after this mark: the landing needs its own time
+    # (KB_CAPTURE_SEG_LAND_RESERVE_SECS; default a quarter of the pass deadline,
+    # 8..25 s). While frozen parts still wait,
+    # the tail is held to half of what is left (the rest is theirs), so an
+    # expensive tail cannot starve the catch-up; its translated sidecars are
+    # cached, so the next pass resumes instead of redoing them.
+    local res="${KB_CAPTURE_SEG_LAND_RESERVE_SECS:-}"
+    if [ -z "$res" ]; then res=$((CAP_HARD / 4)); [ "$res" -lt 8 ] && res=8; [ "$res" -gt 25 ] && res=25; fi
+    local lim=$((CAP_HARD - res))
+    if [ "$k" -eq "$n" ] && [ "${FROZEN_PENDING:-0}" -gt 0 ] && [ -z "${FREEZE_FIRST:-}" ]; then
+      lim=$((SECONDS + (lim - SECONDS) / 2))
+    fi
+    CAP_STAGE_LIMIT="$lim"
+    CAP_PART_NEW=0
     cap_seg_convert "$k"
     crc=$?
     [ "$crc" -eq 0 ] || return "$crc"
@@ -968,16 +1149,38 @@ cap_seg_do_part() {
     stamp="$(date -u -d "$iso" +%Y%m%dT%H%M%SZ 2>/dev/null)"
     [ -n "$stamp" ] || stamp="$cts"
   fi
+  # The landing cap fits the part: base 20 s + one second per
+  # KB_CAPTURE_LAND_BYTES_PER_SEC (8 MiB) of payload (transcript + sidecars),
+  # at most KB_CAPTURE_LAND_MAX_SECS (90) and never past the pass deadline.
+  local payload lcap lmax lleft
+  payload="$(find "$d" -type f -printf '%s\n' 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')"
+  lcap=$((${KB_CAPTURE_LAND_SECS:-20} + payload / ${KB_CAPTURE_LAND_BYTES_PER_SEC:-8388608}))
+  lmax="${KB_CAPTURE_LAND_MAX_SECS:-90}"
+  [ "$lcap" -gt "$lmax" ] && lcap="$lmax"
+  lleft=$((CAP_HARD - SECONDS - 2))
+  [ "$lcap" -gt "$lleft" ] && lcap="$lleft"
+  [ "$lcap" -ge 5 ] || lcap=5
   # Write-ahead: from here on the part may reach the corpus WITHOUT a landed
   # row (parked in the spool and published by ANOTHER session's replay, or
   # kill -9 between the landing and the row). `<base>.seg.pend` remembers it so
   # a later shrink/fork still finds it; the landed row replaces it on success.
   [ "$k" -le 1 ] || cap_tab_set "$pend" "$k" "$pid" "${KEYS[$k]}"
+  local KB_HOOK_BUDGET_SECS="$lcap" KB_HOOK_LAND_SECS="$lcap"
+  [ "$KB_HOOK_BUDGET_SECS" -ge "${KB_CAPTURE_BUDGET_SECS:-25}" ] || KB_HOOK_BUDGET_SECS="${KB_CAPTURE_BUDGET_SECS:-25}"
+  [ "$KB_HOOK_BUDGET_SECS" -ge $((lcap + 5)) ] || KB_HOOK_BUDGET_SECS=$((lcap + 5))
   hook_deadline_init
   cap_bg hook_adapter_land "$pid" "$d/transcript.jsonl" "${cwd:-unknown}" "$stamp" omp || rc=$?
   cap_trace "land part=$k rc=$rc"
   if [ "$rc" -eq 1 ] && [ -d "$d/$pid/subagents" ]; then
-    hook_spool_put_sidecars "$pid" "$d/$pid/subagents" || true
+    # Parked sidecars are capped: past the cap they stay in the translation
+    # cache and the next pass regenerates them, never a second 100 MB copy.
+    local scsz
+    scsz="$(find "$d/$pid/subagents" -type f -printf '%s\n' 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')"
+    if [ "$scsz" -le "${KB_CAPTURE_SEG_SPOOL_SC_MAX:-67108864}" ]; then
+      hook_spool_put_sidecars "$pid" "$d/$pid/subagents" || true
+    else
+      cap_trace "spool sidecars skipped part=$k bytes=$scsz"
+    fi
   fi
   # A landing that reports success but leaves no capture file is a failure
   # (kb missing, an engine that wrote elsewhere): never recorded, and it must
@@ -1109,29 +1312,20 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
   done
 
   # Subagent sidecars go to the part whose time range holds their FIRST
-  # timestamp: the last part that starts strictly before it (a tie goes to the
-  # earlier part); no readable timestamp -> the live tail.
-  local sdir="${tpath%.jsonl}" f s j
-  local -a EP=()
+  # timestamp (cap_seg_assign_sidecars: title slot / header / mtime, cached).
+  local sdir="${tpath%.jsonl}" j scdir="$base.sc"
+  local -a EP=() SCL=()
+  local -A SCK=() SAFE=()
+  CAP_TV="$(printf '%s' "$CAP_VERSION$TRANSLATE" | cksum | cut -d' ' -f1)"
+  CAP_SC_NEW=0
   if [ -d "$sdir" ] && compgen -G "$sdir/*.jsonl" >/dev/null 2>&1; then
     for ((j = 2; j <= n; j++)); do
       cap_iso_bg "$tpath" "${STARTS[$j]}"
       EP[$j]="$(cap_epoch_of "$CAP_ISO")"
     done
-    for f in "$sdir"/*.jsonl; do
-      [ -f "$f" ] || continue
-      s="$(cap_epoch_of "$(head -n 1 -- "$f" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null)")"
-      i=1
-      if [ -n "$s" ]; then
-        for ((j = 2; j <= n; j++)); do
-          if [ -n "${EP[$j]:-}" ] && [ "${EP[$j]}" -lt "$s" ]; then i=$j; fi
-        done
-      else
-        i=$n
-      fi
-      SCF[$i]+="$f"$'\n'
-      KEYS[$i]="${KEYS[$i]}|s:$(stat -c '%s %.9Y %i' -- "$f" 2>/dev/null | cksum | cut -d' ' -f1)-${#f}"
-    done
+    cap_seg_assign_sidecars "$sdir" "$base" "$n" || return 1
+    mkdir -p "$scdir" 2>/dev/null && chmod 700 "$scdir" 2>/dev/null
+    cap_sc_prune "$scdir"
   fi
 
   mkdir -p "$pdir" 2>/dev/null && chmod 700 "$pdir" 2>/dev/null
@@ -1139,43 +1333,67 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
   # must never be replayed, whatever else happens in this pass.
   cap_seg_purge_local "$n" "$rawsid"
   rm -f "$base".seg.tmp.* "$base".seg.pend.tmp.* "$base".done.[0-9]* "$base".exits.[0-9]* "$base".exit.[0-9]* "$plan".tmp* 2>/dev/null
-  local timedout="" landed=0 failed=0 stop="" per="${KB_CAPTURE_SEG_FREEZE_PER_PASS:-4}" frozen_done=0 rc
+  local timedout="" landed=0 failed=0 stop="" per="${KB_CAPTURE_SEG_FREEZE_PER_PASS:-4}" frozen_done=0 rc frozen_left=""
   local -a NEED=()
+  local FROZEN_PENDING=0 FREEZE_FIRST="" did_tail=""
   for ((i = n; i >= 1; i--)); do
     if [ "$(cap_tab_get "$tab" "$i")" != "${KEYS[$i]}" ] || ! cap_capture_exists "${PIDS[$i]}"; then
       NEED[$i]=1
+      [ "$i" -lt "$n" ] && FROZEN_PENDING=$((FROZEN_PENDING + 1))
     fi
   done
-  # 1. the live tail first, 2. frozen parts oldest first.
-  if [ -n "${NEED[$n]:-}" ]; then
+  # Order. Normally the live tail lands FIRST (the session is searchable at
+  # once) and frozen parts follow, oldest first. After a tail that FAILED
+  # (<lock-base>.tailfail: a landing killed at its cap, a conversion that did
+  # not finish) the next pass goes FROZEN-FIRST, so one bad tail can never
+  # starve the catch-up; the tail is then retried once no frozen part is left
+  # waiting. The marker clears when the tail lands. A tail that merely ran out
+  # of time (rc 4/6) is not a failure: its translated sidecars are cached, the
+  # frozen parts go on in the same pass, and another pass follows.
+  [ -e "$base.tailfail" ] && [ "$FROZEN_PENDING" -gt 0 ] && FREEZE_FIRST=1
+  if [ -n "${NEED[$n]:-}" ] && [ -z "$FREEZE_FIRST" ]; then
+    did_tail=1
     cap_seg_do_part "$n"
     rc=$?
     case "$rc" in
-      0) landed=$((landed + 1)) ;;
+      0) landed=$((landed + 1)); rm -f "$base.tailfail" ;;
+      4 | 6) timedout=1 ;;
       5) stop=1 ;;
-      *) failed=1 ;;
+      *) failed=1; : >"$base.tailfail" 2>/dev/null ;;
     esac
   fi
   for ((i = 1; i < n; i++)); do
     [ "$failed" -eq 0 ] && [ -z "$stop" ] || break
     [ -n "${NEED[$i]:-}" ] || continue
-    if [ "$frozen_done" -ge "$per" ]; then CAP_MORE=1; break; fi
+    if [ "$frozen_done" -ge "$per" ]; then CAP_MORE=1; frozen_left=1; break; fi
     cap_seg_do_part "$i"
     rc=$?
     case "$rc" in
       0) landed=$((landed + 1)); frozen_done=$((frozen_done + 1)) ;;
-      4) timedout=1; stop=1 ;; # out of time: progress is on disk, go again (only if something landed)
+      4 | 6) timedout=1; stop=1 ;; # out of time: progress is on disk, go again (only if something landed)
       5) stop=1 ;;
       *) failed=1 ;;
     esac
   done
-  [ -n "$timedout" ] && [ "$landed" -gt 0 ] && CAP_MORE=1
-  # Another pass only after progress (a landing, or a re-plan after halving):
-  # a failing kb must never spin the coalescing loop.
-  if [ "$failed" -ne 0 ] || { [ "$landed" -eq 0 ] && [ -z "$stop" ]; }; then CAP_MORE=""; fi
+  if [ -n "${NEED[$n]:-}" ] && [ -z "$did_tail" ] && [ "$failed" -eq 0 ] && [ -z "$stop" ] && [ -z "$frozen_left" ]; then
+    cap_seg_do_part "$n"
+    rc=$?
+    case "$rc" in
+      0) landed=$((landed + 1)); rm -f "$base.tailfail" ;;
+      4 | 6) timedout=1 ;;
+      5) stop=1 ;;
+      *) failed=1; : >"$base.tailfail" 2>/dev/null ;;
+    esac
+  fi
+  cap_trace "pass landed=$landed translated=$CAP_SC_NEW frozen_left=${frozen_left:-0} t=$SECONDS"
+  # Another pass only after progress (a landing, a sidecar translated, or a
+  # re-plan after halving): a failing kb must never spin the coalescing loop.
+  [ -n "$timedout" ] && [ $((landed + CAP_SC_NEW)) -gt 0 ] && CAP_MORE=1
+  if [ "$failed" -ne 0 ] || { [ $((landed + CAP_SC_NEW)) -eq 0 ] && [ -z "$stop" ]; }; then CAP_MORE=""; fi
   [ "$failed" -eq 0 ] || return 1
   [ -z "$CAP_MORE" ] || return 0
   [ -z "$stop" ] || return 1
+  [ -z "$timedout" ] || return 1
   # Everything on the plan is landed: drop what the plan no longer reaches.
   local drops=0
   cap_seg_drop_orphans "$n" || drops=1
