@@ -776,6 +776,89 @@ fn find_existing_capture(out_dir: &Path, sid: &str, raw_sid: &str) -> Option<Pat
     newest(&|n| n == lossy || n == lossy_dash, &owns)
 }
 
+/// Is `part` exactly `<of>-p<digits>` with a part number of at least 2? The
+/// shape the omp adapter mints for a continuation part (and the one
+/// `kb_core::sessions` accepts as a segment link); part 1 keeps the bare id.
+fn is_continuation_part_id(part: &str, of: &str) -> bool {
+    let Some(rest) = part.strip_prefix(of).and_then(|r| r.strip_prefix("-p")) else {
+        return false;
+    };
+    !of.is_empty()
+        && !rest.is_empty()
+        && rest.bytes().all(|b| b.is_ascii_digit())
+        && rest.parse::<u64>().is_ok_and(|n| n >= 2)
+}
+
+/// v0.46 SEG-PR2 - `kb sessions drop-part`: remove the capture file(s) of ONE
+/// continuation part of a segmented session, so the daemon's own delete
+/// cascade (R2: the watcher sees the file leave the corpus) clears its index
+/// rows, sidecars and comments. The omp adapter calls it when a rewind or
+/// `/clear` behind a frozen boundary makes the stored parts orphans. The
+/// adapter itself never removes anything from the corpus: this verb finds the
+/// file the same way the writer does ([`find_existing_capture`]) and refuses
+/// anything that is not VERIFIED to be that part (its own embedded `sessionId`
+/// is `part_id` AND its `segmentOf` is `segment_of`; part 1 / a plain session
+/// is never droppable). Idempotent: nothing found is success with an empty
+/// list. Filesystem-only.
+pub fn run_drop_part(
+    out: Option<PathBuf>,
+    part_id: &str,
+    segment_of: &str,
+    json: bool,
+) -> Result<()> {
+    if !is_continuation_part_id(part_id, segment_of) {
+        bail!("--session-id must be <segment-of>-p<NN> with NN >= 2, got {part_id:?} of {segment_of:?}");
+    }
+    let out_dir = resolve_out_dir(out)?;
+    let key = super::import::sanitize_sid(part_id);
+    let mut dropped: Vec<PathBuf> = Vec::new();
+    let mut refused: Vec<PathBuf> = Vec::new();
+    // `find_existing_capture` returns the newest candidate; loop until none is
+    // left (a legacy duplicate), refusing - and then stopping on - any file it
+    // finds that is not verifiably this part.
+    for _ in 0..8 {
+        let Some(path) = find_existing_capture(&out_dir, &key, part_id) else {
+            break;
+        };
+        let verified = std::fs::read_to_string(&path).is_ok_and(|html| {
+            kb_core::sessions::recover_jsonl_from_capture(&html).is_some_and(|j| {
+                kb_core::session_bundle::first_transcript_field(&j, "sessionId").as_deref()
+                    == Some(part_id)
+                    && kb_core::session_bundle::first_transcript_field(&j, "segmentOf").as_deref()
+                        == Some(segment_of)
+            })
+        });
+        if !verified {
+            refused.push(path);
+            break;
+        }
+        std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        dropped.push(path);
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "session_id": part_id,
+                "dropped": dropped,
+                "refused": refused,
+            })
+        );
+    } else {
+        for p in &dropped {
+            println!("dropped {}", p.display());
+        }
+        for p in &refused {
+            eprintln!("refused {} (not verifiably part {part_id})", p.display());
+        }
+    }
+    if refused.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("refused to drop an unverified file"))
+    }
+}
+
 /// Unix-now → `YYYYMMDDTHHMMSSZ`, the kb-capture.sh `date -u
 /// +%Y%m%dT%H%M%SZ` stamp.
 fn compact_utc_now() -> String {
@@ -1923,6 +2006,46 @@ mod tests {
             .set_modified(later)
             .unwrap();
         assert!(!item_unchanged(&item, snap));
+    }
+
+    /// v0.46 SEG-PR2: `drop-part` removes a verified continuation part's file,
+    /// is idempotent, and never touches part 1, a plain session, or a file
+    /// whose embedded ids do not match.
+    #[test]
+    fn drop_part_removes_only_a_verified_continuation_part() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path();
+        let html = |body: &str| format!("<html><body><pre>{body}</pre></body></html>");
+        let part = write(
+            out,
+            "session-20260101T000000Z-S1-p02.html",
+            &html(
+                r#"{"sessionId":"S1-p02","type":"adapter-meta","segmentOf":"S1","segmentIdx":2,"rawSessionId":"S1"}"#,
+            ),
+        );
+        let first = write(
+            out,
+            "session-20260101T000000Z-S1.html",
+            &html(r#"{"sessionId":"S1","type":"adapter-meta"}"#),
+        );
+        // A forged file under part 3's name that belongs to nobody.
+        let forged = write(
+            out,
+            "session-20260101T000000Z-S1-p03.html",
+            &html(r#"{"sessionId":"S1-p03","type":"adapter-meta"}"#),
+        );
+        // Not a continuation id: refused up front.
+        assert!(run_drop_part(Some(out.to_path_buf()), "S1", "S1", true).is_err());
+        assert!(run_drop_part(Some(out.to_path_buf()), "S1-p01", "S1", true).is_err());
+        assert!(first.exists());
+        // The forged one is refused and kept.
+        assert!(run_drop_part(Some(out.to_path_buf()), "S1-p03", "S1", true).is_err());
+        assert!(forged.exists());
+        // The verified one goes; a second call is a no-op success.
+        run_drop_part(Some(out.to_path_buf()), "S1-p02", "S1", true).unwrap();
+        assert!(!part.exists());
+        run_drop_part(Some(out.to_path_buf()), "S1-p02", "S1", true).unwrap();
+        assert!(first.exists());
     }
 
     #[test]
