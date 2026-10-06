@@ -2361,12 +2361,13 @@ enum SessionsAction {
     /// capture adapters pipe their translated transcript through this before
     /// embedding it. Filesystem/stdio only.
     Scrub,
-    /// Plan segmented capture of a long omp session (v0.46 SEG-B): stream
+    /// Plan segmented capture of a long omp session: stream
     /// the source JSONL once, resolve its leaf chain with the adapter's own
     /// TRANSLATE rules, and cut the chain into ordered parts at legal user
     /// boundaries (16 MiB raw target). Prints a `segment-plan/1` JSON
     /// document, or with `--emit N` the raw lines of part N. Filesystem
-    /// only; nothing emits segments yet (the adapter lands in a later PR).
+    /// only; nothing emits segments yet.
+    // Provenance: v0.46 SEG-B
     SegmentPlan {
         /// The omp session JSONL.
         #[arg(long)]
