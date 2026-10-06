@@ -254,6 +254,13 @@ registering anywhere `kb-memory` is already installed. Design:
   - **drops a poisoned subagent sidecar** instead of failing the pass: a
     sidecar whose translation errors is skipped (the main transcript and the
     healthy sidecars still land); only a deadline kill or a TERM aborts.
+    **TERM bound (segmented tail conversion included):** every potentially
+    slow step - the planner, the `session_exit` scan, the chain walk, the
+    `kb ... --help` probes - is a tracked background job whose answer is left
+    in a file, never a `$(...)` (bash defers a trapped TERM until a command
+    substitution returns), so a TERM is handled within ~6 s at every stage
+    (pinned for a slow exit scan and a slow chain walk in
+    `test-capture-omp-segments.sh`).
   - **bounds a pass** with `KB_CAPTURE_HARD_SECS` (default 120, the same value
     `kb-omp.ts` always passed as its timeout - this makes that timeout real):
     each child is capped at what is left of it. The `kb` landing gets its own
@@ -343,8 +350,11 @@ registering anywhere `kb-memory` is already installed. Design:
     or that landed right before a `kill -9`, has no landed row but is still
     found by a later shrink/fork. Orphan drops are driven by these two tables
     only: if both are lost, or a `drop-part` fails, the part stays in the corpus
-    until the next change (the session fails open with stale parts, never loses
-    data). A part that
+    until the next trigger (the session fails open with stale parts, never loses
+    data). While any drop is outstanding the input is NOT recorded as done
+    (`<lock-base>.done`), in the segmented pass and in the legacy `/clear` path
+    alike, so the next UNCHANGED trigger passes the fingerprint shortcut, retries
+    the drop and only then records. A part that
     converted but landed with rc 1 (spooled) or 2 (lost) keeps its converted
     files (`<lock-base>.parts/NN/`, private dir) and the retry lands them
     without converting again. A frozen part's key is (first id, last id, entry

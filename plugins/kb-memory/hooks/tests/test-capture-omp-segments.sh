@@ -79,6 +79,7 @@ export KB_SESSIONS_DIR="$TMPROOT/sessions"
 export KB_CAPTURE_TRACE="$TMPROOT/trace"
 export KB_LOG="$TMPROOT/kb.log"
 export KB_FAIL_FLAG="$TMPROOT/kb-fail"
+export KB_DROP_FAIL="$TMPROOT/kb-drop-fail"
 export KB_HANGING="$TMPROOT/kb-hanging"
 export KB_CALLS="$TMPROOT/kb-calls"
 export FAKE_CAPTURE_KB="$FIX/fake-capture-kb.sh"
@@ -94,6 +95,9 @@ if [ "${1:-}" = "sessions" ]; then
     segment-plan)
       if [ -n "${KB_NO_PLANNER:-}" ]; then echo "error: unrecognized subcommand 'segment-plan'" >&2; exit 2; fi
       case " $* " in
+        *" --print-chain "*) [ -n "${KB_CHAIN_SLEEP:-}" ] && { echo "chain $$" >>"$KB_LOG"; sleep "$KB_CHAIN_SLEEP"; } ;;
+      esac
+      case " $* " in
         *" --emit "*) [ -n "${KB_EMIT_SLEEP:-}" ] && { echo "emit $$" >>"$KB_LOG"; sleep "$KB_EMIT_SLEEP"; } ;;
       esac
       if [ -n "$REAL_PLANNER" ]; then exec "$REAL_KB" "$@"; fi
@@ -101,6 +105,7 @@ if [ "${1:-}" = "sessions" ]; then
       exec python3 "$FAKE_PLAN" "$@"
       ;;
     drop-part)
+      case " $* " in *" --help "*) ;; *) [ -e "$KB_DROP_FAIL" ] && { echo "drop-fail $*" >>"$KB_LOG"; exit 1; } ;; esac
       if [ -n "$REAL_DROP" ]; then exec "$REAL_KB" "$@"; fi
       case " $* " in *" --help "*) exit 0 ;; esac
       shift 2
@@ -156,9 +161,9 @@ SEQ=0
 fresh() { # reset corpus/locks/spool/trace for a new scenario
   rm -rf "${KB_SESSIONS_DIR:?}" "${KB_CAPTURE_LOCKS:?}" "${KB_CAPTURE_SPOOL:?}" "${TMPROOT:?}/work"
   mkdir -p "$KB_SESSIONS_DIR" "$TMPROOT/work"
-  rm -f "$KB_CAPTURE_TRACE" "$KB_LOG" "$KB_FAIL_FLAG" "$KB_HANGING" "$KB_CALLS"
+  rm -f "$KB_CAPTURE_TRACE" "$KB_LOG" "$KB_FAIL_FLAG" "$KB_DROP_FAIL" "$KB_HANGING" "$KB_CALLS"
   : >"$KB_CAPTURE_TRACE"; : >"$KB_LOG"
-  unset KB_REAL_CAPTURE KB_HANG_AT KB_EMIT_SLEEP KB_NO_PLANNER KB_CAPTURE_SEG_MAX_PART_BYTES KB_CAPTURE_SEG_MIN_TARGET KB_CAPTURE_SEG_SPOOL_MAX
+  unset KB_REAL_CAPTURE KB_HANG_AT KB_EMIT_SLEEP KB_CHAIN_SLEEP KB_SCAN_SLEEP KB_NO_PLANNER KB_CAPTURE_SEG_MAX_PART_BYTES KB_CAPTURE_SEG_MIN_TARGET KB_CAPTURE_SEG_SPOOL_MAX
   export KB_CAPTURE_SEGMENTS=1
   SEQ=$((SEQ + 1))
   SID="5e600000-0000-4000-8000-$(printf '%012d' "$SEQ")"
@@ -530,6 +535,102 @@ if [ "$Nc" -ge 4 ] && [ "$(n_parts)" = 1 ] && printf '%s' "$body" | grep -q 'TUR
 else
   bad "/clear: parts $Nc -> $(n_parts), drops=$(grep -c '^drop part=' "$KB_CAPTURE_TRACE"), rows=$(tab_rows)"
 fi
+
+# 7b. A FAILED drop-part is retried by the next UNCHANGED trigger: the input is
+#     not recorded as done while a drop is outstanding (else the fingerprint
+#     shortcut would leave the orphan in the corpus forever).
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+hook_fg
+Nf2="$(n_parts)"
+done_before="$(cat "$KB_CAPTURE_LOCKS"/*.done 2>/dev/null)"
+python3 "$GEN" append "$S" 4 --parent t00012r --tag f --blob 300
+: >"$KB_DROP_FAIL"
+hook_fg
+N_failed="$(n_parts)"
+rows_failed="$(tab_rows)"
+done_after_fail="$([ "$(cat "$KB_CAPTURE_LOCKS"/*.done 2>/dev/null)" = "$done_before" ] && echo 0 || echo 1)"
+rm -f "$KB_DROP_FAIL"
+: >"$KB_CAPTURE_TRACE"
+hook_fg # same source, nothing appended
+N_retry="$(n_parts)"
+if [ "$N_failed" = "$Nf2" ] && [ "$done_after_fail" = 0 ] && [ "$N_retry" -lt "$Nf2" ] \
+  && [ "$(tab_rows)" = "$N_retry" ] && [ "$(grep -c '^drop part=' "$KB_CAPTURE_TRACE")" -ge 1 ] \
+  && [ -n "$done_before" ] && [ "$(cat "$KB_CAPTURE_LOCKS"/*.done 2>/dev/null)" != "$done_before" ]; then
+  ok "segmented fork: a failed drop-part leaves the input unrecorded (no .done, $rows_failed rows kept); the next UNCHANGED trigger retries it ($Nf2 -> $N_retry parts) and then records"
+else
+  bad "segmented drop retry: parts $Nf2 -> $N_failed -> $N_retry, .done advanced after failure=$done_after_fail, rows=$(tab_rows), err=$(head -c 200 "$TMPROOT/last.err")"
+fi
+
+# 7c. Same through the legacy /clear path (the session is one part again).
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+hook_fg
+Nc2="$(n_parts)"
+done_before="$(cat "$KB_CAPTURE_LOCKS"/*.done 2>/dev/null)"
+python3 "$GEN" reset "$S"
+python3 "$GEN" append "$S" 2 --tag c --blob 300
+: >"$KB_DROP_FAIL"
+hook_fg
+Nc_failed="$(n_parts)"
+done_after_fail="$([ "$(cat "$KB_CAPTURE_LOCKS"/*.done 2>/dev/null)" = "$done_before" ] && echo 0 || echo 1)"
+rm -f "$KB_DROP_FAIL"
+hook_fg
+if [ "$Nc2" -ge 4 ] && [ "$Nc_failed" -gt 1 ] && [ "$done_after_fail" = 0 ] && [ "$(n_parts)" = 1 ] \
+  && [ -n "$done_before" ] && [ "$(cat "$KB_CAPTURE_LOCKS"/*.done 2>/dev/null)" != "$done_before" ]; then
+  ok "/clear: a failed drop-part is not recorded as done ($Nc_failed parts left); the next unchanged trigger drops the stale parts (-> $(n_parts) part) and records"
+else
+  bad "/clear drop retry: parts $Nc2 -> $Nc_failed -> $(n_parts), .done advanced after failure=$done_after_fail"
+fi
+
+# 7d. TERM while the tail's exit scan / chain walk is slow: handled promptly
+#     (the answer rides a tracked background job, never a $(...) that would
+#     defer the trap), nothing of ours survives, and the next capture recovers.
+term_slow() { # <label> : the slow stage is already armed via env
+  local KT members gone left marker
+  hook_bg; KT=$LAST_PID
+  if wait_for 20 grep -q "^$2 " "$KB_LOG"; then
+    members="$(ps -s "$KT" -o pid= | tr -d ' ' | grep -vx "$KT" | tr '\n' ' ')"
+    kill -TERM "$KT"
+    gone=0
+    for _ in $(seq 1 120); do kill -0 "$KT" 2>/dev/null || { gone=1; break; }; sleep 0.05; done
+    wait "$KT" 2>/dev/null
+    left=""
+    for p in $members; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
+    left="$left $(ps -s "$KT" -o pid= 2>/dev/null | tr -d ' ' | tr '\n' ' ')"
+    if [ "$gone" = 1 ] && [ -n "$(echo "$members" | tr -d ' ')" ] && [ -z "$(echo "$left" | tr -d ' ')" ] && lock_free && no_scratch; then
+      ok "SIGTERM during the slow $1: exits within 6 s, no owned descendant ($(echo "$members" | wc -w) processes) survives, lock released, scratch removed"
+    else
+      bad "TERM during $1: gone=$gone members='$members' left='$left'"
+    fi
+  else
+    bad "the slow $1 never started"
+  fi
+}
+mkdir -p "$TMPROOT/shim"
+cat >"$TMPROOT/shim/grep" <<'GS'
+#!/usr/bin/env bash
+case "$*" in *session_exit*) if [ -n "${KB_SCAN_SLEEP:-}" ]; then echo "scan $$" >>"$KB_LOG"; sleep "$KB_SCAN_SLEEP"; fi ;; esac
+exec "$(PATH="${PATH#"$TMPROOT/shim:"}" command -v grep)" "$@"
+GS
+chmod +x "$TMPROOT/shim/grep"
+export TMPROOT
+for stage in exit-scan chain-walk; do
+  fresh
+  python3 "$GEN" create "$S" "$SID" 30 --blob 300
+  python3 "$GEN" exit "$S" signal
+  python3 "$GEN" append "$S" 30 --blob 300
+  case "$stage" in
+    exit-scan) export KB_SCAN_SLEEP=60; mk=scan ;;
+    chain-walk) export KB_CHAIN_SLEEP=60; mk=chain ;;
+  esac
+  OLDPATH="$PATH"; export PATH="$TMPROOT/shim:$PATH"
+  term_slow "$stage" "$mk"
+  export PATH="$OLDPATH"
+  unset KB_SCAN_SLEEP KB_CHAIN_SLEEP
+  hook_fg
+  [ "$(n_parts)" -ge 3 ] && ok "recovery after the TERM during the $stage: the next capture lands every part" || bad "no recovery after TERM during $stage ($(n_parts) parts)"
+done
 
 # ---------------------------------------------------------------------------
 # 8. A sidecar change re-lands only the part it belongs to.

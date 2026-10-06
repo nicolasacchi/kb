@@ -733,7 +733,7 @@ cap_seg_ready() {
     cap_seg_warn "kb-hook-lib.sh lacks the segmented-capture helpers"; return 1
   fi
   hook_kb_in_path || { cap_seg_warn "kb is not on PATH"; return 1; }
-  capt kb sessions segment-plan --help >/dev/null 2>&1 \
+  cap_bg capt kb sessions segment-plan --help >/dev/null 2>&1 \
     || { cap_seg_warn "this kb has no 'sessions segment-plan'"; return 1; }
   cap_seg_build_programs || { cap_seg_warn "the translator no longer matches the segment programs"; return 1; }
   CAP_SEG_PROBED=1
@@ -876,8 +876,14 @@ cap_seg_convert() {
   local emitexit=false xexit=null
   if [ "$k" -eq "$n" ]; then
     emitexit=true
-    xexit="$(cap_seg_last_exit "$tpath" "${STARTS[$n]}" "$base")" \
-      || { rm -rf -- "${d:?}"; rm -f "$raw"; return 1; }
+    # A tracked background job with its answer in a file - NEVER $(...): bash
+    # defers a trapped TERM until a command substitution returns, and the exit
+    # scan + planner chain walk can be slow on a cold multi-GB source.
+    cap_bg cap_seg_last_exit "$tpath" "${STARTS[$n]}" "$base" >"$CAP_RUN/xexit.out"
+    erc=$?
+    if [ "$erc" -ne 0 ]; then rm -rf -- "${d:?}"; rm -f "$raw" "$CAP_RUN/xexit.out"; return 1; fi
+    xexit="$(cat "$CAP_RUN/xexit.out" 2>/dev/null)"
+    rm -f "$CAP_RUN/xexit.out"
     [ -n "$xexit" ] || xexit=null
   fi
   cap_trace "convert part=$k state=${STATES[$k]}"
@@ -1014,7 +1020,9 @@ cap_seg_purge_local() { # <keep idx count> [raw id]
 
 # Drop the continuation parts the table holds beyond index $1 (the new part
 # count; 1 = every continuation part) through `kb sessions drop-part`. A row is
-# removed only when kb confirmed. rc 0 = nothing left.
+# removed only when kb confirmed. rc 0 = nothing left; rc 1 = a drop is
+# outstanding, so the caller must NOT record the input as done (the next
+# unchanged trigger has to come back and retry it).
 cap_seg_drop_orphans() { # <keep idx count>
   local keep="$1" i pid raw left=0 t
   cap_seg_purge_local "$keep"
@@ -1026,7 +1034,7 @@ cap_seg_drop_orphans() { # <keep idx count>
       pid="$(cap_tab_pid "$t" "$i")"
       raw="$(cap_part_raw "$pid")"
       if [ "$i" -le 1 ] || [ "$raw" = "$pid" ]; then cap_tab_del "$t" "$i"; continue; fi
-      if capt kb sessions drop-part --help >/dev/null 2>&1; then
+      if cap_bg capt kb sessions drop-part --help >/dev/null 2>&1; then
         if cap_bg capt kb sessions drop-part --session-id "$pid" --segment-of "$raw" --out "$KB_SESSIONS_DIR" >/dev/null 2>&1; then
           cap_trace "drop part=$i"
           hook_spool_drop "$pid"
@@ -1048,9 +1056,10 @@ cap_seg_drop_orphans() { # <keep idx count>
 # path re-landed the bare id in place, drop every stale continuation part.
 cap_seg_reset() { # <lock-base>
   local tab="$1.seg" pend="$1.seg.pend" pdir="$1.parts"
-  cap_seg_drop_orphans 1 || true
+  local drc=0
+  cap_seg_drop_orphans 1 || drc=1
   cap_tab_del "$tab" 1
-  return 0
+  return "$drc"
 }
 
 # ONE segmented pass. rc 0 = done or progressed (CAP_MORE says another pass is
@@ -1168,9 +1177,10 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
   [ -z "$CAP_MORE" ] || return 0
   [ -z "$stop" ] || return 1
   # Everything on the plan is landed: drop what the plan no longer reaches.
-  cap_seg_drop_orphans "$n" || true
+  local drops=0
+  cap_seg_drop_orphans "$n" || drops=1
   rmdir "$pdir" 2>/dev/null
-  if [ -n "$fp" ]; then
+  if [ -n "$fp" ] && [ "$drops" -eq 0 ]; then
     printf '%s\n' "$fp" >"$base.done.$$" 2>/dev/null && mv -f "$base.done.$$" "$base.done" 2>/dev/null
   fi
   return 0
@@ -1307,18 +1317,23 @@ capture_pass() {
   cap_untrack "$scratch"
   # Recorded ONLY for a real landing, and only for the state read BEFORE the
   # conversion (an append during it makes the next fingerprint differ).
-  if [ "$rc" -eq 0 ] && [ -n "$base" ] && [ -n "$fp" ]; then
-    printf '%s\n' "$fp" >"$base.done.$$" 2>/dev/null && mv -f "$base.done.$$" "$base.done" 2>/dev/null
-  fi
+  # (the record itself is written below, once no drop-part is outstanding)
+  local drops=0
   # The session fits in one part again (a /clear after segmenting): the bare id
   # was just re-landed in place, so the continuation parts are stale.
   if [ "$rc" -eq 0 ] && [ -n "$CAP_SEG_SINGLE" ] && [ -n "$base" ]; then
-    cap_seg_reset "$base"
+    cap_seg_reset "$base" || drops=1
   elif [ "$rc" -eq 0 ] && [ -n "$base" ] && [ -s "$base.seg" ]; then
     # The legacy path (segmentation off, or unusable) just landed the WHOLE
     # session over part 1: part 1 is no longer what the table says. Forget its
     # row so re-enabling re-lands it small (the -pNN parts stay as landed).
     cap_tab_del "$base.seg" 1
+  fi
+  # Not recorded while a drop is outstanding: the fingerprint shortcut would
+  # otherwise skip every later unchanged trigger and the orphan part would stay
+  # in the corpus for good.
+  if [ "$rc" -eq 0 ] && [ -n "$base" ] && [ -n "$fp" ] && [ "$drops" -eq 0 ]; then
+    printf '%s\n' "$fp" >"$base.done.$$" 2>/dev/null && mv -f "$base.done.$$" "$base.done" 2>/dev/null
   fi
   [ "$rc" -eq 0 ]
 }
