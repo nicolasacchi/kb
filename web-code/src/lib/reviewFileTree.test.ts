@@ -288,15 +288,15 @@ describe("shipped e2e hooks the tree / map must keep", () => {
     expect(css).toContain("position: sticky");
   });
 
-  it("sticky section-head does not use --z-bar or a mapped topbar offset (would cover the first strip)", () => {
+  it("sticky section-head does not use --z-bar and has no mapped override", () => {
     const css = readFileSync(fileURLToPath(new URL("../styles/reviews.css", import.meta.url)), "utf-8");
     const head = css.match(/\.kbc-rdiff__section-head \{[^}]+\}/)?.[0] ?? "";
     expect(head).toContain("position: sticky");
     expect(head).toMatch(/z-index:\s*1;/);
     expect(head).not.toContain("var(--z-bar)");
-    const mapped = css.match(/\.kbc-rdiff__body--mapped \.kbc-rdiff__section-head \{[^}]+\}/)?.[0] ?? "";
-    expect(mapped).toMatch(/top:\s*0;/);
-    expect(mapped).not.toContain("var(--topbar-h)");
+    // v0.47 SH — the mapped `top: 0` override is gone: the head pins at the
+    // toolbar's measured height in both modes (stickyHead.test.ts pins it).
+    expect(css).not.toMatch(/\.kbc-rdiff__body--mapped \.kbc-rdiff__section-head \{/);
   });
 
   it("hunk strip stacks above the section-head and has scroll-margin below the sticky chrome", () => {

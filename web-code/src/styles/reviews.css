@@ -1337,7 +1337,7 @@
    * neither of those specs runs at to catch. Left as-is; a map-closed
    * repro would need its own real fix (or a live-measured height), not a
    * guess ported over from the mapped-mode case. */
-  top: var(--topbar-h);
+  top: var(--rdiff-stick-top, var(--topbar-h));
   z-index: 1;
   display: flex;
   align-items: center;
@@ -2179,13 +2179,18 @@ span.kbc-diff__impact-chip {
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
+  overflow-x: clip !important;
+  overflow-y: visible !important;
 }
-/* Map open: the library Group is `overflow:hidden` (inline, sticky
- * containing block) and already sits below the toolbar. `top: var(--topbar-h)`
- * on the section-head pulled the header down over the first hunk strip so
- * `data-kbc-review-viewed` intercepted `data-kbc-hunk-viewed-toggle`. */
-.kbc-rdiff__body--mapped .kbc-rdiff__section-head {
-  top: 0;
+/* v0.47 SH — map open: the library Group and its Panels may carry an INLINE
+ * `overflow: hidden` (the library's default), which makes them the sticky scrollport (a box that never
+ * scrolls), so the per-file headers below never pinned in map-open mode. Only
+ * the horizontal axis needs clipping (resize jitter); `clip` does not create a
+ * scroll container, so sticky resolves against `.kbc-approute` again. The
+ * headers then pin at the toolbar's measured height (`--rdiff-stick-top`, set
+ * by useStickyOffset) in map-open and map-closed alike. */
+.kbc-rdiff__split [data-panel] {
+  overflow: visible !important;
 }
 .kbc-rdiff__map-panel,
 .kbc-rdiff__stream-panel {
