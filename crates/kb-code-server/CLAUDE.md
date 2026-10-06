@@ -1089,8 +1089,8 @@ invariant #2 records).
     which was written for an UNCHANGED claim:* when a re-import/compose of
     an `import`-origin finding changes its `location_*` (path/kind/lines/
     removed), OR the linked annotation has no anchor at all, OR the stored
-    anchor does NOT resolve EXACTLY at the target patchset (orphaned, or
-    only fuzzy — the route reads the blobs BEFORE the transaction,
+    anchor is ORPHANED at the target patchset or resolves only FUZZILY
+    to the claimed lines (fuzzy + disagreeing is the warn case below — the route reads the blobs BEFORE the transaction,
     `review_findings::probe_anchors`, and hands the annotation ids in as
     `store::AnchorRepairs`; never git I/O under the store lock), the anchor
     (+ path, side, bound `ps_number` — so later patchsets carry forward from
@@ -1100,13 +1100,13 @@ invariant #2 records).
     exists because an earlier compose may already have moved `location_*`
     while leaving the anchor: a re-compose with that same, already-updated
     claim sees no change and would leave the orphan forever.
-    **A verified anchor beats a resent claim.** When the stored anchor
-    resolves EXACT at the target patchset but to lines other than the
-    claim (ps2 inserted lines above, carry-forward moved the anchor, and
+    **When anchor and claim disagree, the daemon picks neither.** When the
+    stored anchor resolves (EXACT or FUZZY) at the target patchset to lines
+    other than the claim (ps2 inserted lines above, carry-forward moved the anchor, and
     the agent resends its stale pre-insertion numbers), the anchor is KEPT —
     never rewritten from the claim, `own_ps` unchanged — and the response's
     `anchor_warnings[]` gains `{kind: "claim_disagrees_with_anchor", slug,
-    anchor_line, anchor_line_end, claimed_lines}` so the agent can correct
+    anchor_line, anchor_line_end, confidence: exact|fuzzy, claimed_lines}` so the agent can correct
     its claim or use the explicit reanchor route. The saved claim
     (`location_*`) stays the agent's value (it is the saved claim, as
     today); the view's `resolution` is computed from the anchor, so the two

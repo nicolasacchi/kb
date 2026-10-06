@@ -2435,6 +2435,7 @@ fn assert_kept_exact_anchor_and_warning(
     assert_eq!(w["slug"], "f-a", "{w}");
     assert_eq!(w["anchor_line"], 5, "{w}");
     assert_eq!(w["anchor_line_end"], 7, "{w}");
+    assert_eq!(w["confidence"], "exact", "{w}");
     assert_eq!(w["claimed_lines"], serde_json::json!([3, 5]), "{w}");
 }
 
@@ -2528,4 +2529,49 @@ async fn an_anchor_that_resolves_only_fuzzily_is_re_derived_from_the_claim() {
     assert_eq!(fa["resolution"]["line"], 2, "{fa}");
     assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
     assert_eq!(body["anchor_warnings"], serde_json::json!([]), "{body}");
+}
+
+/// RULING: a FUZZY anchor (long line) that resolves to lines other than the
+/// resent claim is kept like the exact case — no rewrite, own_ps unchanged —
+/// and the warning says `confidence: "fuzzy"`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fuzzy_anchor_disagreeing_with_a_stale_claim_is_kept_and_warns() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let long = format!("-- {}", "word ".repeat(60));
+    let ps1 = format!("local a = 1\n{long}\nlocal b = 2\n");
+    let repo_tmp = fixture_repo_with(&[("long.lua", ps1.as_bytes())]);
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let batch = serde_json::json!({
+        "schema": "kbc-findings/1",
+        "findings": [finding_at("f-a", "long.lua", 2)],
+    });
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    // ps2 inserts two lines above the long line (now line 4).
+    std::fs::write(
+        repo_tmp.path().join("long.lua"),
+        format!("-- h1\n-- h2\n{ps1}"),
+    )
+    .unwrap();
+    git(repo_tmp.path(), &["add", "-A"]);
+    git(repo_tmp.path(), &["commit", "-q", "-m", "ps2 insert above"]);
+    assert_eq!(snapshot(&client, &base, id).await, 2);
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["resolution"]["line"], 4, "precondition: {before}");
+    assert_eq!(before["resolution"]["confidence"], "fuzzy", "{before}");
+
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["own_ps"], 1, "anchor kept: {fa}");
+    assert_eq!(fa["resolution"]["line"], 4, "{fa}");
+    let w = &body["anchor_warnings"][0];
+    assert_eq!(w["kind"], "claim_disagrees_with_anchor", "{body}");
+    assert_eq!(w["anchor_line"], 4, "{w}");
+    assert_eq!(w["confidence"], "fuzzy", "{w}");
+    assert_eq!(w["claimed_lines"], serde_json::json!([2]), "{w}");
 }

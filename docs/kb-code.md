@@ -264,17 +264,17 @@ LOOPBACK-ONLY, addendum §E) lets a human author one finding directly.
 claim (`location`) and the anchor of its linked annotation. A re-import or
 compose of an agent (`import`-origin) finding whose location changed now
 re-derives the anchor from the target patchset in the same transaction, and
-so does one whose stored anchor does not resolve exactly at that patchset
-(orphaned or only fuzzy) even though the claim itself is unchanged (an
+so does one whose stored anchor is orphaned at that patchset, or resolves
+only fuzzily to the claimed lines, even though the claim itself is unchanged (an
 earlier compose already moved the claim; the anchor, and its bound patchset
 `own_ps`, now move with it). This amends the original "the anchor is never
 rewritten on re-import" rule, which only held for an unchanged claim whose
 anchor still agrees with it; every `manual` finding is untouched. When the
-stored anchor resolves EXACT at the target patchset to lines other than a
-resent, unchanged claim (lines were inserted above and the agent resent its
-stale numbers), the verified anchor is kept and the response's
+stored anchor resolves (exact or fuzzy) at the target patchset to lines other
+than a resent, unchanged claim (lines were inserted above and the agent resent its
+stale numbers), the anchor is kept (neither side is verified, so the daemon never silently picks the claim) and the response's
 `anchor_warnings[]` carries `claim_disagrees_with_anchor` (`slug`,
-`anchor_line`, `anchor_line_end`, `claimed_lines`); the saved claim stays the
+`anchor_line`, `anchor_line_end`, `confidence`, `claimed_lines`); the saved claim stays the
 agent's value while `resolution` follows the anchor. A citation that cannot be anchored —
 blob over the size cap, path absent, line past end of file — is imported
 without an anchor (an honest orphan, never a guessed line) and reported per

@@ -1027,8 +1027,8 @@ pub(crate) fn compose_finding_view(
 ///   anchor kept ps1 text);
 /// * anchor resolves EXACT to the claimed line / range -> nothing (the
 ///   carry-forward worked; `own_ps` is kept);
-/// * anchor resolves EXACT to OTHER lines -> `exact_elsewhere`: the anchor is
-///   the verified position and is KEPT. A resent claim that merely repeats a
+/// * anchor resolves (exact OR fuzzy) to OTHER lines -> `exact_elsewhere`: the
+///   anchor is KEPT (fuzzy + agreeing is re-derived instead). A resent claim that merely repeats a
 ///   stale pre-insertion line number must not turn a correct carried-forward
 ///   anchor into a confidently wrong one; the reconcile reports it instead.
 fn probe_anchors(
@@ -1069,10 +1069,6 @@ fn probe_anchors(
         if row.location_kind == store::LOCATION_KIND_WHOLE_FILE {
             continue;
         }
-        if r.confidence != Some("exact") {
-            repairs.stale.insert(row.annotation_id.clone());
-            continue;
-        }
         let agrees = match row.location_kind.as_str() {
             store::LOCATION_KIND_RANGE => {
                 r.line == claimed.iter().min().map(|n| *n as u32)
@@ -1080,12 +1076,22 @@ fn probe_anchors(
             }
             _ => r.line == claimed.first().map(|n| *n as u32),
         };
-        if !agrees {
-            if let Some(l) = r.line {
-                repairs
-                    .exact_elsewhere
-                    .insert(row.annotation_id.clone(), (l, r.line_end));
+        let exact = r.confidence == Some("exact");
+        if agrees {
+            // Exact + agreeing: carry-forward worked, leave it. Fuzzy +
+            // agreeing: re-derive (idempotent at the same lines).
+            if !exact {
+                repairs.stale.insert(row.annotation_id.clone());
             }
+        } else if let Some(l) = r.line {
+            // Disagreeing (exact OR fuzzy): neither side is verified, so the
+            // daemon never silently picks the claim — keep the anchor, warn.
+            repairs.exact_elsewhere.insert(
+                row.annotation_id.clone(),
+                (l, r.line_end, if exact { "exact" } else { "fuzzy" }),
+            );
+        } else {
+            repairs.stale.insert(row.annotation_id.clone());
         }
     }
     Ok(repairs)
@@ -1107,6 +1113,7 @@ fn claim_disagreement_warnings(outcome: &store::FindingsImportOutcome) -> Vec<se
                 "kind": "claim_disagrees_with_anchor",
                 "anchor_line": d.anchor_line,
                 "anchor_line_end": d.anchor_line_end,
+                "confidence": d.confidence,
                 "claimed_lines": claimed,
                 "detail": "the stored anchor resolves exactly at the target patchset to \
                            different lines than the resent claim; the verified anchor was \

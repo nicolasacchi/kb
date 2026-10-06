@@ -736,6 +736,8 @@ pub struct ClaimDisagreement {
     pub claimed_lines: Option<String>,
     pub anchor_line: u32,
     pub anchor_line_end: Option<u32>,
+    /// `exact` | `fuzzy` — how the kept anchor resolved.
+    pub confidence: &'static str,
 }
 
 /// v0.47 FA — what the caller learned (blob reads, BEFORE the transaction)
@@ -748,7 +750,7 @@ pub struct AnchorRepairs {
     pub stale: HashSet<String>,
     /// Anchor resolves EXACT at the target patchset, but not to the claimed
     /// lines: the anchor is kept (verified), the disagreement is reported.
-    pub exact_elsewhere: HashMap<String, (u32, Option<u32>)>,
+    pub exact_elsewhere: HashMap<String, (u32, Option<u32>, &'static str)>,
 }
 
 /// The `annotations` anchor fields [`derive_finding_anchor`] produces for
@@ -1403,12 +1405,13 @@ pub(super) fn reconcile_findings_import_on(
                 // could not be derived (`f.anchor` empty).
                 let anchor_stale = repairs.stale.contains(&cur.annotation_id);
                 if cur.reanchor_json.is_none() && !location_changed {
-                    if let Some((l, le)) = repairs.exact_elsewhere.get(&cur.annotation_id) {
+                    if let Some((l, le, conf)) = repairs.exact_elsewhere.get(&cur.annotation_id) {
                         outcome.claim_disagreements.push(ClaimDisagreement {
                             slug: cur.slug.clone(),
                             claimed_lines: cur.location_lines.clone(),
                             anchor_line: *l,
                             anchor_line_end: *le,
+                            confidence: *conf,
                         });
                     }
                 }
