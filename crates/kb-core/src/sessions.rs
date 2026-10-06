@@ -303,7 +303,7 @@ pub struct SessionActivity {
     /// for an ordinary session and for part 1 (which keeps the bare raw id
     /// and is never rewritten to carry metadata). An older parser simply
     /// never reads the key (adapter-meta is read key-by-key; unknown pairs
-    /// are ignored) — pinned by `parse_ignores_segment_keys_for_old_fields`.
+    /// are ignored) — pinned by `parse_reads_segment_keys_and_changes_no_other_field`.
     pub segment_of: Option<String>,
     /// V0045/seg1 — the same record's `segmentIdx` (1-based part index; a
     /// JSON number or a numeric string). `None` unless `segment_of` is set.

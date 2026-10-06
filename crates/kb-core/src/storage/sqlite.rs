@@ -16421,7 +16421,8 @@ mod tests {
             }],
         )
         .unwrap();
-        let live: [(&str, &str, i64, Option<&str>, Option<i64>, u32); 4] = [
+        type Live<'a> = (&'a str, &'a str, i64, Option<&'a str>, Option<i64>, u32);
+        let live: [Live<'_>; 4] = [
             ("cx-1", "chain-x", 1_700_001_000, None, None, 1),
             (
                 "cx-2",
