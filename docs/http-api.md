@@ -598,7 +598,8 @@ GET  /api/anchors/stale                     Q1: fleet-wide cold load for the
 # v0.14 — sessions (track S)
 GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
      &folder=&q=&project=&substance=         Code transcripts (memory-session
-     &harness=&undistilled=1&since=]         artifacts), newest-first. Cursor
+     &harness=&undistilled=1&since=          artifacts), newest-first. Cursor
+     &collapse=logical]
                                             paginated; default limit 50, cap
                                             1000. Response carries
                                             `next_cursor` (omitted at EOL).
@@ -644,7 +645,28 @@ GET  /api/sessions[?cursor=<unix>&limit=N   Cross-kb list of captured Claude
                                             (`--folder`/`--project`/
                                             `--substance`/`--harness`/
                                             `--limit`/`--undistilled`/
-                                            `--since`).
+                                            `--since`/`--collapse`).
+                                            v0.46 SEG-A — a harness session
+                                            whose translation outgrew the
+                                            segment target is captured as an
+                                            ordered CHAIN of ordinary
+                                            sessions (part 1 under the bare
+                                            raw id, part k>=2 under
+                                            `<raw>-pNN`); each part is its own
+                                            row, listed once, carrying the
+                                            additive `segment_of` (the raw
+                                            id; absent on part 1),
+                                            `segment_idx` (1-based; derived 1
+                                            on part 1) and `segment_count`
+                                            (derived at read time). All three
+                                            are ABSENT for an ordinary
+                                            session, so an unsegmented corpus
+                                            serialises byte-identically.
+                                            `collapse=logical` (opt-in; the
+                                            default and `none` show every part
+                                            so nothing is hidden silently;
+                                            any other value is a 400) keeps
+                                            only the LAST part of each chain.
 GET  /api/sessions/recall-coverage[?days=7]  v0.44 F10 — recall-hook coverage
                                             per harness over the trailing
                                             window (default 7, clamp 1-365),
@@ -689,7 +711,18 @@ GET  /api/sessions/projects                 W3.A/P4 — one card per
                                             (`/sessions?view=projects`).
 GET  /api/sessions/{session_id}             Single session + memory_ids list.
                                             404 when no kb holds a matching
-                                            enrichment row. CLI: `kb sessions
+                                            enrichment row. v0.46 SEG-A — for a
+                                            chain the same `segment_*` fields
+                                            as the list plus `segment_chain`
+                                            (every part's session id, part 1
+                                            first; absent for an ordinary
+                                            session), and `memory_ids` for the
+                                            RAW id also covers memories
+                                            stamped with a part's own id (a
+                                            part asked by its own id reads
+                                            only itself). `/memories` and
+                                            `/recalls` widen the same way;
+                                            surfaced, never scored. CLI: `kb sessions
                                             show <id>` (fetches this + the 8
                                             sub-resources below — scope with
                                             `--section a,b,...` to fetch only
@@ -801,7 +834,13 @@ GET  /api/sessions/{session_id}/view        W2/R1 — the `session-view/1`
                                             (`--json` prints this wire
                                             verbatim; `--full`/`--tail N`/
                                             `--turn A..B`/`--grep PAT` select
-                                            what's shown).
+                                            what's shown). v0.46 SEG-A — a
+                                            chain part's response carries
+                                            `segment: {of, idx, count, prev?,
+                                            next?}` (absent for an ordinary
+                                            session); `kb sessions recover
+                                            <id> --chain` concatenates the
+                                            parts' `/raw` bodies in order.
 GET  /api/sessions/{session_id}/raw         W2/R1 — the decoded JSONL
      [?scrub=…]                              transcript, `text/plain`, byte-
                                             identical to what `claude -r`
@@ -1008,6 +1047,14 @@ GET  /api/sessions/by-commit?sha=<sha>      kb-code Wave 0 (W0.6) — the
                                             `sha_full` (V0025) starts with the
                                             given full/short sha (>=7 hex
                                             chars — shorter is 400). Cross-kb.
+                                            v0.46 SEG-A — each match names
+                                            `segment_of` (the chain's raw id)
+                                            when the commit sits in a
+                                            continuation part, and `?session=
+                                            <id>` keeps only matches whose
+                                            `session_id` OR `segment_of` is
+                                            that id (a `Kb-Session:` trailer
+                                            carries the RAW id).
                                             CLI: `kb sessions by-commit <sha>`.
 GET  /api/sessions/commit-map               kb-code Wave 0 (W0.6) — the flat,
      [?since=<unix>&limit=N&offset=N]        offset-paginated bulk feed of
@@ -1646,6 +1693,12 @@ GET    /api/kb/{kb}/docs/{id}/memories-from
                                             whole response. {rows:[{id, kb,
                                             title, summary, author, anchor,
                                             created_unix}, …]}.
+                                            v0.46 SEG-A — asked from the HEAD
+                                            artifact of a segmented session
+                                            (part 1), it also lists memories
+                                            highlighted from the later parts'
+                                            artifacts; a part's own artifact
+                                            lists only its own.
 GET    /api/kb/{kb}/memories/{id}/lineage  MI-W2.4a — `kb memory log`'s data
                                             source: walks one supersede chain
                                             both directions (what {id}
