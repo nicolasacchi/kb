@@ -3544,20 +3544,6 @@ export interface FindingResolution {
   orphan_reason?: "blob_unreadable" | "anchor_missing" | "text_changed";
 }
 
-/** v0.47 FA — audit of a human re-anchor (`POST .../findings/{slug}/reanchor`). */
-export interface FindingReanchorAudit {
-  by: string;
-  at: number;
-  ps: number;
-  from: {
-    path: string;
-    kind: string;
-    lines: number[] | null;
-    removed: boolean;
-    ps: number | null;
-  };
-}
-
 /// kbc-prose/1 (V76-B3) — one extracted (and optionally resolved) prose
 /// reference. Spans are UTF-16 code units into the field text. Additive:
 /// an older daemon omits the whole `*_refs` object.
@@ -3618,8 +3604,23 @@ export interface ReviewFinding {
   created_at: number;
   updated_at: number;
   resolution: FindingResolution;
-  /** v0.47 FA — present only once a human re-anchored this finding. */
-  reanchor?: FindingReanchorAudit;
+  /**
+   * v0.47 FA — audit of a human re-anchor (`POST .../findings/{slug}/reanchor`);
+   * present only once one happened. Inline: the wire ratchet counts
+   * hand-written exports.
+   */
+  reanchor?: {
+    by: string;
+    at: number;
+    ps: number;
+    from: {
+      path: string;
+      kind: string;
+      lines: number[] | null;
+      removed: boolean;
+      ps: number | null;
+    };
+  };
   thread_count: number;
   unresolved_count: number;
   /**
