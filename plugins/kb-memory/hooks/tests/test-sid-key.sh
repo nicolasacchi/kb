@@ -49,6 +49,11 @@ PP="$(printf 'p%.0s' $(seq 1 80))"
 check_key "${PP}X" 'pppppppppppppppppppppppppppppppppppppppppppppppp-f697b5af07a87313' "80-char prefix + X"
 check_key "${PP}Y" 'pppppppppppppppppppppppppppppppppppppppppppppppp-ffe6644da0d12e79' "80-char prefix + Y"
 check_key "$(printf 'a%.0s' $(seq 1 80))" "$(printf 'a%.0s' $(seq 1 80))" "exactly 80 plain chars stay plain"
+# v0.46 SEG-A - segmented-capture part ids (`<raw id>-pNN`).
+check_key "${UUID}-p02" "${UUID}-p02" "a uuid part id is its own key"
+check_key 'ses_01HXYZ-p02' 'ses-01HXYZ-p02-7006ddf22fd96a3e' "opencode-style part id is hashed"
+R77="$(printf 'r%.0s' $(seq 1 77))"
+check_key "${R77}-p02" 'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr-11deaa9d76484e97' "81-byte part id is hashed"
 
 echo "== the beat heartbeat marker uses the key =="
 export XDG_CACHE_HOME="$TMPROOT/cache"

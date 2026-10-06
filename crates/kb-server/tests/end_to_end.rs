@@ -24025,3 +24025,221 @@ async fn meta_patch_delta_tags_merge_into_the_current_set() {
         .unwrap();
     assert_eq!(resp.status(), 404);
 }
+
+/// v0.46 SEG-A — a segmented session (3 parts + an ordinary one) through the
+/// real daemon: the list shows every part once with its chain fields, the
+/// opt-in `?collapse=logical` keeps only the last part (and a bad value 400s),
+/// the detail names the whole chain, the view carries `segment`
+/// {of, idx, count, prev, next} for a part and nothing for an ordinary
+/// session, by-commit resolves a trailer's RAW id to the part that holds the
+/// commit, and the memories read for the raw id widens to a memory stamped
+/// with a part's own id (while the part's own read does not leak sideways).
+// invariant:11 segmented chain through the real routes
+#[tokio::test]
+async fn segmented_session_chain_reads_through_the_routes() {
+    let meta = |sid: &str, extra: &str| {
+        format!(
+            r#"{{"sessionId":"{sid}","type":"adapter-meta","adapter":"kb-capture-omp/1","harness":"omp"{extra}}}"#
+        )
+    };
+    let body = |sid: &str, text: &str| {
+        format!(
+            r#"{{"sessionId":"{sid}","type":"user","promptSource":"typed","message":{{"role":"user","content":"{text}"}}}}"#
+        )
+    };
+    let part =
+        |sid: &str, extra: &str, text: &str| format!("{}\n{}\n", meta(sid, extra), body(sid, text));
+    let tail_sha = "cafe0003".repeat(5);
+    let commit = resolved_commit_fixture(&tail_sha, vec!["Kb-Session: chain-e2e".into()]);
+    let p1 = session_transcript_html(
+        "chain-e2e",
+        "20260601T100000Z",
+        &part("chain-e2e", "", "first part"),
+    );
+    let p2 = session_transcript_html(
+        "chain-e2e-p02",
+        "20260601T110000Z",
+        &part(
+            "chain-e2e-p02",
+            r#","segmentOf":"chain-e2e","segmentIdx":2,"rawSessionId":"chain-e2e""#,
+            "second part",
+        ),
+    );
+    let p3 = session_transcript_html_with_commits(
+        "chain-e2e-p03",
+        "20260601T120000Z",
+        &part(
+            "chain-e2e-p03",
+            r#","segmentOf":"chain-e2e","segmentIdx":3,"rawSessionId":"chain-e2e""#,
+            "third part",
+        ),
+        &[commit],
+    );
+    let solo = session_transcript_html(
+        "solo-e2e",
+        "20260601T123000Z",
+        &part("solo-e2e", "", "just one"),
+    );
+    let global = vec![
+        ("session-20260601T100000Z-chain-e2e.html", p1),
+        ("session-20260601T110000Z-chain-e2e-p02.html", p2),
+        ("session-20260601T120000Z-chain-e2e-p03.html", p3),
+        ("session-20260601T123000Z-solo-e2e.html", solo),
+        (
+            "mem-for-p02.html",
+            memory_with_session_html("Mem For Part Two", "chain-e2e-p02"),
+        ),
+    ];
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    let get = |path: String| {
+        let client = client.clone();
+        async move {
+            let resp = client.get(url(addr, &path)).send().await.unwrap();
+            let status = resp.status();
+            let json = resp.json::<serde_json::Value>().await.unwrap_or_default();
+            (status, json)
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, all) = get("/api/sessions?limit=50".into()).await;
+        let rows = all["sessions"].as_array().cloned().unwrap_or_default();
+        let p2_row = rows.iter().find(|r| r["session_id"] == "chain-e2e-p02");
+        if rows.len() == 4 && p2_row.is_some_and(|r| r["memory_count"] == 1) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the four sessions: {all}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let ids = |body: &serde_json::Value| -> Vec<String> {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["session_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Default list: every part once, newest first, chain fields on the parts.
+    let (_, all) = get("/api/sessions?limit=50".into()).await;
+    assert_eq!(
+        ids(&all),
+        ["solo-e2e", "chain-e2e-p03", "chain-e2e-p02", "chain-e2e"],
+        "{all}"
+    );
+    let row = |sid: &str| -> serde_json::Value {
+        all["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == sid)
+            .cloned()
+            .unwrap()
+    };
+    let (r1, r2, rs) = (row("chain-e2e"), row("chain-e2e-p02"), row("solo-e2e"));
+    assert!(
+        r1.get("segment_of").is_none(),
+        "part 1 is never rewritten: {r1}"
+    );
+    assert_eq!(
+        (r1["segment_idx"].as_i64(), r1["segment_count"].as_u64()),
+        (Some(1), Some(3))
+    );
+    assert_eq!(r2["segment_of"], "chain-e2e");
+    assert_eq!(
+        (r2["segment_idx"].as_i64(), r2["segment_count"].as_u64()),
+        (Some(2), Some(3))
+    );
+    assert!(
+        rs.get("segment_of").is_none()
+            && rs.get("segment_idx").is_none()
+            && rs.get("segment_count").is_none(),
+        "an ordinary session serialises with NO segment keys: {rs}"
+    );
+
+    // Opt-in collapse keeps the LAST part; a bad value is a 400.
+    let (status, collapsed) = get("/api/sessions?limit=50&collapse=logical".into()).await;
+    assert!(status.is_success());
+    assert_eq!(
+        ids(&collapsed),
+        ["solo-e2e", "chain-e2e-p03"],
+        "{collapsed}"
+    );
+    let (status, _) = get("/api/sessions?collapse=bogus".into()).await;
+    assert_eq!(status, 400);
+    let (_, none) = get("/api/sessions?limit=50&collapse=none".into()).await;
+    assert_eq!(ids(&none).len(), 4);
+
+    // Detail: the whole chain, from the raw id AND from a part id.
+    for sid in ["chain-e2e", "chain-e2e-p03"] {
+        let (_, detail) = get(format!("/api/sessions/{sid}")).await;
+        assert_eq!(
+            detail["segment_chain"],
+            serde_json::json!(["chain-e2e", "chain-e2e-p02", "chain-e2e-p03"]),
+            "{sid}: {detail}"
+        );
+        assert_eq!(detail["segment_count"], 3);
+    }
+    let (_, solo_detail) = get("/api/sessions/solo-e2e".into()).await;
+    assert!(solo_detail.get("segment_chain").is_none(), "{solo_detail}");
+
+    // View: `segment` for a middle part, absent for an ordinary session.
+    let (_, view) = get("/api/sessions/chain-e2e-p02/view?turns=all".into()).await;
+    assert_eq!(
+        view["segment"],
+        serde_json::json!({"of":"chain-e2e","idx":2,"count":3,"prev":"chain-e2e","next":"chain-e2e-p03"}),
+        "{view}"
+    );
+    let (_, first) = get("/api/sessions/chain-e2e/view?turns=all".into()).await;
+    assert_eq!(first["segment"]["idx"], 1);
+    assert!(first["segment"].get("prev").is_none(), "{first}");
+    let (_, solo_view) = get("/api/sessions/solo-e2e/view?turns=all".into()).await;
+    assert!(solo_view.get("segment").is_none(), "{solo_view}");
+
+    // By-commit: the trailer's RAW id finds the part that holds the commit.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let (_, m) = get("/api/sessions/by-commit?sha=cafe0003&session=chain-e2e".into()).await;
+        if m["matches"].as_array().is_some_and(|a| a.len() == 1) {
+            assert_eq!(m["matches"][0]["session_id"], "chain-e2e-p03");
+            assert_eq!(m["matches"][0]["segment_of"], "chain-e2e");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "by-commit never matched: {m}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (_, other) = get("/api/sessions/by-commit?sha=cafe0003&session=someone-else".into()).await;
+    assert_eq!(other["matches"].as_array().unwrap().len(), 0, "{other}");
+    let (_, unfiltered) = get("/api/sessions/by-commit?sha=cafe0003".into()).await;
+    assert_eq!(unfiltered["matches"].as_array().unwrap().len(), 1);
+
+    // Memories: the raw id widens to the part-stamped memory; a sibling
+    // part's own read does not.
+    let titles = |body: &serde_json::Value| -> Vec<String> {
+        body["memories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["title"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (_, raw_mem) = get("/api/sessions/chain-e2e/memories".into()).await;
+    assert_eq!(titles(&raw_mem), ["Mem For Part Two"], "{raw_mem}");
+    let (_, p2_mem) = get("/api/sessions/chain-e2e-p02/memories".into()).await;
+    assert_eq!(titles(&p2_mem), ["Mem For Part Two"], "{p2_mem}");
+    let (_, p3_mem) = get("/api/sessions/chain-e2e-p03/memories".into()).await;
+    assert!(titles(&p3_mem).is_empty(), "{p3_mem}");
+    let (_, raw_detail) = get("/api/sessions/chain-e2e".into()).await;
+    assert_eq!(
+        raw_detail["memory_ids"].as_array().unwrap().len(),
+        1,
+        "{raw_detail}"
+    );
+}

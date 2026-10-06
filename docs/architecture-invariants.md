@@ -954,6 +954,35 @@ the double-count this whole section exists to prevent. This also structurally
 retires the MI-W1.A self-correlation bug class — a bare flag has no
 correlation target to get wrong.
 
+*Segmented-capture amendment (v0.46):* the unit every read aggregates stays the `session_id`. A harness session whose translation outgrows the segment target is captured as an ORDERED CHAIN of ordinary sessions: part 1 under the bare raw id, part k>=2 under `<raw id>-p<NN>`. Each part has its own canonical id, capture(s), `is_newest` group and `*_for_session` rows. The chain is two additive nullable columns (`segment_of`, `segment_idx`, V0045) that are SURFACED, never scored, and never joined on by a per-session read. count/prev/next are derived at read time. Frozen parts are captured once and not recaptured, so the multi-capture newest-superset rule still holds WITHIN a part. ACROSS parts the slices are DISJOINT: event totals sum, and only a count of logical sessions groups by `COALESCE(segment_of, session_id)`. Cuts are planned over the harness leaf chain at a legal user boundary (no pending tool call), deterministically and LLM-free, on raw bytes (16 MiB target). `landed` is recorded only on rc 0. CAPTURE_MAX_TRANSCRIPT_BYTES and the refuse-never-truncate rule are UNCHANGED: segmentation is how an adapter produces a bounded translation, not a size-based skip.
+
+The read-side shape of that amendment (SEG-A, V0045; nothing emits parts yet —
+the adapter and the planner verb are later PRs, so a corpus with no
+`segment_of` is byte-identical on every wire): *counts that mean "sessions"*
+group logically (`COUNT(DISTINCT COALESCE(segment_of, session_id))` in the
+folder facet, projects stats + harness mix, research-rollup `sessions`, the
+funnel's `*_sessions`, the funnel `commented` input, the ledger's
+`totals.sessions`, recall-coverage's session count and live-registry
+exclusion), while every event sum (tokens, edits, commits, tool calls) stays a
+plain sum over newest captures. Capture-grain counters (the recall census,
+`kb doctor --hooks`) deliberately stay per part. `GET /api/sessions` shows
+every part (additive `segment_of`/`segment_idx`/`segment_count`, all absent for
+an ordinary session); `?collapse=logical` is opt-in and a pure SQL WHERE term
+so the keyset cursor stays coherent. Reads keyed on the RAW id widen at READ
+time only — `memories`/`memory_ids`/`recalls` and `memories-from` (head
+artifact only) cover the chain, a part asked by its own id reads just itself,
+and the widening is surfaced-never-scored (it changes which rows a read
+lists, never a ranking input). A live serve is stamped with the RAW id while
+later turns are captured under part ids, so `served_uncovered_pred`, the
+write-time retire in `memory_recalls_replace`, and the last-capture serve
+reclaim all look across the chain. `by-commit` names `segment_of` on each match
+and accepts `?session=` (a trailer's raw id) to find the part that holds the
+commit. The live-status Tier-0 rebuild groups parts into one row under the raw
+id. `session_id` stays the only key a per-session child read joins on.
+*Rollback:* V0045 bumps the refinery epoch, so an older binary REFUSES a
+migrated volume (`refuse_if_volume_ahead`, the same guard that made the
+13.5 h kbc outage loud) — see docs/self-host.md "Rolling back across V0045".
+
 **Episodic-memory retrieval (R0–R5).** Sessions are an *episodic* memory the
 agent PULLS on demand — distinct from the curated *semantic* memory (`kb
 remember`/`recall`), which it pushes every turn. Load-bearing constraints:

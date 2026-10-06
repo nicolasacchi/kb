@@ -17,4 +17,11 @@ kind: string, sha?: string, sha_full?: string, resolved: boolean, subject?: stri
  * Server-computed display name (title → first_user_prompt → short id —
  * the same ladder as [`SessionOut::from_row`]).
  */
-display_name: string, started_at: number, };
+display_name: string, started_at: number, 
+/**
+ * V0045/seg1 — the matched capture's chain id (the raw, part-1 session
+ * id) when it is a continuation part. A `Kb-Session:` trailer carries the
+ * RAW id, so a join that compares a trailer sid against a match matches
+ * on `session_id` OR `segment_of`.
+ */
+segment_of?: string, };

@@ -710,6 +710,30 @@ the file's bytes still match (an artifact edited before the upgrade
 already had its review orphaned under the old scheme). No `kb reset` or
 manual step is needed — just start the v0.7.1 daemon.
 
+## Rolling back across V0045 (segmented capture, v0.46)
+
+V0045 adds two nullable columns and one partial index to `sessions`
+(`segment_of`, `segment_idx`, `idx_sessions_segment_of`) and nothing else; it
+backfills nothing, and nothing in the read-side release emits a segmented part.
+Like every schema migration it raises the volume's **refinery epoch**, so a
+daemon built BEFORE V0045 **refuses to boot** on a migrated `index.db`
+(`refusing to boot: schema epoch V45 on disk at <path> is NEWER than this
+binary's V44 …` — the `refuse_if_volume_ahead` guard, deliberately loud rather
+than a silent downgrade). To roll back:
+
+1. Stop the daemon.
+2. Restore each kb's `index.db` from the `kb backup` taken before the upgrade
+   (`kb restore <archive> --kb <name>`), or accept a re-derive: the `sessions`
+   table is rebuilt by `kb reindex` from the capture files, so deleting a kb's
+   `index.db` and reindexing on the older binary is safe for session data
+   (comment sidecars and `.review/` files are untouched either way).
+3. Start the older binary.
+
+Take the backup BEFORE upgrading; there is no in-place down-migration. Parts
+already captured under `<raw id>-pNN` (once the adapter ships) are ordinary
+sessions to an older daemon: they show as unrelated rows, which is the
+accepted degradation.
+
 ## Backup & restore (B1)
 
 `kb backup <kb>` writes a **consistent** `tar.gz` of a kb's persistent

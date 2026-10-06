@@ -177,6 +177,159 @@ pub struct SessionOut {
     /// the S7 gallery card both need it here rather than a second
     /// `/commits` fetch per row.
     pub commit_count: u32,
+    /// V0045/seg1 — the raw (part-1) session id this row is a continuation
+    /// PART of (a harness session whose translation outgrew the segment
+    /// target is captured as an ordered chain of ordinary sessions). Absent
+    /// for ordinary sessions and for part 1 itself. Surfaced, never scored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub segment_of: Option<String>,
+    /// V0045/seg1 — 1-based part index. Stored for part k>=2; DERIVED as 1
+    /// for part 1 of a chain that has more than one part (part 1 is never
+    /// rewritten to carry metadata). Absent for ordinary sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub segment_idx: Option<i64>,
+    /// V0045/seg1 — DERIVED at read time: how many newest-capture parts the
+    /// logical session has (`segment_of = ? AND is_newest = 1`, plus part
+    /// 1). Absent for ordinary sessions; nothing about it is stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub segment_count: Option<u32>,
+}
+
+/// V0045/seg1 — the session ids a session-keyed MEMORY read (the `memories`
+/// route, `memory_ids` on the detail, the `recalls` ledger) covers for
+/// `session_id`: just itself for an ordinary session or a part asked by its
+/// own id, but the WHOLE chain when `session_id` is the chain's raw id —
+/// memory stamps and the recall hook carry the raw id, while later turns are
+/// captured under the part ids. Pure over the parts a kb resolved; the
+/// result starts with `session_id` and is de-duplicated. Surfaced, never
+/// scored: it only widens which rows a read lists, it does not touch any
+/// ranking input.
+pub fn widen_session_ids(
+    session_id: &str,
+    parts: &[kb_core::storage::sqlite::SegmentPart],
+) -> Vec<String> {
+    let is_head = parts
+        .first()
+        .is_some_and(|p| p.session_id == session_id && p.idx == 1);
+    let is_orphan_raw = !parts.is_empty() && parts.iter().all(|p| p.session_id != session_id);
+    let mut out = vec![session_id.to_string()];
+    if is_head || is_orphan_raw {
+        for p in parts {
+            if !out.contains(&p.session_id) {
+                out.push(p.session_id.clone());
+            }
+        }
+    }
+    out
+}
+
+/// V0045/seg1 — the artifact ids a `memories-from` read covers for the
+/// session artifact `artifact_id` (whose capture row says it is `session_id`):
+/// itself, plus every other part's artifact when it is the chain's HEAD (raw
+/// id, part 1) — a memory highlighted out of any part of a long session is
+/// "from" that session when asked from its raw artifact. A part's own
+/// artifact reads only itself. `parts` is the chain as
+/// [`kb_core::storage::sqlite::Db::sessions_chain`] returns it. Pure.
+pub fn widen_artifact_ids(
+    artifact_id: &str,
+    session_id: &str,
+    parts: &[kb_core::storage::sqlite::SegmentPart],
+) -> Vec<String> {
+    let mut out = vec![artifact_id.to_string()];
+    let is_head = parts
+        .first()
+        .is_some_and(|p| p.session_id == session_id && p.idx == 1);
+    if is_head && parts.iter().any(|p| p.artifact_id == artifact_id) {
+        for p in parts {
+            if !out.contains(&p.artifact_id) {
+                out.push(p.artifact_id.clone());
+            }
+        }
+    }
+    out
+}
+
+async fn session_read_ids(state: &Arc<KbHandles>, session_id: &str) -> Vec<String> {
+    widen_session_ids(session_id, &session_chain_parts(state, session_id).await)
+}
+
+/// V0045/seg1 — the logical session's newest-capture parts across every kb,
+/// in chain order (empty when no kb holds a capture of `session_id`).
+async fn session_chain_parts(
+    state: &Arc<KbHandles>,
+    session_id: &str,
+) -> Vec<kb_core::storage::sqlite::SegmentPart> {
+    let mut futs: Vec<super::CorpusFut<'_, Vec<kb_core::storage::sqlite::SegmentPart>>> =
+        Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            ctx.storage
+                .sessions_chain(session_id.to_string())
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_chain failed");
+                    Vec::new()
+                })
+        }));
+    }
+    let mut parts: Vec<kb_core::storage::sqlite::SegmentPart> =
+        super::buffered_join(futs, state.fanout_cap)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+    parts.sort_by(|a, b| {
+        a.idx
+            .cmp(&b.idx)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
+    parts
+}
+
+/// V0045/seg1 — `session-view/1`'s additive `segment` block: where this
+/// capture sits in its chain. `None` for an ordinary (unsegmented) session.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionSegment {
+    /// The chain's raw (part-1) session id.
+    pub of: String,
+    /// This part's 1-based index.
+    pub idx: i64,
+    /// How many parts the chain has right now (derived, never stored).
+    pub count: u32,
+    /// The previous part's session id; absent on part 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub prev: Option<String>,
+    /// The next part's session id; absent on the last part.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub next: Option<String>,
+}
+
+/// Pure: the chain position of `session_id` within `parts` (chain order).
+pub fn segment_links(
+    session_id: &str,
+    parts: &[kb_core::storage::sqlite::SegmentPart],
+) -> Option<SessionSegment> {
+    let pos = parts.iter().position(|p| p.session_id == session_id)?;
+    let me = &parts[pos];
+    if parts.len() < 2 && me.segment_of.is_none() {
+        return None;
+    }
+    Some(SessionSegment {
+        of: me
+            .segment_of
+            .clone()
+            .unwrap_or_else(|| session_id.to_string()),
+        idx: me.idx,
+        count: parts.len() as u32,
+        prev: pos.checked_sub(1).map(|i| parts[i].session_id.clone()),
+        next: parts.get(pos + 1).map(|p| p.session_id.clone()),
+    })
 }
 
 /// A2/A3 — the server-computed "display name" ladder: `title` →
@@ -255,7 +408,80 @@ impl SessionOut {
             active_secs: row.active_secs,
             user_turns: row.user_turns,
             commit_count: row.commit_count,
+            segment_of: row.segment_of,
+            segment_idx: row.segment_idx,
+            segment_count: None,
         }
+    }
+
+    /// V0045/seg1 — the logical-session key: the chain's raw id for a
+    /// continuation part, the row's own id otherwise.
+    pub fn logical_key(&self) -> &str {
+        self.segment_of.as_deref().unwrap_or(&self.session_id)
+    }
+}
+
+/// V0045/seg1 — fill the DERIVED `segment_count` (and part 1's derived
+/// `segment_idx = 1`) on a page of rows. One batched indexed lookup per kb
+/// (fan-out, #28), over the page's logical keys only. An ordinary session
+/// (count 1, no `segment_of`) is left exactly as it was, so a corpus with no
+/// segmented session serialises byte-identically.
+async fn annotate_segments(state: &Arc<KbHandles>, rows: &mut [SessionOut]) {
+    if rows.is_empty() {
+        return;
+    }
+    let keys: Vec<String> = {
+        let mut k: Vec<String> = rows.iter().map(|r| r.logical_key().to_string()).collect();
+        k.sort();
+        k.dedup();
+        k
+    };
+    let keys = &keys;
+    let mut futs: Vec<super::CorpusFut<'_, Vec<(String, u32)>>> = Vec::new();
+    for (kb_name, ctx) in state.kbs.iter() {
+        futs.push(Box::pin(async move {
+            ctx.storage
+                .sessions_segment_counts(keys.clone())
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(kb = %kb_name, error = %e, "sessions_segment_counts failed");
+                    Vec::new()
+                })
+        }));
+    }
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for per_kb in super::buffered_join(futs, state.fanout_cap).await {
+        for (k, n) in per_kb {
+            *counts.entry(k).or_insert(0) += n;
+        }
+    }
+    apply_segment_counts(rows, &counts);
+}
+
+/// Pure half of [`annotate_segments`] (unit-pinned).
+fn apply_segment_counts(rows: &mut [SessionOut], counts: &HashMap<String, u32>) {
+    for r in rows.iter_mut() {
+        let n = counts.get(r.logical_key()).copied().unwrap_or(1);
+        if r.segment_of.is_some() || n >= 2 {
+            r.segment_count = Some(n.max(1));
+            if r.segment_of.is_none() && r.segment_idx.is_none() {
+                r.segment_idx = Some(1);
+            }
+        }
+    }
+}
+
+/// V0045/seg1 — `?collapse=` grammar: absent/`none` = every part is its own
+/// row (the default — nothing is hidden silently); `logical` = keep only the
+/// last part of each segmented session. Anything else is a 400.
+#[allow(clippy::result_large_err)]
+fn parse_collapse(raw: Option<&str>) -> Result<bool, Response> {
+    match raw.map(str::trim) {
+        None | Some("") | Some("none") => Ok(false),
+        Some("logical") => Ok(true),
+        Some(other) => Err(error_to_problem_json(&kb_core::Error::BadRequest(format!(
+            "unknown collapse value {other:?} (expected `logical` or `none`)"
+        )))),
     }
 }
 
@@ -306,6 +532,11 @@ pub struct ListParams {
     /// The list is newest-first, so this is a stop condition for the keyset
     /// walk, not a post-filter: `next_cursor` is `None` once it is reached.
     pub since: Option<i64>,
+    /// V0045/seg1 — `?collapse=logical` keeps only the LAST part of each
+    /// segmented session (opt-in; the default shows every part with its
+    /// `segment_*` fields so a long session is never silently hidden).
+    /// `none`/absent = no collapse; any other value 400s.
+    pub collapse: Option<String>,
 }
 
 /// `?undistilled=` truthiness: `1|true|yes` (case-insensitive) is on;
@@ -444,6 +675,12 @@ pub struct SessionDetailResponse {
     /// are N memories, here are their ids" so the SPA can render
     /// nested-row affordances without a second request.
     pub memory_ids: Vec<String>,
+    /// V0045/seg1 — the session ids of every part of this session's chain,
+    /// in order (part 1 first), when it has more than one part. Absent for an
+    /// ordinary session. Derived at read time; `kb sessions recover --chain`
+    /// walks it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub segment_chain: Vec<String>,
 }
 
 #[cfg_attr(
@@ -588,6 +825,9 @@ pub async fn list(
         Some(Err(resp)) => return resp,
         None => Vec::new(),
     };
+    if let Err(resp) = parse_collapse(params.collapse.as_deref()) {
+        return resp;
+    }
     if !undistilled && params.since.is_none() {
         let (out, had_more) = list_page(
             &state,
@@ -734,6 +974,9 @@ async fn list_page(
     // full page even when one corpus dominates. Each per-kb fetch
     // honours the same `before` cursor so older pages stay coherent.
     let per_kb = limit.saturating_mul(2);
+    // V0045/seg1 — validated by `list` before this point; a malformed value
+    // can only reach here through a future caller, where it reads as "off".
+    let collapse_logical = parse_collapse(params.collapse.as_deref()).unwrap_or(false);
     // FF-D — fan out each kb's sessions_list concurrently (bounded,
     // submission-ordered), then flatten in BTreeMap order. Pure reads; the
     // deferred title/memory_count enrichment + final sort below are unchanged.
@@ -746,7 +989,7 @@ async fn list_page(
         futs.push(Box::pin(async move {
             let rows = match ctx
                 .storage
-                .sessions_list(
+                .sessions_list_with(
                     per_kb,
                     cursor,
                     cursor_id.clone(),
@@ -755,6 +998,7 @@ async fn list_page(
                     project_filter.clone(),
                     substance.to_vec(),
                     harness.to_vec(),
+                    collapse_logical,
                 )
                 .await
             {
@@ -791,6 +1035,7 @@ async fn list_page(
     // `next_cursor: None`.
     let had_more = out.len() > limit as usize;
     out.truncate(limit as usize);
+    annotate_segments(state, &mut out).await;
     // Second pass — the page is now fixed, so fill `memory_count` for the
     // surviving rows ONLY, via ONE batched grouped count per corpus
     // (`count_docs_by_kb_session`: one projection scan each) fanned out
@@ -906,14 +1151,36 @@ pub fn aggregate_recall_coverage(
     live: &std::collections::HashSet<String>,
 ) -> (Vec<RecallCoverageHarness>, RecallCoverageHarness, u64) {
     let mut by: std::collections::BTreeMap<String, [u64; 4]> = std::collections::BTreeMap::new();
+    // V0045/seg1 — turn sums are per capture (a segmented session's parts
+    // are disjoint slices, so they add), but a SESSION counts once however
+    // many parts it has, and the live registry knows only the raw id. A row
+    // whose `logical_id == session_id` (an ordinary session, or a chain's
+    // part 1) always counts as itself — byte-identical to the pre-V0045
+    // arithmetic, including the same session held by two kbs. A continuation
+    // part counts only when no head row of its chain is in the window, and
+    // then once per chain.
+    let heads: std::collections::HashSet<&str> = rows
+        .iter()
+        .filter(|r| r.logical_id == r.session_id)
+        .map(|r| r.logical_id.as_str())
+        .collect();
+    let mut counted: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
     let mut excluded = 0u64;
     for r in rows {
-        if live.contains(&r.session_id) {
-            excluded += 1;
+        let continuation = r.logical_id != r.session_id;
+        let counts_as_session = !continuation
+            || (!heads.contains(r.logical_id.as_str())
+                && counted.insert((r.harness.as_str(), r.logical_id.as_str())));
+        if live.contains(&r.logical_id) || live.contains(&r.session_id) {
+            if counts_as_session {
+                excluded += 1;
+            }
             continue;
         }
         let e = by.entry(r.harness.clone()).or_insert([0; 4]);
-        e[0] += 1;
+        if counts_as_session {
+            e[0] += 1;
+        }
         e[1] += r.user_turns;
         e[2] += r.landed_turns;
         e[3] += r.lost_turns;
@@ -1005,6 +1272,7 @@ mod f10_tests {
     fn row(sid: &str, h: &str, u: u64, l: u64, x: u64) -> RecallCoverageRow {
         RecallCoverageRow {
             session_id: sid.into(),
+            logical_id: sid.into(),
             harness: h.into(),
             user_turns: u,
             landed_turns: l,
@@ -1847,6 +2115,11 @@ pub struct LedgerResponse {
 struct LedgerSessionRow {
     date: String,
     started_at: i64,
+    /// V0045/seg1 — `(kb, COALESCE(segment_of, session_id))`: the logical
+    /// session, so `totals.sessions` counts a segmented session once while
+    /// every part still lists as its own entry (commits/decisions/active
+    /// seconds are per-part disjoint slices and simply add).
+    logical: (String, String),
     session: LedgerSessionOut,
     commits: Vec<LedgerCommitOut>,
     decisions: u32,
@@ -1954,6 +2227,12 @@ pub async fn ledger(
                     .map(|dt| dt.date_naive().to_string())
                     .unwrap_or_default();
                 let session_id = row.session_id.clone();
+                let logical = (
+                    kb_name.as_str().to_string(),
+                    row.segment_of
+                        .clone()
+                        .unwrap_or_else(|| row.session_id.clone()),
+                );
                 let so = SessionOut::from_row(kb_name.as_str(), row);
                 let commits = commits_map
                     .remove(&session_id)
@@ -1979,6 +2258,7 @@ pub async fn ledger(
                 out.push(LedgerSessionRow {
                     date,
                     started_at: so.started_at,
+                    logical,
                     session: LedgerSessionOut {
                         sid: so.id,
                         kb: so.kb,
@@ -2010,6 +2290,8 @@ pub async fn ledger(
         by_date.insert(d, (Vec::new(), Vec::new(), 0, Vec::new()));
     }
 
+    let mut logical_sessions: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
     for row in super::buffered_join(futs, state.fanout_cap)
@@ -2021,6 +2303,7 @@ pub async fn ledger(
         // skew between `window_start`'s UTC-midnight truncation and a
         // session's own `started_at` — never in practice, but `entry(..).
         // or_default()` keeps this total rather than silently dropping data.
+        logical_sessions.insert(row.logical);
         let entry = by_date.entry(row.date).or_default();
         entry.1.extend(row.commits);
         entry.2 += row.decisions;
@@ -2032,7 +2315,6 @@ pub async fn ledger(
     let mut days_out = Vec::with_capacity(by_date.len());
     for (date, (mut sess_rows, commits, decisions_count, research)) in by_date {
         sess_rows.sort_by_key(|(started_at, _)| std::cmp::Reverse(*started_at)); // newest-first
-        totals.sessions += sess_rows.len() as u32;
         totals.commits += commits.len() as u32;
         totals.decisions += decisions_count;
         totals.active_secs += sess_rows.iter().map(|(_, s)| s.active_secs).sum::<i64>();
@@ -2044,6 +2326,12 @@ pub async fn ledger(
             research_topics: top_n_by_frequency(research, LEDGER_TOPICS_PER_DAY),
         });
     }
+
+    // V0045/seg1 — a logical session counts once however many parts (and
+    // days) it spans. For an unsegmented corpus every row is its own logical
+    // session, so this equals the old per-row sum (a session id is unique
+    // per kb in the newest-capture list).
+    totals.sessions = logical_sessions.len() as u32;
 
     Json(LedgerResponse {
         project: p.project,
@@ -2996,6 +3284,13 @@ pub struct CommitMatchOut {
     /// the same ladder as [`SessionOut::from_row`]).
     pub display_name: String,
     pub started_at: i64,
+    /// V0045/seg1 — the matched capture's chain id (the raw, part-1 session
+    /// id) when it is a continuation part. A `Kb-Session:` trailer carries the
+    /// RAW id, so a join that compares a trailer sid against a match matches
+    /// on `session_id` OR `segment_of`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub segment_of: Option<String>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -3007,6 +3302,10 @@ pub struct SessionsByCommitResponse {
 #[derive(Debug, Deserialize)]
 pub struct ByCommitParams {
     pub sha: String,
+    /// V0045/seg1 — optional session filter (a `Kb-Session:` trailer's id):
+    /// keep only matches whose `session_id` OR `segment_of` equals it, so the
+    /// raw id a trailer carries finds the PART that holds the commit.
+    pub session: Option<String>,
 }
 
 /// `GET /api/sessions/by-commit?sha=<sha-or-prefix>` (kb-code Wave 0 / W0.6)
@@ -3065,6 +3364,7 @@ pub async fn by_commit(
                             .unwrap_or_default(),
                         display_name,
                         started_at: m.started_at,
+                        segment_of: m.segment_of,
                     }
                 })
                 .collect()
@@ -3077,6 +3377,14 @@ pub async fn by_commit(
         .into_iter()
         .flatten()
         .collect();
+    if let Some(sid) = params
+        .session
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        matches.retain(|m| m.session_id == sid || m.segment_of.as_deref() == Some(sid));
+    }
     matches.sort_by(|a, b| {
         b.started_at
             .cmp(&a.started_at)
@@ -4770,21 +5078,37 @@ pub async fn get(
     State(state): State<Arc<KbHandles>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let Some(session) = find_session(&state, &session_id).await else {
+    let Some(mut session) = find_session(&state, &session_id).await else {
         return error_to_problem_json(&kb_core::Error::NotFound(format!("session {session_id}")));
     };
+    annotate_segments(&state, std::slice::from_mut(&mut session)).await;
     // memory_ids: scan every kb and concatenate. Bounded by
     // PER_SESSION_MEMORY_LIMIT per corpus so a runaway script can't
-    // blow out the response.
-    let session_id = &session_id;
+    // blow out the response. V0045/seg1 — for a chain's raw id the scan
+    // covers every part id (memory stamps carry the raw id, the capture
+    // hook may stamp a part's own id).
+    let chain_parts = session_chain_parts(&state, &session_id).await;
+    let read_ids = widen_session_ids(&session_id, &chain_parts);
+    let segment_chain: Vec<String> = if chain_parts.len() >= 2 {
+        chain_parts.iter().map(|p| p.session_id.clone()).collect()
+    } else {
+        Vec::new()
+    };
+    let read_ids = &read_ids;
     let mut futs: Vec<super::CorpusFut<'_, Vec<String>>> = Vec::new();
     for (_, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {
-            ctx.storage
-                .list_docs_with_kb_session(session_id.clone(), PER_SESSION_MEMORY_LIMIT)
-                .await
-                .map(|rows| rows.into_iter().map(|r| r.id).collect::<Vec<_>>())
-                .unwrap_or_default()
+            let mut ids: Vec<String> = Vec::new();
+            for sid in read_ids {
+                ids.extend(
+                    ctx.storage
+                        .list_docs_with_kb_session(sid.clone(), PER_SESSION_MEMORY_LIMIT)
+                        .await
+                        .map(|rows| rows.into_iter().map(|r| r.id).collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                );
+            }
+            ids
         }));
     }
     // PF-R1 — the operator-configurable `[server] fanout_cap` (default 8,
@@ -4799,6 +5123,7 @@ pub async fn get(
     Json(SessionDetailResponse {
         session,
         memory_ids,
+        segment_chain,
     })
     .into_response()
 }
@@ -4810,26 +5135,29 @@ pub async fn memories(
     State(state): State<Arc<KbHandles>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let session_id = &session_id;
+    let read_ids = session_read_ids(&state, &session_id).await;
+    let read_ids = &read_ids;
     let mut futs: Vec<super::CorpusFut<'_, Vec<MemoryHit>>> = Vec::new();
     for (kb_name, ctx) in state.kbs.iter() {
         futs.push(Box::pin(async move {
-            let rows = match ctx
-                .storage
-                .list_docs_with_kb_session(session_id.clone(), PER_SESSION_MEMORY_LIMIT)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(
-                        kb = %kb_name,
-                        session_id = %session_id,
-                        error = %e,
-                        "list_docs_with_kb_session failed",
-                    );
-                    return Vec::new();
+            let mut rows = Vec::new();
+            for session_id in read_ids {
+                match ctx
+                    .storage
+                    .list_docs_with_kb_session(session_id.clone(), PER_SESSION_MEMORY_LIMIT)
+                    .await
+                {
+                    Ok(r) => rows.extend(r),
+                    Err(e) => {
+                        tracing::warn!(
+                            kb = %kb_name,
+                            session_id = %session_id,
+                            error = %e,
+                            "list_docs_with_kb_session failed",
+                        );
+                    }
                 }
-            };
+            }
             rows.into_iter()
                 .map(|d| {
                     let source_relative = kb_core::paths::doc_rel_path(&d.path, &ctx.source_path);
@@ -4900,19 +5228,36 @@ pub async fn recalls(
         })
         .into_response();
     };
-    let rows = ctx
-        .storage
-        .memory_recalls_for_session(session_id.clone())
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                kb = %session_kb,
-                session_id = %session_id,
-                error = %e,
-                "memory_recalls_for_session failed",
-            );
-            Vec::new()
+    // V0045/seg1 — the raw id of a chain reads the ledger of EVERY part
+    // (recall-hook serve rows carry the raw id; captured rows carry the part
+    // id of the slice they landed in). One id → exactly the old single call.
+    let read_ids = session_read_ids(&state, &session_id).await;
+    let mut rows = Vec::new();
+    for sid in &read_ids {
+        rows.extend(
+            ctx.storage
+                .memory_recalls_for_session(sid.clone())
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        kb = %session_kb,
+                        session_id = %sid,
+                        error = %e,
+                        "memory_recalls_for_session failed",
+                    );
+                    Vec::new()
+                }),
+        );
+    }
+    if read_ids.len() > 1 {
+        // Same ordering `memory_recalls_for_session` applies per id.
+        rows.sort_by(|a, b| {
+            a.recalled_at
+                .is_none()
+                .cmp(&b.recalled_at.is_none())
+                .then_with(|| a.recalled_at.cmp(&b.recalled_at))
         });
+    }
 
     // Batch-resolve display fields, one `get_by_ids` per distinct
     // memory_kb the ledger names.
@@ -6324,6 +6669,11 @@ pub struct SessionViewResponse {
     /// whatever `?turns=` this response actually windowed to (mirrors
     /// `SessionReplayResponse::total_beats`).
     pub turns_total: usize,
+    /// V0045/seg1 — this capture's place in its segmented-session chain
+    /// (`{of, idx, count, prev, next}`); absent for an ordinary session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub segment: Option<SessionSegment>,
     /// PF-R1 — how many turns THIS response's `?turns=` spec kept, before
     /// `?fields=` decides whether `turns`/`side_lanes` are even
     /// serialized. `turns_returned == turns_total` whenever `?turns=all`
@@ -6467,6 +6817,7 @@ pub async fn view(
         minimap: fields.minimap.then(|| view.minimap.clone()),
         stats: fields.stats.then(|| view.stats.clone()),
         turns_total,
+        segment: segment_links(&session_id, &session_chain_parts(&state, &session_id).await),
         turns_returned,
         scrubbed,
         redactions,
@@ -7448,6 +7799,58 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
     }
 }
 
+/// V0045/seg1 — the Tier-0 rebuild's grouping step. A segmented session is
+/// ONE live session however many parts it has captured: group the newest
+/// captures by `COALESCE(segment_of, session_id)`, keep the part with the
+/// latest activity (`max(ended_at, started_at)`; ties go to the higher part
+/// index, then the lower artifact id), and report it under the logical (raw)
+/// id — the id the harness's own hook beats under and `resume` needs. An
+/// unsegmented row is its own group, so with no parts anywhere this is the
+/// identity function (order preserved: groups keep first-seen order).
+pub(crate) fn group_tier0_rows(
+    rows: Vec<kb_core::storage::sqlite::SessionRow>,
+) -> Vec<kb_core::storage::sqlite::SessionRow> {
+    let activity = |r: &kb_core::storage::sqlite::SessionRow| r.ended_at.max(r.started_at);
+    let idx = |r: &kb_core::storage::sqlite::SessionRow| r.segment_idx.unwrap_or(1);
+    let mut order: Vec<String> = Vec::new();
+    let mut best: HashMap<String, kb_core::storage::sqlite::SessionRow> = HashMap::new();
+    for row in rows {
+        let key = row
+            .segment_of
+            .clone()
+            .unwrap_or_else(|| row.session_id.clone());
+        match best.get(&key) {
+            None => {
+                order.push(key.clone());
+                best.insert(key, row);
+            }
+            Some(cur) => {
+                let better = (
+                    activity(&row),
+                    idx(&row),
+                    std::cmp::Reverse(&row.artifact_id),
+                ) > (activity(cur), idx(cur), std::cmp::Reverse(&cur.artifact_id));
+                if better {
+                    best.insert(key, row);
+                }
+            }
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|k| {
+            best.remove(&k).map(|mut r| {
+                if r.segment_of.is_some() {
+                    r.session_id = k;
+                    r.segment_of = None;
+                    r.segment_idx = None;
+                }
+                r
+            })
+        })
+        .collect()
+}
+
 /// `GET /api/sessions/live-status?state=&harness=&project=&limit=` —
 /// LSC-2's merged cockpit read (design §6 "Routes"): every registry entry
 /// (`source: "hook"`, `confidence: "observed"`) PLUS a Tier-0 degraded
@@ -7549,7 +7952,8 @@ pub async fn live_status(
                     return Vec::new();
                 }
             };
-            list.into_iter()
+            group_tier0_rows(list)
+                .into_iter()
                 .filter(|row| !known_ids.contains(&row.session_id))
                 .filter(|row| {
                     let last = row.started_at.max(row.ended_at);
@@ -8652,5 +9056,267 @@ mod replay_tests {
         assert_eq!(job_link_role("claude"), JobLinkRole::Driver);
         assert_eq!(job_link_role("codex"), JobLinkRole::Driver);
         assert_eq!(job_link_role("opencode"), JobLinkRole::Driver);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v0.46 SEG-A — segmented capture, read side (pure halves)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod seg1_tests {
+    use super::*;
+    use kb_core::storage::sqlite::{SegmentPart, SessionRow};
+
+    fn part(sid: &str, idx: i64, of: Option<&str>) -> SegmentPart {
+        SegmentPart {
+            session_id: sid.into(),
+            artifact_id: format!("a-{sid}"),
+            idx,
+            started_at: idx * 100,
+            ended_at: idx * 100 + 50,
+            segment_of: of.map(String::from),
+        }
+    }
+
+    fn chain() -> Vec<SegmentPart> {
+        vec![
+            part("raw", 1, None),
+            part("raw-p02", 2, Some("raw")),
+            part("raw-p03", 3, Some("raw")),
+        ]
+    }
+
+    #[test]
+    fn widen_covers_the_whole_chain_for_the_raw_id_only() {
+        let c = chain();
+        assert_eq!(widen_session_ids("raw", &c), ["raw", "raw-p02", "raw-p03"]);
+        // A part asked by its own id reads just itself: nothing leaks sideways.
+        assert_eq!(widen_session_ids("raw-p02", &c), ["raw-p02"]);
+        // Ordinary session, or an id no capture holds: exactly itself.
+        assert_eq!(
+            widen_session_ids("solo", &[part("solo", 1, None)]),
+            ["solo"]
+        );
+        assert_eq!(widen_session_ids("ghost", &[]), ["ghost"]);
+        // The raw id of a chain whose part 1 is gone (re-plan in flight) still
+        // widens to the parts that remain.
+        let orphaned = vec![
+            part("raw-p02", 2, Some("raw")),
+            part("raw-p03", 3, Some("raw")),
+        ];
+        assert_eq!(
+            widen_session_ids("raw", &orphaned),
+            ["raw", "raw-p02", "raw-p03"]
+        );
+    }
+
+    #[test]
+    fn segment_links_name_prev_and_next_and_skip_ordinary_sessions() {
+        let c = chain();
+        let mid = segment_links("raw-p02", &c).unwrap();
+        assert_eq!(
+            (mid.of.as_str(), mid.idx, mid.count),
+            ("raw", 2, 3),
+            "{mid:?}"
+        );
+        assert_eq!(mid.prev.as_deref(), Some("raw"));
+        assert_eq!(mid.next.as_deref(), Some("raw-p03"));
+        let head = segment_links("raw", &c).unwrap();
+        assert_eq!(
+            (head.of.as_str(), head.idx, head.prev.clone()),
+            ("raw", 1, None)
+        );
+        assert_eq!(head.next.as_deref(), Some("raw-p02"));
+        let last = segment_links("raw-p03", &c).unwrap();
+        assert_eq!(last.next, None);
+        assert_eq!(segment_links("solo", &[part("solo", 1, None)]), None);
+        assert_eq!(segment_links("ghost", &c), None);
+        // A lone part (its siblings not captured yet) still names its chain.
+        let lone = segment_links("raw-p02", &[part("raw-p02", 2, Some("raw"))]).unwrap();
+        assert_eq!((lone.of.as_str(), lone.count, lone.prev), ("raw", 1, None));
+    }
+
+    fn out(sid: &str, of: Option<&str>, idx: Option<i64>) -> SessionOut {
+        SessionOut::from_row(
+            "k",
+            SessionRow {
+                session_id: sid.into(),
+                segment_of: of.map(String::from),
+                segment_idx: idx,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn segment_counts_leave_ordinary_sessions_byte_identical() {
+        let mut rows = vec![
+            out("raw", None, None),
+            out("raw-p02", Some("raw"), Some(2)),
+            out("solo", None, None),
+        ];
+        let counts: HashMap<String, u32> = [("raw".to_string(), 3), ("solo".to_string(), 1)].into();
+        apply_segment_counts(&mut rows, &counts);
+        assert_eq!(
+            (rows[0].segment_idx, rows[0].segment_count),
+            (Some(1), Some(3))
+        );
+        assert_eq!(
+            rows[0].segment_of, None,
+            "part 1 is never given a segment_of"
+        );
+        assert_eq!(
+            (rows[1].segment_idx, rows[1].segment_count),
+            (Some(2), Some(3))
+        );
+        assert_eq!(rows[1].segment_of.as_deref(), Some("raw"));
+        let solo = serde_json::to_value(&rows[2]).unwrap();
+        for key in ["segment_of", "segment_idx", "segment_count"] {
+            assert!(
+                solo.get(key).is_none(),
+                "{key} must not serialise for an ordinary session"
+            );
+        }
+        // A chain whose count read failed (empty map) keeps a continuation
+        // part honest rather than inventing a count.
+        let mut lone = vec![out("raw-p02", Some("raw"), Some(2))];
+        apply_segment_counts(&mut lone, &HashMap::new());
+        assert_eq!(lone[0].segment_count, Some(1));
+    }
+
+    #[test]
+    fn collapse_grammar_is_closed() {
+        assert!(!parse_collapse(None).unwrap());
+        assert!(!parse_collapse(Some("")).unwrap());
+        assert!(!parse_collapse(Some("none")).unwrap());
+        assert!(parse_collapse(Some("logical")).unwrap());
+        assert_eq!(
+            parse_collapse(Some("everything")).unwrap_err().status(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
+    }
+
+    fn row(sid: &str, of: Option<&str>, idx: Option<i64>, started: i64, ended: i64) -> SessionRow {
+        SessionRow {
+            artifact_id: format!("art-{sid}"),
+            session_id: sid.into(),
+            segment_of: of.map(String::from),
+            segment_idx: idx,
+            started_at: started,
+            ended_at: ended,
+            harness: "omp".into(),
+            ..Default::default()
+        }
+    }
+
+    /// The live-status Tier-0 rebuild groups a chain's parts into ONE row under
+    /// the raw id (the id the hook beats under and `resume` needs), taking the
+    /// part with the latest activity; unsegmented rows pass through unchanged
+    /// in their original order.
+    #[test]
+    fn tier0_rebuild_groups_a_chain_and_takes_the_latest_activity() {
+        let rows = vec![
+            row("solo", None, None, 900, 950),
+            row("raw-p03", Some("raw"), Some(3), 800, 880),
+            row("raw", None, None, 100, 200),
+            row("raw-p02", Some("raw"), Some(2), 400, 500),
+        ];
+        let got = group_tier0_rows(rows.clone());
+        let ids: Vec<&str> = got.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["solo", "raw"],
+            "one row per logical session, first-seen order"
+        );
+        let chain = &got[1];
+        assert_eq!(
+            chain.artifact_id, "art-raw-p03",
+            "the part with max(ended_at)"
+        );
+        assert_eq!(chain.ended_at, 880);
+        assert_eq!((chain.segment_of.clone(), chain.segment_idx), (None, None));
+        // Identity when nothing is segmented.
+        let plain = vec![row("a", None, None, 1, 2), row("b", None, None, 3, 4)];
+        let same = group_tier0_rows(plain.clone());
+        assert_eq!(
+            same.iter()
+                .map(|r| r.artifact_id.clone())
+                .collect::<Vec<_>>(),
+            plain
+                .iter()
+                .map(|r| r.artifact_id.clone())
+                .collect::<Vec<_>>()
+        );
+        // A registry entry for the RAW id now suppresses the chain's parts too
+        // (the Tier-0 filter compares the grouped id against the registry).
+        let known: std::collections::HashSet<String> = ["raw".to_string()].into();
+        let remaining: Vec<String> = group_tier0_rows(rows)
+            .into_iter()
+            .filter(|r| !known.contains(&r.session_id))
+            .map(|r| r.session_id)
+            .collect();
+        assert_eq!(remaining, ["solo"]);
+    }
+
+    /// Recall coverage: turn sums add across parts, a SESSION counts once, and
+    /// a live raw id excludes every part (the registry only knows the raw id).
+    #[test]
+    fn recall_coverage_counts_a_chain_once_and_excludes_it_when_live() {
+        use kb_core::storage::sqlite::RecallCoverageRow;
+        let r = |sid: &str, logical: &str, u: u64, l: u64, x: u64| RecallCoverageRow {
+            session_id: sid.into(),
+            logical_id: logical.into(),
+            harness: "omp".into(),
+            user_turns: u,
+            landed_turns: l,
+            lost_turns: x,
+        };
+        let rows = vec![
+            r("raw", "raw", 10, 5, 1),
+            r("raw-p02", "raw", 10, 3, 0),
+            r("raw-p03", "raw", 4, 1, 0),
+            r("solo", "solo", 6, 6, 0),
+        ];
+        let none = std::collections::HashSet::new();
+        let (hs, total, excluded) = aggregate_recall_coverage(&rows, &none);
+        assert_eq!(excluded, 0);
+        assert_eq!(
+            hs[0],
+            coverage_entry("omp", 2, 30, 15, 1),
+            "2 sessions, summed turns"
+        );
+        assert_eq!(total, coverage_entry("all", 2, 30, 15, 1));
+        let live: std::collections::HashSet<String> = ["raw".to_string()].into();
+        let (hs, _, excluded) = aggregate_recall_coverage(&rows, &live);
+        assert_eq!(excluded, 1, "the chain is ONE excluded session");
+        assert_eq!(hs[0], coverage_entry("omp", 1, 6, 6, 0));
+        // Head row outside the window: the surviving continuation still counts
+        // as the chain exactly once.
+        let tail_only = vec![r("raw-p02", "raw", 10, 3, 0), r("raw-p03", "raw", 4, 1, 0)];
+        let (hs, _, _) = aggregate_recall_coverage(&tail_only, &none);
+        assert_eq!(hs[0], coverage_entry("omp", 1, 14, 4, 0));
+    }
+
+    #[test]
+    fn memories_from_widens_a_head_artifact_to_every_part_artifact() {
+        let c = chain();
+        assert_eq!(
+            widen_artifact_ids("a-raw", "raw", &c),
+            ["a-raw", "a-raw-p02", "a-raw-p03"]
+        );
+        // A part's own artifact reads only itself.
+        assert_eq!(
+            widen_artifact_ids("a-raw-p02", "raw-p02", &c),
+            ["a-raw-p02"]
+        );
+        // An ordinary session's artifact, or a chain read that failed: itself.
+        assert_eq!(
+            widen_artifact_ids("a-x", "x", &[part("x", 1, None)]),
+            ["a-x"]
+        );
+        assert_eq!(widen_artifact_ids("a-x", "x", &[]), ["a-x"]);
+        // A STALE capture's artifact (not the newest of the head) never widens.
+        assert_eq!(widen_artifact_ids("a-old", "raw", &c), ["a-old"]);
     }
 }

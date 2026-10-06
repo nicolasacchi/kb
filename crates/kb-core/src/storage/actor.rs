@@ -42,7 +42,7 @@ use crate::storage::sqlite::{
     FolderStats, FunnelCounts, HistoryRow, ListEntryRow, ListRow, MemoryCommitRow,
     MemoryRecallCount, MemoryRecallRow, MemoryRecallWeeklyRow, MemoryRecalledByRow, MoveRow,
     NewAtlasFrame, OpenResult, ProjectHarnessRow, ProjectStatsRow, ReadingResume,
-    RecallCoverageRow, ResearchRollupRow, RunRow, SectionDwell, ServedRecallRow,
+    RecallCoverageRow, ResearchRollupRow, RunRow, SectionDwell, SegmentPart, ServedRecallRow,
     SessionCommitMatch, SessionCommitRow, SessionDecisionRow, SessionFileRow, SessionResearchRow,
     SessionRow, ShareRow, SloSnapshotRow, SnapshotMeta, SourceRow, SweepOutcome,
 };
@@ -1124,7 +1124,20 @@ pub enum StorageMsg {
         /// W5/I — optional `?harness=` csv set (SQL WHERE, closed-set
         /// validated at the route).
         harness: Vec<String>,
+        /// V0045/seg1 — opt-in `?collapse=logical` (SQL WHERE term; absent =
+        /// every part is its own row).
+        collapse_logical: bool,
         reply: oneshot::Sender<Result<Vec<SessionRow>>>,
+    },
+    /// V0045/seg1 — the newest-capture parts of one logical session.
+    SessionsChain {
+        session_id: String,
+        reply: oneshot::Sender<Result<Vec<SegmentPart>>>,
+    },
+    /// V0045/seg1 — part counts per logical session key.
+    SessionsSegmentCounts {
+        keys: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<(String, u32)>>>,
     },
     /// Sessions enrichment — the folder facet (distinct cwd + count + latest).
     SessionsFolders {
@@ -1600,6 +1613,8 @@ fn is_read_lane(msg: &StorageMsg) -> bool {
             | StorageMsg::ListEntriesForArtifact { .. }
             // Sessions READS.
             | StorageMsg::SessionsList { .. }
+            | StorageMsg::SessionsChain { .. }
+            | StorageMsg::SessionsSegmentCounts { .. }
             | StorageMsg::SessionsFolders { .. }
             | StorageMsg::SessionsRecallCoverage { .. }
             | StorageMsg::SessionsProjectsStats { .. }
@@ -3397,9 +3412,10 @@ impl StorageActor {
                 project,
                 substance,
                 harness,
+                collapse_logical,
                 reply,
             } => {
-                let _ = reply.send(self.db.sessions_list(
+                let _ = reply.send(self.db.sessions_list_with(
                     limit,
                     before,
                     before_id,
@@ -3408,7 +3424,14 @@ impl StorageActor {
                     &project,
                     &substance,
                     &harness,
+                    collapse_logical,
                 ));
+            }
+            StorageMsg::SessionsChain { session_id, reply } => {
+                let _ = reply.send(self.db.sessions_chain(&session_id));
+            }
+            StorageMsg::SessionsSegmentCounts { keys, reply } => {
+                let _ = reply.send(self.db.sessions_segment_counts(&keys));
             }
             StorageMsg::SessionsFolders { reply } => {
                 let _ = reply.send(self.db.sessions_folders());
@@ -5366,6 +5389,27 @@ impl StorageHandle {
         substance: Vec<String>,
         harness: Vec<String>,
     ) -> Result<Vec<SessionRow>> {
+        self.sessions_list_with(
+            limit, before, before_id, folder, q, project, substance, harness, false,
+        )
+        .await
+    }
+
+    /// [`Self::sessions_list`] plus the V0045/seg1 `collapse_logical` switch
+    /// (keep only the last part of each segmented session).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn sessions_list_with(
+        &self,
+        limit: u32,
+        before: Option<i64>,
+        before_id: Option<String>,
+        folder: Option<String>,
+        q: Option<String>,
+        project: crate::sessions::ProjectFilter,
+        substance: Vec<String>,
+        harness: Vec<String>,
+        collapse_logical: bool,
+    ) -> Result<Vec<SessionRow>> {
         self.send_and_await(|reply| StorageMsg::SessionsList {
             limit,
             before,
@@ -5375,9 +5419,24 @@ impl StorageHandle {
             project,
             substance,
             harness,
+            collapse_logical,
             reply,
         })
         .await
+    }
+
+    /// V0045/seg1 — the newest-capture parts of the logical session
+    /// `session_id` belongs to, in chain order (see `Db::sessions_chain`).
+    pub async fn sessions_chain(&self, session_id: String) -> Result<Vec<SegmentPart>> {
+        self.send_and_await(|reply| StorageMsg::SessionsChain { session_id, reply })
+            .await
+    }
+
+    /// V0045/seg1 — part counts per logical session key (see
+    /// `Db::sessions_segment_counts`).
+    pub async fn sessions_segment_counts(&self, keys: Vec<String>) -> Result<Vec<(String, u32)>> {
+        self.send_and_await(|reply| StorageMsg::SessionsSegmentCounts { keys, reply })
+            .await
     }
 
     /// Sessions enrichment — the folder facet: `(cwd, count, latest_started_at)`
@@ -6152,6 +6211,8 @@ mod tests {
             user_turns: 1,
             active_secs: 1,
             substance: None,
+            segment_of: None,
+            segment_idx: None,
         };
         h.sessions_upsert(row).await.unwrap();
         let g0 = h.index_generation();

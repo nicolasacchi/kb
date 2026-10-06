@@ -2079,7 +2079,7 @@ pub async fn memories_from(
     State(state): State<Arc<KbHandles>>,
     Path((kb, id)): Path<(String, String)>,
 ) -> Response<Body> {
-    let (kb_name, _ctx) = match crate::routes::resolve_kb(&state, &kb) {
+    let (kb_name, source_ctx) = match crate::routes::resolve_kb(&state, &kb) {
         Ok(v) => v,
         Err(resp) => return resp,
     };
@@ -2089,6 +2089,28 @@ pub async fn memories_from(
         )));
     }
     let source_kb = kb_name.as_str().to_string();
+    // V0045/seg1 — when `{id}` is the HEAD artifact of a segmented session
+    // (part 1, the bare raw id), memories highlighted out of any of its parts
+    // are "from" it too; a part's own artifact (or any ordinary doc) reads
+    // only itself. Best-effort: a failed lookup degrades to the single id.
+    let source_ids: Vec<String> = match source_ctx
+        .storage
+        .sessions_get_by_artifact_ids(vec![id.clone()])
+        .await
+    {
+        Ok(rows) => match rows.into_iter().next() {
+            Some(row) => {
+                let parts = source_ctx
+                    .storage
+                    .sessions_chain(row.session_id.clone())
+                    .await
+                    .unwrap_or_default();
+                crate::routes::sessions::widen_artifact_ids(&id, &row.session_id, &parts)
+            }
+            None => vec![id.clone()],
+        },
+        Err(_) => vec![id.clone()],
+    };
 
     let mut futs: Vec<super::CorpusFut<'_, Vec<(String, kb_core::storage::lance::DocSummary)>>> =
         Vec::new();
@@ -2098,20 +2120,28 @@ pub async fn memories_from(
         }
         let kb2_str = kb2.as_str().to_string();
         let source_kb = source_kb.clone();
-        let id = id.clone();
+        let source_ids = source_ids.clone();
         futs.push(Box::pin(async move {
-            let rows = ctx2
-                .storage
-                .list_docs_with_kb_source_artifact(source_kb, id, MEMORIES_FROM_LIMIT)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        kb = %kb2_str,
-                        error = %e,
-                        "list_docs_with_kb_source_artifact failed"
-                    );
-                    Vec::new()
-                });
+            let mut rows = Vec::new();
+            for id in source_ids {
+                rows.extend(
+                    ctx2.storage
+                        .list_docs_with_kb_source_artifact(
+                            source_kb.clone(),
+                            id,
+                            MEMORIES_FROM_LIMIT,
+                        )
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(
+                                kb = %kb2_str,
+                                error = %e,
+                                "list_docs_with_kb_source_artifact failed"
+                            );
+                            Vec::new()
+                        }),
+                );
+            }
             rows.into_iter()
                 .map(|d| (kb2_str.clone(), d))
                 .collect::<Vec<_>>()
