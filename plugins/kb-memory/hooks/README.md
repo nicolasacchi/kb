@@ -254,13 +254,15 @@ registering anywhere `kb-memory` is already installed. Design:
   - **drops a poisoned subagent sidecar** instead of failing the pass: a
     sidecar whose translation errors is skipped (the main transcript and the
     healthy sidecars still land); only a deadline kill or a TERM aborts.
-    **TERM bound (segmented tail conversion included):** every potentially
-    slow step - the planner, the `session_exit` scan, the chain walk, the
-    `kb ... --help` probes - is a tracked background job whose answer is left
-    in a file, never a `$(...)` (bash defers a trapped TERM until a command
-    substitution returns), so a TERM is handled within ~6 s at every stage
-    (pinned for a slow exit scan and a slow chain walk in
-    `test-capture-omp-segments.sh`).
+    **TERM bound (segmented tail conversion included):** every step whose
+    cost grows with the input - the planner, the `session_exit` scan, the
+    chain walk, the `kb ... --help` probes, `drop-part` - is a tracked
+    background job whose answer is left in a file, never a `$(...)` (bash
+    defers a trapped TERM until a command substitution returns), so a TERM is
+    handled within ~6 s at those stages (pinned for a slow exit scan and a
+    slow chain walk in `test-capture-omp-segments.sh`). A few constant-size
+    `jq` reads (one plan-file field, one sidecar timestamp line) still run in
+    `$(...)`; only an IO stall on those tiny reads could delay a TERM.
   - **bounds a pass** with `KB_CAPTURE_HARD_SECS` (default 120, the same value
     `kb-omp.ts` always passed as its timeout - this makes that timeout real):
     each child is capped at what is left of it. The `kb` landing gets its own
@@ -313,7 +315,10 @@ registering anywhere `kb-memory` is already installed. Design:
     `kb sessions segment-plan` (v0.46); the script probes it once per run and,
     when it is absent, prints ONE stderr warning and uses the unchanged
     single-capture path. Deleting superseded parts also needs `kb sessions
-    drop-part` (an older kb keeps them and says so).
+    drop-part` (v0.47): an older kb keeps them and says so, and because an
+    outstanding drop keeps the input from being recorded as done, every
+    trigger of that session re-runs the (cheap, already-landed) segmented pass
+    and repeats the warning until the kb is upgraded.
   - **Ids**: part 1 keeps the bare session id (existing artifact ids never
     change); part k>=2 is `<id>-p<NN>` (`-p02`, `-p03`, ...). Every record of
     part k>=2 carries `sessionId: <id>-p<NN>`, and its first `adapter-meta`
