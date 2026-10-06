@@ -34,6 +34,7 @@ import { impactChipText, topChangedSymbol } from "../../lib/reviewImpact";
 import { codeUrl, type DiffCtxDial } from "../../lib/codeUrl";
 import { shortSha } from "../../lib/format";
 import { statusKind } from "../../lib/reviewFileTree";
+import { stuckScrollDelta } from "../../lib/stickyHead";
 import { deepLinkExpands, hunkCollapse } from "../../lib/collapseOnTick";
 import {
   hunkHasThreads,
@@ -536,6 +537,26 @@ export function LazyDiffSection({
   psNumber?: number | null;
 }) {
   const { ref, inView } = useInViewOnce();
+  // v0.47 SH — ticking "viewed" from the PINNED header collapses a file the
+  // reader is mid-way through; the page shrinks under the scroller. Once the
+  // collapse has rendered, put the collapsed section's header back at the pin
+  // line so the next file's header lands where the collapsed one was pinned.
+  const toggleViewedKeepingPin = (f: ReviewFileRow, from: HTMLElement) => {
+    const section = from.closest<HTMLElement>("[data-kbc-rdiff-file]");
+    onToggleViewed(f);
+    if (!section) return;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (section.getAttribute("data-kbc-rdiff-collapsed") !== "1") return;
+        const root = section.closest("[data-kbc-rdiff]") as HTMLElement | null;
+        const stick = parseFloat(root?.style.getPropertyValue("--rdiff-stick-top") ?? "") || 0;
+        const scroller = section.closest(".kbc-approute") as HTMLElement | null;
+        if (!scroller) return;
+        const delta = stuckScrollDelta(section.getBoundingClientRect().top - scroller.getBoundingClientRect().top, stick);
+        if (delta !== 0) scroller.scrollTop += delta;
+      }),
+    );
+  };
   return (
     <section
       ref={ref}
@@ -573,7 +594,7 @@ export function LazyDiffSection({
             <input
               type="checkbox"
               checked={checked}
-              onChange={() => onToggleViewed(file)}
+              onChange={(e) => toggleViewedKeepingPin(file, e.currentTarget)}
               aria-label={checked ? "mark unviewed" : "mark viewed"}
               data-kbc-review-viewed={file.path}
             />

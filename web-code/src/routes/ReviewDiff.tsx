@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { useStickyOffset } from "../hooks/useStickyOffset";
 import type { ReviewDetailPr, ReviewFileRow } from "../api/types";
 import {
   useReviewComments,
@@ -120,6 +121,7 @@ import type { ReviewMapSplitHandle } from "../components/reviews/ReviewMapSplit"
 
 
 export default function ReviewDiff() {
+  const rootRef = useStickyOffset();
   const { repo = "", id: idParam = "" } = useParams<{ repo: string; id: string }>();
   const focusPath = splatPath(useParams()["*"] ?? "");
   const single = focusPath.length > 0;
@@ -1585,6 +1587,7 @@ export default function ReviewDiff() {
 
   return (
     <div
+      ref={rootRef}
       className={"kbc-rdiff" + (single ? " kbc-rdiff--single" : " kbc-rdiff--all")}
       id="main"
       data-kbc-rdiff={id}
