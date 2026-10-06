@@ -1088,12 +1088,20 @@ invariant #2 records).
     point 5 ("the annotation's own anchor is NOT eagerly rewritten"),
     which was written for an UNCHANGED claim:* when a re-import/compose of
     an `import`-origin finding changes its `location_*` (path/kind/lines/
-    removed), or the linked annotation has no anchor at all, the anchor
-    (+ path, side, bound `ps_number`; replies follow) is re-derived from the
-    target patchset in the SAME transaction (`reconcile_findings_import_on`)
-    — keeping the old anchor made a finding with correct saved lines an
-    orphan forever. A SAME-location re-import still never touches the anchor
-    (the carry-forward ladder owns it), and `manual` rows stay untouched.
+    removed), OR the linked annotation has no anchor at all, OR the stored
+    anchor no longer resolves to the CLAIMED lines at the target patchset
+    (orphaned, or resolved elsewhere — the route reads the blobs BEFORE the
+    transaction, `review_findings::stale_anchor_ids`, and hands the
+    annotation ids in; never git I/O under the store lock), the anchor
+    (+ path, side, bound `ps_number` — so later patchsets carry forward from
+    the patchset the anchor text came from, `own_ps` moves with it; replies
+    follow) is re-derived from the target patchset in the SAME transaction
+    (`reconcile_findings_import_on`). The third trigger exists because an
+    earlier compose may already have moved `location_*` while leaving the
+    anchor: a re-compose with that same, already-updated claim sees no
+    change and would leave the orphan forever. An anchor that still agrees
+    with the claim (carry-forward worked) is never rewritten, so a finding
+    keeps its original `own_ps`; `manual` rows stay untouched.
     An anchor that cannot be derived (blob over the cap / path absent /
     cited line past EOF) is NEVER stored as an empty snippet: the anchor is
     persisted as SQL NULL (`store::UNANCHORED`), the finding is still

@@ -4,6 +4,7 @@
 //! the helpers it shares stay in the parent module; this child can
 //! call them. Public paths stay `crate::store`.
 use super::*;
+use std::collections::HashSet;
 
 impl Store {
     // -- Findings (V0024) -----------------------------------------------
@@ -341,6 +342,41 @@ impl Store {
         mode: FindingsImportMode,
         now: i64,
     ) -> Result<FindingsImportOutcome> {
+        self.reconcile_findings_import_repairing(
+            review_id,
+            repo_id,
+            ps_number,
+            import_batch_id,
+            author,
+            findings,
+            mode,
+            &HashSet::new(),
+            now,
+        )
+    }
+
+    /// [`Self::reconcile_findings_import`] plus v0.47 FA's repair set:
+    /// `stale_anchor_ids` names the linked-annotation ids of existing,
+    /// un-pinned, import-origin findings whose stored anchor does NOT
+    /// resolve to their claimed lines at THIS patchset (the caller read the
+    /// blobs BEFORE this call — the store never does git I/O, and never
+    /// under its connection lock). Such a finding has its anchor re-derived
+    /// from the incoming (target-patchset) anchor even though its claimed
+    /// location is unchanged — the case a compose at ps2 left behind when
+    /// it updated `location_*` but not the anchor.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reconcile_findings_import_repairing(
+        &self,
+        review_id: i64,
+        repo_id: i64,
+        ps_number: i64,
+        import_batch_id: &str,
+        author: &str,
+        findings: &[ImportedFinding],
+        mode: FindingsImportMode,
+        stale_anchor_ids: &HashSet<String>,
+        now: i64,
+    ) -> Result<FindingsImportOutcome> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         let outcome = reconcile_findings_import_on(
@@ -353,6 +389,7 @@ impl Store {
             findings,
             mode,
             FindingIdentity::Slug,
+            stale_anchor_ids,
             now,
         )?;
         tx.commit()?;
@@ -406,6 +443,7 @@ impl Store {
             findings,
             mode,
             FindingIdentity::Slug,
+            &HashSet::new(),
             now,
         )?;
 
@@ -1138,6 +1176,7 @@ pub(super) fn reconcile_findings_import_on(
     findings: &[ImportedFinding],
     mode: FindingsImportMode,
     identity: FindingIdentity,
+    stale_anchor_ids: &HashSet<String>,
     now: i64,
 ) -> Result<FindingsImportOutcome> {
     let existing_rows: Vec<ReviewFindingRow> = {
@@ -1324,8 +1363,18 @@ pub(super) fn reconcile_findings_import_on(
                 } else {
                     false
                 };
+                // A second trigger, for a claim that is ALREADY the new one
+                // (an earlier compose updated `location_*` but not the
+                // anchor): the caller proved this anchor no longer resolves
+                // to the claimed lines at this patchset
+                // (`stale_anchor_ids`). Never fires when the anchor and the
+                // claim agree (the carry-forward worked), never for a pinned
+                // row, and never to write an anchor that could not be
+                // derived (`f.anchor` empty).
+                let anchor_stale = stale_anchor_ids.contains(&cur.annotation_id);
                 let rewrite_anchor = cur.reanchor_json.is_none()
-                    && (location_changed || (anchor_missing && !f.anchor.is_empty()));
+                    && (location_changed
+                        || ((anchor_missing || anchor_stale) && !f.anchor.is_empty()));
                 if rewrite_anchor {
                     rewrite_finding_anchor_on(
                         tx,

@@ -263,10 +263,13 @@ LOOPBACK-ONLY, addendum §E) lets a human author one finding directly.
 **Finding anchors (v0.47 FA).** A finding has two positions: the saved
 claim (`location`) and the anchor of its linked annotation. A re-import or
 compose of an agent (`import`-origin) finding whose location changed now
-re-derives the anchor from the target patchset in the same transaction (this
-amends the original "the anchor is never rewritten on re-import" rule, which
-only held for an unchanged claim; a same-location re-import and every
-`manual` finding are still untouched). A citation that cannot be anchored —
+re-derives the anchor from the target patchset in the same transaction, and
+so does one whose stored anchor no longer resolves to its claimed lines at that
+patchset even though the claim itself is unchanged (an earlier compose already
+moved the claim; the anchor, and its bound patchset `own_ps`, now move with
+it). This amends the original "the anchor is never rewritten on re-import"
+rule, which only held for an unchanged claim whose anchor still agrees with it;
+every `manual` finding is untouched. A citation that cannot be anchored —
 blob over the size cap, path absent, line past end of file — is imported
 without an anchor (an honest orphan, never a guessed line) and reported per
 slug in the import/compose response as `anchor_warnings[]`

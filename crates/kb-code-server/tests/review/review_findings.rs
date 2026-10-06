@@ -2172,3 +2172,230 @@ async fn reanchor_refuses_an_adopted_human_comment() {
     assert_eq!(status, 409, "{body}");
     assert_eq!(body["reason"], "adopted_comment");
 }
+
+// --- v0.47 FA: the ps2 shape (claim moved by a compose, anchor left behind) --
+
+const LIMITER_PS1: &str = "local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local n = redis.call('INCR', key)\n\
+if n == 1 then\n\
+  redis.call('EXPIRE', key, ARGV[2])\n\
+end\n\
+return n <= limit\n";
+
+/// ps2 shifts the code down two lines AND rewrites the range's last line
+/// (the cited range ended on a line that no longer exists).
+const LIMITER_PS2_MOVED: &str = "-- limiter v2\n\
+local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local validity = tonumber(ARGV[2])\n\
+local n = redis.call('INCR', key)\n\
+if n == 1 then\n\
+  finalize_window(state, validity)\n\
+end\n\
+return n <= limit\n";
+
+/// ps2 rewrites lines 3-5 in place: the SAME numbers, different text.
+const LIMITER_PS2_REWRITTEN: &str = "local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local validity = tonumber(ARGV[2])\n\
+local window = compute_window_bucket(key, validity)\n\
+return finalize_window(window, limit)\n";
+
+async fn compose_findings(
+    client: &reqwest::Client,
+    base: &str,
+    id: i64,
+    findings: Vec<serde_json::Value>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let resp = client
+        .post(format!("{base}/api/reviews/{id}/compose"))
+        .json(&serde_json::json!({
+            "summary": "ps2 review",
+            "findings": { "schema": "kbc-findings/1", "findings": findings },
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = resp.json().await.unwrap();
+    (status, body)
+}
+
+fn range_finding(slug: &str, a: i64, b: i64) -> serde_json::Value {
+    serde_json::json!({
+        "slug": slug,
+        "severity": "concern",
+        "category": "correctness",
+        "location": { "path": "limiter.lua", "kind": "range", "lines": [a, b] },
+        "title": format!("finding {slug}"),
+        "rationale": "Spotted on review.",
+    })
+}
+
+async fn export_comment_slugs(
+    client: &reqwest::Client,
+    base: &str,
+    id: i64,
+) -> (Vec<String>, Vec<String>) {
+    let out: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id}/export/github"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let slugs = |k: &str| -> Vec<String> {
+        out[k]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|c| c["finding_slug"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    (slugs("comments"), slugs("skipped_orphaned"))
+}
+
+/// Boot, review at ps1 (limiter.lua = PS1), import `f-a` at ps1 with the
+/// claim [a1,b1], then commit `ps2_text` and snapshot ps2.
+async fn limiter_at_ps2(
+    ps2_text: &str,
+    a1: i64,
+    b1: i64,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    String,
+    reqwest::Client,
+    i64,
+) {
+    let repo_tmp = fixture_repo_with(&[("limiter.lua", LIMITER_PS1.as_bytes())]);
+    let (daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [range_finding("f-a", a1, b1)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_eq!(
+        finding_by_slug(&listed, "f-a")["resolution"]["orphaned"],
+        false
+    );
+    std::fs::write(repo_tmp.path().join("limiter.lua"), ps2_text).unwrap();
+    git(repo_tmp.path(), &["add", "-A"]);
+    git(repo_tmp.path(), &["commit", "-q", "-m", "ps2 rewrite"]);
+    assert_eq!(snapshot(&client, &base, id).await, 2);
+    (repo_tmp, daemon, base, client, id)
+}
+
+/// THE REPORTED SHAPE: ps1 range ends on a line ps2 rewrote; the agent
+/// composes at ps2 with the NEW lines. The finding must resolve exact at
+/// ps2, be raised-against ps2 from now on (carry-forward starts there), and
+/// export as a line comment, not a skipped orphan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compose_at_ps2_with_moved_lines_re_anchors_at_ps2() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_MOVED, 3, 5).await;
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(
+        before["resolution"]["orphaned"], true,
+        "precondition: the ps1 anchor orphans on the ps2 blob: {before}"
+    );
+
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 5, 7)]).await;
+    assert_eq!(status, 200, "{body}");
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
+    assert_eq!(fa["resolution"]["line"], 5, "{fa}");
+    assert_eq!(fa["resolution"]["line_end"], 7, "{fa}");
+    assert_eq!(
+        fa["own_ps"], 2,
+        "the anchor's base patchset moves with it: {fa}"
+    );
+
+    let (comments, skipped) = export_comment_slugs(&client, &base, id).await;
+    assert!(comments.contains(&"f-a".to_string()), "{comments:?}");
+    assert!(!skipped.contains(&"f-a".to_string()), "{skipped:?}");
+}
+
+/// The case a claim-changed trigger misses: the stored claim ALREADY equals
+/// the new one (lines 3-5, valid at ps1 and still the claim at ps2) but the
+/// anchor holds ps1 text. A compose/import at ps2 with the SAME location
+/// must still repair it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compose_with_an_unchanged_claim_repairs_a_stale_anchor() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_REWRITTEN, 3, 5).await;
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["location"]["lines"], serde_json::json!([3, 5]));
+    assert_eq!(
+        before["resolution"]["orphaned"], true,
+        "precondition: ps1 text is gone from lines 3-5 at ps2: {before}"
+    );
+
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 3, 5)]).await;
+    assert_eq!(status, 200, "{body}");
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
+    assert_eq!(fa["resolution"]["line"], 3, "{fa}");
+    assert_eq!(fa["resolution"]["line_end"], 5, "{fa}");
+    assert_eq!(fa["own_ps"], 2, "{fa}");
+
+    // A second identical compose is a no-op repair: anchor and claim agree,
+    // nothing is rewritten, own_ps stays 2.
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 3, 5)]).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_eq!(finding_by_slug(&listed, "f-a")["own_ps"], 2);
+}
+
+/// The same repair through the explicit route, with no compose at all; the
+/// repaired finding then exports as a line comment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reanchor_route_repairs_a_stale_anchor_without_a_compose() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_MOVED, 3, 5).await;
+    let (comments, skipped) = export_comment_slugs(&client, &base, id).await;
+    assert!(!comments.contains(&"f-a".to_string()), "{comments:?}");
+    assert!(skipped.contains(&"f-a".to_string()), "{skipped:?}");
+
+    let (status, _, body) = post_reanchor(
+        &client,
+        &base,
+        id,
+        "f-a",
+        &serde_json::json!({
+            "location": {"path": "limiter.lua", "kind": "range", "lines": [5, 7]},
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["resolution"]["line"], 5, "{body}");
+    assert_eq!(body["resolution"]["line_end"], 7, "{body}");
+    assert_eq!(body["own_ps"], 2, "{body}");
+    assert_eq!(body["reanchor"]["from"]["lines"], serde_json::json!([3, 5]));
+
+    let (comments, skipped) = export_comment_slugs(&client, &base, id).await;
+    assert!(comments.contains(&"f-a".to_string()), "{comments:?}");
+    assert!(!skipped.contains(&"f-a".to_string()), "{skipped:?}");
+}

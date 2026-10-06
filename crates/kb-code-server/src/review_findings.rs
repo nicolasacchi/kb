@@ -1017,6 +1017,67 @@ pub(crate) fn compose_finding_view(
 
 // --- routes --------------------------------------------------------------
 
+/// v0.47 FA — which existing import-origin findings carry an anchor that no
+/// longer resolves to what their (saved) claim says, at `target_ps`: the
+/// linked-annotation ids the reconcile must re-derive even though the
+/// claimed location is unchanged. This is the repair for a claim an EARLIER
+/// compose already moved (`location_*` is the ps2 claim; the anchor still
+/// holds ps1 text and orphans).
+///
+/// A finding is NOT stale when its anchor resolves (any confidence) to
+/// exactly the claimed line / range at the target blob — the carry-forward
+/// worked and agrees with the claim, so nothing is rewritten and the
+/// finding keeps its original `own_ps`. Stale = orphaned, or resolved
+/// somewhere other than the claim. Pinned (human re-anchored) rows are never
+/// listed. Runs BEFORE the reconcile transaction (blob reads never happen
+/// under the store lock, same shape as `compose_finding_view`'s closure).
+fn stale_anchor_ids(
+    store: &Store,
+    git: &GitCtx,
+    review_id: i64,
+    target_ps: &ReviewPatchsetRow,
+) -> Result<std::collections::HashSet<String>, ApiError> {
+    let mut stale = std::collections::HashSet::new();
+    let mut cache: HashMap<(String, String), Option<String>> = HashMap::new();
+    for row in store.list_review_findings(review_id, None, true)? {
+        if row.origin != store::FINDING_ORIGIN_IMPORT || row.reanchor_json.is_some() {
+            continue;
+        }
+        let Some(ann) = store.get_annotation(&row.annotation_id)? else {
+            continue;
+        };
+        let claimed: Vec<i64> = row
+            .location_lines
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        if row.location_kind != store::LOCATION_KIND_WHOLE_FILE && claimed.is_empty() {
+            continue; // nothing to compare against — never guess
+        }
+        let sha = review_comments::target_sha_for_side(ann.side.as_deref(), target_ps).to_string();
+        let key = (ann.path.clone(), sha.clone());
+        let text = cache
+            .entry(key)
+            .or_insert_with(|| review_comments::read_blob_text(git, &ann.path, &sha))
+            .clone();
+        let r =
+            review_comments::resolve_for_ps_with_content(&ann, target_ps, &sha, text.as_deref());
+        let agrees = !r.orphaned
+            && match row.location_kind.as_str() {
+                store::LOCATION_KIND_WHOLE_FILE => true,
+                store::LOCATION_KIND_RANGE => {
+                    r.line == claimed.iter().min().map(|n| *n as u32)
+                        && r.line_end == claimed.iter().max().map(|n| *n as u32)
+                }
+                _ => r.line == claimed.first().map(|n| *n as u32),
+            };
+        if !agrees {
+            stale.insert(row.annotation_id.clone());
+        }
+    }
+    Ok(stale)
+}
+
 /// `POST /api/reviews/{id}/findings/import` — LOOPBACK-ONLY (design doc §2
 /// row 8). One transaction via `Store::reconcile_findings_import`
 /// (already shipped by R1); one `review.changed{reason:"findings_import"}`
@@ -1122,10 +1183,13 @@ pub async fn import_findings_route(
     let ps_number = target_ps.ps_number;
     let import_batch_id_c = import_batch_id.clone();
     let author_c = author.clone();
+    let git_for_repair = git_ctx.clone();
+    let target_ps_c = target_ps.clone();
     let outcome = state
         .store
-        .run_blocking(move |store| {
-            store.reconcile_findings_import(
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let stale = stale_anchor_ids(store, &git_for_repair, id, &target_ps_c)?;
+            Ok(store.reconcile_findings_import_repairing(
                 id,
                 repo_id,
                 ps_number,
@@ -1133,8 +1197,9 @@ pub async fn import_findings_route(
                 &author_c,
                 &imported,
                 mode,
+                &stale,
                 now,
-            )
+            )?)
         })
         .await?;
 
@@ -1663,10 +1728,13 @@ async fn compose_document(
     let import_batch_id_c = import_batch_id.clone();
     let verdict_state = body.verdict.clone();
     let verdict_note = body.verdict_note.clone();
+    let git_for_repair = git_ctx.clone();
+    let target_ps_c = target_ps.clone();
     let outcome = state
         .store
-        .run_blocking(move |store| {
-            store.compose_review_doc(
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let stale = stale_anchor_ids(store, &git_for_repair, id, &target_ps_c)?;
+            Ok(store.compose_review_doc(
                 &new_row,
                 repo_id,
                 &import_batch_id_c,
@@ -1677,8 +1745,9 @@ async fn compose_document(
                 verdict_state
                     .as_deref()
                     .map(|s| (s, verdict_note.as_deref())),
+                &stale,
                 now,
-            )
+            )?)
         })
         .await?;
 
