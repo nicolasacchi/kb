@@ -326,6 +326,8 @@ impl EnrichmentHook for SessionCaptureHook {
                 user_turns: act.user_turns,
                 active_secs: act.active_secs,
                 substance: Some(substance.to_string()),
+                segment_of: act.segment_of.clone(),
+                segment_idx: act.segment_idx,
             };
             if let Err(e) = ctx.storage.sessions_upsert(row).await {
                 tracing::warn!(
@@ -1767,6 +1769,94 @@ mod tests {
         assert_eq!(c.author.as_deref(), Some("kb-test <test@kb>"));
         assert_eq!(c.parents, Some(1));
         assert_eq!(c.trailers.as_deref(), Some("Kb-Session: sess-commits-1"));
+    }
+
+    /// v0.46 SEG-A — the hook copies the adapter-meta `segmentOf`/`segmentIdx`
+    /// pair into the new `sessions` columns, part 1 (no keys) stays NULL, and
+    /// the part's own id (not the chain's raw id) is the canonical session id.
+    #[tokio::test]
+    async fn session_capture_hook_fills_the_segment_columns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = crate::storage::StorageActor::spawn(
+            tmp.path().join("lance"),
+            tmp.path().join("index.db"),
+            None,
+        )
+        .await
+        .unwrap();
+        let bus = EventBus::default();
+        let kb_name = KbName::new("smoke").unwrap();
+        let source_slug = SourceSlug::from_path(tmp.path());
+        for (file, sid, meta_extra) in [
+            ("p1.html", "seg-sess", ""),
+            (
+                "p2.html",
+                "seg-sess-p02",
+                r#","segmentOf":"seg-sess","segmentIdx":2,"rawSessionId":"seg-sess""#,
+            ),
+        ] {
+            let path = tmp.path().join(file);
+            let artifact_id = ArtifactId::from_path(file);
+            let meta_line = format!(
+                r#"{{"sessionId":"{sid}","type":"adapter-meta","adapter":"kb-capture-omp/1","harness":"omp"{meta_extra}}}"#
+            );
+            let user_line = format!(
+                r#"{{"sessionId":"{sid}","type":"user","promptSource":"typed","message":{{"role":"user","content":"hi"}}}}"#
+            );
+            let jsonl = format!("{meta_line}\n{user_line}\n");
+            let html = format!(
+                "<html><head><meta name=\"kb-category\" content=\"memory-session\"></head>\
+                 <body><pre>{jsonl}</pre></body></html>"
+            );
+            let ctx = EnrichCtx {
+                kb_name: &kb_name,
+                source_slug: &source_slug,
+                storage: &storage,
+                bus: &bus,
+                quarantine_dir: tmp.path(),
+                source_root: tmp.path(),
+                path: &path,
+                artifact_id: &artifact_id,
+                rel_path: file,
+                html: &html,
+                artifact_host_suffix: crate::iframe::DEFAULT_HOST_SUFFIX,
+                kb_category: Some("memory-session"),
+                mtime_unix: 1_700_000_000,
+                now_unix: 1_700_000_500,
+                seed_global: false,
+                seed_linked_kbs: &[],
+                content_hash: "deadbeef0004",
+                raw_source: &html,
+                versions_mode: crate::vcs::VersionsMode::Off,
+                session_parse: None,
+            };
+            SessionCaptureHook.enrich(&ctx).await.unwrap();
+        }
+        let p1 = storage
+            .sessions_get("seg-sess".to_string())
+            .await
+            .unwrap()
+            .expect("part 1 row");
+        assert_eq!((p1.segment_of, p1.segment_idx), (None, None));
+        assert_eq!(p1.harness, "omp");
+        let p2 = storage
+            .sessions_get("seg-sess-p02".to_string())
+            .await
+            .unwrap()
+            .expect("part 2 row under its own canonical id");
+        assert_eq!(p2.segment_of.as_deref(), Some("seg-sess"));
+        assert_eq!(p2.segment_idx, Some(2));
+        let chain = storage
+            .sessions_chain("seg-sess".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            chain
+                .iter()
+                .map(|p| (p.session_id.as_str(), p.idx))
+                .collect::<Vec<_>>(),
+            [("seg-sess", 1), ("seg-sess-p02", 2)]
+        );
     }
 
     /// W0.4 — a capture WITHOUT the commits block (old captures, `kb import

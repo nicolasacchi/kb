@@ -1976,10 +1976,25 @@ mod tests {
             ("ses_01HXYZ", "ses-01HXYZ-8413c6b038ea242d"),
             ("s\u{e9}si\u{f3}n", "s--si--n-857c877373c39c8b"),
             ("", "session-e3b0c44298fc1c14"),
+            // v0.46 SEG-A - segmented-capture part ids (`<raw id>-pNN`):
+            // a part id is an ordinary id for the key function.
+            (
+                "0b2f1c9e-5d3a-4e7b-8c1d-9a6f2e4b7d10-p02",
+                "0b2f1c9e-5d3a-4e7b-8c1d-9a6f2e4b7d10-p02",
+            ),
+            ("ses_01HXYZ-p02", "ses-01HXYZ-p02-7006ddf22fd96a3e"),
         ];
         for (raw, want) in rows {
             assert_eq!(sanitize_sid(raw), *want, "raw {raw:?}");
         }
+        // 77-byte raw id + "-p02" = 81 bytes: over the 80 plain cap, so the
+        // part id is hashed (and stays distinct from the raw id's own key).
+        let r77 = format!("{}-p02", "r".repeat(77));
+        assert_eq!(
+            sanitize_sid(&r77),
+            "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr-11deaa9d76484e97"
+        );
+        assert_ne!(sanitize_sid(&r77), sanitize_sid(&"r".repeat(77)));
         let a81 = "a".repeat(81);
         assert_eq!(
             sanitize_sid(&a81),
