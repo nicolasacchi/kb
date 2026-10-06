@@ -1089,7 +1089,15 @@ GET  /api/sessions/ledger                   W6/moonshots M4 — one project's
                                             absent = every project in the
                                             window. Every calendar day in the
                                             window is present in the response
-                                            even when empty. CLI:
+                                            even when empty. Segmented
+                                            sessions (v0.46): `totals.sessions`
+                                            is a LOGICAL count (a chain counts
+                                            once) while each day's `sessions`
+                                            array lists every PART, so summing
+                                            the day arrays can exceed the total
+                                            by design (context-pack, daycard,
+                                            timeline and echoes likewise count
+                                            parts). CLI:
                                             `kb sessions ledger [--project]
                                             [--days]`.
 GET  /api/sessions/folders                                              W3.A/P4 — the per-folder activity list (one row per folder). Powers the session gallery filter. CLI: `kb sessions folders`.
