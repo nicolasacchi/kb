@@ -387,23 +387,21 @@ fn an_unanswered_call_followed_by_a_user_message_leaves_a_legal_cut() {
 
 #[test]
 fn pair_heavy_sessions_cut_only_before_users_and_never_split_a_pair() {
+    // every turn starts with a user message and holds one or two call/result
+    // pairs, so a legal cut always exists within 2*target of any part start
     let mut g = Gen::new();
     let mut rng = Rng(0x1234_5678_9abc_def1);
     let mut calls = 0u64;
-    for _ in 0..90 {
-        match rng.below(4) {
-            0 => {
-                g.user(150 + rng.below(400) as usize);
-            }
-            1 | 2 => {
-                calls += 1;
-                let c = format!("k{calls}");
-                g.call(&c, 240 + rng.below(300) as usize);
-                g.result(&c, 200 + rng.below(500) as usize);
-            }
-            _ => {
-                g.assistant(150 + rng.below(500) as usize);
-            }
+    for _ in 0..40 {
+        g.user(150 + rng.below(400) as usize);
+        for _ in 0..(1 + rng.below(2)) {
+            calls += 1;
+            let c = format!("k{calls}");
+            g.call(&c, 240 + rng.below(300) as usize);
+            g.result(&c, 200 + rng.below(500) as usize);
+        }
+        if rng.below(2) == 0 {
+            g.assistant(200 + rng.below(400) as usize);
         }
     }
     let fx = Fx::new();
