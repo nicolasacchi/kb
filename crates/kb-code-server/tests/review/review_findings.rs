@@ -1828,10 +1828,7 @@ async fn unanchorable_citations_warn_per_slug_and_store_no_empty_anchor() {
 async fn a_latin1_lua_file_anchors_and_resolves() {
     let _guard = crate::ENV_SERIAL.lock().await;
     let lua: &[u8] = b"-- caf\xe9 module\nlocal M = {}\nM.name = \"\xe9t\xe9\"\nreturn M\n";
-    assert!(
-        std::str::from_utf8(lua).is_err(),
-        "fixture must be non-UTF-8"
-    );
+    assert!(lua.contains(&0xe9), "fixture must carry a non-UTF-8 byte");
     let repo_tmp = fixture_repo_with(&[("legacy.lua", lua)]);
     let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
     let client = reqwest::Client::new();

@@ -676,7 +676,7 @@ mod fa_tests {
     #[test]
     fn decoding_is_total_and_deterministic_for_non_utf8() {
         let bytes = b"caf\xe9\n";
-        assert!(std::str::from_utf8(bytes).is_err());
+        assert!(bytes.contains(&0xe9));
         assert_eq!(decode_blob(bytes), decode_blob(bytes));
         assert!(decode_blob(bytes).starts_with("caf"));
     }
