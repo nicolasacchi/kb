@@ -1411,7 +1411,7 @@ pub(super) fn reconcile_findings_import_on(
                             claimed_lines: cur.location_lines.clone(),
                             anchor_line: *l,
                             anchor_line_end: *le,
-                            confidence: *conf,
+                            confidence: conf,
                         });
                     }
                 }
