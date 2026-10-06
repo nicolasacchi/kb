@@ -21,8 +21,11 @@
 //! Cuts are planned over the live chain, in raw bytes of chain lines, with a
 //! target of 16 MiB (`--target-bytes` overrides, for tests):
 //!
-//! 1. a cut is LEGAL only before a user message with text, with no tool call
-//!    pending (every `toolCall` id seen so far has its `toolResult`);
+//! 1. a cut is LEGAL only before a user message TRANSLATE would emit (the
+//!    exact jq join predicate, not "has non-empty text"); a tool call never
+//!    straddles such a cut, because omp records no user message between a
+//!    call and its result - a call still unanswered at a user message was
+//!    abandoned (interrupt/abort), so it must not block every later cut;
 //! 2. among legal cuts leaving a part of `[target/2, target]` bytes, the LAST
 //!    one that follows a compaction wins, else the last legal one;
 //! 3. else the first legal cut leaving `(target, 2*target]` bytes;
@@ -51,7 +54,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -135,20 +137,29 @@ fn canon_id(v: Option<&Value>) -> Option<String> {
     }
 }
 
+/// TRANSLATE's user-message predicate, exactly: it emits a user record iff
+/// `[$m.content[]? | objects | select(.type == "text") | .text | <tojson for
+/// object/array>] | join("\n")` is non-empty. `.[]?` walks an array's
+/// elements OR an object's values (a string/number/null yields nothing); jq's
+/// `join` renders null as "" and numbers/booleans via tostring. So two empty
+/// text parts join to "\n" (emitted) while one empty or null part is "" (not).
 fn text_nonempty(content: &Value) -> bool {
-    match content.as_array() {
-        None => false,
-        Some(parts) => parts.iter().any(|p| {
-            p.as_object().is_some_and(|o| {
-                o.get("type").and_then(Value::as_str) == Some("text")
-                    && match o.get("text") {
-                        None | Some(Value::Null) => false,
-                        Some(Value::String(s)) => !s.is_empty(),
-                        Some(_) => true,
-                    }
-            })
-        }),
-    }
+    let items: Vec<&Value> = match content {
+        Value::Array(a) => a.iter().collect(),
+        Value::Object(o) => o.values().collect(),
+        _ => return false,
+    };
+    let joined: Vec<String> = items
+        .into_iter()
+        .filter_map(Value::as_object)
+        .filter(|o| o.get("type").and_then(Value::as_str) == Some("text"))
+        .map(|o| match o.get("text") {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(s)) => s.clone(),
+            Some(other) => other.to_string(),
+        })
+        .collect();
+    !joined.join("\n").is_empty()
 }
 
 /// Classify one parsed line. `None` = not a JSON object (jq would error or
@@ -348,31 +359,23 @@ fn plan_cuts(entries: &[Entry], live: &[usize], target: u64) -> Vec<Cut> {
     }
     let mut legal = vec![false; n];
     let mut after_comp = vec![false; n];
-    let mut pending: HashSet<String> = HashSet::new();
     let mut seen_comp = false;
+    // Legality is "a user message TRANSLATE emits": no pending-call tracking.
+    // A call/result pair is never split because omp records no user message
+    // between a call and its result (queued steering is parked until the tool
+    // batch ends, pi-agent-core `agent-loop.ts`; a run's unpaired tail is
+    // re-executed before steering is injected), and a call still unanswered
+    // at a user message was abandoned (interrupt/abort) - tracking it as
+    // pending would forbid every later cut. The rule reads only the prefix up
+    // to the candidate, so a decision never changes when lines are appended.
     for (p, &i) in live.iter().enumerate() {
-        let e = &entries[i];
-        if e.kind == Kind::User && pending.is_empty() {
-            legal[p] = true;
-            after_comp[p] = seen_comp;
-            seen_comp = false;
-        }
-        match e.kind {
+        match entries[i].kind {
+            Kind::User => {
+                legal[p] = true;
+                after_comp[p] = seen_comp;
+                seen_comp = false;
+            }
             Kind::Compaction => seen_comp = true,
-            Kind::Assistant => {
-                if !e.aux.is_empty() {
-                    if let Ok(calls) = serde_json::from_str::<Vec<String>>(&e.aux) {
-                        for c in calls {
-                            pending.insert(c);
-                        }
-                    }
-                }
-            }
-            Kind::ToolResult => {
-                if let Ok(id) = serde_json::from_str::<String>(&e.aux) {
-                    pending.remove(&id);
-                }
-            }
             _ => {}
         }
     }
@@ -661,6 +664,12 @@ pub struct Part {
     /// Positions in the live chain: `[lo, hi)`.
     pub lo: usize,
     pub hi: usize,
+    /// The default model for records of this part: the last `model_change` on
+    /// the live chain at or before the part's first entry, else `"omp"`
+    /// (TRANSLATE's `$dmodel` fallback). Unlike the document-level `dmodel`
+    /// (the LAST model_change anywhere) it cannot change when later lines are
+    /// appended, so a frozen part keeps the value it was translated with.
+    pub dmodel: Value,
 }
 
 pub struct PlanResult {
@@ -681,6 +690,20 @@ fn truthy_str(v: &Value) -> Option<String> {
         Value::String(s) => Some(s.clone()),
         other => Some(other.to_string()),
     }
+}
+
+/// TRANSLATE's `$dmodel` over `live[..=upto]`: jq's `last // "omp"` over the
+/// `model_change` models - the LAST one, falling back to `"omp"` when there is
+/// none or that last one is null/false (earlier ones are not consulted).
+fn dmodel_upto(entries: &[Entry], live: &[usize], upto: usize) -> Value {
+    live.iter()
+        .take(upto.saturating_add(1))
+        .rev()
+        .map(|&i| &entries[i])
+        .find(|e| e.kind == Kind::Model)
+        .and_then(|e| serde_json::from_str::<Value>(&e.aux).ok())
+        .filter(|v| !matches!(v, Value::Null | Value::Bool(false)))
+        .unwrap_or_else(|| Value::String("omp".to_string()))
 }
 
 fn read_entry_json(f: &mut File, e: &Entry) -> Option<Value> {
@@ -758,6 +781,7 @@ pub fn plan_file(source: &Path, state_path: &Path, opts: &Opts) -> Result<PlanRe
             reused: false,
             lo: c.start,
             hi: c.end,
+            dmodel: dmodel_upto(&entries, &live, c.start),
         });
     }
 
@@ -826,14 +850,7 @@ pub fn plan_file(source: &Path, state_path: &Path, opts: &Opts) -> Result<PlanRe
         .and_then(|v| v.get("title").and_then(Value::as_str).map(str::to_string))
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let dmodel = live
-        .iter()
-        .rev()
-        .map(|&i| &entries[i])
-        .find(|e| e.kind == Kind::Model)
-        .and_then(|e| serde_json::from_str::<Value>(&e.aux).ok())
-        .filter(|v| !matches!(v, Value::Null | Value::Bool(false)))
-        .unwrap_or_else(|| Value::String("omp".to_string()));
+    let dmodel = dmodel_upto(&entries, &live, live.len().saturating_sub(1));
 
     // 5. persist the checkpoint (derived data: safe to lose).
     let new_stored: Vec<StoredPart> = parts
@@ -894,6 +911,7 @@ pub fn plan_file(source: &Path, state_path: &Path, opts: &Opts) -> Result<PlanRe
                 "end_offset": p.end_offset,
                 "bytes": p.bytes,
                 "cut": p.cut,
+                "dmodel": p.dmodel,
             })
         })
         .collect();
