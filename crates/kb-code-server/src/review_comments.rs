@@ -85,7 +85,26 @@ pub struct ResolvedForPs {
     /// only as trustworthy as its least-certain edge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<&'static str>,
+    /// v0.47 FA — WHY this anchor is orphaned, present iff `orphaned`
+    /// (additive: absent on every resolved row, so a pre-FA reader sees
+    /// byte-identical output for those). One of [`ORPHAN_BLOB_UNREADABLE`]
+    /// (the pinned blob could not be read: path absent at that sha, over the
+    /// size cap, or a git error — a statement about the BLOB, not the
+    /// text), [`ORPHAN_ANCHOR_MISSING`] (the row carries no usable anchor —
+    /// none was ever persisted, or it does not parse), or
+    /// [`ORPHAN_TEXT_CHANGED`] (blob read fine; the stored snippet no longer
+    /// resolves, or resolves to a line that does not carry it). A
+    /// diagnosis, never a verdict: the line is still withheld.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphan_reason: Option<&'static str>,
 }
+
+/// See [`ResolvedForPs::orphan_reason`].
+pub const ORPHAN_BLOB_UNREADABLE: &str = "blob_unreadable";
+/// See [`ResolvedForPs::orphan_reason`].
+pub const ORPHAN_ANCHOR_MISSING: &str = "anchor_missing";
+/// See [`ResolvedForPs::orphan_reason`].
+pub const ORPHAN_TEXT_CHANGED: &str = "text_changed";
 
 /// `annotations::MatchConfidence` -> the wire string [`ResolvedForPs::
 /// confidence`] carries. `pub(crate)` — PRR-R7's `crate::review_github_threads`
@@ -127,7 +146,7 @@ pub fn resolve_for_ps(
 }
 
 /// Same as [`resolve_for_ps`] but takes already-read file text
-/// (`None` = file absent / not valid UTF-8 at that sha → orphaned).
+/// (`None` = blob unreadable at that sha — absent, over the size cap — → orphaned).
 pub fn resolve_for_ps_with_content(
     row: &AnnotationRow,
     target_ps: &ReviewPatchsetRow,
@@ -139,13 +158,14 @@ pub fn resolve_for_ps_with_content(
         sha: sha.to_string(),
     };
     let original = original_from_row(row);
-    let orphaned = |orig: Option<OriginalAnchor>| ResolvedForPs {
+    let orphaned = |orig: Option<OriginalAnchor>, reason: &'static str| ResolvedForPs {
         line: None,
         line_end: None,
         orphaned: true,
         resolved_against: against.clone(),
         original: orig,
         confidence: None,
+        orphan_reason: Some(reason),
     };
 
     // PRR-R3 (design arbitration #6) — a review-scoped, PATH-LESS "general
@@ -161,17 +181,18 @@ pub fn resolve_for_ps_with_content(
             resolved_against: against,
             original: None,
             confidence: None,
+            orphan_reason: None,
         };
     }
 
     let Some(text) = content else {
-        return orphaned(original);
+        return orphaned(original, ORPHAN_BLOB_UNREADABLE);
     };
 
     // A reply has no anchor of its own — callers should not resolve
     // one, but fail closed rather than invent a line.
     if row.parent_id.is_some() || row.anchor.is_none() {
-        return orphaned(original);
+        return orphaned(original, ORPHAN_ANCHOR_MISSING);
     }
 
     // PRR-R3 — a `whole_file` finding's `anchor` column holds the bare
@@ -189,19 +210,20 @@ pub fn resolve_for_ps_with_content(
             resolved_against: against,
             original: None,
             confidence: None,
+            orphan_reason: None,
         };
     }
 
     let Ok(anchor) = serde_json::from_str::<Anchor>(row.anchor.as_deref().unwrap_or("")) else {
-        return orphaned(original);
+        return orphaned(original, ORPHAN_ANCHOR_MISSING);
     };
 
     if row.anchor_kind == annotations::ANCHOR_KIND_RANGE {
         let Some(end_json) = row.anchor2.as_deref() else {
-            return orphaned(original);
+            return orphaned(original, ORPHAN_ANCHOR_MISSING);
         };
         let Ok(end_anchor) = serde_json::from_str::<Anchor>(end_json) else {
-            return orphaned(original);
+            return orphaned(original, ORPHAN_ANCHOR_MISSING);
         };
         let start = annotations::resolve(text, &anchor);
         let end = annotations::resolve(text, &end_anchor);
@@ -210,7 +232,7 @@ pub fn resolve_for_ps_with_content(
             || !line_matches_snippet(text, start.line, snippet_of(&anchor))
             || !line_matches_snippet(text, end.line, snippet_of(&end_anchor))
         {
-            return orphaned(original);
+            return orphaned(original, ORPHAN_TEXT_CHANGED);
         }
         let (lo, hi, _) = annotations::normalize_range(start, end);
         return ResolvedForPs {
@@ -220,12 +242,13 @@ pub fn resolve_for_ps_with_content(
             resolved_against: against,
             original: None,
             confidence: Some(combine_confidence(start.confidence, end.confidence)),
+            orphan_reason: None,
         };
     }
 
     let resolved = annotations::resolve(text, &anchor);
     if resolved.stale || !line_matches_snippet(text, resolved.line, snippet_of(&anchor)) {
-        return orphaned(original);
+        return orphaned(original, ORPHAN_TEXT_CHANGED);
     }
     ResolvedForPs {
         line: Some(resolved.line),
@@ -234,25 +257,76 @@ pub fn resolve_for_ps_with_content(
         orphaned: false,
         resolved_against: against,
         original: None,
+        orphan_reason: None,
     }
+}
+
+/// Why a pinned blob could not be turned into text. Surfaced (not
+/// swallowed) by [`read_blob_text_checked`] so the finding import can say
+/// WHY it could not anchor a line instead of persisting an anchor that can
+/// never re-match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlobReadError {
+    /// The path is not a readable file at that sha (absent, a directory…).
+    PathAbsent,
+    /// Over `DEFAULT_BLOB_SIZE_CAP`.
+    TooLarge,
+    /// Any other git/ODB failure.
+    Unreadable,
+}
+
+impl BlobReadError {
+    /// The wire word (`anchor_warnings[].reason`).
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            BlobReadError::PathAbsent => "path_absent",
+            BlobReadError::TooLarge => "blob_too_large",
+            BlobReadError::Unreadable => "blob_unreadable",
+        }
+    }
+}
+
+/// The ONE decoding policy for review blobs (v0.47 FA): bytes -> text with
+/// `String::from_utf8_lossy`, on BOTH the anchor-build and the resolve
+/// path (both go through [`read_blob_text_checked`]), so they always agree
+/// about what line N says. Before FA a non-UTF-8 file (a Latin-1 script) was
+/// "unreadable": it anchored an empty snippet at import and orphaned at
+/// read. Lossy decoding maps each invalid byte sequence to U+FFFD
+/// deterministically, so the snippet stored at import equals the line text
+/// seen at resolve; the cost is that two files differing only in invalid
+/// bytes can compare equal on a line, which the exact+snippet ladder
+/// already tolerates for any other whitespace-level ambiguity.
+pub(crate) fn decode_blob(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// RS-U4 (S6) — a review read at a patchset sha: the review store first
+/// once it is ready, then the member work tree's ODB
+/// (`GitCtx::read_with_fallback`). Typed failure; see [`BlobReadError`].
+pub(crate) fn read_blob_text_checked(
+    ctx: &GitCtx,
+    path: &str,
+    sha: &str,
+) -> Result<String, BlobReadError> {
+    ctx.read_with_fallback(|root| {
+        let git = GitRepo::open(root.git_path()).map_err(|_| BlobReadError::Unreadable)?;
+        match git.read_blob(sha, path, DEFAULT_BLOB_SIZE_CAP) {
+            Ok(bytes) => Ok(decode_blob(&bytes)),
+            Err(GitError::PathNotFound { .. }) | Err(GitError::NotABlob { .. }) => {
+                Err(BlobReadError::PathAbsent)
+            }
+            Err(GitError::TooLarge { .. }) => Err(BlobReadError::TooLarge),
+            Err(_) => Err(BlobReadError::Unreadable),
+        }
+    })
 }
 
 /// `pub(crate)` — PRR-R3's findings-list route (`crate::review_findings`)
 /// reuses this exact blob read (same per-`(path, sha)` caching convention
-/// as [`build_comment_groups`]) rather than a second copy.
-///
-/// RS-U4 (S6) — a review read at a patchset sha: the review store first
-/// once it is ready, then the member work tree's ODB
-/// (`GitCtx::read_opt_with_fallback`).
+/// as [`build_comment_groups`]) rather than a second copy. `None` = the
+/// blob could not be read (see [`read_blob_text_checked`] for why).
 pub(crate) fn read_blob_text(ctx: &GitCtx, path: &str, sha: &str) -> Option<String> {
-    ctx.read_opt_with_fallback(|root| {
-        let git = GitRepo::open(root.git_path()).ok()?;
-        match git.read_blob(sha, path, DEFAULT_BLOB_SIZE_CAP) {
-            Ok(bytes) => String::from_utf8(bytes).ok(),
-            Err(GitError::PathNotFound { .. }) | Err(GitError::NotABlob { .. }) => None,
-            Err(_) => None,
-        }
-    })
+    read_blob_text_checked(ctx, path, sha).ok()
 }
 
 fn snippet_of(anchor: &Anchor) -> &str {
@@ -296,8 +370,14 @@ pub(crate) fn line_matches_snippet(content: &str, line: u32, snippet: &str) -> b
         return false;
     };
     let trimmed = text.trim();
+    // v0.47 FA — the cap is in CHARS (`anchor_for_line` takes
+    // `.chars().take(DEFAULT_CONTEXT_CHARS)`), so the "was this snippet
+    // capped" test must count chars too: `snippet.len()` is bytes, which
+    // for a long non-ASCII line is > the cap and never took the prefix
+    // branch (a false orphan).
     trimmed == snippet
-        || (snippet.len() == kb_core::review::DEFAULT_CONTEXT_CHARS && trimmed.starts_with(snippet))
+        || (snippet.chars().count() == kb_core::review::DEFAULT_CONTEXT_CHARS
+            && trimmed.starts_with(snippet))
 }
 
 // --- GET /api/reviews/{id}/comments ---------------------------------------
@@ -566,5 +646,38 @@ mod in_diff_caption_tests {
         assert_eq!(in_diff_caption("b.rs", Some(&set)), Some(false));
         assert_eq!(in_diff_caption("a.rs", None), None);
         assert_eq!(in_diff_caption("", None), Some(false));
+    }
+}
+
+#[cfg(test)]
+mod fa_tests {
+    use super::{decode_blob, line_matches_snippet};
+
+    /// The stored snippet is the first DEFAULT_CONTEXT_CHARS *chars* of the
+    /// trimmed line; a long non-ASCII line's snippet is > that many BYTES, so
+    /// the pre-FA `snippet.len() == CAP` test never took the prefix branch.
+    #[test]
+    fn a_capped_non_ascii_snippet_matches_as_a_prefix() {
+        let line = format!("-- {}", "è".repeat(300));
+        let snippet: String = line
+            .trim()
+            .chars()
+            .take(kb_core::review::DEFAULT_CONTEXT_CHARS)
+            .collect();
+        assert!(snippet.len() > kb_core::review::DEFAULT_CONTEXT_CHARS);
+        let content = format!("first\n{line}\nlast\n");
+        assert!(line_matches_snippet(&content, 2, &snippet));
+        // A genuinely different line of the same length still orphans.
+        let other = format!("-- {}", "é".repeat(300));
+        let content = format!("first\n{other}\nlast\n");
+        assert!(!line_matches_snippet(&content, 2, &snippet));
+    }
+
+    #[test]
+    fn decoding_is_total_and_deterministic_for_non_utf8() {
+        let bytes = b"caf\xe9\n";
+        assert!(std::str::from_utf8(bytes).is_err());
+        assert_eq!(decode_blob(bytes), decode_blob(bytes));
+        assert!(decode_blob(bytes).starts_with("caf"));
     }
 }

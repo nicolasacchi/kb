@@ -301,8 +301,13 @@ impl Store {
     /// phase): every `findings` entry is either a brand NEW slug (create,
     /// `origin="import"`), an EXISTING slug present again (refresh volatile
     /// fields, stamp `content_updated_at`, un-supersede — but NEVER touch
-    /// disposition or the annotation's thread/anchor), or truly unchanged
-    /// (skip the write entirely).
+    /// disposition or the annotation's thread), or truly unchanged (skip the
+    /// write entirely). v0.47 FA amends the anchor half of that: an
+    /// import-origin finding whose CITED LOCATION changed (or whose
+    /// annotation has no anchor) gets its anchor re-derived by the caller
+    /// and rewritten here in the same transaction; an unchanged location
+    /// still never touches the anchor, and a finding with `reanchor_json`
+    /// (a human re-anchored it) keeps both its location and its anchor.
     ///
     /// PRR-R1 scope extension (operator-ratified mid-build, human-authored
     /// findings): the supersede step only ever runs under
@@ -320,9 +325,10 @@ impl Store {
     /// `review_findings.author = None` — see [`NewReviewFinding::finding_
     /// author`]'s doc); `ps_number` is the CURRENT (now-latest) patchset new
     /// findings are anchored at — an existing finding's own annotation
-    /// keeps whatever `ps_number`/anchor it was first created with (design
-    /// doc §4.3 point 5: "the annotation's own anchor is NOT eagerly
-    /// rewritten").
+    /// keeps whatever `ps_number`/anchor it was first created with UNLESS
+    /// its cited location changed (design doc §4.3 point 5 said "the
+    /// annotation's own anchor is NOT eagerly rewritten"; v0.47 FA amends
+    /// that to cover only an UNCHANGED location — see above).
     #[allow(clippy::too_many_arguments)]
     pub fn reconcile_findings_import(
         &self,
@@ -513,6 +519,12 @@ pub struct ReviewFindingRow {
     /// The slug that REPLACED this one, when the composing author declared
     /// the supersession. Never inferred.
     pub superseded_by: Option<String>,
+    // --- v0.47 FA (migration V0046) --------------------------------------
+    /// Raw JSON, `None` for a finding no human has re-anchored. PRESENCE is
+    /// the pin — a later import/compose never rewrites the anchor of a
+    /// pinned import finding — and the CONTENT is the audit (`by`, `at`,
+    /// `ps`, `from`). See `V0046__finding_reanchor.sql`.
+    pub reanchor_json: Option<String>,
 }
 
 /// A finding ready to persist — the caller has already: (a) validated
@@ -682,6 +694,22 @@ pub struct DerivedFindingAnchor {
     pub anchor: String,
     pub anchor2: Option<String>,
     pub side: Option<String>,
+}
+
+/// v0.47 FA — the `anchor` value meaning "no anchor could be derived" (the
+/// pinned blob was unreadable, or the cited line is past its end). It is
+/// stored as SQL NULL ([`anchor_column`]) so the resolver reads it as an
+/// honest orphan (`orphan_reason: anchor_missing`) instead of matching an
+/// EMPTY snippet that can never re-match a real line.
+pub const UNANCHORED: &str = "";
+
+/// `anchor` string -> the nullable `annotations.anchor` column.
+pub(crate) fn anchor_column(anchor: &str) -> Option<String> {
+    if anchor.is_empty() {
+        None
+    } else {
+        Some(anchor.to_string())
+    }
 }
 
 pub const SEVERITY_BLOCKER: &str = "blocker";
@@ -909,6 +937,7 @@ fn review_finding_row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewFind
         cites_json: r.get(33)?,
         fingerprint: r.get(34)?,
         superseded_by: r.get(35)?,
+        reanchor_json: r.get(36)?,
     })
 }
 
@@ -920,7 +949,7 @@ const REVIEW_FINDING_COLUMNS: &str = "id, review_id, annotation_id, slug, severi
     content_updated_at, published_state, published_at, published_url,
     superseded, superseded_at, superseded_reason, import_batch_id,
     created_at, updated_at,
-    act, blocking, cites_json, fingerprint, superseded_by";
+    act, blocking, cites_json, fingerprint, superseded_by, reanchor_json";
 
 /// Insert one finding's `annotations` row AND its `review_findings`
 /// sibling, in that order, on an ALREADY-OPEN transaction — shared by
@@ -939,7 +968,7 @@ fn insert_review_finding_on(
         id: annotation_id.clone(),
         repo_id: f.repo_id,
         path: f.location_path.clone(),
-        anchor: Some(f.anchor.clone()),
+        anchor: anchor_column(&f.anchor),
         anchor_kind: f.anchor_kind.clone(),
         anchor2: f.anchor2.clone(),
         parent_id: None,
@@ -1230,6 +1259,24 @@ pub(super) fn reconcile_findings_import_on(
                     outcome.unchanged.push(f.slug.clone());
                     continue;
                 }
+                // v0.47 FA — a finding a human re-anchored by hand keeps the
+                // location the human set: the incoming location (and the
+                // anchor derived from it) is ignored in favour of the row's
+                // own, so claim and anchor can never disagree. Everything
+                // else about the import (severity, prose, …) still refreshes.
+                let pinned_f;
+                let f = if cur.reanchor_json.is_some() {
+                    pinned_f = ImportedFinding {
+                        location_kind: cur.location_kind.clone(),
+                        location_path: cur.location_path.clone(),
+                        location_lines: cur.location_lines.clone(),
+                        location_removed: cur.location_removed,
+                        ..f.clone()
+                    };
+                    &pinned_f
+                } else {
+                    f
+                };
                 let content_changed = cur.severity != f.severity
                     || cur.category != f.category
                     || cur.location_kind != f.location_kind
@@ -1249,7 +1296,50 @@ pub(super) fn reconcile_findings_import_on(
                     // of an untouched v2 finding would clear its fingerprint
                     // and orphan it from the next compose.
                     || (f.fingerprint.is_some() && cur.fingerprint != f.fingerprint);
-                if content_changed || cur.superseded {
+                // v0.47 FA — an import-origin finding's anchor FOLLOWS a
+                // re-import whose cited location changed (path / kind /
+                // lines / side), and is repaired when the annotation has no
+                // anchor at all (the first import could not read the blob).
+                // This AMENDS design §4.3 point 5 ("the annotation's own
+                // anchor is NOT eagerly rewritten"), which was written for
+                // an unchanged claim; for a changed claim the old anchor
+                // describes a line the finding no longer cites, so keeping
+                // it made the finding an orphan forever. A re-import with
+                // the SAME location still never touches the anchor (the
+                // carry-forward ladder keeps resolving it across
+                // patchsets), and a finding a human re-anchored by hand
+                // (`reanchor_json` set) is never rewritten by an import.
+                let location_changed = cur.location_kind != f.location_kind
+                    || cur.location_path != f.location_path
+                    || cur.location_lines != f.location_lines
+                    || cur.location_removed != f.location_removed;
+                let anchor_missing = if cur.reanchor_json.is_none() && !location_changed {
+                    tx.query_row(
+                        "SELECT anchor IS NULL FROM annotations WHERE id = ?1",
+                        params![cur.annotation_id],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .optional()?
+                    .unwrap_or(false)
+                } else {
+                    false
+                };
+                let rewrite_anchor = cur.reanchor_json.is_none()
+                    && (location_changed || (anchor_missing && !f.anchor.is_empty()));
+                if rewrite_anchor {
+                    rewrite_finding_anchor_on(
+                        tx,
+                        &cur.annotation_id,
+                        &f.location_path,
+                        &f.anchor_kind,
+                        anchor_column(&f.anchor).as_deref(),
+                        f.anchor2.as_deref(),
+                        f.side.as_deref(),
+                        ps_number,
+                        now,
+                    )?;
+                }
+                if content_changed || cur.superseded || rewrite_anchor {
                     tx.execute(
                         "UPDATE review_findings SET
                             severity = ?2, category = ?3, location_kind = ?4, location_path = ?5,
@@ -1324,6 +1414,169 @@ pub(super) fn reconcile_findings_import_on(
     }
 
     Ok(outcome)
+}
+
+/// v0.47 FA — rewrite a finding's linked annotation's position (path, anchor
+/// pair, side, bound patchset) in place, on an open transaction. Replies
+/// follow the parent's `path`/`ps_number`/`side` (the scope-binding twin,
+/// `update_annotation_review_scope_on`, moves them together the same way).
+/// `anchor = None` writes NULL — an honest "no anchor" the resolver reads as
+/// an orphan, never an empty snippet.
+#[allow(clippy::too_many_arguments)]
+fn rewrite_finding_anchor_on(
+    tx: &Transaction<'_>,
+    annotation_id: &str,
+    path: &str,
+    anchor_kind: &str,
+    anchor: Option<&str>,
+    anchor2: Option<&str>,
+    side: Option<&str>,
+    ps_number: i64,
+    now: i64,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE annotations SET
+            path = ?2, anchor_kind = ?3, anchor = ?4, anchor2 = ?5,
+            side = ?6, ps_number = ?7, updated_at = ?8
+         WHERE id = ?1",
+        params![
+            annotation_id,
+            path,
+            anchor_kind,
+            anchor,
+            anchor2,
+            side,
+            ps_number,
+            now
+        ],
+    )?;
+    tx.execute(
+        "UPDATE annotations SET path = ?2, side = ?3, ps_number = ?4
+         WHERE parent_id = ?1",
+        params![annotation_id, path, side, ps_number],
+    )?;
+    Ok(())
+}
+
+/// Everything [`Store::reanchor_finding`] writes, derived by the caller (the
+/// route reads the blob and proves the anchor resolves EXACTLY before this
+/// ever runs — the store never does git I/O).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FindingReanchorWrite {
+    pub location_kind: String,
+    pub location_path: String,
+    pub location_lines: Option<String>,
+    pub location_removed: bool,
+    pub anchor_kind: String,
+    pub anchor: String,
+    pub anchor2: Option<String>,
+    pub side: Option<String>,
+    /// The patchset the anchor was re-derived against; becomes the
+    /// annotation's `ps_number` (the ps it is now "raised against").
+    pub ps_number: i64,
+    pub by: String,
+}
+
+/// Outcome of [`Store::reanchor_finding`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FindingReanchorOutcome {
+    /// `(review_id, slug)` does not exist.
+    NotFound,
+    /// The finding's linked annotation is an ADOPTED human comment
+    /// (`intent != finding`) — moving its anchor would move a human's own
+    /// comment, which is not this verb's to do.
+    AdoptedComment,
+    Done(Box<ReviewFindingRow>),
+}
+
+impl Store {
+    /// v0.47 FA — an explicit, human re-anchor, ONE transaction: rewrite the
+    /// finding's `location_*`, its annotation's anchor/path/side/ps binding
+    /// and (replies follow), and stamp `reanchor_json` (the pin + audit:
+    /// by, at, ps, and the `from` location read INSIDE the transaction so it
+    /// is what was actually replaced). Never touches disposition,
+    /// publication, severity or prose.
+    pub fn reanchor_finding(
+        &self,
+        review_id: i64,
+        slug: &str,
+        w: &FindingReanchorWrite,
+        now: i64,
+    ) -> Result<FindingReanchorOutcome> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let cur: Option<ReviewFindingRow> = tx
+            .query_row(
+                &format!(
+                    "SELECT {REVIEW_FINDING_COLUMNS} FROM review_findings
+                     WHERE review_id = ?1 AND slug = ?2"
+                ),
+                params![review_id, slug],
+                review_finding_row_from,
+            )
+            .optional()?;
+        let Some(cur) = cur else {
+            return Ok(FindingReanchorOutcome::NotFound);
+        };
+        let (intent, from_ps): (String, Option<i64>) = tx.query_row(
+            "SELECT intent, ps_number FROM annotations WHERE id = ?1",
+            params![cur.annotation_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if intent != crate::annotations::INTENT_FINDING {
+            return Ok(FindingReanchorOutcome::AdoptedComment);
+        }
+        let from_lines: Option<serde_json::Value> = cur
+            .location_lines
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
+        let audit = serde_json::json!({
+            "by": w.by,
+            "at": now,
+            "ps": w.ps_number,
+            "from": {
+                "path": cur.location_path,
+                "kind": cur.location_kind,
+                "lines": from_lines,
+                "removed": cur.location_removed,
+                "ps": from_ps,
+            },
+        })
+        .to_string();
+        rewrite_finding_anchor_on(
+            &tx,
+            &cur.annotation_id,
+            &w.location_path,
+            &w.anchor_kind,
+            anchor_column(&w.anchor).as_deref(),
+            w.anchor2.as_deref(),
+            w.side.as_deref(),
+            w.ps_number,
+            now,
+        )?;
+        tx.execute(
+            "UPDATE review_findings SET
+                location_kind = ?2, location_path = ?3, location_lines = ?4,
+                location_removed = ?5, reanchor_json = ?6, updated_at = ?7
+             WHERE id = ?1",
+            params![
+                cur.id,
+                w.location_kind,
+                w.location_path,
+                w.location_lines,
+                w.location_removed as i64,
+                audit,
+                now
+            ],
+        )?;
+        let row = tx.query_row(
+            &format!("SELECT {REVIEW_FINDING_COLUMNS} FROM review_findings WHERE id = ?1"),
+            params![cur.id],
+            review_finding_row_from,
+        )?;
+        tx.commit()?;
+        Ok(FindingReanchorOutcome::Done(Box::new(row)))
+    }
 }
 
 // ── V73-K1: kbc-review/1 — the review document, the slug ledger ─────────
