@@ -690,6 +690,45 @@ for final in none normal signal; do
   fi
 done
 
+# 11c2. The marker follows the RESOLVED chain, as legacy does: an exit on an
+#       abandoned branch, or one at/before the last /clear, is never carried.
+compare_legacy() { # <label> : S/SID already built
+  hook_fg
+  cat_parts >"$TMPROOT/parts.cat"
+  nparts="$(n_parts)"
+  rm -rf "${KB_SESSIONS_DIR:?}" "${KB_CAPTURE_LOCKS:?}"; mkdir -p "$KB_SESSIONS_DIR"
+  KB_CAPTURE_SEGMENTS=0 hook_fg
+  pre_of "$(html_of "$SID")" | jq -c 'del(.sessionId)' >"$TMPROOT/legacy.cat"
+  nm="$(grep -c '\[session-exit\]' "$TMPROOT/parts.cat" || true)"
+  nl="$(grep -c '\[session-exit\]' "$TMPROOT/legacy.cat" || true)"
+  if cmp -s "$TMPROOT/parts.cat" "$TMPROOT/legacy.cat" && [ "$nm" = "$nl" ] && [ "$nparts" -ge 2 ]; then
+    ok "$1: $nparts parts carry exactly the legacy marker count ($nm) and equal the single-capture translation record for record"
+  else
+    bad "$1: parts=$nparts markers parts=$nm legacy=$nl, records $(wc -l <"$TMPROOT/parts.cat") vs $(wc -l <"$TMPROOT/legacy.cat")"
+  fi
+}
+fresh
+python3 "$GEN" create "$S" "$SID" 40 --blob 300
+python3 "$GEN" exit "$S" sigterm --parent t00010r # a dead-end branch, never continued
+python3 "$GEN" append "$S" 30 --blob 300 --parent t00040r
+compare_legacy "a session_exit on an abandoned branch is not a marker"
+fresh
+python3 "$GEN" create "$S" "$SID" 20 --blob 300
+python3 "$GEN" exit "$S" sigterm # omp writes it on exit; the session is resumed...
+python3 "$GEN" append "$S" 10 --blob 300
+python3 "$GEN" reset "$S" # ...then /clear
+python3 "$GEN" append "$S" 30 --blob 300
+compare_legacy "a mid-session session_exit before a /clear is not a marker"
+fresh
+python3 "$GEN" create "$S" "$SID" 20 --blob 300
+python3 "$GEN" reset "$S"
+python3 "$GEN" append "$S" 10 --blob 300
+python3 "$GEN" exit "$S" sigterm # after the /clear, on the chain: carried by the tail
+python3 "$GEN" append "$S" 30 --blob 300
+python3 "$GEN" exit "$S" sigterm
+python3 "$GEN" append "$S" 5 --blob 300
+compare_legacy "a session_exit after the /clear on the chain still follows legacy"
+
 # ---------------------------------------------------------------------------
 # 11d. A part that was PARKED in the spool but never landed has no table row:
 #      when the chain shrinks (rewind, /clear) its spool item and its .parts
@@ -723,6 +762,48 @@ for shrink_to in 3 25; do
     bad "ghost part after shrink to $nexp part(s): parked=$parked spool_left=$spool_left ghosts='$ghost_ids' stale_dirs='$stale_dirs' corpus=$(part_ids | tr '\n' ' ')"
   fi
 done
+
+# 11d2. A parked part that ANOTHER session's replay publishes has no landed
+#       row; the chain then shrinks to one part: the published part must go.
+#      (the replay is `kb sessions capture --replay-spool`: it needs the REAL engine)
+if [ -n "$REAL_KB" ] && "$REAL_KB" sessions capture --help 2>&1 | grep -q -- '--stamp'; then
+  fresh
+  python3 "$GEN" create "$S" "$SID" 60 --blob 300
+  : >"$KB_FAIL_FLAG"
+  hook_fg
+  rm -f "$KB_FAIL_FLAG"
+  OTHER="5e600000-0000-4000-8000-0000000000fe"
+  OS="$TMPROOT/work/2026-08-24T10-00-00-000Z_$OTHER.jsonl"
+  python3 "$GEN" create "$OS" "$OTHER" 2 --blob 100
+  hook_input "$OS" "$OTHER" | KB_REAL_CAPTURE=1 bash "$CAPTURE" >/dev/null 2>&1
+  published="$(part_ids | grep -c -E -- "^$SID-p" || true)"
+  python3 "$GEN" create "$S" "$SID" 3 --blob 300
+  rm -f "$KB_CAPTURE_LOCKS"/*.done
+  hook_fg
+  ghosts="$(part_ids | grep -E -- "^$SID-p" | tr '\n' ' ')"
+  if [ "$published" -ge 1 ] && [ -z "$ghosts" ]; then
+    ok "a part published by another session's replay (no landed row) is dropped when the chain shrinks to one part (published: $published)"
+  else
+    bad "published-parked part survived the shrink: published=$published ghosts='$ghosts' corpus=$(part_ids | tr '\n' ' ')"
+  fi
+else
+  echo "skip - this kb has no 'sessions capture --stamp': the published-parked scenario did not run"
+fi
+
+# 11d3. A planner checkpoint temp left by a SIGKILL is swept at the next pass.
+fresh
+python3 "$GEN" create "$S" "$SID" 40 --blob 300
+hook_fg
+planf="$(ls "$KB_CAPTURE_LOCKS"/*.plan 2>/dev/null | head -1)"
+if [ -n "$planf" ]; then
+  : >"$planf.tmp4242"
+  python3 "$GEN" append "$S" 1 --blob 300
+  hook_fg
+  [ ! -e "$planf.tmp4242" ] && ok "a planner checkpoint temp (<plan>.tmp<pid>) left by a kill is swept at the next pass" \
+    || bad "stale planner temp survived: $(ls "$KB_CAPTURE_LOCKS" | tr '\n' ' ')"
+else
+  bad "no planner checkpoint found to seed the sweep test ($(ls "$KB_CAPTURE_LOCKS" | tr '\n' ' '))"
+fi
 
 # ---------------------------------------------------------------------------
 # 11e. Flag switching segmented -> legacy -> segmented: the legacy path lands

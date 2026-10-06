@@ -329,13 +329,22 @@ registering anywhere `kb-memory` is already installed. Design:
     on the first meta; if TRANSLATE is ever edited so one no longer applies the
     script warns and falls back, it never drifts). More work than one pass may
     do re-runs passes (the coalescing loop) until caught up; nothing is
-    recorded as done until every part is landed. A catch-up that outlasts the
+    recorded as done until every part is landed. A part is never started with 15 s or less of the pass deadline left (the pass
+    then lands nothing and the next one continues; stderr says so). A catch-up that outlasts the
     caller's own timeout (`KB_CAPTURE_TIMEOUT_MS`, 120 s in `kb-omp.ts`) is cut
     by it like any capture and RESUMES at the next trigger: progress is
     persisted per landed part, never restarted.
   - **Landed means rc 0**: the script's own table (`<lock-base>.seg`: part,
     id, input key) is committed tmp+rename after each part that landed with rc
-    0, so `kill -9` mid catch-up loses at most the part in flight. A part that
+    0, so `kill -9` mid catch-up loses at most the part in flight. A WRITE-AHEAD
+    table (`<lock-base>.seg.pend`) records every continuation part just before
+    its landing is attempted and drops the row once the landed row exists: a
+    part that was parked in the spool and published by ANOTHER session's replay,
+    or that landed right before a `kill -9`, has no landed row but is still
+    found by a later shrink/fork. Orphan drops are driven by these two tables
+    only: if both are lost, or a `drop-part` fails, the part stays in the corpus
+    until the next change (the session fails open with stale parts, never loses
+    data). A part that
     converted but landed with rc 1 (spooled) or 2 (lost) keeps its converted
     files (`<lock-base>.parts/NN/`, private dir) and the retry lands them
     without converting again. A frozen part's key is (first id, last id, entry
@@ -373,11 +382,16 @@ registering anywhere `kb-memory` is already installed. Design:
     purged too when the chain shrinks - its spool item and `.parts/NN` cache go
     at the start of the pass, so another session's spool replay can never
     publish it as a ghost.
-  - **`[session-exit]`**: legacy emits ONE marker, for the session's final
-    `session_exit`. Only the live tail emits it (taking the last exit from the
-    earlier parts, cached in `<lock-base>.exit`, when the tail has none); a
-    frozen part never does, so an exit followed by a resume cannot leave a
-    stale marker behind. A part whose own exit entry is later superseded is not
+  - **`[session-exit]`**: legacy emits ONE marker, for the last
+    `session_exit` of the RESOLVED chain (the leaf chain after the last
+    `/clear`). Only the live tail emits it: its own last exit, else the last
+    exit of the earlier parts that is on the planner's chain (`--print-chain`;
+    candidates are cached in `<lock-base>.exits` and re-checked against the
+    chain every pass), so an exit on an abandoned branch, or one at/before a
+    `/clear`, is never carried - exactly legacy. A frozen part never emits it,
+    so an exit followed by a resume cannot leave a stale marker behind. If the
+    planner cannot answer the chain query the tail is not converted (fail
+    closed, retried next pass). A part whose own exit entry is later superseded is not
     re-landed, because it never carried one.
   - **A failed plan**: when `segment-plan` fails for a session larger than the
     target nothing is captured (fail closed - a corrupt `<lock-base>.plan` is
@@ -400,12 +414,20 @@ registering anywhere `kb-memory` is already installed. Design:
     carry the raw id and resolve to part 1 (read-time widening in the daemon);
     turning the flag off for a session that is already segmented makes the next
     capture re-land the WHOLE session under the bare id over part 1 and leave the
-    `-pNN` parts in place; turning it back on re-lands part 1 small at the next
+    `-pNN` parts in place - and since those parts still carry
+    `segmentOf`/`segmentIdx`, chain-grouped readers (`recover --chain`, logical
+    event sums) DOUBLE-COUNT their content until segmentation is re-enabled (the
+    parts are then re-landed disjoint again; the same applies when `segment-plan`
+    is unavailable after a segmented run); turning it back on re-lands part 1 small at the next
     capture that has something to do (the legacy path forgets part 1's table
     row; an unchanged session waits for its next change);
     the per-part default model is exact at part boundaries only (a
     `model_change` inside a part does not change records of that part that
-    carry no model of their own - real omp assistant messages carry theirs); a subagent that keeps writing re-converts and re-lands
+    carry no model of their own - real omp assistant messages carry theirs).
+    This makes the output differ from legacy BY DESIGN for records without a
+    model of their own (legacy applies the chain-global LAST `model_change` to
+    them, compaction and exit records included; a part uses the model in force
+    at its start, which is the more accurate of the two); a subagent that keeps writing re-converts and re-lands
     its part on every pass.
   Tests: `tests/test-capture-omp-segments.sh` (run by `hook_shell.rs`, against
   the real planner and `drop-part`; with an older kb it uses

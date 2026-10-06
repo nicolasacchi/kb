@@ -770,8 +770,19 @@ cap_seg_target() {
 # ISO timestamp of the source line starting at byte offset $2 of $1 (empty when
 # it carries none). Reads one line, never the file.
 cap_iso_at() {
-  tail -c +"$(($2 + 1))" -- "$1" 2>/dev/null | head -n 1 \
-    | jq -r '(.timestamp // (.message.timestamp | if type == "number" then (. / 1000 | todate) else empty end)) // empty' 2>/dev/null
+  capt tail -c +"$(($2 + 1))" -- "$1" 2>/dev/null | capt head -n 1 \
+    | capt jq -r '(.timestamp // (.message.timestamp | if type == "number" then (. / 1000 | todate) else empty end)) // empty' 2>/dev/null
+}
+# Same, run as a tracked background job - NOT inside $(...), which would defer
+# a TERM behind a cold read; the answer is left in CAP_ISO.
+CAP_ISO=""
+cap_iso_bg() {
+  CAP_ISO=""
+  if [ -z "${CAP_RUN:-}" ]; then CAP_ISO="$(cap_iso_at "$@")"; return 0; fi
+  cap_bg cap_iso_at "$@" >"$CAP_RUN/iso.out"
+  read -r CAP_ISO <"$CAP_RUN/iso.out" 2>/dev/null || true
+  rm -f "$CAP_RUN/iso.out"
+  return 0
 }
 cap_epoch_of() { [ -n "$1" ] && date -u -d "$1" +%s 2>/dev/null; }
 
@@ -780,23 +791,55 @@ cap_part_id() { if [ "$2" -le 1 ]; then printf '%s' "$1"; else printf '%s-p%02d'
 # The raw id a part id belongs to (strips one trailing -p<digits>).
 cap_part_raw() { if [[ "$1" =~ ^(.+)-p[0-9]+$ ]]; then printf '%s' "${BASH_REMATCH[1]}"; else printf '%s' "$1"; fi; }
 
-# The last session_exit entry BEFORE byte offset $2 of $1 (the live tail's
-# start), as one JSON line (empty when none). Incremental: `<base>.exit` caches
-# the scanned offset and the last exit found, so each pass reads only the bytes
-# frozen since (a shrunk source rescans from 0).
+# The session_exit candidates in bytes [$2, $3) of $1, one compact JSON object
+# per line. Every external stage is capped by the pass deadline (capt) and the
+# pipeline runs under cap_bg, so a TERM is not deferred behind a cold read.
+cap_exit_scan() { # <src> <from> <to>
+  capt tail -c +"$(($2 + 1))" -- "$1" 2>/dev/null | capt head -c "$(($3 - $2))" \
+    | capt grep -a -E '"customType": ?"session_exit"' \
+    | capt jq -c 'select(.type == "custom" and .customType == "session_exit" and (.id | type) == "string")' 2>/dev/null
+}
+
+# The session_exit of the RESOLVED chain that legacy would carry, among the
+# bytes BEFORE offset $2 of $1 (the live tail's start), as one JSON line (empty
+# when none). Legacy reads only $live - the leaf chain after the last
+# reset_boundary - so a raw `last exit in the file` is wrong for an exit on an
+# abandoned branch or at/before a /clear. Candidates (every exit seen, newest
+# 64) are cached incrementally in `<base>.exits` (scanned offset, then one
+# candidate per line; a shrunk source rescans from 0); chain membership and
+# order come from the planner (`--print-chain`, only when a candidate exists).
+# Needs $plan/$target/$tpath from the caller. rc 0 ok, 1 failed (the part must
+# not be converted with a guessed marker).
 cap_seg_last_exit() { # <tpath> <upto> <base>
-  local src="$1" upto="$2" cf="$3.exit" off=0 last="" cached found
+  local src="$1" upto="$2" cf="$3.exits" off=0 cached
+  local cand="$CAP_RUN/exit.cand" new="$CAP_RUN/exit.new" chain="$CAP_RUN/exit.chain" want last src_rc
+  : >"$cand"
   cached="$(head -n 1 "$cf" 2>/dev/null)"
-  case "$cached" in '' | *[!0-9]*) ;; *) off="$cached"; last="$(sed -n 2p "$cf" 2>/dev/null)" ;; esac
-  [ "$off" -le "$upto" ] || { off=0; last=""; }
+  case "$cached" in '' | *[!0-9]*) ;; *) off="$cached"; tail -n +2 "$cf" >"$cand" 2>/dev/null ;; esac
+  if [ "$off" -gt "$upto" ]; then off=0; : >"$cand"; fi
   if [ "$off" -lt "$upto" ]; then
-    found="$(tail -c +"$((off + 1))" -- "$src" 2>/dev/null | head -c "$((upto - off))" \
-      | grep -a -E '"customType": ?"session_exit"' \
-      | jq -c 'select(.type == "custom" and .customType == "session_exit")' 2>/dev/null | tail -n 1)"
-    [ -n "$found" ] && last="$found"
-    printf '%s\n%s\n' "$upto" "$last" >"$cf.$$" 2>/dev/null && mv -f "$cf.$$" "$cf" 2>/dev/null
+    cap_bg cap_exit_scan "$src" "$off" "$upto" >"$new"
+    local sts=$?
+    cap_fatal_rc "$sts" && return 1
+    cat "$new" >>"$cand" 2>/dev/null
+    rm -f "$new"
+    tail -n 64 "$cand" >"$cand.t" 2>/dev/null && mv -f "$cand.t" "$cand"
+    { printf '%s\n' "$upto"; cat "$cand"; } >"$cf.$$" 2>/dev/null && mv -f "$cf.$$" "$cf" 2>/dev/null
   fi
-  printf '%s' "$last"
+  [ -s "$cand" ] || return 0
+  cap_bg capt kb sessions segment-plan --source "$src" --state "$plan" --target-bytes "$target" \
+    --adapter-ver "$CAP_SEG_VER" --print-chain --no-write >"$chain" 2>/dev/null
+  src_rc=$?
+  if [ "$src_rc" -ne 0 ]; then rm -f "$chain" "$cand"; return 1; fi
+  want="$CAP_RUN/exit.want"
+  jq -r '.id' "$cand" >"$want" 2>/dev/null
+  last="$(jq -r '.chain_ids[]?' "$chain" 2>/dev/null \
+    | awk 'NR == FNR { w[$0] = 1; next } ($0 in w) { l = $0 } END { print l }' "$want" -)"
+  rm -f "$chain" "$want"
+  [ -n "$last" ] || { rm -f "$cand"; return 0; }
+  jq -c --arg id "$last" 'select(.id == $id)' "$cand" 2>/dev/null | tail -n 1
+  rm -f "$cand"
+  return 0
 }
 
 # Room in the private spool for one more parked part of this session?
@@ -833,7 +876,8 @@ cap_seg_convert() {
   local emitexit=false xexit=null
   if [ "$k" -eq "$n" ]; then
     emitexit=true
-    xexit="$(cap_seg_last_exit "$tpath" "${STARTS[$n]}" "$base")"
+    xexit="$(cap_seg_last_exit "$tpath" "${STARTS[$n]}" "$base")" \
+      || { rm -rf -- "${d:?}"; rm -f "$raw"; return 1; }
     [ -n "$xexit" ] || xexit=null
   fi
   cap_trace "convert part=$k state=${STATES[$k]}"
@@ -897,7 +941,10 @@ cap_seg_convert() {
 cap_seg_do_part() {
   local k="$1" pid="${PIDS[$1]}" d stamp iso rc=0 crc
   d="${pdir:?}/$(printf '%02d' "$k")"
-  [ $((CAP_HARD - SECONDS)) -gt 15 ] || return 4
+  if [ $((CAP_HARD - SECONDS)) -le 15 ]; then
+    echo "kb-capture-omp.sh: under 15 s of the pass deadline left - part $k of ${rawsid:-the session} waits for the next pass" >&2
+    return 4
+  fi
   if [ "$(cat "$d/key" 2>/dev/null)" != "${KEYS[$k]}" ] || [ ! -s "$d/transcript.jsonl" ]; then
     cap_seg_convert "$k"
     crc=$?
@@ -910,10 +957,16 @@ cap_seg_do_part() {
   if [ "$k" -le 1 ]; then
     stamp="$cts"
   else
-    iso="$(cap_iso_at "$tpath" "${STARTS[$k]}")"
+    cap_iso_bg "$tpath" "${STARTS[$k]}"
+    iso="$CAP_ISO"
     stamp="$(date -u -d "$iso" +%Y%m%dT%H%M%SZ 2>/dev/null)"
     [ -n "$stamp" ] || stamp="$cts"
   fi
+  # Write-ahead: from here on the part may reach the corpus WITHOUT a landed
+  # row (parked in the spool and published by ANOTHER session's replay, or
+  # kill -9 between the landing and the row). `<base>.seg.pend` remembers it so
+  # a later shrink/fork still finds it; the landed row replaces it on success.
+  [ "$k" -le 1 ] || cap_tab_set "$pend" "$k" "$pid" "${KEYS[$k]}"
   hook_deadline_init
   cap_bg hook_adapter_land "$pid" "$d/transcript.jsonl" "${cwd:-unknown}" "$stamp" omp || rc=$?
   cap_trace "land part=$k rc=$rc"
@@ -929,6 +982,7 @@ cap_seg_do_part() {
   fi
   if [ "$rc" -eq 0 ]; then
     cap_tab_set "$tab" "$k" "$pid" "${KEYS[$k]}"
+    cap_tab_del "$pend" "$k"
     rm -rf -- "${d:?}"
     return 0
   fi
@@ -962,26 +1016,30 @@ cap_seg_purge_local() { # <keep idx count> [raw id]
 # count; 1 = every continuation part) through `kb sessions drop-part`. A row is
 # removed only when kb confirmed. rc 0 = nothing left.
 cap_seg_drop_orphans() { # <keep idx count>
-  local keep="$1" i pid raw left=0
+  local keep="$1" i pid raw left=0 t
   cap_seg_purge_local "$keep"
-  for i in $(cap_tab_idxs "$tab"); do
-    [ "$i" -gt "$keep" ] || continue
-    pid="$(cap_tab_pid "$tab" "$i")"
-    raw="$(cap_part_raw "$pid")"
-    if [ "$i" -le 1 ] || [ "$raw" = "$pid" ]; then cap_tab_del "$tab" "$i"; continue; fi
-    if capt kb sessions drop-part --help >/dev/null 2>&1; then
-      if cap_bg capt kb sessions drop-part --session-id "$pid" --segment-of "$raw" --out "$KB_SESSIONS_DIR" >/dev/null 2>&1; then
-        cap_trace "drop part=$i"
-        hook_spool_drop "$pid"
-        rm -rf -- "${pdir:?}/$(printf '%02d' "$i")"
-        cap_tab_del "$tab" "$i"
+  # The landed table AND the write-ahead one (parts that may have reached the
+  # corpus without a landed row).
+  for t in "$tab" "$pend"; do
+    for i in $(cap_tab_idxs "$t"); do
+      [ "$i" -gt "$keep" ] || continue
+      pid="$(cap_tab_pid "$t" "$i")"
+      raw="$(cap_part_raw "$pid")"
+      if [ "$i" -le 1 ] || [ "$raw" = "$pid" ]; then cap_tab_del "$t" "$i"; continue; fi
+      if capt kb sessions drop-part --help >/dev/null 2>&1; then
+        if cap_bg capt kb sessions drop-part --session-id "$pid" --segment-of "$raw" --out "$KB_SESSIONS_DIR" >/dev/null 2>&1; then
+          cap_trace "drop part=$i"
+          hook_spool_drop "$pid"
+          rm -rf -- "${pdir:?}/$(printf '%02d' "$i")"
+          cap_tab_del "$t" "$i"
+        else
+          left=1
+        fi
       else
+        cap_seg_warn "this kb has no 'sessions drop-part', so superseded parts stay in the corpus"
         left=1
       fi
-    else
-      cap_seg_warn "this kb has no 'sessions drop-part', so superseded parts stay in the corpus"
-      left=1
-    fi
+    done
   done
   [ "$left" -eq 0 ]
 }
@@ -989,7 +1047,7 @@ cap_seg_drop_orphans() { # <keep idx count>
 # The session now fits in ONE part again (a /clear): after the single-capture
 # path re-landed the bare id in place, drop every stale continuation part.
 cap_seg_reset() { # <lock-base>
-  local tab="$1.seg" pdir="$1.parts"
+  local tab="$1.seg" pend="$1.seg.pend" pdir="$1.parts"
   cap_seg_drop_orphans 1 || true
   cap_tab_del "$tab" 1
   return 0
@@ -1003,7 +1061,7 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
   [ -n "$base" ] || return 9
   cap_run_init
   [ -n "$CAP_RUN" ] || return 9
-  local plan="$base.plan" tab="$base.seg" pdir="$base.parts" planj="$CAP_RUN/plan.json"
+  local plan="$base.plan" tab="$base.seg" pend="$base.seg.pend" pdir="$base.parts" planj="$CAP_RUN/plan.json"
   local target prc n rawsid title i tkey
   target="$(cap_seg_target "$base")"
   cap_bg capt kb sessions segment-plan --source "$tpath" --state "$plan" --target-bytes "$target" \
@@ -1047,7 +1105,10 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
   local sdir="${tpath%.jsonl}" f s j
   local -a EP=()
   if [ -d "$sdir" ] && compgen -G "$sdir/*.jsonl" >/dev/null 2>&1; then
-    for ((j = 2; j <= n; j++)); do EP[$j]="$(cap_epoch_of "$(cap_iso_at "$tpath" "${STARTS[$j]}")")"; done
+    for ((j = 2; j <= n; j++)); do
+      cap_iso_bg "$tpath" "${STARTS[$j]}"
+      EP[$j]="$(cap_epoch_of "$CAP_ISO")"
+    done
     for f in "$sdir"/*.jsonl; do
       [ -f "$f" ] || continue
       s="$(cap_epoch_of "$(head -n 1 -- "$f" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null)")"
@@ -1068,7 +1129,7 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
   # A chain that shrank (rewind, /clear): a parked part beyond the new count
   # must never be replayed, whatever else happens in this pass.
   cap_seg_purge_local "$n" "$rawsid"
-  rm -f "$base".seg.tmp.* "$base".done.[0-9]* "$base".exit.[0-9]* 2>/dev/null
+  rm -f "$base".seg.tmp.* "$base".seg.pend.tmp.* "$base".done.[0-9]* "$base".exits.[0-9]* "$base".exit.[0-9]* "$plan".tmp* 2>/dev/null
   local timedout="" landed=0 failed=0 stop="" per="${KB_CAPTURE_SEG_FREEZE_PER_PASS:-4}" frozen_done=0 rc
   local -a NEED=()
   for ((i = n; i >= 1; i--)); do
