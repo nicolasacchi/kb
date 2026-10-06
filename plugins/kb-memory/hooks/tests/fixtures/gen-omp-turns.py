@@ -4,6 +4,8 @@
   gen-omp-turns.py create FILE SID TURNS [--blob N] [--model M] [--writes K]
   gen-omp-turns.py append FILE TURNS [--parent ID] [--tag T] [--blob N]
   gen-omp-turns.py reset  FILE            (append a reset_boundary on the leaf)
+  gen-omp-turns.py exit   FILE KIND       (append a session_exit custom entry on the leaf;
+                                           the next append continues the chain after it)
 
 A turn is: user message -> assistant (text + toolCall) -> tool_execution_start
 -> toolResult, one genuine id/parentId chain. Every `--writes`-th turn calls a
@@ -86,6 +88,14 @@ def main():
         leaf = [e for e in ents if e.get("id")][-1]["id"]
         with open(path, "a") as f:
             f.write(json.dumps({"type": "reset_boundary", "id": "rb%s" % leaf, "parentId": leaf, "timestamp": iso(99999)}) + "\n")
+    elif cmd == "exit":
+        path, kind = a[1], a[2]
+        ents = read(path)
+        leaf = [e for e in ents if e.get("id")][-1]["id"]
+        with open(path, "a") as f:
+            f.write(json.dumps({"type": "custom", "customType": "session_exit", "id": "xit%s" % leaf,
+                                "parentId": leaf, "timestamp": iso(50000 + len(ents)),
+                                "data": {"kind": kind, "pendingToolCalls": []}}) + "\n")
     else:
         sys.exit("usage")
 

@@ -319,7 +319,7 @@ registering anywhere `kb-memory` is already installed. Design:
     overrides it for tests) takes the single-capture path byte for byte (pinned
     against a golden made by the pre-segmentation script).
   - **One pass**, under the same per-session lock, coalescing, watchdog and
-    hard deadline as above: the planner (`kb sessions segment-plan`, state next
+    hard deadline as above (the deadline bounds each PASS; a multi-pass catch-up is bounded only by the caller's timeout): the planner (`kb sessions segment-plan`, state next
     to the lock state in the private lock dir) cuts the chain at legal user
     boundaries; the LIVE TAIL lands first (the session is searchable at once);
     then up to 4 FROZEN parts, oldest first (`KB_CAPTURE_SEG_FREEZE_PER_PASS`),
@@ -354,7 +354,7 @@ registering anywhere `kb-memory` is already installed. Design:
     boundary re-lands the changed parts in place (same ids) and drops the parts
     the chain no longer reaches through `kb sessions drop-part` (verifies the
     file really is that part, then removes it so the daemon's own delete
-    cascade clears its rows - this script never removes a corpus file); a
+    cascade clears its rows - this script never removes a corpus file; the verb itself does unlink the verified file, since kb has no delete route for sessions); a
     `/clear` that leaves the session in one part re-lands the bare id in place
     and drops every `-pNN`. omp is NOT strictly append-only apart from the
     title slot: its session manager rewrites the whole file for
@@ -368,7 +368,23 @@ registering anywhere `kb-memory` is already installed. Design:
     results keeps the same ids, so the already-landed parts are kept as they
     were captured (fuller than omp's pruned file) but byte offsets and
     therefore cut points shift, so the next plan can differ and re-land parts
-    from the first changed cut on (bounded: 4 frozen parts per pass).
+    from the first changed cut on (bounded: 4 frozen parts per pass). A
+    part that was only PARKED in the spool (never landed, so no table row) is
+    purged too when the chain shrinks - its spool item and `.parts/NN` cache go
+    at the start of the pass, so another session's spool replay can never
+    publish it as a ghost.
+  - **`[session-exit]`**: legacy emits ONE marker, for the session's final
+    `session_exit`. Only the live tail emits it (taking the last exit from the
+    earlier parts, cached in `<lock-base>.exit`, when the tail has none); a
+    frozen part never does, so an exit followed by a resume cannot leave a
+    stale marker behind. A part whose own exit entry is later superseded is not
+    re-landed, because it never carried one.
+  - **A failed plan**: when `segment-plan` fails for a session larger than the
+    target nothing is captured (fail closed - a corrupt `<lock-base>.plan` is
+    safe to delete); only a session that fits one target falls back to the
+    single-capture path. A landing that returns 0 but leaves no capture file is
+    treated as a failure (not recorded, no re-landing loop); a pass that ran
+    out of time with nothing landed does not re-run.
   - **Size safety**: a translated part over 40 MiB (`KB_CAPTURE_SEG_MAX_PART_BYTES`)
     is never landed oversized or truncated; the raw target is halved (the
     planner has ONE target, so it is per session, kept in `<lock-base>.target`)
@@ -384,7 +400,12 @@ registering anywhere `kb-memory` is already installed. Design:
     carry the raw id and resolve to part 1 (read-time widening in the daemon);
     turning the flag off for a session that is already segmented makes the next
     capture re-land the WHOLE session under the bare id over part 1 and leave the
-    `-pNN` parts in place; a subagent that keeps writing re-converts and re-lands
+    `-pNN` parts in place; turning it back on re-lands part 1 small at the next
+    capture that has something to do (the legacy path forgets part 1's table
+    row; an unchanged session waits for its next change);
+    the per-part default model is exact at part boundaries only (a
+    `model_change` inside a part does not change records of that part that
+    carry no model of their own - real omp assistant messages carry theirs); a subagent that keeps writing re-converts and re-lands
     its part on every pass.
   Tests: `tests/test-capture-omp-segments.sh` (run by `hook_shell.rs`, against
   the real planner and `drop-part`; with an older kb it uses

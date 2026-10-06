@@ -581,7 +581,7 @@ unset KB_CAPTURE_SEG_MAX_PART_BYTES KB_CAPTURE_SEG_MIN_TARGET
 fresh
 python3 "$GEN" create "$S" "$SID" 60 --blob 300
 mkdir -p "$KB_CAPTURE_SPOOL"
-for i in 30 31 32 33 34 35 36 37; do
+for i in 02 03 04 05 06 07 08 09; do
   printf 'session_id=%s-p%s\n' "$SID" "$i" >"$KB_CAPTURE_SPOOL/$SID-p$i.meta"
   printf '{}\n' >"$KB_CAPTURE_SPOOL/$SID-p$i.jsonl"
 done
@@ -652,6 +652,131 @@ if [ -n "$REAL_KB" ] && "$REAL_KB" sessions capture --help 2>&1 | grep -q -- '--
   unset KB_REAL_CAPTURE
 else
   echo "skip - this kb has no 'sessions capture --stamp': the real-engine scenario did not run"
+fi
+
+# ---------------------------------------------------------------------------
+# 11c. The [session-exit] marker: legacy emits at most ONE, for the FINAL
+#      session_exit. A stale non-normal exit in an earlier part (the session
+#      resumed afterwards) must never become a marker of its own.
+exit_chain() { # <final kind or none>
+  python3 "$GEN" create "$S" "$SID" 12 --blob 300
+  python3 "$GEN" exit "$S" signal
+  python3 "$GEN" append "$S" 14 --blob 300
+  python3 "$GEN" exit "$S" signal
+  python3 "$GEN" append "$S" 14 --blob 300
+  case "$1" in none) ;; *) python3 "$GEN" exit "$S" "$1" ;; esac
+}
+cat_parts() { # records of every part, continuation metas dropped, sessionId stripped
+  local id f
+  for id in $(part_ids); do
+    f="$(html_of "$id")"
+    if [ "$id" = "$SID" ]; then pre_of "$f"; else pre_of "$f" | tail -n +2; fi
+  done | jq -c 'del(.sessionId)'
+}
+for final in none normal signal; do
+  fresh
+  exit_chain "$final"
+  hook_fg
+  cat_parts >"$TMPROOT/parts.cat"
+  rm -rf "${KB_SESSIONS_DIR:?}" "${KB_CAPTURE_LOCKS:?}"; mkdir -p "$KB_SESSIONS_DIR"
+  KB_CAPTURE_SEGMENTS=0 hook_fg
+  pre_of "$(html_of "$SID")" | jq -c 'del(.sessionId)' >"$TMPROOT/legacy.cat"
+  nm="$(grep -c '\[session-exit\]' "$TMPROOT/parts.cat" || true)"
+  nl="$(grep -c '\[session-exit\]' "$TMPROOT/legacy.cat" || true)"
+  if cmp -s "$TMPROOT/parts.cat" "$TMPROOT/legacy.cat" && [ "$nm" = "$nl" ]; then
+    ok "session_exit (final=$final): the parts carry exactly the legacy marker count ($nm) and equal the single-capture translation record for record"
+  else
+    bad "session_exit (final=$final): markers parts=$nm legacy=$nl, records $(wc -l <"$TMPROOT/parts.cat") vs $(wc -l <"$TMPROOT/legacy.cat")"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# 11d. A part that was PARKED in the spool but never landed has no table row:
+#      when the chain shrinks (rewind, /clear) its spool item and its .parts
+#      cache must still go, or a later replay publishes the ghost.
+for shrink_to in 3 25; do
+  fresh
+  python3 "$GEN" create "$S" "$SID" 60 --blob 300
+  : >"$KB_FAIL_FLAG"
+  hook_fg
+  rm -f "$KB_FAIL_FLAG"
+  parked="$(ls "$KB_CAPTURE_SPOOL"/*.meta 2>/dev/null | wc -l | tr -d ' ')"
+  python3 "$GEN" create "$S" "$SID" "$shrink_to" --blob 300
+  nexp="$(kb sessions segment-plan --source "$S" --state "$TMPROOT/plan.probe" --target-bytes "$KB_CAPTURE_SEGMENT_BYTES" \
+    --adapter-ver probe --no-write 2>/dev/null | jq -r '.parts | length')"
+  rm -f "$TMPROOT/plan.probe"
+  hook_fg
+  # an unrelated session landing replays whatever the spool still holds
+  OTHER="5e600000-0000-4000-8000-0000000000ff"
+  OS="$TMPROOT/work/2026-08-24T10-00-00-000Z_$OTHER.jsonl"
+  python3 "$GEN" create "$OS" "$OTHER" 2 --blob 100
+  hook_input "$OS" "$OTHER" | bash "$CAPTURE" >/dev/null 2>&1
+  spool_left="$(grep -l -- "session_id=$SID-p" "$KB_CAPTURE_SPOOL"/*.meta 2>/dev/null | wc -l | tr -d ' ')"
+  ghost_ids=""
+  for g in $(part_ids | grep -E -- "^$SID-p"); do
+    [ "$((10#${g##*-p}))" -gt "$nexp" ] && ghost_ids="$ghost_ids $g"
+  done
+  stale_dirs="$(ls -d "$KB_CAPTURE_LOCKS"/*.parts/* 2>/dev/null | awk -F/ -v n="$nexp" '{ if ($NF + 0 > n) print }')"
+  if [ "$parked" -ge 1 ] && [ "$spool_left" = 0 ] && [ -z "$ghost_ids" ] && [ -z "$stale_dirs" ]; then
+    ok "a parked-never-landed part is dropped when the chain shrinks to $nexp part(s) (parked before: $parked): no spool item, no .parts cache, no ghost published by another session's replay"
+  else
+    bad "ghost part after shrink to $nexp part(s): parked=$parked spool_left=$spool_left ghosts='$ghost_ids' stale_dirs='$stale_dirs' corpus=$(part_ids | tr '\n' ' ')"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# 11e. Flag switching segmented -> legacy -> segmented: the legacy path lands
+#      the WHOLE session over part 1; re-enabling must re-land part 1 small.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+hook_fg
+seg_size="$(stat -c %s "$(html_of "$SID")")"
+python3 "$GEN" append "$S" 1 --blob 300
+KB_CAPTURE_SEGMENTS=0 hook_fg
+whole_size="$(stat -c %s "$(html_of "$SID")")"
+python3 "$GEN" append "$S" 2 --blob 300
+hook_fg
+back_size="$(stat -c %s "$(html_of "$SID")")"
+if [ "$whole_size" -gt $((seg_size * 3)) ] && [ "$back_size" -le $((seg_size + seg_size / 4)) ] \
+  && ! pre_of "$(html_of "$SID")" | grep -q 'TURN-t00060'; then
+  ok "segmented -> legacy -> segmented: part 1 is re-landed small again ($seg_size -> $whole_size -> $back_size bytes), not left as the whole session"
+else
+  bad "flag switch: part 1 sizes seg=$seg_size legacy=$whole_size re-enabled=$back_size"
+fi
+
+# ---------------------------------------------------------------------------
+# 11f. A landing that returns 0 but leaves no capture file is a failure: no
+#      row recorded and no endless coalescing re-pass.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+KB_ORIG_FAKE="$FAKE_CAPTURE_KB"
+cat >"$TMPROOT/nofile-kb.sh" <<'NF'
+#!/usr/bin/env bash
+[ "${1:-}" = "sessions" ] && [ "${2:-}" = "capture" ] && { echo x >>"$KB_NOFILE_COUNT"; exit 0; }
+exec bash "$KB_ORIG_FAKE" "$@"
+NF
+export KB_ORIG_FAKE KB_NOFILE_COUNT="$TMPROOT/nofile-count"
+export FAKE_CAPTURE_KB="$TMPROOT/nofile-kb.sh"
+rm -f "$KB_NOFILE_COUNT"
+SECONDS=0
+hook_fg
+export FAKE_CAPTURE_KB="$KB_ORIG_FAKE"
+if [ "$(tab_rows)" = 0 ] && [ "$(wc -l <"$KB_NOFILE_COUNT" 2>/dev/null || echo 0)" -le 2 ] && [ "$SECONDS" -lt 30 ]; then
+  ok "a landing that returns 0 without writing a capture is a failure: nothing recorded, the pass stops (no re-landing loop)"
+else
+  bad "no-file landing: rows=$(tab_rows) landings=$(wc -l <"$KB_NOFILE_COUNT" 2>/dev/null) secs=$SECONDS"
+fi
+
+# ---------------------------------------------------------------------------
+# 11g. Out of time with nothing landed must not spin the coalescing loop.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+SECONDS=0
+KB_CAPTURE_HARD_SECS=10 hook_fg
+if [ "$SECONDS" -lt 20 ]; then
+  ok "a hard deadline too short to convert anything ends the run (no busy re-plan loop)"
+else
+  bad "short hard deadline looped for $SECONDS s"
 fi
 
 # ---------------------------------------------------------------------------

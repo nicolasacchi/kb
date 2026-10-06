@@ -696,18 +696,26 @@ cap_seg_warn() {
 #   $dmodel   -> the planner's per-part value (stable under appends)
 #   $sid      -> the part id (parts k>=2 only; part 1 keeps the header id)
 #   adapter-meta gains $segmeta ({segmentOf, segmentIdx, rawSessionId})
+#   $exit     -> only the live tail emits the [session-exit] marker
 cap_seg_build_programs() {
-  local t="$TRANSLATE" a b c ra rb rc
+  local t="$TRANSLATE" a b c d ra rb rc rd
   shopt -u patsub_replacement 2>/dev/null
   a='(if ($hdr.id // "") != "" then $hdr.id else ($es[0].id // "unknown") end) as $sid |'
   b='($live | map(select(.type == "model_change") | .model) | last // "omp") as $dmodel |'
   c='+ (if $ttitle != "" then {aiTitle: $ttitle} else {} end)),'
+  d='($live | map(select(.type == "custom" and .customType == "session_exit")) | last) as $exit |'
+  # Legacy emits ONE [session-exit], for the session's LAST exit, at the very
+  # end: only the live tail may emit it (falling back to the last exit found
+  # in the earlier parts, $xexit), never a frozen part.
+  rd='(if $emitexit then ((($live | map(select(.type == "custom" and .customType == "session_exit")) | last) // $xexit)) else null end) as $exit |'
   ra='($psid) as $sid |'
   rb='($pdmodel) as $dmodel |'
   rc='+ (if $ttitle != "" then {aiTitle: $ttitle} else {} end) + $segmeta),'
   case "$t" in *"$a"*) ;; *) return 1 ;; esac
   case "$t" in *"$b"*) ;; *) return 1 ;; esac
   case "$t" in *"$c"*) ;; *) return 1 ;; esac
+  case "$t" in *"$d"*) ;; *) return 1 ;; esac
+  t="${t/"$d"/$rd}"
   CAP_SEG_P1="${t/"$b"/$rb}"
   t="$CAP_SEG_P1"
   t="${t/"$a"/$ra}"
@@ -772,6 +780,25 @@ cap_part_id() { if [ "$2" -le 1 ]; then printf '%s' "$1"; else printf '%s-p%02d'
 # The raw id a part id belongs to (strips one trailing -p<digits>).
 cap_part_raw() { if [[ "$1" =~ ^(.+)-p[0-9]+$ ]]; then printf '%s' "${BASH_REMATCH[1]}"; else printf '%s' "$1"; fi; }
 
+# The last session_exit entry BEFORE byte offset $2 of $1 (the live tail's
+# start), as one JSON line (empty when none). Incremental: `<base>.exit` caches
+# the scanned offset and the last exit found, so each pass reads only the bytes
+# frozen since (a shrunk source rescans from 0).
+cap_seg_last_exit() { # <tpath> <upto> <base>
+  local src="$1" upto="$2" cf="$3.exit" off=0 last="" cached found
+  cached="$(head -n 1 "$cf" 2>/dev/null)"
+  case "$cached" in '' | *[!0-9]*) ;; *) off="$cached"; last="$(sed -n 2p "$cf" 2>/dev/null)" ;; esac
+  [ "$off" -le "$upto" ] || { off=0; last=""; }
+  if [ "$off" -lt "$upto" ]; then
+    found="$(tail -c +"$((off + 1))" -- "$src" 2>/dev/null | head -c "$((upto - off))" \
+      | grep -a -E '"customType": ?"session_exit"' \
+      | jq -c 'select(.type == "custom" and .customType == "session_exit")' 2>/dev/null | tail -n 1)"
+    [ -n "$found" ] && last="$found"
+    printf '%s\n%s\n' "$upto" "$last" >"$cf.$$" 2>/dev/null && mv -f "$cf.$$" "$cf" 2>/dev/null
+  fi
+  printf '%s' "$last"
+}
+
 # Room in the private spool for one more parked part of this session?
 cap_seg_spool_room() { # <raw id> <part id>
   local dir cap="${KB_CAPTURE_SEG_SPOOL_MAX:-8}"
@@ -803,15 +830,23 @@ cap_seg_convert() {
   [ "$erc" -eq 0 ] && edited="$(cat "$CAP_RUN/edited.json" 2>/dev/null)"
   [ -n "$edited" ] || edited='[]'
   dm="${DMS[$k]}"
+  local emitexit=false xexit=null
+  if [ "$k" -eq "$n" ]; then
+    emitexit=true
+    xexit="$(cap_seg_last_exit "$tpath" "${STARTS[$n]}" "$base")"
+    [ -n "$xexit" ] || xexit=null
+  fi
   cap_trace "convert part=$k state=${STATES[$k]}"
   if [ "$k" -le 1 ]; then
     snapsid="$sid"
-    cap_bg capt jq -c -s --arg file "$tpath" --argjson pdmodel "$dm" "$CAP_SEG_P1" "$raw" >"$tmp" 2>/dev/null
+    cap_bg capt jq -c -s --arg file "$tpath" --argjson pdmodel "$dm" \
+      --argjson emitexit "$emitexit" --argjson xexit "$xexit" "$CAP_SEG_P1" "$raw" >"$tmp" 2>/dev/null
   else
     snapsid="$pid"
     segj="$(jq -n -c --arg of "$rawsid" --argjson idx "$k" '{segmentOf: $of, segmentIdx: $idx, rawSessionId: $of}')"
     cap_bg capt jq -c -s --arg file "$tpath" --arg psid "$pid" --argjson pdmodel "$dm" \
-      --argjson segmeta "$segj" "$CAP_SEG_PN" "$raw" >"$tmp" 2>/dev/null
+      --argjson segmeta "$segj" \
+      --argjson emitexit "$emitexit" --argjson xexit "$xexit" "$CAP_SEG_PN" "$raw" >"$tmp" 2>/dev/null
   fi
   trc=$?
   rm -f "$raw"
@@ -885,6 +920,13 @@ cap_seg_do_part() {
   if [ "$rc" -eq 1 ] && [ -d "$d/$pid/subagents" ]; then
     hook_spool_put_sidecars "$pid" "$d/$pid/subagents" || true
   fi
+  # A landing that reports success but leaves no capture file is a failure
+  # (kb missing, an engine that wrote elsewhere): never recorded, and it must
+  # not keep the coalescing loop re-landing the same parts.
+  if [ "$rc" -eq 0 ] && ! cap_capture_exists "$pid"; then
+    echo "kb-capture-omp.sh: landing part $k of $rawsid reported success but no capture file exists - not recorded" >&2
+    rc=1
+  fi
   if [ "$rc" -eq 0 ]; then
     cap_tab_set "$tab" "$k" "$pid" "${KEYS[$k]}"
     rm -rf -- "${d:?}"
@@ -893,11 +935,35 @@ cap_seg_do_part() {
   return 1
 }
 
+# Forget every LOCAL trace of continuation parts beyond index $1: spool items
+# (a part parked after a failed landing has NO table row, and the next landing
+# of any session replays the spool - a stale part would be published as a
+# ghost) and the converted-part caches. Needs $tab/$pdir from the caller.
+cap_seg_purge_local() { # <keep idx count> [raw id]
+  local keep="$1" raw="${2:-${rawsid:-${sid:-}}}" id k d
+  [ -n "$raw" ] || return 0
+  if declare -F hook_spool_group_ids >/dev/null 2>&1; then
+    while IFS= read -r id; do
+      [ -n "$id" ] && [ "$id" != "$raw" ] || continue
+      [[ "$id" =~ ^.+-p([0-9]+)$ ]] || continue
+      k=$((10#${BASH_REMATCH[1]}))
+      if [ "$k" -gt "$keep" ]; then hook_spool_drop "$id"; cap_trace "purge spool part=$k"; fi
+    done < <(hook_spool_group_ids "$raw")
+  fi
+  for d in "${pdir:?}"/[0-9][0-9]*; do
+    [ -d "$d" ] || continue
+    k=$((10#$(basename "$d")))
+    [ "$k" -gt "$keep" ] && rm -rf -- "${d:?}"
+  done
+  return 0
+}
+
 # Drop the continuation parts the table holds beyond index $1 (the new part
 # count; 1 = every continuation part) through `kb sessions drop-part`. A row is
 # removed only when kb confirmed. rc 0 = nothing left.
 cap_seg_drop_orphans() { # <keep idx count>
   local keep="$1" i pid raw left=0
+  cap_seg_purge_local "$keep"
   for i in $(cap_tab_idxs "$tab"); do
     [ "$i" -gt "$keep" ] || continue
     pid="$(cap_tab_pid "$tab" "$i")"
@@ -924,7 +990,6 @@ cap_seg_drop_orphans() { # <keep idx count>
 # path re-landed the bare id in place, drop every stale continuation part.
 cap_seg_reset() { # <lock-base>
   local tab="$1.seg" pdir="$1.parts"
-  [ -s "$tab" ] || return 0
   cap_seg_drop_orphans 1 || true
   cap_tab_del "$tab" 1
   return 0
@@ -1000,7 +1065,11 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
   fi
 
   mkdir -p "$pdir" 2>/dev/null && chmod 700 "$pdir" 2>/dev/null
-  local landed=0 failed=0 stop="" per="${KB_CAPTURE_SEG_FREEZE_PER_PASS:-4}" frozen_done=0 rc
+  # A chain that shrank (rewind, /clear): a parked part beyond the new count
+  # must never be replayed, whatever else happens in this pass.
+  cap_seg_purge_local "$n" "$rawsid"
+  rm -f "$base".seg.tmp.* "$base".done.[0-9]* "$base".exit.[0-9]* 2>/dev/null
+  local timedout="" landed=0 failed=0 stop="" per="${KB_CAPTURE_SEG_FREEZE_PER_PASS:-4}" frozen_done=0 rc
   local -a NEED=()
   for ((i = n; i >= 1; i--)); do
     if [ "$(cap_tab_get "$tab" "$i")" != "${KEYS[$i]}" ] || ! cap_capture_exists "${PIDS[$i]}"; then
@@ -1025,11 +1094,12 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
     rc=$?
     case "$rc" in
       0) landed=$((landed + 1)); frozen_done=$((frozen_done + 1)) ;;
-      4) CAP_MORE=1; stop=1 ;; # out of time: progress is on disk, go again
+      4) timedout=1; stop=1 ;; # out of time: progress is on disk, go again (only if something landed)
       5) stop=1 ;;
       *) failed=1 ;;
     esac
   done
+  [ -n "$timedout" ] && [ "$landed" -gt 0 ] && CAP_MORE=1
   # Another pass only after progress (a landing, or a re-plan after halving):
   # a failing kb must never spin the coalescing loop.
   if [ "$failed" -ne 0 ] || { [ "$landed" -eq 0 ] && [ -z "$stop" ]; }; then CAP_MORE=""; fi
@@ -1183,6 +1253,11 @@ capture_pass() {
   # was just re-landed in place, so the continuation parts are stale.
   if [ "$rc" -eq 0 ] && [ -n "$CAP_SEG_SINGLE" ] && [ -n "$base" ]; then
     cap_seg_reset "$base"
+  elif [ "$rc" -eq 0 ] && [ -n "$base" ] && [ -s "$base.seg" ]; then
+    # The legacy path (segmentation off, or unusable) just landed the WHOLE
+    # session over part 1: part 1 is no longer what the table says. Forget its
+    # row so re-enabling re-lands it small (the -pNN parts stay as landed).
+    cap_tab_del "$base.seg" 1
   fi
   [ "$rc" -eq 0 ]
 }

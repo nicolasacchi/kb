@@ -327,6 +327,23 @@ hook_spool_count_group() {
   ' "$dir"/*.meta 2>/dev/null || printf '0'
 }
 
+# hook_spool_group_ids <raw-session-id>
+# The session ids (one per line) of every spool item of ONE segmented session:
+# the bare raw id and each `<raw id>-p<NN>`; same matching as
+# hook_spool_count_group (the `session_id=` first line of each .meta).
+hook_spool_group_ids() {
+  local dir
+  dir="$(hook_spool_dir)" || return 0
+  awk -v raw="$1" '
+    FNR == 1 {
+      want = "session_id=" raw
+      if ($0 == want) print substr($0, 12)
+      else if (index($0, want "-p") == 1 && substr($0, length(want) + 3) ~ /^[0-9]+$/) print substr($0, 12)
+    }
+  ' "$dir"/*.meta 2>/dev/null
+  return 0
+}
+
 # hook_short_hash <string> - first 8 hex of sha256 (cksum fallback).
 hook_short_hash() {
   if command -v sha256sum >/dev/null 2>&1; then
