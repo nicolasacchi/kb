@@ -290,7 +290,7 @@ fn a_call_result_pair_is_never_split_by_a_non_hard_cut() {
     g.user(200); // u1
     g.call("c1", 240);
     g.result("c1", 200);
-    g.assistant(100);
+    g.assistant(200);
     let u2 = g.user(200);
     g.assistant(800);
     let fx = Fx::new();
@@ -353,7 +353,7 @@ fn an_unanswered_call_followed_by_a_user_message_leaves_a_legal_cut() {
     g2.user(200);
     g2.call("c2", 240);
     g2.result("c2", 200);
-    g2.assistant(100);
+    g2.assistant(200);
     g2.user(200);
     g2.assistant(800);
     let fx2 = Fx::new();
