@@ -1362,8 +1362,12 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
       *) failed=1; : >"$base.tailfail" 2>/dev/null ;;
     esac
   fi
+  # A frozen part that fails (a landing killed at its cap) is skipped for the
+  # rest of the pass and counts against the per-pass budget: it must never
+  # block the parts behind it, nor the tail.
+  local tailbad="$failed"
   for ((i = 1; i < n; i++)); do
-    [ "$failed" -eq 0 ] && [ -z "$stop" ] || break
+    [ "$tailbad" -eq 0 ] && [ -z "$stop" ] || break
     [ -n "${NEED[$i]:-}" ] || continue
     if [ "$frozen_done" -ge "$per" ]; then CAP_MORE=1; frozen_left=1; break; fi
     cap_seg_do_part "$i"
@@ -1372,10 +1376,13 @@ cap_seg_pass() { # <tpath> <sid> <cwd> <base> <cts> <fp>
       0) landed=$((landed + 1)); frozen_done=$((frozen_done + 1)) ;;
       4 | 6) timedout=1; stop=1 ;; # out of time: progress is on disk, go again (only if something landed)
       5) stop=1 ;;
-      *) failed=1 ;;
+      *) failed=1; frozen_done=$((frozen_done + 1)) ;;
     esac
   done
-  if [ -n "${NEED[$n]:-}" ] && [ -z "$did_tail" ] && [ "$failed" -eq 0 ] && [ -z "$stop" ] && [ -z "$frozen_left" ]; then
+  # In frozen-first mode the tail is attempted once even when the frozen
+  # budget ran out or a frozen part failed (it is the tip of the session).
+  if [ -n "${NEED[$n]:-}" ] && [ -z "$did_tail" ] && [ "$tailbad" -eq 0 ] && [ -z "$stop" ] \
+    && { [ -z "$frozen_left" ] || [ -n "$FREEZE_FIRST" ]; }; then
     cap_seg_do_part "$n"
     rc=$?
     case "$rc" in

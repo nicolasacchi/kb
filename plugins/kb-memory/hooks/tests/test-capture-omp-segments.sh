@@ -136,6 +136,7 @@ if [ "${1:-}" = "sessions" ]; then
         [ "$prev" = "--transcript" ] && t="$a"
         prev="$a"
       done
+      if [ -n "${KB_FAIL_SID_SUFFIX:-}" ]; then case "$sid" in *"$KB_FAIL_SID_SUFFIX") exit 1 ;; esac; fi
       if [ -n "${KB_REAL_CAPTURE:-}" ]; then exec "$REAL_KB" "$@"; fi
       if [ -n "$t" ]; then
         n=$(($(cat "$KB_CALLS" 2>/dev/null || echo 0) + 1)); echo "$n" >"$KB_CALLS"
@@ -1117,18 +1118,36 @@ fi
 : >"$KB_CAPTURE_TRACE"
 KB_CAPTURE_LAND_MAX_SECS=21 KB_CAPTURE_LAND_BYTES_PER_SEC=1000 hook_fg
 firstland="$(grep '^land' "$KB_CAPTURE_TRACE" | head -1 | sed 's/ rc=.*//; s/land part=//')"
-if [ "$(n_parts)" = $((Nl - 1)) ] && [ "$firstland" = 1 ] && [ -z "$(html_of "$(pid_of "$Nl")")" ]; then
-  ok "after a failed tail the next pass is frozen-first: all $((Nl - 1)) frozen parts landed (first landing: part $firstland), the tail is retried last"
+if [ "$(n_parts)" = 4 ] && [ "$firstland" = 1 ] && [ -z "$(html_of "$(pid_of "$Nl")")" ] && grep -q "^land part=$Nl " "$KB_CAPTURE_TRACE"; then
+  ok "after a failed tail the next pass is frozen-first (4 frozen parts, first landing: part $firstland) and the tail is still retried once"
 else
   bad "frozen-first after a failed tail: parts=$(n_parts) (want $((Nl - 1))) first landing=$firstland ($(grep -E '^land' "$KB_CAPTURE_TRACE" | tr '\n' ' ' | cut -c1-300))"
 fi
 export KB_CAP_SLEEP_OVER=2000 KB_CAP_SLEEP=2
-KB_CAPTURE_LAND_BYTES_PER_SEC=1000 hook_fg
+for _r in 1 2 3 4; do KB_CAPTURE_LAND_BYTES_PER_SEC=1000 hook_fg; done
 unset KB_CAP_SLEEP_OVER KB_CAP_SLEEP
 if [ "$(n_parts)" = "$Nl" ] && [ "$(tab_rows)" = "$Nl" ] && [ "$(ls "$KB_CAPTURE_LOCKS" | grep -c tailfail)" = 0 ]; then
   ok "the tail lands on the following trigger and the failure marker is cleared"
 else
   bad "tail did not recover: parts=$(n_parts) rows=$(tab_rows) marker=$(ls "$KB_CAPTURE_LOCKS" | grep -c tailfail)"
+fi
+
+# 13f. A stuck FROZEN part must not starve the parts behind it nor the tail:
+#      tail fails once (tailfail written), then one frozen part fails on every
+#      capture. Every later pass still lands the other frozen parts and the tail.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+touch "$KB_FAIL_FLAG"; hook_fg; rm -f "$KB_FAIL_FLAG"
+Nf="$(n_parts)"
+if [ "$Nf" = 0 ] && ls "$KB_CAPTURE_LOCKS" | grep -q tailfail; then :; else bad "13f setup: tail failure did not leave the marker (parts=$Nf)"; fi
+export KB_FAIL_SID_SUFFIX=-p03
+for _r in 1 2 3 4 5 6; do hook_fg; done
+unset KB_FAIL_SID_SUFFIX
+if [ -n "$(html_of "$(pid_of 1)")" ] && [ -n "$(html_of "$(pid_of 2)")" ] && [ -z "$(html_of "$(pid_of 3)")" ] \
+  && [ -n "$(html_of "$(pid_of 4)")" ] && [ "$(tab_rows)" -ge 5 ] && [ -z "$(ls "$KB_CAPTURE_LOCKS" | grep tailfail)" ]; then
+  ok "a permanently failing frozen part (3) does not block parts behind it or the tail (tab rows=$(tab_rows), tailfail cleared)"
+else
+  bad "frozen failure starved the rest: parts=$(n_parts) rows=$(tab_rows) marker=$(ls "$KB_CAPTURE_LOCKS" | grep -c tailfail)"
 fi
 
 # ---------------------------------------------------------------------------
