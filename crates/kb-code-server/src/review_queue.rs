@@ -821,6 +821,7 @@ mod tests {
             cites_json: None,
             fingerprint: None,
             superseded_by: None,
+            reanchor_json: None,
         }
     }
 

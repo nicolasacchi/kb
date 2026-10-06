@@ -1201,6 +1201,24 @@ async fn findings_mutation_routes_404_for_non_loopback() {
         "DELETE .../disposition must 404 a non-loopback caller"
     );
 
+    // v0.47 FA — re-anchor is a review mutation on the same gate.
+    let resp = client
+        .post(format!(
+            "{base}/api/reviews/{id}/findings/f-target/reanchor"
+        ))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .json(&serde_json::json!({
+            "location": {"path": "order.rb", "kind": "single", "lines": [4]},
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        404,
+        "POST .../reanchor must 404 a non-loopback caller"
+    );
+
     // Nothing above actually wrote — the finding stays undecided.
     let listed = list_findings(&client, &base, id, &[]).await;
     let f = finding_by_slug(&listed, "f-target");
@@ -1208,6 +1226,8 @@ async fn findings_mutation_routes_404_for_non_loopback() {
         f["disposition"].is_null(),
         "every 404'd mutation above must have left the finding untouched"
     );
+    assert!(f.get("reanchor").is_none(), "{f}");
+    assert_eq!(f["location"]["lines"], serde_json::json!([3]));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1622,4 +1642,936 @@ async fn replying_to_a_whole_file_finding_is_created_not_500() {
     assert_eq!(st, reqwest::StatusCode::OK, "{text}");
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["anchor_kind"], "whole_file", "{v}");
+}
+
+// --- v0.47 FA: finding anchors follow re-imports; explicit re-anchor --------
+
+/// `fixture_repo()` plus extra files committed on the feature branch (raw
+/// bytes, so a non-UTF-8 fixture is possible).
+fn fixture_repo_with(files: &[(&str, &[u8])]) -> tempfile::TempDir {
+    let tmp = fixture_repo();
+    let dir = tmp.path();
+    for (name, bytes) in files {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "extra fixtures"]);
+    tmp
+}
+
+fn finding_at(slug: &str, path: &str, line: i64) -> serde_json::Value {
+    serde_json::json!({
+        "slug": slug,
+        "severity": "concern",
+        "category": "Style",
+        "location": { "path": path, "kind": "single", "lines": [line] },
+        "title": format!("finding {slug}"),
+        "rationale": "Spotted on review.",
+    })
+}
+
+async fn post_reanchor(
+    client: &reqwest::Client,
+    base: &str,
+    id: i64,
+    slug: &str,
+    body: &serde_json::Value,
+) -> (reqwest::StatusCode, String, serde_json::Value) {
+    let resp = client
+        .post(format!("{base}/api/reviews/{id}/findings/{slug}/reanchor"))
+        .json(body)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    let body = resp.json().await.unwrap();
+    (status, ctype, body)
+}
+
+/// ROOT CAUSE (the reported bug): a finding first imported with a wrong
+/// location (here: past EOF) and re-imported with the CORRECT lines kept its
+/// stale anchor forever and read as orphaned. The re-import must now
+/// re-derive the anchor of an import-origin finding whose location changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reimport_with_corrected_lines_repairs_a_stale_anchor() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    // First import cites line 99 — past EOF of the 6-line order.rb.
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-a", "order.rb", 99)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_eq!(
+        finding_by_slug(&listed, "f-a")["resolution"]["orphaned"],
+        true
+    );
+
+    // Re-import with the corrected line.
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-a", "order.rb", 3)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["updated"], serde_json::json!(["f-a"]), "{body}");
+    assert_eq!(body["anchor_warnings"], serde_json::json!([]), "{body}");
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
+    assert_eq!(fa["resolution"]["line"], 3, "{fa}");
+    assert_eq!(fa["resolution"]["confidence"], "exact", "{fa}");
+
+    // An UNCHANGED-location re-import never touches the anchor (the
+    // carry-forward ladder keeps owning it): still resolved, `unchanged`.
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-a", "order.rb", 3)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["unchanged"], serde_json::json!(["f-a"]), "{body}");
+}
+
+/// A past-EOF / missing-path citation is reported per slug
+/// (`anchor_warnings`), the finding is still imported as an honest orphan
+/// with a stated reason, and NO empty-snippet anchor is persisted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unanchorable_citations_warn_per_slug_and_store_no_empty_anchor() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [
+                finding_at("f-eof", "order.rb", 99),
+                finding_at("f-gone", "nope/missing.rb", 1),
+                finding_at("f-ok", "order.rb", 3),
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["created"],
+        serde_json::json!(["f-eof", "f-gone", "f-ok"]),
+        "an imprecise citation never fails the batch"
+    );
+    let warnings = body["anchor_warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2, "{body}");
+    let by_slug = |slug: &str| {
+        warnings
+            .iter()
+            .find(|w| w["slug"] == slug)
+            .unwrap_or_else(|| panic!("no warning for {slug}: {body}"))
+    };
+    assert_eq!(by_slug("f-eof")["kind"], "anchor_unreadable");
+    assert_eq!(by_slug("f-eof")["reason"], "line_past_eof");
+    assert_eq!(by_slug("f-gone")["reason"], "path_absent");
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let eof = finding_by_slug(&listed, "f-eof");
+    assert_eq!(eof["resolution"]["orphaned"], true);
+    assert_eq!(
+        eof["resolution"]["orphan_reason"], "anchor_missing",
+        "no anchor was stored, so the orphan says so (not text_changed)"
+    );
+    assert_eq!(eof["location"]["lines"], serde_json::json!([99]));
+    let gone = finding_by_slug(&listed, "f-gone");
+    assert_eq!(gone["resolution"]["orphan_reason"], "blob_unreadable");
+    let ok = finding_by_slug(&listed, "f-ok");
+    assert_eq!(ok["resolution"]["orphaned"], false);
+    assert!(
+        ok["resolution"].get("orphan_reason").is_none(),
+        "orphan_reason is absent on a resolved row (additive wire)"
+    );
+}
+
+/// A non-UTF-8 (Latin-1) source file anchors and resolves: both paths decode
+/// the blob with the one lossy policy, so the snippet stored at import is
+/// the line text compared at read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_latin1_lua_file_anchors_and_resolves() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let lua: &[u8] = b"-- caf\xe9 module\nlocal M = {}\nM.name = \"\xe9t\xe9\"\nreturn M\n";
+    assert!(lua.contains(&0xe9), "fixture must carry a non-UTF-8 byte");
+    let repo_tmp = fixture_repo_with(&[("legacy.lua", lua)]);
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-lua", "legacy.lua", 3)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["anchor_warnings"], serde_json::json!([]), "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let f = finding_by_slug(&listed, "f-lua");
+    assert_eq!(f["resolution"]["orphaned"], false, "{f}");
+    assert_eq!(f["resolution"]["line"], 3, "{f}");
+}
+
+/// A long (> 200 char) NON-ASCII line: the stored snippet is the first 200
+/// CHARS; the resolver compared its BYTE length against the CHAR cap, never
+/// took the prefix branch, and false-orphaned it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_non_ascii_line_resolves() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let long: String = format!("-- {}\n", "è".repeat(250));
+    let content = format!("local a = 1\n{long}local b = 2\n");
+    let repo_tmp = fixture_repo_with(&[("long.lua", content.as_bytes())]);
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-long", "long.lua", 2)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let f = finding_by_slug(&listed, "f-long");
+    assert_eq!(f["resolution"]["orphaned"], false, "{f}");
+    assert_eq!(f["resolution"]["line"], 2, "{f}");
+}
+
+/// Manual findings are untouched by an import (existing rule, pinned beside
+/// the new anchor-rewrite so the rewrite cannot leak onto them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_findings_are_unaffected_by_a_reimport() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+
+    let (status, manual) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "slug": "f-mine",
+            "severity": "concern",
+            "category": "Style",
+            "location": {"path": "order.rb", "kind": "single", "lines": [3]},
+            "title": "mine",
+            "rationale": "human note",
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{manual}");
+
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-agent", "order.rb", 4)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["superseded"], serde_json::json!([]), "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let mine = finding_by_slug(&listed, "f-mine");
+    assert_eq!(mine["superseded"], false);
+    assert_eq!(mine["location"]["lines"], serde_json::json!([3]));
+    assert_eq!(mine["resolution"]["line"], 3);
+    assert!(mine.get("reanchor").is_none());
+}
+
+/// `POST …/reanchor` happy path: location + anchor move together, the audit
+/// trail names who/when/from, the SSE reason is `finding.reanchored`, and
+/// the finding resolves exactly at the new line.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reanchor_moves_the_finding_and_records_the_audit() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let (status, _) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-a", "order.rb", 3)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let sse_resp = client
+        .get(format!("{base}/api/events"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = sse_resp.bytes_stream();
+    drain_sse_backlog(&mut stream).await;
+
+    let (status, ctype, body) = post_reanchor(
+        &client,
+        &base,
+        id,
+        "f-a",
+        &serde_json::json!({
+            "location": {"path": "order.rb", "kind": "single", "lines": [4]},
+            "author": "nik",
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{ctype} {body}");
+    assert_eq!(body["location"]["lines"], serde_json::json!([4]), "{body}");
+    assert_eq!(body["resolution"]["orphaned"], false, "{body}");
+    assert_eq!(body["resolution"]["line"], 4, "{body}");
+    assert_eq!(body["reanchor"]["by"], "nik", "{body}");
+    assert_eq!(body["reanchor"]["from"]["lines"], serde_json::json!([3]));
+    assert_eq!(body["reanchor"]["from"]["path"], "order.rb");
+    assert_eq!(body["reanchor"]["ps"], 1);
+    assert!(body["reanchor"]["at"].as_i64().unwrap() > 0);
+    assert_eq!(body["own_ps"], 1);
+
+    let hits = collect_sse_matching(
+        &mut stream,
+        "\"reason\":\"finding.reanchored\"",
+        std::time::Duration::from_millis(500),
+    )
+    .await;
+    assert!(
+        hits >= 1,
+        "expected review.changed{{reason:finding.reanchored}}"
+    );
+
+    // The list read agrees.
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["resolution"]["line"], 4, "{fa}");
+    assert_eq!(fa["reanchor"]["by"], "nik");
+}
+
+/// The honest-orphan law on an explicit act: an anchor that does not resolve
+/// EXACTLY on the target blob is refused 409 (problem+json, named reason)
+/// and nothing is written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reanchor_that_cannot_resolve_is_409_and_writes_nothing() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let (status, _) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-a", "order.rb", 3)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    for (loc, reason) in [
+        (
+            serde_json::json!({"path": "order.rb", "kind": "single", "lines": [99]}),
+            "line_past_eof",
+        ),
+        (
+            serde_json::json!({"path": "nope/missing.rb", "kind": "single", "lines": [1]}),
+            "path_absent",
+        ),
+    ] {
+        let (status, ctype, body) = post_reanchor(
+            &client,
+            &base,
+            id,
+            "f-a",
+            &serde_json::json!({ "location": loc }),
+        )
+        .await;
+        assert_eq!(status, 409, "{body}");
+        assert!(ctype.contains("application/problem+json"), "{ctype}");
+        assert_eq!(body["type"], "urn:kb:errors:finding-reanchor-unresolvable");
+        assert_eq!(body["reason"], reason, "{body}");
+    }
+
+    // Unknown slug -> 404; bad location shape -> 400.
+    let (status, _, _) = post_reanchor(
+        &client,
+        &base,
+        id,
+        "f-nope",
+        &serde_json::json!({"location": {"path": "order.rb", "kind": "single", "lines": [3]}}),
+    )
+    .await;
+    assert_eq!(status, 404);
+    let (status, _, _) = post_reanchor(
+        &client,
+        &base,
+        id,
+        "f-a",
+        &serde_json::json!({"location": {"path": "order.rb", "kind": "single", "lines": [3, 4]}}),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["location"]["lines"], serde_json::json!([3]));
+    assert_eq!(fa["resolution"]["line"], 3);
+    assert!(
+        fa.get("reanchor").is_none(),
+        "a refused act leaves no audit"
+    );
+}
+
+/// A human's re-anchor of an IMPORT finding survives a later re-import that
+/// still cites the old lines (claim and anchor never disagree), while the
+/// import's other refreshed fields still land.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_manual_reanchor_survives_a_reimport() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let (status, _) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [finding_at("f-a", "order.rb", 3)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _, body) = post_reanchor(
+        &client,
+        &base,
+        id,
+        "f-a",
+        &serde_json::json!({"location": {"path": "order.rb", "kind": "single", "lines": [4]}}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+
+    let mut again = finding_at("f-a", "order.rb", 3);
+    again["title"] = serde_json::json!("retitled by the agent");
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({"schema": "kbc-findings/1", "findings": [again]}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["updated"], serde_json::json!(["f-a"]), "{body}");
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["title"], "retitled by the agent");
+    assert_eq!(fa["location"]["lines"], serde_json::json!([4]), "{fa}");
+    assert_eq!(fa["resolution"]["line"], 4, "{fa}");
+    assert_eq!(fa["reanchor"]["from"]["lines"], serde_json::json!([3]));
+}
+
+/// A finding that adopted a human comment as its thread cannot be
+/// re-anchored (it would move the human's own comment).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reanchor_refuses_an_adopted_human_comment() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let repo_tmp = fixture_repo();
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let ann = comment_on(
+        &client,
+        &base,
+        "r",
+        id,
+        "order.rb",
+        3,
+        "needs a guard",
+        "new",
+    )
+    .await;
+    let (status, body) = create_manual_finding(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "slug": "f-adopt",
+            "severity": "concern",
+            "category": "Style",
+            "from_annotation_id": ann["id"],
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let (status, _, body) = post_reanchor(
+        &client,
+        &base,
+        id,
+        "f-adopt",
+        &serde_json::json!({"location": {"path": "order.rb", "kind": "single", "lines": [4]}}),
+    )
+    .await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["reason"], "adopted_comment");
+}
+
+// --- v0.47 FA: the ps2 shape (claim moved by a compose, anchor left behind) --
+
+const LIMITER_PS1: &str = "local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local n = redis.call('INCR', key)\n\
+if n == 1 then\n\
+  redis.call('EXPIRE', key, ARGV[2])\n\
+end\n\
+return n <= limit\n";
+
+/// ps2 shifts the code down two lines AND rewrites the range's last line
+/// (the cited range ended on a line that no longer exists).
+const LIMITER_PS2_MOVED: &str = "-- limiter v2\n\
+local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local validity = tonumber(ARGV[2])\n\
+local n = redis.call('INCR', key)\n\
+if n == 1 then\n\
+  finalize_window(state, validity)\n\
+end\n\
+return n <= limit\n";
+
+/// ps2 rewrites lines 3-5 in place: the SAME numbers, different text.
+const LIMITER_PS2_REWRITTEN: &str = "local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local validity = tonumber(ARGV[2])\n\
+local window = compute_window_bucket(key, validity)\n\
+return finalize_window(window, limit)\n";
+
+async fn compose_findings(
+    client: &reqwest::Client,
+    base: &str,
+    id: i64,
+    findings: Vec<serde_json::Value>,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let resp = client
+        .post(format!("{base}/api/reviews/{id}/compose"))
+        .json(&serde_json::json!({
+            "summary": "ps2 review",
+            "findings": { "schema": "kbc-findings/1", "findings": findings },
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = resp.json().await.unwrap();
+    (status, body)
+}
+
+fn range_finding(slug: &str, a: i64, b: i64) -> serde_json::Value {
+    serde_json::json!({
+        "slug": slug,
+        "severity": "concern",
+        "category": "correctness",
+        "location": { "path": "limiter.lua", "kind": "range", "lines": [a, b] },
+        "title": format!("finding {slug}"),
+        "rationale": "Spotted on review.",
+    })
+}
+
+async fn export_comment_slugs(
+    client: &reqwest::Client,
+    base: &str,
+    id: i64,
+) -> (Vec<String>, Vec<String>) {
+    let out: serde_json::Value = client
+        .get(format!("{base}/api/reviews/{id}/export/github"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let slugs = |k: &str| -> Vec<String> {
+        out[k]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|c| c["finding_slug"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    (slugs("comments"), slugs("skipped_orphaned"))
+}
+
+/// Boot, review at ps1 (limiter.lua = PS1), import `f-a` at ps1 with the
+/// claim [a1,b1], then commit `ps2_text` and snapshot ps2.
+async fn limiter_at_ps2(
+    ps2_text: &str,
+    a1: i64,
+    b1: i64,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    String,
+    reqwest::Client,
+    i64,
+) {
+    let repo_tmp = fixture_repo_with(&[("limiter.lua", LIMITER_PS1.as_bytes())]);
+    let (daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [range_finding("f-a", a1, b1)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_eq!(
+        finding_by_slug(&listed, "f-a")["resolution"]["orphaned"],
+        false
+    );
+    std::fs::write(repo_tmp.path().join("limiter.lua"), ps2_text).unwrap();
+    git(repo_tmp.path(), &["add", "-A"]);
+    git(repo_tmp.path(), &["commit", "-q", "-m", "ps2 rewrite"]);
+    assert_eq!(snapshot(&client, &base, id).await, 2);
+    (repo_tmp, daemon, base, client, id)
+}
+
+/// THE REPORTED SHAPE: ps1 range ends on a line ps2 rewrote; the agent
+/// composes at ps2 with the NEW lines. The finding must resolve exact at
+/// ps2, be raised-against ps2 from now on (carry-forward starts there), and
+/// export as a line comment, not a skipped orphan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compose_at_ps2_with_moved_lines_re_anchors_at_ps2() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_MOVED, 3, 5).await;
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(
+        before["resolution"]["orphaned"], true,
+        "precondition: the ps1 anchor orphans on the ps2 blob: {before}"
+    );
+
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 5, 7)]).await;
+    assert_eq!(status, 200, "{body}");
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
+    assert_eq!(fa["resolution"]["line"], 5, "{fa}");
+    assert_eq!(fa["resolution"]["line_end"], 7, "{fa}");
+    assert_eq!(
+        fa["own_ps"], 2,
+        "the anchor's base patchset moves with it: {fa}"
+    );
+
+    let (comments, skipped) = export_comment_slugs(&client, &base, id).await;
+    assert!(comments.contains(&"f-a".to_string()), "{comments:?}");
+    assert!(!skipped.contains(&"f-a".to_string()), "{skipped:?}");
+}
+
+/// The case a claim-changed trigger misses: the stored claim ALREADY equals
+/// the new one (lines 3-5, valid at ps1 and still the claim at ps2) but the
+/// anchor holds ps1 text. A compose/import at ps2 with the SAME location
+/// must still repair it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compose_with_an_unchanged_claim_repairs_a_stale_anchor() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_REWRITTEN, 3, 5).await;
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["location"]["lines"], serde_json::json!([3, 5]));
+    assert_eq!(
+        before["resolution"]["orphaned"], true,
+        "precondition: ps1 text is gone from lines 3-5 at ps2: {before}"
+    );
+
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 3, 5)]).await;
+    assert_eq!(status, 200, "{body}");
+
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
+    assert_eq!(fa["resolution"]["line"], 3, "{fa}");
+    assert_eq!(fa["resolution"]["line_end"], 5, "{fa}");
+    assert_eq!(fa["own_ps"], 2, "{fa}");
+
+    // A second identical compose is a no-op repair: anchor and claim agree,
+    // nothing is rewritten, own_ps stays 2.
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 3, 5)]).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_eq!(finding_by_slug(&listed, "f-a")["own_ps"], 2);
+}
+
+/// The same repair through the explicit route, with no compose at all; the
+/// repaired finding then exports as a line comment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reanchor_route_repairs_a_stale_anchor_without_a_compose() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_MOVED, 3, 5).await;
+    let (comments, skipped) = export_comment_slugs(&client, &base, id).await;
+    assert!(!comments.contains(&"f-a".to_string()), "{comments:?}");
+    assert!(skipped.contains(&"f-a".to_string()), "{skipped:?}");
+
+    let (status, _, body) = post_reanchor(
+        &client,
+        &base,
+        id,
+        "f-a",
+        &serde_json::json!({
+            "location": {"path": "limiter.lua", "kind": "range", "lines": [5, 7]},
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["resolution"]["line"], 5, "{body}");
+    assert_eq!(body["resolution"]["line_end"], 7, "{body}");
+    assert_eq!(body["own_ps"], 2, "{body}");
+    assert_eq!(body["reanchor"]["from"]["lines"], serde_json::json!([3, 5]));
+
+    let (comments, skipped) = export_comment_slugs(&client, &base, id).await;
+    assert!(comments.contains(&"f-a".to_string()), "{comments:?}");
+    assert!(!skipped.contains(&"f-a".to_string()), "{skipped:?}");
+}
+
+// --- v0.47 FA review round: a verified anchor beats a stale resent claim ----
+
+/// ps2 inserts two lines ABOVE the code: every ps1 line number is off by two.
+const LIMITER_PS2_INSERTED_ABOVE: &str = "-- header a\n\
+-- header b\n\
+local key = KEYS[1]\n\
+local limit = tonumber(ARGV[1])\n\
+local n = redis.call('INCR', key)\n\
+if n == 1 then\n\
+  redis.call('EXPIRE', key, ARGV[2])\n\
+end\n\
+return n <= limit\n";
+
+fn assert_kept_exact_anchor_and_warning(
+    listed: &serde_json::Value,
+    warnings: &serde_json::Value,
+    context: &str,
+) {
+    let fa = finding_by_slug(listed, "f-a");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{context}: {fa}");
+    assert_eq!(fa["resolution"]["line"], 5, "{context}: {fa}");
+    assert_eq!(fa["resolution"]["line_end"], 7, "{context}: {fa}");
+    assert_eq!(fa["resolution"]["confidence"], "exact", "{context}: {fa}");
+    assert_eq!(
+        fa["own_ps"], 1,
+        "{context}: the verified anchor was NOT rewritten: {fa}"
+    );
+    // The saved claim stays the agent's; the view resolves from the anchor.
+    assert_eq!(fa["location"]["lines"], serde_json::json!([3, 5]), "{fa}");
+    let w = warnings
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["kind"] == "claim_disagrees_with_anchor")
+        .unwrap_or_else(|| panic!("{context}: no claim_disagrees_with_anchor in {warnings}"));
+    assert_eq!(w["slug"], "f-a", "{w}");
+    assert_eq!(w["anchor_line"], 5, "{w}");
+    assert_eq!(w["anchor_line_end"], 7, "{w}");
+    assert_eq!(w["confidence"], "exact", "{w}");
+    assert_eq!(w["claimed_lines"], serde_json::json!([3, 5]), "{w}");
+}
+
+/// RULING: ps1 claim 3-5; ps2 inserts lines above, so carry-forward resolves
+/// the anchor EXACT at 5-7. An agent re-composing at ps2 with its STALE claim
+/// 3-5 must NOT turn that into a confidently wrong anchor: the anchor is
+/// kept (own_ps stays 1) and a per-slug warning names both positions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compose_with_a_stale_claim_keeps_the_exact_carried_anchor_and_warns() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_INSERTED_ABOVE, 3, 5).await;
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["resolution"]["line"], 5, "precondition: {before}");
+    assert_eq!(
+        before["resolution"]["line_end"], 7,
+        "precondition: {before}"
+    );
+    assert_eq!(before["resolution"]["confidence"], "exact", "{before}");
+
+    let (status, body) =
+        compose_findings(&client, &base, id, vec![range_finding("f-a", 3, 5)]).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_kept_exact_anchor_and_warning(&listed, &body["anchor_warnings"], "compose");
+}
+
+/// The same ruling through `findings/import` (the reconcile is shared; the
+/// response carries the warning at the top level).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_import_with_a_stale_claim_keeps_the_exact_carried_anchor_and_warns() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let (_repo, _daemon, base, client, id) = limiter_at_ps2(LIMITER_PS2_INSERTED_ABOVE, 3, 5).await;
+    let (status, body) = import_findings(
+        &client,
+        &base,
+        id,
+        &serde_json::json!({
+            "schema": "kbc-findings/1",
+            "findings": [range_finding("f-a", 3, 5)],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    assert_kept_exact_anchor_and_warning(&listed, &body["anchor_warnings"], "import");
+}
+
+/// An anchor that resolves only FUZZILY at the target patchset (a line over
+/// the 200-char snippet cap matches as a prefix, never as an exact text) is
+/// not "verified": it is re-derived from the claim, so the finding is
+/// raised-against the target patchset from then on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_anchor_that_resolves_only_fuzzily_is_re_derived_from_the_claim() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let long = format!("-- {}", "word ".repeat(60));
+    let ps1 = format!("local a = 1\n{long}\nlocal b = 2\n");
+    let repo_tmp = fixture_repo_with(&[("long.lua", ps1.as_bytes())]);
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let batch = serde_json::json!({
+        "schema": "kbc-findings/1",
+        "findings": [finding_at("f-a", "long.lua", 2)],
+    });
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["resolution"]["orphaned"], false, "{before}");
+    assert_eq!(
+        before["resolution"]["confidence"], "fuzzy",
+        "precondition (long line => prefix match, never exact): {before}"
+    );
+    assert_eq!(before["own_ps"], 1, "{before}");
+
+    std::fs::write(
+        repo_tmp.path().join("long.lua"),
+        format!("{ps1}local c = 3\n"),
+    )
+    .unwrap();
+    git(repo_tmp.path(), &["add", "-A"]);
+    git(repo_tmp.path(), &["commit", "-q", "-m", "ps2 append"]);
+    assert_eq!(snapshot(&client, &base, id).await, 2);
+
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["own_ps"], 2, "re-derived at the target patchset: {fa}");
+    assert_eq!(fa["resolution"]["line"], 2, "{fa}");
+    assert_eq!(fa["resolution"]["orphaned"], false, "{fa}");
+    assert_eq!(body["anchor_warnings"], serde_json::json!([]), "{body}");
+}
+
+/// RULING: a FUZZY anchor (long line) that resolves to lines other than the
+/// resent claim is kept like the exact case — no rewrite, own_ps unchanged —
+/// and the warning says `confidence: "fuzzy"`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fuzzy_anchor_disagreeing_with_a_stale_claim_is_kept_and_warns() {
+    let _guard = crate::ENV_SERIAL.lock().await;
+    let long = format!("-- {}", "word ".repeat(60));
+    let ps1 = format!("local a = 1\n{long}\nlocal b = 2\n");
+    let repo_tmp = fixture_repo_with(&[("long.lua", ps1.as_bytes())]);
+    let (_daemon, base) = boot_with_repo("r", repo_tmp.path()).await;
+    let client = reqwest::Client::new();
+    let id = create_review(&client, &base, "r").await;
+    let batch = serde_json::json!({
+        "schema": "kbc-findings/1",
+        "findings": [finding_at("f-a", "long.lua", 2)],
+    });
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    // ps2 inserts two lines above the long line (now line 4).
+    std::fs::write(
+        repo_tmp.path().join("long.lua"),
+        format!("-- h1\n-- h2\n{ps1}"),
+    )
+    .unwrap();
+    git(repo_tmp.path(), &["add", "-A"]);
+    git(repo_tmp.path(), &["commit", "-q", "-m", "ps2 insert above"]);
+    assert_eq!(snapshot(&client, &base, id).await, 2);
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let before = finding_by_slug(&listed, "f-a");
+    assert_eq!(before["resolution"]["line"], 4, "precondition: {before}");
+    assert_eq!(before["resolution"]["confidence"], "fuzzy", "{before}");
+
+    let (status, body) = import_findings(&client, &base, id, &batch).await;
+    assert_eq!(status, 200, "{body}");
+    let listed = list_findings(&client, &base, id, &[]).await;
+    let fa = finding_by_slug(&listed, "f-a");
+    assert_eq!(fa["own_ps"], 1, "anchor kept: {fa}");
+    assert_eq!(fa["resolution"]["line"], 4, "{fa}");
+    let w = &body["anchor_warnings"][0];
+    assert_eq!(w["kind"], "claim_disagrees_with_anchor", "{body}");
+    assert_eq!(w["anchor_line"], 4, "{w}");
+    assert_eq!(w["confidence"], "fuzzy", "{w}");
+    assert_eq!(w["claimed_lines"], serde_json::json!([2]), "{w}");
 }

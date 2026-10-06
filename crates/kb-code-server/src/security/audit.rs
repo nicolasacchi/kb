@@ -68,14 +68,16 @@ const DEFAULT_SINCE_SECS: i64 = 24 * 60 * 60;
 /// `review_gate::review_mutations_gate`, untouched by this module.
 fn is_review_gate_path(path: &str) -> bool {
     // `/api/reviews/{id}/findings`, `.../findings/{slug}/disposition`,
-    // `.../findings/{slug}/published`, `.../verdict`, `.../verdict/published`.
+    // `.../findings/{slug}/published`, `.../findings/{slug}/reanchor`, `.../verdict`, `.../verdict/published`.
     if let Some(rest) = path.strip_prefix("/api/reviews/") {
         if let Some((_id, tail)) = rest.split_once('/') {
             return tail == "findings"
                 || tail == "verdict"
                 || tail == "verdict/published"
                 || (tail.starts_with("findings/")
-                    && (tail.ends_with("/disposition") || tail.ends_with("/published")));
+                    && (tail.ends_with("/disposition")
+                        || tail.ends_with("/published")
+                        || tail.ends_with("/reanchor")));
         }
         return false;
     }
@@ -331,6 +333,7 @@ mod tests {
             "/api/reviews/7/verdict/published",
             "/api/reviews/7/findings/f-abc/disposition",
             "/api/reviews/7/findings/f-abc/published",
+            "/api/reviews/7/findings/f-abc/reanchor",
             "/api/boards/checkout-flow/accept",
             "/api/boards/checkout-flow/archive",
             "/api/boards/checkout-flow",

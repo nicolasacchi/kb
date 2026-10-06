@@ -1637,6 +1637,13 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
             put(crate::review_findings::set_finding_disposition_route)
                 .delete(crate::review_findings::clear_finding_disposition_route),
         )
+        // v0.47 FA — explicit finding re-anchor. Same admission table as
+        // `/disposition` (a human act on one finding), GRADUATED onto the
+        // `[review] remote_mutations` gate from day one.
+        .route(
+            "/reviews/{id}/findings/{slug}/reanchor",
+            post(crate::review_findings::reanchor_finding_route),
+        )
         // PRR-R5 (design doc §2 rows 15-16) — publish recording, advisory
         // only (Risk #5). Was on `transcripts_api`; GRADUATED here by S2-B,
         // same family as `/disposition` just above.

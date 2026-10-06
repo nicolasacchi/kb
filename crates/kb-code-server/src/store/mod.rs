@@ -113,17 +113,19 @@ pub use self::claims::{ClaimFilter, ClaimRow};
 pub use self::comments::{CommentRow, NewComment};
 pub use self::doclens::{DocLensPin, DocRefRow, DocRefWrite, DoclensSyncCursor, NewDocRef};
 pub use self::entities::EntityDefRow;
+pub(crate) use self::findings::anchor_column;
 use self::findings::reconcile_findings_import_on;
 pub use self::findings::{
     derive_finding_anchor, is_valid_disposition, is_valid_finding_origin, is_valid_location_kind,
-    is_valid_severity, location_lines_json, slug_ordinal, AdoptedReviewFinding, ComposeOutcome,
-    DerivedFindingAnchor, FindingIdentity, FindingsImportMode, FindingsImportOutcome,
+    is_valid_severity, location_lines_json, slug_ordinal, AdoptedReviewFinding, AnchorRepairs,
+    ClaimDisagreement, ComposeOutcome, DerivedFindingAnchor, FindingIdentity,
+    FindingReanchorOutcome, FindingReanchorWrite, FindingsImportMode, FindingsImportOutcome,
     ImportedFinding, NewReviewFinding, OtherReviewJudgement, ReviewFindingRow, DISPOSITIONS,
     DISPOSITION_AGREE, DISPOSITION_DISPUTE, DISPOSITION_FIX_LATER, DISPOSITION_WAIVE,
     FINDING_ORIGINS, FINDING_ORIGIN_IMPORT, FINDING_ORIGIN_MANUAL, LOCATION_KINDS,
     LOCATION_KIND_MULTI, LOCATION_KIND_RANGE, LOCATION_KIND_SINGLE, LOCATION_KIND_WHOLE_FILE,
     SEVERITIES, SEVERITY_BLOCKER, SEVERITY_CONCERN, SEVERITY_OK, SUPERSEDED_REASON_NOT_IN_REIMPORT,
-    SUPERSEDED_REASON_REPLACED,
+    SUPERSEDED_REASON_REPLACED, UNANCHORED,
 };
 pub use self::lanes::{
     LaneFactIn, LaneFactRow, LaneGcCounts, LaneRunIn, LaneStatRow, LaneSummaryRow, LANE_GC_PAGE,

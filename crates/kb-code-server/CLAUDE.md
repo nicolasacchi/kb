@@ -1083,6 +1083,59 @@ invariant #2 records).
     location — surfaced on `GET /api/reviews/{id}/findings` and every
     single-finding response `finding_json` composes, never scored, and
     the word "fixed" appears nowhere in this lane.
+    (h) **A finding's anchor follows its claim; a re-anchor is an explicit,
+    exact-or-refused act** (v0.47 FA, migration V0046). *Amends design §4.3
+    point 5 ("the annotation's own anchor is NOT eagerly rewritten"),
+    which was written for an UNCHANGED claim:* when a re-import/compose of
+    an `import`-origin finding changes its `location_*` (path/kind/lines/
+    removed), OR the linked annotation has no anchor at all, OR the stored
+    anchor is ORPHANED at the target patchset or resolves only FUZZILY
+    to the claimed lines (fuzzy + disagreeing is the warn case below — the route reads the blobs BEFORE the transaction,
+    `review_findings::probe_anchors`, and hands the annotation ids in as
+    `store::AnchorRepairs`; never git I/O under the store lock), the anchor
+    (+ path, side, bound `ps_number` — so later patchsets carry forward from
+    the patchset the anchor text came from, `own_ps` moves with it; replies
+    follow) is re-derived from the claim at the target patchset in the SAME
+    transaction (`reconcile_findings_import_on`). The stale-anchor trigger
+    exists because an earlier compose may already have moved `location_*`
+    while leaving the anchor: a re-compose with that same, already-updated
+    claim sees no change and would leave the orphan forever.
+    **When anchor and claim disagree, the daemon picks neither.** When the
+    stored anchor resolves (EXACT or FUZZY) at the target patchset to lines
+    other than the claim (ps2 inserted lines above, carry-forward moved the anchor, and
+    the agent resends its stale pre-insertion numbers), the anchor is KEPT —
+    never rewritten from the claim, `own_ps` unchanged — and the response's
+    `anchor_warnings[]` gains `{kind: "claim_disagrees_with_anchor", slug,
+    anchor_line, anchor_line_end, confidence: exact|fuzzy, claimed_lines}` so the agent can correct
+    its claim or use the explicit reanchor route. The saved claim
+    (`location_*`) stays the agent's value (it is the saved claim, as
+    today); the view's `resolution` is computed from the anchor, so the two
+    can differ until one is corrected. A CHANGED claim always re-derives (it
+    is an explicit new statement). An anchor that agrees with the claim is
+    never rewritten, so a finding keeps its original `own_ps`; `manual`
+    rows stay untouched.
+    An anchor that cannot be derived (blob over the cap / path absent /
+    cited line past EOF) is NEVER stored as an empty snippet: the anchor is
+    persisted as SQL NULL (`store::UNANCHORED`), the finding is still
+    imported (the author's citation is kept, never a guessed line), and the
+    response carries a per-slug `anchor_warnings[]` entry
+    (`kind: anchor_unreadable`, `reason`: `path_absent`|`blob_too_large`|
+    `blob_unreadable`|`line_past_eof`; manual create: `anchor_warning`).
+    Blobs decode through ONE policy (`review_comments::decode_blob`,
+    lossy UTF-8) on BOTH the anchor-build and resolve paths, and a finding's
+    `resolution.orphan_reason` (additive, present iff orphaned:
+    `blob_unreadable`|`anchor_missing`|`text_changed`) says WHICH kind of
+    orphan it is. `POST /api/reviews/{id}/findings/{slug}/reanchor`
+    (`review_remote`, the disposition gate) re-derives with the same
+    builder on the chosen patchset's blob and REFUSES (409,
+    `urn:kb:errors:finding-reanchor-unresolvable`, named `reason`) unless
+    the result resolves EXACTLY at the cited line through the shared
+    resolver; on success one transaction rewrites location + anchor and
+    stamps `review_findings.reanchor_json` — the audit (`by`, `at`, `ps`,
+    `from`) AND the pin: a later import/compose keeps a pinned finding's
+    location and anchor (everything else still refreshes). An adopted human
+    comment's finding (`intent != finding`) is refused (`adopted_comment`).
+    `review.changed{reason:"finding.reanchored", finding_slug}`.
 
 24. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
     board is COORDINATE-FREE, and the two mutation rules are enforced by
