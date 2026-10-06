@@ -32,6 +32,7 @@ pub async fn list(
     harness: Option<&str>,
     undistilled: bool,
     since: Option<&str>,
+    collapse: Option<&str>,
 ) -> Result<()> {
     let url = require_daemon(daemon, bearer).await?;
     let client = http::client_with_timeout_and_bearer(10, bearer)?;
@@ -68,6 +69,11 @@ pub async fn list(
     if let Some(sn) = since {
         let at = parse_since(sn, now_unix())?;
         req = req.query(&[("since", at.to_string())]);
+    }
+    // V0045/seg1 — opt-in `--collapse logical` (one row per segmented
+    // session); absent = every part is listed.
+    if let Some(c) = collapse {
+        req = req.query(&[("collapse", c)]);
     }
     let body: serde_json::Value = req.send().await?.error_for_status()?.json().await?;
     let empty: Vec<serde_json::Value> = Vec::new();
@@ -128,14 +134,125 @@ pub async fn list(
             format!(" ({harness})")
         };
         println!(
-            "  {ts}  {where_}  {name}{harness_suffix}",
+            "  {ts}  {where_}  {name}{harness_suffix}{chip}",
             ts = format_started(started),
             name = truncate(name, 72),
+            chip = segment_chip(r),
         );
         println!(
             "      {mc:>4} msg  {mem:>2} mem  {fr:>3} read  {fe:>3} edited  {prompt}",
             prompt = truncate(prompt, 60),
         );
+    }
+    Ok(())
+}
+
+/// V0045/seg1 — the `part k/N` chip for a segmented session's row (empty for
+/// an ordinary session). Pure over the wire row so the list renderer and its
+/// test share one reading of `segment_idx`/`segment_count`.
+pub(crate) fn segment_chip(row: &serde_json::Value) -> String {
+    match (row["segment_idx"].as_i64(), row["segment_count"].as_u64()) {
+        (Some(k), Some(n)) => format!("  [part {k}/{n}]"),
+        (Some(k), None) => format!("  [part {k}]"),
+        _ => String::new(),
+    }
+}
+
+/// V0045/seg1 — join a chain's raw transcripts (in chain order) into ONE
+/// JSONL body. Part 1 is kept verbatim; every continuation part drops its
+/// own leading adapter-meta line (the one carrying `segmentOf`) so the result
+/// reads as a single transcript with a single header, and every part ends on
+/// a newline so lines never fuse across a seam. All other bytes are verbatim:
+/// nothing is re-interpreted, re-numbered or re-attributed.
+pub(crate) fn join_chain_bodies(parts: &[String]) -> String {
+    let mut out = String::new();
+    for (i, body) in parts.iter().enumerate() {
+        for line in body.split_inclusive('\n') {
+            if i > 0 && is_continuation_meta(line) {
+                continue;
+            }
+            out.push_str(line);
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn is_continuation_meta(line: &str) -> bool {
+    let t = line.trim();
+    if !t.starts_with('{') || !t.contains("segmentOf") {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(t)
+        .map(|v| v["type"] == "adapter-meta" && v.get("segmentOf").is_some())
+        .unwrap_or(false)
+}
+
+/// `kb sessions recover <sid> [--chain] [--out FILE]` — the decoded
+/// transcript JSONL of one session (`GET /{sid}/raw`), or with `--chain` the
+/// whole segmented chain concatenated in part order (the chain ids come from
+/// `GET /{sid}`'s derived `segment_chain`; any member id resolves the full
+/// chain). An unsegmented session with `--chain` is just itself.
+pub async fn recover(
+    session_id: &str,
+    chain: bool,
+    out: Option<&Path>,
+    daemon: Option<&str>,
+    bearer: Option<&str>,
+) -> Result<()> {
+    let url = require_daemon(daemon, bearer).await?;
+    let client = http::client_with_timeout_and_bearer(60, bearer)?;
+    let mut ids: Vec<String> = vec![session_id.to_string()];
+    if chain {
+        let detail: serde_json::Value = client
+            .get(format!(
+                "{url}/api/sessions/{}",
+                http::encode_path_segment(session_id)
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if let Some(parts) = detail["segment_chain"].as_array() {
+            let got: Vec<String> = parts
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            if !got.is_empty() {
+                ids = got;
+            }
+        }
+    }
+    let mut bodies: Vec<String> = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let text = client
+            .get(format!(
+                "{url}/api/sessions/{}/raw",
+                http::encode_path_segment(id)
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await
+            .with_context(|| format!("reading raw transcript of part {id}"))?;
+        bodies.push(text);
+    }
+    let joined = if bodies.len() == 1 {
+        bodies.remove(0)
+    } else {
+        join_chain_bodies(&bodies)
+    };
+    match out {
+        Some(path) => {
+            std::fs::write(path, joined.as_bytes())
+                .with_context(|| format!("writing {}", path.display()))?;
+            eprintln!("wrote {} part(s) to {}", ids.len(), path.display());
+        }
+        None => print!("{joined}"),
     }
     Ok(())
 }
@@ -2991,5 +3108,69 @@ mod f10_tests {
         assert!(out
             .lines()
             .any(|l| l.trim_start().starts_with("all") && l.contains('-')));
+    }
+
+    // --- v0.46 SEG-A — segmented capture, CLI half ------------------------
+
+    #[test]
+    fn segment_chip_reads_only_the_derived_wire_fields() {
+        assert_eq!(
+            segment_chip(&json!({"segment_idx": 2, "segment_count": 3})),
+            "  [part 2/3]"
+        );
+        assert_eq!(segment_chip(&json!({"segment_idx": 4})), "  [part 4]");
+        assert_eq!(
+            segment_chip(&json!({"session_id": "plain"})),
+            "",
+            "an ordinary session prints no chip"
+        );
+    }
+
+    /// `recover --chain` joins part bodies in order: part 1 verbatim, every
+    /// continuation part loses ONLY its own adapter-meta header line (the one
+    /// naming `segmentOf`), and a part that lacks a trailing newline never
+    /// fuses with the next part's first line.
+    #[test]
+    fn join_chain_bodies_drops_only_continuation_headers() {
+        let p1 = concat!(
+            r#"{"sessionId":"raw","type":"adapter-meta","harness":"omp"}"#,
+            "\n",
+            r#"{"sessionId":"raw","type":"user","message":{"content":"a"}}"#,
+            "\n",
+        )
+        .to_string();
+        let p2 = concat!(
+            r#"{"sessionId":"raw-p02","type":"adapter-meta","harness":"omp","segmentOf":"raw","segmentIdx":2}"#,
+            "\n",
+            r#"{"sessionId":"raw-p02","type":"user","message":{"content":"b segmentOf mention"}}"#,
+        )
+        .to_string(); // no trailing newline on purpose
+        let p3 = concat!(
+            r#"{"sessionId":"raw-p03","type":"adapter-meta","segmentOf":"raw","segmentIdx":3}"#,
+            "\n",
+            r#"{"sessionId":"raw-p03","type":"user","message":{"content":"c"}}"#,
+            "\n",
+        )
+        .to_string();
+        let got = join_chain_bodies(&[p1.clone(), p2, p3]);
+        let lines: Vec<&str> = got.lines().collect();
+        assert_eq!(lines.len(), 4, "{got}");
+        assert_eq!(
+            lines[0],
+            p1.lines().next().unwrap(),
+            "part 1 header kept verbatim"
+        );
+        assert!(lines[1].contains(r#""raw","type":"user""#));
+        assert!(
+            lines[2].contains("b segmentOf mention"),
+            "a mere mention of the key is not a header"
+        );
+        assert!(lines[3].contains(r#""raw-p03","type":"user""#));
+        assert!(got.ends_with('\n'));
+        assert!(
+            got.lines()
+                .all(|l| serde_json::from_str::<serde_json::Value>(l).is_ok()),
+            "every line is still one JSON object"
+        );
     }
 }
