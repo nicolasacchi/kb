@@ -513,37 +513,119 @@ fn validate_import_batch(
 
 // --- anchor derivation (shared by import + manual create) ----------------
 
+/// One blob read per unique `(path, sha)` for a whole import/compose/create
+/// call — the typed result is cached so the failure REASON survives into
+/// the per-slug warning.
+pub(crate) type AnchorBlobCache =
+    HashMap<(String, String), Result<String, review_comments::BlobReadError>>;
+
+/// Why a finding could not be given a real anchor (v0.47 FA). Reported per
+/// slug in the import/compose response (`anchor_warnings`) and on a manual
+/// create's response (`anchor_warning`); the finding is STILL imported with
+/// its location claim and an honest `anchor_missing` orphan resolution —
+/// the author's citation is kept, never silently turned into a guessed line
+/// and never into an empty-snippet anchor that can never re-match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AnchorWarning {
+    /// `path_absent` | `blob_too_large` | `blob_unreadable` |
+    /// `line_past_eof`.
+    pub reason: &'static str,
+    pub detail: String,
+}
+
+impl AnchorWarning {
+    pub(crate) fn to_json(&self, slug: &str, location: &FindingLocationBody) -> serde_json::Value {
+        serde_json::json!({
+            "slug": slug,
+            "kind": "anchor_unreadable",
+            "reason": self.reason,
+            "detail": self.detail,
+            "path": location.path,
+            "lines": location.lines,
+            "removed": location.removed,
+        })
+    }
+}
+
+/// The lines a location's anchor is derived from — the one the single/multi
+/// kinds anchor on, or both range endpoints. Empty for `whole_file`.
+fn cited_lines(location: &FindingLocationBody) -> Vec<i64> {
+    let lines = location.lines.as_deref().unwrap_or(&[]);
+    match location.kind.as_str() {
+        store::LOCATION_KIND_SINGLE | store::LOCATION_KIND_MULTI => {
+            lines.first().copied().into_iter().collect()
+        }
+        store::LOCATION_KIND_RANGE => lines.iter().copied().take(2).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Build one finding's `annotations` anchor via
 /// `store::derive_finding_anchor`, reading the appropriate pinned blob
 /// (`target_ps.base_sha` when `location.removed`, else `.tip_sha`) through
-/// the SAME cached `read_blob_text` `/comments` uses — one git read per
-/// unique `(path, sha)` for the whole call, not per finding. A cited line
-/// past the blob's own line count degrades to an EMPTY line-text (never an
-/// error): the resulting anchor snippet is simply empty and will not
-/// re-match on a later read, the SAME honest "this looks orphaned now"
-/// degrade every other stale comment goes through — not a batch-import
-/// failure over an imprecise citation.
+/// the SAME cached `read_blob_text_checked` `/comments` resolves with (one
+/// git read per unique `(path, sha)`, one decoding policy —
+/// `review_comments::decode_blob` — so what is anchored here is what is
+/// compared at read time).
+///
+/// v0.47 FA: when the blob cannot be read, or a cited line is past its end,
+/// the anchor is NOT built from empty text (the pre-FA behaviour persisted
+/// an empty-snippet anchor that could never re-match, reported as nothing).
+/// Instead the returned anchor is [`store::UNANCHORED`] and the
+/// [`AnchorWarning`] names why; the import still succeeds so one imprecise
+/// citation never fails the batch. `whole_file` reads no blob and never
+/// warns.
 fn build_finding_anchor(
     repo_root: &GitCtx,
-    blob_cache: &mut HashMap<(String, String), Option<String>>,
+    blob_cache: &mut AnchorBlobCache,
     target_ps: &ReviewPatchsetRow,
     location: &FindingLocationBody,
-) -> Result<store::DerivedFindingAnchor, ApiError> {
+) -> Result<(store::DerivedFindingAnchor, Option<AnchorWarning>), ApiError> {
     let sha = if location.removed {
         target_ps.base_sha.clone()
     } else {
         target_ps.tip_sha.clone()
     };
-    let key = (location.path.clone(), sha.clone());
-    if !blob_cache.contains_key(&key) {
-        let text = review_comments::read_blob_text(repo_root, &location.path, &sha);
-        blob_cache.insert(key.clone(), text);
+    let needs_blob = location.kind != store::LOCATION_KIND_WHOLE_FILE;
+    let mut warning: Option<AnchorWarning> = None;
+    let mut content: &str = "";
+    if needs_blob {
+        let key = (location.path.clone(), sha.clone());
+        if !blob_cache.contains_key(&key) {
+            let text = review_comments::read_blob_text_checked(repo_root, &location.path, &sha);
+            blob_cache.insert(key.clone(), text);
+        }
+        match blob_cache.get(&key).expect("just inserted") {
+            Ok(text) => {
+                content = text.as_str();
+                let total = content.lines().count() as i64;
+                if let Some(bad) = cited_lines(location)
+                    .into_iter()
+                    .find(|n| *n < 1 || *n > total)
+                {
+                    warning = Some(AnchorWarning {
+                        reason: "line_past_eof",
+                        detail: format!(
+                            "line {bad} is outside {:?} at {} ({total} lines)",
+                            location.path,
+                            &sha[..sha.len().min(12)]
+                        ),
+                    });
+                }
+            }
+            Err(e) => {
+                warning = Some(AnchorWarning {
+                    reason: e.as_str(),
+                    detail: format!(
+                        "{:?} could not be read at {}",
+                        location.path,
+                        &sha[..sha.len().min(12)]
+                    ),
+                });
+            }
+        }
     }
-    let content = blob_cache
-        .get(&key)
-        .and_then(|c| c.as_deref())
-        .unwrap_or("");
-    store::derive_finding_anchor(
+    let mut derived = store::derive_finding_anchor(
         &location.kind,
         &location.path,
         location.lines.as_deref(),
@@ -553,7 +635,12 @@ fn build_finding_anchor(
             content.lines().nth(idx).unwrap_or("").to_string()
         },
     )
-    .map_err(ApiError::bad_request)
+    .map_err(ApiError::bad_request)?;
+    if warning.is_some() {
+        derived.anchor = store::UNANCHORED.to_string();
+        derived.anchor2 = None;
+    }
+    Ok((derived, warning))
 }
 
 // --- adoption (V80-M5) ----------------------------------------------------
@@ -673,6 +760,8 @@ fn orphaned_resolution(target_ps: &ReviewPatchsetRow) -> ResolvedForPs {
         },
         original: None,
         confidence: None,
+        // No annotation row at all: the same "no usable anchor" family.
+        orphan_reason: Some(review_comments::ORPHAN_ANCHOR_MISSING),
     }
 }
 
@@ -761,7 +850,24 @@ fn finding_json(
         .cites_json
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
-    serde_json::json!({
+    // v0.47 FA — `resolution.orphan_reason` is additive and present only
+    // when orphaned (see `ResolvedForPs::orphan_reason`); `reanchor` is the
+    // audit of a human re-anchor, present only when one happened (surfaced,
+    // never a quality verdict).
+    let mut resolution_json = serde_json::json!({
+        "line": resolution.line,
+        "line_end": resolution.line_end,
+        "orphaned": resolution.orphaned,
+        "confidence": confidence,
+    });
+    if let Some(reason) = resolution.orphan_reason {
+        resolution_json["orphan_reason"] = serde_json::json!(reason);
+    }
+    let reanchor: Option<serde_json::Value> = f
+        .reanchor_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+    let mut out = serde_json::json!({
         "slug": f.slug,
         "act": f.act,
         "blocking": f.blocking,
@@ -793,12 +899,7 @@ fn finding_json(
         "import_batch_id": f.import_batch_id,
         "created_at": f.created_at,
         "updated_at": f.updated_at,
-        "resolution": {
-            "line": resolution.line,
-            "line_end": resolution.line_end,
-            "orphaned": resolution.orphaned,
-            "confidence": confidence,
-        },
+        "resolution": resolution_json,
         "thread_count": thread_count,
         "unresolved_count": unresolved_count,
         // V80-F3 (`kbc-hunkid/1`-adjacent, `review_finding_touches`) — the
@@ -811,7 +912,11 @@ fn finding_json(
         "own_ps": own_ps,
         "touched_in": &touched.entries,
         "touched_in_capped": touched.capped,
-    })
+    });
+    if let Some(r) = reanchor {
+        out["reanchor"] = r;
+    }
+    out
 }
 
 /// Compose ONE finding's full view (resolution + thread counts), for the
@@ -912,6 +1017,113 @@ pub(crate) fn compose_finding_view(
 
 // --- routes --------------------------------------------------------------
 
+/// v0.47 FA — probe the anchors of existing import-origin findings at
+/// `target_ps`, BEFORE the reconcile transaction (blob reads never happen
+/// under the store lock). Per finding (pinned/human-re-anchored rows and
+/// rows with nothing to compare are skipped):
+///
+/// * anchor orphaned, or resolving only FUZZILY -> `stale`: re-derive it from
+///   the claim (the repair for a claim an earlier compose moved while the
+///   anchor kept ps1 text);
+/// * anchor resolves EXACT to the claimed line / range -> nothing (the
+///   carry-forward worked; `own_ps` is kept);
+/// * anchor resolves (exact OR fuzzy) to OTHER lines -> `exact_elsewhere`: the
+///   anchor is KEPT (fuzzy + agreeing is re-derived instead). A resent claim that merely repeats a
+///   stale pre-insertion line number must not turn a correct carried-forward
+///   anchor into a confidently wrong one; the reconcile reports it instead.
+fn probe_anchors(
+    store: &Store,
+    git: &GitCtx,
+    review_id: i64,
+    target_ps: &ReviewPatchsetRow,
+) -> Result<store::AnchorRepairs, ApiError> {
+    let mut repairs = store::AnchorRepairs::default();
+    let mut cache: HashMap<(String, String), Option<String>> = HashMap::new();
+    for row in store.list_review_findings(review_id, None, true)? {
+        if row.origin != store::FINDING_ORIGIN_IMPORT || row.reanchor_json.is_some() {
+            continue;
+        }
+        let Some(ann) = store.get_annotation(&row.annotation_id)? else {
+            continue;
+        };
+        let claimed: Vec<i64> = row
+            .location_lines
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        if row.location_kind != store::LOCATION_KIND_WHOLE_FILE && claimed.is_empty() {
+            continue; // nothing to compare against — never guess
+        }
+        let sha = review_comments::target_sha_for_side(ann.side.as_deref(), target_ps).to_string();
+        let key = (ann.path.clone(), sha.clone());
+        let text = cache
+            .entry(key)
+            .or_insert_with(|| review_comments::read_blob_text(git, &ann.path, &sha))
+            .clone();
+        let r =
+            review_comments::resolve_for_ps_with_content(&ann, target_ps, &sha, text.as_deref());
+        if r.orphaned {
+            repairs.stale.insert(row.annotation_id.clone());
+            continue;
+        }
+        if row.location_kind == store::LOCATION_KIND_WHOLE_FILE {
+            continue;
+        }
+        let agrees = match row.location_kind.as_str() {
+            store::LOCATION_KIND_RANGE => {
+                r.line == claimed.iter().min().map(|n| *n as u32)
+                    && r.line_end == claimed.iter().max().map(|n| *n as u32)
+            }
+            _ => r.line == claimed.first().map(|n| *n as u32),
+        };
+        let exact = r.confidence == Some("exact");
+        if agrees {
+            // Exact + agreeing: carry-forward worked, leave it. Fuzzy +
+            // agreeing: re-derive (idempotent at the same lines).
+            if !exact {
+                repairs.stale.insert(row.annotation_id.clone());
+            }
+        } else if let Some(l) = r.line {
+            // Disagreeing (exact OR fuzzy): neither side is verified, so the
+            // daemon never silently picks the claim — keep the anchor, warn.
+            repairs.exact_elsewhere.insert(
+                row.annotation_id.clone(),
+                (l, r.line_end, if exact { "exact" } else { "fuzzy" }),
+            );
+        } else {
+            repairs.stale.insert(row.annotation_id.clone());
+        }
+    }
+    Ok(repairs)
+}
+
+/// Per-slug `anchor_warnings[]` entries for the reconcile's kept-anchor
+/// disagreements (see [`probe_anchors`]).
+fn claim_disagreement_warnings(outcome: &store::FindingsImportOutcome) -> Vec<serde_json::Value> {
+    outcome
+        .claim_disagreements
+        .iter()
+        .map(|d| {
+            let claimed: Option<serde_json::Value> = d
+                .claimed_lines
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
+            serde_json::json!({
+                "slug": d.slug,
+                "kind": "claim_disagrees_with_anchor",
+                "anchor_line": d.anchor_line,
+                "anchor_line_end": d.anchor_line_end,
+                "confidence": d.confidence,
+                "claimed_lines": claimed,
+                "detail": "the stored anchor resolves exactly at the target patchset to \
+                           different lines than the resent claim; the verified anchor was \
+                           kept. Correct the claim, or POST \
+                           /api/reviews/{id}/findings/{slug}/reanchor to move it.",
+            })
+        })
+        .collect()
+}
+
 /// `POST /api/reviews/{id}/findings/import` — LOOPBACK-ONLY (design doc §2
 /// row 8). One transaction via `Store::reconcile_findings_import`
 /// (already shipped by R1); one `review.changed{reason:"findings_import"}`
@@ -975,10 +1187,15 @@ pub async fn import_findings_route(
     let (v1_act, v1_blocking, v1_cites, v1_fp, v1_supersedes) =
         store::ImportedFinding::v1_defaults();
     let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
-    let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
+    let mut blob_cache: AnchorBlobCache = HashMap::new();
     let mut imported = Vec::with_capacity(body.findings.len());
+    let mut anchor_warnings: Vec<serde_json::Value> = Vec::new();
     for f in &body.findings {
-        let anchor = build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &f.location)?;
+        let (anchor, warning) =
+            build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &f.location)?;
+        if let Some(w) = warning {
+            anchor_warnings.push(w.to_json(&f.slug, &f.location));
+        }
         imported.push(store::ImportedFinding {
             slug: f.slug.clone(),
             severity: f.severity.clone(),
@@ -1012,10 +1229,13 @@ pub async fn import_findings_route(
     let ps_number = target_ps.ps_number;
     let import_batch_id_c = import_batch_id.clone();
     let author_c = author.clone();
+    let git_for_repair = git_ctx.clone();
+    let target_ps_c = target_ps.clone();
     let outcome = state
         .store
-        .run_blocking(move |store| {
-            store.reconcile_findings_import(
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let repairs = probe_anchors(store, &git_for_repair, id, &target_ps_c)?;
+            Ok(store.reconcile_findings_import_repairing(
                 id,
                 repo_id,
                 ps_number,
@@ -1023,12 +1243,14 @@ pub async fn import_findings_route(
                 &author_c,
                 &imported,
                 mode,
+                &repairs,
                 now,
-            )
+            )?)
         })
         .await?;
 
     emit_findings_review_changed(&state.bus, id, &review.repo, "findings_import", None);
+    anchor_warnings.extend(claim_disagreement_warnings(&outcome));
 
     Ok((
         StatusCode::OK,
@@ -1041,6 +1263,7 @@ pub async fn import_findings_route(
             "review_id": id,
             "ps_number": target_ps.ps_number,
             "import_batch_id": import_batch_id,
+            "anchor_warnings": anchor_warnings,
         })),
     )
         .into_response())
@@ -1477,10 +1700,18 @@ async fn compose_document(
     // Derive each finding's annotation anchor from the TARGET patchset's
     // pinned blob — the same `build_finding_anchor` the v1 import path uses,
     // so a v2 finding's carry-forward ladder is the identical one.
-    let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
+    let mut blob_cache: AnchorBlobCache = HashMap::new();
     let mut imported = Vec::with_capacity(prepared.findings.len());
+    let mut anchor_warnings: Vec<serde_json::Value> = Vec::new();
     for f in &prepared.findings {
-        let anchor = build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &f.location)?;
+        let (anchor, warning) =
+            build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &f.location)?;
+        if let Some(w) = warning {
+            // A compose finding may carry no slug yet (minted by the
+            // reconcile); the warning then names the title.
+            let who = f.slug.clone().unwrap_or_else(|| f.title.clone());
+            anchor_warnings.push(w.to_json(&who, &f.location));
+        }
         imported.push(store::ImportedFinding {
             slug: f.slug.clone().unwrap_or_default(),
             severity: f.severity.clone(),
@@ -1544,10 +1775,13 @@ async fn compose_document(
     let import_batch_id_c = import_batch_id.clone();
     let verdict_state = body.verdict.clone();
     let verdict_note = body.verdict_note.clone();
+    let git_for_repair = git_ctx.clone();
+    let target_ps_c = target_ps.clone();
     let outcome = state
         .store
-        .run_blocking(move |store| {
-            store.compose_review_doc(
+        .run_blocking(move |store| -> Result<_, ApiError> {
+            let repairs = probe_anchors(store, &git_for_repair, id, &target_ps_c)?;
+            Ok(store.compose_review_doc(
                 &new_row,
                 repo_id,
                 &import_batch_id_c,
@@ -1558,14 +1792,16 @@ async fn compose_document(
                 verdict_state
                     .as_deref()
                     .map(|s| (s, verdict_note.as_deref())),
+                &repairs,
                 now,
-            )
+            )?)
         })
         .await?;
 
     // ONE event for the whole transaction — never three, and never one per
     // finding (the same rule V70-R's own `compose` follows).
     emit_review_changed(&state.bus, id, &review.repo, "compose", false);
+    anchor_warnings.extend(claim_disagreement_warnings(&outcome.findings));
 
     let (doc_out, _, _) =
         doc_routes::load_doc_out(&state, id, Some(&target_ps.ps_number.to_string()), true).await?;
@@ -1588,6 +1824,7 @@ async fn compose_document(
             },
             "report_set": outcome.report_set,
             "verdict_changed": outcome.verdict_changed,
+            "anchor_warnings": anchor_warnings,
             "lint": prepared.lint,
             "doc": doc_out,
         })),
@@ -1766,6 +2003,7 @@ pub async fn create_manual_finding_route(
     let category = body.category.clone().unwrap_or_else(|| "other".to_string());
     let now = now_unix();
 
+    let mut anchor_warning: Option<serde_json::Value> = None;
     let row = if let Some(ann) = &adopted {
         // ADOPT path (V80-M5) — the location comes from the comment's own
         // anchor, never re-derived from a request body; no git read, no
@@ -1814,8 +2052,10 @@ pub async fn create_manual_finding_route(
         // anchored from the request's own `location`.
         let location = body.location.clone().expect("validated required above");
         let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
-        let mut blob_cache: HashMap<(String, String), Option<String>> = HashMap::new();
-        let anchor = build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &location)?;
+        let mut blob_cache: AnchorBlobCache = HashMap::new();
+        let (anchor, warning) =
+            build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &location)?;
+        anchor_warning = warning.map(|w| w.to_json(&slug, &location));
         let new = store::NewReviewFinding {
             review_id: id,
             repo_id,
@@ -1870,10 +2110,15 @@ pub async fn create_manual_finding_route(
     let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
     let target_ps_c = target_ps.clone();
     let row_c = row.clone();
-    let view = state
+    let mut view = state
         .store
         .run_blocking(move |store| compose_finding_view(store, &repo_root, &target_ps_c, &row_c))
         .await?;
+    if let (Some(w), Some(obj)) = (anchor_warning, view.as_object_mut()) {
+        // v0.47 FA — additive, present only when the anchor could not be
+        // derived (the finding is created, resolution.orphaned says so).
+        obj.insert("anchor_warning".to_string(), w);
+    }
     Ok((
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -2166,6 +2411,231 @@ pub async fn clear_finding_disposition_route(
     let view = state
         .store
         .run_blocking(move |store| compose_finding_view(store, &repo_root, &target_ps_c, &row_c))
+        .await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
+}
+
+// --- v0.47 FA: explicit re-anchor ----------------------------------------
+
+/// `POST /api/reviews/{id}/findings/{slug}/reanchor`'s body.
+#[derive(Debug, Deserialize)]
+pub struct ReanchorFindingBody {
+    /// Patchset to re-derive against; default = the review's latest.
+    #[serde(default)]
+    pub ps: Option<i64>,
+    pub location: FindingLocationBody,
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+pub const ERR_REANCHOR_UNRESOLVABLE: &str = "urn:kb:errors:finding-reanchor-unresolvable";
+
+/// The honest-orphan law, applied to an EXPLICIT act: the new anchor must
+/// resolve EXACTLY, on the target blob, at the line the caller named — read
+/// back through the SAME resolver (`resolve_for_ps_with_content`) every
+/// later read will use. Anything less (a fuzzy match, a line that moved, a
+/// blank line with no text to hold on to) is refused with a named reason;
+/// a re-anchor is never a guess. `whole_file` is proven by the blob being
+/// readable at all (its anchor is the bare path).
+fn prove_reanchor_exact(
+    target_ps: &ReviewPatchsetRow,
+    location: &FindingLocationBody,
+    derived: &store::DerivedFindingAnchor,
+    sha: &str,
+    text: &str,
+) -> Result<(), (&'static str, String)> {
+    if location.kind == store::LOCATION_KIND_WHOLE_FILE {
+        return Ok(());
+    }
+    let probe = store::AnnotationRow {
+        id: "reanchor-probe".to_string(),
+        repo_id: 0,
+        path: location.path.clone(),
+        anchor: store::anchor_column(&derived.anchor),
+        anchor_kind: derived.anchor_kind.clone(),
+        anchor2: derived.anchor2.clone(),
+        parent_id: None,
+        intent: annotations::INTENT_FINDING.to_string(),
+        body: String::new(),
+        author: String::new(),
+        created_at: 0,
+        updated_at: 0,
+        resolved: false,
+        review_id: None,
+        ps_number: Some(target_ps.ps_number),
+        side: derived.side.clone(),
+        set_id: None,
+        trail_id: None,
+    };
+    let r = review_comments::resolve_for_ps_with_content(&probe, target_ps, sha, Some(text));
+    let cited = cited_lines(location);
+    let lo = cited.iter().copied().min().unwrap_or(0);
+    let hi = cited.iter().copied().max().unwrap_or(0);
+    if r.orphaned {
+        return Err((
+            "anchor_does_not_resolve",
+            format!(
+                "the anchor derived from the cited lines does not resolve on {:?} at the target \
+                 patchset ({})",
+                location.path,
+                r.orphan_reason.unwrap_or("unknown")
+            ),
+        ));
+    }
+    if r.confidence != Some("exact") {
+        return Err((
+            "anchor_not_exact",
+            "the anchor resolves only fuzzily (a blank or repeated line cannot be pinned \
+             exactly); cite a line with distinctive text"
+                .to_string(),
+        ));
+    }
+    let want_end = (location.kind == store::LOCATION_KIND_RANGE).then_some(hi as u32);
+    if r.line != Some(lo as u32) || r.line_end != want_end {
+        return Err((
+            "anchor_moved",
+            format!(
+                "the anchor resolves to line {:?}{}, not the cited {lo}{}",
+                r.line,
+                r.line_end.map(|e| format!("-{e}")).unwrap_or_default(),
+                want_end.map(|e| format!("-{e}")).unwrap_or_default()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// `POST /api/reviews/{id}/findings/{slug}/reanchor` — S2-B GATED
+/// (`review_remote`, the SAME admission table as the disposition routes:
+/// loopback unconditionally, else `[review] remote_mutations`, default OFF,
+/// then `auth_bearer`). Body `{ps?, location:{path,kind,lines,removed},
+/// author?}`.
+///
+/// An EXPLICIT human act that repairs a finding whose anchor no longer
+/// matches its (correct) saved lines, or moves it. The anchor is re-derived
+/// with the SAME `build_finding_anchor` the import uses, against the chosen
+/// patchset's pinned blob (default latest), and is REFUSED with `409`
+/// (`application/problem+json`, `type` [`ERR_REANCHOR_UNRESOLVABLE`], a
+/// named `reason`) unless it resolves EXACTLY there
+/// ([`prove_reanchor_exact`]) — the honest-orphan law. On success ONE
+/// transaction rewrites the finding's `location_*`, its annotation's
+/// anchor/path/side/ps binding, and stamps `reanchor_json` (who, when,
+/// patchset, and the `from` location — surfaced on the finding as
+/// `reanchor`, never a verdict); a later import/compose never overwrites a
+/// re-anchored finding's anchor. `404` unknown finding; `409`
+/// `adopted_comment` when the finding's thread is an adopted human comment
+/// (not this verb's to move). Emits `review.changed{reason:
+/// "finding.reanchored", finding_slug}` and returns the finding view.
+pub async fn reanchor_finding_route(
+    State(state): State<SharedState>,
+    AxumPath((id, slug)): AxumPath<(i64, String)>,
+    Json(body): Json<ReanchorFindingBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (review, repo, _repo_id) = require_review(&state, id).await?;
+    if let Err(e) = validate_location_shape(&body.location) {
+        let (_, message) = describe_location_error(e, &body.location);
+        return Err(ApiError::bad_request(message));
+    }
+    let ps_param = body.ps.map(|n| n.to_string());
+    let target_ps = state
+        .store
+        .run_blocking(move |store| resolve_ps(store, id, ps_param.as_deref()))
+        .await?;
+    let unresolvable = |reason: &'static str, detail: String| {
+        ApiError::new(StatusCode::CONFLICT, detail)
+            .with_problem_type(ERR_REANCHOR_UNRESOLVABLE)
+            .with_reason(reason)
+    };
+
+    let git_ctx = GitCtx::resolve_entry(&state.store, repo).await;
+    let mut blob_cache: AnchorBlobCache = HashMap::new();
+    let (derived, warning) =
+        build_finding_anchor(&git_ctx, &mut blob_cache, &target_ps, &body.location)?;
+    if let Some(w) = warning {
+        return Err(unresolvable(w.reason, w.detail));
+    }
+    let sha = if body.location.removed {
+        target_ps.base_sha.clone()
+    } else {
+        target_ps.tip_sha.clone()
+    };
+    // `whole_file` reads no blob inside the builder; prove the path exists.
+    let text = match review_comments::read_blob_text_checked(&git_ctx, &body.location.path, &sha) {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(unresolvable(
+                e.as_str(),
+                format!(
+                    "{:?} could not be read at the target patchset",
+                    body.location.path
+                ),
+            ))
+        }
+    };
+    if let Err((reason, detail)) =
+        prove_reanchor_exact(&target_ps, &body.location, &derived, &sha, &text)
+    {
+        return Err(unresolvable(reason, detail));
+    }
+
+    let write = store::FindingReanchorWrite {
+        location_kind: body.location.kind.clone(),
+        location_path: body.location.path.clone(),
+        location_lines: body
+            .location
+            .lines
+            .as_deref()
+            .map(store::location_lines_json),
+        location_removed: body.location.removed,
+        anchor_kind: derived.anchor_kind,
+        anchor: derived.anchor,
+        anchor2: derived.anchor2,
+        side: derived.side,
+        ps_number: target_ps.ps_number,
+        by: body.author.clone().unwrap_or_else(|| "you".to_string()),
+    };
+    let now = now_unix();
+    let slug_c = slug.clone();
+    let outcome = state
+        .store
+        .run_blocking(move |store| store.reanchor_finding(id, &slug_c, &write, now))
+        .await?;
+    let row = match outcome {
+        store::FindingReanchorOutcome::NotFound => {
+            return Err(ApiError::not_found(format!(
+                "no finding {slug:?} on review {id}"
+            )))
+        }
+        store::FindingReanchorOutcome::AdoptedComment => {
+            return Err(unresolvable(
+                "adopted_comment",
+                "this finding adopted a human review comment as its thread; re-anchoring it \
+                 would move that comment — edit the comment instead"
+                    .to_string(),
+            ))
+        }
+        store::FindingReanchorOutcome::Done(row) => *row,
+    };
+    emit_findings_review_changed(
+        &state.bus,
+        id,
+        &review.repo,
+        "finding.reanchored",
+        Some(&slug),
+    );
+
+    let latest = state
+        .store
+        .run_blocking(move |store| -> Result<ReviewPatchsetRow, ApiError> {
+            store
+                .latest_patchset(id)?
+                .ok_or_else(|| ApiError::not_found(format!("review {id} has no patchsets")))
+        })
+        .await?;
+    let repo_root = GitCtx::resolve_entry(&state.store, repo).await;
+    let view = state
+        .store
+        .run_blocking(move |store| compose_finding_view(store, &repo_root, &latest, &row))
         .await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)))
 }
@@ -2513,6 +2983,7 @@ mod tests {
             cites_json: None,
             fingerprint: None,
             superseded_by: None,
+            reanchor_json: None,
         }
     }
 
@@ -2568,6 +3039,7 @@ mod tests {
             },
             original: None,
             confidence: Some("exact"),
+            orphan_reason: None,
         }
     }
 

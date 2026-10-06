@@ -232,6 +232,21 @@ async fn gate_off_non_loopback_valid_token_404s_all_five_families() {
         .unwrap();
     assert_eq!(resp.status(), 404, "disposition DELETE, gate off");
 
+    // 3b. v0.47 FA — finding re-anchor rides the SAME gate.
+    let resp = client
+        .post(format!(
+            "{base}/api/reviews/{id}/findings/f-target/reanchor"
+        ))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", &auth)
+        .json(&serde_json::json!({
+            "location": {"path": "a.txt", "kind": "single", "lines": [1]},
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404, "finding reanchor, gate off");
+
     // 4. finding publish recording.
     let resp = client
         .post(format!(
@@ -359,6 +374,26 @@ async fn gate_on_non_loopback_valid_token_succeeds_on_every_family() {
         resp.status(),
         reqwest::StatusCode::OK,
         "disposition PUT, gate on"
+    );
+
+    // 2b. v0.47 FA — finding re-anchor through the same gate.
+    let resp = client
+        .post(format!(
+            "{base}/api/reviews/{id}/findings/f-target/reanchor"
+        ))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", &auth)
+        .json(&serde_json::json!({
+            "location": {"path": "a.txt", "kind": "single", "lines": [1]},
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "finding reanchor, gate on: {}",
+        resp.text().await.unwrap()
     );
 
     // 3. finding publish recording.

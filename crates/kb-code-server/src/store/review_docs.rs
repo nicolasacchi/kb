@@ -69,6 +69,7 @@ impl Store {
         mode: FindingsImportMode,
         report_json: &str,
         verdict: Option<(&str, Option<&str>)>,
+        repairs: &AnchorRepairs,
         now: i64,
     ) -> Result<ComposeDocOutcome> {
         let review_id = doc.review_id;
@@ -85,6 +86,7 @@ impl Store {
             findings,
             mode,
             FindingIdentity::Fingerprint,
+            repairs,
             now,
         )?;
 

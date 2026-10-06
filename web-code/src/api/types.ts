@@ -3536,6 +3536,12 @@ export interface FindingResolution {
   line_end: number | null;
   orphaned: boolean;
   confidence: FindingResolutionConfidence;
+  /**
+   * v0.47 FA — WHY the anchor is orphaned; present iff `orphaned`. A
+   * diagnosis, never a verdict (the line stays withheld). Absent on an older
+   * daemon.
+   */
+  orphan_reason?: "blob_unreadable" | "anchor_missing" | "text_changed";
 }
 
 /// kbc-prose/1 (V76-B3) — one extracted (and optionally resolved) prose
@@ -3598,6 +3604,23 @@ export interface ReviewFinding {
   created_at: number;
   updated_at: number;
   resolution: FindingResolution;
+  /**
+   * v0.47 FA — audit of a human re-anchor (`POST .../findings/{slug}/reanchor`);
+   * present only once one happened. Inline: the wire ratchet counts
+   * hand-written exports.
+   */
+  reanchor?: {
+    by: string;
+    at: number;
+    ps: number;
+    from: {
+      path: string;
+      kind: string;
+      lines: number[] | null;
+      removed: boolean;
+      ps: number | null;
+    };
+  };
   thread_count: number;
   unresolved_count: number;
   /**

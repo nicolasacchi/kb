@@ -1,0 +1,23 @@
+-- v0.47 FA — an explicit, human re-anchor of a finding.
+--
+-- `review_findings.reanchor_json` is NULL for every finding that has never
+-- been re-anchored by hand (every pre-V0046 row, and every row a re-import
+-- merely refreshed). It is set, in the SAME transaction that rewrites the
+-- finding's location and its linked annotation's anchor, by
+-- `POST /api/reviews/{id}/findings/{slug}/reanchor`, and carries the audit
+-- trail for that act:
+--
+--   {"by": "<identity>", "at": <unix>, "ps": <ps the anchor was re-derived
+--    against>, "from": {"path", "kind", "lines", "removed", "ps"}}
+--
+-- Two meanings, one column, deliberately: its PRESENCE is the pin (a later
+-- `findings import`/`compose` of an import-origin finding must not
+-- overwrite the human's re-anchor), and its CONTENT is the who/when/from.
+-- A re-anchor of an already-pinned finding overwrites the audit with the
+-- newest act; the previous location is the new `from`, so the chain is
+-- recoverable from the event stream, not stored as history here (surfaced,
+-- never a quality verdict).
+--
+-- O(1) DDL: ALTER TABLE ADD COLUMN, no default, no backfill (V0043/V0044's
+-- precedent).
+ALTER TABLE review_findings ADD COLUMN reanchor_json TEXT;
