@@ -21,7 +21,7 @@ opencode, Grok Build, Kimi Code) and a full extension-based wiring for omp
 | `kb-distill-nudge-codex.sh` | `Stop` (codex) | **MI-W0.3** — the codex-side twin of `kb-distill-nudge.sh`: same git-commit-without-a-successful-remember check, but greps the CODEX rollout named by `.transcript_path` instead of a Claude transcript (tool-call lines matched on `"name":"(exec_command\|shell\|local_shell)"`, then the literal substring `git commit`; the `remembered <12-hex-id>` success marker is plain text either way, so it's the same regex). Session id read from the rollout's own `session_meta.payload.id`. Once per session (its own `distill-nudged-codex-*` marker namespace under `~/.cache/kb/`). Registered in `~/.codex/hooks.json`'s `Stop` chain after the capture entry (see "Codex CLI registration" below). Test: `tests/test-distill-nudge-codex.sh`. |
 | `kb-capture-kimi.sh` | `Stop` / `SessionEnd` / `PreCompact` (Kimi Code) | Capture adapter for Kimi Code: Kimi's hook payload has no `transcript_path`, so the script derives the wire itself — `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/wd_<basename(cwd)>_<sha256(cwd)[0:12]>/<session_id>/agents/main/wire.jsonl`. Translates the wire (`turn.prompt`, `content.part` text/think, `tool.call`/`tool.result` — Kimi tool names are already Claude-shaped; Write/Edit `.args.path` → `file_path`, usage `inputOther+inputCacheRead+inputCacheCreation`/`output` → `input_tokens`/`output_tokens`) into the same Claude-shaped JSONL and writes via the SAME preferred path (`kb sessions capture`, bash fallback with `kb-harness: kimi`). CLI backfill: `kb-capture-kimi.sh <wire.jsonl>…`. Test: `tests/test-capture-kimi.sh`. |
 | `kb-distill-nudge-kimi.sh` | `Stop` (Kimi Code) | The Kimi-side twin of the distill nudge: greps the wire's `"name":"Bash"` `tool.call` lines for `git commit`, suppresses on a successful `remembered <12-hex-id>`, once per session (`distill-nudged-kimi-*` marker). On a hit it prints the one-line nudge (Stop stdout may be shown to the user) AND appends `kimi <sid> <epoch>` to the shared `~/.cache/kb/distill-pending` ledger, so the next interactive session's wake (any harness) surfaces it. Test: `tests/test-distill-nudge-kimi.sh`. |
-| `kb-capture-omp.sh` | `session_stop` / `session.compacting` / `session_shutdown` (omp, via `kb-omp.ts`) | Capture adapter for Oh My Pi (omp): translates an omp v3 session JSONL (`~/.omp/agent/sessions/<encoded-cwd>/<ts>_<sid>.jsonl`) into the same Claude-shaped JSONL. omp sessions are an append-only TREE (`id`/`parentId`), so a single backward pass from the last entry captures the LEAF CHAIN only — abandoned branch experiments never pollute the activity — and everything at-or-before a trailing `reset_boundary` (`/clear`) is cut. Tool names are canonicalized (`bash`→`Bash`, …), Write/Edit `.arguments.path` → `file_path`, per-assistant `usage{input,output,cacheRead,cacheWrite}` → summed `input_tokens`/`output_tokens`; own injected `custom_message` entries are dropped so kb's context never echoes back into the corpus. Lenient pre-clean drops torn trailing lines (crash or active append) instead of aborting. Same preferred path + fallback + overwrite contract as the other adapters. **Lifecycle (v0.45 OC)**: one active conversion per session file across processes, a hard deadline, and every child reaped on cancel - see "The omp capture owns its lifecycle" below. CLI backfill: `kb-capture-omp.sh <session.jsonl>…`. Tests: `tests/test-capture-omp.sh`, `tests/test-capture-omp-lifecycle.sh`, `tests/test-omp-capture-lifecycle.sh` (the `kb-omp.ts` spawn path, bun). |
+| `kb-capture-omp.sh` | `session_stop` / `session.compacting` / `session_shutdown` (omp, via `kb-omp.ts`) | Capture adapter for Oh My Pi (omp): translates an omp v3 session JSONL (`~/.omp/agent/sessions/<encoded-cwd>/<ts>_<sid>.jsonl`) into the same Claude-shaped JSONL. omp sessions are an append-only TREE (`id`/`parentId`), so a single backward pass from the last entry captures the LEAF CHAIN only — abandoned branch experiments never pollute the activity — and everything at-or-before a trailing `reset_boundary` (`/clear`) is cut. Tool names are canonicalized (`bash`→`Bash`, …), Write/Edit `.arguments.path` → `file_path`, per-assistant `usage{input,output,cacheRead,cacheWrite}` → summed `input_tokens`/`output_tokens`; own injected `custom_message` entries are dropped so kb's context never echoes back into the corpus. Lenient pre-clean drops torn trailing lines (crash or active append) instead of aborting. Same preferred path + fallback + overwrite contract as the other adapters. **Lifecycle (v0.45 OC)**: one active conversion per session file across processes, a hard deadline, and every child reaped on cancel - see "The omp capture owns its lifecycle" below. **Segmented capture (v0.46 SEG-PR2, opt-in)**: a session whose leaf chain outgrows 16 MiB is landed as an ordered chain of ordinary sessions instead of one O(session) conversion - see "Segmented omp capture" below. CLI backfill: `kb-capture-omp.sh <session.jsonl>…`. Tests: `tests/test-capture-omp.sh`, `tests/test-capture-omp-lifecycle.sh`, `tests/test-capture-omp-segments.sh`, `tests/test-capture-omp-segments-scale.sh`, `tests/test-omp-capture-lifecycle.sh` (the `kb-omp.ts` spawn path, bun). |
 | `kb-beat.sh` | `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` (Claude Code); registered analogously for codex, Kimi Code, opencode, omp | **LSC-3** push collection for the live-sessions cockpit (design: [docs/research/kb-live-sessions-cockpit-2026-08.html](../../../docs/research/kb-live-sessions-cockpit-2026-08.html) §4/§5). One script for all harnesses: `kb-beat.sh <harness> <event>` reads the hook payload on stdin, maps it to the canonical `kb-live/1` beat (`v`, `session_id`, `harness`, `event` — one of `start\|prompt\|tool\|turn_end\|blocked\|unblocked\|end`, never a derived state — `at`, `host`, `pid`, `cwd`, `model`, `lease_secs`, optional `title`/`last_line`/`detail`), and POSTs it fire-and-forget (detached background subshell, `curl --max-time 2 --connect-timeout 1`) to `${KB_DAEMON_URL:-http://127.0.0.1:4000}${KB_BEAT_PATH:-/api/sessions/beat}`. Every failure path — no `curl`/`jq`, no daemon, the route not existing yet, malformed stdin — is silent and `exit 0`; this ships safely ahead of the server-side route. Kill switch `KB_BEAT=0`; opt out of `last_line` content with `KB_BEAT_CONTENT=0`; `KB_BEAT_DRYRUN=1` prints the JSON body to stdout instead of posting (used by `tests/test-beat.sh` and for manual sanity checks). Claude's Stop event carries `.last_assistant_message` verbatim (capped 240 chars) as `last_line`; codex resolves the canonical `session_id` from the rollout's own `session_meta.payload.id` (same ground-truth preference as every other adapter here), falling back to a bare `.session_id` if present. `KB_SESSIONS_DIR` gates it exactly like every capture hook (kb not configured for this project ⇒ no-op). Test: `tests/test-beat.sh`. |
 | `kb-beat-throttle.sh` | `PostToolUse` (Claude Code) | A min-interval gate (`KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS`, default 180s) in front of `kb-beat.sh <harness> tool`, mirroring `kb-capture-throttle.sh`'s pattern but keyed on a per-session marker file's mtime (no artifact to stat here). Exists so a single long tool call (a 20-minute build) still refreshes the session's `lease_secs` mid-turn instead of only at the next `Stop` — design §11's named mitigation for "per-tool beats would be hundreds per session." Default **ON** (unlike the capture throttle — a beat is a tiny POST, not a multi-MB re-serialize); `KB_BEAT_HEARTBEAT=0` disables just the heartbeat, `KB_BEAT=0` disables every beat. |
 
@@ -254,6 +254,15 @@ registering anywhere `kb-memory` is already installed. Design:
   - **drops a poisoned subagent sidecar** instead of failing the pass: a
     sidecar whose translation errors is skipped (the main transcript and the
     healthy sidecars still land); only a deadline kill or a TERM aborts.
+    **TERM bound (segmented tail conversion included):** every step whose
+    cost grows with the input - the planner, the `session_exit` scan, the
+    chain walk, the `kb ... --help` probes, `drop-part` - is a tracked
+    background job whose answer is left in a file, never a `$(...)` (bash
+    defers a trapped TERM until a command substitution returns), so a TERM is
+    handled within ~6 s at those stages (pinned for a slow exit scan and a
+    slow chain walk in `test-capture-omp-segments.sh`). A few constant-size
+    `jq` reads (one plan-file field, one sidecar timestamp line) still run in
+    `$(...)`; only an IO stall on those tiny reads could delay a TERM.
   - **bounds a pass** with `KB_CAPTURE_HARD_SECS` (default 120, the same value
     `kb-omp.ts` always passed as its timeout - this makes that timeout real):
     each child is capped at what is left of it. The `kb` landing gets its own
@@ -287,6 +296,157 @@ registering anywhere `kb-memory` is already installed. Design:
   exits, so the capture outlives it, bounded by that same per-pass figure.
   Tests: `tests/test-capture-omp-lifecycle.sh` (real subprocesses; run by
   `hook_shell.rs`), `tests/test-omp-capture-lifecycle.sh` (bun lane).
+- **Segmented omp capture (v0.46 SEG-PR2, off by default)** - the single
+  conversion above is `jq -s` over the WHOLE session file: CPU and RSS grow with
+  the session, and a ~500 MB session never finished inside the 120 s hard
+  deadline, so it was never captured at all. With segmentation on, a session
+  whose planned leaf chain has more than one part is captured as an ORDERED
+  CHAIN of ordinary capture sessions, each converted from only its own byte
+  range, so a turn costs O(live tail), not O(session):
+  - **Enable it** (either; checked at EVERY capture, so a RUNNING omp needs no
+    restart - the next turn-end capture picks it up):
+    `KB_CAPTURE_SEGMENTS=1` in the environment of the capture process, **or**
+    the flag file `${XDG_CONFIG_HOME:-$HOME/.config}/kb/capture-segments`
+    (`mkdir -p ~/.config/kb && touch ~/.config/kb/capture-segments`; its
+    content is ignored). Remove the file to turn it off again;
+    `KB_CAPTURE_SEGMENTS=0` forces it off even when the file exists. The env
+    var only reaches omp processes that were started with it - the flag file is
+    the path for sessions that are already running. It needs a `kb` that has
+    `kb sessions segment-plan` (v0.46); the script probes it once per run and,
+    when it is absent, prints ONE stderr warning and uses the unchanged
+    single-capture path. Deleting superseded parts also needs `kb sessions
+    drop-part` (v0.47): an older kb keeps them and says so, and because an
+    outstanding drop keeps the input from being recorded as done, every
+    trigger of that session re-runs the (cheap, already-landed) segmented pass
+    and repeats the warning until the kb is upgraded.
+  - **Ids**: part 1 keeps the bare session id (existing artifact ids never
+    change); part k>=2 is `<id>-p<NN>` (`-p02`, `-p03`, ...). Every record of
+    part k>=2 carries `sessionId: <id>-p<NN>`, and its first `adapter-meta`
+    record adds `segmentOf`, `segmentIdx` and `rawSessionId` (part 1 carries no
+    keys and is never rewritten to add them). Parts are DISJOINT slices of the
+    leaf chain: event totals add up, `kb sessions recover --chain <id>`
+    concatenates them.
+  - **Below the threshold nothing changes**: a session whose plan has one part
+    (the common case; the target is 16 MiB of raw chain bytes, `KB_CAPTURE_SEGMENT_BYTES`
+    overrides it for tests) takes the single-capture path byte for byte (pinned
+    against a golden made by the pre-segmentation script).
+  - **One pass**, under the same per-session lock, coalescing, watchdog and
+    hard deadline as above (the deadline bounds each PASS; a multi-pass catch-up is bounded only by the caller's timeout): the planner (`kb sessions segment-plan`, state next
+    to the lock state in the private lock dir) cuts the chain at legal user
+    boundaries; the LIVE TAIL lands first (the session is searchable at once);
+    then up to 4 FROZEN parts, oldest first (`KB_CAPTURE_SEG_FREEZE_PER_PASS`),
+    each from `--emit K` (only that part's lines), translated by the SAME
+    TRANSLATE program - derived from it by three verified text substitutions
+    (`$dmodel` = the planner's per-part value, `$sid` = the part id, `$segmeta`
+    on the first meta; if TRANSLATE is ever edited so one no longer applies the
+    script warns and falls back, it never drifts). More work than one pass may
+    do re-runs passes (the coalescing loop) until caught up; nothing is
+    recorded as done until every part is landed. A part is never started with 15 s or less of the pass deadline left (the pass
+    then lands nothing and the next one continues; stderr says so). A catch-up that outlasts the
+    caller's own timeout (`KB_CAPTURE_TIMEOUT_MS`, 120 s in `kb-omp.ts`) is cut
+    by it like any capture and RESUMES at the next trigger: progress is
+    persisted per landed part, never restarted.
+  - **Landed means rc 0**: the script's own table (`<lock-base>.seg`: part,
+    id, input key) is committed tmp+rename after each part that landed with rc
+    0, so `kill -9` mid catch-up loses at most the part in flight. A WRITE-AHEAD
+    table (`<lock-base>.seg.pend`) records every continuation part just before
+    its landing is attempted and drops the row once the landed row exists: a
+    part that was parked in the spool and published by ANOTHER session's replay,
+    or that landed right before a `kill -9`, has no landed row but is still
+    found by a later shrink/fork. Orphan drops are driven by these two tables
+    only: if both are lost, or a `drop-part` fails, the part stays in the corpus
+    until the next trigger (the session fails open with stale parts, never loses
+    data). While any drop is outstanding the input is NOT recorded as done
+    (`<lock-base>.done`), in the segmented pass and in the legacy `/clear` path
+    alike, so the next UNCHANGED trigger passes the fingerprint shortcut, retries
+    the drop and only then records. A part that
+    converted but landed with rc 1 (spooled) or 2 (lost) keeps its converted
+    files (`<lock-base>.parts/NN/`, private dir) and the retry lands them
+    without converting again. A frozen part's key is (first id, last id, entry
+    count, its own sidecars), so a title-only change re-lands only the tail, an
+    append converts only the tail (plus the one part that just froze), and a
+    late subagent re-opens only the part it belongs to.
+  - **Sidecars** go to the last part that starts strictly before the sidecar's
+    first timestamp (ties -> the earlier part); no readable timestamp -> the
+    tail.
+  - **Part 1 is re-landed smaller at its first freeze** (correctness over
+    artifact stability): a session that was captured whole before segmentation
+    keeps its bare-id artifact, which is then overwritten in place with just
+    the first slice, and the rest arrives as `-pNN`.
+  - **Rewind, fork, `/clear`, edits of earlier lines**: a frozen part is only
+    valid while the chain behind it is. A branch/rewind behind a frozen
+    boundary re-lands the changed parts in place (same ids) and drops the parts
+    the chain no longer reaches through `kb sessions drop-part` (verifies the
+    file really is that part, then removes it so the daemon's own delete
+    cascade clears its rows - this script never removes a corpus file; the verb itself does unlink the verified file, since kb has no delete route for sessions); a
+    `/clear` that leaves the session in one part re-lands the bare id in place
+    and drops every `-pNN`. omp is NOT strictly append-only apart from the
+    title slot: its session manager rewrites the whole file for
+    `rewriteEntries()` (pruning old tool outputs, clearing large tool results
+    and images during compaction, `discardEntryDurably` after a turn
+    recovery), for a load-time migration or malformed-record sanitize, and when
+    the session is moved to another cwd (`session-manager.ts`,
+    `session-maintenance.ts`, `turn-recovery.ts` in `@oh-my-pi/pi-coding-agent`).
+    The planner's checkpoint detects it (size, window hash, index checksum),
+    rebuilds by streaming, and keys parts by entry ids: a prune that only blanks
+    results keeps the same ids, so the already-landed parts are kept as they
+    were captured (fuller than omp's pruned file) but byte offsets and
+    therefore cut points shift, so the next plan can differ and re-land parts
+    from the first changed cut on (bounded: 4 frozen parts per pass). A
+    part that was only PARKED in the spool (never landed, so no table row) is
+    purged too when the chain shrinks - its spool item and `.parts/NN` cache go
+    at the start of the pass, so another session's spool replay can never
+    publish it as a ghost.
+  - **`[session-exit]`**: legacy emits ONE marker, for the last
+    `session_exit` of the RESOLVED chain (the leaf chain after the last
+    `/clear`). Only the live tail emits it: its own last exit, else the last
+    exit of the earlier parts that is on the planner's chain (`--print-chain`;
+    candidates are cached in `<lock-base>.exits` and re-checked against the
+    chain every pass), so an exit on an abandoned branch, or one at/before a
+    `/clear`, is never carried - exactly legacy. A frozen part never emits it,
+    so an exit followed by a resume cannot leave a stale marker behind. If the
+    planner cannot answer the chain query the tail is not converted (fail
+    closed, retried next pass). A part whose own exit entry is later superseded is not
+    re-landed, because it never carried one.
+  - **A failed plan**: when `segment-plan` fails for a session larger than the
+    target nothing is captured (fail closed - a corrupt `<lock-base>.plan` is
+    safe to delete); only a session that fits one target falls back to the
+    single-capture path. A landing that returns 0 but leaves no capture file is
+    treated as a failure (not recorded, no re-landing loop); a pass that ran
+    out of time with nothing landed does not re-run.
+  - **Size safety**: a translated part over 40 MiB (`KB_CAPTURE_SEG_MAX_PART_BYTES`)
+    is never landed oversized or truncated; the raw target is halved (the
+    planner has ONE target, so it is per session, kept in `<lock-base>.target`)
+    and the session is re-planned. The 48 MiB cap and `--allow-oversized` are
+    untouched.
+  - **Spool**: each unlanded part parks under its own key (`hook_sid_key` of the
+    part id). The spool has a 48 MiB cap per item and no total cap; this script
+    caps ONE session at 8 parked parts (`KB_CAPTURE_SEG_SPOOL_MAX`) - at the
+    cap a part that is not already parked is not landed (stderr says so) and
+    nothing advances, so the next pass regenerates from the source.
+  - **Limits, stated plainly**: an older daemon shows the parts as unrelated
+    sessions; a comment cannot span a cut; memory stamps and commit trailers
+    carry the raw id and resolve to part 1 (read-time widening in the daemon);
+    turning the flag off for a session that is already segmented makes the next
+    capture re-land the WHOLE session under the bare id over part 1 and leave the
+    `-pNN` parts in place - and since those parts still carry
+    `segmentOf`/`segmentIdx`, chain-grouped readers (`recover --chain`, logical
+    event sums) DOUBLE-COUNT their content until segmentation is re-enabled (the
+    parts are then re-landed disjoint again; the same applies when `segment-plan`
+    is unavailable after a segmented run); turning it back on re-lands part 1 small at the next
+    capture that has something to do (the legacy path forgets part 1's table
+    row; an unchanged session waits for its next change);
+    the per-part default model is exact at part boundaries only (a
+    `model_change` inside a part does not change records of that part that
+    carry no model of their own - real omp assistant messages carry theirs).
+    This makes the output differ from legacy BY DESIGN for records without a
+    model of their own (legacy applies the chain-global LAST `model_change` to
+    them, compaction and exit records included; a part uses the model in force
+    at its start, which is the more accurate of the two); a subagent that keeps writing re-converts and re-lands
+    its part on every pass.
+  Tests: `tests/test-capture-omp-segments.sh` (run by `hook_shell.rs`, against
+  the real planner and `drop-part`; with an older kb it uses
+  `tests/fixtures/fake-segment-plan.py`), `tests/test-capture-omp-segments-scale.sh`.
 - **One per-session key (v0.45 N4)** - every per-session file name (capture
   file, spool item, throttle lookup, markers) derives from `hook_sid_key`, and
   `kb sessions capture` (`sanitize_sid`) uses the identical algorithm: a plain
