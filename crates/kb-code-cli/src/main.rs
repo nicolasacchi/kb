@@ -4792,6 +4792,39 @@ enum ReviewFindingsCmd {
     // Args> Args for Box<T>` — clap_builder's derive.rs), so parsing is
     // unchanged; call sites now match `Add(args)` and read `args.id` etc.
     Add(Box<ReviewFindingsAddArgs>),
+    /// v0.47 FA — `reanchor ID SLUG --path P {--lines A[-B]|--whole-file}
+    /// [--ps N] [--removed] [--json]` — `POST
+    /// /api/reviews/{id}/findings/{slug}/reanchor`. An explicit human act:
+    /// re-derives the finding's anchor on patchset N's blob (default
+    /// latest) and moves its saved location with it — REFUSED (HTTP 409,
+    /// named reason) unless the new anchor resolves exactly on that blob.
+    /// A single line is `--lines 12`, a range `--lines 12-18`. Same
+    /// admission as `review disposition` (loopback, or `[review]
+    /// remote_mutations` for a bearer caller).
+    Reanchor {
+        id: i64,
+        slug: String,
+        #[arg(long)]
+        path: String,
+        /// `A` (one line) or `A-B` (inclusive range).
+        #[arg(long, conflicts_with = "whole_file")]
+        lines: Option<String>,
+        #[arg(long = "whole-file")]
+        whole_file: bool,
+        /// Patchset to re-derive against (default: latest).
+        #[arg(long)]
+        ps: Option<i64>,
+        /// The cited line was DELETED by this diff (anchors on the `old`
+        /// side).
+        #[arg(long)]
+        removed: bool,
+        #[command(flatten)]
+        who: AuthorArgs,
+        #[arg(long, default_value = "http://127.0.0.1:4747")]
+        daemon: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// V70-A8 (D20, PRR-F) — which of this review's own findings recur
     /// across other reviews (`GET /api/reviews/{id}/findings/recurrence`;
     /// no CLI coverage before this unit — recon `cli-agent-surface.md`
@@ -6424,6 +6457,32 @@ async fn run(cli: Cli) -> Result<()> {
                 }
                 ReviewFindingsCmd::Recurrence { id, daemon, json } => {
                     review_findings_recurrence_cmd(&daemon, id, json).await
+                }
+                ReviewFindingsCmd::Reanchor {
+                    id,
+                    slug,
+                    path,
+                    lines,
+                    whole_file,
+                    ps,
+                    removed,
+                    who,
+                    daemon,
+                    json,
+                } => {
+                    review_findings_reanchor_cmd(
+                        &daemon,
+                        id,
+                        &slug,
+                        &path,
+                        lines.as_deref(),
+                        whole_file,
+                        ps,
+                        removed,
+                        &who.resolve()?,
+                        json,
+                    )
+                    .await
                 }
             },
             ReviewCmd::Disposition {
@@ -18910,6 +18969,103 @@ async fn review_findings_add_cmd(
     Ok(())
 }
 
+/// v0.47 FA — the `location` object `POST …/findings/{slug}/reanchor`
+/// takes, from the CLI's `--path/--lines/--whole-file/--removed`. Pure (no
+/// I/O) so the grammar is unit-pinned: `--lines 12` is a `single`,
+/// `--lines 12-18` a `range` (a degenerate `12-12` collapses to `single`),
+/// `--whole-file` carries no lines.
+fn reanchor_location_json(
+    path: &str,
+    lines: Option<&str>,
+    whole_file: bool,
+    removed: bool,
+) -> Result<serde_json::Value> {
+    let (kind, lines_json): (&str, Option<Vec<i64>>) = match (whole_file, lines) {
+        (true, _) => ("whole_file", None),
+        (false, None) => {
+            anyhow::bail!("review findings reanchor: pass --lines A[-B] or --whole-file")
+        }
+        (false, Some(spec)) => {
+            let num = |t: &str| -> Result<i64> {
+                t.trim().parse::<i64>().with_context(|| {
+                    format!("review findings reanchor: --lines {spec:?} is not A or A-B")
+                })
+            };
+            match spec.split_once('-') {
+                None => ("single", Some(vec![num(spec)?])),
+                Some((a, b)) => {
+                    let (a, b) = (num(a)?, num(b)?);
+                    if a == b {
+                        ("single", Some(vec![a]))
+                    } else {
+                        ("range", Some(vec![a, b]))
+                    }
+                }
+            }
+        }
+    };
+    Ok(serde_json::json!({
+        "path": path,
+        "kind": kind,
+        "lines": lines_json,
+        "removed": removed,
+    }))
+}
+
+/// `kb-code review findings reanchor ID SLUG …` — `POST
+/// /api/reviews/{id}/findings/{slug}/reanchor`. A plain write (no capture),
+/// so the default http timeout applies. Prints the daemon's named refusal
+/// reason on a 409.
+#[allow(clippy::too_many_arguments)]
+async fn review_findings_reanchor_cmd(
+    daemon: &str,
+    id: i64,
+    slug: &str,
+    path: &str,
+    lines: Option<&str>,
+    whole_file: bool,
+    ps: Option<i64>,
+    removed: bool,
+    author: &str,
+    json: bool,
+) -> Result<()> {
+    let location = reanchor_location_json(path, lines, whole_file, removed)?;
+    let mut payload = serde_json::json!({ "location": location, "author": author });
+    if let Some(n) = ps {
+        payload["ps"] = serde_json::json!(n);
+    }
+    let client = http_client()?;
+    let route = format!("/api/reviews/{id}/findings/{slug}/reanchor");
+    let (status, body) = post_json_raw(&client, daemon, &route, &payload).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    }
+    if !status.is_success() {
+        if status == reqwest::StatusCode::CONFLICT && !json {
+            eprintln!(
+                "refused: {} ({})",
+                body["reason"].as_str().unwrap_or("unresolvable"),
+                body["error"].as_str().unwrap_or("")
+            );
+        }
+        return Err(loopback_or_api_error(
+            "review findings reanchor",
+            daemon,
+            status,
+            &body,
+        ));
+    }
+    if !json {
+        let r = &body["resolution"];
+        println!(
+            "✓ finding {slug} (review {id}) re-anchored; resolves at line {} ({})",
+            r["line"],
+            r["confidence"].as_str().unwrap_or("?")
+        );
+    }
+    Ok(())
+}
+
 const FINDING_DISPOSITIONS: &[&str] = &["agree", "dispute", "waive", "fix-later"];
 
 /// `kb-code review disposition ID SLUG {agree,dispute,waive,fix-later,clear}
@@ -28824,6 +28980,74 @@ mod tests {
             }
             other => panic!("expected Review{{Findings{{List}}}}, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn review_findings_reanchor_parses_and_builds_the_location() {
+        match parse_cli(&[
+            "review",
+            "findings",
+            "reanchor",
+            "4",
+            "f-a",
+            "--path",
+            "app/legacy.lua",
+            "--lines",
+            "12-18",
+            "--ps",
+            "2",
+            "--removed",
+        ])
+        .unwrap()
+        {
+            Cmd::Review {
+                cmd:
+                    ReviewCmd::Findings {
+                        cmd:
+                            ReviewFindingsCmd::Reanchor {
+                                id,
+                                slug,
+                                path,
+                                lines,
+                                whole_file,
+                                ps,
+                                removed,
+                                ..
+                            },
+                    },
+            } => {
+                assert_eq!(
+                    (id, slug.as_str(), path.as_str()),
+                    (4, "f-a", "app/legacy.lua")
+                );
+                assert_eq!(ps, Some(2));
+                assert!(removed && !whole_file);
+                let loc =
+                    reanchor_location_json(&path, lines.as_deref(), whole_file, removed).unwrap();
+                assert_eq!(
+                    loc,
+                    serde_json::json!({
+                        "path": "app/legacy.lua", "kind": "range",
+                        "lines": [12, 18], "removed": true,
+                    })
+                );
+            }
+            other => panic!("expected Review{{Findings{{Reanchor}}}}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reanchor_location_grammar() {
+        let one = reanchor_location_json("a.rb", Some("7"), false, false).unwrap();
+        assert_eq!(one["kind"], "single");
+        assert_eq!(one["lines"], serde_json::json!([7]));
+        let degenerate = reanchor_location_json("a.rb", Some("7-7"), false, false).unwrap();
+        assert_eq!(degenerate["kind"], "single");
+        let whole = reanchor_location_json("a.rb", None, true, false).unwrap();
+        assert_eq!(whole["kind"], "whole_file");
+        assert!(whole["lines"].is_null());
+        assert!(reanchor_location_json("a.rb", None, false, false).is_err());
+        assert!(reanchor_location_json("a.rb", Some("x-3"), false, false).is_err());
     }
 
     #[test]

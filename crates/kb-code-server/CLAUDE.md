@@ -1083,6 +1083,39 @@ invariant #2 records).
     location — surfaced on `GET /api/reviews/{id}/findings` and every
     single-finding response `finding_json` composes, never scored, and
     the word "fixed" appears nowhere in this lane.
+    (h) **A finding's anchor follows its claim; a re-anchor is an explicit,
+    exact-or-refused act** (v0.47 FA, migration V0046). *Amends design §4.3
+    point 5 ("the annotation's own anchor is NOT eagerly rewritten"),
+    which was written for an UNCHANGED claim:* when a re-import/compose of
+    an `import`-origin finding changes its `location_*` (path/kind/lines/
+    removed), or the linked annotation has no anchor at all, the anchor
+    (+ path, side, bound `ps_number`; replies follow) is re-derived from the
+    target patchset in the SAME transaction (`reconcile_findings_import_on`)
+    — keeping the old anchor made a finding with correct saved lines an
+    orphan forever. A SAME-location re-import still never touches the anchor
+    (the carry-forward ladder owns it), and `manual` rows stay untouched.
+    An anchor that cannot be derived (blob over the cap / path absent /
+    cited line past EOF) is NEVER stored as an empty snippet: the anchor is
+    persisted as SQL NULL (`store::UNANCHORED`), the finding is still
+    imported (the author's citation is kept, never a guessed line), and the
+    response carries a per-slug `anchor_warnings[]` entry
+    (`kind: anchor_unreadable`, `reason`: `path_absent`|`blob_too_large`|
+    `blob_unreadable`|`line_past_eof`; manual create: `anchor_warning`).
+    Blobs decode through ONE policy (`review_comments::decode_blob`,
+    lossy UTF-8) on BOTH the anchor-build and resolve paths, and a finding's
+    `resolution.orphan_reason` (additive, present iff orphaned:
+    `blob_unreadable`|`anchor_missing`|`text_changed`) says WHICH kind of
+    orphan it is. `POST /api/reviews/{id}/findings/{slug}/reanchor`
+    (`review_remote`, the disposition gate) re-derives with the same
+    builder on the chosen patchset's blob and REFUSES (409,
+    `urn:kb:errors:finding-reanchor-unresolvable`, named `reason`) unless
+    the result resolves EXACTLY at the cited line through the shared
+    resolver; on success one transaction rewrites location + anchor and
+    stamps `review_findings.reanchor_json` — the audit (`by`, `at`, `ps`,
+    `from`) AND the pin: a later import/compose keeps a pinned finding's
+    location and anchor (everything else still refreshes). An adopted human
+    comment's finding (`intent != finding`) is refused (`adopted_comment`).
+    `review.changed{reason:"finding.reanchored", finding_slug}`.
 
 24. **`kbc-canvas/1`: a board node is a CLAIM re-resolved on every read, a
     board is COORDINATE-FREE, and the two mutation rules are enforced by

@@ -260,6 +260,28 @@ human sees in the browser. `kb-code review findings add ID --severity S
 --category C --path P {--line N|--lines A-B|--whole-file} -m TITLE
 --rationale R [--act A] [--blocking]` (`POST /api/reviews/{id}/findings`,
 LOOPBACK-ONLY, addendum §E) lets a human author one finding directly.
+**Finding anchors (v0.47 FA).** A finding has two positions: the saved
+claim (`location`) and the anchor of its linked annotation. A re-import or
+compose of an agent (`import`-origin) finding whose location changed now
+re-derives the anchor from the target patchset in the same transaction (this
+amends the original "the anchor is never rewritten on re-import" rule, which
+only held for an unchanged claim; a same-location re-import and every
+`manual` finding are still untouched). A citation that cannot be anchored —
+blob over the size cap, path absent, line past end of file — is imported
+without an anchor (an honest orphan, never a guessed line) and reported per
+slug in the import/compose response as `anchor_warnings[]`
+(`reason`: `path_absent`|`blob_too_large`|`blob_unreadable`|`line_past_eof`).
+Non-UTF-8 sources are decoded lossily on both the anchor and resolve paths.
+Each finding's `resolution` gains an additive `orphan_reason`
+(`blob_unreadable`|`anchor_missing`|`text_changed`) when orphaned. To repair
+or move one by hand: `kb-code review findings reanchor ID SLUG --path P
+{--lines A[-B]|--whole-file} [--ps N] [--removed]` (`POST
+/api/reviews/{id}/findings/{slug}/reanchor`, same admission as `disposition`)
+— refused with `409` and a named `reason` unless the new anchor resolves
+exactly on that patchset's blob; on success the finding carries a `reanchor`
+audit (`by`, `at`, `ps`, `from`), a later import keeps its location and
+anchor, and an SSE `review.changed{reason:"finding.reanchored"}` fires. A
+finding that adopted a human comment cannot be re-anchored.
 `--act` (findings v2's speech-act axis — `issue`|`question`|`suggestion`|
 `nitpick`|`praise`|`note`|`todo`|`chore`, default `issue`) and `--blocking`
 (the reviewer's own call, never derived from `severity`) were previously
@@ -1375,7 +1397,7 @@ bearer caller when `[review] remote_mutations = true`, else a bodiless
 |---|---|---|
 | `POST /api/reviews`, `/reviews/{id}/snapshot`, `/reviews/{id}/retrack`, `PATCH`/`DELETE /reviews/{id}`, `POST /reviews/gc`, `/reviews/refs/gc`, `/reviews/pr`, `/reviews/sweep`, `/reviews/sync`, `/reviews/retrack-bulk`, `/branches/review` | loopback | creates, rewrites or deletes review state and refs, or runs git/`gh` |
 | `PUT /reviews/{id}/viewed`, `PUT`/`DELETE …/hunk-viewed`, `PUT /reviews/{id}/report`, `POST …/findings/import`, `POST …/compose`, `POST …/doc/render` | loopback | stay loopback regardless of the flag (pinned by the "never moves" suite) |
-| `POST /reviews/{id}/findings`, `PUT`/`DELETE …/findings/{slug}/disposition`, `POST …/findings/{slug}/published`, `POST …/verdict/published`, `PUT`/`DELETE …/verdict` | review_remote | the five graduated families |
+| `POST /reviews/{id}/findings`, `PUT`/`DELETE …/findings/{slug}/disposition`, `POST …/findings/{slug}/published`, `POST …/findings/{slug}/reanchor` (v0.47), `POST …/verdict/published`, `PUT`/`DELETE …/verdict` | review_remote | the graduated families |
 | `POST /boards/{slug}/accept`, `POST /boards/{slug}/archive`, `DELETE /boards/{slug}` | review_remote | `POST /boards/apply` and `/tours/apply` stay loopback |
 | `POST /annotations/{id}/apply`, `/annotations/apply-batch` (suggestion apply), `POST /checkout`, `/worktrees…`, `/prs/fetch`, `/scip/ingest`, `/doc-lens/sync` | loopback | the sanctioned working-tree and ref mutations |
 | `POST /annotations`, `PATCH`/`DELETE /annotations/{id}`, `PUT`/`DELETE …/suggestion`, `POST /annotations/batch`, `PUT`/`DELETE /annotations/{id}/review`, `POST /code-actions` | bearer | annotation rows only; no working-tree effect |
