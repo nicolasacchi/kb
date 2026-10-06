@@ -289,6 +289,44 @@ hook_spool_put_sidecars() {
   )
 }
 
+# hook_kb_in_path
+# Put `kb` on PATH in THIS shell (a harness hook often runs with a minimal
+# PATH): the usual install dirs and KB_BIN_DIR are probed, as hook_adapter_land
+# does inside its own call. rc 1 = not found. (v0.46 SEG-PR2: the segmented
+# omp capture probes `kb sessions segment-plan` in the main shell, because
+# hook_adapter_land runs in a subshell and its PATH change does not survive.)
+hook_kb_in_path() {
+  command -v kb >/dev/null 2>&1 && return 0
+  local d
+  for d in "${KB_BIN_DIR:-}" "${HOME:-}/.local/bin" "${HOME:-}/.cargo/bin" /usr/local/bin /opt/homebrew/bin; do
+    if [ -n "$d" ] && [ -x "$d/kb" ]; then
+      PATH="$d:$PATH"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# hook_spool_count_group <raw-session-id>
+# How many spool items belong to ONE segmented session: the bare raw id plus
+# every `<raw id>-p<NN>` continuation part (matched on the `session_id=` first
+# line of each item's .meta, never on the file name - a non-plain id's key
+# carries a hash of the full part id, so parts share no name prefix). Prints
+# the count. v0.46 SEG-PR2: the adapter caps the parked parts of one session.
+hook_spool_count_group() {
+  local dir
+  dir="$(hook_spool_dir)" || { printf '0'; return 0; }
+  # shellcheck disable=SC2231
+  awk -v raw="$1" '
+    FNR == 1 {
+      want = "session_id=" raw
+      if ($0 == want) c++
+      else if (index($0, want "-p") == 1 && substr($0, length(want) + 3) ~ /^[0-9]+$/) c++
+    }
+    END { print c + 0 }
+  ' "$dir"/*.meta 2>/dev/null || printf '0'
+}
+
 # hook_short_hash <string> - first 8 hex of sha256 (cksum fallback).
 hook_short_hash() {
   if command -v sha256sum >/dev/null 2>&1; then
