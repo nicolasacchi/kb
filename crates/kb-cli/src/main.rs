@@ -2801,7 +2801,7 @@ enum SessionsAction {
         #[arg(long)]
         json: bool,
     },
-    /// V0045/seg1 — print one session's decoded transcript JSONL
+    /// Print one session's decoded transcript JSONL
     /// (`GET /{sid}/raw`); with `--chain`, a segmented session's WHOLE chain
     /// concatenated in part order (continuation parts drop their own
     /// adapter-meta header line; every other byte is verbatim).
