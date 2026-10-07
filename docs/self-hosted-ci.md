@@ -110,6 +110,21 @@ nei job; non esporre le porte dei daemon. Per una variazione di capacità occorr
 prima misurare consumo e headroom e poi ricalcolare il budget globale, non
 moltiplicare i limiti individuali o aggiungere worker per svuotare la coda.
 
+### Build immagini con BuildKit integrato
+
+`build-image.yml` usa il driver Buildx `docker` sui runner self-hosted,
+riutilizzando il BuildKit del daemon rootless isolato. Il builder aggiuntivo
+`docker-container` falliva al mount di `sysfs`; non è necessario concedere
+privilegi ulteriori o montare il socket dell'host. I runner GitHub-hosted
+mantengono `docker-container`.
+
+Le cache mount persistono nel volume del singolo daemon e non sono condivise
+tra slot. Restano invariati architettura nativa, `provenance: false`,
+permessi, gate sulla CI riuscita e checkout dell'esatto SHA verificato.
+Il collaudo del 7 ottobre 2026 ha eseguito l'action Buildx fissata allo SHA,
+build e avvio reali, riuso della cache e push/pull tramite un registry
+temporaneo interno al daemon. Nessuna pubblicazione GHCR usata come smoke.
+
 ## Manutenzione e collaudo
 
 Prima di applicare modifiche infrastrutturali, controllare stato e job attivo dei
