@@ -29,7 +29,7 @@ jobs:
     permissions:
       contents: read
     name: Public gate (whole tree)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Grep the tracked tree for the private pattern list
@@ -42,8 +42,8 @@ jobs:
     permissions:
       contents: read
     name: Review-store driver self-test
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Prove the safety rails (path-independent, touches nothing; hosted python3 >= 3.11)
+      - name: Prove the safety rails (path-independent, touches nothing; runner python3 >= 3.11)
         run: python3 scripts/review-store/run_gates.py --self-test

@@ -38,11 +38,12 @@ env:
 # (v0.44 F1, review A12.f7).
 permissions: {}
 
-# RUNNERS — all jobs run on GitHub-hosted runners. Every job below is an
-# `ubuntu-latest` (4 vCPU / 16 GB / ~14 GB free disk; free and unlimited on a
-# public repo), and so is every job in every other workflow here — the image
-# build and the nightly bench included. The job budgets and the disk-space
-# guard below are all sized for that machine.
+# RUNNERS — trusted nicolasacchi/kb events use two bounded cpu-pool KB slots
+# in Ubuntu runner containers (3 logical CPUs / 11 GiB per client+dind pair).
+# Capacity is shared with two primary slots under a 40 GiB Linux parent limit
+# and a separately bounded Windows VM; ready jobs queue without new dependencies.
+# Fork PRs, other repositories and pull_request_target use ubuntu-latest.
+# External PR runs require approval; reject workflow edits requesting self-hosted resources.
 #
 # CACHING — GitHub caps a repository at 10 GB of Actions cache and evicts
 # LRU, while a single lance/datafusion target dir is multi-GB. So the
@@ -122,7 +123,7 @@ jobs:
     permissions:
       contents: read
     name: workspace-lint (fmt + clippy)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # SPLIT out of the old `workspace` job (2026-09-06), which ran fmt +
     # clippy + the test sweep serially for 23.4 min cold. clippy is
     # `cargo check`-shaped (dependencies get metadata only, no codegen), so
@@ -219,7 +220,7 @@ jobs:
     permissions:
       contents: read
     name: workspace-test (nextest + doctests + API route table)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # 120 dated from the SERIAL (--test-threads=1) era (outgrew 90 on
     # 2026-07-10's pushes). Post-flip (PF-C1, nextest process-per-test + the
     # drift-job split) it ran ~20 min warm, and the 2026-09-06 lint/test
@@ -284,9 +285,9 @@ jobs:
         # parallel IN-PROCESS harness used to hang on the runner of the day
         # (CPU-quota throttling and/or overlayfs vs. the poll watcher —
         # never fully isolated); nextest's process-per-test isolation was
-        # the fix, adopted only after 3 consecutive green runs on main. It
-        # is kept on hosted runners for the same reason it was adopted:
-        # per-test isolation makes a hung test one failure, not a job wall.
+        # the fix, adopted only after 3 consecutive green runs on main.
+        # Per-test isolation remains necessary on both bounded self-hosted and
+        # hosted runners: a hung test is one failure, not a job wall.
         # Profile: .config/nextest.toml [profile.ci] (lance-heavy overrides
         # live there).
         run: cargo nextest run --locked --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
@@ -348,7 +349,7 @@ jobs:
     # the entire arrow/datafusion/lance graph recompiles, because ts-export
     # pulls in ts-rs (chrono-impl), chrono's resolved features change, and
     # the cascade reaches everything. See the CACHING note at the top.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # Cold ~33 min: two full compiles (the kb-core pass and the kb-server
     # pass resolve features differently, so neither reuses the other's
     # dependency artifacts) on 4 vCPU. Warm should fall to ~12 now that this
@@ -405,7 +406,7 @@ jobs:
     # would recompile the tree-sitter/gix graph the way sharing `workspace`
     # made the kb drift job stay cold. Path-filtered like the other
     # `code-*` jobs so a kb-only PR does not pay this compile.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -464,14 +465,13 @@ jobs:
       # report (flaky-twice detection, scripts/ci/witness.py --prev).
       actions: read
     name: e2e (Playwright iframe smoke)
-    # No `needs:` — hosted runners have no slot contention, so every job in
-    # this file starts at T0 and a red `workspace-test` never delays this
-    # feedback. The suite is a functional smoke (keyword search +
-    # SPA/iframe), not a perf test, so it links `--profile fast` rather than
-    # thin-LTO release.
-    runs-on: ubuntu-latest
-    # 90 -> 120: cold, 4 vCPU now covers a fast-profile kb-server + kb-cli
-    # build, the SPA bundle, and two browser downloads before a spec runs.
+    # No `needs:` — this remains independent of workspace-test, though ready
+    # jobs may queue for the two shared KB slots. The suite is a functional
+    # smoke (keyword search + SPA/iframe), not a perf test, so it links
+    # `--profile fast` rather than thin-LTO release.
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
+    # 90 -> 120 on hosted runners: retain that cold-build budget for the
+    # fast-profile kb-server + kb-cli build, SPA and two browser downloads.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -711,15 +711,14 @@ jobs:
     permissions:
       contents: read
     name: embedder-lint (ORT surface — clippy)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # SPLIT out of the old `embedder` job (2026-09-06): clippy over the two
     # ORT-linking crates is check-shaped and took 4.4 of that job's 22.2
     # cold minutes, sitting in front of a 17.5-minute test leg. As its own
     # job the ORT lint verdict lands in ~6 min. Between them the two jobs
     # still run exactly what `just ci-embedder` runs locally.
     timeout-minutes: 30
-    # No `needs:` — hosted runners are parallel and free; serializing only
-    # delays the answer.
+    # No `needs:` — independent feedback; ready jobs share the bounded slots.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -773,15 +772,14 @@ jobs:
     permissions:
       contents: read
     name: embedder-test (ORT surface — tests)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # This leg compiles kb-core TWICE (plain, then with `local-embedder`)
     # and links a statically-bundled ONNX Runtime, on 4 vCPU: 17.5 min cold
     # once clippy moved out to `embedder-lint`, 5.8 warm (this job owns the
     # `embedder` cache family, so the warm number is the real one).
     timeout-minutes: 90
-    # No `needs: workspace-test` — that gate existed only to ration a scarce
-    # runner slot for the slow ORT build. Hosted runners are parallel and
-    # free; serializing only delays the answer.
+    # No `needs: workspace-test` — keep the ORT verdict independent;
+    # the runner queue, not a test dependency, rations the bounded slots.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -875,7 +873,7 @@ jobs:
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
     #     all five report success: the gate and its own off-switch were the
     #     same unprotected file.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # SPLIT out of the old `code` job (2026-09-06), which ran clippy, the
     # test sweep and the SPA build serially for 31.1 min cold. clippy is
     # check-shaped and took 4.8 of them, in front of a 25-minute test leg.
@@ -985,7 +983,7 @@ jobs:
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
     #     all five report success: the gate and its own off-switch were the
     #     same unprotected file.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # 26.5 min cold (19.8 of it compiling, 5.7 running) once clippy and the
     # SPA moved to their own jobs. The old single `code` job was widened
     # 60->90 in 2026-08 after a run finished the real work inside the wall
@@ -1124,12 +1122,12 @@ jobs:
     #     code-* job (drop `-D warnings`, repoint a `run:`) and still have
     #     all five report success: the gate and its own off-switch were the
     #     same unprotected file.
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # SPLIT out of the old `code` job (2026-09-06). `just ci-code-spa` is
     # node-only — npm ci + vite build + the kbc-theme/1 contrast oracle +
-    # 1840 vitest tests measured 0.5 min end to end — so it has no business
-    # queueing behind a 25-minute Rust compile. No Rust toolchain, no
-    # protoc, no rust-cache and (nothing compiles here) no free-disk step.
+    # 1840 vitest tests measured 0.5 min end to end — so it remains independent
+    # of the Rust lanes, subject only to runner-slot availability. No Rust
+    # toolchain, protoc, rust-cache or (nothing compiles here) free-disk step.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1209,7 +1207,7 @@ jobs:
     # change-detection pattern as the `code-*` jobs above (their own comment
     # explains why the filter gates each step via `if:` rather than a
     # job-level `if:`).
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # 60 -> 90 for 4 vCPU (fast-profile kb-code-server + a browser download
     # + the suite). No `needs:`, same reason as `e2e`. 27.3 min cold; the
     # OWN `code-e2e-fast` cache family below should take the warm case from
@@ -1350,7 +1348,7 @@ jobs:
     permissions:
       contents: read
     name: web (vitest + typecheck)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     # No `needs:` — pure-TS unit tests don't touch the Rust build, so they
     # give fast independent feedback on the SPA's logic (config deep-merge,
@@ -1393,7 +1391,7 @@ jobs:
     permissions:
       contents: read
     name: hooks (omp extension, bun)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     # No `needs:` - a bash + bun lane over fake-`kb` fixtures; it never
     # touches the Rust build. v0.44 X6: kb-omp.ts's env/identity/slate tests
@@ -1424,7 +1422,7 @@ jobs:
     permissions:
       contents: read
     name: supply-chain (cargo-deny — licenses + advisories)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # 30, not 20: no compile happens here, but a cold hosted runner still
     # downloads the crates.io index and the RustSec advisory DB first.
     timeout-minutes: 30
@@ -1621,7 +1619,7 @@ jobs:
       - web-unit
       - hook-omp
       - supply-chain
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

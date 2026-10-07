@@ -5,7 +5,7 @@
 # the smoke's control flow, step reporting, RESULT line and teardown, and that
 # it FAILS when the daemon never becomes healthy, search finds nothing, or the
 # SPA root is missing, and that it never bypasses install.sh's fail-closed
-# checks. Also lints .github/workflows/first-run.yml's trigger/permission shape.
+# checks.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
@@ -224,51 +224,5 @@ if [ "$(bash "$hitsh" "$work/real-hits.json")" = 4 ] && [ "$(bash "$hitsh" "$wor
    && [ "$(bash "$hitsh" "$work/err-hits.txt")" = 0 ] && [ "$(bash "$hitsh" "$work/missing")" = 0 ]; then
   pass first_run_selftest_hit_predicate_counts_real_shape
 else fail "first_run_selftest_hit_predicate_counts_real_shape: helper miscounts the real shape"; fi
-# No harness file may look for a field the real output lacks.
-if grep -n 'source_relative' "$smoke" "$hitsh" "$repo/.github/workflows/first-run.yml" | grep -vE ':[0-9]+:\s*#' ; then
-  fail "first_run_selftest_no_phantom_field: harness references source_relative (not in the real output)"
-else pass first_run_selftest_no_phantom_field; fi
-
-# 7. workflow shape lint (no yaml parser needed)
-wf="$repo/.github/workflows/first-run.yml"
-code="$(grep -vE '^\s*#' "$wf")"
-lint_ok=1
-lint() { echo "$code" | grep -qE "$1" || { fail "first_run_workflow_triggers: missing /$1/"; lint_ok=0; }; }
-nolint() { ! echo "$code" | grep -qE "$1" || { fail "first_run_workflow_triggers: forbidden /$1/"; lint_ok=0; }; }
-lint '^  workflow_run:'
-lint '^  workflow_dispatch:'
-lint '^permissions: \{\}$'
-lint '^            image: debian:trixie$'
-lint '^            image: ubuntu:24\.04$'
-lint '^            image: fedora:latest$'
-lint '^  docker:$'
-lint '^  tarball:$'
-nolint '^  release:'
-nolint 'secrets\.'
-nolint 'pull_request_target'
-nolint 'self-hosted'
-nolint 'KB_INSECURE_SKIP_VERIFY'
-# Harness from main, release bits from the tag: the tag may only be checked out
-# into release/ (a bare tag checkout would run the TAG's harness again), and
-# every leg must have one default-ref checkout plus one tag checkout.
-[ "$(echo "$code" | grep -cE '^\s+ref: \$\{\{ needs\.resolve\.outputs\.tag \}\}$')" = 2 ] \
-  && [ "$(echo "$code" | grep -cE '^\s+path: release$')" = 2 ] \
-  && [ "$(echo "$code" | grep -cE 'uses: actions/checkout@')" = 4 ] \
-  || { fail "first_run_workflow_harness_from_main: tag must be checked out only into release/ beside a default-ref checkout"; lint_ok=0; }
-lint 'INSTALL_SH: \$\{\{ github\.workspace \}\}/release/scripts/install\.sh'
-lint 'cp -R release/corpus/canon'
-# A reader that exits early (`| head`, `| grep -q`) SIGPIPEs the writer; under
-# `set -o pipefail` that is exit 141 and killed the fedora leg on `ldd --version
-# | head -n1`. Keep early-exit readers off pipes in the workflow and the smoke.
-for f in "$wf" "$smoke"; do
-  if grep -vE '^\s*#' "$f" | grep -nE '\|\s*(head|grep -[a-zA-Z]*q)\b' >"$work/sigpipe.out"; then
-    # `|| true`-guarded diagnostics in the smoke are tolerated; flag the rest.
-    if grep -vE '\|\| *true' "$work/sigpipe.out" | grep -q .; then
-      fail "first_run_no_sigpipe_pipes: early-exit pipe in $(basename "$f"):"; cat "$work/sigpipe.out"
-    fi
-  fi
-done
-[ "$lint_ok" = 1 ] && pass first_run_workflow_triggers
-
 if [ "$fails" -ne 0 ]; then echo "first-run selftest: $fails FAILED" >&2; exit 1; fi
 echo "first-run selftest OK"

@@ -26,6 +26,10 @@
 # fan-out like a PR title/body, but treated the same); both are passed
 # through `env:` and referenced as shell variables, never interpolated
 # directly into a `run:` body.
+#
+# Trusted runs use two bounded KB slots in Ubuntu containers on cpu-pool,
+# sharing host capacity with primary and Windows; other repositories and untrusted
+# events fall back to ubuntu-latest, without changing the job guard below.
 name: bench-nightly
 
 on:
@@ -70,7 +74,7 @@ jobs:
     permissions:
       contents: read
     name: bench-nightly (kb bench, keyword/BM25-only)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
     # A fork inherits this file's `schedule`, so without the repository guard
     # every fork would silently run a nightly bench of its own on GitHub's
     # minutes. Belt-and-braces on the event too — there is no pull_request
@@ -86,7 +90,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
-        # A runner starts with only ~14 GB free on /, and the lance/datafusion
+        # A hosted fallback starts with only ~14 GB free on /, and the lance/datafusion
         # dependency graph plus its link step can eat that (a full disk shows
         # up as a SIGBUS'd linker, not as ENOSPC). Reclaim ~20 GB of
         # preinstalled toolchains nothing here uses. Inline on purpose — no
