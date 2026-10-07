@@ -1,46 +1,42 @@
-# CI self-hosted su h4oamd
+# CI self-hosted nel pool CPU
 
 ## Macchina e stato della migrazione
 
-`h4oamd` è la macchina condivisa per la CI CPU: AMD Ryzen 5 3600,
+Il pool condiviso per la CI CPU usa AMD Ryzen 5 3600,
 **6 core fisici / 12 thread SMT**, 64 GiB di RAM nominali (circa 62,7 GiB
 visibili al sistema) e storage NVMe in RAID1. I thread SMT non sono dodici
 core fisici indipendenti.
 
 La configurazione mantiene **quattro slot Linux complessivi**, ripartiti in
-**2 H4O + 2 KB**, e una VM Windows Evaluation separata con **16 GiB di RAM** e
+**2 KB + 2 altri slot Linux**, e una VM Windows Evaluation separata con **16 GiB di RAM** e
 un tetto di **3 CPU**. Altri worker richiedono misure e un nuovo budget globale,
 non la moltiplicazione dei limiti. Il riequilibrio iniziale è stato eseguito
 senza interrompere i job in corso.
 
-Il 7 ottobre 2026 i runner `h4o-amd-01`, `h4o-amd-02`, `kb-amd-03`,
-`kb-amd-04` e `h4o-win-ci-amd-01` sono stati registrati sul nuovo host.
+Il 7 ottobre 2026 i due runner CPU KB sono stati registrati sul nuovo host.
 Il collaudo runtime ha verificato limiti cgroup, assenza di mount/socket host,
 startup persistente e i percorsi Docker reali. L'immagine pubblicata KB `0.48`
 ha passato salute, SPA, ricerca, doctor, rifiuto sulla porta non-loopback e
 pulizia dello scratch sia keyword-only sia con configurazione predefinita.
 Questi smoke non sostituiscono la verifica GitHub della CI sul nuovo commit.
 
-Le fonti operative sono i profili infrastrutturali separati:
-
-- `/home/nik/traefik/ci-runner-amd`: runner Linux H4O;
-- `/home/nik/traefik/kb-ci-runner-amd`: runner Linux KB.
-
-I profili vanno mantenuti coerenti con il deployment su h4oamd. Non modificare
-per questa migrazione lo stack edge esistente, il firewall o le altre VM;
-non copiare credenziali nei workflow o nella documentazione pubblica.
+I profili infrastrutturali e i dettagli identificativi della macchina sono
+documentati separatamente nella configurazione operativa privata. Il repository
+pubblico usa soltanto nomi di pool generici, senza host, percorsi personali o
+identificativi di altri progetti. Il gate `PUBLIC_GATE_PATTERNS` resta vincolante;
+non modificarlo per ammettere dettagli infrastrutturali nella CI pubblica.
 
 ## Instradamento dei workflow KB
 
 Un job che prima usava `ubuntu-latest` seleziona i runner KB con le label
-`self-hosted`, `Linux`, `X64`, `kb-h4o`, `h4oamd` soltanto quando:
+`self-hosted`, `Linux`, `X64`, `kb-cpu`, `cpu-ci` soltanto quando:
 
 1. il repository è esattamente `nicolasacchi/kb`;
 2. l'evento non è `pull_request_target`;
 3. se l'evento è `pull_request`, il repository di origine della PR coincide con
    il repository corrente.
 
-Quindi push, dispatch, schedule e PR interne ammissibili possono usare h4oamd.
+Quindi push, dispatch, schedule e PR interne ammissibili possono usare il pool CPU.
 Le PR da fork, le esecuzioni in altri repository e `pull_request_target` mantengono
 il fallback GitHub-hosted `ubuntu-latest`. Gli `if` già presenti sui job restano
 vincolanti: scegliere un runner non autorizza un job che prima era escluso.
@@ -48,12 +44,12 @@ vincolanti: scegliere un runner non autorizza un job che prima era escluso.
 L'espressione comune per un job Ubuntu x64 è:
 
 ```yaml
-runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
+runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
 ```
 
 Nelle matrici si sostituisce soltanto il runner Ubuntu x64 idoneo; gli altri
 valori della matrice non cambiano. **Tutti i job ARM nativi restano GitHub-hosted**,
-incluso `ubuntu-24.04-arm`: h4oamd x64 non può sostituirli. La migrazione non
+incluso `ubuntu-24.04-arm`: il pool x64 non può sostituirli. La migrazione non
 sposta implicitamente altre piattaforme. I container delle prove first-run
 mantengono le distribuzioni originarie: il sistema del runner non è la
 distribuzione oggetto del test.
@@ -86,14 +82,14 @@ Il parent cgroup Linux, gestito con slice systemd standard, deve imporre
 
 | Risorsa | Numero | Tetto RAM combinato per slot | Limiti individuali |
 | --- | --- | --- | --- |
-| Linux H4O | 2 | 9 GiB | client 1 GiB, daemon rootless DinD 8 GiB |
+| Altri slot Linux | 2 | 9 GiB | client 1 GiB, daemon rootless DinD 8 GiB |
 | Linux KB | 2 | 11 GiB | client 10 GiB, daemon rootless DinD 9 GiB |
 | VM Windows | 1 | 16 GiB | distinta dal parent Linux |
 
 Per KB, **10 + 9 non significa 19 GiB disponibili**: client e daemon condividono
 il parent hard da 11 GiB. I job Rust KB compilano direttamente nel client, mentre
-i job H4O pesanti usano soprattutto il daemon DinD; assegnare al client KB solo
-1 GiB sarebbe quindi errato. I due parent H4O da 9 GiB e i due parent KB da 11 GiB
+i job degli altri slot Linux usano soprattutto il daemon DinD; assegnare al client KB solo
+1 GiB sarebbe quindi errato. I due parent da 9 GiB e i due parent KB da 11 GiB
 sommano esattamente 40 GiB. Con la riserva Windows da 16 GiB rimangono circa
 6,7 GiB per host e overhead sulla RAM effettivamente visibile. Lo swap dell'host
 non è capacità aggiuntiva per i job: i cgroup Linux non devono permettere swap
@@ -122,7 +118,7 @@ Per un drain, impedire l'accettazione di nuovi job senza terminare quello in
 corso; riconvertire o riavviare lo slot soltanto quando è idle. Una coda in attesa
 non autorizza a interrompere lavoro o ad aumentare il budget.
 
-Lo spostamento della manutenzione su h4oamd non cambia le protezioni applicative:
+Lo spostamento della manutenzione nel pool CPU non cambia le protezioni applicative:
 
 - `ghcr-gc.yml` continua a escludere le PR dai job distruttivi; il dispatch usa
   il dry-run per default, mentre lo schedule esegue la pulizia. Sono eliminabili
