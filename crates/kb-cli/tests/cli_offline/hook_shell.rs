@@ -236,6 +236,10 @@ fn omp_segmented_capture_lands_a_chain_resumes_and_drops_orphans() {
 fn omp_segmented_capture_per_turn_cost_does_not_scale_with_the_session() {
     run_with_real_kb_env(
         "test-capture-omp-segments-scale.sh",
-        &[("SEG_SCALE_MB", "16"), ("SEG_SCALE_TARGET", "2097152")],
+        &[
+            ("SEG_SCALE_MB", "16"),
+            ("SEG_SCALE_TARGET", "2097152"),
+            ("SEG_SCALE_SIDECARS", "300"),
+        ],
     );
 }

@@ -15,6 +15,12 @@
 #   SEG_SCALE_MB      session size (default 24)
 #   SEG_SCALE_TARGET  raw bytes per part (default 4194304; production = 16 MiB)
 #   SEG_SCALE_VMEM_KB `ulimit -v` in KiB (default 4194304 = 4 GiB)
+#   SEG_SCALE_SIDECARS  >0 adds a SIDECAR-HEAVY run (v0.48 SEG-PERF): that many
+#                     subagent sidecars (omp's real layout, SEG_SCALE_SC_KB KiB of
+#                     text each, default 128) spread over the chain's timeline;
+#                     asserts they spread over the parts, catch-up completes, and
+#                     prints the per-pass numbers. SEG_SCALE_HARD = the pass
+#                     deadline (KB_CAPTURE_HARD_SECS; default 120).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -138,6 +144,39 @@ echo "SCALE: steady-state median per appended turn: wall=${MW}s cpu=${MC}s"
 read -r W C R <<<"$(timed)"
 echo "SCALE: no-change     wall=${W}s cpu=${C}s"
 if [ "$(grep -c '^convert' "$KB_CAPTURE_TRACE")" = 0 ]; then ok "an unchanged session converts nothing (fingerprint shortcut)"; else bad "unchanged session converted"; fi
+
+
+# 4. sidecar-heavy ----------------------------------------------------------------
+NSC="${SEG_SCALE_SIDECARS:-0}"
+if [ "$NSC" -gt 0 ]; then
+  SCKB="${SEG_SCALE_SC_KB:-128}"
+  HARD="${SEG_SCALE_HARD:-120}"
+  rm -rf "${KB_SESSIONS_DIR:?}" "${KB_CAPTURE_LOCKS:?}" "${KB_CAPTURE_SPOOL:?}"; mkdir -p "$KB_SESSIONS_DIR"
+  # the chain ticks one second per record: spread the sidecar starts over it
+  STEP=$(( (LINES - 10) / NSC )); [ "$STEP" -ge 1 ] || STEP=1
+  python3 "$FIX/gen-omp-sidecars.py" "${S%.jsonl}" "$NSC" --start 5 --step "$STEP" --records 4 --blob $((SCKB * 256)) --base 2025-08-24T08:00:00Z
+  SCBYTES="$(du -sb "${S%.jsonl}" | cut -f1)"
+  : >"$KB_CAPTURE_TRACE"
+  export KB_CAPTURE_HARD_SECS="$HARD"
+  read -r W C R <<<"$(timed)"
+  unset KB_CAPTURE_HARD_SECS
+  NP="$(ls "$KB_SESSIONS_DIR" | wc -l | tr -d ' ')"
+  NPASS="$(grep -c '^pass ' "$KB_CAPTURE_TRACE")"
+  TR="$(grep -c '^translate sidecar=' "$KB_CAPTURE_TRACE")"
+  echo "SCALE: sidecar-heavy catch-up  sidecars=$NSC ($((SCBYTES / 1048576)) MiB) hard=${HARD}s wall=${W}s cpu=${C}s peak-rss=$((R / 1024)) MiB parts=$NP passes=$NPASS translated=$TR"
+  grep -E '^(sidecars|pass) ' "$KB_CAPTURE_TRACE" | sed 's/^/SCALE:   /'
+  if [ "$NP" -ge 2 ] && [ "$(wc -l <"$KB_CAPTURE_LOCKS"/*.seg | tr -d ' ')" = "$NP" ]; then
+    ok "sidecar-heavy: $NSC sidecars, every one of $NP parts landed (in $NPASS pass(es))"
+  else
+    bad "sidecar-heavy catch-up incomplete: parts=$NP err=$(head -c 300 "$TMPROOT/hook.err")"
+  fi
+  if [ "$TR" = "$NSC" ]; then ok "sidecar-heavy: every sidecar was translated exactly once ($TR)"; else bad "sidecar-heavy: $TR translations for $NSC sidecars"; fi
+  # nothing may pile up in the tail: the fake capture records what each part carried
+  TAILSC="$(grep '^sidecars ' "$KB_CAPTURE_TRACE" | head -1)"
+  echo "SCALE: ${TAILSC}"
+  MAXPART="$(cat "$KB_CAPTURE_LOCKS"/*.sc.tsv 2>/dev/null | wc -l | tr -d " ")"
+  if [ "${MAXPART:-0}" = "$NSC" ]; then ok "sidecar-heavy: the placement cache holds all $NSC sidecars (later passes read no sidecar head)"; else bad "placement cache has ${MAXPART:-0} of $NSC"; fi
+fi
 
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
