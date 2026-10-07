@@ -127,19 +127,12 @@ jobs:
       && github.event.workflow_run.head_repository.full_name == github.repository
       && github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
-    # Every run of every leg is a COLD compile: BuildKit's cache mounts (the
-    # cargo registry/git dirs and target/, declared in the Dockerfile) live in
-    # the ephemeral builder, so nothing carries over between runs — and, since
-    # the split, nothing carries over between the two LEGS either (they no
-    # longer share one builder, so the kb leg now compiles the
-    # lance/datafusion graph that the kb-code leg used to leave warm in the
-    # shared target mount). Per leg that means a full release build at the
-    # Dockerfile's CARGO_BUILD_JOBS=2 plus, for kb, the 1.34 GB model
-    # download. 330 minutes is a deliberately generous ceiling under GitHub's
-    # hard 360-minute per-job cap — this job publishes an artifact, it never
-    # gates a PR, so a long budget costs nothing and a too-tight one throws
-    # away hours of compute. Kept as-is for BOTH legs: the kb leg's work grew
-    # by the shared graph it now builds itself.
+    # Self-hosted slots use daemon-integrated BuildKit, whose cache mounts
+    # persist in that slot's isolated daemon volume. Slots never share caches.
+    # Hosted jobs keep an ephemeral docker-container builder and start cold.
+    # A cold leg still compiles the release graph at CARGO_BUILD_JOBS=2 and,
+    # for kb, downloads the 1.34 GB model. Keep the 330-minute ceiling for
+    # both independent publishes; a cold cache must not waste a partial build.
     timeout-minutes: 330
     permissions:
       contents: read
@@ -191,6 +184,10 @@ jobs:
         # breaking change is the Node 24 runtime + an ESM rewrite (no input
         # or behaviour change for the way they're used here).
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # Another BuildKit container cannot mount sysfs inside rootless DinD.
+          # Use its integrated builder without relaxing host isolation.
+          driver: ${{ runner.environment == 'self-hosted' && 'docker' || 'docker-container' }}
 
       - name: Log in to ghcr.io
         # `packages: write` above grants the push; GITHUB_TOKEN is scoped to
