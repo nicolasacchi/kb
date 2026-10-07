@@ -28,6 +28,23 @@ async function pressGd(page: Page) {
   await page.keyboard.press("d");
 }
 
+/// The peek card takes DOM focus on the frame AFTER its DOM is inserted
+/// (`requestAnimationFrame` in `editor/inlinePeek.ts` — a widget's DOM exists
+/// before it is attached), and CM6 builds a NEW card when the destination's
+/// source lands. `[data-kbc-inpeek]` being visible therefore does NOT mean
+/// the card owns the keyboard yet: a key pressed in that gap goes to the
+/// editor underneath (CI log: `Enter` moved the caret and the URL gained
+/// `?line=11` instead of `?pane2=`). Wait for the loaded card AND its focus
+/// before any key that the card is supposed to own.
+async function peekOwnsKeyboard(page: Page) {
+  const peek = page.locator("[data-kbc-inpeek]");
+  await expect(peek).toBeVisible({ timeout: 10_000 });
+  await expect(peek.locator("[data-kbc-inpeek-body]")).toContainText(LOCAL_TARGET_FN, {
+    timeout: 10_000,
+  });
+  await expect(peek).toBeFocused({ timeout: 5_000 });
+}
+
 test.describe("inline peek", () => {
   test("gd on a single candidate opens it IN PLACE, not by navigating away", async ({ page }) => {
     await openResolverFile(page);
@@ -95,7 +112,7 @@ test.describe("inline peek", () => {
     );
 
     await pressGd(page);
-    await expect(page.locator("[data-kbc-inpeek]")).toBeVisible({ timeout: 10_000 });
+    await peekOwnsKeyboard(page);
     await page.keyboard.press("Escape");
     await expect(page.locator("[data-kbc-inpeek]")).toHaveCount(0, { timeout: 5_000 });
 
@@ -111,7 +128,7 @@ test.describe("inline peek", () => {
     await openResolverFile(page);
     await clickCallSite(page);
     await pressGd(page);
-    await expect(page.locator("[data-kbc-inpeek]")).toBeVisible({ timeout: 10_000 });
+    await peekOwnsKeyboard(page);
 
     await page.keyboard.press("Enter");
     // §P7: peek → pane promotion is the ONLY thing that creates a pane 2 this
