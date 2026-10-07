@@ -77,6 +77,7 @@ pub use projects::{
     set_project_registry, ProjectDef, ProjectFilter, ResolvedProject,
 };
 
+use crate::sidecar_spool::SidecarSpool;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -681,6 +682,16 @@ pub fn parse_session_activity(jsonl: &str) -> SessionActivity {
 /// [`parse_session_activity`] and [`parse_subagent_jsonl`] share it so a
 /// sidecar never pays a second full-transcript scan just for its id.
 fn parse_session_activity_full(jsonl: &str) -> (SessionActivity, Option<String>) {
+    parse_session_activity_lines(jsonl.lines())
+}
+
+/// The line-iterator core of [`parse_session_activity_full`]: identical
+/// semantics over any source of transcript lines (each is trimmed here), so a
+/// caller streaming a file line by line (`sidecar_spool`) never needs the
+/// whole text in memory.
+fn parse_session_activity_lines<S: AsRef<str>>(
+    lines: impl Iterator<Item = S>,
+) -> (SessionActivity, Option<String>) {
     let mut act = SessionActivity::default();
     let mut cwd_counts: Vec<(String, u32)> = Vec::new();
     // First-prompt candidates gathered in one pass; the typed winner is
@@ -720,8 +731,8 @@ fn parse_session_activity_full(jsonl: &str) -> (SessionActivity, Option<String>)
     let mut files_seen: std::collections::HashSet<FileTouch> = std::collections::HashSet::new();
     let mut research_seen: std::collections::HashSet<Research> = std::collections::HashSet::new();
 
-    for line in jsonl.lines() {
-        let line = line.trim();
+    for line in lines {
+        let line = line.as_ref().trim();
         if line.is_empty() {
             continue;
         }
@@ -2470,9 +2481,18 @@ pub struct SubagentsBlock {
 /// stem — is the fallback, since the on-disk filename is itself a reliable
 /// identifier for which agent this sidecar belongs to.
 pub fn parse_subagent_jsonl(jsonl: &str, filename_agent_id: &str) -> SubagentDigest {
-    // One walk: activity + agentId ride the same `parse_session_activity_full`
-    // pass (no second line-scan for `transcript_agent_id`).
-    let (act, agent_id) = parse_session_activity_full(jsonl);
+    parse_subagent_lines(jsonl.lines(), filename_agent_id)
+}
+
+/// [`parse_subagent_jsonl`] over a stream of lines (constant memory for the
+/// caller; same digest as the whole-text parse of the same lines).
+pub(crate) fn parse_subagent_lines<S: AsRef<str>>(
+    lines: impl Iterator<Item = S>,
+    filename_agent_id: &str,
+) -> SubagentDigest {
+    // One walk: activity + agentId ride the same pass (no second line-scan
+    // for `transcript_agent_id`).
+    let (act, agent_id) = parse_session_activity_lines(lines);
     let agent_id = agent_id.unwrap_or_else(|| filename_agent_id.to_string());
     SubagentDigest {
         agent_id,
@@ -2684,7 +2704,7 @@ pub const SIDECAR_TEXT_BLOCK_ID: &str = "kb-session-sidecar-text";
 
 /// Per-agent cap on RAW (pre-escape) sidecar JSONL bytes folded into the
 /// [`SIDECAR_TEXT_BLOCK_ID`] block. An agent whose sidecar exceeds this
-/// keeps a HEAD/TAIL slice — see [`truncate_and_escape_agent_raw`].
+/// keeps a HEAD/TAIL slice — see `SidecarSpool::kept_for_budget`.
 pub const SIDECAR_TEXT_AGENT_CAP_BYTES: usize = 2 * 1024 * 1024;
 
 /// Total cap on RAW (pre-escape) sidecar JSONL bytes across ALL agents in
@@ -2693,7 +2713,7 @@ pub const SIDECAR_TEXT_AGENT_CAP_BYTES: usize = 2 * 1024 * 1024;
 /// agent under its own [`SIDECAR_TEXT_AGENT_CAP_BYTES`] leaves headroom for
 /// agents later in sort order rather than wasting a fixed per-slot ration —
 /// this cap is a true ceiling on total RAW bytes ONLY, not rendered ones:
-/// [`truncate_and_escape_agent_raw`] truncates THEN HTML-escapes, so the
+/// `SidecarSpool::kept_for_budget` truncates THEN HTML-escapes, so the
 /// `<pre>` bytes that actually land in the block can exceed this cap by
 /// however much the `&`/`<`/`>` entity expansion inflates the kept text.
 pub const SIDECAR_TEXT_TOTAL_CAP_BYTES: usize = 8 * 1024 * 1024;
@@ -2740,23 +2760,36 @@ pub fn transcript_size_verdict(len: u64, cap: u64, allow_oversized: bool) -> Tra
 /// order must not depend on the caller's / OS's directory-listing order,
 /// same reasoning as [`collect_subagent_digests`]), budgets each agent via
 /// [`sidecar_agent_budgets`], truncates+escapes via
-/// [`truncate_and_escape_agent_raw`], and wraps each agent in a
+/// `SidecarSpool::kept_for_budget`, and wraps each agent in a
 /// `<details data-kb-sidecar-agent="…"><summary>…</summary><pre>…</pre></details>`
 /// inside the single [`SIDECAR_TEXT_BLOCK_ID`] `<section hidden>` container.
 pub fn render_sidecar_text_block(agents: &[(String, String)]) -> Option<String> {
+    let spools: Vec<SidecarSpool> = agents
+        .iter()
+        .map(|(id, raw)| SidecarSpool::from_text(id.as_str(), raw))
+        .collect();
+    render_sidecar_text_block_spooled(&spools)
+}
+
+/// [`render_sidecar_text_block`] over already-spooled (scrubbed, bounded)
+/// sidecar text — the single implementation; the `(id, text)` entry point
+/// above spools and delegates, so the two can never diverge. Output is
+/// byte-identical to the pre-spool pipeline (pinned by
+/// `spooled_render_is_byte_identical_to_the_legacy_pipeline`).
+pub fn render_sidecar_text_block_spooled(agents: &[SidecarSpool]) -> Option<String> {
     if agents.is_empty() {
         return None;
     }
-    let mut sorted: Vec<&(String, String)> = agents.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut sorted: Vec<&SidecarSpool> = agents.iter().collect();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
 
-    let lens: Vec<usize> = sorted.iter().map(|(_, raw)| raw.len()).collect();
+    let lens: Vec<usize> = sorted.iter().map(|s| s.len()).collect();
     let budgets = sidecar_agent_budgets(&lens);
 
     let mut parts = String::new();
-    for ((agent_id, raw), budget) in sorted.iter().zip(budgets) {
-        let attr = escape_sidecar_agent_id(agent_id);
-        let body = truncate_and_escape_agent_raw(raw, budget);
+    for (spool, budget) in sorted.iter().zip(budgets) {
+        let attr = escape_sidecar_agent_id(&spool.id);
+        let body = escape_sidecar_text(&spool.kept_for_budget(budget));
         parts.push_str(&format!(
             r#"<details data-kb-sidecar-agent="{attr}"><summary>{attr}</summary><pre>{body}</pre></details>"#
         ));
@@ -2813,12 +2846,23 @@ fn sidecar_agent_budgets(raw_lens: &[usize]) -> Vec<usize> {
 /// (e.g. a session that worked on this very sidecar-text feature). `false`
 /// for an empty `agents` slice (nothing to truncate).
 pub fn sidecar_text_truncates(agents: &[(String, String)]) -> bool {
-    if agents.is_empty() {
+    let lens: Vec<usize> = agents.iter().map(|(_, raw)| raw.len()).collect();
+    sidecar_lens_truncate(&lens, agents.iter().map(|(id, _)| id.as_str()))
+}
+
+/// [`sidecar_text_truncates`] over spooled agents (same budget walk).
+pub fn sidecar_text_truncates_spooled(agents: &[SidecarSpool]) -> bool {
+    let lens: Vec<usize> = agents.iter().map(|s| s.len()).collect();
+    sidecar_lens_truncate(&lens, agents.iter().map(|s| s.id.as_str()))
+}
+
+fn sidecar_lens_truncate<'a>(lens: &[usize], ids: impl Iterator<Item = &'a str>) -> bool {
+    if lens.is_empty() {
         return false;
     }
-    let mut sorted: Vec<&(String, String)> = agents.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-    let lens: Vec<usize> = sorted.iter().map(|(_, raw)| raw.len()).collect();
+    let mut sorted: Vec<(&str, usize)> = ids.zip(lens.iter().copied()).collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let lens: Vec<usize> = sorted.iter().map(|(_, l)| *l).collect();
     let budgets = sidecar_agent_budgets(&lens);
     lens.iter().zip(budgets).any(|(&len, budget)| len > budget)
 }
@@ -2826,9 +2870,9 @@ pub fn sidecar_text_truncates(agents: &[(String, String)]) -> bool {
 /// Pure HEAD/TAIL byte-count split of an over-budget agent's `budget`: 60%
 /// head, 40% tail (rounding folds into the tail so `head + tail == budget`
 /// exactly) — no UTF-8 awareness, byte counts only, so this unit-tests as
-/// plain arithmetic. [`truncate_and_escape_agent_raw`] snaps both ends to
+/// plain arithmetic. `SidecarSpool::kept_for_budget` snaps both ends to
 /// the nearest char boundary before slicing.
-fn sidecar_head_tail_split(budget: usize) -> (usize, usize) {
+pub(crate) fn sidecar_head_tail_split(budget: usize) -> (usize, usize) {
     let head = budget * 3 / 5;
     (head, budget - head)
 }
@@ -2836,7 +2880,7 @@ fn sidecar_head_tail_split(budget: usize) -> (usize, usize) {
 /// The one fixed truncation marker line spliced between an over-budget
 /// agent's kept HEAD and TAIL halves, reporting the exact number of RAW
 /// bytes dropped. Deterministic text — pinned by tests.
-fn sidecar_truncation_marker(dropped_bytes: usize) -> String {
+pub(crate) fn sidecar_truncation_marker(dropped_bytes: usize) -> String {
     format!("\n[kb-sidecar-text: truncated {dropped_bytes} bytes]\n")
 }
 
@@ -2881,6 +2925,10 @@ fn ceil_char_boundary(s: &str, idx: usize) -> usize {
 /// `budget` (see [`sidecar_head_tail_split`]), each end snapped to the
 /// nearest UTF-8 char boundary, joined by [`sidecar_truncation_marker`]
 /// reporting the exact dropped byte count.
+///
+/// Test oracle ONLY since v0.48 SC: production renders through
+/// `SidecarSpool::kept_for_budget`, which is pinned byte-identical to this.
+#[cfg(test)]
 fn truncate_and_escape_agent_raw(raw: &str, budget: usize) -> String {
     if raw.len() <= budget {
         return escape_sidecar_text(raw);
@@ -3155,7 +3203,7 @@ fn code_field_truncation_marker(dropped_bytes: usize) -> String {
 /// index-time-only Arrow/FTS column, computed fresh from the artifact on
 /// every index pass and never written back to disk (invariant #27: the
 /// on-disk `.html` artifact is untouched). So unlike
-/// [`truncate_and_escape_agent_raw`]'s sidecar scheme — which truncates
+/// `truncate_and_escape_agent_raw`'s sidecar scheme — which truncates
 /// RAW pre-escape bytes and THEN HTML-escapes, because that text is about
 /// to be spliced into a `<pre>` block on disk — this function has no
 /// entity-boundary concern and no escape step at all: it only needs to be
@@ -5725,6 +5773,115 @@ mod tests {
         );
         assert!(once.contains("<summary>a-agent</summary>"), "{once}");
         assert!(once.contains("<pre>raw-a</pre>"), "{once}");
+    }
+
+    // --- spooled sidecar render == the legacy read-whole pipeline (v0.48 SC) ---
+
+    /// Verbatim copy of the pre-spool `render_sidecar_text_block` body: the
+    /// oracle every spooled render is compared against.
+    fn legacy_render(agents: &[(String, String)]) -> Option<String> {
+        if agents.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<&(String, String)> = agents.iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let lens: Vec<usize> = sorted.iter().map(|(_, raw)| raw.len()).collect();
+        let budgets = sidecar_agent_budgets(&lens);
+        let mut parts = String::new();
+        for ((agent_id, raw), budget) in sorted.iter().zip(budgets) {
+            let attr = escape_sidecar_agent_id(agent_id);
+            let body = truncate_and_escape_agent_raw(raw, budget);
+            parts.push_str(&format!(
+                r#"<details data-kb-sidecar-agent="{attr}"><summary>{attr}</summary><pre>{body}</pre></details>"#
+            ));
+        }
+        Some(format!(
+            r#"{}<section id="{SIDECAR_TEXT_BLOCK_ID}" hidden>{parts}</section>"#,
+            sidecar_unhide_style_tag(SIDECAR_TEXT_BLOCK_ID)
+        ))
+    }
+
+    /// Feed `text` into a spool in awkward, char-aligned pieces (so the
+    /// incremental head/tail bookkeeping is exercised, not just one push).
+    fn spool_in_pieces(id: &str, text: &str, piece: usize) -> SidecarSpool {
+        let mut spool = SidecarSpool::new(id);
+        let mut at = 0;
+        while at < text.len() {
+            let mut end = (at + piece).min(text.len());
+            while !text.is_char_boundary(end) {
+                end += 1;
+            }
+            spool.push(&text[at..end]);
+            at = end;
+        }
+        spool
+    }
+
+    fn assert_spooled_matches_legacy(agents: &[(String, String)]) {
+        let legacy = legacy_render(agents);
+        assert_eq!(render_sidecar_text_block(agents), legacy, "string entry");
+        let spools: Vec<SidecarSpool> = agents
+            .iter()
+            .enumerate()
+            .map(|(i, (id, t))| spool_in_pieces(id, t, 7_919 + i * 104_729))
+            .collect();
+        assert_eq!(
+            render_sidecar_text_block_spooled(&spools),
+            legacy,
+            "piecewise spool"
+        );
+        let old_trunc = {
+            let mut sorted: Vec<&(String, String)> = agents.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            let lens: Vec<usize> = sorted.iter().map(|(_, r)| r.len()).collect();
+            let budgets = sidecar_agent_budgets(&lens);
+            lens.iter().zip(budgets).any(|(&l, b)| l > b)
+        };
+        assert_eq!(sidecar_text_truncates(agents), old_trunc);
+        assert_eq!(sidecar_text_truncates_spooled(&spools), old_trunc);
+    }
+
+    #[test]
+    fn spooled_render_is_byte_identical_to_the_legacy_pipeline() {
+        let cap = SIDECAR_TEXT_AGENT_CAP_BYTES;
+        let (head, _) = sidecar_head_tail_split(cap);
+        // Multibyte text whose head cut (cap*3/5) and tail cut both land
+        // MID-scalar for 3-byte chars; shifted by 0..3 ascii prefix bytes so
+        // every alignment of the cut within a scalar is hit.
+        assert_ne!(head % 3, 0, "fixture relies on a mid-scalar head cut");
+        for shift in 0..4usize {
+            let text = format!("{}{}", "x".repeat(shift), "€".repeat(cap)); // ~3*cap bytes
+            assert_spooled_matches_legacy(&[("multibyte".to_string(), text)]);
+        }
+        // 4-byte scalars + entity-heavy ASCII, over and under budget, and
+        // lengths exactly at budget-1 / budget / budget+1.
+        let emoji = "😀<&>".repeat(cap / 4);
+        assert_spooled_matches_legacy(&[("emoji".to_string(), emoji)]);
+        for len in [cap - 1, cap, cap + 1] {
+            let t: String = "a&b<c>d".chars().cycle().take(len).collect();
+            assert_spooled_matches_legacy(&[("edge".to_string(), t)]);
+        }
+        // Many agents overflowing the 8 MiB total: the tail agents get budget
+        // 0 (marker-only) and must still report their exact dropped length.
+        let many: Vec<(String, String)> = (0..7)
+            .map(|i| {
+                (
+                    format!("agent-{i}"),
+                    format!("{i}é").repeat(cap / 2 + 1000 * i),
+                )
+            })
+            .collect();
+        assert!(sidecar_text_truncates(&many));
+        assert_spooled_matches_legacy(&many);
+        // One huge agent next to small ones (small ones keep full text).
+        let mut mixed = vec![
+            ("a-small".to_string(), "tiny <one>".to_string()),
+            ("z-small".to_string(), String::new()),
+            ("m-huge".to_string(), "line é &\n".repeat(cap)),
+        ];
+        assert_spooled_matches_legacy(&mixed);
+        mixed.push(("b-mid".to_string(), "ß".repeat(cap / 2 - 5)));
+        assert_spooled_matches_legacy(&mixed);
     }
 
     #[test]
