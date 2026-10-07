@@ -64,12 +64,12 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use kb_core::sessions::{CapturedCommit, SubagentDigest};
+use kb_core::sessions::CapturedCommit;
 use kb_core::vcs::resolve_commit;
 
 use super::import::{
     collect_extra_sidecar_sources, collect_sidecars, expand_tilde, sanitize_sid,
-    scrub_capture_lanes, wrap_envelope,
+    scrub_capture_lanes, wrap_envelope_spooled,
 };
 
 /// The env var kb-capture.sh resolves its target from — mirrored exactly so
@@ -605,16 +605,18 @@ async fn capture_inner(
     let sidecars_dir = transcript
         .parent()
         .map(|dir| dir.join(&raw_sid).join("subagents"));
-    let (subagents, mut sidecar_texts): (Vec<SubagentDigest>, Vec<(String, String)>) = sidecars_dir
+    let walk = sidecars_dir
         .as_deref()
         .map(collect_sidecars)
         .unwrap_or_default();
+    let (subagents, walked, walked_redactions) = (walk.digests, walk.spools, walk.redactions);
     // W5/R10 — workflow journals + TaskOutput snapshots, folded into the
     // SAME sidecar-text list (same caps, per-source labels — see
     // `collect_extra_sidecar_sources`'s doc comment).
-    if let Some(dir) = sidecars_dir.as_deref() {
-        sidecar_texts.extend(collect_extra_sidecar_sources(dir, &raw));
-    }
+    let extras = sidecars_dir
+        .as_deref()
+        .map(|dir| collect_extra_sidecar_sources(dir, &raw))
+        .unwrap_or_default();
 
     // W5.2 (trust-review rec (b)) — scrub every stored transcript lane on
     // the RAW bytes, before html-escaping AND before the sidecar-text
@@ -627,7 +629,8 @@ async fn capture_inner(
     // Metadata already extracted above (session id, cwd, resolved commits)
     // came from the UNSCRUBBED `raw` on purpose; only what's about to be
     // EMBEDDED is redacted from here on.
-    let (raw, sidecar_texts, mut secrets_redacted) = scrub_capture_lanes(&raw, sidecar_texts);
+    let (raw, sidecar_texts, mut secrets_redacted) =
+        scrub_capture_lanes(&raw, extras, walked, walked_redactions);
     // v0.44 F7b — the structured subagents digest (agent ids + file paths) is
     // a stored lane too; it was the one lane the floor skipped.
     let (subagents, digest_redacted) = super::sessions_scrub::scrub_subagents(subagents);
@@ -638,7 +641,7 @@ async fn capture_inner(
     let (captured, commits_redacted) = super::sessions_scrub::scrub_commits(captured);
     secrets_redacted += commits_redacted;
 
-    let html = wrap_envelope(
+    let html = wrap_envelope_spooled(
         &capture_ts,
         &sid,
         &raw,
@@ -655,7 +658,7 @@ async fn capture_inner(
     // same as any other assistant prose, so a whole-artifact scan can't tell
     // "the session talked about truncation" from "a sidecar was actually
     // truncated".
-    let sidecar_text_truncated = kb_core::sessions::sidecar_text_truncates(&sidecar_texts);
+    let sidecar_text_truncated = kb_core::sessions::sidecar_text_truncates_spooled(&sidecar_texts);
     // Atomic replace: write to a `.tmp` sibling and rename into place, same
     // as kb-capture.sh's `mv -f "$tmp" "$out"` - the watcher never ingests a
     // half-written multi-MB transcript. The whole write + freshness check +
@@ -867,6 +870,7 @@ fn compact_utc_now() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::import::wrap_envelope;
     use super::*;
     use kb_core::sessions::parse_session_html_full;
 

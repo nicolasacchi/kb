@@ -438,23 +438,27 @@ fn import(
         // the same session would have written. Walked under `--dry-run`
         // too: the redaction preview must cover the sidecar lanes.
         let sidecar_dir = path.parent().map(|d| d.join(&canonical).join("subagents"));
-        let (subagents, mut sidecar_texts) = sidecar_dir
+        let walk = sidecar_dir
             .as_deref()
             .map(collect_sidecars)
             .unwrap_or_default();
+        let (subagents, walked, walked_redactions) = (walk.digests, walk.spools, walk.redactions);
         // W5/R10 — workflow journals + TaskOutput snapshots (same caps,
         // same list — see `collect_extra_sidecar_sources`).
-        if let Some(d) = sidecar_dir.as_deref() {
-            sidecar_texts.extend(collect_extra_sidecar_sources(d, &raw));
-        }
+        let extras = sidecar_dir
+            .as_deref()
+            .map(|d| collect_extra_sidecar_sources(d, &raw))
+            .unwrap_or_default();
         // The same W5.2 secrets-only floor a live `kb sessions capture`
         // applies: scrub every stored lane BEFORE the envelope is built.
-        let (scrubbed_raw, sidecar_texts, mut redacted) = scrub_capture_lanes(&raw, sidecar_texts);
+        let (scrubbed_raw, sidecar_texts, mut redacted) =
+            scrub_capture_lanes(&raw, extras, walked, walked_redactions);
         let (subagents, digest_redacted) = super::sessions_scrub::scrub_subagents(subagents);
         redacted += digest_redacted;
         secrets_redacted_total += redacted;
         if !dry_run {
-            let html = wrap_envelope(&ts, &sid, &scrubbed_raw, &[], &subagents, &sidecar_texts);
+            let html =
+                wrap_envelope_spooled(&ts, &sid, &scrubbed_raw, &[], &subagents, &sidecar_texts);
             std::fs::write(&out_path, html)
                 .with_context(|| format!("write capture {}", out_path.display()))?;
         }
@@ -490,23 +494,33 @@ fn import(
 /// scrub the main transcript and every sidecar-text lane on the RAW bytes,
 /// before html-escaping and before any truncation budget, so a secret
 /// straddling a cap boundary can never survive as a fragment. Returns the
-/// redacted main text, the redacted sidecar list and the total redaction
+/// redacted main text, the redacted sidecar spools and the total redaction
 /// count. Never touches `sessionId` (no secrets rule matches it).
+///
+/// The direct `agent-*.jsonl` sidecars arrive ALREADY scrubbed (and bounded)
+/// as `walk` — [`collect_sidecars`] scrubs them while streaming, chunk-safe
+/// and byte-identical to a whole-text scrub (see
+/// `kb_core::session_scrub::SecretScrubStream`), so no secret ever sits in a
+/// spool. `extras` (workflow journals / TaskOutput snapshots, each already
+/// bounded to [`EXTRA_SIDECAR_SOURCE_READ_CEILING_BYTES`]) are scrubbed here
+/// the old way and spooled.
 pub(crate) fn scrub_capture_lanes(
     raw: &str,
-    sidecar_texts: Vec<(String, String)>,
-) -> (String, Vec<(String, String)>, u32) {
+    extras: Vec<(String, String)>,
+    walked: Vec<kb_core::sidecar_spool::SidecarSpool>,
+    walked_redactions: u32,
+) -> (String, Vec<kb_core::sidecar_spool::SidecarSpool>, u32) {
     let opts = ScrubOptions::secrets_only();
     let (raw, report) = scrub_transcript(raw, &opts);
-    let mut total = report.total;
-    let sidecars = sidecar_texts
-        .into_iter()
-        .map(|(id, text)| {
-            let (redacted, r) = scrub_transcript(&text, &opts);
-            total += r.total;
-            (id, redacted)
-        })
-        .collect();
+    let mut total = report.total + walked_redactions;
+    let mut sidecars = walked;
+    for (id, text) in extras {
+        let (redacted, r) = scrub_transcript(&text, &opts);
+        total += r.total;
+        sidecars.push(kb_core::sidecar_spool::SidecarSpool::from_text(
+            id, &redacted,
+        ));
+    }
     (raw, sidecars, total)
 }
 
@@ -539,13 +553,13 @@ fn resolve_into(into: Option<PathBuf>) -> Result<PathBuf> {
 /// this function — it rewrites an EXISTING envelope's tail blocks in place
 /// instead (see [`replace_subagents_block`](kb_core::sessions::replace_subagents_block)
 /// / [`replace_sidecar_text_block`](kb_core::sessions::replace_sidecar_text_block)).
-pub(crate) fn wrap_envelope(
+pub(crate) fn wrap_envelope_spooled(
     ts: &str,
     sid: &str,
     raw_jsonl: &str,
     commits: &[kb_core::sessions::CapturedCommit],
     subagents: &[kb_core::sessions::SubagentDigest],
-    sidecar_texts: &[(String, String)],
+    sidecar_texts: &[kb_core::sidecar_spool::SidecarSpool],
 ) -> String {
     let esc = html_escape(raw_jsonl);
     let mut tail = String::new();
@@ -559,7 +573,9 @@ pub(crate) fn wrap_envelope(
         tail.push_str(&subagents_block);
         tail.push('\n');
     }
-    if let Some(sidecar_text_block) = kb_core::sessions::render_sidecar_text_block(sidecar_texts) {
+    if let Some(sidecar_text_block) =
+        kb_core::sessions::render_sidecar_text_block_spooled(sidecar_texts)
+    {
         tail.push_str(&sidecar_text_block);
         tail.push('\n');
     }
@@ -578,6 +594,24 @@ pub(crate) fn wrap_envelope(
     )
 }
 
+/// Test-facing twin of [`wrap_envelope_spooled`] over plain `(id, text)`
+/// sidecar pairs (spooled without scrubbing — the callers scrub upstream).
+#[cfg(test)]
+pub(crate) fn wrap_envelope(
+    ts: &str,
+    sid: &str,
+    raw_jsonl: &str,
+    commits: &[kb_core::sessions::CapturedCommit],
+    subagents: &[kb_core::sessions::SubagentDigest],
+    sidecar_texts: &[(String, String)],
+) -> String {
+    let spools: Vec<kb_core::sidecar_spool::SidecarSpool> = sidecar_texts
+        .iter()
+        .map(|(id, t)| kb_core::sidecar_spool::SidecarSpool::from_text(id.as_str(), t))
+        .collect();
+    wrap_envelope_spooled(ts, sid, raw_jsonl, commits, subagents, &spools)
+}
+
 /// The hook's `sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'`.
 /// `&` first so the `&` it emits isn't re-encoded (mirror of the parser's
 /// `html_unescape`, which reverses in the opposite order).
@@ -590,22 +624,23 @@ fn html_escape(s: &str) -> String {
 /// W0.6 — walk a session's sidecar directory (`<session-id>/subagents/`) for
 /// `agent-*.jsonl` files, returning BOTH the parsed digests (for
 /// [`render_subagents_block`](kb_core::sessions::render_subagents_block))
-/// AND the raw JSONL text keyed by the SAME resolved `agent_id` (for
-/// [`render_sidecar_text_block`](kb_core::sessions::render_sidecar_text_block))
-/// — one directory walk + one read per file, not two. Mirrors
+/// AND the secrets-scrubbed, bounded text spools keyed by the SAME resolved
+/// `agent_id` (for
+/// [`render_sidecar_text_block_spooled`](kb_core::sessions::render_sidecar_text_block_spooled))
+/// — one directory walk + one STREAMING read per file (v0.48 SC: no file is
+/// ever held whole in memory). Mirrors
 /// `kb_core::sessions::collect_subagent_digests`'s file-listing + sort
 /// exactly (deterministic order; `subagents/workflows/**` is excluded by
 /// construction since only direct-child `agent-*.jsonl` files match) but
-/// additionally keeps the raw string `parse_subagent_jsonl` would otherwise
-/// discard. Both callers ([`import`] and [`refresh_subagents_backfill`])
+/// additionally keeps the (bounded, scrubbed) text `parse_subagent_jsonl`
+/// would otherwise discard. Both callers ([`import`] and [`refresh_subagents_backfill`])
 /// need the pair, and `kb sessions capture` (`sessions_capture.rs`) reuses
 /// this too — one shared walk instead of three divergent ones. Best-effort,
 /// same contract as `collect_subagent_digests`: an unreadable sidecar is
-/// skipped, never a hard error; an absent/empty dir returns `(vec![],
-/// vec![])`.
-pub(crate) fn collect_sidecars(dir: &Path) -> (Vec<SubagentDigest>, Vec<(String, String)>) {
+/// skipped, never a hard error; an absent/empty dir returns an empty walk.
+pub(crate) fn collect_sidecars(dir: &Path) -> SidecarWalk {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return (Vec::new(), Vec::new());
+        return SidecarWalk::default();
     };
     let mut files: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
@@ -622,17 +657,19 @@ pub(crate) fn collect_sidecars(dir: &Path) -> (Vec<SubagentDigest>, Vec<(String,
     // directory-listing order.
     files.sort();
 
-    let mut digests = Vec::with_capacity(files.len());
-    let mut texts = Vec::with_capacity(files.len());
+    let mut walk = SidecarWalk::default();
     let mut skipped = 0u32;
     for path in &files {
-        match std::fs::read_to_string(path) {
-            Ok(raw) => {
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let filename_id = stem.strip_prefix("agent-").unwrap_or(stem);
-                let digest = kb_core::sessions::parse_subagent_jsonl(&raw, filename_id);
-                texts.push((digest.agent_id.clone(), raw));
-                digests.push(digest);
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let filename_id = stem.strip_prefix("agent-").unwrap_or(stem);
+        // ONE streaming pass per file (constant memory per file): the digest
+        // parse and the secrets scrub both ride it, and only the head/tail
+        // windows the render can use are kept. See `kb_core::sidecar_spool`.
+        match kb_core::sidecar_spool::spool_sidecar_file(path, filename_id) {
+            Ok(done) => {
+                walk.redactions += done.redactions;
+                walk.digests.push(done.digest);
+                walk.spools.push(done.spool);
             }
             Err(e) => {
                 skipped += 1;
@@ -651,7 +688,17 @@ pub(crate) fn collect_sidecars(dir: &Path) -> (Vec<SubagentDigest>, Vec<(String,
             "sidecar collection skipped unreadable files"
         );
     }
-    (digests, texts)
+    walk
+}
+
+/// What [`collect_sidecars`] returns: the parsed digests (from the RAW
+/// lines), the already-SCRUBBED bounded text spools keyed by the same
+/// resolved `agent_id`, and the secrets-redaction count over those sidecars.
+#[derive(Default)]
+pub(crate) struct SidecarWalk {
+    pub(crate) digests: Vec<SubagentDigest>,
+    pub(crate) spools: Vec<kb_core::sidecar_spool::SidecarSpool>,
+    pub(crate) redactions: u32,
 }
 
 /// Per-source read ceiling, well above [`kb_core::sessions::
@@ -872,17 +919,18 @@ fn refresh_subagents_backfill(
             .iter()
             .map(|p| p.join(&session_id).join("subagents"))
             .find(|d| d.is_dir());
-        let (agents, mut sidecar_texts) = match &sidecar_dir {
+        let walk = match &sidecar_dir {
             Some(d) => collect_sidecars(d),
-            None => (Vec::new(), Vec::new()),
+            None => SidecarWalk::default(),
         };
+        let (agents, walked, walked_redactions) = (walk.digests, walk.spools, walk.redactions);
         // W5/R10 — workflow journals + TaskOutput snapshots ride the SAME
         // refresh (same caps, same list). TaskOutput scanning needs the
         // main transcript text, recovered from the capture's own `<pre>`
         // (byte-identical round-trip, invariant #11) — no live transcript
         // file needed, so a refresh keeps working for a project dir that's
         // since been pruned from `~/.claude/projects`.
-        let extra = match &sidecar_dir {
+        let extras = match &sidecar_dir {
             Some(d) => {
                 let main_text = extract_pre(&html)
                     .map(|pre| html_unescape(&pre))
@@ -891,8 +939,7 @@ fn refresh_subagents_backfill(
             }
             None => Vec::new(),
         };
-        sidecar_texts.extend(extra);
-        if agents.is_empty() && sidecar_texts.is_empty() {
+        if agents.is_empty() && walked.is_empty() && extras.is_empty() {
             no_sidecars += 1;
             items.push(RefreshItem {
                 outcome: RefreshOutcome::NoSidecars,
@@ -912,10 +959,11 @@ fn refresh_subagents_backfill(
         // counts as `Updated`.
         // The sidecar-text lane is rewritten from raw files here, so it needs
         // the same secrets floor as a fresh capture.
-        let (_, sidecar_texts, _) = scrub_capture_lanes("", sidecar_texts);
+        let (_, sidecar_texts, _) = scrub_capture_lanes("", extras, walked, walked_redactions);
         let (agents, _) = super::sessions_scrub::scrub_subagents(agents);
         let with_subagents = kb_core::sessions::replace_subagents_block(&html, &agents);
-        let sidecar_text_block = kb_core::sessions::render_sidecar_text_block(&sidecar_texts);
+        let sidecar_text_block =
+            kb_core::sessions::render_sidecar_text_block_spooled(&sidecar_texts);
         let rewritten =
             kb_core::sessions::replace_sidecar_text_block(&with_subagents, sidecar_text_block);
         if rewritten == html {
@@ -1689,6 +1737,104 @@ mod tests {
 
         let texts = kb_core::sessions::extract_sidecar_text_block(&html);
         assert_eq!(texts, vec![("a1".to_string(), raw.to_string())]);
+    }
+
+    // --- v0.48 SC — bounded sidecar read + scrub ------------------------------
+
+    /// One synthetic sidecar: `lines` JSONL records, a secret every 211th
+    /// line, multibyte + entity padding.
+    fn synthetic_sidecar(agent: &str, lines: usize) -> String {
+        let mut s = String::new();
+        for i in 0..lines {
+            s.push_str(&format!(
+                "{{\"agentId\":\"{agent}\",\"message\":{{\"role\":\"assistant\",\"usage\":{{\"input_tokens\":1,\"output_tokens\":2}}}},\"i\":{i},\"pad\":\"é&<> synthetic sidecar padding line\"}}\n"
+            ));
+            if i % 211 == 0 {
+                s.push_str(
+                    "{\"leak\":\"api_key=abcdEFGH12345678 sk-ZYXWVUTSRQPONMLKJIHGFEDCBA\"}\n",
+                );
+            }
+        }
+        s
+    }
+
+    /// A capture over MANY large sidecars (22 files, ~10 MB total — well past
+    /// the 8 MiB total cap, several past the 2 MiB per-agent cap) is
+    /// byte-identical to the legacy pipeline (read whole -> parse whole ->
+    /// scrub whole -> render), in digests, redaction count AND the rendered
+    /// sidecar-text block. Only head/tail windows are retained per sidecar
+    /// (`kb_core::sidecar_spool`), so the capture's resident memory no longer
+    /// scales with total sidecar bytes — expected peak is roughly
+    /// (one scrub chunk, ~1 MiB) + (the ~8 MiB the block can render), where
+    /// the old path held every file whole plus its scrubbed copy.
+    #[test]
+    fn many_large_sidecars_capture_byte_identically_to_the_legacy_pipeline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("subagents");
+        for n in 0..22usize {
+            // Sizes vary: most well under the 2 MiB per-agent cap, every
+            // 7th (4 files) over it.
+            let lines = if n % 7 == 0 { 11_500 } else { 400 + n * 50 };
+            write(
+                &dir,
+                &format!("agent-a{n:02}.jsonl"),
+                &synthetic_sidecar(&format!("a{n:02}"), lines),
+            );
+        }
+        // Not an agent sidecar: ignored.
+        write(&dir, "notes.txt", "ignore me");
+
+        // --- legacy pipeline (the pre-v0.48 code, verbatim shape) ---
+        let opts = ScrubOptions::secrets_only();
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("agent-") && n.ends_with(".jsonl"))
+            })
+            .collect();
+        files.sort();
+        let mut legacy_digests = Vec::new();
+        let mut legacy_texts = Vec::new();
+        let mut legacy_redactions = 0u32;
+        let mut total_bytes = 0usize;
+        for f in &files {
+            let raw = std::fs::read_to_string(f).unwrap();
+            total_bytes += raw.len();
+            let stem = f.file_stem().and_then(|s| s.to_str()).unwrap();
+            let d = kb_core::sessions::parse_subagent_jsonl(&raw, &stem["agent-".len()..]);
+            let (scrubbed, rep) = scrub_transcript(&raw, &opts);
+            legacy_redactions += rep.total;
+            legacy_texts.push((d.agent_id.clone(), scrubbed));
+            legacy_digests.push(d);
+        }
+        assert!(
+            total_bytes > kb_core::sessions::SIDECAR_TEXT_TOTAL_CAP_BYTES,
+            "fixture must exceed the total cap ({total_bytes})"
+        );
+        let legacy_block = kb_core::sessions::render_sidecar_text_block(&legacy_texts).unwrap();
+        assert!(kb_core::sessions::sidecar_text_truncates(&legacy_texts));
+
+        // --- streaming pipeline ---
+        let walk = collect_sidecars(&dir);
+        assert_eq!(walk.digests, legacy_digests, "digests unchanged");
+        assert_eq!(
+            walk.redactions, legacy_redactions,
+            "redaction count unchanged"
+        );
+        assert!(kb_core::sessions::sidecar_text_truncates_spooled(
+            &walk.spools
+        ));
+        let (_, spools, total) = scrub_capture_lanes("", Vec::new(), walk.spools, walk.redactions);
+        assert_eq!(total, legacy_redactions);
+        let new_block = kb_core::sessions::render_sidecar_text_block_spooled(&spools).unwrap();
+        assert_eq!(new_block, legacy_block, "sidecar-text block byte-identical");
+        assert!(
+            !new_block.contains("ZYXWVUTSRQPONMLK"),
+            "no secret fragment"
+        );
     }
 
     // --- W5/R10 — collect_extra_sidecar_sources -------------------------
