@@ -1105,6 +1105,17 @@ is a SEARCHABLE-EVIDENCE block, not a resumable transcript: round-trip
 `<pre>`, and `subagents/workflows/**` stays excluded from the sidecar walk.
 Written by `kb sessions capture`, the plain `kb import claude-history`
 backfill, and `--refresh-subagents`, all from one shared sidecar walk.
+*v0.48 SC:* that walk STREAMS each `agent-*.jsonl` once (line by line; the
+digest parse and the secrets scrub ride the same pass) into a
+`kb_core::sidecar_spool::SidecarSpool` that keeps only the scrubbed text's
+exact length plus the head/tail windows a render can use, so capture memory no
+longer scales with total sidecar bytes. The scrub is chunked only at a
+`\n{` boundary (no secrets pattern can match across one — see
+`SecretScrubStream`) and runs on the FULL text before any cut, so output, the
+`truncated N bytes` marker, the redaction count and the digest are
+byte-identical to the old read-whole pipeline (pinned by golden tests);
+scrub CPU stays O(total sidecar bytes) on purpose, because the marker and the
+budgets depend on every agent's exact scrubbed length.
 
 **W0.6 fix amendment (2026-07-22) — the `code` FTS column is capped, not
 unbounded.** The same commit that stopped clearing `fields.code` for

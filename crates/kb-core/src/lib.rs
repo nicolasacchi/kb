@@ -56,6 +56,7 @@ pub mod session_scrub;
 pub mod sessions;
 pub mod share;
 pub mod sibling;
+pub mod sidecar_spool;
 pub mod slate;
 pub mod slo;
 pub mod storage;
