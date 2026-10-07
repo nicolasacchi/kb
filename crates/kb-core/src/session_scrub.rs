@@ -81,8 +81,16 @@ const ENTROPY_MIN_LEN: usize = 32;
 /// Redact a raw JSONL transcript per `opts`. Returns the redacted text + a
 /// report. Deterministic; a no-op (clone + empty report) when no layer is on.
 pub fn scrub_transcript(jsonl: &str, opts: &ScrubOptions) -> (String, ScrubReport) {
-    let mut text = jsonl.to_string();
     let mut report = ScrubReport::default();
+    // Secrets-only fast path: the layers are applied SEQUENTIALLY, so when no
+    // rule matches the ORIGINAL text, rule 1 is a no-op, rule 2 sees the same
+    // text, and so on — the output is the input, byte for byte. One
+    // multi-pattern scan then replaces ~12 per-rule scans + copies on the
+    // (overwhelmingly common) clean chunk.
+    if opts.secrets && !opts.paths && !opts.entropy && !secrets_prefilter().is_match(jsonl) {
+        return (jsonl.to_string(), report);
+    }
+    let mut text = jsonl.to_string();
     if opts.secrets {
         apply_token_rules(&mut text, &mut report);
         apply_group_rules(&mut text, labeled_rules(), &mut report);
@@ -224,17 +232,33 @@ fn path_rules() -> &'static [GroupRule] {
     })
 }
 
+/// One `RegexSet` over every `secrets`-layer pattern (token + labeled rules),
+/// used only as a no-match fast path by [`scrub_transcript`].
+fn secrets_prefilter() -> &'static regex::RegexSet {
+    static SET: OnceLock<regex::RegexSet> = OnceLock::new();
+    SET.get_or_init(|| {
+        let pats: Vec<&str> = token_rules()
+            .iter()
+            .map(|r| r.re.as_str())
+            .chain(labeled_rules().iter().map(|r| r.re.as_str()))
+            .collect();
+        regex::RegexSet::new(pats).expect("valid secrets prefilter set")
+    })
+}
+
 fn apply_token_rules(text: &mut String, report: &mut ScrubReport) {
     for rule in token_rules() {
         let mut n = 0u32;
-        let replaced = rule
-            .re
-            .replace_all(text.as_str(), |_: &Captures| {
-                n += 1;
-                format!("[redacted:{}]", rule.kind)
-            })
-            .into_owned();
-        *text = replaced;
+        let owned = match rule.re.replace_all(text.as_str(), |_: &Captures| {
+            n += 1;
+            format!("[redacted:{}]", rule.kind)
+        }) {
+            std::borrow::Cow::Owned(s) => Some(s),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        if let Some(s) = owned {
+            *text = s;
+        }
         report.bump(rule.kind, n);
     }
 }
@@ -242,14 +266,16 @@ fn apply_token_rules(text: &mut String, report: &mut ScrubReport) {
 fn apply_group_rules(text: &mut String, rules: &[GroupRule], report: &mut ScrubReport) {
     for rule in rules {
         let mut n = 0u32;
-        let replaced = rule
-            .re
-            .replace_all(text.as_str(), |caps: &Captures| {
-                n += 1;
-                format!("{}{}", &caps[1], rule.mask)
-            })
-            .into_owned();
-        *text = replaced;
+        let owned = match rule.re.replace_all(text.as_str(), |caps: &Captures| {
+            n += 1;
+            format!("{}{}", &caps[1], rule.mask)
+        }) {
+            std::borrow::Cow::Owned(s) => Some(s),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        if let Some(s) = owned {
+            *text = s;
+        }
         report.bump(rule.kind, n);
     }
 }
@@ -288,6 +314,76 @@ fn apply_entropy(text: &mut String, report: &mut ScrubReport) {
         .into_owned();
     *text = replaced;
     report.bump("high-entropy", n);
+}
+
+/// Minimum size at which [`SecretScrubStream`] considers cutting a new chunk.
+pub const SCRUB_STREAM_CHUNK_BYTES: usize = 1024 * 1024;
+
+/// Incremental, chunk-local twin of [`scrub_transcript`] with
+/// [`ScrubOptions::secrets_only`], for callers that must not hold a whole
+/// multi-MB transcript in memory. Lines are fed in order; the stream buffers
+/// them and only scrubs a chunk when it may cut cleanly.
+///
+/// **Cut rule (what makes chunked output byte-identical to a whole-text
+/// scrub).** A cut is taken only between a `\n` and a following line whose
+/// FIRST byte is `{` (every JSONL record). No `secrets` pattern can match
+/// across such a cut: the only constructs able to consume a newline are the
+/// `\s*`/`\s+` runs of the labeled and bearer rules, and each needs a further
+/// `[:=]` or token character AFTER the whitespace, while the byte right after
+/// the cut is `{` (not whitespace, not `:`/`=`, not in any value class); every
+/// other rule (`.*?`, `[^\s…]+`, character classes) cannot contain `\n`. The
+/// longest span any single match can have is therefore bounded by the line it
+/// sits on, so there is no cut-straddling partial secret by construction —
+/// the cut never lands inside a match. Text that never offers such a cut
+/// (non-JSONL, one giant line) simply stays one chunk: correctness first,
+/// memory second.
+pub struct SecretScrubStream {
+    pending: String,
+    /// Total redactions across every flushed chunk.
+    pub redactions: u32,
+}
+
+impl Default for SecretScrubStream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SecretScrubStream {
+    pub fn new() -> Self {
+        Self {
+            pending: String::new(),
+            redactions: 0,
+        }
+    }
+
+    fn flush(&mut self, sink: &mut impl FnMut(&str)) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let (out, report) = scrub_transcript(&self.pending, &ScrubOptions::secrets_only());
+        self.redactions += report.total;
+        sink(&out);
+        self.pending.clear();
+    }
+
+    /// Feed the next physical line (INCLUDING its terminating `\n`, except
+    /// possibly the last line of the input). Scrubbed chunks are handed to
+    /// `sink` in order.
+    pub fn push_line(&mut self, line: &str, sink: &mut impl FnMut(&str)) {
+        if self.pending.len() >= SCRUB_STREAM_CHUNK_BYTES
+            && self.pending.ends_with('\n')
+            && line.starts_with('{')
+        {
+            self.flush(sink);
+        }
+        self.pending.push_str(line);
+    }
+
+    /// Flush the final chunk.
+    pub fn finish(&mut self, sink: &mut impl FnMut(&str)) {
+        self.flush(sink);
+    }
 }
 
 /// Shannon entropy of `s` in bits per byte.
@@ -529,5 +625,54 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(line)
                 .unwrap_or_else(|e| panic!("scrubbed line not valid JSON: {e}\n{line}"));
         }
+    }
+
+    /// The chunked stream is byte-identical to a whole-text scrub — including
+    /// newline-spanning `\s+` matches (bearer, labeled) that must NOT be cut
+    /// even when a chunk boundary is "due" — and reports the same total.
+    #[test]
+    fn stream_chunking_is_byte_identical_to_whole_text_scrub() {
+        let mut text = String::new();
+        let mut i = 0usize;
+        while text.len() < 3 * SCRUB_STREAM_CHUNK_BYTES + 5_000 {
+            text.push_str(&format!(
+                "{{\"i\":{i},\"pad\":\"lorem ipsum dolor sit amet\"}}\n"
+            ));
+            if i % 400 == 0 {
+                text.push_str("Authorization: Bearer\nabcdefghijklmnopqrstuvwxyz0123456789\n");
+                text.push_str("\"password\"\n:  hunter2hunter2\n");
+                text.push_str(
+                    "{\"k\":\"sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ\",\"e\":\"AWS_SECRET_KEY=abc12345\"}\n",
+                );
+            }
+            i += 1;
+        }
+        let (whole, report) = scrub_transcript(&text, &ScrubOptions::secrets_only());
+        let mut stream = SecretScrubStream::new();
+        let mut out = String::new();
+        let mut chunks = 0;
+        let mut sink = |c: &str| {
+            chunks += 1;
+            out.push_str(c);
+        };
+        // Feed physical lines (the producer contract).
+        for line in text.split_inclusive('\n') {
+            stream.push_line(line, &mut sink);
+        }
+        stream.finish(&mut sink);
+        assert!(chunks >= 3, "fixture must really be cut into chunks");
+        assert_eq!(out, whole);
+        assert_eq!(stream.redactions, report.total);
+    }
+
+    #[test]
+    fn prefilter_fast_path_returns_clean_input_verbatim() {
+        let clean = "{\"a\":\"nothing secret here\"}\n{\"b\":2}\n";
+        let (out, rep) = scrub_transcript(clean, &ScrubOptions::secrets_only());
+        assert_eq!(out, clean);
+        assert_eq!(rep.total, 0);
+        let dirty = "{\"a\":\"ghp_abcdefghijklmnopqrstuvwxyz0123456789\"}";
+        let (out, rep) = scrub_transcript(dirty, &ScrubOptions::secrets_only());
+        assert!(out.contains("[redacted:github-token]") && rep.total == 1);
     }
 }
