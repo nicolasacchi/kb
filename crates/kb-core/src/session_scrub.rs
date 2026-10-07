@@ -18,7 +18,7 @@
 //!     (`password:\n  hunter2-x`, `Bearer\n<token>`, `export TOKEN=\<nl> value`),
 //!     and a label may be wrapped in escaped quotes (`\"client_secret\":`).
 //!     The newline-tolerant labeled/bearer forms only redact a value that
-//!     looks like a credential (contains a digit or `+/=`), so code such as
+//!     looks like a credential (contains a digit, `+` or `=`), so code such as
 //!     `password:\n  SecretString` is left alone; a purely alphabetic
 //!     passphrase on the line after its label is a known, accepted miss.
 //!     PEM private keys with REAL newlines (non-JSON text lanes: commit
@@ -150,10 +150,12 @@ const PEM_HOLD_WINDOW: usize = PEM_BODY_MAX + 160;
 /// whitespace, or an escaped `\n` `\r` `\t` (one or two backslashes).
 const ESC_WS: &str = r"(?:[ \t\r\n]|\\{1,2}[nrt])";
 
-/// A newline-tolerant labeled/bearer value must look like a credential.
+/// A newline-tolerant labeled/bearer value must look like a credential: a
+/// digit, `+` or `=`. (`/` alone is deliberately not enough: file paths after
+/// a `secret:` label are common and are not credentials.)
 fn looks_like_credential(v: &str) -> bool {
     v.bytes()
-        .any(|b| b.is_ascii_digit() || matches!(b, b'+' | b'/' | b'='))
+        .any(|b| b.is_ascii_digit() || matches!(b, b'+' | b'='))
 }
 
 fn token_rules() -> &'static [TokenRule] {
@@ -171,10 +173,12 @@ fn token_rules() -> &'static [TokenRule] {
                 r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
             ),
             // The same span across REAL newlines (non-JSON text lanes): ASCII
-            // body only, length-bounded, non-greedy up to the END marker.
+            // body only (never `"` or `\`, so a match can never swallow JSONL
+            // record structure across lines), length-bounded, non-greedy up
+            // to the END marker.
             mk(
                 "private-key",
-                r"-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----[\x00-\x7f]{0,8192}?-----END [A-Z ]{0,32}PRIVATE KEY-----",
+                r"-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----[\x00-\x21\x23-\x5b\x5d-\x7f]{0,8192}?-----END [A-Z ]{0,32}PRIVATE KEY-----",
             ),
             mk("github-pat", r"github_pat_[A-Za-z0-9_]{60,}"),
             mk("github-token", r"gh[pousr]_[A-Za-z0-9]{36,}"),
@@ -260,7 +264,7 @@ fn labeled_rules() -> &'static [GroupRule] {
             ),
             // Newline-tolerant labeled secret: escaped `\n`/`\t`/`\r` count as
             // whitespace, the label may sit in escaped quotes, the value may
-            // follow a (real or escaped) newline. Vetted (digit or `+/=`).
+            // follow a (real or escaped) newline. Vetted (digit, `+` or `=`).
             // Runs after the same-line rule; its value class excludes `[`
             // (never re-matches a marker) and `{` (the stream's `\n{` cut can
             // never split a match).
@@ -1160,6 +1164,10 @@ mod tests {
             r#"{"t":"the password:\n  see the docs for details"}"#,
             r#"{"t":"api_key:\n  your_api_key_here"}"#,
             r#"{"t":"secret:\n  required"}"#,
+            r#"{"t":"secret:\n  /run/secrets/db_password"}"#,
+            r#"{"t":"token:\n  config.items.list"}"#,
+            r#"{"t":"pub fn next(&mut self) -> Token {\n    token:\n        TokenKind::Ident,\n}"}"#,
+            "schema:\n  password:\n    type: string\n  token:\n    description: text\n",
             r#"{"t":"Bearer\nauthentication-scheme-header is described"}"#,
             r#"{"t":"Bearer\n  token_endpoint_handler_name"}"#,
             r#"{"t":"export API_TOKEN=\n  next_line_of_the_script"}"#,
@@ -1190,6 +1198,32 @@ mod tests {
         ] {
             assert!(secrets_prefilter().is_match(text), "{text}");
             assert_eq!(run(text), scrub_unfiltered(text), "{text}");
+        }
+    }
+
+    /// A BEGIN at the end of one JSONL record and an END in a later record must
+    /// not be swallowed as one "PEM": the match would eat the record
+    /// boundaries and leave invalid JSON. Every output line stays valid JSON,
+    /// whole-text and chunked alike.
+    #[test]
+    fn pem_rule_never_spans_jsonl_records() {
+        let text = "{\"t\":\"grep -n BEGIN -----BEGIN PRIVATE KEY-----\"}\n{\"t\":\"middle\"}\n{\"t\":\"-----END PRIVATE KEY-----\"}\n";
+        let (whole, rep) = run(text);
+        assert_eq!(whole, text);
+        assert_eq!(rep.total, 0);
+        for line in whole.lines() {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|e| panic!("invalid JSON line: {e}\n{line}"));
+        }
+        for chunk_bytes in [1usize, 17] {
+            let mut stream = SecretScrubStream::with_chunk_bytes(chunk_bytes);
+            let mut out = String::new();
+            let mut sink = |c: &str| out.push_str(c);
+            for line in text.split_inclusive('\n') {
+                stream.push_line(line, &mut sink);
+            }
+            stream.finish(&mut sink);
+            assert_eq!(out, whole);
         }
     }
 }
