@@ -1167,7 +1167,7 @@ mod tests {
             r#"{"t":"secret:\n  /run/secrets/db_password"}"#,
             r#"{"t":"token:\n  config.items.list"}"#,
             r#"{"t":"pub fn next(&mut self) -> Token {\n    token:\n        TokenKind::Ident,\n}"}"#,
-            "schema:\n  password:\n    type: string\n  token:\n    description: text\n",
+            "schema:\n  password:\n    type: string\n  token:\n    kind: text\n",
             r#"{"t":"Bearer\nauthentication-scheme-header is described"}"#,
             r#"{"t":"Bearer\n  token_endpoint_handler_name"}"#,
             r#"{"t":"export API_TOKEN=\n  next_line_of_the_script"}"#,
