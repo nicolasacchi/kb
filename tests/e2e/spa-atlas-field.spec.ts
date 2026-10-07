@@ -119,6 +119,73 @@ test.describe("atlas — the operator field", () => {
     expect(put.ok()).toBeTruthy();
   });
 
+  test("a drop in the same task as the last move still commits (no stale-closure race)", async ({
+    page,
+    request,
+  }) => {
+    await page.goto(`http://127.0.0.1:${PORT}/?view=atlas`);
+    const canvas = page.locator(".atlas__canvas");
+    await expect(canvas).toBeVisible();
+    const before = await canvas.getAttribute("data-first-dot");
+    expect(before).toBeTruthy();
+    await page.locator('[data-kb-act="atlas-field"]').click();
+    await page.locator('[data-kb-act="atlas-field-place"]').click();
+    await expect(canvas).toHaveAttribute("data-atlas-field-place", "1");
+    await canvas.scrollIntoViewIfNeeded();
+
+    // mousedown / mousemove / mouseup dispatched back-to-back in ONE task:
+    // React has no chance to re-render between the move and the drop, which
+    // is exactly the ordering a loaded CI box produces with real input.
+    // The drop must use the latest pointer position, not the last render's.
+    const [lx, ly] = before!.split(",").map(Number);
+    await canvas.evaluate(
+      (el, [px, py]) => {
+        const r = el.getBoundingClientRect();
+        const x = r.left + (r.width * px) / 600;
+        const y = r.top + (r.height * py) / 360;
+        const fire = (type: string, cx: number, cy: number) =>
+          el.dispatchEvent(
+            new MouseEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              clientX: cx,
+              clientY: cy,
+              button: 0,
+              buttons: type === "mouseup" ? 0 : 1,
+            }),
+          );
+        fire("mousedown", x, y);
+        fire("mousemove", x + 90, y + 50);
+        fire("mouseup", x + 90, y + 50);
+      },
+      [lx, ly],
+    );
+
+    await expect
+      .poll(async () =>
+        Number(await canvas.getAttribute("data-atlas-field-ghosts")),
+      )
+      .toBeGreaterThanOrEqual(1);
+    await expect(canvas).toHaveAttribute("data-first-dot", before!);
+    await expect
+      .poll(
+        async () => {
+          const r = await request.get(`${BASE}/api/kb/canon/atlas/field`);
+          if (!r.ok()) return 0;
+          const doc = await r.json();
+          return (doc.nodes ?? []).filter(
+            (n: { type?: string }) => n.type === "file",
+          ).length;
+        },
+        { timeout: 10_000 },
+      )
+      .toBeGreaterThanOrEqual(1);
+    const put = await request.put(`${BASE}/api/kb/canon/atlas/field`, {
+      data: { nodes: [], edges: [] },
+    });
+    expect(put.ok()).toBeTruthy();
+  });
+
   test("the loci walk offers a list and records nothing", async ({ page }) => {
     await page.goto(`http://127.0.0.1:${PORT}/?view=atlas`);
     await expect(page.locator(".atlas__canvas")).toBeVisible();
