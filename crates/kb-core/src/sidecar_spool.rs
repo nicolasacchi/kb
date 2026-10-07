@@ -287,9 +287,9 @@ mod tests {
     fn streamed_sidecar_file_equals_the_legacy_read_whole_pipeline() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent-abc.jsonl");
-        // > 2 scrub chunks and > the 2 MiB per-agent cap, multibyte + entities.
+        // > 2 scrub chunks (1 MiB each) and > the 2 MiB per-agent cap, multibyte + entities.
         let text = jsonl_fixture(14_000);
-        assert!(text.len() > 2 * SIDECAR_TEXT_AGENT_CAP_BYTES);
+        assert!(text.len() > SIDECAR_TEXT_AGENT_CAP_BYTES + (1 << 20));
         std::fs::write(&path, &text).unwrap();
         let (scrubbed, spool) = assert_file_matches_legacy(&path);
         assert!(scrubbed.contains("[redacted:api-key]"));
