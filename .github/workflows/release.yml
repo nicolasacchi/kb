@@ -21,10 +21,10 @@
 #      `gh` and `docker` CLIs in `run:` steps so there are NO extra actions to
 #      pin at all (only checkout / setup-rust / rust-cache, all from ci.yml).
 #
-# Runners: GitHub-hosted throughout (ubuntu-latest for the release/ghcr
-# jobs, ubuntu-24.04 + the native ubuntu-24.04-arm for the binary matrix) —
-# the same posture as every other workflow in this repository. Action SHA
-# pins are copied verbatim from ci.yml.
+# Runners: trusted x64 jobs use the isolated h4oamd pool; fork/off-repository
+# runs stay hosted. The binary matrix keeps native ubuntu-24.04-arm hosted;
+# its x64 pool image must retain the Ubuntu 24.04 build floor described below.
+# Action SHA pins are copied verbatim from ci.yml.
 #
 # Injection-safety: every `${{ … }}` expression is passed through `env:` and
 # referenced as a shell variable inside `run:` — never interpolated into a
@@ -113,7 +113,7 @@ jobs:
   # tags on the same rule.
   verify-ci:
     name: verify ci is green for the tagged commit
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       actions: read
@@ -140,7 +140,7 @@ jobs:
     name: create release
     needs: verify-ci
     if: github.event_name == 'push' && !inputs.dry_run
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -172,7 +172,7 @@ jobs:
   binaries:
     name: binaries (${{ matrix.target }})
     needs: create-release
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-24.04' && github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || matrix.runner }}
     # 90 -> 180 when kb-code's three binaries joined this job (see the
     # SAME-JOB note above the kb-code build steps for the measured basis).
     # Still an order of magnitude under GitHub's hard 360-minute per-job cap;
@@ -214,6 +214,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
+        if: runner.environment == 'github-hosted'
         # The release link (lance + datafusion, plus static ORT for the
         # embedder) is heavy; reclaim ~20 GB so it can't run the runner dry.
         # Mirrors ci.yml's guard. Best-effort — missing dirs are ignored.
@@ -473,7 +474,7 @@ jobs:
     name: ghcr images (kb + kb-code)
     needs: verify-ci
     if: github.event_name == 'push' && !inputs.dry_run
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     # Independent of `binaries` — builds the existing repo-root Dockerfile,
     # BOTH of its runtime targets: `kb-code-runtime` and the default (last)
     # `runtime` stage, which is kb's. Same pair, same Dockerfile and same
@@ -497,6 +498,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (drop preinstalled SDKs)
+        if: runner.environment == 'github-hosted'
         # The kb image is ~1.7 GB (bakes in the ~1.34 GB bge-large model) on
         # top of a full release compile, and this job now builds kb-code's
         # image before it — reclaim headroom before either docker build.
@@ -508,7 +510,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
                       /opt/hostedtoolcache/CodeQL \
                       /usr/local/lib/android /usr/local/share/boost || true
-          sudo docker image prune -af || true
+          docker image prune -af || true
           df -h /
 
       - name: Log in to ghcr.io
@@ -667,7 +669,7 @@ jobs:
     name: channels exist (anonymous)
     needs: [binaries, ghcr]
     if: github.event_name == 'push' && !inputs.dry_run
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

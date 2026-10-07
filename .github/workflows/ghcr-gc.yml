@@ -17,8 +17,9 @@
 # `latest`, or any other tag beside a main-* tag is never selected. Untagged
 # versions (multi-arch child manifests) are never selected either.
 #
-# Runs on GitHub-hosted ubuntu-latest, like every other workflow here: pure
-# ghcr.io/GitHub-API traffic. The checkout is only for scripts/ghcr-gc.sh.
+# Trusted runs use the repo-scoped h4oamd runners; fork/external-repo runs use
+# GitHub-hosted Ubuntu (see docs/self-hosted-ci.md). Only ghcr.io/GitHub-API
+# traffic is needed; the checkout is only for scripts/ghcr-gc.sh.
 name: ghcr-gc
 
 on:
@@ -55,7 +56,7 @@ defaults:
 jobs:
   selftest:
     name: gc selection selftest
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -73,7 +74,7 @@ jobs:
       contents: read
       packages: write
     name: gc (${{ matrix.package }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -101,7 +102,7 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: gc
     name: channels exist (anonymous)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

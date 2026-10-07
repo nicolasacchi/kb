@@ -43,7 +43,7 @@ jobs:
     permissions:
       contents: write
     name: regenerate package-lock.json (web, web-code, tests/e2e, web-code/e2e)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -93,7 +93,7 @@ jobs:
       contents: write
     name: regenerate Cargo.lock + THIRD-PARTY-LICENSES.md (prune only, no version moves)
     needs: regen
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     if: >-
       !cancelled() && needs.regen.result == 'success' && (

@@ -55,7 +55,7 @@ jobs:
           && github.event.workflow_run.event == 'push'
           && github.event.workflow_run.conclusion == 'success'
           && github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -91,7 +91,7 @@ jobs:
   tarball:
     name: tarball (${{ matrix.name }})
     needs: resolve
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-latest' && github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || matrix.runner }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -199,14 +199,15 @@ jobs:
   docker:
     name: docker (ghcr image, anonymous pull)
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
     permissions:
       contents: read
     env:
       IMAGE: ghcr.io/nicolasacchi/kb:${{ needs.resolve.outputs.version }}
-      # The step below probes 127.0.0.1:4000 because it relies on the image's own
-      # default addr (its CMD and HEALTHCHECK) with --network host.
+      # Probe inside the image's network namespace: its default addr/CMD and
+      # HEALTHCHECK stay loopback-only, even with a remote rootless TLS daemon.
+      # No host socket, host networking or published port is needed.
     steps:
       # HARNESS = this workflow's own ref (main), so a harness fix applies to an
       # already-published tag. RELEASE = the tag, in release/: only what a user
@@ -224,10 +225,21 @@ jobs:
             echo "pull attempt $attempt failed"; sleep 30
           done
           exit 1
+      - name: Prepare shared Docker scratch
+        run: |
+          set -euo pipefail
+          # The runner and remote daemon share this workspace at the SAME path;
+          # /tmp belongs to the runner alone and cannot supply remote bind mounts.
+          scratch="$(mktemp -d "$GITHUB_WORKSPACE/.first-run-docker.XXXXXX")"
+          chmod 755 "$scratch"
+          echo "DOCKER_SCRATCH=$scratch" >> "$GITHUB_ENV"
+          echo "CONTAINER=kb-first-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          owner="$(docker run --rm --entrypoint sh "$IMAGE" -c 'printf "%s:%s" "$(id -u)" "$(id -g)"')"
+          echo "IMAGE_OWNER=$owner" >> "$GITHUB_ENV"
       - name: Run the image against the sample corpus
         run: |
           set -euo pipefail
-          T="$(mktemp -d)"
+          T="$DOCKER_SCRATCH/keyword"
           mkdir -p "$T/config/kb" "$T/state"
           # The sample corpus is not baked into the image: mount it from the tag.
           cp -R release/corpus/canon "$T/corpus"
@@ -243,43 +255,57 @@ jobs:
           [kb.canon]
           path = "/corpus"
           TOML
-          chmod -R 777 "$T/config" "$T/state"
-          echo "T=$T" >> "$GITHUB_ENV"
-          docker run -d --name kb --network host \
-            -v "$T/config:/var/lib/kb/config" \
-            -v "$T/state:/var/lib/kb/state" \
-            -v "$T/corpus:/corpus:ro" \
+          # Chown in the DAEMON's user namespace, not the runner's: rootless
+          # Docker maps the image UID to a subordinate host UID. No world-writable
+          # config/state, and the image still runs as its declared non-root user.
+          docker run --rm --user 0:0 --entrypoint sh \
+            --mount "type=bind,source=$T,target=/scratch" "$IMAGE" \
+            -c 'chown -R "$1" /scratch/config /scratch/state; chmod -R u+rwX,go-rwx /scratch/config /scratch/state' sh "$IMAGE_OWNER"
+          docker run -d --name "$CONTAINER" \
+            --mount "type=bind,source=$T/config,target=/var/lib/kb/config" \
+            --mount "type=bind,source=$T/state,target=/var/lib/kb/state" \
+            --mount "type=bind,source=$T/corpus,target=/corpus,readonly" \
             "$IMAGE"
           for i in $(seq 1 60); do
-            curl -fsS --max-time 3 http://127.0.0.1:4000/healthz >/dev/null 2>&1 && break
+            docker exec "$CONTAINER" curl -fsS --max-time 3 http://127.0.0.1:4000/healthz >/dev/null 2>&1 && break
             sleep 2
           done
-          curl -fsS http://127.0.0.1:4000/healthz
-          code="$(curl -sS -o root.html -w '%{http_code}' http://127.0.0.1:4000/)"
+          docker exec "$CONTAINER" curl -fsS http://127.0.0.1:4000/healthz
+          code="$(docker exec "$CONTAINER" curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/)"
+          docker exec "$CONTAINER" curl -fsS http://127.0.0.1:4000/ >root.html
           [ "$code" = 200 ] && grep -q '<div id="root"' root.html
           found=0
           for i in $(seq 1 60); do
-            docker exec kb kb search borrow --kb canon --mode keyword --json >search.last 2>&1 || true
+            docker exec "$CONTAINER" kb search borrow --kb canon --mode keyword --json >search.last 2>&1 || true
             n="$(bash scripts/ci/first-run-hits.sh search.last)"
             if [ "${n:-0}" -ge 1 ]; then found=1; break; fi
             sleep 3
           done
           if [ "$found" != 1 ]; then
             echo "---- last kb search output ----"; sed -n '1,40p' search.last
-            echo "---- kb status ----"; docker exec kb kb status 2>&1 | sed -n '1,40p' || true
+            echo "---- kb status ----"; docker exec "$CONTAINER" kb status 2>&1 | sed -n '1,40p' || true
             exit 1
           fi
-          docker exec kb kb daemon doctor
+          docker exec "$CONTAINER" kb daemon doctor
           for i in $(seq 1 30); do
-            st="$(docker inspect --format '{{.State.Health.Status}}' kb)"
+            st="$(docker inspect --format '{{.State.Health.Status}}' "$CONTAINER")"
             [ "$st" = healthy ] && break
             sleep 5
           done
           [ "$st" = healthy ]
+          # A healthy loopback endpoint must NOT also accept on the bridge IP.
+          ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CONTAINER")"
+          [ -n "$ip" ]
+          if docker exec "$CONTAINER" curl --noproxy '*' -fsS --max-time 3 "http://$ip:4000/healthz"; then
+            echo "::error::image unexpectedly accepts non-loopback connections"
+            exit 1
+          else
+            [ "$?" = 7 ] # curl's connect failure, not an unrelated exec error
+          fi
           echo "RESULT docker PASS"
       - name: Container logs
         if: failure()
-        run: docker logs kb 2>&1 | tail -n 150
+        run: docker logs "$CONTAINER" 2>&1 | tail -n 150
       - name: Default config (no embedding_model, as the quickstart writes it) - non-gating probe
         # Answers "does the image index with the config `kb add` produces?" on
         # every run. It does not gate: an embedder-backed first index depends on
@@ -287,23 +313,26 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          set -uo pipefail
-          docker rm -f kb >/dev/null 2>&1 || true
-          P="$(mktemp -d)"
+          set -euo pipefail
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          P="$DOCKER_SCRATCH/default"
           mkdir -p "$P/config/kb" "$P/state"
           cp -R release/corpus/canon "$P/corpus"
           printf '[kb.canon]\npath = "/corpus"\n' > "$P/config/kb/kb.toml"
-          chmod -R 777 "$P/config" "$P/state"
-          docker run -d --name kb --network host \
-            -v "$P/config:/var/lib/kb/config" -v "$P/state:/var/lib/kb/state" \
-            -v "$P/corpus:/corpus:ro" "$IMAGE" >/dev/null
+          docker run --rm --user 0:0 --entrypoint sh \
+            --mount "type=bind,source=$P,target=/scratch" "$IMAGE" \
+            -c 'chown -R "$1" /scratch/config /scratch/state; chmod -R u+rwX,go-rwx /scratch/config /scratch/state' sh "$IMAGE_OWNER"
+          docker run -d --name "$CONTAINER" \
+            --mount "type=bind,source=$P/config,target=/var/lib/kb/config" \
+            --mount "type=bind,source=$P/state,target=/var/lib/kb/state" \
+            --mount "type=bind,source=$P/corpus,target=/corpus,readonly" "$IMAGE" >/dev/null
           for i in $(seq 1 60); do
-            curl -fsS --max-time 3 http://127.0.0.1:4000/healthz >/dev/null 2>&1 && break
+            docker exec "$CONTAINER" curl -fsS --max-time 3 http://127.0.0.1:4000/healthz >/dev/null 2>&1 && break
             sleep 2
           done
           found=0
           for i in $(seq 1 40); do
-            docker exec kb kb search borrow --kb canon --mode keyword --json >probe.last 2>&1 || true
+            docker exec "$CONTAINER" kb search borrow --kb canon --mode keyword --json >probe.last 2>&1 || true
             n="$(bash scripts/ci/first-run-hits.sh probe.last)"
             if [ "${n:-0}" -ge 1 ]; then found=1; break; fi
             sleep 3
@@ -311,13 +340,25 @@ jobs:
           echo "default-config keyword hits found=$found after ~$((i * 3))s"
           if [ "$found" != 1 ]; then
             sed -n '1,40p' probe.last
-            docker exec kb kb status 2>&1 | sed -n '1,40p' || true
-            docker logs kb 2>&1 | grep -v 'lance::dataset::scanner' | tail -n 60 || true
+            docker exec "$CONTAINER" kb status 2>&1 | sed -n '1,40p' || true
+            docker logs "$CONTAINER" 2>&1 | grep -v 'lance::dataset::scanner' | tail -n 60 || true
             exit 1
           fi
       - name: Cleanup
         if: always()
-        run: docker rm -f kb >/dev/null 2>&1 || true
+        run: |
+          set -euo pipefail
+          if [ -n "${CONTAINER:-}" ]; then
+            docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${DOCKER_SCRATCH:-}" ] && [ -d "$DOCKER_SCRATCH" ]; then
+            # The daemon owns subordinate-UID files; remove only this job's two
+            # scratch legs in its namespace before the runner removes the root.
+            docker run --rm --user 0:0 --entrypoint sh \
+              --mount "type=bind,source=$DOCKER_SCRATCH,target=/scratch" "$IMAGE" \
+              -c 'rm -rf /scratch/keyword /scratch/default'
+            rmdir "$DOCKER_SCRATCH"
+          fi
       - name: Summary
         if: always()
         run: |
@@ -327,7 +368,7 @@ jobs:
     name: report
     needs: [resolve, tarball, docker]
     if: always() && needs.resolve.result != 'skipped'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-h4o","h4oamd"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions: {}
     steps:
