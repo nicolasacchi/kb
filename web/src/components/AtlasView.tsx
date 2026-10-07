@@ -497,7 +497,14 @@ export default function AtlasView({
     x: number;
     y: number;
   } | null>(null);
-  const fieldDragRef = useRef<{ file: string } | null>(null);
+  // The ref is the SOURCE OF TRUTH for the commit: it carries the latest
+  // pointer position too. `fieldDrag` (state) only drives the draw — mouse
+  // moves are continuous-priority updates, so a mouseup landing before the
+  // re-render would read a stale (null) `fieldDrag` in its closure and drop
+  // the placement silently.
+  const fieldDragRef = useRef<{ file: string; x: number; y: number } | null>(
+    null,
+  );
   const queryClient = useQueryClient();
 
   // W3.F-c — loci tours. Pure navigation over an EXISTING reading list —
@@ -1897,7 +1904,7 @@ export default function AtlasView({
       const hit = findHit(e.clientX, e.clientY);
       const lp = screenToLogical(e.clientX, e.clientY);
       if (hit?.doc.source_relative && lp) {
-        fieldDragRef.current = { file: hit.doc.source_relative };
+        fieldDragRef.current = { file: hit.doc.source_relative, x: lp.x, y: lp.y };
         setFieldDrag({ file: hit.doc.source_relative, x: lp.x, y: lp.y });
       }
       return;
@@ -1928,6 +1935,7 @@ export default function AtlasView({
         const lp = screenToLogical(e.clientX, e.clientY);
         if (lp) {
           const file = fieldDragRef.current.file;
+          fieldDragRef.current = { file, x: lp.x, y: lp.y };
           setFieldDrag({ file, x: lp.x, y: lp.y });
         }
         return;
@@ -1966,15 +1974,14 @@ export default function AtlasView({
       // any atlas coordinate — the machine layout is read-only.
       const drag = fieldDragRef.current;
       fieldDragRef.current = null;
-      const pos = fieldDrag;
       setFieldDrag(null);
-      if (drag && pos && pos.file === drag.file) {
+      if (drag) {
         scheduleFieldSave(
           setPlacement(
             fieldDoc,
             drag.file,
-            unitFromLogicalX(pos.x),
-            unitFromLogicalY(pos.y),
+            unitFromLogicalX(drag.x),
+            unitFromLogicalY(drag.y),
           ),
         );
         censusBump("atlas.field.place");
