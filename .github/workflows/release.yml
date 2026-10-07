@@ -21,7 +21,7 @@
 #      `gh` and `docker` CLIs in `run:` steps so there are NO extra actions to
 #      pin at all (only checkout / setup-rust / rust-cache, all from ci.yml).
 #
-# Runners: trusted x64 jobs use the isolated cpu-pool pool; fork/off-repository
+# Runners: trusted x64 jobs use the isolated CPU pool; fork/off-repository
 # runs stay hosted. The binary matrix keeps native ubuntu-24.04-arm hosted;
 # its x64 pool image must retain the Ubuntu 24.04 build floor described below.
 # Action SHA pins are copied verbatim from ci.yml.
@@ -113,7 +113,7 @@ jobs:
   # tags on the same rule.
   verify-ci:
     name: verify ci is green for the tagged commit
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       actions: read
@@ -140,7 +140,7 @@ jobs:
     name: create release
     needs: verify-ci
     if: github.event_name == 'push' && !inputs.dry_run
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -172,7 +172,7 @@ jobs:
   binaries:
     name: binaries (${{ matrix.target }})
     needs: create-release
-    runs-on: ${{ matrix.runner == 'ubuntu-24.04' && github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-24.04' && github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || matrix.runner }}
     # 90 -> 180 when kb-code's three binaries joined this job (see the
     # SAME-JOB note above the kb-code build steps for the measured basis).
     # Still an order of magnitude under GitHub's hard 360-minute per-job cap;
@@ -474,7 +474,7 @@ jobs:
     name: ghcr images (kb + kb-code)
     needs: verify-ci
     if: github.event_name == 'push' && !inputs.dry_run
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
     # Independent of `binaries` — builds the existing repo-root Dockerfile,
     # BOTH of its runtime targets: `kb-code-runtime` and the default (last)
     # `runtime` stage, which is kb's. Same pair, same Dockerfile and same
@@ -669,7 +669,7 @@ jobs:
     name: channels exist (anonymous)
     needs: [binaries, ghcr]
     if: github.event_name == 'push' && !inputs.dry_run
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

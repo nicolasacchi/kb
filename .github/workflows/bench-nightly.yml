@@ -27,8 +27,8 @@
 # through `env:` and referenced as shell variables, never interpolated
 # directly into a `run:` body.
 #
-# Trusted runs use two bounded KB slots in Ubuntu containers on cpu-pool,
-# sharing host capacity with primary and Windows; other repositories and untrusted
+# Trusted runs use two bounded KB slots in the isolated CPU pool,
+# sharing host capacity with other Linux jobs and Windows; other repositories and untrusted
 # events fall back to ubuntu-latest, without changing the job guard below.
 name: bench-nightly
 
@@ -74,7 +74,7 @@ jobs:
     permissions:
       contents: read
     name: bench-nightly (kb bench, keyword/BM25-only)
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-selfhosted","cpu-pool"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
     # A fork inherits this file's `schedule`, so without the repository guard
     # every fork would silently run a nightly bench of its own on GitHub's
     # minutes. Belt-and-braces on the event too — there is no pull_request
