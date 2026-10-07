@@ -342,7 +342,8 @@ registering anywhere `kb-memory` is already installed. Design:
     script warns and falls back, it never drifts). More work than one pass may
     do re-runs passes (the coalescing loop) until caught up; nothing is
     recorded as done until every part is landed. A part is never started with 15 s or less of the pass deadline left (the pass
-    then lands nothing and the next one continues; stderr says so). A catch-up that outlasts the
+    then lands nothing, another pass follows only if something landed or a
+    sidecar was translated; stderr says so). A catch-up that outlasts the
     caller's own timeout (`KB_CAPTURE_TIMEOUT_MS`, 120 s in `kb-omp.ts`) is cut
     by it like any capture and RESUMES at the next trigger: progress is
     persisted per landed part, never restarted.
@@ -367,8 +368,52 @@ registering anywhere `kb-memory` is already installed. Design:
     append converts only the tail (plus the one part that just froze), and a
     late subagent re-opens only the part it belongs to.
   - **Sidecars** go to the last part that starts strictly before the sidecar's
-    first timestamp (ties -> the earlier part); no readable timestamp -> the
-    tail.
+    first timestamp (ties -> the earlier part). omp writes a fixed-width TITLE
+    SLOT (`{"type":"title", ..., "updatedAt"}`, no `timestamp`) as line 1 of
+    every session file, sidecars included, and the session header (with the
+    `timestamp`) as line 2, so the first three lines are read: the first
+    `timestamp` (else a message's, else the slot's `updatedAt`). A sidecar with
+    no readable timestamp is placed by its file mtime (the subagent's end
+    time); only a file that cannot be stat'ed goes to the tail. Each pass
+    reports the split (`KB_CAPTURE_TRACE`: `sidecars total=N ts=a mtime=b
+    unplaced=c`) and warns on stderr when more than 20 sidecars and a quarter
+    of them needed the fallback (the omp format may have changed). The first
+    timestamps are cached in `<lock-base>.sc.tsv` keyed by (path, size, mtime,
+    inode): a pass reads no sidecar head it has read before. Before v0.48 the
+    first line was read, so EVERY sidecar of a real session landed in the tail
+    part, and a session with hundreds of them never finished a pass.
+  - **Sidecar translation cache (v0.48)**: a translated sidecar is kept under
+    `<lock-base>.sc/<name>.<inode>.<size>.<mtime>.<translator hash>.jsonl`
+    (an untranslatable one as `.none`). A part conversion links the cached file
+    in and translates only what is new or changed, so an unchanged sidecar is
+    translated ONCE, whatever else about its part changed, and the work survives
+    a deadline kill. Entries of sidecars that are gone or changed are pruned at
+    each pass; the directory is private (0700) and is at most the size of the
+    translated sidecars (never part of a capture).
+  - **Catch-up cannot starve (v0.48)**: no sidecar is started in the last
+    `KB_CAPTURE_SEG_LAND_RESERVE_SECS` of the pass (default a quarter of the
+    pass deadline, 8-25 s: the landing needs it); the part stops there, keeps
+    its cached sidecars and another pass continues (progress = a landing OR a
+    sidecar translated; the first sidecar of a part always translates). While
+    frozen parts wait, the tail's staging is held to half of the time left, so
+    an expensive tail cannot eat the pass. A tail that FAILED (a landing killed
+    at its cap, a conversion that did not finish) leaves
+    `<lock-base>.tailfail`: the next pass goes FROZEN-FIRST (the tail is retried
+    once no frozen part is left waiting) and the marker clears when the tail
+    lands - so one bad tail never stops the frozen parts, and the tail still
+    gets a try on every pass that has nothing older to do.
+  - **Landing cap fits the part (v0.48)**: a part's `kb sessions capture` is
+    capped at `KB_CAPTURE_LAND_SECS` (20) + payload bytes /
+    `KB_CAPTURE_LAND_BYTES_PER_SEC` (8 MiB; transcript + sidecars), at most
+    `KB_CAPTURE_LAND_MAX_SECS` (90) and never past the pass deadline. A failed
+    landing parks its sidecars in the spool only up to
+    `KB_CAPTURE_SEG_SPOOL_SC_MAX` (64 MiB); past that they stay in the
+    translation cache and the next pass regenerates the part (no second copy of
+    100 MB of sidecars). Known remaining cost: `kb sessions capture` reads and
+    scrubs ALL of a part's sidecar bytes before its 2 MiB/agent, 8 MiB total
+    render caps apply (a kb-side change, not done here), which is why the cap
+    scales with the payload and why spreading the sidecars over the parts
+    matters most.
   - **Part 1 is re-landed smaller at its first freeze** (correctness over
     artifact stability): a session that was captured whole before segmentation
     keeps its bare-id artifact, which is then overwritten in place with just

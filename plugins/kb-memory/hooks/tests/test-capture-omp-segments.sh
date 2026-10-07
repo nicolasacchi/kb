@@ -136,11 +136,16 @@ if [ "${1:-}" = "sessions" ]; then
         [ "$prev" = "--transcript" ] && t="$a"
         prev="$a"
       done
+      if [ -n "${KB_FAIL_SID_SUFFIX:-}" ]; then case "$sid" in *"$KB_FAIL_SID_SUFFIX") exit 1 ;; esac; fi
       if [ -n "${KB_REAL_CAPTURE:-}" ]; then exec "$REAL_KB" "$@"; fi
       if [ -n "$t" ]; then
         n=$(($(cat "$KB_CALLS" 2>/dev/null || echo 0) + 1)); echo "$n" >"$KB_CALLS"
         sc="$(ls "$(dirname "$t")"/*/subagents/*.jsonl 2>/dev/null | xargs -r -n1 basename | tr '\n' ',')"
         echo "capture $sid bytes=$(stat -c %s "$t") sidecars=$sc" >>"$KB_LOG"
+        if [ -n "${KB_CAP_SLEEP_OVER:-}" ]; then
+          sb="$(cat "$(dirname "$t")"/*/subagents/*.jsonl 2>/dev/null | wc -c)"
+          [ "$sb" -gt "$KB_CAP_SLEEP_OVER" ] && sleep "${KB_CAP_SLEEP:-1}"
+        fi
         if [ -n "${KB_HANG_AT:-}" ] && [ "$n" = "$KB_HANG_AT" ]; then
           echo "$$" >"$KB_HANGING"
           sleep 300
@@ -959,6 +964,190 @@ if [ "$SECONDS" -lt 20 ]; then
   ok "a hard deadline too short to convert anything ends the run (no busy re-plan loop)"
 else
   bad "short hard deadline looped for $SECONDS s"
+fi
+
+# ---------------------------------------------------------------------------
+# 13. v0.48 SEG-PERF: sidecar-heavy sessions must catch up.
+SGEN="$FIX/gen-omp-sidecars.py"
+# <part id> <sidecars landed with it> (the largest landing of each part)
+holders() { grep '^capture ' "$KB_LOG" | awk '{ c = 0; n = split($0, a, "sidecars="); if (a[2] != "") c = split(a[2], b, ",") - 1; if (c > m[$2]) m[$2] = c } END { for (p in m) print p, m[p] }'; }
+n_holders() { holders | awk '$2 > 0' | wc -l | tr -d ' '; }
+held_by() { holders | awk -v p="$1" '$1 == p { print $2 }'; }
+translates() { grep -c '^translate sidecar=' "$KB_CAPTURE_TRACE" 2>/dev/null || true; }
+
+# 13a. omp's real layout: the TITLE SLOT is line 1, the header (with the
+#      timestamp) line 2. Every sidecar used to read "no timestamp" from line 1
+#      and land in the tail; they must spread over the parts they belong to.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+python3 "$SGEN" "${S%.jsonl}" 24 --start 5 --step 25
+hook_fg
+Nh="$(n_parts)"
+tailn="$(held_by "$(pid_of "$Nh")")"
+if [ "$(n_holders)" -ge 6 ] && [ "${tailn:-0}" -le 4 ]; then
+  ok "sidecars in omp's real layout (title slot first) spread over $(n_holders) of $Nh parts; the tail holds ${tailn:-0} of 24"
+else
+  bad "sidecar spread: holders=$(n_holders) tail=${tailn:-0} of 24 ($(holders | tr '\n' ' '))"
+fi
+if grep -q '^sidecars total=24 .*ts=24 .*unplaced=0' "$KB_CAPTURE_TRACE"; then
+  ok "the assignment is reported: $(grep '^sidecars ' "$KB_CAPTURE_TRACE" | head -1)"
+else
+  bad "no/incorrect sidecar assignment report: $(grep '^sidecars' "$KB_CAPTURE_TRACE" | head -2)"
+fi
+
+# 13b. No readable timestamp anywhere: the file's mtime places it (the end time
+#      of the subagent) - never "everything in the tail".
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+python3 "$SGEN" "${S%.jsonl}" 24 --start 5 --step 25 --no-timestamps
+hook_fg
+Nh="$(n_parts)"
+tailn="$(held_by "$(pid_of "$Nh")")"
+if [ "$(n_holders)" -ge 6 ] && [ "${tailn:-0}" -le 4 ] && grep -q '^sidecars total=24 .*mtime=24 .*unplaced=0' "$KB_CAPTURE_TRACE"; then
+  ok "sidecars without any timestamp are placed by mtime over $(n_holders) parts (tail holds ${tailn:-0}); the report counts them: $(grep '^sidecars ' "$KB_CAPTURE_TRACE" | head -1)"
+else
+  bad "mtime fallback: holders=$(n_holders) tail=${tailn:-0} report=$(grep '^sidecars' "$KB_CAPTURE_TRACE" | head -1)"
+fi
+
+# 13c. The per-sidecar translation cache: an unchanged sidecar is never
+#      translated again, not even when ANOTHER sidecar of its part changed.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+python3 "$SGEN" "${S%.jsonl}" 8 --start 5 --step 1
+hook_fg
+first="$(translates)"
+if [ "$first" = 8 ]; then
+  ok "8 sidecars of one part: each translated once on the first capture"
+else
+  bad "first capture translated $first sidecars (want 8)"
+fi
+: >"$KB_CAPTURE_TRACE"
+printf '{"type":"message","id":"late","parentId":"s3m2","timestamp":"2026-08-24T10:00:30.000Z","message":{"role":"user","content":[{"type":"text","text":"later"}]}}\n' >>"${S%.jsonl}/3-Agent.jsonl"
+sleep 0.05
+hook_fg
+if [ "$(translates)" = 1 ] && [ "$(tcount '^land')" = 1 ]; then
+  ok "one changed sidecar: only IT is translated again (1 of 8), and only its part is re-landed"
+else
+  bad "changed sidecar: translated $(translates), landed $(tcount '^land') ($(grep -E '^(translate|land)' "$KB_CAPTURE_TRACE" | tr '\n' ' '))"
+fi
+# a sidecar that cannot be translated is remembered, not retried every pass
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+mkdir -p "${S%.jsonl}"
+printf 'not json at all\n' >"${S%.jsonl}/bad-Agent.jsonl"
+hook_fg
+: >"$KB_CAPTURE_TRACE"
+python3 "$GEN" append "$S" 1 --blob 300
+hook_fg
+if [ "$(translates)" = 0 ]; then
+  ok "an untranslatable sidecar is remembered (a later pass does not retry it)"
+else
+  bad "untranslatable sidecar retried: $(translates)"
+fi
+
+# 13d. A slow tail (many sidecars, a squeezed deadline): frozen parts still land
+#      in the same pass, the translation work survives the deadline, and the
+#      run converges with every sidecar translated exactly once. The bare-id
+#      capture of the whole session is replaced by the small part 1.
+REAL_JQ="$(command -v jq)"
+mkdir -p "$TMPROOT/jqbin"
+cat >"$TMPROOT/jqbin/jq" <<JQ
+#!/usr/bin/env bash
+# slows only a sidecar TRANSLATION (jq -s ... --arg file <sidecar>), like a big sidecar on a loaded host
+case " \$* " in *" -s --arg file "*"-Agent.jsonl "*) [ -n "\${JQ_SLOW:-}" ] && sleep "\$JQ_SLOW" ;; esac
+exec "$REAL_JQ" "\$@"
+JQ
+chmod +x "$TMPROOT/jqbin/jq"
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+python3 "$SGEN" "${S%.jsonl}" 24 --start 590 --step 0
+KB_CAPTURE_SEGMENTS=0 hook_fg
+whole="$(html_of "$SID")"; whole_size="$(stat -c %s "$whole")"
+rm -f "${KB_CAPTURE_LOCKS:?}"/*.done
+: >"$KB_CAPTURE_TRACE"
+SECONDS=0
+PATH="$TMPROOT/jqbin:$PATH" JQ_SLOW=0.8 KB_CAPTURE_HARD_SECS=40 hook_fg
+SQ=$SECONDS
+Nq="$(n_parts)"
+firstland="$(grep '^land' "$KB_CAPTURE_TRACE" | head -1 | sed 's/ rc=.*//; s/land part=//')"
+if [ "$Nq" -ge 4 ] && [ "$(tab_rows)" = "$Nq" ] && [ "$(translates)" = 24 ]; then
+  ok "a slow 24-sidecar tail under a 40 s pass deadline converges ($Nq parts landed, every sidecar translated exactly once, $SQ s)"
+else
+  bad "squeezed catch-up: parts=$Nq rows=$(tab_rows) translated=$(translates) after $SQ s: $(head -c 300 "$TMPROOT/last.err")"
+fi
+if [ -n "$firstland" ] && [ "$firstland" != "$Nq" ]; then
+  ok "frozen parts landed while the tail was still being staged (first landing: part $firstland of $Nq)"
+else
+  bad "the expensive tail starved the frozen parts (first landing: part ${firstland:-none}; $(grep '^land' "$KB_CAPTURE_TRACE" | tr '\n' ' '))"
+fi
+if [ "$(html_of "$SID")" = "$whole" ] && [ "$(stat -c %s "$whole")" -lt "$whole_size" ]; then
+  ok "the stale whole-session bare-id capture was replaced by the small part 1 ($whole_size -> $(stat -c %s "$whole") bytes)"
+else
+  bad "bare-id capture not replaced: $whole_size -> $(stat -c %s "$(html_of "$SID")")"
+fi
+
+# 13e. The landing cap fits the part: a tail whose payload is big gets a longer
+#      cap (base + payload / rate), still bounded by the pass deadline and by
+#      KB_CAPTURE_LAND_MAX_SECS. (The stand-in capture sleeps 24 s when the
+#      sidecar payload is over 2000 bytes: the old fixed 20 s cap killed it.)
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+python3 "$SGEN" "${S%.jsonl}" 6 --start 590 --step 0 --records 40
+export KB_CAP_SLEEP_OVER=2000 KB_CAP_SLEEP=24
+KB_CAPTURE_LAND_BYTES_PER_SEC=1000 hook_fg
+Nl="$(n_parts)"
+unset KB_CAP_SLEEP_OVER KB_CAP_SLEEP
+if [ "$(tab_rows)" = "$Nl" ] && [ "$Nl" -ge 4 ] && [ -n "$(html_of "$(pid_of "$Nl")")" ]; then
+  ok "a landing that outlasts the old fixed 20 s cap lands (the cap scales with the payload): $Nl parts"
+else
+  bad "big-payload tail did not land: rows=$(tab_rows) parts=$Nl"
+fi
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+python3 "$SGEN" "${S%.jsonl}" 6 --start 590 --step 0 --records 40
+export KB_CAP_SLEEP_OVER=2000 KB_CAP_SLEEP=24
+SECONDS=0
+KB_CAPTURE_LAND_MAX_SECS=21 KB_CAPTURE_LAND_BYTES_PER_SEC=1000 hook_fg
+LS=$SECONDS
+if [ -z "$(html_of "$(pid_of "$Nl")")" ] && [ "$(n_parts)" = 0 ] && [ "$LS" -lt 45 ]; then
+  ok "the scaled landing cap is bounded (KB_CAPTURE_LAND_MAX_SECS): a hung tail landing is killed (after $LS s), nothing is recorded"
+else
+  bad "hung landing was not bounded: parts=$(n_parts) after $LS s"
+fi
+# the NEXT pass goes frozen-first: a tail that failed cannot starve the catch-up
+: >"$KB_CAPTURE_TRACE"
+KB_CAPTURE_LAND_MAX_SECS=21 KB_CAPTURE_LAND_BYTES_PER_SEC=1000 hook_fg
+firstland="$(grep '^land' "$KB_CAPTURE_TRACE" | head -1 | sed 's/ rc=.*//; s/land part=//')"
+if [ "$(n_parts)" = 4 ] && [ "$firstland" = 1 ] && [ -z "$(html_of "$(pid_of "$Nl")")" ] && grep -q "^land part=$Nl " "$KB_CAPTURE_TRACE"; then
+  ok "after a failed tail the next pass is frozen-first (4 frozen parts, first landing: part $firstland) and the tail is still retried once"
+else
+  bad "frozen-first after a failed tail: parts=$(n_parts) (want $((Nl - 1))) first landing=$firstland ($(grep -E '^land' "$KB_CAPTURE_TRACE" | tr '\n' ' ' | cut -c1-300))"
+fi
+export KB_CAP_SLEEP_OVER=2000 KB_CAP_SLEEP=2
+for _r in 1 2 3 4; do KB_CAPTURE_LAND_BYTES_PER_SEC=1000 hook_fg; done
+unset KB_CAP_SLEEP_OVER KB_CAP_SLEEP
+if [ "$(n_parts)" = "$Nl" ] && [ "$(tab_rows)" = "$Nl" ] && [ "$(ls "$KB_CAPTURE_LOCKS" | grep -c tailfail)" = 0 ]; then
+  ok "the tail lands on the following trigger and the failure marker is cleared"
+else
+  bad "tail did not recover: parts=$(n_parts) rows=$(tab_rows) marker=$(ls "$KB_CAPTURE_LOCKS" | grep -c tailfail)"
+fi
+
+# 13f. A stuck FROZEN part must not starve the parts behind it nor the tail:
+#      tail fails once (tailfail written), then one frozen part fails on every
+#      capture. Every later pass still lands the other frozen parts and the tail.
+fresh
+python3 "$GEN" create "$S" "$SID" 60 --blob 300
+touch "$KB_FAIL_FLAG"; hook_fg; rm -f "$KB_FAIL_FLAG"
+Nf="$(n_parts)"
+if [ "$Nf" = 0 ] && ls "$KB_CAPTURE_LOCKS" | grep -q tailfail; then :; else bad "13f setup: tail failure did not leave the marker (parts=$Nf)"; fi
+export KB_FAIL_SID_SUFFIX=-p03
+for _r in 1 2 3 4 5 6; do hook_fg; done
+unset KB_FAIL_SID_SUFFIX
+if [ -n "$(html_of "$(pid_of 1)")" ] && [ -n "$(html_of "$(pid_of 2)")" ] && [ -z "$(html_of "$(pid_of 3)")" ] \
+  && [ -n "$(html_of "$(pid_of 4)")" ] && [ "$(tab_rows)" -ge 5 ] && [ -z "$(ls "$KB_CAPTURE_LOCKS" | grep tailfail)" ]; then
+  ok "a permanently failing frozen part (3) does not block parts behind it or the tail (tab rows=$(tab_rows), tailfail cleared)"
+else
+  bad "frozen failure starved the rest: parts=$(n_parts) rows=$(tab_rows) marker=$(ls "$KB_CAPTURE_LOCKS" | grep -c tailfail)"
 fi
 
 # ---------------------------------------------------------------------------

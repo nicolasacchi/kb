@@ -434,7 +434,7 @@ hook_adapter_land() {
         [ -n "$stamp" ] || continue
         extra=(--stamp "$stamp")
       fi
-      if run_to 20 kb sessions capture "${base[@]}" ${extra[@]+"${extra[@]}"} \
+      if run_to "${KB_HOOK_LAND_SECS:-20}" kb sessions capture "${base[@]}" ${extra[@]+"${extra[@]}"} \
         --out "$KB_SESSIONS_DIR" >/dev/null 2>&1; then
         # The spooled snapshot of THIS session is now older than what landed.
         hook_spool_drop "$sid"
