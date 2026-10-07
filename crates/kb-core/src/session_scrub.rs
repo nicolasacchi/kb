@@ -820,6 +820,7 @@ mod tests {
         for iter in 0..400 {
             let mut text = String::new();
             let mut must_not_leak: Vec<String> = Vec::new();
+            let mut exempt: Vec<String> = Vec::new();
             let n = 4 + rng.step() % 10;
             for _ in 0..n {
                 match rng.step() % 4 {
@@ -831,8 +832,12 @@ mod tests {
                         text.push_str(&format!("{{\"k\":\"{esc}\"}}\n"));
                         // The escaped form only redacts if it matches as-is;
                         // track the raw secret only for newline-free samples.
-                        if !secret.contains('\n') && !t.contains('\n') {
+                        if !t.contains('\n') {
                             must_not_leak.push(secret.clone());
+                        } else {
+                            // `\n`-escaped form does not match (by design,
+                            // it is not whitespace): the raw value stays.
+                            exempt.push(secret.clone());
                         }
                     }
                     _ => {
@@ -859,7 +864,7 @@ mod tests {
                 assert_eq!(out, whole, "iter {iter} chunk {chunk_bytes}\n{text}");
                 assert_eq!(stream.redactions, report.total, "iter {iter} count");
             }
-            for secret in &must_not_leak {
+            for secret in must_not_leak.iter().filter(|x| !exempt.contains(x)) {
                 assert!(
                     !whole.contains(secret.as_str()),
                     "iter {iter}: {secret} leaked\n{whole}"
