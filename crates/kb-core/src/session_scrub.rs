@@ -11,6 +11,21 @@
 //!     Slack, Google, JWT, PEM private keys, `Bearer …`), labeled key/value
 //!     secrets (`"api_key": "…"`, `password=…`), and secret-named env vars.
 //!     The safe floor — near-zero false positives.
+//!     Escaped-whitespace coverage (v0.48 SCR): in a JSONL capture a newline
+//!     inside a string is the two characters backslash + `n`, so the labeled /
+//!     bearer / env rules treat `\n`, `\r`, `\t` (and the double-escaped form
+//!     of JSON-in-JSON) as whitespace between label, separator and value
+//!     (`password:\n  hunter2-x`, `Bearer\n<token>`, `export TOKEN=\<nl> value`),
+//!     and a label may be wrapped in escaped quotes (`\"client_secret\":`).
+//!     The newline-tolerant labeled/bearer forms only redact a value that
+//!     looks like a credential (contains a digit or `+/=`), so code such as
+//!     `password:\n  SecretString` is left alone; a purely alphabetic
+//!     passphrase on the line after its label is a known, accepted miss.
+//!     PEM private keys with REAL newlines (non-JSON text lanes: commit
+//!     bodies, slate posts, the `first_secret_token_kind` lint) are redacted
+//!     up to an ASCII body bound of [`PEM_BODY_MAX`] bytes. Captures written
+//!     before this coverage existed can be re-scrubbed with
+//!     `kb sessions rescrub` (dry run) then `--apply`.
 //!   - `paths` — anonymise `/home/<user>` and `/Users/<user>` usernames
 //!     (rewrites historical paths; `claude -r` uses the *current* cwd, so this
 //!     is cosmetic for resume).
@@ -118,6 +133,27 @@ struct GroupRule {
     kind: &'static str,
     re: Regex,
     mask: &'static str,
+    /// Optional veto on the secret group (group 2): `false` leaves the match
+    /// untouched and uncounted. The newline-tolerant rules use it to keep
+    /// false positives low.
+    accept: Option<fn(&str) -> bool>,
+}
+
+/// Longest ASCII body (bytes) a multi-line PEM private key may have between
+/// its BEGIN and END markers. Bounds the match and the stream's hold window;
+/// an RSA-8192 key is ~6.5 KB.
+pub const PEM_BODY_MAX: usize = 8192;
+/// Stream hold window: body bound + two bounded markers + slack.
+const PEM_HOLD_WINDOW: usize = PEM_BODY_MAX + 160;
+
+/// Whitespace between label / separator / value in a JSONL capture: real
+/// whitespace, or an escaped `\n` `\r` `\t` (one or two backslashes).
+const ESC_WS: &str = r"(?:[ \t\r\n]|\\{1,2}[nrt])";
+
+/// A newline-tolerant labeled/bearer value must look like a credential.
+fn looks_like_credential(v: &str) -> bool {
+    v.bytes()
+        .any(|b| b.is_ascii_digit() || matches!(b, b'+' | b'/' | b'='))
 }
 
 fn token_rules() -> &'static [TokenRule] {
@@ -133,6 +169,12 @@ fn token_rules() -> &'static [TokenRule] {
             mk(
                 "private-key",
                 r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+            ),
+            // The same span across REAL newlines (non-JSON text lanes): ASCII
+            // body only, length-bounded, non-greedy up to the END marker.
+            mk(
+                "private-key",
+                r"-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----[\x00-\x7f]{0,8192}?-----END [A-Z ]{0,32}PRIVATE KEY-----",
             ),
             mk("github-pat", r"github_pat_[A-Za-z0-9_]{60,}"),
             mk("github-token", r"gh[pousr]_[A-Za-z0-9]{36,}"),
@@ -193,7 +235,16 @@ fn labeled_rules() -> &'static [GroupRule] {
             kind,
             re: Regex::new(pat).expect("valid labeled regex"),
             mask,
+            accept: None,
         };
+        let mk_vetted = |kind, pat: &str, mask| GroupRule {
+            kind,
+            re: Regex::new(pat).expect("valid labeled regex"),
+            mask,
+            accept: Some(looks_like_credential as fn(&str) -> bool),
+        };
+        let ws = ESC_WS;
+        let q = r#"(?:\\{0,2}")?"#;
         vec![
             // `"api_key": "VALUE"`  /  `password=VALUE`  /  `secret: VALUE`
             mk(
@@ -207,10 +258,37 @@ fn labeled_rules() -> &'static [GroupRule] {
                 r"(?i)(bearer\s+)([A-Za-z0-9._\-]{16,})",
                 "[redacted:bearer-token]",
             ),
+            // Newline-tolerant labeled secret: escaped `\n`/`\t`/`\r` count as
+            // whitespace, the label may sit in escaped quotes, the value may
+            // follow a (real or escaped) newline. Vetted (digit or `+/=`).
+            // Runs after the same-line rule; its value class excludes `[`
+            // (never re-matches a marker) and `{` (the stream's `\n{` cut can
+            // never split a match).
+            mk_vetted(
+                "labeled-secret",
+                &format!(
+                    r#"(?i)({q}(?:api[_-]?key|apikey|secret|token|password|passwd|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key){q}{ws}{{0,64}}[:=]{ws}{{0,64}}{q})([A-Za-z0-9+/=_\-\.]{{8,}})"#
+                ),
+                "[redacted:labeled-secret]",
+            ),
+            mk_vetted(
+                "bearer-token",
+                &format!(r"(?i)(bearer{ws}{{1,64}})([A-Za-z0-9._\-]{{16,}})"),
+                "[redacted:bearer-token]",
+            ),
             // `AWS_SECRET_ACCESS_KEY=VALUE` — env var whose NAME implies a secret.
             mk(
                 "env-secret",
                 r"\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|APIKEY)[A-Z0-9_]*=)([^\s\x22\\]+)",
+                "[masked]",
+            ),
+            // Shell line continuation after the `=`: `KEY=\<newline>  value`,
+            // as a real newline or JSON-escaped (3+ backslashes then `n`). A
+            // plain `KEY=` + newline (empty var) is NOT a continuation and
+            // never matches. The value cannot start with `{` (stream cut).
+            mk(
+                "env-secret",
+                r#"\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|APIKEY)[A-Z0-9_]*=(?:\\{3,8}n|\\[ \t]*\r?\n)(?:[ \t]|\\{1,2}t)*)([^\s\x22\\{][^\s\x22\\]*)"#,
                 "[masked]",
             ),
         ]
@@ -224,6 +302,7 @@ fn path_rules() -> &'static [GroupRule] {
             kind: "home-path",
             re: Regex::new(pat).expect("valid path regex"),
             mask: "[user]",
+            accept: None,
         };
         vec![
             mk(r"(/home/)([A-Za-z0-9_][A-Za-z0-9_.\-]*)"),
@@ -267,6 +346,9 @@ fn apply_group_rules(text: &mut String, rules: &[GroupRule], report: &mut ScrubR
     for rule in rules {
         let mut n = 0u32;
         let owned = match rule.re.replace_all(text.as_str(), |caps: &Captures| {
+            if rule.accept.is_some_and(|ok| !ok(&caps[2])) {
+                return caps[0].to_string();
+            }
             n += 1;
             format!("{}{}", &caps[1], rule.mask)
         }) {
@@ -334,7 +416,14 @@ pub const SCRUB_STREAM_CHUNK_BYTES: usize = 1024 * 1024;
 /// other rule (`.*?`, `[^\s…]+`, character classes) cannot contain `\n`. The
 /// longest span any single match can have is therefore bounded by the line it
 /// sits on, so there is no cut-straddling partial secret by construction —
-/// the cut never lands inside a match. Text that never offers such a cut
+/// the cut never lands inside a match. (v0.48 SCR: the newline-tolerant rules
+/// keep that argument — an ESCAPED newline is two ordinary characters, not a
+/// line break, so it can never be a cut; every value class and the env
+/// continuation's first-value-char class exclude `{`. The ONE rule that can
+/// span real lines is the multi-line PEM private key, whose body may contain a
+/// `\n{` line: [`open_pem_tail`] HOLDS the cut while a BEGIN marker within the
+/// last [`PEM_BODY_MAX`] bytes has no END marker yet, so the cut never lands
+/// inside a PEM match either.) Text that never offers such a cut
 /// (non-JSONL, one giant line) simply stays one chunk: correctness first,
 /// memory second.
 pub struct SecretScrubStream {
@@ -386,6 +475,7 @@ impl SecretScrubStream {
         if self.pending.len() >= self.chunk_bytes
             && self.pending.ends_with('\n')
             && line.starts_with('{')
+            && !open_pem_tail(&self.pending)
         {
             self.flush(sink);
         }
@@ -396,6 +486,27 @@ impl SecretScrubStream {
     pub fn finish(&mut self, sink: &mut impl FnMut(&str)) {
         self.flush(sink);
     }
+}
+
+/// True when the tail of `pending` holds a PEM private-key BEGIN marker with no
+/// END marker after it: a cut here could split a multi-line PEM match. Only the
+/// last [`PEM_HOLD_WINDOW`] bytes matter — a BEGIN older than that is further
+/// from the cut than the PEM body bound, so it can no longer match across it.
+fn open_pem_tail(pending: &str) -> bool {
+    static RES: OnceLock<(Regex, Regex)> = OnceLock::new();
+    let (begin, end) = RES.get_or_init(|| {
+        (
+            Regex::new(r"-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----").expect("valid"),
+            Regex::new(r"-----END [A-Z ]{0,32}PRIVATE KEY-----").expect("valid"),
+        )
+    });
+    let mut start = pending.len().saturating_sub(PEM_HOLD_WINDOW);
+    while !pending.is_char_boundary(start) {
+        start += 1;
+    }
+    let w = &pending[start..];
+    let after_last_end = end.find_iter(w).last().map_or(0, |m| m.end());
+    begin.is_match(&w[after_last_end..])
 }
 
 /// Shannon entropy of `s` in bits per byte.
@@ -741,6 +852,37 @@ mod tests {
             "AWS_SECRET_KEY=abc12345xyz",
             "abc12345xyz",
         ));
+        // v0.48 SCR: escaped-newline / real-newline-PEM shapes. The first
+        // four are JSON-escaped already (no real newline), so the chunk
+        // property test asserts they never leak.
+        v.push(lab(
+            "labeled-secret",
+            r"password:\n  hunter2-very-secret",
+            "hunter2-very-secret",
+        ));
+        v.push(lab(
+            "labeled-secret",
+            r#"\"client_secret\":\n \"Zx81QwErTy99\""#,
+            "Zx81QwErTy99",
+        ));
+        v.push(lab(
+            "bearer-token",
+            r"Authorization: Bearer\nabcd1234efgh5678ijkl",
+            "abcd1234efgh5678ijkl",
+        ));
+        v.push(lab(
+            "env-secret",
+            r"export API_TOKEN=\\\n  s3cr3tvalue99",
+            "s3cr3tvalue99",
+        ));
+        v.push(lab(
+            "env-secret",
+            "export API_TOKEN=\\\n   s3cr3tvalue77",
+            "s3cr3tvalue77",
+        ));
+        let pem =
+            "-----BEGIN PRIVATE KEY-----\nMIIabc123\n{inner}\nQUJD\n-----END PRIVATE KEY-----";
+        v.push(("private-key", pem.to_string(), pem.to_string()));
         v
     }
 
@@ -811,6 +953,10 @@ mod tests {
             "api_key =\n",
             "\"secret\": \"\n",
             "AWS_SECRET_KEY=\n",
+            "export API_TOKEN=\\\n",
+            "-----BEGIN PRIVATE KEY-----\n",
+            "-----END PRIVATE KEY-----\n",
+            "password:\\n\n",
             "   \n",
             "\n",
             "not json line\n",
@@ -835,8 +981,9 @@ mod tests {
                         if !t.contains('\n') {
                             must_not_leak.push(secret.clone());
                         } else {
-                            // `\n`-escaped form does not match (by design,
-                            // it is not whitespace): the raw value stays.
+                            // Real-newline samples are escaped into the JSON
+                            // string here, which changes their shape; their
+                            // leak check runs on the bare-line branch only.
                             exempt.push(secret.clone());
                         }
                     }
@@ -873,9 +1020,9 @@ mod tests {
         }
     }
 
-    /// A REAL-newline PEM block is not matched by the (non-`(?s)`) private-key
-    /// rule in the whole-text scrub; the stream must not behave differently
-    /// (neither better nor worse) even when its body has a `\n{` line.
+    /// A REAL-newline PEM block IS redacted (v0.48 SCR), and the stream — held
+    /// open while a BEGIN has no END — must produce the same bytes even when
+    /// the body has `\n{` lines at every allowed cut.
     #[test]
     fn real_newline_pem_with_brace_line_is_chunked_identically() {
         let text = "{\"a\":1}\n-----BEGIN PRIVATE KEY-----\n{inner}\nMIIabc\n-----END PRIVATE KEY-----\n{\"b\":2}\n";
@@ -889,5 +1036,160 @@ mod tests {
         stream.finish(&mut sink);
         assert_eq!(out, whole);
         assert_eq!(stream.redactions, rep.total);
+        assert!(whole.contains("[redacted:private-key]"), "{whole}");
+        assert!(!whole.contains("MIIabc") && !whole.contains("{inner}"));
+        assert_eq!(rep.by_kind.get("private-key"), Some(&1));
+    }
+
+    fn run(text: &str) -> (String, ScrubReport) {
+        scrub_transcript(text, &secrets())
+    }
+
+    #[test]
+    fn escaped_newline_labeled_secrets_are_redacted() {
+        for (input, secret) in [
+            (
+                r#"{"t":"password:\n  hunter2-very-secret"}"#,
+                "hunter2-very-secret",
+            ),
+            (
+                r#"{"t":"password:\\n  hunter2-very-secret"}"#,
+                "hunter2-very-secret",
+            ),
+            (
+                r#"{"t":"password:\r\n\t hunter2-very-secret"}"#,
+                "hunter2-very-secret",
+            ),
+            (
+                r#"{"t":"client_secret:\n    Zx81QwErTy99AbCd"}"#,
+                "Zx81QwErTy99AbCd",
+            ),
+            (
+                r#"{"t":"{\"client_secret\":\n \"Zx81QwErTy99\"}"}"#,
+                "Zx81QwErTy99",
+            ),
+            (
+                r#"{"t":"db:\n  api_key =\n  k3y-abcdefgh"}"#,
+                "k3y-abcdefgh",
+            ),
+            (r#"{"t":"TOKEN=\nabcd1234efgh"}"#, "abcd1234efgh"),
+        ] {
+            let (out, rep) = run(input);
+            assert!(!out.contains(secret), "leaked {secret}: {out}");
+            assert!(out.contains("[redacted:labeled-secret]"), "{out}");
+            assert!(rep.total >= 1);
+            serde_json::from_str::<serde_json::Value>(&out)
+                .unwrap_or_else(|e| panic!("invalid JSON after scrub: {e}\n{out}"));
+        }
+    }
+
+    #[test]
+    fn escaped_newline_bearer_is_redacted() {
+        for input in [
+            r#"{"t":"Authorization: Bearer\nabcd1234efgh5678ijkl"}"#,
+            r#"{"t":"Authorization: Bearer\\n\\t abcd1234efgh5678ijkl"}"#,
+            r#"{"t":"authorization: bearer \r\n abcd1234efgh5678ijkl"}"#,
+        ] {
+            let (out, rep) = run(input);
+            assert!(!out.contains("abcd1234efgh5678ijkl"), "{out}");
+            assert_eq!(rep.by_kind.get("bearer-token"), Some(&1), "{out}");
+        }
+    }
+
+    #[test]
+    fn env_secret_shell_continuation_is_redacted() {
+        // JSON-escaped (`\` + `\n`), double-escaped, and real-newline forms.
+        for (input, secret) in [
+            (
+                r#"{"t":"export API_TOKEN=\\\n  s3cr3tvalue99"}"#,
+                "s3cr3tvalue99",
+            ),
+            (
+                r#"{"t":"export API_TOKEN=\\\\\\n\\t s3cr3tvalue99"}"#,
+                "s3cr3tvalue99",
+            ),
+            ("export API_TOKEN=\\\n   s3cr3tvalue99\n", "s3cr3tvalue99"),
+        ] {
+            let (out, rep) = run(input);
+            assert!(!out.contains(secret), "leaked: {out}");
+            assert_eq!(rep.by_kind.get("env-secret"), Some(&1), "{out}");
+            assert!(out.contains("API_TOKEN="), "label kept: {out}");
+        }
+    }
+
+    #[test]
+    fn real_newline_pem_is_redacted_and_bounded() {
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nabc+/=\n-----END RSA PRIVATE KEY-----";
+        let (out, rep) = run(&format!("before\n{pem}\nafter\n"));
+        assert_eq!(out, "before\n[redacted:private-key]\nafter\n");
+        assert_eq!(rep.by_kind.get("private-key"), Some(&1));
+        // Encrypted PEM with headers (hyphen, colon, comma) too.
+        let enc = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,AB12\n\nQUJD\n-----END RSA PRIVATE KEY-----";
+        assert_eq!(run(enc).0, "[redacted:private-key]");
+        // No END marker: nothing is swallowed.
+        let open = "-----BEGIN PRIVATE KEY-----\nMIIabc\nand the rest of the file\n";
+        assert_eq!(run(open).0, open);
+        // Body longer than the bound is not matched (bounded, no runaway scan).
+        let big = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
+            "A".repeat(PEM_BODY_MAX + 10)
+        );
+        assert_eq!(run(&big).0, big);
+        // Just inside the bound still matches.
+        let fits = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
+            "A".repeat(PEM_BODY_MAX - 10)
+        );
+        assert_eq!(run(&fits).0, "[redacted:private-key]");
+        // Many unterminated BEGINs stay cheap and untouched.
+        let many = "-----BEGIN PRIVATE KEY-----\nx\n".repeat(300);
+        assert_eq!(run(&many).0, many);
+        // The lint sees a multi-line PEM too.
+        assert_eq!(first_secret_token_kind(pem), Some("private-key"));
+    }
+
+    /// False-positive guard: code, docs prose and this file's own rule text
+    /// that mention a label followed by an (escaped) newline are untouched.
+    #[test]
+    fn newline_tolerant_rules_leave_non_secrets_alone() {
+        let neg = [
+            r#"{"t":"password:\n  {"}"#,
+            r#"{"t":"struct Login {\n    password:\n        SecretString,\n}"}"#,
+            r#"{"t":"token:\n    TokenKind::Identifier"}"#,
+            r#"{"t":"fn f(token:\n  Option<String>)"}"#,
+            r#"{"t":"the password:\n  see the docs for details"}"#,
+            r#"{"t":"api_key:\n  your_api_key_here"}"#,
+            r#"{"t":"secret:\n  required"}"#,
+            r#"{"t":"Bearer\nauthentication-scheme-header is described"}"#,
+            r#"{"t":"Bearer\n  token_endpoint_handler_name"}"#,
+            r#"{"t":"export API_TOKEN=\n  next_line_of_the_script"}"#,
+            r#"{"t":"export API_TOKEN=\\\n  {"}"#,
+            r#"{"t":"export TOKEN=\\\n"}"#,
+            "password:\n  {\"a\":1}\n",
+            "-----BEGIN PUBLIC KEY-----\nMIIabc\n-----END PUBLIC KEY-----",
+            // The scrubber's own rule text.
+            r#"(?i)(bearer(?:[ \t\r\n]|\\{1,2}[nrt]){1,64})([A-Za-z0-9._\-]{16,})"#,
+            r"`password:\n  hunter2…`, `Bearer\n<token>`",
+        ];
+        for input in neg {
+            let (out, rep) = run(input);
+            assert_eq!(out, input, "false positive: {out}");
+            assert_eq!(rep.total, 0, "{input}");
+        }
+    }
+
+    /// Every changed rule is in the prefilter and agrees with the unfiltered
+    /// path on the new shapes (guards the RegexSet against drifting).
+    #[test]
+    fn prefilter_agrees_on_new_shapes() {
+        for text in [
+            r#"{"t":"password:\n  hunter2-very-secret"}"#,
+            r#"{"t":"Bearer\nabcd1234efgh5678ijkl"}"#,
+            "export API_TOKEN=\\\n   s3cr3tvalue99\n",
+            "-----BEGIN PRIVATE KEY-----\nMII\n-----END PRIVATE KEY-----",
+        ] {
+            assert!(secrets_prefilter().is_match(text), "{text}");
+            assert_eq!(run(text), scrub_unfiltered(text), "{text}");
+        }
     }
 }
