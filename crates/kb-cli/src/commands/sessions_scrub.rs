@@ -171,13 +171,18 @@ pub fn scrub_capture_html(html: &str) -> (String, LaneHits) {
     let opts = ScrubOptions::secrets_only();
     let mut hits = LaneHits::default();
 
-    let (pre, r) = scrub_transcript(&html_unescape(&html[sp.pre_inner.0..sp.pre_inner.1]), &opts);
-    hits.transcript = r.total;
-    let (digest, r) = scrub_transcript(&html[sp.digest.0..sp.digest.1], &opts);
-    hits.digest = r.total;
+    // A lane counts only when scrubbing CHANGED its bytes: a rule that matches
+    // and rewrites to the identical text is not a pending redaction (v0.49 RI:
+    // the report and the rewrite decision reflect real changes only).
+    let pre_in = html_unescape(&html[sp.pre_inner.0..sp.pre_inner.1]);
+    let (pre, r) = scrub_transcript(&pre_in, &opts);
+    hits.transcript = if pre == pre_in { 0 } else { r.total };
+    let digest_in = &html[sp.digest.0..sp.digest.1];
+    let (digest, r) = scrub_transcript(digest_in, &opts);
+    hits.digest = if digest == digest_in { 0 } else { r.total };
     let sidecar = sp.sidecar.map(|(a, b)| {
         let (s, r) = scrub_transcript(&html[a..b], &opts);
-        hits.sidecar_text = r.total;
+        hits.sidecar_text = if s == html[a..b] { 0 } else { r.total };
         s
     });
 
@@ -566,6 +571,40 @@ mod tests {
         let again = rescrub(tmp.path(), true).unwrap();
         assert_eq!((again.affected, again.rewritten), (0, 0), "idempotent");
         assert_eq!(std::fs::read_to_string(&f).unwrap(), after);
+    }
+
+    /// v0.49 RI — a capture whose env secrets were already masked by a
+    /// previous scrub (`KEY=[masked]`) is CLEAN: dry run and apply report zero
+    /// and do not rewrite it. v0.48 re-matched its own `[masked]` marker, so
+    /// every run reported (and `--apply` rewrote) the same captures.
+    #[test]
+    fn rescrub_is_idempotent_on_env_secret_markers_and_reports_real_changes_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("session-20260301T090000Z-s1.html");
+        let pre = "{\"t\":\"export AWS_SECRET_ACCESS_KEY=abc123def456 && x\"}\n{\"t\":\"MY_CREDENTIAL=hunter2hunter2\"}\n";
+        let sidecars = vec![(
+            "a1".to_string(),
+            "STORE_CREDENTIAL=zzzzzzzz9 ok\n".to_string(),
+        )];
+        std::fs::write(&f, envelope(pre, &[], &sidecars)).unwrap();
+
+        let first = rescrub(tmp.path(), true).unwrap();
+        assert_eq!((first.affected, first.rewritten), (1, 1));
+        assert!(first.redactions.transcript >= 2 && first.redactions.sidecar_text >= 1);
+        let after = std::fs::read_to_string(&f).unwrap();
+        assert!(after.contains("AWS_SECRET_ACCESS_KEY=[masked]"), "{after}");
+
+        for apply in [false, true] {
+            let again = rescrub(tmp.path(), apply).unwrap();
+            assert_eq!(
+                (again.affected, again.rewritten, again.redactions.total()),
+                (0, 0, 0),
+                "apply={apply}"
+            );
+            assert_eq!(std::fs::read_to_string(&f).unwrap(), after);
+        }
+        let (again, hits) = scrub_capture_html(&after);
+        assert_eq!((hits.total(), again), (0, after));
     }
 
     /// v0.44 X4 — `rescrub --apply` must not change a capture's permission
