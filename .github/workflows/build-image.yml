@@ -126,10 +126,8 @@ jobs:
       && github.event.workflow_run.head_branch == 'main'
       && github.event.workflow_run.head_repository.full_name == github.repository
       && github.event.workflow_run.conclusion == 'success'
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
-    # Self-hosted slots use daemon-integrated BuildKit, whose cache mounts
-    # persist in that slot's isolated daemon volume. Slots never share caches.
-    # Hosted jobs keep an ephemeral docker-container builder and start cold.
+    runs-on: ubuntu-latest
+    # Hosted jobs use an ephemeral docker-container builder and start cold.
     # A cold leg still compiles the release graph at CARGO_BUILD_JOBS=2 and,
     # for kb, downloads the 1.34 GB model. Keep the 330-minute ceiling for
     # both independent publishes; a cold cache must not waste a partial build.
@@ -156,7 +154,6 @@ jobs:
           fetch-tags: true
 
       - name: Free disk space (drop preinstalled SDKs)
-        if: runner.environment == 'github-hosted'
         # A runner starts with only ~14 GB free on /, and this leg builds the
         # whole lance/datafusion graph, bakes in the ~1.34 GB embedding model
         # (kb only), and keeps its image layer tree — a full disk shows up as
@@ -185,9 +182,7 @@ jobs:
         # or behaviour change for the way they're used here).
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          # Another BuildKit container cannot mount sysfs inside rootless DinD.
-          # Use its integrated builder without relaxing host isolation.
-          driver: ${{ runner.environment == 'self-hosted' && 'docker' || 'docker-container' }}
+          driver: docker-container
 
       - name: Log in to ghcr.io
         # `packages: write` above grants the push; GITHUB_TOKEN is scoped to
