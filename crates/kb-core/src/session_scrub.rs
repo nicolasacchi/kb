@@ -1348,4 +1348,80 @@ mod tests {
             check(&format!("iter {iter}"), &text);
         }
     }
+
+    /// v0.49 RI review — a vetoed newline-tolerant match must not shadow the
+    /// real secret behind its inner label: ONE pass redacts it. (Without the
+    /// resume-after-start walk the veto consumed the span and only a second
+    /// pass found `X1abcdefgh`.)
+    #[test]
+    fn vetoed_label_does_not_shadow_an_inner_labeled_secret_on_pass_one() {
+        let text = r#"password:\n "client_secret":\n "X1abcdefgh""#;
+        let (once, rep) = scrub_transcript(text, &secrets());
+        assert!(!once.contains("X1abcdefgh"), "leaked on pass 1: {once}");
+        assert!(rep.total >= 1);
+        let (twice, r2) = scrub_transcript(&once, &secrets());
+        assert_eq!((twice, r2.total), (once, 0));
+    }
+
+    /// Resuming after a veto steps one CHAR (not byte): a multi-byte label
+    /// start (`ſ` case-folds to `s`) must not panic or split, and a secret
+    /// after it is still redacted.
+    #[test]
+    fn veto_resume_is_char_boundary_safe() {
+        let text = "ſecret:\\n abcdefghi \u{2100}ſecret:\\n abcdefghi ſecret:\\n Z9abcdefgh";
+        let (out, _) = scrub_transcript(text, &secrets());
+        assert!(!out.contains("Z9abcdefgh"), "{out}");
+    }
+
+    /// Adversarial runs of overlapping vetoed matches stay linear-ish.
+    #[test]
+    fn many_vetoed_matches_are_not_quadratic() {
+        let t0 = std::time::Instant::now();
+        for unit in [
+            "password: abcdefgh ",
+            "password:\\n \\\"client_secret\\\":\\n ",
+            "secretsecretsecret:secretsecretsecret:",
+            "bearer abcdefghijklmnopq.",
+        ] {
+            let text = unit.repeat(20_000);
+            let (_, rep) = scrub_transcript(&text, &secrets());
+            let _ = rep;
+        }
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            t0.elapsed()
+        );
+    }
+
+    /// With no markers and no vetoes the walk is byte-for-byte `replace_all`.
+    #[test]
+    fn group_walk_equals_replace_all_when_nothing_is_vetoed() {
+        let mut text = String::new();
+        for (_, t, _) in canonical_samples() {
+            text.push_str(&t);
+            text.push_str(" and ");
+            text.push_str(&t);
+            text.push('\n');
+        }
+        text.push_str("/home/alice/x /Users/bob.k/y");
+        for rule in labeled_rules().iter().chain(path_rules()) {
+            if rule.accept.is_some() {
+                continue;
+            }
+            let mut n = 0u32;
+            let want = rule
+                .re
+                .replace_all(&text, |c: &Captures| {
+                    n += 1;
+                    format!("{}{}", &c[1], rule.mask)
+                })
+                .into_owned();
+            let mut got = text.clone();
+            let mut rep = ScrubReport::default();
+            apply_group_rules(&mut got, std::slice::from_ref(rule), &mut rep);
+            assert_eq!(got, want, "{}", rule.re.as_str());
+            assert_eq!(rep.total, n);
+        }
+    }
 }
