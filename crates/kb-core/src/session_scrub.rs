@@ -346,11 +346,28 @@ fn apply_token_rules(text: &mut String, report: &mut ScrubReport) {
     }
 }
 
+/// True when `v` is, in its entirety, a redaction marker this module writes
+/// (`[masked]` or `[redacted:<kind>]`). A rule must NEVER treat a marker as a
+/// secret value: doing so re-matches (and recounts) its own output on every
+/// pass, so the scrub would not be idempotent (v0.49 RI: the env-secret rules'
+/// non-whitespace value class swallowed `[masked]`, and `kb sessions rescrub`
+/// reported and rewrote the same captures on every run).
+fn is_marker(v: &str) -> bool {
+    if v == "[masked]" {
+        return true;
+    }
+    v.strip_prefix("[redacted:")
+        .and_then(|r| r.strip_suffix(']'))
+        .is_some_and(|kind| {
+            !kind.is_empty() && kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+        })
+}
+
 fn apply_group_rules(text: &mut String, rules: &[GroupRule], report: &mut ScrubReport) {
     for rule in rules {
         let mut n = 0u32;
         let owned = match rule.re.replace_all(text.as_str(), |caps: &Captures| {
-            if rule.accept.is_some_and(|ok| !ok(&caps[2])) {
+            if is_marker(&caps[2]) || rule.accept.is_some_and(|ok| !ok(&caps[2])) {
                 return caps[0].to_string();
             }
             n += 1;
@@ -1224,6 +1241,85 @@ mod tests {
             }
             stream.finish(&mut sink);
             assert_eq!(out, whole);
+        }
+    }
+
+    /// v0.49 RI — `scrub(scrub(x)) == scrub(x)` byte for byte and the second
+    /// report is zero, for every canonical sample (alone, doubled, in a JSON
+    /// record, on bare lines) and for generated mixtures that also embed the
+    /// scrubber's own markers in the shapes that used to re-match
+    /// (`KEY=[masked]`, `TOKEN=[redacted:…]`, `Bearer [redacted:…]`, …).
+    #[test]
+    fn scrub_is_idempotent_for_every_rule_and_lane() {
+        let o = secrets();
+        let check = |label: &str, text: &str| {
+            let (once, _) = scrub_transcript(text, &o);
+            let (twice, r2) = scrub_transcript(&once, &o);
+            assert_eq!(twice, once, "{label}: second pass changed bytes\n{text}");
+            assert_eq!(r2.total, 0, "{label}: second pass reported {r2:?}\n{once}");
+        };
+        let samples = canonical_samples();
+        for (rule, t, _) in &samples {
+            check(rule, t);
+            check(rule, &format!("{t} {t}"));
+            check(rule, &format!("{{\"k\":\"{}\"}}\n", t.replace('\n', "\\n")));
+            check(rule, &format!("{{\"a\":1}}\n{t}\n{{\"b\":2}}\n"));
+        }
+        let marker_shapes = [
+            "FOO_TOKEN=[masked]",
+            "export MY_SECRET=[masked] tail",
+            "API_KEY=[redacted:api-key]",
+            "DB_PASSWORD=[redacted:labeled-secret]",
+            "KEY=\\\\\\n  [masked]",
+            "KEY=\\\n  [masked]",
+            "password: [redacted:labeled-secret]",
+            "\"token\": \"[redacted:github-token]\"",
+            "Bearer [redacted:bearer-token]",
+            "Bearer\n[redacted:bearer-token]",
+            "{\"c\":\"password:\\n  [redacted:labeled-secret]\"}",
+            "[redacted:private-key]",
+            "AKIA[redacted:aws-access-key-id]",
+        ];
+        for m in marker_shapes {
+            check(m, m);
+        }
+        // A marker-valued env var is left exactly as is, and not counted.
+        let (out, rep) = scrub_transcript("FOO_TOKEN=[masked] and API_KEY=[redacted:api-key]", &o);
+        assert_eq!(out, "FOO_TOKEN=[masked] and API_KEY=[redacted:api-key]");
+        assert_eq!(rep.total, 0);
+        // A non-marker value that merely STARTS like a marker is still masked.
+        let (out, _) = scrub_transcript("FOO_TOKEN=[masked]trailing", &o);
+        assert_eq!(out, "FOO_TOKEN=[masked]");
+
+        let fillers = [
+            "{\"pad\":1}\n",
+            "Bearer\n",
+            "password:\n",
+            "export API_TOKEN=\\\n",
+            "FOO_TOKEN=[masked]\n",
+            "SECRET=[redacted:api-key] ",
+            "token: ",
+            "[masked]",
+            "[redacted:labeled-secret]",
+            " ",
+            "\n",
+            "\\n",
+            "=",
+            ":",
+            "&quot;",
+        ];
+        let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+        for iter in 0..600 {
+            let mut text = String::new();
+            for _ in 0..(3 + rng.step() % 10) {
+                if rng.step() % 3 == 0 {
+                    let (_, t, _) = &samples[rng.step() % samples.len()];
+                    text.push_str(t);
+                } else {
+                    text.push_str(fillers[rng.step() % fillers.len()]);
+                }
+            }
+            check(&format!("iter {iter}"), &text);
         }
     }
 }
