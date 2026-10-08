@@ -17,9 +17,8 @@
 # `latest`, or any other tag beside a main-* tag is never selected. Untagged
 # versions (multi-arch child manifests) are never selected either.
 #
-# Trusted runs use the repo-scoped CPU pool; fork/external-repo runs use
-# GitHub-hosted Ubuntu (see docs/self-hosted-ci.md). Only ghcr.io/GitHub-API
-# traffic is needed; the checkout is only for scripts/ghcr-gc.sh.
+# Runs on GitHub-hosted Ubuntu. Only ghcr.io/GitHub-API traffic is needed;
+# the checkout is only for scripts/ghcr-gc.sh.
 name: ghcr-gc
 
 on:
@@ -56,7 +55,7 @@ defaults:
 jobs:
   selftest:
     name: gc selection selftest
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -74,7 +73,7 @@ jobs:
       contents: read
       packages: write
     name: gc (${{ matrix.package }})
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -102,7 +101,7 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: gc
     name: channels exist (anonymous)
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read

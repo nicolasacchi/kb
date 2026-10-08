@@ -12,9 +12,8 @@
 # NON-BLOCKING for PRs by construction: schedule + workflow_dispatch, plus a
 # pull_request trigger scoped to the canary machinery's own paths (so a change
 # to a canary proves itself on the PR that makes it). It is not a required
-# check. Trusted runs use two bounded KB slots in the isolated CPU pool,
-# sharing host capacity with other Linux jobs and Windows; fork PRs, other repositories and
-# pull_request_target fall back to ubuntu-latest. The existing job guard stays.
+# check. Runs on GitHub-hosted Ubuntu; the existing job guard still
+# prevents inherited schedules from burning a fork's minutes.
 name: canaries
 
 on:
@@ -49,7 +48,7 @@ jobs:
     permissions:
       contents: read
     name: canaries (each invariant pin must fail when broken)
-    runs-on: ${{ github.repository == 'nicolasacchi/kb' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","X64","kb-cpu","cpu-ci"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # A fork inherits `schedule`; do not burn its minutes.
     if: github.repository == 'nicolasacchi/kb' || github.event_name == 'pull_request'
     timeout-minutes: 120
