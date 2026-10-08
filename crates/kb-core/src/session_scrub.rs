@@ -346,21 +346,64 @@ fn apply_token_rules(text: &mut String, report: &mut ScrubReport) {
     }
 }
 
+/// True when `v` is, in its entirety, a redaction marker this module writes
+/// (`[masked]` or `[redacted:<kind>]`). A rule must NEVER treat a marker as a
+/// secret value: doing so re-matches (and recounts) its own output on every
+/// pass, so the scrub would not be idempotent (v0.49 RI: the env-secret rules'
+/// non-whitespace value class swallowed `[masked]`, and `kb sessions rescrub`
+/// reported and rewrote the same captures on every run).
+fn is_marker(v: &str) -> bool {
+    if v == "[masked]" {
+        return true;
+    }
+    v.strip_prefix("[redacted:")
+        .and_then(|r| r.strip_suffix(']'))
+        .is_some_and(|kind| {
+            !kind.is_empty() && kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+        })
+}
+
 fn apply_group_rules(text: &mut String, rules: &[GroupRule], report: &mut ScrubReport) {
     for rule in rules {
+        let src = text.as_str();
+        let mut out = String::new();
+        let mut last = 0usize; // end of the last ACCEPTED match
+        let mut pos = 0usize; // where the next search starts
         let mut n = 0u32;
-        let owned = match rule.re.replace_all(text.as_str(), |caps: &Captures| {
-            if rule.accept.is_some_and(|ok| !ok(&caps[2])) {
-                return caps[0].to_string();
+        while pos <= src.len() {
+            let Some(caps) = rule.re.captures_at(src, pos) else {
+                break;
+            };
+            let m = caps.get(0).expect("group 0");
+            let marker = is_marker(&caps[2]);
+            if marker || rule.accept.is_some_and(|ok| !ok(&caps[2])) {
+                // Vetoed: leave the text, count nothing. A vetoed match must
+                // not SHADOW a real secret that overlaps it (v0.49 RI: the
+                // newline-tolerant `password:\n \"client_secret\":\n \"X1…"`
+                // veto swallowed the span holding the real secret, which only
+                // a second pass found). A marker is skipped whole; any other
+                // veto resumes one char after its start.
+                pos = if marker {
+                    m.end()
+                } else {
+                    let mut p = m.start() + 1;
+                    while p < src.len() && !src.is_char_boundary(p) {
+                        p += 1;
+                    }
+                    p
+                };
+                continue;
             }
             n += 1;
-            format!("{}{}", &caps[1], rule.mask)
-        }) {
-            std::borrow::Cow::Owned(s) => Some(s),
-            std::borrow::Cow::Borrowed(_) => None,
-        };
-        if let Some(s) = owned {
-            *text = s;
+            out.push_str(&src[last..m.start()]);
+            out.push_str(&caps[1]);
+            out.push_str(rule.mask);
+            last = m.end();
+            pos = m.end().max(m.start() + 1);
+        }
+        if n > 0 {
+            out.push_str(&src[last..]);
+            *text = out;
         }
         report.bump(rule.kind, n);
     }
@@ -1224,6 +1267,161 @@ mod tests {
             }
             stream.finish(&mut sink);
             assert_eq!(out, whole);
+        }
+    }
+
+    /// v0.49 RI — `scrub(scrub(x)) == scrub(x)` byte for byte and the second
+    /// report is zero, for every canonical sample (alone, doubled, in a JSON
+    /// record, on bare lines) and for generated mixtures that also embed the
+    /// scrubber's own markers in the shapes that used to re-match
+    /// (`KEY=[masked]`, `TOKEN=[redacted:…]`, `Bearer [redacted:…]`, …).
+    #[test]
+    fn scrub_is_idempotent_for_every_rule_and_lane() {
+        let o = secrets();
+        let check = |label: &str, text: &str| {
+            let (once, _) = scrub_transcript(text, &o);
+            let (twice, r2) = scrub_transcript(&once, &o);
+            assert_eq!(twice, once, "{label}: second pass changed bytes\n{text}");
+            assert_eq!(r2.total, 0, "{label}: second pass reported {r2:?}\n{once}");
+        };
+        let samples = canonical_samples();
+        for (rule, t, _) in &samples {
+            check(rule, t);
+            check(rule, &format!("{t} {t}"));
+            check(rule, &format!("{{\"k\":\"{}\"}}\n", t.replace('\n', "\\n")));
+            check(rule, &format!("{{\"a\":1}}\n{t}\n{{\"b\":2}}\n"));
+        }
+        let marker_shapes = [
+            "FOO_TOKEN=[masked]",
+            "export MY_SECRET=[masked] tail",
+            "API_KEY=[redacted:api-key]",
+            "DB_PASSWORD=[redacted:labeled-secret]",
+            "KEY=\\\\\\n  [masked]",
+            "KEY=\\\n  [masked]",
+            "password: [redacted:labeled-secret]",
+            "\"token\": \"[redacted:github-token]\"",
+            "Bearer [redacted:bearer-token]",
+            "Bearer\n[redacted:bearer-token]",
+            "{\"c\":\"password:\\n  [redacted:labeled-secret]\"}",
+            "[redacted:private-key]",
+            "AKIA[redacted:aws-access-key-id]",
+        ];
+        for m in marker_shapes {
+            check(m, m);
+        }
+        // A marker-valued env var is left exactly as is, and not counted.
+        let (out, rep) = scrub_transcript("FOO_TOKEN=[masked] and API_KEY=[redacted:api-key]", &o);
+        assert_eq!(out, "FOO_TOKEN=[masked] and API_KEY=[redacted:api-key]");
+        assert_eq!(rep.total, 0);
+        // A non-marker value that merely STARTS like a marker is still masked.
+        let (out, _) = scrub_transcript("FOO_TOKEN=[masked]trailing", &o);
+        assert_eq!(out, "FOO_TOKEN=[masked]");
+
+        let fillers = [
+            "{\"pad\":1}\n",
+            "Bearer\n",
+            "password:\n",
+            "export API_TOKEN=\\\n",
+            "FOO_TOKEN=[masked]\n",
+            "SECRET=[redacted:api-key] ",
+            "token: ",
+            "[masked]",
+            "[redacted:labeled-secret]",
+            " ",
+            "\n",
+            "\\n",
+            "=",
+            ":",
+            "&quot;",
+        ];
+        let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+        for iter in 0..600 {
+            let mut text = String::new();
+            for _ in 0..(3 + rng.step() % 10) {
+                if rng.step() % 3 == 0 {
+                    let (_, t, _) = &samples[rng.step() % samples.len()];
+                    text.push_str(t);
+                } else {
+                    text.push_str(fillers[rng.step() % fillers.len()]);
+                }
+            }
+            check(&format!("iter {iter}"), &text);
+        }
+    }
+
+    /// v0.49 RI review — a vetoed newline-tolerant match must not shadow the
+    /// real secret behind its inner label: ONE pass redacts it. (Without the
+    /// resume-after-start walk the veto consumed the span and only a second
+    /// pass found `X1abcdefgh`.)
+    #[test]
+    fn vetoed_label_does_not_shadow_an_inner_labeled_secret_on_pass_one() {
+        let text = r#"password:\n "client_secret":\n "X1abcdefgh""#;
+        let (once, rep) = scrub_transcript(text, &secrets());
+        assert!(!once.contains("X1abcdefgh"), "leaked on pass 1: {once}");
+        assert!(rep.total >= 1);
+        let (twice, r2) = scrub_transcript(&once, &secrets());
+        assert_eq!((twice, r2.total), (once, 0));
+    }
+
+    /// Resuming after a veto steps one CHAR (not byte): a multi-byte label
+    /// start (`ſ` case-folds to `s`) must not panic or split, and a secret
+    /// after it is still redacted.
+    #[test]
+    fn veto_resume_is_char_boundary_safe() {
+        let text = "ſecret:\\n abcdefghi \u{2100}ſecret:\\n abcdefghi ſecret:\\n Z9abcdefgh";
+        let (out, _) = scrub_transcript(text, &secrets());
+        assert!(!out.contains("Z9abcdefgh"), "{out}");
+    }
+
+    /// Adversarial runs of overlapping vetoed matches stay linear-ish.
+    #[test]
+    fn many_vetoed_matches_are_not_quadratic() {
+        let t0 = std::time::Instant::now();
+        for unit in [
+            "password: abcdefgh ",
+            "password:\\n \\\"client_secret\\\":\\n ",
+            "secretsecretsecret:secretsecretsecret:",
+            "bearer abcdefghijklmnopq.",
+        ] {
+            let text = unit.repeat(20_000);
+            let (_, rep) = scrub_transcript(&text, &secrets());
+            let _ = rep;
+        }
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            t0.elapsed()
+        );
+    }
+
+    /// With no markers and no vetoes the walk is byte-for-byte `replace_all`.
+    #[test]
+    fn group_walk_equals_replace_all_when_nothing_is_vetoed() {
+        let mut text = String::new();
+        for (_, t, _) in canonical_samples() {
+            text.push_str(&t);
+            text.push_str(" and ");
+            text.push_str(&t);
+            text.push('\n');
+        }
+        text.push_str("/home/alice/x /Users/bob.k/y");
+        for rule in labeled_rules().iter().chain(path_rules()) {
+            if rule.accept.is_some() {
+                continue;
+            }
+            let mut n = 0u32;
+            let want = rule
+                .re
+                .replace_all(&text, |c: &Captures| {
+                    n += 1;
+                    format!("{}{}", &c[1], rule.mask)
+                })
+                .into_owned();
+            let mut got = text.clone();
+            let mut rep = ScrubReport::default();
+            apply_group_rules(&mut got, std::slice::from_ref(rule), &mut rep);
+            assert_eq!(got, want, "{}", rule.re.as_str());
+            assert_eq!(rep.total, n);
         }
     }
 }

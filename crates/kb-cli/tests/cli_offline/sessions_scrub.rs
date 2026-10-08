@@ -60,6 +60,43 @@ fn rescrub_is_dry_by_default_then_applies_once() {
         .stdout(contains("\"affected\": 0"));
 }
 
+/// v0.49 RI — the second `--apply` over env-secret captures rewrites and
+/// reports nothing, and leaves the bytes of the first apply untouched.
+#[test]
+fn rescrub_apply_twice_second_pass_is_a_noop_for_env_secrets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let f = tmp.path().join("session-20260301T090000Z-s1.html");
+    std::fs::write(
+        &f,
+        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\n</head><body>\n<pre>{\"t\":\"export AWS_SECRET_ACCESS_KEY=abc123def456 ok\"}\n</pre>\n</body></html>\n",
+    )
+    .unwrap();
+    let dir = tmp.path().to_str().unwrap();
+    let run = |args: &[&str]| {
+        let out = Command::cargo_bin("kb")
+            .unwrap()
+            .args(["sessions", "rescrub", "--dir", dir, "--json"])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&out).unwrap()
+    };
+    let first = run(&["--apply"]);
+    assert_eq!(first["rewritten"], 1, "{first}");
+    let after = std::fs::read_to_string(&f).unwrap();
+    assert!(after.contains("AWS_SECRET_ACCESS_KEY=[masked]"), "{after}");
+    for args in [&["--apply"][..], &[][..]] {
+        let again = run(args);
+        assert_eq!(again["affected"], 0, "{again}");
+        assert_eq!(again["rewritten"], 0, "{again}");
+        assert_eq!(again["redactions"]["transcript"], 0, "{again}");
+    }
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), after);
+}
+
 #[test]
 fn doctor_hooks_prints_the_capture_scrub_lane_table() {
     let tmp = tempfile::tempdir().unwrap();
