@@ -365,19 +365,45 @@ fn is_marker(v: &str) -> bool {
 
 fn apply_group_rules(text: &mut String, rules: &[GroupRule], report: &mut ScrubReport) {
     for rule in rules {
+        let src = text.as_str();
+        let mut out = String::new();
+        let mut last = 0usize; // end of the last ACCEPTED match
+        let mut pos = 0usize; // where the next search starts
         let mut n = 0u32;
-        let owned = match rule.re.replace_all(text.as_str(), |caps: &Captures| {
-            if is_marker(&caps[2]) || rule.accept.is_some_and(|ok| !ok(&caps[2])) {
-                return caps[0].to_string();
+        while pos <= src.len() {
+            let Some(caps) = rule.re.captures_at(src, pos) else {
+                break;
+            };
+            let m = caps.get(0).expect("group 0");
+            let marker = is_marker(&caps[2]);
+            if marker || rule.accept.is_some_and(|ok| !ok(&caps[2])) {
+                // Vetoed: leave the text, count nothing. A vetoed match must
+                // not SHADOW a real secret that overlaps it (v0.49 RI: the
+                // newline-tolerant `password:\n \"client_secret\":\n \"X1…"`
+                // veto swallowed the span holding the real secret, which only
+                // a second pass found). A marker is skipped whole; any other
+                // veto resumes one char after its start.
+                pos = if marker {
+                    m.end()
+                } else {
+                    let mut p = m.start() + 1;
+                    while p < src.len() && !src.is_char_boundary(p) {
+                        p += 1;
+                    }
+                    p
+                };
+                continue;
             }
             n += 1;
-            format!("{}{}", &caps[1], rule.mask)
-        }) {
-            std::borrow::Cow::Owned(s) => Some(s),
-            std::borrow::Cow::Borrowed(_) => None,
-        };
-        if let Some(s) = owned {
-            *text = s;
+            out.push_str(&src[last..m.start()]);
+            out.push_str(&caps[1]);
+            out.push_str(rule.mask);
+            last = m.end();
+            pos = m.end().max(m.start() + 1);
+        }
+        if n > 0 {
+            out.push_str(&src[last..]);
+            *text = out;
         }
         report.bump(rule.kind, n);
     }
