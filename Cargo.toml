@@ -71,7 +71,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # the old toml 0.8/toml_edit 0.22/winnow 0.7 chain refinery 0.8 dragged in.
 # kb's surface (embed_migrations!, Runner, refinery_schema_history,
 # rusqlite 0.32 ≤ its 0.39 ceiling) is untouched by the 0.9 breaking set.
-refinery = { version = "0.9", features = ["rusqlite"] }
+refinery = { version = "0.10", features = ["rusqlite"] }
 
 # Embeddings — fastembed with a statically-bundled ONNX Runtime (per topic 02
 # §Decisions + spike-fastembed findings: fp32 default, model cache set
