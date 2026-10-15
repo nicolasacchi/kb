@@ -15,6 +15,7 @@ test.describe("/search page", () => {
     await page.goto(`${BASE}/search`);
     const input = page.getByRole("textbox", { name: "search query" });
     await input.fill(KNOWN_SYMBOL);
+    await page.getByRole("button", { name: "Syntax" }).click();
     await page.getByRole("button", { name: /symbols prefix/i }).click();
 
     await expect(input).toHaveValue(`@${KNOWN_SYMBOL}`);
@@ -24,5 +25,13 @@ test.describe("/search page", () => {
     // The debounced URL sync round-trips q= so the narrowed search stays
     // shareable.
     await expect(page).toHaveURL(new RegExp(`q=%40${KNOWN_SYMBOL}`));
+  });
+
+  test("shows a result count line and a zero-hit state with actions", async ({ page }) => {
+    await page.goto(`${BASE}/search?q=${encodeURIComponent(KNOWN_SYMBOL)}`);
+    await expect(page.locator('[data-kbc-role="result-count"]')).toContainText(/\d+ results?/, { timeout: 10_000 });
+    await page.goto(`${BASE}/search?q=zzqxnomatchzzqx`);
+    await expect(page.getByRole("heading", { name: /No matches for/ })).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-kb-action="try-symbols"]')).toBeVisible();
   });
 });

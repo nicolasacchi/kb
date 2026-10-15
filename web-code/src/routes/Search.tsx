@@ -23,19 +23,18 @@
 //     browser-local (`lib/searchHistory.ts`'s recorded cut); the parity
 //     affordance is the copied `kb-code search '<q>'` line.
 
-import type { ReactNode } from "react";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useRamp } from "../nav/ramp";
 import { useNavigate, useSearchParams } from "react-router";
 import type { TranscriptHit } from "../api/types";
+import { StateCard } from "@kb/ui/StateCard";
+import { ViewBar, type Cluster } from "@kb/ui/ViewBar";
 import EmptyState from "../components/EmptyState";
 import MetaLine from "../components/MetaLine";
 import { Icon } from "../components/iconSet";
-import PrefixChips from "../components/search/PrefixChips";
 import SearchSection from "../components/search/SearchSection";
 import FacetRail from "../components/search/FacetRail";
 import SearchPreview from "../components/search/SearchPreview";
-import { useIsMobile } from "../hooks/useIsMobile";
 import { useOmniSearch } from "../hooks/useOmniSearch";
 import { useReviewFiles } from "../hooks/useReviews";
 import { useScopes } from "../hooks/useScopes";
@@ -43,11 +42,12 @@ import { readerUrl } from "../lib/breadcrumbs";
 import { useValidatedCurrentReview } from "../hooks/useValidatedCurrentReview";
 import { sectionsToRowCounts } from "../lib/omniSearch";
 import { initialPaletteState, paletteReducer } from "../lib/paletteReducer";
-import { loadSearchPreviewOpen, saveSearchPreviewOpen } from "../lib/prefs";
-import { applyPrefixChip, PREFIX_CHIPS } from "../lib/prefixChips";
+import { loadKeyPreset, loadSearchPreviewOpen, saveSearchPreviewOpen } from "../lib/prefs";
+import { applyPrefixChip, PREFIX_CHIPS, stripLeadingPrefix } from "../lib/prefixChips";
 import { resolveSearchTarget } from "../lib/searchTargets";
-import { buildPageView } from "../lib/searchPage";
-import { tokenOf, resolve as resolveCommand } from "../commands/dispatch";
+import { buildPageView, laneCounts } from "../lib/searchPage";
+import { displayKey, tokenOf, resolve as resolveCommand } from "../commands/dispatch";
+import { KBC_COMMANDS } from "../commands/registry.gen";
 import { useCommandScope } from "../commands/CommandRoot";
 import { SEARCH_COMMAND_IDS, type SearchHandlers } from "./searchCommands";
 import { setFacets, setGroup } from "../lib/kbcqEdit";
@@ -73,27 +73,20 @@ import { toast } from "../lib/toast";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import "../styles/search.css";
 
-/// V80-R1 — one entry in the toolbar's three labelled groups (Results ·
-/// Query · Set). A plain data shape, not JSX, so the SAME array drives
-/// both the inline toolbar (≥1100px) and the collapsed overflow menu
-/// (<1100px, `TOOLBAR_OVERFLOW_MAX_WIDTH`) — one source of buttons, never
-/// two copies that could drift.
-interface ToolbarItem {
-  key: string;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-}
-interface ToolbarGroup {
-  label: string;
-  items: ToolbarItem[];
+/// The key a `scope: "search"` row displays under the active preset, so the
+/// ViewBar names the same chord the `?` sheet does (null = palette-only).
+function keyFor(id: string): string | undefined {
+  const c = KBC_COMMANDS.find((r) => r.id === id);
+  return c ? (displayKey(c, loadKeyPreset()) ?? undefined) : undefined;
 }
 
-/// Below this width the toolbar's three groups collapse into one "Actions"
-/// disclosure — the SAME breakpoint `search.css`'s `.kbc-searchpage__cols`
-/// already stacks the facet rail/preview at, so the page picks up exactly
-/// one narrow-layout threshold rather than two that could disagree.
-const TOOLBAR_OVERFLOW_MAX_WIDTH = 1099;
+const GROUP_LABELS: Record<GroupKey, string> = {
+  file: "File",
+  kind: "Kind",
+  lane: "Lane",
+  dir: "Directory",
+  none: "None",
+};
 
 const LIMIT = 20;
 const URL_SYNC_MS = 120;
@@ -129,7 +122,7 @@ export default function Search() {
   const ramp = useRamp({ focusedPane: 1 });
   const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState(() => searchParams.get("q") ?? "");
-  const [repo] = useState<string | undefined>(() => searchParams.get("repo") ?? undefined);
+  const [repo, setRepo] = useState<string | undefined>(() => searchParams.get("repo") ?? undefined);
   const [popoverHit, setPopoverHit] = useState<TranscriptHit | null>(null);
   const [refineText, setRefineText] = useState("");
   // V80-R1 — collapsible, persisted (`lib/prefs.ts`'s `searchPreviewOpen`):
@@ -140,9 +133,7 @@ export default function Search() {
     loadSearchPreviewOpen(typeof window !== "undefined" ? window.innerWidth : 1280),
   );
   const [historyOpen, setHistoryOpen] = useState(false);
-  // The toolbar's three labelled groups collapse into one overflow menu
-  // below the SAME width `.kbc-searchpage__cols` already stacks at.
-  const toolbarNarrow = useIsMobile(TOOLBAR_OVERFLOW_MAX_WIDTH);
+  const [syntaxOpen, setSyntaxOpen] = useState(false);
   const storage = useMemo(browserStorage, []);
   const [history, setHistory] = useState<string[]>(() => loadHistory(storage));
   const [saved, setSaved] = useState<SavedSearch[]>(() => loadSaved(storage));
@@ -193,7 +184,7 @@ export default function Search() {
     }, URL_SYNC_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q]);
+  }, [q, repo]);
 
   // History records a query the user actually SETTLED on (the URL sync has
   // fired and the response landed), never every keystroke.
@@ -282,6 +273,10 @@ export default function Search() {
     // never re-queries and never navigates; clearing the refinement KEEPS
     // the result set underneath it.
     "search.refine.clear": () => {
+      if (syntaxOpen) {
+        setSyntaxOpen(false);
+        return;
+      }
       if (popoverHit) {
         setPopoverHit(null);
         return;
@@ -318,60 +313,88 @@ export default function Search() {
     "search.stack.prev": () => stackDispatch({ type: "stepSet", delta: -1 }),
   };
 
-  // V80-R1 — the seven action pills, regrouped into the three labelled
-  // groups the brief names (Results · Query · Set). ONE array drives both
-  // the inline toolbar and the collapsed overflow menu below
-  // `TOOLBAR_OVERFLOW_MAX_WIDTH` — see `renderToolbarGroups`.
-  const toolbarGroups: ToolbarGroup[] = [
+  // The seven action pills as ONE ViewBar. Same handlers the keys run; the
+  // labels are verbs and the keys come from the cmd/1 rows.
+  const clusters: Cluster[] = [
     {
       label: "Results",
-      items: [
+      controls: [
         {
-          key: "facets",
-          label: parseKbcq(q).facets ? "facets on" : "facets off",
-          onClick: handlers["search.facets"],
+          id: "search.facets",
+          label: "Facets",
+          kind: "toggle",
           active: parseKbcq(q).facets,
+          key: keyFor("search.facets"),
+          onSelect: handlers["search.facets"],
         },
-        { key: "group", label: `group: ${group ?? "—"}`, onClick: handlers["search.group.cycle"] },
-        { key: "preview", label: previewOn ? "preview on" : "preview off", onClick: handlers["search.preview"], active: previewOn },
+        {
+          id: "search.group",
+          label: "Group by",
+          kind: "select",
+          key: keyFor("search.group.cycle"),
+          value: group ?? "",
+          options: [
+            { value: "", label: "Default" },
+            ...GROUP_KEYS.map((k) => ({ value: k, label: GROUP_LABELS[k] })),
+          ],
+          onSelect: (v) => setQ((cur) => setGroup(cur, v ? (v as GroupKey) : null)),
+        },
+        {
+          id: "search.preview",
+          label: "Preview",
+          kind: "toggle",
+          active: previewOn,
+          key: keyFor("search.preview"),
+          onSelect: handlers["search.preview"],
+        },
       ],
     },
     {
       label: "Query",
-      items: [
-        { key: "copy-cli", label: "copy CLI", onClick: handlers["search.copy-cli"] },
-        { key: "save", label: "save", onClick: handlers["search.save"] },
-        { key: "history", label: "history", onClick: handlers["search.history"], active: historyOpen },
+      controls: [
+        { id: "search.save", label: "Save", kind: "button", key: keyFor("search.save"), onSelect: handlers["search.save"] },
+        {
+          id: "search.history",
+          label: "History",
+          kind: "toggle",
+          active: historyOpen,
+          key: keyFor("search.history"),
+          onSelect: handlers["search.history"],
+        },
+        {
+          id: "search.copy-cli",
+          label: "Copy CLI",
+          kind: "button",
+          key: keyFor("search.copy-cli"),
+          onSelect: handlers["search.copy-cli"],
+        },
       ],
     },
     {
       label: "Set",
-      items: [{ key: "keep", label: "keep set", onClick: handlers["search.keep"] }],
+      controls: [
+        {
+          id: "search.keep",
+          label: "Keep as set",
+          kind: "button",
+          key: keyFor("search.keep"),
+          onSelect: handlers["search.keep"],
+        },
+      ],
     },
   ];
 
-  /// Renders every group's label + buttons — called once for the inline
-  /// toolbar (≥1100px) and once inside the collapsed `<details>` overflow
-  /// menu (<1100px), so both surfaces share one set of buttons/handlers
-  /// rather than two copies that could drift.
-  function renderToolbarGroups(): ReactNode {
-    return toolbarGroups.map((g) => (
-      <div key={g.label} className="kbc-searchpage__toolbar-group" role="group" aria-label={g.label}>
-        <span className="kbc-searchpage__toolbar-label">{g.label}</span>
-        {g.items.map((it) => (
-          <button
-            key={it.key}
-            type="button"
-            className={`kbc-search__chip-btn${it.active ? " is-active" : ""}`}
-            aria-pressed={it.active}
-            onClick={it.onClick}
-          >
-            {it.label}
-          </button>
-        ))}
-      </div>
-    ));
-  }
+  const counts = laneCounts(sections);
+  const countLine: string | null =
+    trimmedQ === "" || error
+      ? null
+      : loading
+        ? "Searching…"
+        : page.total === 0
+          ? "No results"
+          : `${page.total} ${page.total === 1 ? "result" : "results"} · lanes: ${counts
+              .map((c) => `${c.label} ${c.count}`)
+              .join(", ")}`;
 
   /// ONE keyboard door for the whole page: canonicalise the event to a
   /// kbc-cmd/1 token, ask the SAME resolver `CommandRoot` uses which
@@ -385,6 +408,20 @@ export default function Search() {
     e.preventDefault();
     handler();
   }
+
+  const laneActions = () => {
+    const sym = PREFIX_CHIPS.find((c) => c.hint === "symbols");
+    const text = PREFIX_CHIPS.find((c) => c.hint === "text");
+    const bare = stripLeadingPrefix(q.trim());
+    const go = (chip: (typeof PREFIX_CHIPS)[number]) => () => {
+      setQ((cur) => applyPrefixChip(cur, chip));
+      inputRef.current?.focus();
+    };
+    return [
+      ...(sym ? [{ key: "try-symbols", label: `Search symbols (@${bare})`, onClick: go(sym) }] : []),
+      ...(text ? [{ key: "try-text", label: `Try the text lane: /${bare}`, onClick: go(text) }] : []),
+    ];
+  };
 
   const activeSet = activeDrawerSet(stack);
   const tabs = drawerTabOrder(stack);
@@ -404,11 +441,43 @@ export default function Search() {
           ref={inputRef}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search files, symbols, text, semantic, sessions, transcripts…"
+          placeholder="Search files, symbols, text… (@symbol  #file  /regex/  ?question  ~session)"
           className="kbc-searchpage__input"
           aria-label="search query"
           autoFocus
         />
+        <span className="kbc-searchpage__syntax">
+          <button
+            type="button"
+            className="kbc-searchpage__syntax-btn"
+            aria-expanded={syntaxOpen}
+            aria-controls="kbc-search-syntax"
+            onClick={() => setSyntaxOpen((v) => !v)}
+          >
+            Syntax
+          </button>
+          {syntaxOpen && (
+            <div id="kbc-search-syntax" className="kbc-searchpage__syntax-pop" role="group" aria-label="search prefixes">
+              {PREFIX_CHIPS.map((chip) => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  className="kbc-searchpage__syntax-row"
+                  aria-label={`${chip.hint} prefix (${chip.label})`}
+                  title={`${chip.hint} - inserts "${chip.label}"`}
+                  onClick={() => {
+                    setQ((cur) => applyPrefixChip(cur, chip));
+                    setSyntaxOpen(false);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  <code>{chip.label}</code>
+                  <span>{chip.hint}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
         <input
           ref={refineRef}
           value={refineText}
@@ -431,6 +500,7 @@ export default function Search() {
       <MetaLine
         className="kbc-searchpage__meta"
         items={[
+          countLine && <span data-kbc-role="result-count">{countLine}</span>,
           response?.stale && (
             <span title="the daemon's index generation this answer came from">
               index generation {response.stale.generation}
@@ -439,31 +509,7 @@ export default function Search() {
         ]}
       />
 
-      <div className="kbc-searchpage__bar">
-        <div className="kbc-searchpage__chipgroup">
-          <span className="kbc-searchpage__grouplabel">Prefix</span>
-          <PrefixChips
-            onInsert={(chip) => {
-              setQ((cur) => applyPrefixChip(cur, chip));
-              inputRef.current?.focus();
-            }}
-          />
-        </div>
-        {/* V80-R1 — the 7 action pills, regrouped into 3 labelled groups
-            (Results · Query · Set), collapsing into one "Actions" menu
-            below `TOOLBAR_OVERFLOW_MAX_WIDTH` (the SAME width the
-            facet-rail/preview columns already stack at). */}
-        {toolbarNarrow ? (
-          <details className="kbc-searchpage__toolbar-menu" data-kbc-role="toolbar-overflow">
-            <summary className="kbc-search__chip-btn">Actions</summary>
-            <div className="kbc-searchpage__toolbar-menu-panel">{renderToolbarGroups()}</div>
-          </details>
-        ) : (
-          <div className="kbc-searchpage__toolbar" role="toolbar" aria-label="search actions">
-            {renderToolbarGroups()}
-          </div>
-        )}
-      </div>
+      <ViewBar clusters={clusters} maxVisible={5} />
 
       {/* The query that actually RAN, plus every token the parser could not
           honour — the same two lines `kb-code search` prints. */}
@@ -534,30 +580,36 @@ export default function Search() {
             <EmptyState
               icon={<Icon.Search />}
               title="Search everywhere"
-              hint="Type to search files, symbols, text, semantic, sessions, and transcripts — or click a prefix chip above to jump straight to one lane."
+              hint="Type to search files, symbols, text, semantic, sessions, and transcripts. The Syntax button lists the prefixes that jump to one lane."
             />
           ) : noResults ? (
-            <EmptyState
-              icon={<Icon.Search />}
-              title="No matches"
-              hint={
+            <StateCard
+              kind="empty"
+              title={`No matches for “${q}”`}
+              reason={
                 page.refined
                   ? `The refinement "${refineText}" removed every row of this page. Escape clears it.`
-                  : `Nothing in any lane for "${q}".`
+                  : `Nothing in any lane of ${repo ? `repo ${repo}` : "any indexed repo"}.`
               }
-              action={{
-                label: page.refined ? "Clear the refinement" : `Try the text lane: /${q}`,
-                onClick: () => {
-                  if (page.refined) {
-                    setRefineText("");
-                    inputRef.current?.focus();
-                    return;
-                  }
-                  const textChip = PREFIX_CHIPS.find((c) => c.hint === "text");
-                  if (textChip) setQ((cur) => applyPrefixChip(cur, textChip));
-                  inputRef.current?.focus();
-                },
-              }}
+              actions={
+                page.refined
+                  ? [
+                      {
+                        key: "clear-refinement",
+                        label: "Clear the refinement",
+                        onClick: () => {
+                          setRefineText("");
+                          inputRef.current?.focus();
+                        },
+                      },
+                    ]
+                  : [
+                      ...laneActions(),
+                      ...(repo
+                        ? [{ key: "all-repos", label: "Search every repo", onClick: () => setRepo(undefined) }]
+                        : []),
+                    ]
+              }
             />
           ) : (
             page.view.map((v, i) => (
