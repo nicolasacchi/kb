@@ -28,7 +28,8 @@ test.describe("spa detail view", () => {
     // fullscreen action (U1 — replaced the old ↗ open-in-tab primary slot).
     const ctxbar = page.getByRole("navigation", { name: "artifact context" });
     await expect(ctxbar).toBeVisible();
-    await expect(ctxbar.locator('[data-kb-act="fullscreen"]')).toBeVisible();
+    await ctxbar.locator('[data-kb-act="more"]').click();
+    await expect(page.locator('[data-kb-act="fullscreen"]')).toBeVisible();
 
     // Iframe loads — wait for the artifact's H1 to appear inside the frame.
     const iframe = page.frameLocator(".detail__frame");

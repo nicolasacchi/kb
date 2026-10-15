@@ -6264,6 +6264,69 @@ a.proposal-row__chip:hover {
   border-color: color-mix(in oklab, var(--err) 45%, var(--rule));
 }
 
+/* OL R1 — the More menu. Fixed so the phone bar's overflow scroller cannot
+ * clip it; labels and key hints stay visible on a phone (the bar's own
+ * `.kb-ctxbar__lbl` rule does not reach these classes). */
+.kb-ctxbar__more {
+  position: fixed;
+  z-index: var(--z-popover-hi);
+  min-width: 210px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--rule);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-ctxbar__mi {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  padding: 6px 8px;
+  min-height: 32px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.kb-ctxbar__mi:hover {
+  background: var(--bg-card-hi);
+  text-decoration: none;
+}
+.kb-ctxbar__mi.is-on {
+  color: var(--warn);
+}
+.kb-ctxbar__mi.is-ok {
+  color: var(--ok);
+}
+.kb-ctxbar__mi.is-fail {
+  color: var(--err);
+}
+.kb-ctxbar__mi-lbl {
+  flex: 1;
+}
+.kb-ctxbar__mi-key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+@media (max-width: 860px) {
+  .kb-ctxbar__mi {
+    min-height: 40px;
+  }
+}
+
 /* E1 — daemon-down banner. Slim full-width alert under the chrome when the
  * live SSE link drops; clears itself on reconnect. Warn-tinted, not error-red,
  * because the daemon auto-reconnects ("working on it", not a dead end). */

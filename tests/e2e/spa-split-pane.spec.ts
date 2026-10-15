@@ -31,6 +31,10 @@ const frames = (page: Page) => page.locator("iframe.detail__frame");
 const panes = (page: Page) => page.locator(".detail__pane");
 const rails = (page: Page) => page.locator(".kb-pinsp");
 
+// OL R1 — "open beside"/"close this pane" live in the ContextBar's More menu.
+const openMore = (page: Page) =>
+  page.locator('[data-kb-act="more"]').first().click();
+
 async function frameSrcs(page: Page): Promise<string[]> {
   return frames(page).evaluateAll((els) =>
     els.map((e) => (e as HTMLIFrameElement).src),
@@ -70,6 +74,7 @@ test.describe("two-pane split (desktop)", () => {
 
     // "open beside" lives on the primary pane only (and only once the
     // sibling walk has resolved a target).
+    await openMore(page);
     const splitBtn = page.locator('[data-kb-act="split"]');
     await expect(splitBtn).toHaveCount(1);
     await splitBtn.click();
@@ -83,7 +88,10 @@ test.describe("two-pane split (desktop)", () => {
 
     // The surviving `[data-kb-act="split"]` is now pane 2's "close this
     // pane" (the primary drops its own while a split is open).
-    const closeBtn = page.locator('[data-kb-pane="2"] [data-kb-act="split"]');
+    await page
+      .locator('[data-kb-pane="2"] [data-kb-act="more"]')
+      .click();
+    const closeBtn = page.locator('[data-kb-act="split"]');
     await expect(closeBtn).toHaveCount(1);
     await closeBtn.click();
 
@@ -94,8 +102,11 @@ test.describe("two-pane split (desktop)", () => {
 
   test("the `w` pane chord splits (w v) and closes (w q)", async ({ page }) => {
     await page.goto(`${BASE}${PRIMARY}`);
-    // Wait for the sibling walk (the split target) to resolve.
+    // Wait for the sibling walk (the split target) to resolve: the split row
+    // only exists in More once it has.
+    await openMore(page);
     await expect(page.locator('[data-kb-act="split"]')).toHaveCount(1);
+    await page.keyboard.press("Escape");
 
     await page.keyboard.press("w");
     await page.keyboard.press("v");
@@ -113,6 +124,7 @@ test.describe("two-pane split (desktop)", () => {
   }) => {
     await page.goto(`${BASE}/`);
     await page.goto(`${BASE}${PRIMARY}`);
+    await openMore(page);
     await expect(page.locator('[data-kb-act="split"]')).toHaveCount(1);
     await page.locator('[data-kb-act="split"]').click();
     await expect(frames(page)).toHaveCount(2);
