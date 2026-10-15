@@ -145,6 +145,23 @@
   display: flex;
   align-items: center;
   gap: var(--space-1, 4px);
+}
+
+/* OL-C11 — the pane header row: [← →] filename … toolbar. The filename
+ * yields first (ellipsis); the toolbar sits at the right end and never
+ * shrinks below its own content. */
+.kbc-panechrome__file {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+.kbc-panechrome__tools {
+  flex: 0 0 auto;
   margin-left: auto;
 }
 

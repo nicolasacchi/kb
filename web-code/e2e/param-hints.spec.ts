@@ -31,10 +31,16 @@ test.describe("param hints (V3.1-H3a)", () => {
     await page.locator(".kbc-codeview").click();
     await expect(page.locator("[data-kbc-param-hint]").first()).toBeVisible({ timeout: 15_000 });
 
+    // OL-C11 — the toggle lives in the toolbar's More menu (which closes
+    // after a pick, so it is reopened to read the state back).
+    const more = page.locator("[data-kb-viewbar-more]");
     const toggle = page.locator("[data-kbc-param-hints-toggle]");
+    await more.click();
     await expect(toggle).toBeVisible();
     await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await more.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await page.keyboard.press("Escape");
 
     // After disable + debounce, widgets should clear.
     await expect(page.locator("[data-kbc-param-hint]")).toHaveCount(0, { timeout: 5_000 });

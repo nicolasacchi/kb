@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { StateCard } from "@kb/ui/StateCard";
 import { flushSync } from "react-dom";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
@@ -19,6 +19,7 @@ import {
   fetchXrefs,
 } from "../api/client";
 import Breadcrumbs from "../components/Breadcrumbs";
+import { ScopePortal } from "../components/ScopeSlot";
 import CodeView, { type CodeViewHandle, type GotoSel } from "../components/CodeView";
 import DiffView from "../components/DiffView";
 import EmptyState from "../components/EmptyState";
@@ -398,12 +399,17 @@ function ReaderStartCards({ repo, onOpen }: { repo: string; onOpen: (path: strin
 /// chip arrives.
 function PaneChrome({
   pane,
+  file,
   provisional,
   onBack,
   onForward,
   onPin,
+  children,
 }: {
   pane: 1 | 2;
+  /// The pane's open path — rendered as its basename (full path on hover).
+  file?: string;
+  children?: ReactNode;
   provisional: boolean;
   onBack(): void;
   onForward(): void;
@@ -416,6 +422,11 @@ function PaneChrome({
       data-kbc-panechrome={pane}
     >
       <PaneHistoryNav pane={pane} onBack={onBack} onForward={onForward} />
+      {file ? (
+        <span className="kbc-panechrome__file" data-kbc-panechrome-file title={file}>
+          {file.slice(file.lastIndexOf("/") + 1)}
+        </span>
+      ) : null}
       <span className="kbc-panechrome__mods">
         {mods.map((m) =>
           m === "provisional" ? (
@@ -433,6 +444,7 @@ function PaneChrome({
           ) : null,
         )}
       </span>
+      {children ? <div className="kbc-panechrome__tools">{children}</div> : null}
     </div>
   );
 }
@@ -3995,9 +4007,185 @@ export default function Reader() {
     { pinned: railPinned },
   );
 
+  // OL-C3 — the toolbar is a labelled ViewBar of verbs: three named clusters
+  // (Gutter / Text / Lines), each control a verb, active toggles pressed via
+  // `aria-pressed`. OL-C11 — `maxVisible={3}` keeps Provenance, Comments and
+  // Text size in the pane header row and moves Wrap, Parameter hints, Code
+  // lenses and Sticky scope into More; every `data-kbc-*` hook the e2e suite
+  // drives is carried by `attrs` or by the `renderControl` markup. The Ref
+  // group stays outside the bar at the row's right end.
+  const toolbarInPane = !diffMode && !storyMode && !historySentinelMode;
+  const readerToolbar = (
+    <div className="kbc-reader-toolbar" data-kbc-reader-toolbar>
+      {isFile && !diffMode && !storyMode && (
+        <ViewBar
+          ariaLabel="Reader view"
+          maxVisible={3}
+          clusters={[
+            {
+              label: "Gutter",
+              controls: [
+                {
+                  id: "provenance",
+                  label: "Provenance",
+                  kind: "segment",
+                  value: provenanceMode,
+                },
+                {
+                  id: "comments",
+                  label: `Comments: ${commentGutterMode}`,
+                  key: "Space C c",
+                  kind: "button",
+                  attrs: { "data-kbc-comment-gutter-mode": commentGutterMode },
+                  onSelect: cycleCommentGutterMode,
+                },
+              ],
+            },
+            {
+              label: "Text",
+              controls: [{ id: "text-size", label: "Text size", kind: "segment" }],
+            },
+            {
+              label: "Lines",
+              controls: [
+                {
+                  id: "wrap",
+                  label: "Wrap lines",
+                  kind: "toggle",
+                  active: wrapEnabled,
+                  attrs: { "data-kbc-wrap-toggle": "" },
+                  onSelect: () =>
+                    setWrapEnabled((v) => {
+                      const next = !v;
+                      saveWrap(next);
+                      return next;
+                    }),
+                },
+                {
+                  id: "param-hints",
+                  label: "Parameter hints",
+                  kind: "toggle",
+                  active: paramHintsEnabled,
+                  attrs: { "data-kbc-param-hints-toggle": "" },
+                  onSelect: () =>
+                    setParamHintsEnabled((v) => {
+                      const next = !v;
+                      saveParamHints(next);
+                      return next;
+                    }),
+                },
+                {
+                  id: "lenses",
+                  label: "Code lenses",
+                  kind: "toggle",
+                  active: codeLensesEnabled,
+                  attrs: { "data-kbc-lenses-toggle": "" },
+                  onSelect: () =>
+                    setCodeLensesEnabled((v) => {
+                      const next = !v;
+                      saveCodeLenses(next);
+                      return next;
+                    }),
+                },
+                {
+                  id: "sticky",
+                  label: "Sticky scope",
+                  kind: "toggle",
+                  active: stickyEnabled,
+                  attrs: { "data-kbc-sticky-toggle": "" },
+                  onSelect: () =>
+                    setStickyEnabled((v) => {
+                      const next = !v;
+                      saveStickyContext(next);
+                      return next;
+                    }),
+                },
+              ],
+            },
+          ]}
+          renderControl={(control, node) => {
+            if (control.id === "provenance") {
+              return (
+                <div className="kbc-provenance-toggle" role="group" aria-label="Provenance">
+                  <button
+                    type="button"
+                    className={"kbc-provenance-toggle__opt" + (provenanceMode === "off" ? " is-active" : "")}
+                    aria-pressed={provenanceMode === "off"}
+                    onClick={() => setProvenanceMode("off")}
+                    data-kbc-provenance-mode="off"
+                  >
+                    Off
+                  </button>
+                  <button
+                    type="button"
+                    className={"kbc-provenance-toggle__opt" + (provenanceMode === "dots" ? " is-active" : "")}
+                    aria-pressed={provenanceMode === "dots"}
+                    onClick={() => setProvenanceMode((m) => (m === "dots" ? "off" : "dots"))}
+                    data-kbc-provenance-toggle
+                    data-kbc-provenance-mode="dots"
+                    title="Show blame provenance dots in the gutter"
+                  >
+                    Dots
+                  </button>
+                  <button
+                    type="button"
+                    className={"kbc-provenance-toggle__opt" + (provenanceMode === "age" ? " is-active" : "")}
+                    aria-pressed={provenanceMode === "age"}
+                    onClick={() => setProvenanceMode((m) => (m === "age" ? "off" : "age"))}
+                    data-kbc-provenance-mode="age"
+                    title="Tint lines by author age"
+                  >
+                    Age
+                  </button>
+                </div>
+              );
+            }
+            if (control.id === "text-size") {
+              return (
+                <div className="kbc-fontsize-stepper" role="group" aria-label="Text size" data-kbc-fontsize-stepper>
+                  <button
+                    type="button"
+                    className="kbc-fontsize-stepper__btn"
+                    aria-label="Decrease code font size"
+                    title="Smaller text"
+                    data-kbc-fontsize-dec
+                    disabled={codeFontSize <= CODE_FONT_SIZE_MIN}
+                    onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur - 1))}
+                  >
+                    A−
+                  </button>
+                  <button
+                    type="button"
+                    className="kbc-fontsize-stepper__btn"
+                    aria-label="Increase code font size"
+                    title="Larger text"
+                    data-kbc-fontsize-inc
+                    disabled={codeFontSize >= CODE_FONT_SIZE_MAX}
+                    onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur + 1))}
+                  >
+                    A+
+                  </button>
+                </div>
+              );
+            }
+            return node;
+          }}
+        />
+      )}
+      <div className="kbc-toolbar-group" role="group" aria-label="Ref">
+        <RefPicker repo={repo} path={path} activeRef={gitRef} pane2={pane2Loc ?? undefined} />
+        {/* Phase E4 — capture the FOCUSED pane's open file (or its
+            current selection, when one exists) into a reading set. */}
+        {focusedPath !== undefined && !diffMode && !storyMode && (
+          <AddToSetMenu repo={repo} path={focusedPath} getSelection={currentPaneSelection} />
+        )}
+      </div>
+    </div>
+  );
+
   const readerHeader = (
     <>
-      <header className="kbc-reader__top">
+      <header className={"kbc-reader__top" + (toolbarInPane ? " kbc-reader__top--bare" : "")}>
         {/* F5 — mobile-only hamburger (CSS-hidden ≥861px): promotes the tree
             aside to an overlay `MobileDrawer` below. Reuses `Icon.List`'s
             3-line glyph, which already reads as a hamburger — see
@@ -4012,188 +4200,24 @@ export default function Reader() {
         >
           <Icon.List />
         </button>
-        <Breadcrumbs
-          repo={repo}
-          path={path}
-          gitRef={gitRef}
-          symbols={focusedSymbols}
-          cursorLine={cursorLineUi}
-          onJumpSymbol={(line) => jumpToLine(focusedPane, line)}
-        />
+        {/* OL-C11 — the path crumbs live in the top bar's scope slot. */}
+        <ScopePortal>
+          <Breadcrumbs
+            repo={repo}
+            path={path}
+            gitRef={gitRef}
+            symbols={focusedSymbols}
+            cursorLine={cursorLineUi}
+            onJumpSymbol={(line) => jumpToLine(focusedPane, line)}
+          />
+        </ScopePortal>
         {/* F1 — the search launcher moved to the global TopBar (app.tsx),
             mounted once above every route; this header no longer duplicates
             it. */}
-        {/* OL-C3 — the toolbar is a labelled ViewBar of verbs: three named
-            clusters (Gutter / Text / Lines), each control a verb, active
-            toggles pressed via `aria-pressed`. `maxVisible={6}` keeps Sticky
-            scope in the More menu; every `data-kbc-*` hook the e2e suite
-            drives is carried by `attrs` or by the `renderControl` markup.
-            The Ref group stays outside the bar at the row's right end. */}
-        <div className="kbc-reader-toolbar" data-kbc-reader-toolbar>
-          {isFile && !diffMode && !storyMode && (
-            <ViewBar
-              title="Reader view"
-              maxVisible={6}
-              clusters={[
-                {
-                  label: "Gutter",
-                  controls: [
-                    {
-                      id: "provenance",
-                      label: "Provenance",
-                      kind: "segment",
-                      value: provenanceMode,
-                    },
-                    {
-                      id: "comments",
-                      label: `Comments: ${commentGutterMode}`,
-                      key: "Space C c",
-                      kind: "button",
-                      attrs: { "data-kbc-comment-gutter-mode": commentGutterMode },
-                      onSelect: cycleCommentGutterMode,
-                    },
-                  ],
-                },
-                {
-                  label: "Text",
-                  controls: [{ id: "text-size", label: "Text size", kind: "segment" }],
-                },
-                {
-                  label: "Lines",
-                  controls: [
-                    {
-                      id: "wrap",
-                      label: "Wrap lines",
-                      kind: "toggle",
-                      active: wrapEnabled,
-                      attrs: { "data-kbc-wrap-toggle": "" },
-                      onSelect: () =>
-                        setWrapEnabled((v) => {
-                          const next = !v;
-                          saveWrap(next);
-                          return next;
-                        }),
-                    },
-                    {
-                      id: "param-hints",
-                      label: "Parameter hints",
-                      kind: "toggle",
-                      active: paramHintsEnabled,
-                      attrs: { "data-kbc-param-hints-toggle": "" },
-                      onSelect: () =>
-                        setParamHintsEnabled((v) => {
-                          const next = !v;
-                          saveParamHints(next);
-                          return next;
-                        }),
-                    },
-                    {
-                      id: "lenses",
-                      label: "Code lenses",
-                      kind: "toggle",
-                      active: codeLensesEnabled,
-                      attrs: { "data-kbc-lenses-toggle": "" },
-                      onSelect: () =>
-                        setCodeLensesEnabled((v) => {
-                          const next = !v;
-                          saveCodeLenses(next);
-                          return next;
-                        }),
-                    },
-                    {
-                      id: "sticky",
-                      label: "Sticky scope",
-                      kind: "toggle",
-                      active: stickyEnabled,
-                      attrs: { "data-kbc-sticky-toggle": "" },
-                      onSelect: () =>
-                        setStickyEnabled((v) => {
-                          const next = !v;
-                          saveStickyContext(next);
-                          return next;
-                        }),
-                    },
-                  ],
-                },
-              ]}
-              renderControl={(control, node) => {
-                if (control.id === "provenance") {
-                  return (
-                    <div className="kbc-provenance-toggle" role="group" aria-label="Provenance">
-                      <button
-                        type="button"
-                        className={"kbc-provenance-toggle__opt" + (provenanceMode === "off" ? " is-active" : "")}
-                        aria-pressed={provenanceMode === "off"}
-                        onClick={() => setProvenanceMode("off")}
-                        data-kbc-provenance-mode="off"
-                      >
-                        Off
-                      </button>
-                      <button
-                        type="button"
-                        className={"kbc-provenance-toggle__opt" + (provenanceMode === "dots" ? " is-active" : "")}
-                        aria-pressed={provenanceMode === "dots"}
-                        onClick={() => setProvenanceMode((m) => (m === "dots" ? "off" : "dots"))}
-                        data-kbc-provenance-toggle
-                        data-kbc-provenance-mode="dots"
-                        title="Show blame provenance dots in the gutter"
-                      >
-                        Dots
-                      </button>
-                      <button
-                        type="button"
-                        className={"kbc-provenance-toggle__opt" + (provenanceMode === "age" ? " is-active" : "")}
-                        aria-pressed={provenanceMode === "age"}
-                        onClick={() => setProvenanceMode((m) => (m === "age" ? "off" : "age"))}
-                        data-kbc-provenance-mode="age"
-                        title="Tint lines by author age"
-                      >
-                        Age
-                      </button>
-                    </div>
-                  );
-                }
-                if (control.id === "text-size") {
-                  return (
-                    <div className="kbc-fontsize-stepper" role="group" aria-label="Text size" data-kbc-fontsize-stepper>
-                      <button
-                        type="button"
-                        className="kbc-fontsize-stepper__btn"
-                        aria-label="Decrease code font size"
-                        title="Smaller text"
-                        data-kbc-fontsize-dec
-                        disabled={codeFontSize <= CODE_FONT_SIZE_MIN}
-                        onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur - 1))}
-                      >
-                        A−
-                      </button>
-                      <button
-                        type="button"
-                        className="kbc-fontsize-stepper__btn"
-                        aria-label="Increase code font size"
-                        title="Larger text"
-                        data-kbc-fontsize-inc
-                        disabled={codeFontSize >= CODE_FONT_SIZE_MAX}
-                        onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur + 1))}
-                      >
-                        A+
-                      </button>
-                    </div>
-                  );
-                }
-                return node;
-              }}
-            />
-          )}
-          <div className="kbc-toolbar-group" role="group" aria-label="Ref">
-            <RefPicker repo={repo} path={path} activeRef={gitRef} pane2={pane2Loc ?? undefined} />
-            {/* Phase E4 — capture the FOCUSED pane's open file (or its
-                current selection, when one exists) into a reading set. */}
-            {focusedPath !== undefined && !diffMode && !storyMode && (
-              <AddToSetMenu repo={repo} path={focusedPath} getSelection={currentPaneSelection} />
-            )}
-          </div>
-        </div>
+        {/* OL-C11 — where the panes render, the toolbar is each pane
+            header's (pane 1's) right end; diff, story and sentinel views
+            have no pane header, so it stays here for them. */}
+        {!toolbarInPane && readerToolbar}
         {/* F5 — mobile-only "reader tools" sheet entry button (CSS-hidden
             ≥861px). Badged with the unresolved-annotation count so an
             operator knows there's something to look at before opening it. */}
@@ -4216,6 +4240,12 @@ export default function Reader() {
           </button>
         )}
       </header>
+      {/* OL-C11 — a one-file working set is the pane header's own filename; the
+          strip only earns a row when there is more than one chip, a pinned
+          chip to unpin, or a workspace chip. */}
+      {(workingSet.entries.length > 1 ||
+        workingSet.entries.some((e) => e.pinnedAt !== null) ||
+        !!activeWorkspaceChip) && (
       <WorkingSetStrip
         entries={workingSet.entries}
         pane1Path={activeFile}
@@ -4228,6 +4258,7 @@ export default function Reader() {
         onUpdateWorkspace={activeWorkspace.id ? () => void updateActiveWorkspace() : undefined}
         onSaveWorkspaceAs={() => setSaveWorkspaceOpen(true)}
       />
+      )}
       <RepoStateBanner repo={repo} />
       {liveMirror1.headMoved && (
         <HeadMovedBanner newRef={liveMirror1.headMoved.new} onRefreshTree={refreshTree} onDismiss={liveMirror1.dismissHeadMoved} />
@@ -4327,11 +4358,14 @@ export default function Reader() {
               >
                 <PaneChrome
                   pane={1}
+                  file={path || undefined}
                   provisional={isProvisional(provisional, 1)}
                   onBack={() => handleJumpBack(1)}
                   onForward={() => handleJumpForward(1)}
                   onPin={() => setProvisional((st) => pinPane(st, 1))}
-                />
+                >
+                  {readerToolbar}
+                </PaneChrome>
                 {liveMirror1.fileChangedOnDisk && (
                   <FileChangedToast
                     paneLabel={fileChangedPaneLabel(1, !!pane2Loc)}
@@ -4440,6 +4474,7 @@ export default function Reader() {
                   >
                     <PaneChrome
                       pane={2}
+                      file={pane2Loc?.path}
                       provisional={isProvisional(provisional, 2)}
                       onBack={() => handleJumpBack(2)}
                       onForward={() => handleJumpForward(2)}
