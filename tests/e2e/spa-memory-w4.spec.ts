@@ -11,13 +11,19 @@ import { PORT } from "./helpers";
 // tests may have already mutated it) and instead verify the SURFACES
 // render and behave, not a specific triage/rollup membership.
 test.describe("memory view — MI-W4 visualization suite", () => {
-  test("each row renders a decay-projection sparkline in the health column", async ({
+  test("a row renders a decay-projection sparkline in the health column only once it has been recalled", async ({
     page,
   }) => {
     await page.goto(`http://127.0.0.1:${PORT}/memory`);
     const row = page.getByTestId("memory-item").first();
     await expect(row).toBeVisible({ timeout: 10_000 });
-    await expect(row.getByTestId("decay-sparkline")).toBeVisible();
+    // OL R3 — the seeded corpus has never been recalled, so no sparkline is
+    // drawn; a recalled memory (recalls N >= 1) must have one.
+    const recalls = Number(
+      /recalls (\d+)/.exec((await row.getByTestId("memory-meta").textContent()) ?? "")?.[1],
+    );
+    expect(Number.isNaN(recalls)).toBe(false);
+    await expect(row.getByTestId("decay-sparkline")).toHaveCount(recalls >= 1 ? 1 : 0);
   });
 
   test("the DecayRail shows a 'fastest-decaying scores' rollup panel", async ({ page }) => {
