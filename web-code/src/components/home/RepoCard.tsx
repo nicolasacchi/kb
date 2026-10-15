@@ -1,21 +1,15 @@
 import { Link } from "react-router";
 import type { HeadInfo, RepoListEntry } from "../../api/types";
 import { useBranches } from "../../hooks/useBranches";
-import { useRecentFiles } from "../../hooks/useRecentFiles";
-import { useWorkingSet } from "../../hooks/useWorkingSet";
 import { readerUrl } from "../../lib/breadcrumbs";
 import { branchesUrl, codeBasePath, commitUrl, hotspotsUrl, reviewsUrl } from "../../lib/codeUrl";
 import { effectiveIntelProviders } from "../../lib/diagnostics";
 import { shortSha } from "../../lib/format";
 import { fullSearchUrl } from "../../lib/searchLanes";
-import { splitPath } from "../../lib/workingSet";
 import MetaLine from "../MetaLine";
 import AttributionCard from "../history/AttributionCard";
 import { BranchAhead, BranchBehind } from "../history/BranchAheadBehind";
-import { ReviewCredentialSection, ReviewStoreSection } from "./ReviewStoreSection";
 
-const RECENT_FILES_LIMIT = 4;
-const CONTINUE_READING_LIMIT = 3;
 const ACTIVE_BRANCHES_LIMIT = 4;
 
 export interface RepoCardProps {
@@ -62,29 +56,20 @@ function HeadChip({ repoName, head }: { repoName: string; head: HeadInfo | null 
 }
 
 /// F4 — one repo's dashboard card on Home: name + watcher badge + HEAD
-/// chip, then three lazily-fetched sections (Continue reading from the
-/// sessionStorage working set, Recent files from the files lane's own
-/// empty-query frecency, Active branches from `/api/branches`), then a
-/// footer link row. Each section is an INDEPENDENT React Query consumer —
-/// branches/recent-files fire in parallel, no waterfall — and a failed
+/// chip, counts, the Active branches section (`/api/branches`), then a
+/// footer link row. OL-C7: "Continue reading" / "Recent files" moved to
+/// Home's Continue section and the review-store / fetch-credential
+/// diagnostics to its collapsed "Daemon status" section. The branches read is an independent React Query consumer, and a failed
 /// fetch renders a quiet inline note rather than breaking the whole card
 /// (Home's own multi-repo fan-out must survive one repo's daemon-side
 /// hiccup, same "never let one failure take down the rest" discipline as
 /// kb's own federated fan-out, root CLAUDE.md invariant #28).
 export default function RepoCard({ repo }: RepoCardProps) {
   const branches = useBranches(repo.name);
-  const recentFiles = useRecentFiles(repo.name, RECENT_FILES_LIMIT);
-  const workingSet = useWorkingSet(repo.name);
   // S2-D (design-s2.md §S2-D) — every matching lip/1 provider, preferring
   // the new `intel_providers` vec over the legacy single-valued `intel`
   // (`lib/diagnostics.ts`'s `effectiveIntelProviders`).
   const intelProviders = effectiveIntelProviders(repo);
-
-  // "Continue reading" wants RECENCY (most-recently-touched first), unlike
-  // the working-set strip's own stable insertion order (`WorkingSetStrip`'s
-  // doc) — a "continue where I left off" affordance is naturally
-  // recency-ranked.
-  const continueReading = [...workingSet.entries].sort((a, b) => b.touchedAt - a.touchedAt).slice(0, CONTINUE_READING_LIMIT);
 
   const activeBranches = branches.data
     ? [...branches.data.branches]
@@ -142,50 +127,6 @@ export default function RepoCard({ repo }: RepoCardProps) {
         </div>
       )}
 
-      {continueReading.length > 0 && (
-        <section className="kbc-home-card__section" data-kbc-home-continue>
-          <h3 className="kbc-home-card__section-title">Continue reading</h3>
-          <ul className="kbc-home-card__filelist">
-            {continueReading.map((e) => {
-              const { dir, base } = splitPath(e.path);
-              return (
-                <li key={e.path}>
-                  <Link to={readerUrl(repo.name, e.path)} className="kbc-home-card__file">
-                    {dir && <span className="kbc-home-card__file-dir">{dir}/</span>}
-                    <span className="kbc-home-card__file-base">{base}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-
-      <section className="kbc-home-card__section" data-kbc-home-recent>
-        <h3 className="kbc-home-card__section-title">Recent files</h3>
-        {recentFiles.isLoading ? (
-          <SkeletonLines count={2} />
-        ) : recentFiles.error ? (
-          <p className="kbc-home-card__error">Couldn't load recent files</p>
-        ) : recentFiles.data && recentFiles.data.hits.length > 0 ? (
-          <ul className="kbc-home-card__filelist">
-            {recentFiles.data.hits.map((hit) => {
-              const { dir, base } = splitPath(hit.path);
-              return (
-                <li key={hit.path}>
-                  <Link to={readerUrl(hit.repo, hit.path)} className="kbc-home-card__file">
-                    {dir && <span className="kbc-home-card__file-dir">{dir}/</span>}
-                    <span className="kbc-home-card__file-base">{base}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="kbc-home-card__muted">No files opened yet.</p>
-        )}
-      </section>
-
       <section className="kbc-home-card__section" data-kbc-home-branches>
         <h3 className="kbc-home-card__section-title">Active branches</h3>
         {branches.isLoading ? (
@@ -217,12 +158,6 @@ export default function RepoCard({ repo }: RepoCardProps) {
           <p className="kbc-home-card__muted">No other branches.</p>
         )}
       </section>
-
-      {/* RS-U11 — README §12's "Settings" cards; web-code has no
-          dedicated Settings page, so they ride this per-repo dashboard
-          card (`ReviewStoreSection.tsx`'s own module doc). */}
-      <ReviewStoreSection repo={repo.name} />
-      <ReviewCredentialSection repo={repo.name} />
 
       {/* V80-R1 fix — the six footer links are a `MetaLine` (its own
           "·"-separated caption row) INSIDE the `<footer>` that used to wrap

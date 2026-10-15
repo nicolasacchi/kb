@@ -57,34 +57,38 @@
   margin-bottom: 20px;
 }
 
+/* OL-C7 — Home is a place: generous vertical rhythm, the Continue hero
+ * clearly the largest element, small sans section labels (never mono caps),
+ * tokens only. */
 .kbc-home__lanes {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 32px;
+  margin-bottom: 32px;
 }
 .kbc-home__section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background: var(--bg-card);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-md);
-  padding: 16px 18px;
+  gap: 12px;
 }
-.kbc-home__section-title {
+.kbc-home__section--repos {
+  margin-bottom: 32px;
+}
+.kbc-home__label {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: var(--fs-lg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
   font-weight: 600;
+  color: var(--ink-mute);
 }
-.kbc-home__section-title a {
-  color: var(--ink);
+.kbc-home__label a {
+  color: inherit;
   text-decoration: none;
 }
-.kbc-home__section-title a:hover {
+.kbc-home__label a:hover {
   color: var(--accent-soft);
 }
 .kbc-home__section-badge {
@@ -96,54 +100,103 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ── the Inbox summary's own lanes — an `h3` per lane (Reviews/Open
-   questions/Desk/Comments), each either the counted link or an
-   EmptyState-SHAPED caption (`.kbc-home__inbox-lane-empty` — NOT the
-   shared `EmptyState` component; `InboxSummaryLane`'s own doc in
-   `routes/Home.tsx` says why: this Home summary must never carry a
-   `[data-kbc-empty]` element, since `e2e/home.spec.ts`'s own "F6
-   EmptyState sweep" asserts there are ZERO on a configured Home).
-   A responsive grid rather than a stacked list — there is a full-width
-   section to fill now that this is no longer sharing a 260px-min column
-   with Continue-reading. ── */
-.kbc-home__inbox-lanes {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+.kbc-home__hero {
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: 24px 28px;
 }
-.kbc-home__inbox-lane-title {
-  margin: 0 0 6px;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
-}
-.kbc-home__inbox-lane-link {
-  color: var(--ink-mute);
+.kbc-home__hero-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
   text-decoration: none;
-  font-size: var(--fs-sm);
+  color: var(--ink);
 }
-.kbc-home__inbox-lane-link:hover {
+.kbc-home__hero-head:hover .kbc-home__hero-loc {
   color: var(--accent-soft);
 }
-.kbc-home__inbox-lane-empty {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.kbc-home__hero-repo {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.kbc-home__hero-loc {
+  font-family: var(--font-mono);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.kbc-home__hero-code {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--ink-dim);
+  overflow-x: auto;
+}
+
+.kbc-home__quiet {
   margin: 0;
   color: var(--ink-faint);
   font-size: var(--fs-sm);
 }
-.kbc-home__inbox-lane-empty-icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
+.kbc-home__needs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-home__inbox-lane-link {
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: var(--fs-body);
+}
+.kbc-home__inbox-lane-link:hover {
+  color: var(--accent-soft);
+}
+
+.kbc-home__status {
+  border-top: 1px solid var(--rule);
+  padding-top: 16px;
+}
+.kbc-home__status-summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-mute);
+}
+.kbc-home__status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 12px;
+}
+.kbc-home__status-line {
+  margin: 0;
+  font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
-.kbc-home__inbox-lane-empty-icon svg {
-  width: 100%;
-  height: 100%;
+.kbc-home__status-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-home__status-repo-name {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink);
 }
 
 .kbc-home__continue-list {
