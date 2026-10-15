@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { StateCard } from "@kb/ui/StateCard";
 import type { CommitSummary } from "../../api/types";
 import EmptyState from "../EmptyState";
 import { Icon } from "../iconSet";
@@ -48,7 +49,7 @@ export default function HistoryPanel({
   truncated,
 }: HistoryPanelProps) {
   if (isLoading) {
-    return <div className="kbc-inspector__hint">Loading history…</div>;
+    return <StateCard size="inline" kind="loading" title="Loading history…" />;
   }
 
   const curIndex = currentHistoryIndex(entries, currentRef);

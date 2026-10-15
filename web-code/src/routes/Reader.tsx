@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { StateCard } from "@kb/ui/StateCard";
 import { flushSync } from "react-dom";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -4342,7 +4343,7 @@ export default function Reader() {
                   />
                 )}
                 {file.isLoading ? (
-                  <div className="kbc-reader__hint">Loading…</div>
+                  <StateCard size="inline" kind="loading" title="Loading…" />
                 ) : file.error ? (
                   <div className="kbc-reader__hint kbc-reader__hint--error">{(file.error as Error).message}</div>
                 ) : file.data ? (
@@ -4455,7 +4456,7 @@ export default function Reader() {
                       />
                     )}
                     {pane2File.isLoading ? (
-                      <div className="kbc-reader__hint">Loading…</div>
+                      <StateCard size="inline" kind="loading" title="Loading…" />
                     ) : pane2File.error ? (
                       <div className="kbc-reader__hint kbc-reader__hint--error">
                         {(pane2File.error as Error).message}

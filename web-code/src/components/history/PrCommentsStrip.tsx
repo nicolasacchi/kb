@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { StateCard } from "@kb/ui/StateCard";
 import { usePrComments } from "../../hooks/usePrs";
 import { readerUrl } from "../../lib/breadcrumbs";
 import { relativeTime } from "../../lib/format";
@@ -28,7 +29,7 @@ export default function PrCommentsStrip({ repo, number, atRef }: PrCommentsStrip
     <aside className="kbc-prcomments" data-kbc-prcomments>
       <h2 className="kbc-compare__section-title">PR #{number} comments</h2>
       {comments.isLoading ? (
-        <div className="kbc-reader__hint">Loading comments…</div>
+        <StateCard size="inline" kind="loading" title="Loading comments…" />
       ) : comments.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error">{(comments.error as Error).message}</div>
       ) : data?.unavailable_reason ? (

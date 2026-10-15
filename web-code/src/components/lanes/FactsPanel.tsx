@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { StateCard } from "@kb/ui/StateCard";
 import { useLaneFacts, useLanes } from "../../hooks/useLanes";
 import {
   buildFactsView,
@@ -120,9 +121,9 @@ export default function FactsPanel({
         </button>
       </div>
       {view.kind === "loading" && (
-        <p className="kbc-facts__hint" data-kbc-facts-loading>
-          Loading…
-        </p>
+        <div className="kbc-facts__hint" data-kbc-facts-loading>
+          <StateCard size="inline" kind="loading" title="Loading…" />
+        </div>
       )}
       {view.kind === "error" && (
         <p className="kbc-facts__error" data-kbc-facts-error>
