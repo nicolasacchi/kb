@@ -225,19 +225,15 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
   test("tab one is All, and Review is absent without a review for this file", async ({ page }) => {
     await openReader(page, "?desk=read");
     const tabs = page.locator("[data-kbc-itab]");
-    // V72-J2 — comments/1's Comments tab joined the rail, UNCONDITIONAL
-    // (unlike Review/Dossier). V74-L3b added Trail, also unconditional.
-    // V76-R3a added Facts (aug-lane/1) on the same footing — a rail tab
-    // because the Lane Budget forbids a fifth gutter. Seven visible tabs;
-    // Review/Dossier stay gated. (RAIL_TABS.length is 9.)
-    await expect(tabs).toHaveCount(7);
+    // OL-C4 — five homes: All, Understand, History, Notes, Facts. Review stays
+    // gated on review context. Dossier members, source comments and the trail
+    // are SECTIONS of Understand / Facts / Notes, no longer tabs.
+    await expect(tabs).toHaveCount(5);
     await expect(tabs.nth(0)).toHaveAttribute("data-kbc-itab", "all");
     await expect(tabs.nth(1)).toHaveAttribute("data-kbc-itab", "understand");
     await expect(tabs.nth(2)).toHaveAttribute("data-kbc-itab", "history");
     await expect(tabs.nth(3)).toHaveAttribute("data-kbc-itab", "notes");
-    await expect(tabs.nth(4)).toHaveAttribute("data-kbc-itab", "comments");
-    await expect(tabs.nth(5)).toHaveAttribute("data-kbc-itab", "trail");
-    await expect(tabs.nth(6)).toHaveAttribute("data-kbc-itab", "facts");
+    await expect(tabs.nth(4)).toHaveAttribute("data-kbc-itab", "facts");
     await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
   });
 
@@ -245,7 +241,7 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
     await openReader(page, "?desk=read");
     const body = page.locator("[data-kbc-rail-body]");
     await expect(body).toHaveAttribute("data-kbc-rail-body", "all");
-    for (const s of ["outline", "entity", "provenance", "history", "annotations", "bookmarks", "comments", "facts"]) {
+    for (const s of ["outline", "entity", "provenance", "history", "annotations", "bookmarks", "trail", "comments", "facts"]) {
       await expect(page.locator(`[data-kbc-rail-section="${s}"]`)).toHaveCount(1);
     }
 
@@ -253,6 +249,11 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
     await expect(body).toHaveAttribute("data-kbc-rail-body", "notes");
     await expect(page.locator('[data-kbc-rail-section="annotations"]')).toHaveCount(1);
     await expect(page.locator('[data-kbc-rail-section="outline"]')).toHaveCount(0);
+    // The trail moved INTO Notes; the source comments moved INTO Facts.
+    await expect(page.locator('[data-kbc-rail-section="trail"]')).toHaveCount(1);
+    await page.locator('[data-kbc-itab="facts"]').click();
+    await expect(body).toHaveAttribute("data-kbc-rail-body", "facts");
+    await expect(page.locator('[data-kbc-rail-section="comments"]')).toHaveCount(1);
   });
 
   test("the subject chip names the subject on every tab, and the passport cards stay above it", async ({

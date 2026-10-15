@@ -64,7 +64,9 @@ test.describe("comments/1 — the per-file gutter", () => {
     await page.keyboard.press("Space");
     await page.keyboard.press("R");
     await page.keyboard.press("c");
-    await expect(page.locator('[data-kbc-itab="comments"]')).toHaveAttribute("aria-selected", "true");
+    // OL-C4: the source comments are a section of the Facts home.
+    await expect(page.locator('[data-kbc-itab="facts"]')).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator('[data-kbc-rail-section="comments"]')).toBeVisible();
 
     const gutter = page.locator(".cm-gutter.kbc-comment-gutter");
     await expect(gutter).toBeVisible();

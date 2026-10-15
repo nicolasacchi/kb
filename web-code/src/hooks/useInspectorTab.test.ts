@@ -20,6 +20,9 @@ describe("useInspectorTab — the six→four migration", () => {
       "annotations",
       "bookmarks",
       "entity",
+      "dossier",
+      "comments",
+      "trail",
     ];
     expect(Object.keys(LEGACY_TAB_MAP).sort()).toEqual([...legacy].sort());
     for (const l of legacy) expect(INSPECTOR_TABS).toContain(LEGACY_TAB_MAP[l]);
@@ -31,6 +34,15 @@ describe("useInspectorTab — the six→four migration", () => {
     expect(normalizeInspectorTab("provenance")).toBe("history");
     expect(normalizeInspectorTab("annotations")).toBe("notes");
     expect(normalizeInspectorTab("bookmarks")).toBe("notes");
+  });
+
+  it("OL-C4: the three retired tabs land on the home that now holds their section", () => {
+    expect(INSPECTOR_TABS).toEqual(["all", "understand", "history", "notes", "facts", "review"]);
+    expect(normalizeInspectorTab("dossier")).toBe("understand");
+    expect(normalizeInspectorTab("comments")).toBe("facts");
+    expect(normalizeInspectorTab("trail")).toBe("notes");
+    // Prototype keys are not legacy ids.
+    expect(normalizeInspectorTab("toString")).toBe("all");
   });
 
   it("history keeps its own name AND its meaning", () => {

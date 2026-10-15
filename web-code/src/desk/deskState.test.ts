@@ -37,7 +37,7 @@ function memStorage(seed: Record<string, string> = {}): StorageLike & { data: Re
 /// collapsed combinations × both pane counts × every rail tab, plus the
 /// dirty flag. Small enough to be exhaustive, which is the point — the
 /// round-trip golden below has nothing to sample. Rail-tab count rides
-/// `RAIL_TABS.length` (9 as of V76-R3a).
+/// `RAIL_TABS.length` (6 as of OL-C4).
 function everyState(): DeskState[] {
   const out: DeskState[] = [];
   for (const preset of DESK_PRESET_NAMES) {
@@ -72,11 +72,9 @@ function everyState(): DeskState[] {
 describe("deskState — the golden round trip", () => {
   it("survives JSON serialise → parse → migrate byte-for-byte, for every reachable state", () => {
     const states = everyState();
-    // presets × dock × rail × drawer × dirty × RAIL_TABS × chrome. The `9` is
-    // `RAIL_TABS.length` — V72-J2 added `comments` as a seventh tab (it was
-    // 6 through V72-G1.2, 5 through V71), V74-L3b added `trail` as an
-    // eighth, V76-R3a added `facts` as a ninth, so this product moves with it.
-    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 9 * 2);
+    // presets × dock × rail × drawer × dirty × RAIL_TABS × chrome. The `6` is
+    // `RAIL_TABS.length` (OL-C4 cut nine tabs to five homes plus Review).
+    expect(states.length).toBe(4 * 2 * 2 * 2 * 2 * 6 * 2);
     for (const s of states) {
       const back = migrateDeskState(JSON.parse(JSON.stringify(s)));
       expect(back, `round trip lost ${JSON.stringify(s)}`).toEqual(s);
@@ -167,6 +165,20 @@ describe("deskState — corrupt input never bricks the shell", () => {
   it("drops an unknown rail tab to the preset's own tab", () => {
     const got = migrateDeskState({ v: 1, preset: "review", railTab: "outline" });
     expect(got!.railTab).toBe("review");
+  });
+});
+
+describe("deskState — retired rail tab ids (OL-C4)", () => {
+  it("a persisted dossier/comments/trail railTab lands on the home that now holds it", () => {
+    const want = { dossier: "understand", comments: "facts", trail: "notes" } as const;
+    for (const [old, home] of Object.entries(want)) {
+      expect(migrateDeskState({ v: 1, preset: "read", railTab: old })?.railTab).toBe(home);
+    }
+  });
+
+  it("an unknown railTab still falls back to the preset's own", () => {
+    expect(migrateDeskState({ v: 1, preset: "review", railTab: "nope" })?.railTab).toBe("review");
+    expect(migrateDeskState({ v: 1, preset: "read", railTab: "toString" })?.railTab).toBe("all");
   });
 });
 

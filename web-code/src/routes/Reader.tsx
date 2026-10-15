@@ -3449,7 +3449,7 @@ export default function Reader() {
     "entity.dossier.sort": () => setDossierSort((s2) => cycleMemberSort(s2)),
     "entity.dossier.section-next": () => stepDossierSection(1),
     "entity.dossier.section-prev": () => stepDossierSection(-1),
-    "rail.tab.dossier": () => selectRailTab("dossier"),
+    "rail.tab.dossier": () => selectRailTab("understand"),
     "tree.focus-next": () => treeRef.current?.moveFocus(1),
     "tree.focus-prev": () => treeRef.current?.moveFocus(-1),
     "tree.open": () => treeRef.current?.activateFocused(undefined),
@@ -3627,8 +3627,8 @@ export default function Reader() {
     "rail.tab.understand": () => selectRailTab("understand"),
     "rail.tab.history": () => selectRailTab("history"),
     "rail.tab.notes": () => selectRailTab("notes"),
-    "rail.tab.comments": () => selectRailTab("comments"),
-    "rail.tab.trail": () => selectRailTab("trail"),
+    "rail.tab.comments": () => selectRailTab("facts"),
+    "rail.tab.trail": () => selectRailTab("notes"),
     "rail.tab.facts": () => selectRailTab("facts"),
     "rail.tab.review": () => selectRailTab("review"),
     "facts.coverage-band": () => toggleCoverageBand(),
@@ -3869,7 +3869,7 @@ export default function Reader() {
       const detail = (e as CustomEvent<TrailFocusDetail>).detail;
       if (!detail) return;
       setTrailFocus(detail);
-      selectRailTab("trail");
+      selectRailTab("notes");
     };
     window.addEventListener(TRAIL_FOCUS_EVENT, on);
     return () => window.removeEventListener(TRAIL_FOCUS_EVENT, on);
