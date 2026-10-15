@@ -3,7 +3,7 @@
 // component so the decisions - when to ask, what a row opens, what the
 // caption says - are unit-testable without a DOM.
 
-import type { KbDocHit, KbSearchResponse } from "../api/types";
+import type { KbDocHitOut, KbSearchOut } from "../api/types";
 
 /// Minimum query length (chars, trimmed) before kb is asked - mirrors the
 /// relay's own floor, so the lane never fires a request the server would
@@ -26,7 +26,7 @@ export function shouldQueryKbDocs(q: string): boolean {
 }
 
 /// Navigable row count (header excluded) - an unavailable response has none.
-export function kbDocsRowCount(res: KbSearchResponse | null): number {
+export function kbDocsRowCount(res: KbSearchOut | null): number {
   if (!res || res.unavailable) return 0;
   return res.hits.length;
 }
@@ -60,8 +60,8 @@ export function safeDocUrl(url: string): string | null {
 }
 
 /// The URL for row `row` of the lane, or null (out of range / unsafe).
-export function kbDocsRowHref(res: KbSearchResponse | null, row: number): string | null {
+export function kbDocsRowHref(res: KbSearchOut | null, row: number): string | null {
   if (!res || res.unavailable) return null;
-  const hit: KbDocHit | undefined = res.hits[row];
+  const hit: KbDocHitOut | undefined = res.hits[row];
   return hit ? safeDocUrl(hit.url) : null;
 }

@@ -25,8 +25,7 @@ use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::Json;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 
 /// Queries shorter than this (in chars, after trimming) never reach kb.
 pub const MIN_QUERY_CHARS: usize = 2;
@@ -73,34 +72,71 @@ fn cap_snippet(s: &str) -> String {
     out
 }
 
+// Wire shapes (ts-export: `web-code/src/api/generated/`). Plain `//` comments
+// on purpose - a `///` here would be copied into the generated TypeScript.
+
+// One Documents-lane row. `url` is the artifact permalink on kb's PUBLIC url.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+pub struct KbDocHitOut {
+    pub kb: String,
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub snippet: Option<String>,
+}
+
+// `GET /api/kb/search`. `unavailable` is absent on a healthy answer.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+pub struct KbSearchOut {
+    pub hits: Vec<KbDocHitOut>,
+    pub kb_public_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub unavailable: Option<String>,
+}
+
+// `GET /api/kb/ui`. Both values are null when kb has none or is unavailable.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+pub struct KbUiOut {
+    pub theme: Option<String>,
+    pub theme_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub unavailable: Option<String>,
+}
+
 /// Compose the `/api/kb/search` body from kb's answer. Pure. A hit with no
 /// `kb` (single-kb shape) or no resolvable permalink is dropped rather than
 /// rendered as a dead row.
-pub fn search_body(result: Result<KbSearchRelay, KbClientError>, public_base: &str) -> Value {
+pub fn search_body(result: Result<KbSearchRelay, KbClientError>, public_base: &str) -> KbSearchOut {
     match result {
-        Ok(relay) => {
-            let hits: Vec<Value> = relay
+        Ok(relay) => KbSearchOut {
+            hits: relay
                 .hits
                 .iter()
                 .filter_map(|h| {
                     let kb = h.kb.as_deref().filter(|k| !k.is_empty())?;
                     let url = doc_href(public_base, kb, &h.source_relative)?;
-                    Some(json!({
-                        "kb": kb,
-                        "id": h.id,
-                        "title": h.title,
-                        "url": url,
-                        "snippet": h.snippet.as_deref().map(cap_snippet),
-                    }))
+                    Some(KbDocHitOut {
+                        kb: kb.to_string(),
+                        id: h.id.clone(),
+                        title: h.title.clone(),
+                        url,
+                        snippet: h.snippet.as_deref().map(cap_snippet),
+                    })
                 })
-                .collect();
-            json!({ "hits": hits, "kb_public_url": public_base })
-        }
-        Err(e) => json!({
-            "hits": [],
-            "kb_public_url": public_base,
-            "unavailable": unavailable_caption(&e),
-        }),
+                .collect(),
+            kb_public_url: public_base.to_string(),
+            unavailable: None,
+        },
+        Err(e) => KbSearchOut {
+            hits: Vec::new(),
+            kb_public_url: public_base.to_string(),
+            unavailable: Some(unavailable_caption(&e).to_string()),
+        },
     }
 }
 
@@ -115,21 +151,20 @@ pub fn valid_family_slug(s: &str) -> bool {
 
 /// Compose the `/api/kb/ui` body. Pure. Unknown / malformed values become
 /// `null` (ignored by the SPA), never an error.
-pub fn ui_body(result: Result<KbUiRelay, KbClientError>) -> Value {
+pub fn ui_body(result: Result<KbUiRelay, KbClientError>) -> KbUiOut {
     match result {
-        Ok(ui) => {
-            let family = ui.theme_family.as_deref().filter(|f| valid_family_slug(f));
-            let theme = ui
+        Ok(ui) => KbUiOut {
+            theme: ui
                 .theme
-                .as_deref()
-                .filter(|t| matches!(*t, "light" | "dark" | "system"));
-            json!({ "theme": theme, "theme_family": family })
-        }
-        Err(e) => json!({
-            "theme": null,
-            "theme_family": null,
-            "unavailable": unavailable_caption(&e),
-        }),
+                .filter(|t| matches!(t.as_str(), "light" | "dark" | "system")),
+            theme_family: ui.theme_family.filter(|f| valid_family_slug(f)),
+            unavailable: None,
+        },
+        Err(e) => KbUiOut {
+            theme: None,
+            theme_family: None,
+            unavailable: Some(unavailable_caption(&e).to_string()),
+        },
     }
 }
 
@@ -141,7 +176,11 @@ pub async fn kb_search_route(
     let public_base = state.kb_daemon.public_base().to_string();
     let q = params.q.trim();
     let body = if q.chars().count() < MIN_QUERY_CHARS {
-        json!({ "hits": [], "kb_public_url": public_base })
+        KbSearchOut {
+            hits: Vec::new(),
+            kb_public_url: public_base,
+            unavailable: None,
+        }
     } else {
         let limit = parse_limit(params.limit.as_deref());
         search_body(state.kb_client.search(q, limit).await, &public_base)
@@ -170,6 +209,10 @@ mod tests {
         }
     }
 
+    fn wire<T: Serialize>(v: &T) -> serde_json::Value {
+        serde_json::to_value(v).unwrap()
+    }
+
     #[test]
     fn search_body_builds_permalinks_on_the_public_base() {
         let body = search_body(
@@ -178,13 +221,14 @@ mod tests {
             }),
             "https://kb.example.com/",
         );
-        assert_eq!(body["kb_public_url"], "https://kb.example.com/");
+        assert_eq!(body.kb_public_url, "https://kb.example.com/");
         assert_eq!(
-            body["hits"][0]["url"],
+            body.hits[0].url,
             "https://kb.example.com/a/platform/docs/a%20b.html"
         );
-        assert_eq!(body["hits"][0]["kb"], "platform");
-        assert!(body.get("unavailable").is_none());
+        assert_eq!(body.hits[0].kb, "platform");
+        // Healthy answers carry no `unavailable` key at all on the wire.
+        assert!(wire(&body).get("unavailable").is_none());
     }
 
     #[test]
@@ -199,8 +243,8 @@ mod tests {
             }),
             "https://kb.example.com",
         );
-        assert_eq!(body["hits"].as_array().unwrap().len(), 1);
-        assert_eq!(body["hits"][0]["url"], "https://kb.example.com/a/k/ok.html");
+        assert_eq!(body.hits.len(), 1);
+        assert_eq!(body.hits[0].url, "https://kb.example.com/a/k/ok.html");
     }
 
     #[test]
@@ -211,7 +255,7 @@ mod tests {
             Ok(KbSearchRelay { hits: vec![h] }),
             "https://kb.example.com",
         );
-        let snip = body["hits"][0]["snippet"].as_str().unwrap();
+        let snip = body.hits[0].snippet.as_deref().unwrap();
         assert_eq!(snip.chars().count(), SNIPPET_CAP + 1);
         assert!(snip.ends_with('…'));
     }
@@ -222,15 +266,16 @@ mod tests {
             Err(KbClientError::Unreachable("u".into(), "boom".into())),
             "https://kb.example.com",
         );
-        assert_eq!(unreachable["hits"], json!([]));
-        assert_eq!(unreachable["unavailable"], "kb unreachable");
+        assert!(unreachable.hits.is_empty());
+        assert_eq!(unreachable.unavailable.as_deref(), Some("kb unreachable"));
+        assert_eq!(wire(&unreachable)["hits"], serde_json::json!([]));
 
         let mismatch = search_body(
             Err(KbClientError::SiblingMismatch("x".into())),
             "https://kb.example.com",
         );
-        assert_eq!(mismatch["hits"], json!([]));
-        assert_eq!(mismatch["unavailable"], "kb_sibling_mismatch");
+        assert!(mismatch.hits.is_empty());
+        assert_eq!(mismatch.unavailable.as_deref(), Some("kb_sibling_mismatch"));
 
         // A non-2xx or garbage body from kb is "unreachable" to the caller,
         // never a 5xx.
@@ -238,12 +283,14 @@ mod tests {
             Err(KbClientError::BadStatus(reqwest::StatusCode::NOT_FOUND)),
             "",
         );
-        assert_eq!(bad["unavailable"], "kb unreachable");
+        assert_eq!(bad.unavailable.as_deref(), Some("kb unreachable"));
         let parse = search_body(Err(KbClientError::Parse("x".into())), "");
-        assert_eq!(parse["unavailable"], "kb unreachable");
+        assert_eq!(parse.unavailable.as_deref(), Some("kb unreachable"));
         assert_eq!(
-            search_body(Err(KbClientError::Disabled), "")["unavailable"],
-            "kb disabled"
+            search_body(Err(KbClientError::Disabled), "")
+                .unavailable
+                .as_deref(),
+            Some("kb disabled")
         );
     }
 
@@ -282,29 +329,32 @@ mod tests {
             theme: Some("dark".into()),
             theme_family: Some("catppuccin".into()),
         }));
-        assert_eq!(ok["theme"], "dark");
-        assert_eq!(ok["theme_family"], "catppuccin");
+        assert_eq!(ok.theme.as_deref(), Some("dark"));
+        assert_eq!(ok.theme_family.as_deref(), Some("catppuccin"));
+        assert!(wire(&ok).get("unavailable").is_none());
 
         let junk = ui_body(Ok(KbUiRelay {
             theme: Some("neon".into()),
             theme_family: Some("<b>x</b>".into()),
         }));
-        assert!(junk["theme"].is_null());
-        assert!(junk["theme_family"].is_null());
+        assert!(junk.theme.is_none());
+        assert!(junk.theme_family.is_none());
+        // null on the wire, not an absent key.
+        assert!(wire(&junk)["theme_family"].is_null());
 
-        let none = ui_body(Ok(KbUiRelay::default()));
-        assert!(none["theme_family"].is_null());
-        assert!(none.get("unavailable").is_none());
+        assert!(ui_body(Ok(KbUiRelay::default())).theme_family.is_none());
     }
 
     #[test]
     fn degraded_ui_carries_the_same_captions() {
         let d = ui_body(Err(KbClientError::Disabled));
-        assert!(d["theme_family"].is_null());
-        assert_eq!(d["unavailable"], "kb disabled");
+        assert!(d.theme_family.is_none());
+        assert_eq!(d.unavailable.as_deref(), Some("kb disabled"));
         assert_eq!(
-            ui_body(Err(KbClientError::SiblingMismatch("x".into())))["unavailable"],
-            "kb_sibling_mismatch"
+            ui_body(Err(KbClientError::SiblingMismatch("x".into())))
+                .unavailable
+                .as_deref(),
+            Some("kb_sibling_mismatch")
         );
     }
 }

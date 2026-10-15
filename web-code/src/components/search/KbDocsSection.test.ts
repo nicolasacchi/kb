@@ -2,12 +2,12 @@ import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import KbDocsSection from "./KbDocsSection";
-import type { KbSearchResponse } from "../../api/types";
+import type { KbSearchOut } from "../../api/types";
 
 const noop = () => {};
 
 interface Props {
-  response: KbSearchResponse | null;
+  response: KbSearchOut | null;
   loading: boolean;
   laneIndex: number;
   cursor: { section: number; row: number };
@@ -15,7 +15,7 @@ interface Props {
 const render = (p: Props) => renderToString(createElement(KbDocsSection, { ...p, onHover: noop }));
 const cursor = { section: 3, row: -1 };
 
-const res = (over: Partial<KbSearchResponse> = {}): KbSearchResponse => ({
+const res = (over: Partial<KbSearchOut> = {}): KbSearchOut => ({
   hits: [
     {
       kb: "platform",

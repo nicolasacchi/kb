@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchKbSearch, isAbortError } from "../api/client";
-import type { KbSearchResponse } from "../api/types";
+import type { KbSearchOut } from "../api/types";
 import { KB_DOCS_LIMIT, shouldQueryKbDocs } from "../lib/kbDocs";
 
 /// A little slower than the code lanes' 120ms: this one crosses to a second
@@ -12,7 +12,7 @@ export interface KbDocsState {
   /// rendered at all while it is false.
   active: boolean;
   loading: boolean;
-  response: KbSearchResponse | null;
+  response: KbSearchOut | null;
 }
 
 const IDLE: KbDocsState = { active: false, loading: false, response: null };

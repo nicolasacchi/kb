@@ -36,6 +36,7 @@ mod tests {
         "src/claims.rs",
         "src/review_since.rs",
         "src/review_queue.rs",
+        "src/kb_relay.rs",
     ];
 
     fn crate_root() -> PathBuf {

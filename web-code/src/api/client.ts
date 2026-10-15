@@ -91,8 +91,8 @@ import type {
   TreeResponse,
   TreeV2Response,
   UnifiedSearchResponse,
-  KbSearchResponse,
-  KbUiResponse,
+  KbSearchOut,
+  KbUiOut,
   AgeOut,
   CouplingOut,
   HotspotsOut,
@@ -379,13 +379,13 @@ export function fetchKbSearch(
   q: string,
   limit: number,
   signal?: AbortSignal,
-): Promise<KbSearchResponse> {
-  return getJson<KbSearchResponse>("/api/kb/search", { q, limit: String(limit) }, signal);
+): Promise<KbSearchOut> {
+  return getJson<KbSearchOut>("/api/kb/search", { q, limit: String(limit) }, signal);
 }
 
 /// `GET /api/kb/ui` - kb's theme family, relayed (OL S1). `lib/kbTheme.ts`.
-export function fetchKbUi(signal?: AbortSignal): Promise<KbUiResponse> {
-  return getJson<KbUiResponse>("/api/kb/ui", {}, signal);
+export function fetchKbUi(signal?: AbortSignal): Promise<KbUiOut> {
+  return getJson<KbUiOut>("/api/kb/ui", {}, signal);
 }
 
 /// `GET /api/search/files?repo=&q=&limit=` — the files lane's OWN standalone

@@ -1,11 +1,11 @@
 import { HEADER_ROW, type PaletteCursor } from "../../lib/paletteReducer";
 import { kbDocsCaption, kbDocsRowCount, safeDocUrl } from "../../lib/kbDocs";
-import type { KbDocHit, KbSearchResponse } from "../../api/types";
+import type { KbDocHitOut, KbSearchOut } from "../../api/types";
 
 export const KB_DOCS_LANE_LABEL = "Documents";
 
 export interface KbDocsSectionProps {
-  response: KbSearchResponse | null;
+  response: KbSearchOut | null;
   loading: boolean;
   /// This lane's index in the palette's section list (after every code lane).
   laneIndex: number;
@@ -17,7 +17,7 @@ function rowClassName(active: boolean): string {
   return `kbc-search__row${active ? " is-active" : ""}`;
 }
 
-function origin(hit: KbDocHit): string {
+function origin(hit: KbDocHitOut): string {
   const url = safeDocUrl(hit.url);
   if (!url) return hit.kb;
   try {

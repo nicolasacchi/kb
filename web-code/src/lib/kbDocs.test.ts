@@ -6,10 +6,10 @@ import {
   safeDocUrl,
   shouldQueryKbDocs,
 } from "./kbDocs";
-import type { KbSearchResponse } from "../api/types";
+import type { KbSearchOut } from "../api/types";
 
 const hit = (url: string) => ({ kb: "platform", id: "a", title: "T", url, snippet: null });
-const ok = (...urls: string[]): KbSearchResponse => ({
+const ok = (...urls: string[]): KbSearchOut => ({
   hits: urls.map(hit),
   kb_public_url: "https://kb.example.com",
 });
@@ -42,7 +42,7 @@ describe("kbDocsRowCount / kbDocsRowHref", () => {
   });
 
   it("an unavailable (or absent) response has no navigable rows", () => {
-    const down: KbSearchResponse = { hits: [], kb_public_url: "", unavailable: "kb unreachable" };
+    const down: KbSearchOut = { hits: [], kb_public_url: "", unavailable: "kb unreachable" };
     expect(kbDocsRowCount(down)).toBe(0);
     expect(kbDocsRowHref(down, 0)).toBeNull();
     expect(kbDocsRowCount(null)).toBe(0);

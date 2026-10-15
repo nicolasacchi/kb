@@ -14,9 +14,9 @@ import {
   setThemePrefs,
   themeFamilySource,
 } from "./prefs";
-import type { KbUiResponse } from "../api/types";
+import type { KbUiOut } from "../api/types";
 
-const ui = (over: Partial<KbUiResponse> = {}): KbUiResponse => ({
+const ui = (over: Partial<KbUiOut> = {}): KbUiOut => ({
   theme: "dark",
   theme_family: "catppuccin",
   ...over,

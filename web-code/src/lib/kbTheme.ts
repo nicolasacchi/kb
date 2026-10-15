@@ -8,7 +8,7 @@
 // appearance stays kb-code's own pref.
 
 import { fetchKbUi } from "../api/client";
-import type { KbUiResponse } from "../api/types";
+import type { KbUiOut } from "../api/types";
 import {
   applyTheme,
   hasLocalThemeFamily,
@@ -25,7 +25,7 @@ const FAMILY_SLUG = /^[a-z0-9-]{1,40}$/;
 
 /// The family a relay answer asks us to follow, or null (absent, malformed,
 /// or kb unavailable). Pure.
-export function familyFromKbUi(ui: KbUiResponse | null | undefined): string | null {
+export function familyFromKbUi(ui: KbUiOut | null | undefined): string | null {
   const f = ui?.theme_family;
   return typeof f === "string" && FAMILY_SLUG.test(f) ? f : null;
 }
@@ -47,7 +47,7 @@ export function themeSourceCaption(source: ThemeFamilySource): string | null {
 /// already chosen a family here. Repaints (and tells the theme controls) only
 /// when the follow actually changed what is on screen.
 export async function followKbTheme(
-  fetchUi: (signal?: AbortSignal) => Promise<KbUiResponse> = fetchKbUi,
+  fetchUi: (signal?: AbortSignal) => Promise<KbUiOut> = fetchKbUi,
 ): Promise<void> {
   if (hasLocalThemeFamily()) return;
   let family: string | null;

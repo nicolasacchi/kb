@@ -2717,7 +2717,8 @@ mod tests {
     }
 
     /// The relay asks for scope=all keyword mode, URL-encodes the query, and
-    /// clamps `limit` to the 20-row ceiling before it ever reaches kb.
+    /// clamps `limit` to the 20-row ceiling before it ever reaches kb. The
+    /// mock echoes the params it saw back as the hit title.
     #[tokio::test]
     async fn search_sends_scope_all_keyword_and_clamps_limit() {
         use std::collections::HashMap;
@@ -2725,17 +2726,19 @@ mod tests {
             "/api/search",
             get(
                 |axum::extract::Query(p): axum::extract::Query<HashMap<String, String>>| async move {
-                    Json(serde_json::json!({
+                    let mut keys: Vec<_> = p.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    keys.sort();
+                    let body = serde_json::json!({
                         "hits": [{
                             "kb": "platform",
                             "id": "abc",
-                            "title": "echo",
+                            "title": keys.join("|"),
                             "source_relative": "docs/a b.html",
-                            "snippet": "…hit…",
+                            "snippet": "hit",
                             "future_field": 1
-                        }],
-                        "echo": p,
-                    }))
+                        }]
+                    });
+                    Json(body)
                 },
             ),
         );
@@ -2745,23 +2748,6 @@ mod tests {
         assert_eq!(relay.hits.len(), 1);
         assert_eq!(relay.hits[0].kb.as_deref(), Some("platform"));
         assert_eq!(relay.hits[0].source_relative, "docs/a b.html");
-
-        // Re-ask against a mock that echoes the params back as the title.
-        let router = Router::new().route(
-            "/api/search",
-            get(
-                |axum::extract::Query(p): axum::extract::Query<HashMap<String, String>>| async move {
-                    let mut keys: Vec<_> = p.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                    keys.sort();
-                    Json(serde_json::json!({
-                        "hits": [{"kb": "k", "id": "i", "title": keys.join("|"), "source_relative": "x.html"}]
-                    }))
-                },
-            ),
-        );
-        let (addr, _server) = mock_kb_server(router).await;
-        let client = KbClient::new(cfg(format!("http://{addr}")));
-        let relay = client.search("a&b c", 500).await.unwrap();
         assert_eq!(
             relay.hits[0].title,
             "limit=20|mode=keyword|q=a&b c|scope=all"
@@ -2795,12 +2781,13 @@ mod tests {
         let router = Router::new().route(
             "/api/settings",
             get(|| async {
-                Json(serde_json::json!({
+                let body = serde_json::json!({
                     "theme": "dark",
                     "accent": null,
                     "density": "comfy",
                     "theme_family": "catppuccin"
-                }))
+                });
+                Json(body)
             }),
         );
         let (addr, _server) = mock_kb_server(router).await;
@@ -2812,7 +2799,10 @@ mod tests {
         // An older kb (no theme_family field) parses to None, not an error.
         let router = Router::new().route(
             "/api/settings",
-            get(|| async { Json(serde_json::json!({ "theme": "ink" })) }),
+            get(|| async {
+                let body = serde_json::json!({ "theme": "ink" });
+                Json(body)
+            }),
         );
         let (addr, _server) = mock_kb_server(router).await;
         let client = KbClient::new(cfg(format!("http://{addr}")));
