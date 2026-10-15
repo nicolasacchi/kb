@@ -989,13 +989,15 @@
   gap: 1px;
   min-width: 0;
 }
-/* RA4 — one-line summary gloss beneath a memory's title. */
+/* RA4 — summary gloss (two-line clamp) beneath a memory's title. */
 .kb-mem__summary {
-  font: 400 12px/1.35 var(--font-sans, system-ui);
+  font: 400 var(--fs-sm)/1.35 var(--font-sans, system-ui);
   color: var(--ink-soft, #b8b8b8);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* CT-E4 — agent-hot-human-cold tension badge, the CT-B6 dossier wording
    inline on the row ("Recalled N× by agents · never opened by you"). Same

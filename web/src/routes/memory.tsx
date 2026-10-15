@@ -24,7 +24,14 @@ import {
   type MemoryScope,
   type RecallHit,
 } from "../api/client";
-import { decayHalfLifeDays, decayHalfLifeLabel, floorState, floorStateLabel } from "../lib/decayProjection";
+import {
+  decayHalfLifeDays,
+  decayHalfLifeLabel,
+  decayHalfLifeSummary,
+  modalDecayK,
+  floorState,
+  floorStateLabel,
+} from "../lib/decayProjection";
 import { isAgentHotHumanCold, orderUnverifiedFirst, tensionLabel } from "../lib/attention";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useReportQueryStats } from "../components/chrome/queryStats";
@@ -208,6 +215,17 @@ export default function Memory() {
     return { total, pinned };
   }, [hits, pinOverlay]);
 
+  // The decay policy is said ONCE, here, instead of on every row.
+  const { policy: decayPolicy } = useMemoryPolicy();
+  const halfLifeCaption = useMemo(
+    () =>
+      decayHalfLifeSummary(
+        hits.map((h) => h.decay_k).filter((k): k is number => typeof k === "number"),
+      ),
+    [hits],
+  );
+  const commonDecayK = useMemo(() => modalDecayK(hits.map((h) => h.decay_k)), [hits]);
+
   return (
     <div className="kb-mem" data-testid="memory-view">
       <main className="kb-mem__main">
@@ -219,6 +237,11 @@ export default function Memory() {
               {q && ` matching ${JSON.stringify(q)}`}
               {sessionId && ` from session`}
             </span>
+            {halfLifeCaption && (
+              <span className="kb-mem__halflife" data-testid="memory-halflife">
+                {decayPolicy} decay · {halfLifeCaption}
+              </span>
+            )}
           </div>
         </div>
 
@@ -334,12 +357,9 @@ export default function Memory() {
             </div>
 
             <div className="kb-mem__thead">
-              <span>type · scope</span>
               <span>memory</span>
               <span>salience</span>
               <span>health</span>
-              <span>links</span>
-              <span className="num">score</span>
               <span />
             </div>
 
@@ -361,6 +381,7 @@ export default function Memory() {
                 onLinksChanged={refresh}
                 onOpenLineage={() => setLineageTarget({ kb: h.kb, id: h.id })}
                 onOpenProvenance={() => setProvenanceTarget(h)}
+                commonDecayK={commonDecayK}
               />
             ))}
           </>
@@ -466,6 +487,7 @@ function MemoryRow({
   onLinksChanged,
   onOpenLineage,
   onOpenProvenance,
+  commonDecayK,
 }: {
   h: RecallHit;
   pinned: boolean;
@@ -480,6 +502,8 @@ function MemoryRow({
   // session-only disable is gone; a session-less memory's dossier renders
   // origin/currency/attention and an honest chain absence).
   onOpenProvenance: () => void;
+  /** The page's most common decay rate; a row only names its own bucket when it differs. */
+  commonDecayK: number | null;
 }) {
   const { dropThreshold } = useMemoryPolicy();
   // CT-B5 — a memory's summary is free-text prose that may cite a commit
@@ -487,20 +511,22 @@ function MemoryRow({
   // memory's OWN kb has a code_url configured (a cross-kb `scope=all`
   // recall can mix kbs, so this must be per-row, not a page-level value).
   const codeUrl = useCodeUrlForKb(h.kb);
+  // Actions show on hover / focus-within; the ⋯ button pins the strip open
+  // so it is reachable without hover (keyboard, touch).
+  const [menuOpen, setMenuOpen] = useState(false);
+  const oddBucket =
+    typeof h.decay_k === "number" && commonDecayK != null && h.decay_k !== commonDecayK;
   return (
     <div
       className={`kb-mem__row ${pinned ? "pinned" : ""}`}
       data-testid="memory-item"
       data-id={h.id}
     >
-      <span className="kb-mem__type">
-        <span className="kb-mem__pill">memory</span>
-        <span className="kb-mem__scope-tag">· {h.kb}</span>
-      </span>
       <span className="kb-mem__titlecell">
         <Link
           className="kb-mem__title"
           to={artifactHref(h.kb, h.source_relative)}
+          title={h.title}
         >
           {h.title}
         </Link>
@@ -509,6 +535,25 @@ function MemoryRow({
             <CitationText text={h.summary} codeUrl={codeUrl} />
           </span>
         )}
+        <span
+          className="kb-mem__meta"
+          data-testid="memory-meta"
+          title={`score ${h.score.toFixed(4)}`}
+        >
+          <span className="kb-mem__scope-tag">{h.kb}</span>
+          <span aria-hidden>·</span>
+          <span className="kb-mem__metaitem">
+            salience <SalienceEdit value={salience} onCommit={onSalienceChange} />
+          </span>
+          {oddBucket && (
+            <>
+              <span aria-hidden>·</span>
+              <span>{decayHalfLifeLabel(h.decay_k as number).replace("score halves", "halves")}</span>
+            </>
+          )}
+          <span aria-hidden>·</span>
+          <span>recalls {h.recall_count}</span>
+        </span>
         {isAgentHotHumanCold(h) && (
           <span
             className="kb-mem__tension"
@@ -528,68 +573,84 @@ function MemoryRow({
           </Link>
         )}
         <ProvenanceChip h={h} />
-      </span>
-      <span className="kb-mem__salcell">
-        <span className="kb-mem__salbar">
-          <i style={{ width: `${(salience * 100).toFixed(0)}%` }} />
-          <span className="kb-mem__ticks" aria-hidden>
-            <span style={{ left: "25%" }} />
-            <span style={{ left: "50%" }} />
-            <span style={{ left: "75%" }} />
-          </span>
-        </span>
-        <SalienceEdit value={salience} onCommit={onSalienceChange} />
-      </span>
-      <span className="kb-mem__healthcell">
-        <DecaySparkline
-          salience={salience}
-          ageDays={h.age_days}
-          decayK={h.decay_k}
-          stability={h.stability}
-          floor={dropThreshold}
-          pinned={pinned}
-        />
-        <InjectionHistogram weekly={h.recall_weekly} usedCount={h.recall_used_count} />
-      </span>
-      <span className="kb-mem__linkscell">
         <MemoryLinkChips hit={h} onChanged={onLinksChanged} />
       </span>
-      <span className="kb-mem__score">{h.score.toFixed(4)}</span>
-      <span className="kb-mem__actions">
+      <span className="kb-mem__salcell">
+        <span className="kb-mem__salbar" aria-hidden>
+          <i style={{ width: `${(salience * 100).toFixed(0)}%` }} />
+        </span>
+      </span>
+      <span className="kb-mem__healthcell">
+        {h.recall_count >= 1 && (
+          <>
+            <DecaySparkline
+              compact
+              salience={salience}
+              ageDays={h.age_days}
+              decayK={h.decay_k}
+              stability={h.stability}
+              floor={dropThreshold}
+              pinned={pinned}
+            />
+            <InjectionHistogram weekly={h.recall_weekly} usedCount={h.recall_used_count} />
+          </>
+        )}
+      </span>
+      <span
+        className={`kb-mem__actions ${menuOpen ? "is-open" : ""}`}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && menuOpen) setMenuOpen(false);
+        }}
+      >
+        <span className="kb-mem__strip" id={`kb-mem-strip-${h.id}`}>
+          <button
+            type="button"
+            className={`kb-mem__act ${pinned ? "is-on" : ""}`}
+            onClick={onTogglePin}
+            title={pinned ? "unpin" : "pin"}
+            aria-pressed={pinned}
+          >
+            <Icon.Bookmark />
+          </button>
+          <button
+            type="button"
+            className="kb-mem__act"
+            onClick={onOpenLineage}
+            title="view supersede lineage"
+          >
+            lineage
+          </button>
+          <button
+            type="button"
+            className="kb-mem__act"
+            onClick={onOpenProvenance}
+            title="open this memory's provenance dossier — origin, currency, attention, and the session chain when one exists"
+          >
+            provenance
+          </button>
+          <button
+            type="button"
+            className="kb-mem__act"
+            onClick={onPromote}
+            title="promote to a regular kb"
+          >
+            ↗ promote
+          </button>
+          <MemoryActions kb={h.kb} id={h.id} onForgotten={onForgotten} />
+        </span>
         <button
           type="button"
-          className={`kb-mem__act ${pinned ? "is-on" : ""}`}
-          onClick={onTogglePin}
-          title={pinned ? "unpin" : "pin"}
-          aria-pressed={pinned}
+          className="kb-mem__act kb-mem__more"
+          data-testid="memory-more"
+          aria-label="more actions"
+          aria-haspopup="true"
+          aria-expanded={menuOpen}
+          aria-controls={`kb-mem-strip-${h.id}`}
+          title="actions"
+          onClick={() => setMenuOpen((v) => !v)}
         >
-          <Icon.Bookmark />
+          <Icon.More />
         </button>
-        <button
-          type="button"
-          className="kb-mem__act"
-          onClick={onOpenLineage}
-          title="view supersede lineage"
-        >
-          lineage
-        </button>
-        <button
-          type="button"
-          className="kb-mem__act"
-          onClick={onOpenProvenance}
-          title="open this memory's provenance dossier — origin, currency, attention, and the session chain when one exists"
-        >
-          provenance
-        </button>
-        <button
-          type="button"
-          className="kb-mem__act"
-          onClick={onPromote}
-          title="promote to a regular kb"
-        >
-          ↗ promote
-        </button>
-        <MemoryActions kb={h.kb} id={h.id} onForgotten={onForgotten} />
       </span>
     </div>
   );
