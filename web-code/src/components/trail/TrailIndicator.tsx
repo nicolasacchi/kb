@@ -20,7 +20,7 @@
 //      caption, never a button that 403s.
 
 import { useCallback, useState } from "react";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { useCommandHandlers } from "../../commands/CommandRoot";
 import { normalizeTrailMode, useSetTrailState, useTrailState } from "../../hooks/useTrails";
 import { toast } from "../../lib/toast";

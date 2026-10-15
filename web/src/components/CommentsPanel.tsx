@@ -14,7 +14,7 @@ import type {
   VerdictState,
 } from "../api/client";
 import { toast } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import CommentBody from "./CommentBody";
 import CommentModal from "./CommentModal";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./LazyMarkdownEditor";

@@ -1,5 +1,5 @@
 import type { DocSummary } from "../api/client";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 import type { JSX } from "react";
 

@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router";
 import type { StackLayer } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import FileChangeRow from "../components/history/FileChangeRow";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import { useStacks, useStacksLayerDiff } from "../hooks/useStacks";
 import { shortSha } from "../lib/format";

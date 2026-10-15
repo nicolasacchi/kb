@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { useActiveRepo, useExplicitRepo } from "../hooks/useActiveRepo";
 import { useRepos } from "../hooks/useRepos";
 import { readerUrl } from "../lib/breadcrumbs";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 
 // F1 — the repo-scope pill, replacing the old `RepoPicker` box. The
 // operator's explicit ask: "remove the top left box to change the codebase,

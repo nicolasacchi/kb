@@ -22,7 +22,7 @@
 
 import { useNavigate } from "react-router";
 import type { TrailLink } from "../../lib/codeUrl";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { useTour } from "../../hooks/useTours";
 import { useTrail } from "../../hooks/useTrails";
 import { tourHref } from "../../lib/toursUrl";

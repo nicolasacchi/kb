@@ -4,7 +4,7 @@
 // `--kbc-room-chip-color` from its ONE token so the wash, the border and
 // the glyph can never disagree (`AgentVerdictCard`'s own one-token trick).
 import type { FindingSeverity } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import {
   actChip,
   categoryChip,

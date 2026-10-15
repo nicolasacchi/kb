@@ -5,7 +5,7 @@ import { fetchFile } from "../api/client";
 import type { SetSpanOut } from "../api/types";
 import CodeView, { type GotoSel } from "../components/CodeView";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import StepperBar from "../components/story/StepperBar";
 import { useFile } from "../hooks/useFile";
 import { useSet } from "../hooks/useSets";

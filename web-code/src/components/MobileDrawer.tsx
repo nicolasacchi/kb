@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 
 // F5 — accessible off-canvas drawer for the mobile shell (≤860px), ported
 // from kb's own `web/src/components/chrome/MobileDrawer.tsx` (root

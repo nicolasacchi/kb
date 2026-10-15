@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { splitPath, type WorkingSetEntry } from "../lib/workingSet";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 
 /// V70-A10 ("Workspaces v0", D26) — the currently open workspace (from
 /// `?workspace=` on the URL), for the strip's leading chip. `dirty` is

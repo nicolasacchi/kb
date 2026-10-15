@@ -5,7 +5,7 @@ import { highlightSegments, speedFilterItems } from "../lib/speedSearch";
 import { buildSym, langIdForPath, symbolPermalinkFor } from "../lib/codeUrl";
 import { copyToClipboard } from "../editor/vimReader";
 import { toast } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 
 export interface StructurePopupProps {
   open: boolean;

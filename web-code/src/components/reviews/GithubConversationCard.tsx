@@ -12,7 +12,7 @@ import { usePrComments } from "../../hooks/usePrs";
 import { usePrReviews } from "../../hooks/useReviews";
 import { formatFetchedCaption } from "./CiChecksCard";
 import { prExternalUrl } from "./PrChip";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export type ConversationState =
   | { kind: "loading" }

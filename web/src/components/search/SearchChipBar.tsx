@@ -4,7 +4,7 @@
 // removes its own filter (the inverse of the rail setter); "clear all"
 // nulls every filter axis at once (keeping q/mode/scope/kb/sort/limit).
 
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 export type Chip = { key: string; label: string; onRemove: () => void };
 

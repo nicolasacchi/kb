@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import type { HotspotRow } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import Sparkline from "../components/Sparkline";
 import { useHotspots, useTimeseries } from "../hooks/useBehavioral";

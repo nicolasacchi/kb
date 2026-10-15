@@ -24,7 +24,7 @@
 import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { ReviewDocCard } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import TrustBadge from "../TrustBadge";
 import { paintLine, type PaintedSegment } from "../../lib/diffHighlight";
 import { byteSpansToHighlightSpans, paintSpans } from "../../lib/paintSpans";

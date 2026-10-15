@@ -22,7 +22,7 @@
 import { useState } from "react";
 import { useDocRefs } from "../../hooks/useDocRefs";
 import { citedByLabel, citedByRowLabel } from "../../lib/citedBy";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface CitedByProps {
   repo: string;

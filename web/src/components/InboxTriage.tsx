@@ -5,7 +5,7 @@ import type { InboxItem } from "../api/inbox";
 import { artifactHref } from "../lib/artifactHref";
 import { useConfirm } from "./ConfirmProvider";
 import { toast } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import {
   clampSwipeDelta,
   resolveSwipeAction,

@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import type { SetSummary } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useCreateSet, useDeleteSet, usePatchSet, useSets } from "../hooks/useSets";

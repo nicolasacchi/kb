@@ -3,12 +3,12 @@
 // fork of `DiffThread` (that component is a mutation-heavy `ReviewComment`
 // renderer: reply/resolve/delete/suggest/disposition, none of which apply
 // to content this daemon never authors). No GitHub brand glyph exists in
-// this crate's hand-drawn icon set (`components/icons.tsx`) — per the "no
+// this crate's hand-drawn icon set (`@kb/ui/icons`) — per the "no
 // invented glyphs" rule, the origin mark is a plain text chip, not an icon.
 import type { GithubThread, GithubThreadComment } from "../../api/types";
 import { relativeTime } from "../../lib/format";
 import { parseGithubTimestamp } from "../../lib/githubThreads";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 function GithubCommentRow({ comment, isReply }: { comment: GithubThreadComment; isReply: boolean }) {
   const at = parseGithubTimestamp(comment.created_at);

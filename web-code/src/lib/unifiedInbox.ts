@@ -115,7 +115,7 @@ export function kbArtifactUrl(kbBase: string, kb: string, rel: string): string {
 /// straight to the thread — kb's own `ArtifactHrefOpts.panel` grammar
 /// (`web/src/lib/artifactHref.ts`), reproduced here rather than imported
 /// (kb-code has no cross-package import of kb's `web/` — separate npm
-/// packages, same boundary `components/icons.tsx`'s header doc notes for
+/// packages, same boundary `@kb/ui/icons`'s header doc notes for
 /// the analogous EmptyState case).
 export function kbCommentUrl(kbBase: string, kb: string, rel: string): string {
   return `${kbArtifactUrl(kbBase, kb, rel)}?panel=comments`;

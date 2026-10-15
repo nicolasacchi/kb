@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { useBodyScrollLock } from "../../hooks/useBodyScrollLock";
 
 // Accessible off-canvas drawer for the mobile shell (≤860px). Powers the

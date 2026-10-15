@@ -7,7 +7,7 @@ import { artifactHref } from "../lib/artifactHref";
 import { relativeAge } from "../lib/time";
 import type { CorkboardEntry } from "../api/client";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 
 // v0.10 K3 — /anchors view. Replaces the dedicated /stale-anchors
 // route (which now permanent-redirects here with ?filter=stale).

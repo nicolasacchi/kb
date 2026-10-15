@@ -23,7 +23,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { TrailStepOut, TrailSummary } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { useConfirm } from "../ConfirmProvider";
 import { useForkTrail, usePurgeTrails, useTrail, useTrails } from "../../hooks/useTrails";
 import { appendTrail, codeUrl } from "../../lib/codeUrl";

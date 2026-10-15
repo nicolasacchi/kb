@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { useBacklinks } from "../hooks/useNotes";
 import { artifactHref } from "../lib/artifactHref";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // "Linked from" — the inbound side of the wikilink graph. Shown under a note
 // (what references this note) and on an artifact's detail (what notes/artifacts

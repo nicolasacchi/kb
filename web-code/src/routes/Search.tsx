@@ -30,7 +30,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import type { TranscriptHit } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import MetaLine from "../components/MetaLine";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PrefixChips from "../components/search/PrefixChips";
 import SearchSection from "../components/search/SearchSection";
 import FacetRail from "../components/search/FacetRail";

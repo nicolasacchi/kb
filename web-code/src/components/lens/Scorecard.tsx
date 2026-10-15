@@ -12,7 +12,7 @@
 
 import { useNavigate } from "react-router";
 import type { ScorecardOut } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { formatUnixSeconds, shortSha } from "../../lib/format";
 import { ApiError } from "../../api/client";
 import { useFromDocSet } from "../../hooks/useSets";

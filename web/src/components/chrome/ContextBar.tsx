@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { useAnchors } from "../../hooks/useAnchors";
 import { artifactHref } from "../../lib/artifactHref";
 import { withKb } from "../../lib/navItems";

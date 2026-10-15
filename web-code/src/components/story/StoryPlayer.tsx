@@ -5,7 +5,7 @@ import { fetchCommit, fetchDiff, fetchFile } from "../../api/client";
 import AttributionCard from "../history/AttributionCard";
 import CodeView, { type GotoSel } from "../CodeView";
 import EmptyState from "../EmptyState";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { useCommit } from "../../hooks/useCommit";
 import { useDiff } from "../../hooks/useDiff";
 import { useFile } from "../../hooks/useFile";

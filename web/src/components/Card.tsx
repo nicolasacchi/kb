@@ -15,7 +15,7 @@ import {
 } from "../lib/derive";
 import { navigateWithTitleTransition } from "../lib/viewTransition";
 import CapabilityGlyphs, { glyphsFor } from "./CapabilityGlyphs";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import TagPill from "./TagPill";
 import ReadingChip from "./ReadingChip";
 import SessionCardBody from "./SessionCard";

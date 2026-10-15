@@ -3,7 +3,7 @@ import type { BranchOut } from "../../api/types";
 import { readerUrl } from "../../lib/breadcrumbs";
 import { codeBasePath, commitUrl, reviewsUrl } from "../../lib/codeUrl";
 import { relativeTime, shortSha } from "../../lib/format";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface BranchesHeroProps {
   repo: string;

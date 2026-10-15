@@ -19,7 +19,7 @@ import {
   evidenceRefView,
   ladderLabel,
 } from "../../lib/claims";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import ProseBlock from "../prose/ProseBlock";
 
 function ClaimBody({

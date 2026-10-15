@@ -1,6 +1,6 @@
 import type { FunctionComponent } from "react";
 import type { Location } from "react-router-dom";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 
 // Single source of truth for the SPA's primary view destinations. Consumed
 // by the desktop Header's view-toggle strip and the mobile hamburger

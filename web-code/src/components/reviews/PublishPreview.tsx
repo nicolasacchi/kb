@@ -21,7 +21,7 @@ import { usePublishFinding, usePublishVerdict, useReviewExportGithub } from "../
 import { clearMarks, useMarkedSlugs } from "../../lib/publishMarks";
 import { composeGhCommandsText, type GhExportInput } from "../../lib/publishGithub";
 import { toast } from "../../lib/toast";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { isLoopbackRefusal, LOOPBACK_HINT, msg } from "./ReviewHeader";
 
 // Session-wide latch, same idiom as `DispositionMenu.tsx`/`AskAgentCard.tsx`

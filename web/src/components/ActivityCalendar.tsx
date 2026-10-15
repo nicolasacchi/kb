@@ -11,7 +11,7 @@ import {
 } from "../lib/calendar";
 import { galleryUrl } from "../lib/galleryUrl";
 import { censusBump } from "../lib/census";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // W2.10 — the corpus activity calendar: a GitHub-graph-shaped year density
 // grid, mounted as a collapsible header of the history view. Calm-computing

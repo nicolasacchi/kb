@@ -21,7 +21,7 @@
 import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { BoardNode } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { LiveRefCard } from "../reviews/RefCard";
 import {
   boardCaption,

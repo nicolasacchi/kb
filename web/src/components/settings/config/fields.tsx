@@ -4,7 +4,7 @@
 // (see app.css). No data fetching here.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Icon } from "../../icons";
+import { Icon } from "@kb/ui/icons";
 
 export function FieldRow({
   label,

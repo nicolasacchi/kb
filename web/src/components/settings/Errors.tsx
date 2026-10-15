@@ -8,7 +8,7 @@ import {
   type KbSummary,
 } from "../../api/client";
 import { sse } from "../../api/sse";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // Errors tab. Per-kb open-error list with row-level Dismiss +
 // Apply-fix buttons. Reacts to `error*` SSE events so a newly-raised

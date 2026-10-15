@@ -6,7 +6,7 @@ import { isIndexPage, relativeAge, tagColor, tagsFor } from "../lib/derive";
 import { useAnchors } from "../hooks/useAnchors";
 import CapabilityGlyphs, { glyphsFor } from "./CapabilityGlyphs";
 import TagPill from "./TagPill";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // v0.10 G2 — pinned/index card. Replaces IndexHero. Two-column layout:
 // left = identity (badge + folder + serif title + excerpt + tags),

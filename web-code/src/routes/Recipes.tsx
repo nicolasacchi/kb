@@ -5,7 +5,7 @@ import type { KbcRunOut, KbcStepRun } from "../api/types";
 import type { RecipeCatalogEntry, RecipeItem } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import ErrorBoundary from "../components/ErrorBoundary";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import RecipeAutoForm from "../components/recipes/RecipeAutoForm";
 import RecipeHome from "../components/recipes/RecipeHome";

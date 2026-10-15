@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { currentDaemonBase } from "../../api/base";
 import { fetchKbs, type KbSummary } from "../../api/client";
 import ConfirmModal from "./ConfirmModal";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // Admin tab. Three destructive actions, each gated by a typed-token
 // ConfirmModal: drop a kb's storage, purge a kb's history, drain

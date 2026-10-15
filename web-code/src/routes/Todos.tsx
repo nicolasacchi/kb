@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import type { TodoItem } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import { useScopes } from "../hooks/useScopes";
 import { useTodos } from "../hooks/useTodos";

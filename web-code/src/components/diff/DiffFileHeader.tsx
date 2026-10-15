@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { diffStats } from "../../lib/diff";
 import type { ParsedDiff } from "../../lib/diff";
 import type { FindingSeverity } from "../../lib/diffFindings";

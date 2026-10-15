@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { DiffLine } from "../../lib/diff";
 import { noiseLabelText, type NoiseLabel } from "../../lib/diffNoise";
 import { EXPAND_STEP } from "../../lib/diffContext";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 /// V73-K2a — everything ONE hunk of ONE file knows about itself, computed
 /// once by `FileDiffBody` and handed to whichever renderer (unified or

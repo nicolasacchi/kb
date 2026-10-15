@@ -9,7 +9,7 @@
 import type { ReviewDetailPr } from "../../api/types";
 import { summarizeChecks } from "./CiChecksCard";
 import { useReviewChecks } from "../../hooks/useReviews";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 /// `owner/name` + PR number → the external `github.com` PR URL. `null` when
 /// the slug isn't a real `owner/name` pair (`pr_repo_slug` degrades to the

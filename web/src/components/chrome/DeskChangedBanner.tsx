@@ -6,7 +6,7 @@
 
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { useDesk } from "../../hooks/useDesk";
 import type { DeskItem } from "../../api/desk";
 import { artifactHref } from "../../lib/artifactHref";

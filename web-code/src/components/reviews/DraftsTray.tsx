@@ -1,4 +1,4 @@
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { publishRefusal, type ReviewDraft } from "../../lib/reviewDrafts";
 
 export interface DraftsTrayProps {

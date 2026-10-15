@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import type { DocSummary } from "../api/client";
 import { artifactHref } from "../lib/artifactHref";
 import { artifactDownloadUrl, triggerDownload } from "../lib/download";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // Single compact row in the list view. Columns: id-chip · title · folder
 // · file · category · open-affordance. Designed for ~28px row height

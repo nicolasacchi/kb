@@ -4,7 +4,7 @@ import MarkdownEditor from "./LazyMarkdownEditor";
 import NoteMarkdown from "./NoteMarkdown";
 import BacklinksSection from "./BacklinksSection";
 import { useConfirm } from "./ConfirmProvider";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // N-track — full interactive view + inline editor for one note. Renders the
 // body with clickable checkboxes (toggling persists), a quick "add task"

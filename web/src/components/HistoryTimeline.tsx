@@ -9,7 +9,7 @@ import { useIdentity } from "../hooks/useArtifactHost";
 import EmptyState from "./EmptyState";
 import ActivityCalendar from "./ActivityCalendar";
 import UserChip from "./UserChip";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // v0.6+ H5 — gallery's 4th view: chronological list of artifact opens,
 // search queries, and authored comments. Reuses gallery chrome (kb

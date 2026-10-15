@@ -48,7 +48,7 @@ import { findingTouchTimelineRows } from "../../lib/findingTouches";
 import { formatUnixSeconds, relativeTime } from "../../lib/format";
 import { timelineRows, type TimelineIconKind } from "../../lib/reviewTimeline";
 import { cycleLaneStep, laneLabel, TIMELINE_LANES, toggleLane } from "../../lib/timelineLanes";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import ProseBlock from "../prose/ProseBlock";
 
 const ICONS: Record<TimelineIconKind, (p: SVGProps<SVGSVGElement>) => JSX.Element> = {
@@ -62,7 +62,7 @@ const ICONS: Record<TimelineIconKind, (p: SVGProps<SVGSVGElement>) => JSX.Elemen
   published: Icon.External,
   comment: Icon.Comment,
   // V73-K2c — the five new server lanes' icons. No hand-drawn glyph exists
-  // for any of these (`components/icons.tsx`'s own doc, PRR-F's identical
+  // for any of these (`@kb/ui/icons`'s own doc, PRR-F's identical
   // note on `github`) — each row's OWN kind/lane text + CSS modifier is
   // what actually disambiguates it, not the icon.
   pr_body: Icon.Note,

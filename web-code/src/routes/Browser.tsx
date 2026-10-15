@@ -11,7 +11,7 @@ import {
 import type { Symbol, SymbolMatch } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { ClassBadge } from "../components/hierarchy/HierarchyPanel";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import { readerUrl } from "../lib/breadcrumbs";
 import {

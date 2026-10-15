@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router";
 import { fetchSet } from "../api/client";
 import type { SetGroupOut, SetSummary } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useCreateSet, useDeleteSet, usePatchSet, useWorkspaceGroups } from "../hooks/useSets";

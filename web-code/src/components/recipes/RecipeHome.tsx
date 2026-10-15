@@ -3,7 +3,7 @@ import type { KbcCatalogEntry } from "../../api/types";
 import { RECIPE_INTENT_ORDER, recipeIntentLabel } from "../../lib/recipeAddr";
 import { recipeRunUrl } from "../../lib/recipeUrl";
 import RecipeTrustBadge from "./RecipeTrustBadge";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import EmptyState from "../EmptyState";
 
 export interface RecipeHomeProps {

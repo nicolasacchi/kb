@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { matchPath, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { useExplicitKb } from "../../hooks/useActiveKb";
 import { useArtifactHostSuffix } from "../../hooks/useArtifactHost";
 import { useFocusTrap } from "../../hooks/useFocusTrap";

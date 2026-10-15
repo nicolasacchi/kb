@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import FileChangeRow from "../components/history/FileChangeRow";
 import MergeCheckCard from "../components/history/MergeCheckCard";
 import PrCommentsStrip from "../components/history/PrCommentsStrip";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import MetaLine from "../components/MetaLine";
 import PageHeader from "../components/PageHeader";
 import RefTypeahead from "../components/RefTypeahead";

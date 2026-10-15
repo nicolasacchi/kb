@@ -22,7 +22,7 @@ import EmptyState from "../components/EmptyState";
 import MetaLine from "../components/MetaLine";
 import PageHeader from "../components/PageHeader";
 import { useConfirm } from "../components/ConfirmProvider";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import { useCommandScope } from "../commands/CommandRoot";
 import {
   useCanvas,

@@ -1,6 +1,6 @@
 import type { Command } from "@codemirror/view";
 import type { ReactNode } from "react";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import {
   toggleBold,
   toggleItalic,

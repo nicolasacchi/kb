@@ -4,7 +4,7 @@
 // unavailable at fetch time.
 import type { CheckRunOut } from "../../api/types";
 import { useReviewChecks } from "../../hooks/useReviews";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface ChecksSummary {
   total: number;

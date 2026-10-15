@@ -17,7 +17,7 @@
 
 import { useMemo, useState } from "react";
 import { ApiError } from "../../api/client";
-import { Icon } from "../../components/icons";
+import { Icon } from "../iconSet";
 import { useApplyTour } from "../../hooks/useTours";
 import { draftToDoc, MAX_TOUR_STEPS, type TourDraft } from "../../lib/tourDoc";
 import { toast } from "../../lib/toast";

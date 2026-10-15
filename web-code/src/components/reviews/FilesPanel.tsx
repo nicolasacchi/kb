@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { ReviewFileRow, ReviewRiskFile } from "../../api/types";
 import EmptyState from "../EmptyState";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { ReviewAwareDiff } from "./ReviewFileItem";
 import ReviewFileTree from "./ReviewFileTree";
 import BlastRadiusStrip from "./BlastRadiusStrip";

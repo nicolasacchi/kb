@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import CommentBody from "../CommentBody";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import {
   authorChip,
   colorForKind,

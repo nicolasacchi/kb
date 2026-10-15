@@ -35,7 +35,7 @@ import {
 } from "../lib/canvas";
 import { artifactHref } from "../lib/artifactHref";
 import { toast } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 3;

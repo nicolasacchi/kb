@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import LazyMarkdownEditor from "../LazyMarkdownEditor";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { glyphForKind } from "../../lib/slateGlyphs";
 import type { SlateKind, SlatePostBody } from "../../api/slateTypes";
 import { SPA_PROV } from "../../hooks/useSlates";

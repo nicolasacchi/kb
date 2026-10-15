@@ -17,7 +17,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import { useTours } from "../hooks/useTours";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";

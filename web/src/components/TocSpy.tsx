@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTocSpyState } from "../hooks/useTocSpyState";
 import { artifactOrigin, isOriginOfArtifact } from "../lib/artifactHost";
 import { artifactHref } from "../lib/artifactHref";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import AddToListButton from "./lists/AddToListButton";
 import type { ReadingSummary } from "../api/reading";
 

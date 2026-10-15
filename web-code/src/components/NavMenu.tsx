@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Link, useLocation } from "react-router";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import { navItemMatches, navTestAttr, type NavItem } from "../lib/navItems";
 
 // V4.U5 — desktop Explore popover. Outside-click + Escape mirror

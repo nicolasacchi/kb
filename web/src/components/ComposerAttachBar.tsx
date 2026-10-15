@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useRef } from "react";
 import type { ComposerAttachments } from "../hooks/useComposerAttachments";
 import { isImageType } from "../lib/attachmentUrl";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // Y-track — the attach affordance under a composer: a paperclip button that
 // opens a (hidden) multi-file picker, plus chips for in-flight (⏳ / ⚠ retry)

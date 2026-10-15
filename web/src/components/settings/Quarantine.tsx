@@ -8,7 +8,7 @@ import {
   type QuarantineEntry,
 } from "../../api/client";
 import { sse } from "../../api/sse";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // Quarantine tab. Per-kb list of artifacts the indexer gave up on
 // after QUARANTINE_THRESHOLD (3) consecutive failures, with row-level

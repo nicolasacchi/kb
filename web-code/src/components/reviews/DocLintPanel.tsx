@@ -10,7 +10,7 @@
 // severity. "did you mean" candidates are the daemon's suggestions in the
 // author's vocabulary — never a fix this panel applies.
 import type { ReviewDocLintOut } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { lintCandidatesText, lintCensusText, lintSeverityClass } from "../../lib/reviewDoc";
 
 export interface DocLintPanelProps {

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { ReviewSummary, ReviewSummaryPr } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import AnalyticsSection from "../components/reviews/AnalyticsSection";
 import InboxList from "../components/reviews/InboxList";

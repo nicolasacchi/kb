@@ -12,7 +12,7 @@ import {
 // client Anchor is looser (optional fields) and doesn't satisfy it.
 import type { Anchor } from "../../api/generated/Anchor";
 import { useLists } from "../../hooks/useLists";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // RL-track — the "add to reading list" affordance. Two faces:
 //   bar   the ContextBar / inspector action (Icon.Tasks + "list"); also

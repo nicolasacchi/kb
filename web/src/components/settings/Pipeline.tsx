@@ -16,7 +16,7 @@ import {
   type SourceSummary,
 } from "../../api/client";
 import { sse } from "../../api/sse";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // Pipeline tab. Sources / runs / queries for each kb on the daemon.
 // Read-only in S2 — pause/resume + reindex buttons land in S4 (they

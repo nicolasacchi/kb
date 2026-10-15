@@ -7,7 +7,7 @@
 // Token discipline: every `token` below is the NAME of an existing
 // kbc-theme/1 custom property (`tokens.css` / `themes.gen.css`), never a
 // raw hue — `npm run lint:themes` stays the gate. Every `icon` is a key of
-// `components/icons.tsx`'s `Icon` map; `reviewRoom.test.ts` pins BOTH
+// `@kb/ui/icons`'s `Icon` map; `reviewRoom.test.ts` pins BOTH
 // sides of that (a mapped icon that does not exist fails the golden, and
 // the mapping tables themselves are golden-pinned).
 
@@ -38,7 +38,7 @@ export function liveFindingCounts(findings: ReviewFinding[]): LiveCounts {
   return counts;
 }
 
-/// An icon name from the ONE icon set (`components/icons.tsx`). Typed as a
+/// An icon name from the ONE icon set (`@kb/ui/icons`). Typed as a
 /// plain `string` here so this module stays JSX-free; the golden test
 /// asserts every mapped name is a real `keyof typeof Icon`.
 export interface ChipSpec {

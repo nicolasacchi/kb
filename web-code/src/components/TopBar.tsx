@@ -4,7 +4,7 @@ import RepoPill from "./RepoPill";
 import CurrentReviewChip from "./CurrentReviewChip";
 import NavMenu from "./NavMenu";
 import NavSheet from "./NavSheet";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import TrailIndicator from "./trail/TrailIndicator";
 import { SpaceHint } from "../commands/learn";
 import { useExplicitRepo } from "../hooks/useActiveRepo";

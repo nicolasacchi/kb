@@ -19,7 +19,7 @@
 // overlay and to `useLearnMode`'s "this control has a key" toast.
 
 import { useEffect, useState } from "react";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import {
   backCount,
   forwardCount,

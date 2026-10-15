@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import type { CommentOut } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import MetaLine from "../components/MetaLine";
 import PageHeader from "../components/PageHeader";
 import { useComments, useCommentsSummary } from "../hooks/useComments";

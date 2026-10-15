@@ -13,7 +13,7 @@ import { layoutStress, type StressPoint } from "../lib/atlasSelection";
 import { relativeAge, tagColor, tagsFor } from "../lib/derive";
 import CapabilityGlyphs, { glyphsFor } from "./CapabilityGlyphs";
 import TagPill from "./TagPill";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // v0.11 A1 — Atlas inspector rail.
 //

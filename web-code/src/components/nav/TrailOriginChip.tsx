@@ -21,7 +21,7 @@
 //      is not there. It never claims a number it did not just count.
 
 import { useEffect, useState } from "react";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { originChipText, stepAt, type Trail } from "../../lib/trail";
 import { countTabsOnTrail } from "../../lib/tabRegistry";
 

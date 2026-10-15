@@ -12,7 +12,7 @@ import { useKbs } from "../hooks/useKbs";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useConfirm } from "./ConfirmProvider";
 import AddToListButton from "./lists/AddToListButton";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // W2.16 — the small floating chooser that appears near a text selection
 // made inside the artifact iframe. Fed by AnnotatorBridge's mode-

@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { dismissToast, useToasts } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 
 // F3a — the single global feedback viewport, mounted once in app.tsx.
 // role=status + aria-live=polite so a screen reader announces failures/

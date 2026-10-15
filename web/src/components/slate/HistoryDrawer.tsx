@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { glyphForKind } from "../../lib/slateGlyphs";
 import { relativeAge } from "../../lib/time";
 import type { SlateHistoryRow } from "../../api/slateTypes";

@@ -7,7 +7,7 @@ import {
 } from "../../api/client";
 import { useKbs } from "../../hooks/useKbs";
 import { toast } from "../../lib/toast";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // Excluded tab (v0.24 X4). Per-kb list of files the operator excluded
 // from the index (Card action, reader About row, or `kb exclude`).

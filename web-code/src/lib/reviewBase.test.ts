@@ -3,7 +3,7 @@
 // act/category, plus the pure label/command-line builders.
 import { describe, expect, it } from "vitest";
 import type { ReviewBaseOut } from "../api/types";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import {
   BASE_LEGACY_CHIP,
   BASE_MODE_CHIPS,

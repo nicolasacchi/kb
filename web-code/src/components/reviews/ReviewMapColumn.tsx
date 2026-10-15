@@ -1,6 +1,6 @@
 import { useMemo, type MutableRefObject } from "react";
 import type { PseudoFile, ReviewFileRow } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { mapCensusText, type MapChapter, type MapRowState } from "../../lib/reviewMapColumn";
 import { useSyntax } from "../../hooks/useSyntax";
 import { ALL_FILES_CAP, useReviewAllFiles } from "../../hooks/useReviewAllFiles";

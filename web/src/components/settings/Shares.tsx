@@ -8,7 +8,7 @@ import {
 } from "../../api/client";
 import ShareModal from "../ShareModal";
 import ConfirmModal from "./ConfirmModal";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // Shares tab. Per-kb published-shares table, with row Revoke and a
 // kb-level Create button. Create opens the existing `ShareModal` so

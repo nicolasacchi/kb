@@ -1,5 +1,5 @@
 import { dismissToast, useToasts } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // F1 — the single global feedback viewport, mounted once in App. role=status +
 // aria-live=polite so a screen reader announces failures/successes. Pure

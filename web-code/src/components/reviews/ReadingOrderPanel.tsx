@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import type { ReviewReadingOrderOut } from "../../api/types";
 import EmptyState from "../EmptyState";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { reviewDiffHref } from "./ReviewHeader";
 
 export interface ReadingOrderPanelProps {

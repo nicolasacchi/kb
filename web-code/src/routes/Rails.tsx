@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import RailsOrphans from "../components/rails/RailsOrphans";
 import RailsSection from "../components/rails/RailsSection";

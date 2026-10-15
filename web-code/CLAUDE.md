@@ -1086,7 +1086,7 @@ Files tab and the review-diff map column render the SAME
 `ReviewFileTree` (status sections of folder trees — added / modified /
 renamed / deleted — because a 38-file review already clustered into
 three status groups; mixing them into one folder walk would hide
-"deleted 15"). Kind icons are real icons (`components/icons` via
+"deleted 15"). Kind icons are real icons (`@kb/ui/icons` via
 `lib/reviewFileTree.ts`'s `fileIconKind`, V80-F1 — a closed `lang` →
 `"doc"|"shell"|"config"|"generic"` mapping over the cached `GET
 /api/syntax` registry's `lang`, never a 2-letter mark). Paths are

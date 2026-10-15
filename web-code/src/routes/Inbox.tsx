@@ -7,7 +7,7 @@
 import { Link } from "react-router";
 import type { UnifiedInboxAnnotationRow } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import InboxList from "../components/reviews/InboxList";
 import { useIdentity } from "../hooks/useIdentity";
