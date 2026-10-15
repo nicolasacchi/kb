@@ -22,6 +22,16 @@ const MASKS = [
   "[aria-label*='daemon status' i]",
 ];
 
+// Clock- and visit-dependent text (timestamps in the passport, "active 4s",
+// visit counts) is masked by content so the goldens only move with styling.
+function textMasks(page: Page) {
+  return [
+    page.getByText(/\d{4}-\d{2}-\d{2}/),
+    page.getByText(/active \d+\w+ .* visit/),
+    page.getByText(/\b\d+ visits?\b/),
+  ];
+}
+
 async function setTheme(page: Page, theme: "dark" | "light") {
   await page.addInitScript((t) => {
     localStorage.setItem("kb:prefs", JSON.stringify({ theme: t }));
@@ -42,11 +52,13 @@ for (const theme of ["dark", "light"] as const) {
   test.describe(`spa visual (${theme})`, () => {
     test("gallery", async ({ page }) => {
       await setTheme(page, theme);
-      await page.goto(`${BASE}/?kb=canon`);
+      // The static pm/ fixture folder, title-sorted: other specs add timestamped
+      // capture docs to the kb root, which would make the full gallery drift.
+      await page.goto(`${BASE}/?kb=canon&folder=pm&sort=title&dir=asc`);
       await expect(page.locator(".kb-card").first()).toBeVisible();
       await settle(page);
       await expect(page).toHaveScreenshot(`gallery-${theme}.png`, {
-        mask: MASKS.map((s) => page.locator(s)),
+        mask: [...MASKS.map((s) => page.locator(s)), ...textMasks(page)],
       });
     });
 
@@ -56,7 +68,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(page.locator("iframe").first()).toBeVisible();
       await settle(page);
       await expect(page).toHaveScreenshot(`reader-${theme}.png`, {
-        mask: [...MASKS.map((s) => page.locator(s)), page.locator("iframe")],
+        mask: [...MASKS.map((s) => page.locator(s)), ...textMasks(page), page.locator("iframe")],
       });
     });
   });
