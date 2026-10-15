@@ -37,6 +37,15 @@
   flex: 1 1 auto;
   min-width: 96px;
 }
+/* OL-C11 — the crumbs and the toolbar moved out of this header (crumbs to the
+ * top bar's scope slot, toolbar to the pane header). On desktop a header that
+ * holds only the two mobile-only buttons would be an empty 40px row above the
+ * code, so it is removed; ≤860px keeps it for the burger + reader-tools. */
+@media (min-width: 861px) {
+  .kbc-reader__top--bare {
+    display: none;
+  }
+}
 
 /* V80-R2 — the reading-mode toolbar: five named, separated clusters
  * (View / Text size / Blame / Comments / Ref) instead of one flat row of
@@ -81,12 +90,6 @@
 .kbc-reader-toolbar .kb-viewbar__cluster {
   flex: 0 0 auto;
   white-space: nowrap;
-}
-.kbc-reader-toolbar .kb-viewbar__legend {
-  font-family: var(--font-sans, inherit);
-  font-size: var(--fs-xs);
-  letter-spacing: 0;
-  text-transform: none;
 }
 .kbc-reader-toolbar .kb-viewbar__btn {
   padding: 2px 8px;

@@ -44,9 +44,8 @@
   float: left;
   padding: 0;
   margin-right: var(--pad-1);
+  font-family: var(--font-sans, inherit);
   font-size: var(--fs-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--ink-mute);
 }
 .kb-viewbar__item {
@@ -147,9 +146,8 @@
   color: var(--accent);
 }
 .kb-viewbar__menu-cluster {
+  font-family: var(--font-sans, inherit);
   font-size: var(--fs-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--ink-mute);
   min-width: 72px;
 }

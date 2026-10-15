@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { StateCard } from "@kb/ui/StateCard";
 import { Link } from "react-router";
 import { Icon } from "../iconSet";
 import { UNCOMMITTED_SHA, type BlameRegion, type LineWhyOut } from "../../api/types";
@@ -66,7 +67,7 @@ export default function WhyPanel({ repo, repoRoot, path, line, region, why }: Wh
   if (!why || !attribution) {
     return (
       <div className="kbc-why kbc-why--loading" data-kbc-why-line={line}>
-        Loading provenance for line {line}…
+        <StateCard size="inline" kind="loading" title={`Loading provenance for line ${line}…`} />
       </div>
     );
   }
@@ -187,7 +188,7 @@ export default function WhyPanel({ repo, repoRoot, path, line, region, why }: Wh
           </button>
           {timelineOpen &&
             (timeline.isLoading ? (
-              <div className="kbc-why__timeline-loading">Loading…</div>
+              <div className="kbc-why__timeline-loading"><StateCard size="inline" kind="loading" title="Loading…" /></div>
             ) : (
               <ul className="kbc-why__timeline-list" data-kbc-why-timeline-list>
                 {(timeline.data?.entries ?? []).map((e) => (

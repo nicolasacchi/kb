@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { StateCard } from "@kb/ui/StateCard";
 import { Link } from "react-router";
 import { Icon } from "../iconSet";
 import DiffFileAnnotations from "../annotations/DiffFileAnnotations";
@@ -92,7 +93,9 @@ export default function FileChangeRow({ repo, file, from, to, disabledNote, brow
       {expanded &&
         !disabled &&
         (diff.isLoading ? (
-          <div className="kbc-diff kbc-diff--loading">Loading diff…</div>
+          <div className="kbc-diff kbc-diff--loading">
+            <StateCard size="inline" kind="loading" title="Loading diff…" />
+          </div>
         ) : diff.error ? (
           <div className="kbc-diff kbc-diff--error">Failed to load diff</div>
         ) : parsed ? (

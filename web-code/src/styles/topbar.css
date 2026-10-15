@@ -21,6 +21,20 @@
   align-self: stretch;
   gap: var(--pad-2);
 }
+/* OL-C11 — the scope slot carries the reader's path crumbs (portalled in by
+ * the route). It keeps a readable floor while there is something in it and
+ * takes no room at all on routes that fill nothing. */
+.kbc-topbar .kb-spine__scope {
+  min-width: 8rem;
+}
+.kbc-topbar .kb-spine__scope:has(> .kbc-scope-slot:empty) {
+  display: none;
+}
+.kbc-scope-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
 .kbc-topbar__doors {
   display: flex;
   align-items: stretch;

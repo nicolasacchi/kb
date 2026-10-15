@@ -69,3 +69,21 @@ describe("ViewBar (server render)", () => {
     expect(html).toContain('aria-pressed="true"');
   });
 });
+
+describe("ViewBar ariaLabel (server render)", () => {
+  const one: Cluster[] = [{ label: "A", controls: [btn("x")] }];
+  it("names the toolbar from ariaLabel without rendering a visible title", () => {
+    const html = renderToString(<ViewBar ariaLabel="Reader view" clusters={one} />);
+    expect(html).toContain('aria-label="Reader view"');
+    expect(html).not.toContain("kb-viewbar__title");
+  });
+  it("lets ariaLabel win over title for the accessible name, title still renders", () => {
+    const html = renderToString(<ViewBar title="Files" ariaLabel="File tools" clusters={one} />);
+    expect(html).toContain('aria-label="File tools"');
+    expect(html).toContain("kb-viewbar__title");
+  });
+  it("keeps the title-then-View fallback", () => {
+    expect(renderToString(<ViewBar title="Files" clusters={one} />)).toContain('aria-label="Files"');
+    expect(renderToString(<ViewBar clusters={one} />)).toContain('aria-label="View"');
+  });
+});

@@ -17,6 +17,7 @@ import {
   navTestAttr,
 } from "../lib/navItems";
 import RefChip from "./RefChip";
+import { ScopeSlot } from "./ScopeSlot";
 
 // F1 — the ONE chrome bar shared by every route, mounted once at the app
 // root (app.tsx), mirroring kb's own `Header` (also mounted once above
@@ -52,6 +53,7 @@ export default function TopBar() {
     <>
       <div className="kbc-topbar" data-region="topbar">
         <Spine
+          scope={<ScopeSlot />}
           switcher={
             <>
               <RepoPill />

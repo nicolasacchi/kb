@@ -145,6 +145,12 @@
  * "The only teaching chrome above the fold is a Space hint and `?`." Two
  * elements, both dismissible, neither ever shown twice.
  */
+.kbc-spacehint kbd {
+  padding: 0 var(--space-1, 4px);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-1, 4px);
+  font-size: var(--fs-xs);
+}
 .kbc-spacehint {
   display: inline-flex;
   align-items: center;

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { StateCard } from "@kb/ui/StateCard";
 import type { Bookmark } from "../../api/types";
 import { useConfirm } from "../ConfirmProvider";
 import {
@@ -86,7 +87,7 @@ export default function BookmarksPanel({ repo, onJump }: BookmarksPanelProps) {
   }
 
   if (q.isLoading) {
-    return <div className="kbc-inspector__hint">Loading bookmarks…</div>;
+    return <StateCard size="inline" kind="loading" title="Loading bookmarks…" />;
   }
   if (q.error) {
     return (

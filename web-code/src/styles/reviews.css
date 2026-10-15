@@ -931,13 +931,6 @@
   flex-wrap: wrap;
   row-gap: var(--pad-1);
 }
-.kbc-rdiff__toolbar .kb-viewbar__legend {
-  font-family: var(--font-sans, inherit);
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: var(--fs-xs);
-  color: var(--fg-dim);
-}
 .kbc-rdiff__ps,
 .kbc-rdiff__step {
   display: inline-flex;
