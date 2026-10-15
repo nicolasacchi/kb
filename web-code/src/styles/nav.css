@@ -132,6 +132,9 @@
   border-bottom: 1px solid var(--rule);
   min-height: 22px;
   font-size: var(--fs-xs);
+  /* OL-P1 — when arrows + filename + toolbar do not fit, the toolbar drops to
+   * its own line; the filename is never what gives. */
+  flex-wrap: wrap;
 }
 
 /* The provisional pane's LOUD signal: a coloured left edge, not italics.
@@ -147,12 +150,14 @@
   gap: var(--space-1, 4px);
 }
 
-/* OL-C11 — the pane header row: [← →] filename … toolbar. The filename
- * yields first (ellipsis); the toolbar sits at the right end and never
- * shrinks below its own content. */
+/* OL-C11 — the pane header row: [← →] filename … toolbar. OL-P1: the
+ * filename keeps at least 12ch and does not shrink (ellipsis only past 40ch,
+ * a pathological basename); the toolbar wraps below instead. The full path
+ * lives in the top-bar breadcrumb. */
 .kbc-panechrome__file {
-  flex: 0 1 auto;
-  min-width: 3ch;
+  flex: 0 0 auto;
+  min-width: 12ch;
+  max-width: 40ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
