@@ -282,3 +282,13 @@ Duplicate snippets are already collapsed: `uniqueHighlightItems` keys on
 (lang, text), and the query key is the unique list, so identical text across
 sections is one cache entry. Revisit if a profile shows the per-file requests
 (not the file reads) dominating a large review.
+
+## ui/: the shared source directory
+
+`ui/src/` (repo root) holds code shared by `web/` and `web-code/`. It is a
+plain source directory with no `package.json` or lockfile: each app reaches it
+through `@kb/ui/*` (tsconfig `paths` plus a Vite/vitest `resolve.alias`), and
+pins `react` / `react-dom` to its own `node_modules` (tsconfig `paths`,
+`resolve.dedupe`) so the same files run under React 18.3 and 19.3. Tests sit
+beside the source as `*.test.ts(x)`; both apps' `vitest.config.ts` include
+`../ui/src/**`, so each file is tested once per app. See `ui/README.md`.

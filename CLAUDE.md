@@ -210,6 +210,7 @@ crates/
 web/               React 18 + Vite + TypeScript SPA
   src/             routes, components, hooks, api, styles
   dist/            vite output (gitignored; daemon serves via ServeDir)
+ui/                shared design foundation (tokens, themes, icons, shell primitives) — a SOURCE dir wired by tsconfig paths + Vite alias into web/ and web-code/; no package.json; must run under React 18 and 19
 web-code/          kb-code's own SPA (React 18 + Vite + TS, mirrors web/'s
                        tooling): omnibox + /search page, CM6 read-only reader
                        with blame gutter + why-panel + hover originating-change,

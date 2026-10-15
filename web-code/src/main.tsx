@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./app";
+import { UI_PROBE } from "@kb/ui/probe";
 import { applyTheme, loadTheme } from "./lib/prefs";
 import { queryClient, startSseInvalidationBridge } from "./api/queryClient";
 import "./styles/tokens.css";
@@ -48,6 +49,9 @@ import "./styles/rails.css";
 // F5 — media-queried mobile-shell overrides; imported LAST so they win over
 // every desktop rule above (mirrors kb's own `main.tsx` import order).
 import "./styles/mobile.css";
+
+// Witness: the shared ui/ source dir is in this bundle (OL F1).
+document.documentElement.dataset.kbUi = UI_PROBE;
 
 // Apply saved theme before first paint to avoid a theme flash on reload.
 // V70-A7 keeps this the ONLY pre-paint hook — deliberately NOT an inline

@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 
 // kb-code SPA build (W4.1). Output goes into web-code/dist; the
@@ -19,7 +20,8 @@ export default defineConfig({
   // CodeMirror 6 breaks subtly if two copies of @codemirror/state load —
   // same guard kb's own web/vite.config.ts carries.
   resolve: {
-    dedupe: ["@codemirror/state"],
+    dedupe: ["@codemirror/state", "react", "react-dom"],
+    alias: { "@kb/ui": fileURLToPath(new URL("../ui/src", import.meta.url)) },
   },
   build: {
     outDir: "dist",
@@ -49,6 +51,7 @@ export default defineConfig({
   server: {
     port: 4748,
     strictPort: true,
+    fs: { allow: [".", "../ui"] },
     proxy: {
       "/api": "http://127.0.0.1:4747",
     },
