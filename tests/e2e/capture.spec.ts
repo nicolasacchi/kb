@@ -342,8 +342,8 @@ test.describe("capture ergonomics — paste text + chrome entry points (C3)", ()
       // above is mobile's only chrome entry point now (Decision 3; the
       // palette row is the other survivor, exercised via openCaptureSheet
       // in the "quick capture (U6)" describe above).
-      await page.locator(".kb-burger").click();
-      const drawer = page.locator(".kb-drawer");
+      await page.locator("[data-kb-spine-menu]").click();
+      const drawer = page.locator("[data-kb-sheet]");
       await expect(drawer).toBeVisible();
       await expect(drawer.locator('[data-kb-act="capture"]')).toHaveCount(0);
     });

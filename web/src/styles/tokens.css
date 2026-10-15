@@ -279,8 +279,7 @@
   --pad-3: calc(16px * var(--density));
   --pad-4: calc(24px * var(--density));
 
-  --topbar-h: 52px;
-  --statusbar-h: 28px;
+  --topbar-h: 44px;
   --ribbon-h: 34px; /* kb2 redesign — context line (was 38px) */
   --rail-w: 240px; /* v0.10 D4 — was 220px in v0.6 */
   /* Mobile bottom tab bar (kb2 redesign — Recent/Search/Memory/Lists). */

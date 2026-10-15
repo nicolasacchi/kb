@@ -16,26 +16,6 @@
 
 /* ───────────────────────── MB2: layout + drawer ─────────────────────── */
 
-/* Hamburger button — hidden on desktop, revealed in the mobile media query
- * below. Lives as the first child of .kb-head. */
-.kb-burger {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  flex: none;
-  border: 1px solid var(--rule);
-  border-radius: 10px;
-  background: var(--bg-panel);
-  color: var(--ink);
-  cursor: pointer;
-}
-.kb-burger:hover {
-  border-color: var(--rule-hi);
-  background: var(--bg-card-hi);
-}
-
 /* Drawer shell. Only ever mounted on mobile (open && isMobile), but the base
  * styles live outside the media query so a slide-in is always positioned
  * correctly when it renders. */
@@ -143,7 +123,8 @@
 }
 /* The filter Sidebar dropped into the drawer fills the width and drops its
  * desktop right border + full-height sizing. */
-.kb-drawer .kb-side {
+.kb-drawer .kb-side,
+[data-kb-sheet] .kb-side {
   height: auto;
   border-right: 0;
   padding: 0 14px 14px;
@@ -214,26 +195,12 @@
 
 /* ── compact header + collapsed layout at ≤860px ─────────────────────── */
 @media (max-width: 860px) {
-  .kb-burger {
-    display: inline-flex;
-  }
-
-  /* Desktop header clusters fold into the drawer / cmdk. The compact header
-   * keeps: burger + workspace + search-mini. The anchor + inbox pills fold
-   * into the drawer NavList as badge rows (W3): the header is a fixed-height
-   * no-wrap flex in the --topbar-h track, so at 390px the two pills overflow
-   * the viewport (~48px) the moment there's anything to triage. */
-  .kb-head > .kb-viewtoggle,
-  .kb-head > .kb-saved-wrap,
-  .kb-head > .kb-iconbtn,
-  .kb-head > .kb-anchor,
-  .kb-head > .kb-inbox,
-  /* LSC-4's "N waiting" chip is a THIRD pill with the same geometry, so it
-   * overflows for the same reason the moment a session is waiting. Unlike
-   * anchor/inbox it has no drawer NavList row to fold into (there is no
-   * /sessions row), so on a phone the count lives only in the Now band at
-   * the top of /sessions. */
-  .kb-head > .kb-waiting {
+  /* The Spine already hides its scope + right slots (identity, pills, waiting
+   * chip, capture, saved queries, theme, settings, daemon status) and shows its
+   * menu button at <=860px; the compact bar keeps menu + workspace + search.
+   * The anchor/inbox pills fold into the sheet's NavList as badge rows (W3).
+   * Only the switcher's view strip needs hiding here. */
+  .kb-head .kb-viewtoggle {
     display: none;
   }
 
@@ -242,14 +209,6 @@
     grid-template-columns: 1fr;
   }
   .body--with-rail > .kb-side {
-    display: none;
-  }
-
-  /* Reclaim the statusbar grid track on phones. */
-  .app {
-    grid-template-rows: var(--topbar-h) auto minmax(0, 1fr) 0;
-  }
-  .kb-statusbar {
     display: none;
   }
 
@@ -329,7 +288,6 @@ body.kb-immersive .body {
 body.kb-immersive .kb-head,
 body.kb-immersive .kb-qribbon,
 body.kb-immersive .kb-qribbon-placeholder,
-body.kb-immersive .kb-statusbar,
 body.kb-immersive .kb-ctxbar,
 body.kb-immersive .pages,
 body.kb-immersive .pill-container {
@@ -1017,13 +975,13 @@ body.kb-immersive .kb-tabbar {
  * selectors simply no-op. */
 @media (pointer: coarse) {
   .kb-iconbtn,
-  .kb-burger,
+  [data-kb-spine-menu],
   .kb-ws,
   .kb-search-mini {
     min-height: 44px;
   }
   .kb-iconbtn,
-  .kb-burger {
+  [data-kb-spine-menu] {
     min-width: 44px;
   }
   /* Sidebar filter rows + date segmented control. */

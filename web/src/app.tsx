@@ -10,9 +10,9 @@ import {
 import Header from "./components/chrome/Header";
 import ContextLine from "./components/chrome/ContextLine";
 import { QueryStatsProvider } from "./components/chrome/queryStats";
-import StatusBar, { StatusBarProvider } from "./components/chrome/StatusBar";
+import { StatusBarProvider } from "./components/chrome/DaemonStatus";
 import Sidebar from "./components/chrome/Sidebar";
-import MobileDrawer from "./components/chrome/MobileDrawer";
+import NavSheet from "./components/chrome/NavSheet";
 import NavList from "./components/chrome/NavList";
 import BottomTabBar from "./components/chrome/BottomTabBar";
 import DaemonDownBanner from "./components/chrome/DaemonDownBanner";
@@ -241,6 +241,8 @@ export default function App() {
       <Header
         onOpenCmdk={() => setCmdkOpen(true)}
         onToggleDrawer={() => setDrawerOpen((o) => !o)}
+        menuOpen={drawerOpen && isMobile}
+        warnings={identityWarnings}
       />
       <ContextLine />
       <DaemonDownBanner />
@@ -426,7 +428,6 @@ export default function App() {
       </Routes>
       </Suspense>
       </ErrorBoundary>
-      <StatusBar warnings={identityWarnings} />
       <StatusPill warnings={identityWarnings} />
       {isMobile && !isDetail && (
         <BottomTabBar
@@ -437,12 +438,7 @@ export default function App() {
       <HotkeyRoot />
       {cmdkOpen && <Cmdk kb={activeKb} onClose={() => setCmdkOpen(false)} />}
       {captureOpen && <CaptureSheet onClose={() => setCaptureOpen(false)} />}
-      <MobileDrawer
-        open={drawerOpen && isMobile}
-        onClose={() => setDrawerOpen(false)}
-        title="kb"
-        ariaLabel="navigation and filters"
-      >
+      <NavSheet open={drawerOpen && isMobile} onClose={() => setDrawerOpen(false)}>
         <NavList onNavigate={() => setDrawerOpen(false)} />
         {!isDetail && (
           <>
@@ -450,7 +446,7 @@ export default function App() {
             <Sidebar />
           </>
         )}
-      </MobileDrawer>
+      </NavSheet>
       <Toasts />
     </div>
     </ConfirmProvider>

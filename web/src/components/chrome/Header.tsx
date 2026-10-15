@@ -13,13 +13,14 @@ import { Icon } from "@kb/ui/icons";
 import { NAV_ITEMS, withKb } from "../../lib/navItems";
 import WaitingChip from "./WaitingChip";
 import DeskPill from "./DeskPill";
+import DaemonStatus from "./DaemonStatus";
+import { Spine } from "@kb/ui/Spine";
 
-// kb2 redesign — Band-1 command bar.
+// kb2 redesign — Band-1 command bar, recomposed on the shared Spine (OL-L1).
 //
-// Slot order matches the redesign canvas: workspace pill (with kb
-// dropdown), anchor pill, view toggle (8-icon segmented strip), then the
-// flex-grow search launcher that fills the gap and pushes the right
-// cluster (saved-queries, theme, settings) to the edge.
+// switcher = workspace pill + view-toggle strip · scope = empty (L7) ·
+// search = the launcher · right = identity/pills/capture/saved/keys/theme/
+// settings/daemon status. The old footer StatusBar lives in `DaemonStatus`.
 //
 // Replaces the v0.6 TopBar. K3 will:
 //   - light up the anchor pill from /api/anchors (cross-kb count)
@@ -31,9 +32,14 @@ import DeskPill from "./DeskPill";
 export default function Header({
   onOpenCmdk,
   onToggleDrawer,
+  menuOpen = false,
+  warnings = [],
 }: {
   onOpenCmdk: () => void;
   onToggleDrawer: () => void;
+  menuOpen?: boolean;
+  /// Identity/environment-drift warnings for the daemon-status popover.
+  warnings?: string[];
 }) {
   const loc = useLocation();
   const { params, set, navigate } = useUrl();
@@ -52,117 +58,115 @@ export default function Header({
     !!matchPath({ path: "/a/:kb/*" }, loc.pathname) ||
     !!matchPath({ path: "/lists/:kb/:id" }, loc.pathname);
 
+  // OL-L1 — the bar is `@kb/ui/Spine` (44px). `div.kb-head` is a wrapper, not a
+  // Spine prop: every pre-existing `.kb-head` selector (immersive hide, the
+  // e2e specs) keeps resolving, and the Spine itself stays app-agnostic. The
+  // Spine root already carries `role="banner"`. The mobile nav Sheet is
+  // mounted by app.tsx, outside this wrapper, so its fixed scrim is not
+  // trapped in the bar's stacking context.
   return (
-    <header className="kb-head" role="banner">
-      <button
-        type="button"
-        className="kb-burger"
-        onClick={onToggleDrawer}
-        aria-label="open menu"
-        title="menu"
-      >
-        <Icon.List aria-hidden="true" />
-      </button>
-      <KbSelector
-        kb={activeKb || "—"}
-        kbs={kbs}
-        scoped={explicitKb !== null}
-        onChange={(name) => {
-          if (onPathKbRoute) navigate(`/?kb=${encodeURIComponent(name)}`);
-          else set("kb", name);
-        }}
-      />
-
-      {/* v0.34 W — current attribution identity (edge/token/loopback).
-          No login/logout affordance — the reverse proxy owns auth. */}
-      <IdentityChip />
-
-      <AnchorPill />
-
-      <InboxPill />
-
-      {/* LSC-4 — "N waiting" — the piece that makes the live-sessions
-          cockpit worth building: the operator shouldn't have to go look.
-          Same hidden-at-zero geometry as the two pills above. */}
-      <WaitingChip />
-
-      <DeskPill />
-
-      <div className="kb-viewtoggle" role="tablist" aria-label="view mode">
-        {NAV_ITEMS.map((item) => {
-          const active = item.isActive(loc, params);
-          return (
-            <Link
-              key={item.id}
-              to={item.href({ params, kb: explicitKb })}
-              role="tab"
-              aria-selected={active}
-              className={active ? "on" : ""}
-              title={item.label}
-              data-testid={item.testid}
+    <div className="kb-head">
+      <Spine
+        switcher={
+          <>
+            <KbSelector
+              kb={activeKb || "—"}
+              kbs={kbs}
+              scoped={explicitKb !== null}
+              onChange={(name) => {
+                if (onPathKbRoute) navigate(`/?kb=${encodeURIComponent(name)}`);
+                else set("kb", name);
+              }}
+            />
+            {/* L2 relabels this strip; until then it keeps its icon form. */}
+            <div className="kb-viewtoggle" role="tablist" aria-label="view mode">
+              {NAV_ITEMS.map((item) => {
+                const active = item.isActive(loc, params);
+                return (
+                  <Link
+                    key={item.id}
+                    to={item.href({ params, kb: explicitKb })}
+                    role="tab"
+                    aria-selected={active}
+                    className={active ? "on" : ""}
+                    title={item.label}
+                    data-testid={item.testid}
+                  >
+                    <item.Glyph />
+                  </Link>
+                );
+              })}
+            </div>
+          </>
+        }
+        search={
+          <button
+            className="kb-search-mini"
+            onClick={onOpenCmdk}
+            aria-label="open search (cmd-k)"
+            title="search (⌘K)"
+          >
+            <Icon.Search />
+            <span className="kb-search-mini__placeholder">Search artifacts…</span>
+            <kbd className="kbd">⌘K</kbd>
+          </button>
+        }
+        right={
+          <>
+            {/* v0.34 W — current attribution identity (edge/token/loopback).
+                No login/logout affordance — the reverse proxy owns auth. */}
+            <IdentityChip />
+            <AnchorPill />
+            <InboxPill />
+            {/* LSC-4 — "N waiting": the operator shouldn't have to go look. */}
+            <WaitingChip />
+            <DeskPill />
+            {/* C2 — first-class capture entry point. Same event the palette
+                command + BottomTabBar button dispatch; App.tsx owns the
+                CaptureSheet's open state. The whole right slot is hidden
+                <=860px by the Spine — the mobile home is the tab bar button. */}
+            <button
+              type="button"
+              className="kb-iconbtn"
+              data-kb-act="capture"
+              title="Capture files or text"
+              aria-label="capture"
+              onClick={() => window.dispatchEvent(new CustomEvent("kb:capture.open"))}
             >
-              <item.Glyph />
+              <Icon.Plus />
+            </button>
+            <SavedQueriesButton />
+            {/* SH.D.4 — the keyboard system's UI entry point; fires the same
+                helpOpen toggle HotkeyRoot's own '?' key uses. */}
+            <button
+              type="button"
+              className="kb-iconbtn"
+              data-kb-act="keyhelp"
+              title="keyboard shortcuts (?)"
+              aria-label="keyboard shortcuts"
+              onClick={() => window.dispatchEvent(new CustomEvent("kb:keyhelp.toggle"))}
+            >
+              ?
+            </button>
+            <ThemeToggle />
+            <Link
+              to="/settings"
+              className={`kb-iconbtn ${loc.pathname === "/settings" ? "on" : ""}`}
+              title="Settings"
+              aria-label="Settings"
+            >
+              <Icon.Settings />
             </Link>
-          );
-        })}
-      </div>
-
-      <button
-        className="kb-search-mini"
-        onClick={onOpenCmdk}
-        aria-label="open search (cmd-k)"
-        title="search (⌘K)"
-      >
-        <Icon.Search />
-        <span className="kb-search-mini__placeholder">Search artifacts…</span>
-        <kbd className="kbd">⌘K</kbd>
-      </button>
-
-      {/* C2 — first-class capture entry point (was palette + drawer row
-          only). Same event the palette command + BottomTabBar button
-          dispatch; App.tsx owns the CaptureSheet's open state. Hidden
-          ≤860px by mobile.css — the mobile home is the tab bar button. */}
-      <button
-        type="button"
-        className="kb-iconbtn"
-        data-kb-act="capture"
-        title="Capture files or text"
-        aria-label="capture"
-        onClick={() => window.dispatchEvent(new CustomEvent("kb:capture.open"))}
-      >
-        <Icon.Plus />
-      </button>
-
-      <SavedQueriesButton />
-
-      {/* SH.D.4 — the keyboard system (chords, marks, registers, hints) had
-          ZERO UI entry point beyond the bare '?' keypress (design audit).
-          A plain text '?' inside the existing .kb-iconbtn shell — no drawn
-          glyph exists for this and a literal question mark is typographically
-          fine here. Fires the same helpOpen toggle HotkeyRoot's own '?' key
-          uses, via the window event that component listens for. */}
-      <button
-        type="button"
-        className="kb-iconbtn"
-        data-kb-act="keyhelp"
-        title="keyboard shortcuts (?)"
-        aria-label="keyboard shortcuts"
-        onClick={() => window.dispatchEvent(new CustomEvent("kb:keyhelp.toggle"))}
-      >
-        ?
-      </button>
-
-      <ThemeToggle />
-
-      <Link
-        to="/settings"
-        className={`kb-iconbtn ${loc.pathname === "/settings" ? "on" : ""}`}
-        title="Settings"
-        aria-label="Settings"
-      >
-        <Icon.Settings />
-      </Link>
-    </header>
+            <DaemonStatus warnings={warnings} />
+          </>
+        }
+        onMenu={onToggleDrawer}
+        menuOpen={menuOpen}
+        menuLabel="open menu"
+        menuControls="kb-navsheet"
+        menuIcon={<Icon.List aria-hidden="true" />}
+      />
+    </div>
   );
 }
 
