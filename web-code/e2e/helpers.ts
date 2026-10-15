@@ -37,7 +37,7 @@ export {
 // change together, same posture kb-code already accepts for its several
 // hand-mirrored grammars (`codeUrl.ts`'s `sym=`/`lang.rs`, per the
 // navigation-history recon).
-export type DeskPreset = "read" | "review" | "explore" | "present" | "legacy";
+export type DeskPreset = "read" | "review" | "explore" | "present";
 
 /// Navigates to `url` with `?desk=<preset>` appended (merged onto any
 /// existing query string, never clobbering it) — so every spec written from

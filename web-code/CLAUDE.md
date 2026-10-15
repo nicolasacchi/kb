@@ -363,8 +363,8 @@ each: `Compare.tsx`'s `dots` checkbox (`Compare.dotsToggle.test.ts`),
 `BoardDetail.tsx`'s `live`/`ctx` checkboxes (`BoardDetail.flagsToggle.test.ts`),
 `TourDetail.tsx`'s `ctx` checkbox (`TourDetail.ctxToggle.test.ts`), and the
 `Tours.tsx`/`Boards.tsx` `status` <select>s (`Tours.statusSelect.test.ts`,
-`Boards.statusSelect.test.ts`). `ReaderLegacy.tsx`'s `handleHierClose` got
-`Reader.tsx`'s flushSync same-tick close so both readers behave alike. The
+`Boards.statusSelect.test.ts`). `handleHierClose` got
+the flushSync same-tick close. The
 rest of the audit stays deliberately UNCHANGED: params seeded into
 `useState` at mount, buttons, read-only display params, local-state and
 server-viewed-state checkboxes, and the review-diff params asserted behind

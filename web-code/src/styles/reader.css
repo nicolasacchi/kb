@@ -27,8 +27,7 @@
 /* V80-R2 — the breadcrumb absorbs the row's free space so the toolbar
  * cluster (below) pins to the right edge regardless of how many of its
  * groups happen to be rendered. Scoped to this header specifically:
- * `.kbc-breadcrumbs` is reused in `ReaderLegacy.tsx` too, which keeps its
- * own flat (ungrouped) toolbar and doesn't need this. A real `min-width`
+ * `.kbc-breadcrumbs` is a shared component. A real `min-width`
  * floor (not `0`) — an EARLIER version of this rule used `min-width: 0`,
  * which let a wide toolbar (five groups, `flex: 0 0 auto`, never shrinks)
  * squeeze the breadcrumb all the way to invisible at 1280px; the floor

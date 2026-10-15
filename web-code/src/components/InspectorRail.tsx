@@ -35,8 +35,8 @@ export type { InspectorTab };
 // props, the same three ALWAYS-VISIBLE passport cards above the body,
 // the same `asSheet` mobile promotion, the same imperative
 // `openTab` handle (which now also accepts the legacy six-tab ids, so
-// the blame gutter, the `a` key and `?shell=legacy`'s reader keep
-// working without a call-site sweep). Root CLAUDE.md invariant #30's
+// the blame gutter and the `a` key keep working without a call-site
+// sweep). Root CLAUDE.md invariant #30's
 // grammar — ONE rail, one home per action, badge on the tab that has
 // something to show — is the thing being preserved, not the tab count.
 const TAB_META: Record<InspectorTab, { label: string; icon: ReactNode; hint: string }> = {
@@ -154,8 +154,7 @@ export interface InspectorRailProps {
   onTogglePin?: () => void;
   /// Controlled tab, when the Desk owns it (the shell's rail stripe and
   /// the presets both set it). Uncontrolled — falling back to the
-  /// per-surface `useInspectorTab` pref — when absent, which is what
-  /// `?shell=legacy`'s reader uses.
+  /// per-surface `useInspectorTab` pref — when absent.
   tab?: InspectorTab;
   onTabChange?: (tab: InspectorTab) => void;
 
@@ -444,9 +443,9 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
           );
         })}
       </nav>
-      {/* Only when the host actually tracks a subject. `?shell=legacy`'s
-          pre-Desk reader passes none, so its rail markup keeps the
-          pre-V70-A4 shape (nav → cards → body) exactly. */}
+      {/* Only when the host actually tracks a subject (the Desk reader
+          always does; a host that omits the prop gets the bare
+          nav → cards → body shape). */}
       {subject !== undefined && (
         <SubjectChip
           subject={subject}

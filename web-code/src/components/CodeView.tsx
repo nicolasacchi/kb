@@ -532,7 +532,7 @@ const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
   // central chord in flight" is a property of the dispatcher, not of
   // whichever route happens to render a buffer, and every CodeView needs
   // the same answer. Wiring it here means the shield exists wherever a
-  // buffer does (`Reader`, `ReaderLegacy`, anything later) instead of once
+  // buffer does (`Reader`, anything later) instead of once
   // per host that remembers to pass it. Outside a `CommandRoot` the bus is
   // the null-object, whose `chordWillConsume` is `() => false`.
   const commandBus = useCommands();

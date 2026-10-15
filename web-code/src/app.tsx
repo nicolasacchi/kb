@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Route, Routes, useLocation, useNavigate } from "react-router";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import ConfirmProvider from "./components/ConfirmProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Omnibox from "./components/Omnibox";
@@ -33,7 +33,6 @@ import LinkedStepChip from "./components/trail/LinkedStepChip";
 import TourRecorder from "./components/tours/TourRecorder";
 import { codeUrl, mergeCurrentSearch } from "./lib/codeUrl";
 import { enterRing, goForward } from "./lib/navHistory";
-import { parseDeskParam } from "./lib/deskParam";
 import CommandRoot, { useCommandHandlers, useCommands } from "./commands/CommandRoot";
 import { useLearnMode } from "./commands/learn";
 import { deepLinkDisposition } from "./commands/commandRows";
@@ -47,11 +46,6 @@ import { toast } from "./lib/toast";
 // (`web/src/app.tsx`).
 const Home = lazy(() => import("./routes/Home"));
 const Reader = lazy(() => import("./routes/Reader"));
-// V70-A4 (§D1) — the pre-Desk reader, kept mounted behind `?shell=legacy`
-// (equivalently `?desk=legacy`) for exactly one milestone so a Desk
-// regression always has a working way back to the code. Its own chunk, so
-// an operator who never asks for it never downloads it.
-const ReaderLegacy = lazy(() => import("./routes/ReaderLegacy"));
 const Search = lazy(() => import("./routes/Search"));
 const SessionDiff = lazy(() => import("./routes/SessionDiff"));
 // Phase C-SPA — time-first-class pages. `~commit`/`~compare`/`~branches`
@@ -136,16 +130,27 @@ const LensEntryByPath = lazy(() => import("./routes/LensEntryByPath"));
 // so `~inbox` is a top-level SIBLING of Home, not a `/r/:repo/~…` sentinel.
 const Inbox = lazy(() => import("./routes/Inbox"));
 
-/// V70-A4 — which reader shell to mount. One switch, read from the URL
-/// (`?shell=legacy`, or `?desk=legacy` via the A0 grammar in
-/// `lib/deskParam.ts`), so the escape hatch is a link the operator can
-/// paste rather than a setting they have to find and later un-find.
+/// The reader route always mounts the Desk reader. The pre-Desk shell that
+/// used to hide behind `?shell=legacy` / `?desk=legacy` is gone (OL C9); a
+/// pasted link that still carries either is not an error — it renders the
+/// Desk and the dead param is stripped with a `replace` navigation (a
+/// redirect never pushes a history entry — the Location Contract).
 function ReaderRoute() {
   const loc = useLocation();
-  const legacy =
-    new URLSearchParams(loc.search).get("shell") === "legacy" ||
-    parseDeskParam(loc.search) === "legacy";
-  return legacy ? <ReaderLegacy /> : <Reader />;
+  const params = new URLSearchParams(loc.search);
+  const stale = params.get("shell") === "legacy" || params.get("desk") === "legacy";
+  if (stale) {
+    if (params.get("shell") === "legacy") params.delete("shell");
+    if (params.get("desk") === "legacy") params.delete("desk");
+    const qs = params.toString();
+    return (
+      <Navigate
+        replace
+        to={{ pathname: loc.pathname, search: qs ? `?${qs}` : "", hash: loc.hash }}
+      />
+    );
+  }
+  return <Reader />;
 }
 
 function RouteFallback() {

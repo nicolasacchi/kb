@@ -73,7 +73,7 @@ Three files, split by what they promise:
 |---|---|
 | `desk-landmarks.spec.ts` | the LANDMARK golden — region identity, order and `data-region` addressing are identical across center modes; a mode may collapse a region, never move or rename one. Iterates a `MODES` list that has one entry today (`reader`) and gains one per center mode. |
 | `desk-viewport.spec.ts` | the VIEWPORT golden — at 1280×720 with the default (Read) desk the code region measures ≥80 columns × 28 lines, computed from CodeMirror's REAL char advance and line height, not an assumed ratio. Also pins the overlay branch: opening the drawer never pushes the code under that floor. |
-| `desk-shell.spec.ts` | everything else the unit shipped — separator drag + persistence, the `Ctrl-w r` resize submode, double-click reset, collapse-to-stripe, `Ctrl-w m` zoom, F11/Shift-F11, the re-cut rail (All first, passport-card order, caret-follow + pin), the drawer's "Keep in drawer" tenant, and the `?shell=legacy` escape hatch. |
+| `desk-shell.spec.ts` | everything else the unit shipped — separator drag + persistence, the `Ctrl-w r` resize submode, double-click reset, collapse-to-stripe, `Ctrl-w m` zoom, F11/Shift-F11, the re-cut rail (All first, passport-card order, caret-follow + pin), the drawer's "Keep in drawer" tenant, and the retired `?shell=legacy` link's redirect to the Desk. |
 
 ## Firefox (opt-in, `KBC_E2E_FIREFOX=1`)
 
@@ -100,7 +100,7 @@ touching `web-code/src/nav/history.ts` even though it is not a CI gate.
 
 ## The `?desk=` URL contract (`web-code/src/lib/deskParam.ts`)
 
-V70-A0 also pins the `?desk=read|review|explore|present|legacy` query-param
+V70-A0 also pins the `?desk=read|review|explore|present` query-param
 grammar one wave before its consumer (the Desk shell itself, unit A3) —
 mirrors `lib/codeUrl.ts`'s `pane2` precedent (shipped before its first
 reader). `parseDeskParam` is unit-tested in `web-code/src/lib/

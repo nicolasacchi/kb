@@ -21,8 +21,8 @@ import { RAIL_TABS, type RailTab } from "../desk/deskState";
 // operator's last six-tab choice and lands on the four-tab equivalent
 // rather than silently resetting everyone to tab one — `LEGACY_TAB_MAP`
 // is that translation, and it is also what lets the imperative
-// `openTab("provenance")` call sites (the blame gutter, `a`) and the
-// `?shell=legacy` reader keep speaking the old vocabulary.
+// `openTab("provenance")` call sites (the blame gutter, `a`) keep
+// speaking the old vocabulary.
 
 export type InspectorTab = RailTab;
 

@@ -87,7 +87,7 @@ export interface PeekPanelProps {
   /// V70-A4 — "Keep in drawer": promote THIS row set into a bottom-drawer
   /// tab that survives the Esc which closes this popup (docs/research/
   /// kb-code-v7-continuum-2026-09.html §P1, the drawer's result-set
-  /// ring). Absent on a host with no Desk around it (`?shell=legacy`),
+  /// ring). Absent on a host with no Desk around it,
   /// in which case the action simply isn't offered — never a dead
   /// button. No new fetch: the rows handed over are the rows already on
   /// screen.

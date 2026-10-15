@@ -5,7 +5,7 @@ import { KNOWN_FILE, KNOWN_SYMBOL } from "./fixture-repo";
 /// V70-A4 — the Desk's behavioural suite: resize + persistence,
 /// collapse-to-stripe, the re-cut rail (All first, passport cards on
 /// every tab, caret-follow + pin), the drawer's "Keep in drawer" tenant,
-/// and the `?shell=legacy` escape hatch.
+/// and the retired `?shell=legacy` link's redirect to the Desk.
 ///
 /// The two GOLDENS live in their own files (`desk-landmarks.spec.ts`,
 /// `desk-viewport.spec.ts`) because they are contracts rather than
@@ -398,30 +398,18 @@ test.describe("Desk — the drawer (V70-A4)", () => {
   });
 });
 
-test.describe("Desk — the legacy shell (V70-A4 / §D1)", () => {
+test.describe("Desk — the retired legacy shell link (OL C9)", () => {
   test.use({ viewport: { width: 1280, height: 720 } });
   test.beforeEach(() => {
     test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
   });
 
-  test("?shell=legacy still mounts the pre-Desk reader", async ({ page }) => {
+  test("?shell=legacy mounts the Desk reader and the param is stripped", async ({ page }) => {
     await page.goto(`${READER}?shell=legacy`);
     await expect(page.locator(".kbc-codeview")).toBeVisible({ timeout: 15_000 });
     await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL);
-    // The pre-Desk shell: the fixed tree aside, no Desk regions at all.
-    await expect(page.locator('[data-region="tree"]')).toHaveCount(1);
-    await expect(page.locator("[data-desk-center-mode]")).toHaveCount(0);
-    await expect(page.locator('[data-region="stripe-left"]')).toHaveCount(0);
-    // The rail is still there, and still the ONE rail (its re-cut tabs
-    // are shared — see `routes/ReaderLegacy.tsx`'s header).
-    await expect(page.locator(".kbc-inspector")).toHaveCount(1);
-  });
-
-  test("?desk=legacy is the same switch", async ({ page }) => {
-    await page.goto(`${READER}?desk=legacy`);
-    await expect(page.locator(".kbc-codeview")).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('[data-region="tree"]')).toHaveCount(1);
-    await expect(page.locator("[data-desk-center-mode]")).toHaveCount(0);
+    await expect(page.locator("[data-desk-center-mode]").first()).toBeAttached();
+    await expect.poll(() => new URL(page.url()).searchParams.has("shell")).toBe(false);
   });
 });
 
