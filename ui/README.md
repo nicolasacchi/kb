@@ -30,12 +30,14 @@ the file.
   with `react-dom/server` `renderToString` in the node environment.
 - Both apps' vitest default to the node environment; a ui/ test that needs the
   DOM must start with a `// @vitest-environment jsdom` docblock.
-- web-code's `lint:css-vars` counts the names `ui/src/**/*.css` declares as
-  defined (incl. the generated `themes.gen.css`) but does not scan `ui/src` for
-  references yet; a later unit widens that.
+- `ui/scripts/css-undefined-vars.mjs <appdir>` lints every `var(--x)` in
+  `<appdir>/src` AND `ui/src` against the names declared in either (OL F10).
 - `ui/scripts/` holds node scripts: `gen-themes.mjs` + `theme-lint.mjs` (the
-  kbc-theme/1 generator and contrast oracle, OL F2; run them with plain `node`)
-  and the type codemod.
+  kbc-theme/1 generator and contrast oracle, OL F2; run them with plain `node`),
+  the type codemod, `css-undefined-vars.mjs` and `ratchet.mjs` (the F10 gates).
+- Gates (OL F10): `<app>/ratchet.json` (literal counts), `ui/chrome-budget.json`
+  and `ui/nav-budget.json`. Both directions fail; lower a number in the PR that
+  earns it. See `docs/web-internals.md` "Frontend gates".
 
 ## Themes (kbc-theme/1)
 
@@ -48,3 +50,20 @@ the pure derivation, `apply.ts` the DOM half (`applyTheme(appearance, family,
 `ThemePicker.tsx` the shared picker (storage is the host's, via a controller).
 kb's default family is `kb-classic` (registry `lead` flag); kb-code keeps its
 built-in `kbc` family painted from its own tokens.css.
+
+## Primitives
+
+**Icons** (`@kb/ui/icons`): one set of 75 names for both apps. `Icon.Name`
+keeps the component-map shape; `createIconSet(overrides)` builds a set with
+per-app default sizes (kb-code overrides Search, Folder and X). Glyphs share one
+16x16 viewBox, 1.4 stroke, `currentColor`.
+
+**Spine.** The one bar both apps share: 44px, sticky, four slots: `switcher` (left), `scope` (breadcrumb; the only slot that shrinks), `search` (centred, max 40rem), `right` (status/identity). At <=860px `scope` and `right` hide and the menu button (enabled by passing `onMenu`) appears. View controls never live in the Spine; they belong to the ViewBar. Apps pass their own router link via `SpineCrumbs`' `renderLink`; `ui/` imports no router.
+
+**ViewBar** (`@kb/ui/ViewBar`): `<ViewBar title count clusters maxVisible={9} moreLabel renderControl />`. Control kinds: button, toggle (`aria-pressed`), select, segment (one control, `aria-pressed` per option). Labels and keys come from the caller's registry row; the component invents none. A disabled control keeps `reason` visible. Controls beyond `maxVisible` (counted across clusters in order) move to a More menu with cluster label, label and key. `attrs` are spread as data-* attributes so apps keep their e2e selectors.
+
+**StateCard** (`@kb/ui/StateCard`): one surface for loading, empty, refused, degraded and version-mismatch states. `kind` picks the semantics (`loading` is a polite `role=status` div; the rest are labelled regions with a heading, default h2) and a default icon; every kind carries `data-kb-state-kind`. Optional `reason`, `progress` (`<progress>` plus "done / total unit"), `actions` (`href` renders `<a>`, otherwise `<button>`) and `cli` (the CLI twin in a `<code>` with a copy button). ui/ imports no router: pass `renderLink={(href, children) => <Link to={href}>{children}</Link>}`. No skeletons or shimmer by design.
+
+**Sheet** (`@kb/ui/Sheet`): a bottom sheet with closed/peek/full detents. The detent machine (`sheet/detents.ts`) is pure; the component adds the scrim, dialog role, grab handle (pointer drag and arrow keys), Esc to close, focus move and restore, and a body scroll lock that restores the previous inline value. `asSheet={false}` renders a plain div so one component serves both a desktop panel and a mobile sheet. Height transitions run only under `prefers-reduced-motion: no-preference`.
+
+**keys/** — `WhichKey` (next-key overlay for a pending chord) and `KeyboardHelp` (`?` sheet) take generic `KeyRow`/`KeyScopeView` data; an app adapter maps its own registry onto them. They own markup, Esc-to-close and CSS, never key dispatch. Import from `@kb/ui/keys/WhichKey`, `@kb/ui/keys/KeyboardHelp`, `@kb/ui/keys/types`.

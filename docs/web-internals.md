@@ -321,3 +321,32 @@ hint 50, modal 100, top 1000.
 kb was re-based onto this ramp by `ui/scripts/codemod-type.mjs` (OL F3); the
 rewrite list is in `ui/scripts/codemod-type.report.md`. A deliberate literal is
 written `/* kb-literal: <reason> */` on the same line.
+
+### Frontend gates (OL F10)
+
+Four gates fail CI when the interface drifts. Each is two-way: going over the
+frozen number is a regression, and going under it fails too, so a reduction is
+locked in by the PR that makes it. **Lower the baseline in the same PR.**
+
+- **Literal ratchet** — `node ui/scripts/ratchet.mjs <appdir>` counts
+  `fontSizeLiterals`, `hexLiterals`, `zIndexLiterals`, `legacyAliases` and
+  `kbLiteralOptOuts` over `<app>/src` (generated themes, any `tokens.css`,
+  `api/generated/` and test files excluded) and compares them with
+  `<app>/ratchet.json`. To lower a baseline after removing literals, run
+  `node ui/scripts/ratchet.mjs web --write` (or `web-code`) and commit the
+  json. A deliberate literal carries `kb-literal: <reason>` on its line and is
+  counted under `kbLiteralOptOuts`. Runs in `web-unit` and `code-spa`.
+- **css-vars lint** — `node ui/scripts/css-undefined-vars.mjs <appdir>` fails on
+  any `var(--x)` in `<app>/src` or `ui/src` that nothing declares. An optional
+  `<app>/scripts/ci/css-vars-allowlist.txt` (one `--name` per line) grandfathers
+  names; an entry that no longer matches a reference fails, so it only shrinks.
+- **Chrome budget** — `ui/chrome-budget.json` holds the pixels of fixed/sticky
+  chrome on the top edge: kb gallery, kb-code home and reader. The Playwright
+  specs `tests/e2e/spa-chrome-budget.spec.ts` and
+  `web-code/e2e/chrome-budget.spec.ts` measure the union of the rects of every
+  fixed or sticky element touching the top edge (elements taller than half the
+  viewport are skipped) and fail above the budget or more than 4px below it.
+  The spec logs `chrome-budget: <app>.<route> measured=N budget=M`; read the new
+  `N` from the CI log when lowering.
+- **Nav count** — `ui/nav-budget.json` holds the number of primary nav items per
+  app; `navItems.budget.test.ts` in each app asserts equality.
