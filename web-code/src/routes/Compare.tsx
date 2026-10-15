@@ -6,6 +6,7 @@ import PrCommentsStrip from "../components/history/PrCommentsStrip";
 import { Icon } from "../components/iconSet";
 import MetaLine from "../components/MetaLine";
 import PageHeader from "../components/PageHeader";
+import ReviewTabs from "../components/nav/ReviewTabs";
 import RefTypeahead from "../components/RefTypeahead";
 import { useCompare } from "../hooks/useCompare";
 import { useRefs } from "../hooks/useRefs";
@@ -135,6 +136,7 @@ export default function Compare() {
 
   return (
     <div className="kbc-compare">
+      <ReviewTabs />
       <PageHeader title="Compare" lede="Commits and file changes between two refs." />
       <form className="kbc-compare__head" onSubmit={onSubmit}>
         <RefTypeahead

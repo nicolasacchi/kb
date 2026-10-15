@@ -62,6 +62,7 @@ const SessionDiff = lazy(() => import("./routes/SessionDiff"));
 const Commit = lazy(() => import("./routes/Commit"));
 const Compare = lazy(() => import("./routes/Compare"));
 const Branches = lazy(() => import("./routes/Branches"));
+const Collections = lazy(() => import("./routes/Collections"));
 // Phase G-server — the review-workflow pages, same repo-scoped/non-file
 // sentinel treatment as `~compare`/`~branches` above.
 const RangeDiff = lazy(() => import("./routes/RangeDiff"));
@@ -439,6 +440,8 @@ function AppShell() {
                 <Route path="/r/:repo/~tours" element={<Tours />} />
                 <Route path="/r/:repo/~tours/:slug" element={<TourDetail />} />
                 <Route path="/r/:repo/~browser" element={<Browser />} />
+                {/* OL-C1 — the page behind the Collections door. */}
+                <Route path="/r/:repo/~collections" element={<Collections />} />
                 {/* DCB W2.B (R2/D14) — the repo-scoped lens, no splat: the
                     artifact id is the doc key on every DCB wire/route. */}
                 <Route path="/r/:repo/~lens/:kb/:docId" element={<Lens />} />

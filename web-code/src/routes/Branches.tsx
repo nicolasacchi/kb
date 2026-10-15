@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useParams } from "react-router";
 import BranchesHero from "../components/branches/BranchesHero";
 import BranchViews from "../components/branches/BranchViews";
@@ -7,6 +7,7 @@ import RankedBranchList from "../components/branches/RankedBranchList";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
+import ReviewTabs from "../components/nav/ReviewTabs";
 import { useBranches } from "../hooks/useBranches";
 import { useWorkspaceGroups } from "../hooks/useSets";
 import { readerUrl } from "../lib/breadcrumbs";
@@ -50,9 +51,19 @@ export default function Branches() {
     return map;
   }, [workspaceGroups.data]);
 
-  if (branches.isLoading) return <div className="kbc-reader__hint">Loading branches…</div>;
+  // The Review sub-nav rides the loading and error states too, so a failed
+  // load does not strand the reader without the other tabs.
+  const withTabs = (body: ReactNode) => (
+    <div className="kbc-branches">
+      <ReviewTabs />
+      {body}
+    </div>
+  );
+  if (branches.isLoading) return withTabs(<div className="kbc-reader__hint">Loading branches…</div>);
   if (branches.error) {
-    return <div className="kbc-reader__hint kbc-reader__hint--error">{(branches.error as Error).message}</div>;
+    return withTabs(
+      <div className="kbc-reader__hint kbc-reader__hint--error">{(branches.error as Error).message}</div>,
+    );
   }
   if (!branches.data) return null;
 
@@ -61,6 +72,7 @@ export default function Branches() {
 
   return (
     <div className="kbc-branches">
+      <ReviewTabs />
       <PageHeader title="Branches" />
       {truncated && (
         <div className="kbc-branches__truncated" data-kbc-branches-truncated>

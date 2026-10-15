@@ -4,6 +4,7 @@ import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/iconSet";
 import MetaLine from "../components/MetaLine";
 import PageHeader from "../components/PageHeader";
+import ReviewTabs from "../components/nav/ReviewTabs";
 import RangeDiffTable from "../components/reviews/RangeDiffTable";
 import RefTypeahead from "../components/RefTypeahead";
 import { useRangeDiff } from "../hooks/useRangeDiff";
@@ -71,6 +72,7 @@ export default function RangeDiff() {
 
   return (
     <div className="kbc-rangediff">
+      <ReviewTabs />
       <PageHeader
         title="Range-diff"
         lede="Which commits in two overlapping ranges — typically the same topic branch before/after a rebase or amend — are equal, modified, added, or removed relative to each other."

@@ -188,8 +188,6 @@
   .kbc-drawer-scrim,
   .kbc-reader__outline,
   .kbc-sheet-scrim,
-  .kbc-navsheet,
-  .kbc-navsheet-scrim,
   .kbc-review__side {
     transition: none;
   }
@@ -594,9 +592,7 @@
   .kbc-search-mini,
   .kbc-drawer__close,
   .kbc-inspector__sheet-x,
-  .kbc-topbar__nav-toggle,
   .kbc-navsheet__row,
-  .kbc-navsheet__close,
   .kbc-navsheet__theme,
   .kbc-review-sheet-toggle,
   .kbc-review__sheet-x,

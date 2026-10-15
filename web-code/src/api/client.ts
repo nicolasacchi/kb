@@ -5,6 +5,7 @@
 // `/api/...` fetch, proxied to 127.0.0.1:4747 in dev (`vite.config.ts`) and
 // same-origin once `web-code/dist` is served by the daemon itself.
 
+import type { SeqListOut } from "./seq";
 import type {
   AnchorKind,
   AnnotationIntent,
@@ -2497,6 +2498,12 @@ export function archiveBoard(repo: string, slug: string): Promise<BoardStatusOut
 // browser therefore gets an honest 404 from `fetchTrails`, which
 // `hooks/useTrails.ts` folds into "not available here" rather than an error
 // toast.
+
+/// `GET /api/seq?repo=` — kbc-seq/1, every sequence projection in one repo
+/// (the Collections page's counts).
+export function fetchSeq(repo: string): Promise<SeqListOut> {
+  return getJson<SeqListOut>("/api/seq", { repo });
+}
 
 /// `GET /api/tours?repo=[&status=]`.
 export function fetchTours(repo: string, status?: string): Promise<ToursListOut> {

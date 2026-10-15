@@ -157,63 +157,61 @@ test.describe("chrome — theme picker", () => {
   });
 });
 
-const NAV_KEYS = [
-  "branches",
-  "prs",
-  "reviews",
-  "browser",
-  "sets",
-  "hotspots",
-  "todos",
-  "recipes",
-  "stacks",
-  "canvas",
+const DOORS = [
+  ["code", "Code"],
+  ["search", "Search"],
+  ["review", "Review"],
+  ["collections", "Collections"],
 ] as const;
 
-/// V4.U5 — mobile nav sheet (390×844) + desktop review chips / Explore.
+/// OL-C1 — mobile nav sheet (390×844) on the shared `@kb/ui/Sheet`: the four
+/// doors + Inbox, closing on navigation / Esc / scrim.
 test.describe("chrome — mobile nav sheet (390×844)", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("nav toggle opens the sheet; every destination is a row; tap navigates and closes", async ({
+  test("menu button opens the sheet; every door is a row; tap navigates and closes", async ({
     page,
   }) => {
     await page.goto(`${BASE}/r/${REPO_NAME}`);
-    const toggle = page.locator("[data-kbc-nav-toggle]");
+    const toggle = page.locator("[data-kb-spine-menu]");
     await expect(toggle).toBeVisible();
     await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
 
     await toggle.click();
     const sheet = page.locator("[data-kbc-navsheet]");
     await expect(sheet).toBeVisible();
-    for (const key of NAV_KEYS) {
-      await expect(sheet.locator(`[data-kbc-topbar-${key}]`)).toBeVisible();
+    for (const [key, label] of DOORS) {
+      const row = sheet.locator(`[data-kbc-nav-row="${key}"]`);
+      await expect(row).toBeVisible();
+      await expect(row).toContainText(label);
     }
+    await expect(sheet.locator('[data-kbc-nav-row="inbox"]')).toBeVisible();
 
-    await sheet.locator("[data-kbc-topbar-todos]").click();
-    await expect(page).toHaveURL(new RegExp(`/r/${REPO_NAME}/~todos`));
+    await sheet.locator('[data-kbc-nav-row="collections"]').click();
+    await expect(page).toHaveURL(new RegExp(`/r/${REPO_NAME}/~collections`));
     await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
   });
 
   test("scrim tap and Escape both dismiss the nav sheet", async ({ page }) => {
     await page.goto(`${BASE}/r/${REPO_NAME}`);
-    await page.locator("[data-kbc-nav-toggle]").click();
+    await page.locator("[data-kb-spine-menu]").click();
     await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
 
-    await page.locator("[data-kbc-nav-toggle]").click();
+    await page.locator("[data-kb-spine-menu]").click();
     await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
-    // Sheet sits at the bottom; tap the scrim near the top, clear of the
-    // panel (same trick as mobile.spec.ts's drawer-scrim click).
-    await page.locator("[data-kbc-navsheet-scrim]").click({ position: { x: 200, y: 40 } });
+    // The sheet sits at the bottom (70vh peek); tap the scrim near the top,
+    // clear of the panel.
+    await page.locator("[data-kb-scrim]").click({ position: { x: 200, y: 40 } });
     await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
   });
 
   test("theme row cycles data-theme", async ({ page }) => {
     await page.goto(`${BASE}/r/${REPO_NAME}`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    await page.locator("[data-kbc-nav-toggle]").click();
+    await page.locator("[data-kb-spine-menu]").click();
     await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
     await page.locator("[data-kbc-nav-theme]").click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
@@ -223,7 +221,7 @@ test.describe("chrome — mobile nav sheet (390×844)", () => {
   /// popover) AND gains a row that opens the same picker as a bottom sheet.
   test("colour-scheme row opens the picker as a sheet", async ({ page }) => {
     await page.goto(`${BASE}/r/${REPO_NAME}`);
-    await page.locator("[data-kbc-nav-toggle]").click();
+    await page.locator("[data-kb-spine-menu]").click();
     await expect(page.locator("[data-kbc-navsheet]")).toBeVisible();
     await page.locator("[data-kbc-nav-theme-picker]").click();
     const picker = page.locator("[data-kbc-themepicker]");
@@ -237,31 +235,53 @@ test.describe("chrome — mobile nav sheet (390×844)", () => {
 test.describe("chrome — desktop TopBar (1280×720)", () => {
   test.use({ viewport: { width: 1280, height: 720 } });
 
-  test("review chips visible; Explore opens/closes; no sheet in DOM", async ({ page }) => {
+  test("four labelled doors visible; no Explore trigger; no sheet in DOM", async ({ page }) => {
     await page.goto(`${BASE}/r/${REPO_NAME}`);
-    await expect(page.locator("[data-kbc-topbar-branches]")).toBeVisible();
-    await expect(page.locator("[data-kbc-topbar-prs]")).toBeVisible();
-    await expect(page.locator("[data-kbc-topbar-reviews]")).toBeVisible();
-    await expect(page.locator("[data-kbc-nav-explore]")).toBeVisible();
-    await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
-    await expect(page.locator("[data-kbc-nav-toggle]")).toHaveCount(0);
-
-    await page.locator("[data-kbc-nav-explore]").click();
-    await expect(page.locator("[data-kbc-navmenu]")).toBeVisible();
-    await expect(page.locator("[data-kbc-topbar-todos]")).toBeVisible();
-    await page.keyboard.press("Escape");
+    for (const [key, label] of DOORS) {
+      const door = page.locator(`[data-kbc-topbar-${key}]`);
+      await expect(door).toBeVisible();
+      await expect(door).toContainText(label);
+    }
+    await expect(page.locator("[data-kbc-topbar-inbox]")).toBeVisible();
+    await expect(page.locator("[data-kbc-nav-explore]")).toHaveCount(0);
     await expect(page.locator("[data-kbc-navmenu]")).toHaveCount(0);
+    await expect(page.locator("[data-kbc-navsheet]")).toHaveCount(0);
+    await expect(page.locator("[data-kb-spine-menu]")).toBeHidden();
+    // The bar keeps its 44px height with the doors in it.
+    const box = await page.locator("[data-kb-spine]").boundingBox();
+    expect(box?.height).toBe(44);
   });
 
-  test("active route marks the current chip with aria-current", async ({ page }) => {
+  test("the active door carries aria-current: Review on ~branches, Collections on ~todos", async ({
+    page,
+  }) => {
     await page.goto(`${BASE}/r/${REPO_NAME}/~branches`);
-    const branches = page.locator("[data-kbc-topbar-branches]");
-    await expect(branches).toBeVisible();
-    await expect(branches).toHaveAttribute("aria-current", "page");
+    const review = page.locator("[data-kbc-topbar-review]");
+    await expect(review).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("[data-kbc-topbar-collections]")).not.toHaveAttribute(
+      "aria-current",
+      "page",
+    );
 
     await page.goto(`${BASE}/r/${REPO_NAME}/~todos`);
-    const explore = page.locator("[data-kbc-nav-explore]");
-    await expect(explore).toHaveAttribute("aria-current", "page");
-    await expect(explore).toContainText("Explore: TODOs");
+    await expect(page.locator("[data-kbc-topbar-collections]")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(review).not.toHaveAttribute("aria-current", "page");
+  });
+
+  test("the review-family pages carry the Review sub-nav", async ({ page }) => {
+    await page.goto(`${BASE}/r/${REPO_NAME}/~branches`);
+    const tabs = page.getByRole("navigation", { name: "Review", exact: true });
+    await expect(tabs).toBeVisible();
+    await expect(tabs.locator("[data-kbc-reviewtab]")).toHaveCount(4);
+    await expect(tabs.locator('[data-kbc-reviewtab="branches"]')).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await tabs.locator('[data-kbc-reviewtab="prs"]').click();
+    await expect(page).toHaveURL(new RegExp(`/r/${REPO_NAME}/~prs`));
+    await expect(page.getByRole("navigation", { name: "Review", exact: true })).toBeVisible();
   });
 });
