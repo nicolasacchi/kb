@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "TZ=UTC vitest run",
-    "test:watch": "TZ=UTC vitest"
+    "test:watch": "TZ=UTC vitest",
+    "lint:css-vars": "node ../ui/scripts/css-undefined-vars.mjs .",
+    "lint:ratchet": "node ../ui/scripts/ratchet.mjs ."
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

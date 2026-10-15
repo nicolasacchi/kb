@@ -17,7 +17,8 @@
     "gen:themes": "node ../ui/scripts/gen-themes.mjs",
     "gen:commands": "node scripts/gen-commands.mjs",
     "lint:themes": "node ../ui/scripts/theme-lint.mjs",
-    "lint:css-vars": "node scripts/css-undefined-vars.mjs"
+    "lint:css-vars": "node ../ui/scripts/css-undefined-vars.mjs .",
+    "lint:ratchet": "node ../ui/scripts/ratchet.mjs ."
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
