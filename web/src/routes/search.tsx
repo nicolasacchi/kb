@@ -13,6 +13,9 @@ import { useKbs } from "../hooks/useKbs";
 import SearchResultCard from "../components/search/SearchResultCard";
 import SearchRail from "../components/search/SearchRail";
 import SearchSortControl from "../components/search/SearchSortControl";
+import { buildSearchClusters, isNoEmbeddingModelError } from "../lib/searchControls";
+import { StateCard } from "@kb/ui/StateCard";
+import { ViewBar } from "@kb/ui/ViewBar";
 import SearchChipBar, { type Chip } from "../components/search/SearchChipBar";
 import SearchSavedBar from "../components/search/SearchSavedBar";
 import ZeroHitRecovery from "../components/search/ZeroHitRecovery";
@@ -340,11 +343,9 @@ export default function SearchRoute() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const rail = (
     <SearchRail
-      mode={mode}
-        scope={scope}
+      scope={scope}
         category={category}
         folder={folder}
-        limit={limit}
         read={read}
         tags={tags}
         excludeTags={excludeTags}
@@ -359,26 +360,49 @@ export default function SearchRoute() {
         readTo={readTo}
         activeKb={activeKb}
         defaultSearchCategory={activeKbMeta?.default_search_category}
-        onMode={(m) => set("mode", m === "hybrid" ? null : m)}
-        // Switching scope clears the single-kb-only facets in one navigate
-        // (folder/tags/session/list are per-corpus; category may not exist
-        // cross-kb).
-        onScope={(s) =>
-          setMany({
-            scope: s === "one" ? null : "all",
-            category: null,
-            folder: null,
-            tags: null,
-            exclude_tags: null,
-            session: null,
-            list: null,
-          })
-        }
-        onLimit={(n) => set("limit", n === DEFAULT_LIMIT ? null : String(n))}
         set={set}
         setMany={setMany}
       />
   );
+
+  // OL R5 — mode/scope/results/sort as one ViewBar. KbSummary carries no
+  // embedding-model field, so the daemon's own refusal is the signal: once a
+  // model-backed mode fails with it, that kb (or the federated scope) keeps
+  // hybrid/semantic disabled with the reason instead of failing again.
+  const noModelKey = scope === "all" ? "*" : (activeKb ?? "");
+  const [noModelKeys, setNoModelKeys] = useState<ReadonlySet<string>>(new Set());
+  const refusedNow = mode !== "keyword" && isNoEmbeddingModelError(res.error);
+  useEffect(() => {
+    if (refusedNow) setNoModelKeys((prev) => new Set(prev).add(noModelKey));
+  }, [refusedNow, noModelKey]);
+  const noModel = refusedNow || noModelKeys.has(noModelKey);
+  const clusters = buildSearchClusters({
+    mode,
+    scope,
+    limit,
+    sort,
+    noModel,
+    onMode: (m) => set("mode", m === "hybrid" ? null : m),
+    // Switching scope clears the single-kb-only facets in one navigate
+    // (folder/tags/session/list are per-corpus; category may not exist
+    // cross-kb).
+    onScope: (sc) =>
+      setMany({
+        scope: sc === "one" ? null : "all",
+        category: null,
+        folder: null,
+        tags: null,
+        exclude_tags: null,
+        session: null,
+        list: null,
+      }),
+    onLimit: (n) => set("limit", n === DEFAULT_LIMIT ? null : String(n)),
+    onSort: (sk) =>
+      setMany({
+        sort: sk === "relevance" ? null : sk,
+        dir: null,
+      }),
+  });
 
   return (
     <div className="kb-search">
@@ -403,6 +427,28 @@ export default function SearchRoute() {
                 q: qq || null,
                 mode: m && m !== "hybrid" ? m : null,
               })
+            }
+          />
+        </div>
+        <div className="kb-search__viewbar">
+          <ViewBar
+            title="Search view"
+            clusters={clusters}
+            renderControl={(c, node) =>
+              c.id === "sort" ? (
+                <SearchSortControl
+                  sort={sort}
+                  dir={dir}
+                  onSort={(sk, d) =>
+                    setMany({
+                      sort: sk === "relevance" ? null : sk,
+                      dir: sk !== "relevance" && d !== defaultSearchDir(sk) ? d : null,
+                    })
+                  }
+                />
+              ) : (
+                node
+              )
             }
           />
         </div>
@@ -446,31 +492,32 @@ export default function SearchRoute() {
                 </>
               )}
               {res.cacheHit && <span className="kb-search__cache">cached</span>}
-              <SearchSortControl
-                sort={sort}
-                dir={dir}
-                onSort={(s, d) =>
-                  setMany({
-                    sort: s === "relevance" ? null : s,
-                    dir:
-                      s !== "relevance" && d !== defaultSearchDir(s) ? d : null,
-                  })
-                }
-              />
             </div>
 
             {res.error ? (
-              <EmptyState
-                icon={<Icon.Search />}
-                title="Search failed"
-                hint={res.error}
-              />
+              refusedNow ? (
+                <StateCard
+                  kind="refused"
+                  title="Hybrid and semantic search are not available"
+                  reason={`${activeKb ? `Kb ${activeKb}` : "A corpus in this search"} has no embedding model, so ${mode} mode cannot run. Keyword search needs no model.`}
+                  cli={`kb model set <model> --kb ${activeKb ?? "<kb>"}`}
+                  actions={[
+                    {
+                      key: "use-keyword",
+                      label: "Use keyword search",
+                      onClick: () => set("mode", "keyword"),
+                    },
+                  ]}
+                />
+              ) : (
+                <StateCard kind="degraded" title="Search failed" reason={res.error} />
+              )
             ) : !res.loading && hitCount === 0 ? (
               <>
-                <EmptyState
-                  icon={<Icon.Search />}
+                <StateCard
+                  kind="empty"
                   title="No matches"
-                  hint={
+                  reason={
                     browse
                       ? "No artifacts match these filters — clear one in the rail, or try one of the ideas below."
                       : "Widen the query, switch search mode, or clear a filter — or try one of the ideas below."
