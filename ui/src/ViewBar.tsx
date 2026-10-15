@@ -26,6 +26,8 @@ export type Cluster = { label: string; controls: Control[] };
 
 export type ViewBarProps = {
   title?: string;
+  /** Accessible name of the toolbar when no visible `title` is wanted (the bar then renders no heading). */
+  ariaLabel?: string;
   count?: number | string;
   clusters: Cluster[];
   maxVisible?: number;
@@ -211,7 +213,7 @@ function MenuRows({ o, close }: { o: Overflow; close: () => void }) {
   );
 }
 
-export function ViewBar({ title, count, clusters, maxVisible = 9, moreLabel = "More", renderControl }: ViewBarProps) {
+export function ViewBar({ title, ariaLabel, count, clusters, maxVisible = 9, moreLabel = "More", renderControl }: ViewBarProps) {
   const uid = useId();
   const menuId = `${uid}-menu`;
   const [open, setOpen] = useState(false);
@@ -249,7 +251,7 @@ export function ViewBar({ title, count, clusters, maxVisible = 9, moreLabel = "M
   }, [open]);
 
   return (
-    <div data-kb-viewbar role="toolbar" aria-label={title ?? "View"} className="kb-viewbar">
+    <div data-kb-viewbar role="toolbar" aria-label={ariaLabel ?? title ?? "View"} className="kb-viewbar">
       <div className="kb-viewbar__lead">
         {title ? <span className="kb-viewbar__title">{title}</span> : null}
         {count !== undefined ? <span className="kb-viewbar__count">{count}</span> : null}
