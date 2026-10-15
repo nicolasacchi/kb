@@ -3,7 +3,6 @@ import {
   fetchFolders,
   isAbortError,
   type FolderNode,
-  type SearchMode,
   type SearchScope,
 } from "../../api/client";
 import FolderTree from "../FolderTree";
@@ -15,12 +14,6 @@ import SessionPicker from "./rail/SessionPicker";
 import ListPicker from "./rail/ListPicker";
 import TemporalScrubber from "./TemporalScrubber";
 
-const MODES: { value: SearchMode; label: string }[] = [
-  { value: "hybrid", label: "hybrid" },
-  { value: "keyword", label: "keyword" },
-  { value: "semantic", label: "semantic" },
-];
-const LIMITS = [20, 50, 100, 200];
 const READ_OPTS: ToggleOption[] = [
   { value: "unread", label: "unread" },
   { value: "in_progress", label: "in progress" },
@@ -44,11 +37,9 @@ const SINCE_FIELD_OPTS: ToggleOption[] = [
 ];
 
 export type SearchRailProps = {
-  mode: SearchMode;
   scope: SearchScope;
   category: string;
   folder: string;
-  limit: number;
   read: string[];
   tags: string[];
   excludeTags: string[];
@@ -69,9 +60,6 @@ export type SearchRailProps = {
   // corpus. `undefined`/`null` when the kb has none configured. Drives the
   // "include session transcripts" toggle's checked state below.
   defaultSearchCategory?: string | null;
-  onMode: (m: SearchMode) => void;
-  onScope: (s: SearchScope) => void;
-  onLimit: (n: number) => void;
   // Generic URL writers from the route's useUrl — leaf facets map straight
   // to params (single value via `set`, related pairs via `setMany`).
   set: (key: string, value: string | null) => void;
@@ -100,19 +88,17 @@ export function isSessionsIncluded(
   );
 }
 
-// FS2/FS3 — the search page's filter rail. Mode/scope/results stay plain
-// always-visible sections; every real facet (read-state, tags, category,
+// FS2/FS3 — the search page's filter rail. Mode/scope/results/sort live in
+// the page's ViewBar (OL R5); the rail holds facets only: every real facet (read-state, tags, category,
 // status, severity, date, capabilities, folder) is a collapsible
 // FilterSection with an active-count badge. Tags + folder are single-kb
 // (per-corpus), hidden under scope=all. The rail is controlled: the route
 // owns useUrl and passes values + `set`/`setMany`; leaves never fetch URL
 // state themselves (keeps the scope-reset batching in one place).
 export default function SearchRail({
-  mode,
   scope,
   category,
   folder,
-  limit,
   read,
   tags,
   excludeTags,
@@ -127,9 +113,6 @@ export default function SearchRail({
   readTo,
   activeKb,
   defaultSearchCategory,
-  onMode,
-  onScope,
-  onLimit,
   set,
   setMany,
 }: SearchRailProps) {
@@ -197,41 +180,6 @@ export default function SearchRail({
 
   return (
     <aside className="kb-search-rail" aria-label="search filters">
-      <div className="kb-search-rail__sect">Mode</div>
-      <div className="kb-search-rail__seg">
-        {MODES.map((m) => (
-          <button
-            key={m.value}
-            type="button"
-            className={mode === m.value ? "on" : ""}
-            onClick={() => onMode(m.value)}
-            aria-pressed={mode === m.value}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="kb-search-rail__sect">Scope</div>
-      <div className="kb-search-rail__seg">
-        <button
-          type="button"
-          className={scope === "one" ? "on" : ""}
-          onClick={() => onScope("one")}
-          aria-pressed={scope === "one"}
-        >
-          this kb
-        </button>
-        <button
-          type="button"
-          className={scope === "all" ? "on" : ""}
-          onClick={() => onScope("all")}
-          aria-pressed={scope === "all"}
-        >
-          all corpora
-        </button>
-      </div>
-
       <FilterSection id="read" title="Read state" count={read.length} defaultOpen>
         <RailToggleGroup
           options={READ_OPTS}
@@ -369,21 +317,6 @@ export default function SearchRail({
           )}
         </FilterSection>
       )}
-
-      <div className="kb-search-rail__sect">Results</div>
-      <div className="kb-search-rail__seg">
-        {LIMITS.map((n) => (
-          <button
-            key={n}
-            type="button"
-            className={limit === n ? "on" : ""}
-            onClick={() => onLimit(n)}
-            aria-pressed={limit === n}
-          >
-            {n}
-          </button>
-        ))}
-      </div>
     </aside>
   );
 }

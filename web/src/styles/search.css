@@ -80,10 +80,6 @@
 .kb-search__count {
   color: var(--ink);
 }
-/* FS4 — push the sort menu to the right edge of the results header. */
-.kb-search__meta .sort-control {
-  margin-left: auto;
-}
 
 /* FS8 — search box + saved/recent dropdown row. */
 .kb-search__topbar {
@@ -938,4 +934,9 @@
   .kb-search-rail {
     position: static;
   }
+}
+
+/* OL R5 — the ViewBar under the query input (mode, scope, results, sort). */
+.kb-search__viewbar {
+  padding: 0 var(--pad-1);
 }
