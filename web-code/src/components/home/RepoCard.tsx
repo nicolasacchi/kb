@@ -59,7 +59,7 @@ function HeadChip({ repoName, head }: { repoName: string; head: HeadInfo | null 
 /// chip, counts, the Active branches section (`/api/branches`), then a
 /// footer link row. OL-C7: "Continue reading" / "Recent files" moved to
 /// Home's Continue section and the review-store / fetch-credential
-/// diagnostics to its collapsed "Daemon status" section. The branches read is an independent React Query consumer, and a failed
+/// diagnostics to the Settings page. The branches read is an independent React Query consumer, and a failed
 /// fetch renders a quiet inline note rather than breaking the whole card
 /// (Home's own multi-repo fan-out must survive one repo's daemon-side
 /// hiccup, same "never let one failure take down the rest" discipline as

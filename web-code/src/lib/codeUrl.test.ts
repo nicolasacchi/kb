@@ -27,6 +27,7 @@ import {
   nextDiffCtx,
   DIFF_CTX_DIAL,
   permalinkFor,
+  settingsUrl,
   prsUrl,
   rangeDiffUrl,
   reviewDiffHref,
@@ -1077,5 +1078,12 @@ describe("parseReviewIdParam", () => {
     for (const bad of ["7.5", "1e3", "0x10", "-1", "0", "abc", "7x"]) {
       expect(parseReviewIdParam(bad)).toBeNull();
     }
+  });
+});
+
+describe("settingsUrl (OL-C8)", () => {
+  it("is the repo-less /~settings route and not a reader path", () => {
+    expect(settingsUrl()).toBe("/~settings");
+    expect(isReaderFilePath(settingsUrl())).toBe(false);
   });
 });

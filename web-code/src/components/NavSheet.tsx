@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { Sheet, type Detent } from "@kb/ui/Sheet";
+import { settingsUrl } from "../lib/codeUrl";
 import CurrentReviewChip from "./CurrentReviewChip";
 import { Icon } from "./iconSet";
 import { cycleTheme, loadTheme, loadThemeFamily } from "../lib/prefs";
@@ -58,6 +59,7 @@ export default function NavSheet({
 
   const active = repo ? matchActiveNavItem(pathname, repo) : null;
   const inboxOn = pathname === "/~inbox";
+  const settingsOn = pathname === settingsUrl();
 
   return (
     <Sheet
@@ -107,6 +109,16 @@ export default function NavSheet({
           >
             <Icon.List aria-hidden />
             Inbox
+          </Link>
+          <Link
+            to={settingsUrl()}
+            className={"kbc-navsheet__row" + (settingsOn ? " is-active" : "")}
+            aria-current={settingsOn ? "page" : undefined}
+            data-kbc-nav-row="settings"
+            onClick={onClose}
+          >
+            <Icon.Settings aria-hidden />
+            Settings
           </Link>
         </section>
         {/* V70-A7 — the APPEARANCE row cycles the light/dark/system axis (the

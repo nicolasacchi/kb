@@ -40,11 +40,12 @@ describe("Home slimming (OL-C7)", () => {
     expect(html).toContain("data-kbc-home-branches");
   });
 
-  it("Daemon status renders collapsed: a details with a summary and no body", () => {
-    const html = markup(h(DaemonStatus, { repos: [repo] }));
-    expect(html).toContain("<details");
-    expect(html).not.toMatch(/<details[^>]*\sopen/);
+  it("Daemon status is one link to Settings, with no diagnostics body", () => {
+    const html = markup(h(DaemonStatus));
+    expect(html).not.toContain("<details");
+    expect(html).toContain('href="/~settings"');
     expect(html).toContain("Daemon status");
-    expect(html).not.toContain("data-kbc-home-status-repo");
+    expect(html).not.toContain("data-kbc-home-store");
   });
+});
 });

@@ -167,36 +167,17 @@
 }
 
 .kbc-home__status {
+  margin: 0;
   border-top: 1px solid var(--rule);
   padding-top: 16px;
-}
-.kbc-home__status-summary {
-  cursor: pointer;
   font-size: var(--fs-sm);
-  font-weight: 600;
+}
+.kbc-home__status-link {
   color: var(--ink-mute);
+  text-decoration: none;
 }
-.kbc-home__status-body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin-top: 12px;
-}
-.kbc-home__status-line {
-  margin: 0;
-  font-size: var(--fs-sm);
-  color: var(--ink-dim);
-}
-.kbc-home__status-repo {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.kbc-home__status-repo-name {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  color: var(--ink);
+.kbc-home__status-link:hover {
+  color: var(--accent-soft);
 }
 
 .kbc-home__continue-list {
