@@ -21,6 +21,9 @@ const MASKS = [
   // whatever the earlier specs left behind.
   ".kb-status-cell",
   ".kb-status-counts",
+  // Bottom-right StatusPill: mounted only while it has something to show, so
+  // it comes and goes between runs.
+  ".pill-container",
 ];
 
 // Clock- and visit-dependent text (timestamps in the passport, "active 4s",
