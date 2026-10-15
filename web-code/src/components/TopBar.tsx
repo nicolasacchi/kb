@@ -16,6 +16,7 @@ import {
   matchActiveNavItem,
   navTestAttr,
 } from "../lib/navItems";
+import { settingsUrl } from "../lib/codeUrl";
 import RefChip from "./RefChip";
 import { ScopeSlot } from "./ScopeSlot";
 
@@ -41,6 +42,7 @@ export default function TopBar() {
 
   const active = explicitRepo ? matchActiveNavItem(pathname, explicitRepo) : null;
   const inboxOn = pathname === "/~inbox";
+  const settingsOn = pathname === settingsUrl();
 
   useEffect(() => {
     setSheetOpen(false);
@@ -124,6 +126,16 @@ export default function TopBar() {
                   {...{ [navTestAttr("inbox")]: true }}
                 >
                   <Icon.List />
+                </Link>
+                <Link
+                  to={settingsUrl()}
+                  className="kbc-iconbtn kbc-topbar__settings"
+                  aria-label="Settings"
+                  title="Settings"
+                  aria-current={settingsOn ? "page" : undefined}
+                  data-kbc-topbar-settings
+                >
+                  <Icon.Settings />
                 </Link>
                 <ThemeControl />
               </>

@@ -14,8 +14,8 @@ import "../styles/home.css";
 /// OL-C7 — Home is a place, not a status page. Top to bottom: where you were
 /// (the Continue hero, with real code under it), what needs you (only the
 /// non-empty inbox lanes), then your repos. Diagnostics (review store, fetch
-/// credential, remote-mutation flag) are a collapsed "Daemon status" section
-/// at the bottom: nothing removed, nothing in the way.
+/// credential, remote-mutation flag) live on the Settings page; Home keeps a
+/// one-line "Daemon status -> Settings" link at the bottom.
 export default function Home() {
   const repos = useRepos();
   const list = repos.data?.repos ?? [];
@@ -99,7 +99,7 @@ export default function Home() {
         )}
       </div>
 
-      {list.length > 0 && <DaemonStatus repos={list} />}
+      {list.length > 0 && <DaemonStatus />}
     </div>
   );
 }

@@ -1,0 +1,97 @@
+/* OL-C8 — the Settings page: one calm column, plain headings, label/value
+ * rows. Tokens only (lint:css-vars), no raw hex, no card chrome. */
+.kbc-settings {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-settings__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 20px;
+  border-top: 1px solid var(--rule);
+  margin-top: 12px;
+}
+.kbc-settings__h2 {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--ink);
+}
+.kbc-settings__h3 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+.kbc-settings__note,
+.kbc-settings__line {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-dim);
+}
+.kbc-settings__repo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kbc-settings__rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kbc-settings__row {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 12px;
+  font-size: var(--fs-sm);
+}
+.kbc-settings__row dt {
+  color: var(--ink-dim);
+}
+.kbc-settings__row dd {
+  margin: 0;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kbc-settings__seg {
+  display: inline-flex;
+  gap: 4px;
+}
+.kbc-settings__segbtn,
+.kbc-settings__link {
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm, 4px);
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.kbc-settings__link {
+  border-color: transparent;
+  padding-left: 0;
+}
+.kbc-settings__segbtn[aria-pressed="true"] {
+  color: var(--accent-soft);
+  border-color: var(--accent-bor);
+  background: var(--accent-bg);
+}
+.kbc-settings__segbtn:hover,
+.kbc-settings__link:hover {
+  color: var(--accent-soft);
+}
+@media (max-width: 860px) {
+  .kbc-settings__row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}

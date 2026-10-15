@@ -23,7 +23,9 @@ import "../styles/themesample.css";
 // the contrast + density controls.
 
 export interface ThemePickerProps {
-  onClose(): void;
+  onClose?(): void;
+  /// OL-C8 — embedded in the Settings page instead of floating.
+  inline?: boolean;
   /// Mobile renders the same component as a bottom sheet (mirrors the
   /// NavSheet), desktop as an anchored popover.
   asSheet?: boolean;
@@ -31,7 +33,7 @@ export interface ThemePickerProps {
 
 const HOST = { builtinFamily: BUILTIN_FAMILY } as const;
 
-export default function ThemePicker({ onClose, asSheet = false }: ThemePickerProps) {
+export default function ThemePicker({ onClose, asSheet = false, inline = false }: ThemePickerProps) {
   const controller = useMemo<ThemePickerController>(
     () => ({
       appearance: loadTheme,
@@ -50,6 +52,7 @@ export default function ThemePicker({ onClose, asSheet = false }: ThemePickerPro
       host={HOST}
       onClose={onClose}
       asSheet={asSheet}
+      inline={inline}
       builtinReceipt={
         <>
           <strong>kb-code</strong> · the built-in palette · passes AA as authored

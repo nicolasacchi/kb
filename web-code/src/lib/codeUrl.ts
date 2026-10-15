@@ -235,6 +235,13 @@ export function commentsUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~comments`;
 }
 
+/// `settingsUrl()` → `/~settings` — OL-C8: the settings page. Top-level and
+/// repo-LESS (a sibling of `/~inbox`, not a `/r/:repo/~…` sentinel), so it
+/// takes no repo. Unmodelled in the Location Contract (decodes to `other`).
+export function settingsUrl(): string {
+  return "/~settings";
+}
+
 /// `lanesUrl(repo)` → `/r/{repo}/~lanes` — V76-R3a aug-lane/1 registry dock.
 /// Unmodelled in the Location Contract's `PageId` set, same footing as
 /// `~rails`/`~browser`: nothing needs a push/replace ruling about moving

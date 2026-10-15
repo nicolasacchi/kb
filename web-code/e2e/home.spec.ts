@@ -94,14 +94,15 @@ test.describe("Home — One Inbox summary + Continue card (V70-A3S)", () => {
   });
 });
 
-test.describe("Home — Daemon status (OL-C7)", () => {
-  test("review-store diagnostics live in a collapsed section that opens on demand", async ({ page }) => {
+test.describe("Home — Daemon status (OL-C8)", () => {
+  test("Home keeps one Daemon status link to Settings, with no diagnostics inline", async ({ page }) => {
     await page.goto(`${BASE}/`);
     const status = page.locator("[data-kbc-home-status]");
     await expect(status).toBeVisible();
-    await expect(status.locator("[data-kbc-home-store]")).toHaveCount(0);
-    await status.locator("summary").click();
-    await expect(status.locator("[data-kbc-home-store]").first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("[data-kbc-home-store]")).toHaveCount(0);
+    await status.locator("a").click();
+    await expect(page).toHaveURL(/\/~settings$/);
+    await expect(page.locator("[data-kbc-home-store]").first()).toBeVisible({ timeout: 10_000 });
   });
 });
 

@@ -131,6 +131,8 @@ const LensEntryByPath = lazy(() => import("./routes/LensEntryByPath"));
 // S2-A — unified inbox (design-s2.md §S2-A): kb items aren't repo-scoped,
 // so `~inbox` is a top-level SIBLING of Home, not a `/r/:repo/~…` sentinel.
 const Inbox = lazy(() => import("./routes/Inbox"));
+// OL-C8 — settings: repo-less, top-level, a sibling of `~inbox`.
+const Settings = lazy(() => import("./routes/Settings"));
 
 /// The reader route always mounts the Desk reader. The pre-Desk shell that
 /// used to hide behind `?shell=legacy` / `?desk=legacy` is gone (OL C9); a
@@ -394,6 +396,7 @@ function AppShell() {
                     Home/Search (same footing as the DCB entry ramps just
                     below). */}
                 <Route path="/~inbox" element={<Inbox />} />
+                <Route path="/~settings" element={<Settings />} />
                 {/* DCB W2.B (R2/D14) — the repo-less entry ramps. Plain
                     top-level routes beside `/`/`/search` (they share no
                     `/r/:repo/` prefix, so position relative to the reader

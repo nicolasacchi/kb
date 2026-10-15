@@ -18,6 +18,7 @@ import { entityUrl } from "../lib/codeUrl";
 const ROUND_TRIP_URLS = [
   "/",
   "/~inbox",
+  "/~settings",
   "/search",
   "/search?q=refund",
   "/r/kb",
