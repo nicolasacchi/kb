@@ -1994,6 +1994,41 @@ legitimately has more than one. See
 [`providers/README.md`](../providers/README.md) for install/enable steps and
 live-smoke evidence per language.
 
+## Sibling lanes
+
+kb and kb-code are one fleet, so each app can show the other's side. The only
+live call direction is still kb-code -> kb (kb-sibling/1; architecture
+invariant #2), so there are two read-only relays on kb-code and one inert
+link on kb's side.
+
+**Documents in kb-code's omnibox.** `GET /api/kb/search?q=&limit=` asks kb's
+`GET /api/search` (scope=all, keyword mode) through `KbClient` and returns
+`{hits: [{kb, id, title, url, snippet}], kb_public_url}`; `url` is the
+artifact permalink on kb's public base (`[kb_daemon] public_url`, else `url`).
+The omnibox renders the hits under a "Documents" lane after the code lanes
+for a query of 2+ characters; Enter or a click opens the permalink in a new
+tab. The route always answers 200: an unreachable or disabled kb returns
+`{hits: [], unavailable: "kb unreachable" | "kb disabled"}` and a
+kb-sibling/1 mismatch `unavailable: "kb_sibling_mismatch"`, which the lane
+shows as a muted line, never an error. Nothing is cached or persisted.
+
+**Theme family follows kb.** kb stores `theme_family` in its `ui` settings
+(`PATCH /api/settings`). `GET /api/kb/ui` relays `{theme, theme_family}` with
+the same `unavailable` semantics. On boot kb-code's SPA applies that family
+only if the browser has not chosen one in kb-code; a choice made in kb-code
+always wins and is never written back to kb. The theme picker says which one
+is in force: "Following kb" or "Chosen here". The light/dark appearance does
+not follow.
+
+**Code in kb's command palette.** kb's Cmd+K shows one row, "Search code for
+"q" in kb-code", linking to `{code_url}/search?q=` in a new tab when the
+active kb has a `[kb.*] code_url`, and nothing when it does not. kb does not
+query kb-code from the browser: the doc-lens CORS route set is pinned to the
+doc-lens read routes on purpose (any loopback origin passes the CORS
+predicate, so adding the code search route would hand repository contents to
+every page open in the operator's browser), and `/api/kb/search` and
+`/api/kb/ui` are asserted absent from it in `cors_layer_route_set_is_pinned`.
+
 ## Review diff v2 (v7.3, Track K)
 
 The full-page review reader (`/r/{repo}/~reviews/{id}/diff[/<path>]`) is

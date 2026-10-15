@@ -180,6 +180,7 @@ that kb). The SPA's Settings page can also change these at runtime.
 | `theme` | string | `paper`, `ink` |
 | `accent` | string | an accent id from the fixed palette |
 | `density` | string | `compact`, `normal`, `spacious` |
+| `theme_family` | string | a kbc-theme/1 family id, `[a-z0-9-]{1,40}` (e.g. `kb-classic`). Normally set by the SPA's theme picker via `PATCH /api/settings`; the sibling kb-code daemon's `GET /api/kb/ui` relay reads it so its SPA can follow kb's family. |
 
 ## `[indexer]`
 
