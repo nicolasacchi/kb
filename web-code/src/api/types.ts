@@ -6257,3 +6257,32 @@ export interface SyntaxOut {
   total?: number;
   truncated?: boolean;
 }
+
+// --- OL S1: the kb relays ----------------------------------------------------
+
+/// One row of `GET /api/kb/search` (`crates/kb-code-server/src/kb_relay.rs`).
+/// `url` is the artifact permalink on kb's PUBLIC url.
+export interface KbDocHit {
+  kb: string;
+  id: string;
+  title: string;
+  url: string;
+  snippet: string | null;
+}
+
+/// `GET /api/kb/search` - always a 200; `unavailable` is a caption
+/// ("kb unreachable" | "kb disabled" | "kb_sibling_mismatch"), never an error.
+export interface KbSearchResponse {
+  hits: KbDocHit[];
+  kb_public_url: string;
+  unavailable?: string;
+}
+
+/// `GET /api/kb/ui` - kb's `theme_family` / `theme`; both null when kb has
+/// none or is unavailable (then `unavailable` names why).
+export interface KbUiResponse {
+  theme: string | null;
+  theme_family: string | null;
+  unavailable?: string;
+}
+

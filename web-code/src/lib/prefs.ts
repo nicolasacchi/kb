@@ -107,6 +107,10 @@ export interface Prefs {
   codeFontSize?: number;
   /// V70-A7 — the kbc-theme/1 family id (default `"kbc"`, the built-in).
   themeFamily?: string;
+  /// OL S1 - set once the user picks a family in kb-code's own picker. Until
+  /// then kb-code follows kb's family (`lib/kbTheme.ts`); a local choice
+  /// always wins and is never written back to kb.
+  themeFamilyChosen?: boolean;
   /// V70-A7 — contrast slider, clamped to [-2, 2] (default 0 = untouched).
   contrast?: number;
   /// V70-A7 — reading-contract density (default `"comfortable"`).
@@ -246,7 +250,40 @@ export function saveDiffSyntaxHighlight(on: boolean): void {
 /// carries. An unknown id (a downgrade, a hand-edited blob) degrades to the
 /// built-in rather than leaving the app on an attribute nothing styles.
 export function loadThemeFamily(): string {
+  if (!hasLocalThemeFamily() && followedFamily) return followedFamily;
   return coerceFamily(loadPrefs().themeFamily, BUILTIN_FAMILY, HOST);
+}
+
+/// OL S1 - did the user choose a family in kb-code itself? True once the
+/// picker committed one, or when an older blob already holds a non-built-in
+/// family (a choice made before this flag existed).
+export function hasLocalThemeFamily(): boolean {
+  const p = loadPrefs();
+  return (
+    p.themeFamilyChosen === true ||
+    (typeof p.themeFamily === "string" && p.themeFamily !== BUILTIN_FAMILY)
+  );
+}
+
+/// kb's family, as relayed by `GET /api/kb/ui` (`lib/kbTheme.ts`). In-memory
+/// ONLY: it is never written into the prefs blob, so kb-code stores nothing
+/// about kb's choice and a stale value cannot outlive the page.
+let followedFamily: string | null = null;
+
+/// Record the family to follow, or clear it (`null`). An id the registry does
+/// not carry is ignored (kb may be newer than this bundle).
+export function setFollowedThemeFamily(family: string | null): void {
+  followedFamily =
+    family && coerceFamily(family, "", HOST) === family ? family : null;
+}
+
+/// Where the family in force comes from: the user's own pick, kb's, or the
+/// built-in default (no pick and nothing to follow).
+export type ThemeFamilySource = "local" | "kb" | "default";
+
+export function themeFamilySource(): ThemeFamilySource {
+  if (hasLocalThemeFamily()) return "local";
+  return followedFamily ? "kb" : "default";
 }
 
 export function loadContrast(): number {
@@ -301,7 +338,12 @@ export function setThemePrefs(next: {
   density?: Density;
 }): void {
   const cur = loadPrefs();
-  savePrefs({ ...cur, ...next });
+  // OL S1 - picking a family here is the moment kb-code stops following kb.
+  savePrefs({
+    ...cur,
+    ...next,
+    ...(next.themeFamily !== undefined ? { themeFamilyChosen: true } : {}),
+  });
   applyTheme(next.theme ?? loadTheme(), next.themeFamily ?? loadThemeFamily());
   window.dispatchEvent(
     new CustomEvent<Theme>("kbc:theme.changed", { detail: loadTheme() }),
