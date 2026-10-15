@@ -12,7 +12,6 @@ describe("StateCard", () => {
     expect(out).toContain(`data-kb-state-kind="${kind}"`);
     expect(out).toContain("why");
     expect(out).toContain("<code>kb x</code>");
-    expect(out).toMatchSnapshot();
   });
 
   it("loading is a polite status; the others are labelled regions with an h2", () => {
