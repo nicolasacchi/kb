@@ -345,7 +345,7 @@ locked in by the PR that makes it. **Lower the baseline in the same PR.**
   specs `tests/e2e/spa-chrome-budget.spec.ts` and
   `web-code/e2e/chrome-budget.spec.ts` measure the union of the rects of every
   fixed or sticky element touching the top edge (elements taller than half the
-  viewport are skipped) and fail above the budget or more than 4px below it.
+  viewport are skipped; a non-sticky band such as kb's context line is not counted) and fail above the budget or more than 4px below it.
   The spec logs `chrome-budget: <app>.<route> measured=N budget=M`; read the new
   `N` from the CI log when lowering.
 - **Nav count** — `ui/nav-budget.json` holds the number of primary nav items per
