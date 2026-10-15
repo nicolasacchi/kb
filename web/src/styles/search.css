@@ -132,7 +132,7 @@
 .kb-search-saved__backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-scrim);
   background: transparent;
   border: none;
   cursor: default;
@@ -141,7 +141,7 @@
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  z-index: 41;
+  z-index: var(--z-drawer);
   min-width: 280px;
   max-width: 360px;
   max-height: 60vh;
@@ -212,7 +212,7 @@
   border: none;
   background: transparent;
   color: var(--ink-dim);
-  font-size: 14px;
+  font-size: var(--fs-md);
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
@@ -221,7 +221,7 @@
 }
 .kb-search-saved__empty {
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 4px 6px;
 }
 
@@ -241,7 +241,7 @@
   padding: 2px 4px 2px 8px;
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--accent-soft);
 }
 .kb-search-chips__x {
@@ -254,7 +254,7 @@
   background: transparent;
   border-radius: 50%;
   color: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1;
   cursor: pointer;
 }
@@ -431,7 +431,7 @@
   height: 13px;
 }
 .kb-search-card__glyph-n {
-  font-size: 9px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kb-search-card__words {
@@ -499,7 +499,7 @@
   font: 400 12px/1.3 var(--font-mono);
 }
 .kb-search-rail__sect {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-dim);
@@ -579,7 +579,7 @@
   list-style: none;
   cursor: pointer;
   user-select: none;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-dim);
@@ -592,7 +592,7 @@
 .kb-search-rail__grouph::before {
   content: "›";
   display: inline-block;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1;
   transition: transform 0.12s var(--ease);
   color: var(--ink-mute);
@@ -610,9 +610,9 @@
   text-align: center;
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--accent-soft);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   line-height: 15px;
 }
 .kb-search-rail__groupbody {
@@ -637,7 +637,7 @@
   padding: 3px 7px;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--ink-mute);
   font: inherit;
   cursor: pointer;
@@ -672,11 +672,11 @@
 }
 .kb-search-rail__tagct {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .kb-search-rail__empty {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 0;
 }
 

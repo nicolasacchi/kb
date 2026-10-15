@@ -18,7 +18,7 @@
 .rnotes__title {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 28px;
+  font-size: var(--fs-hero);
   letter-spacing: -0.01em;
   margin: 0;
   display: flex;
@@ -27,7 +27,7 @@
 }
 .rnotes__count {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--accent-soft);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
@@ -37,7 +37,7 @@
 .rnotes__sub {
   margin: 4px 0 0;
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   max-width: 68ch;
 }
 
@@ -57,7 +57,7 @@
   padding: 4px 10px;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--ink-mute);
 }
 .rnotes__search-input {
@@ -67,7 +67,7 @@
   border: none;
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   outline: none;
 }
 .rnotes__kb-select,
@@ -75,10 +75,10 @@
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   color: var(--ink-mute);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 4px 10px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition:
     border-color 0.1s var(--ease),
@@ -114,10 +114,10 @@
   padding: 3px 7px;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--ink-mute);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition:
     border-color 0.1s var(--ease),
@@ -140,12 +140,12 @@
 }
 .rnotes__chip-count {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
 }
 .rnotes__facets-trunc {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-style: italic;
 }
 .rnotes__filter-note {
@@ -154,17 +154,17 @@
   align-items: center;
   margin-top: 10px;
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 .rnotes__clear {
   background: none;
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--ink-mute);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 1px 8px;
   cursor: pointer;
   text-transform: none;
@@ -177,12 +177,12 @@
 .rnotes__error {
   margin-top: 18px;
   color: var(--red);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .rnotes__trunc {
   margin: 14px 0 0;
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 /* artifact groups */
@@ -213,17 +213,17 @@
 }
 .rnotes-card__kb {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
   flex: none;
 }
 .rnotes-card__title {
   font-family: var(--font-serif);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   color: var(--ink);
   flex: 1;
   min-width: 0;
@@ -233,7 +233,7 @@
 }
 .rnotes-card__age {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   flex: none;
 }
@@ -277,7 +277,7 @@
   line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   line-height: 1.45;
   white-space: pre-wrap;
@@ -289,7 +289,7 @@
   align-items: baseline;
   flex-wrap: wrap;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .rnotes-note__lock {
@@ -298,7 +298,7 @@
 .rnotes-note__status {
   font-family: var(--font-mono);
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.04em;
 }
 .rnotes-note__status--open {
@@ -317,12 +317,12 @@
 .rnotes-note__stale {
   color: var(--warn);
   text-transform: uppercase;
-  font-size: 9px;
+  font-size: var(--fs-xs);
   font-weight: 700;
 }
 .rnotes-note__anchor {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   margin-left: auto;
 }
 .rnotes-note__age {
@@ -336,7 +336,7 @@
 }
 .rnotes-note__tag {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   background: var(--bg-panel);
   border: 1px solid var(--rule);
@@ -352,6 +352,6 @@
     padding: 16px 14px;
   }
   .rnotes__title {
-    font-size: 22px;
+    font-size: var(--fs-title);
   }
 }

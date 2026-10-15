@@ -292,3 +292,32 @@ pins `react` / `react-dom` to its own `node_modules` (tsconfig `paths`,
 `resolve.dedupe`) so the same files run under React 18.3 and 19.3. Tests sit
 beside the source as `*.test.ts(x)`; both apps' `vitest.config.ts` include
 `../ui/src/**`, so each file is tested once per app. See `ui/README.md`.
+
+### Shared tokens and the type ramp
+
+`ui/src/tokens.css` is the one home of the type ramp, spacing steps, radii, the
+z-ladder and motion. Both apps `@import "@kb/ui/tokens.css"` at the top of
+their own `tokens.css`; palettes, fonts, densities and app-specific heights
+stay in the app files. `ui/src/tokens.test.ts` fails if either app redeclares
+a token the shared file owns (kb's density-scaled `--pad-*` steps are the one
+recorded exception). Components use `var(--fs-*)`, never a font-size literal.
+
+| Token | Comfortable | Compact (`[data-density="compact"]`) |
+|---|---|---|
+| `--fs-xs` | 12px | 12px (caption floor) |
+| `--fs-sm` | 13px | 12px |
+| `--fs-md` | 14px | 13px |
+| `--fs-lg` | 15px | 14px |
+| `--fs-xl` (serif display at card scale) | 17px | 16px |
+| `--fs-title` | 20px | 18px |
+| `--fs-hero` | 28px | 24px |
+| `--fs-body` (HTML base where an app opts in) | 15px | 14px (body floor) |
+
+Line heights: `--lh-body` 1.5, `--lh-tight` 1.3. Radii: `--radius-sm/md/lg/pill`
+4 / 8 / 14 / 999px. Motion: `--dur-fast` 100ms, `--dur-base` 160ms, `--ease`.
+z-ladder: bar 5, popover 20, popover-hi 30, float 35, scrim 40, drawer 41,
+hint 50, modal 100, top 1000.
+
+kb was re-based onto this ramp by `ui/scripts/codemod-type.mjs` (OL F3); the
+rewrite list is in `ui/scripts/codemod-type.report.md`. A deliberate literal is
+written `/* kb-literal: <reason> */` on the same line.

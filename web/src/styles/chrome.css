@@ -35,7 +35,7 @@
   background: var(--bg-panel);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kb-ws:hover {
@@ -79,11 +79,11 @@
   white-space: nowrap;
   padding: 3px 8px;
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
-  color: var(--muted, var(--fg-muted));
+  color: var(--ink-mute, var(--ink-mute));
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.2;
   cursor: default;
   user-select: none;
@@ -98,12 +98,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 6px;
-  border-radius: 999px;
-  background: var(--bg-alt, var(--elev, transparent));
-  border: 1px solid var(--border, var(--rule));
-  color: var(--fg-muted, var(--muted));
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel, var(--bg-card, transparent));
+  border: 1px solid var(--rule, var(--rule));
+  color: var(--ink-mute, var(--ink-mute));
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   line-height: 1.4;
 }
@@ -119,7 +119,7 @@
   min-width: 200px;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow);
 }
 .kb-popover__item {
@@ -133,7 +133,7 @@
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   text-align: left;
   cursor: pointer;
 }
@@ -149,7 +149,7 @@
 }
 .kb-popover__count {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -164,7 +164,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--warn);
   text-decoration: none;
 }
@@ -185,7 +185,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--accent);
   text-decoration: none;
 }
@@ -208,7 +208,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--warn);
   text-decoration: none;
 }
@@ -232,7 +232,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--accent);
   cursor: pointer;
 }
@@ -248,14 +248,14 @@
   max-width: min(420px, calc(100vw - 24px));
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 8px;
   box-shadow: var(--shadow);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-desk-pop__head {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -292,7 +292,7 @@
   align-items: center;
   gap: 8px;
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-desk-pop__kb {
   color: var(--ink-mute);
@@ -300,15 +300,15 @@
 .kb-desk-pop__state {
   padding: 0 5px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
-  font-size: 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
 }
 .kb-desk-pop__changed {
   padding: 0 5px;
   border: 1px solid color-mix(in oklab, var(--warn) 45%, var(--rule));
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--warn);
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .kb-desk-pop__age {
   margin-left: auto;
@@ -333,7 +333,7 @@
   border: 1px solid var(--rule);
   background: var(--bg-panel);
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   cursor: pointer;
 }
@@ -350,7 +350,7 @@
   padding: 1px 7px;
   border: 1px solid var(--rule);
   border-radius: 5px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   font-family: var(--font-mono);
   background: transparent;
@@ -361,7 +361,7 @@
   display: flex;
   gap: 2px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 2px;
   background: var(--bg-panel);
 }
@@ -401,14 +401,14 @@
   max-width: 360px;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 8px;
   box-shadow: var(--shadow);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-saved-pop__head {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -448,12 +448,12 @@
 .kb-saved-pop__x {
   width: 22px;
   height: 22px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 0;
   background: transparent;
   color: var(--ink-mute);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1;
 }
 .kb-saved-pop__x:hover {
@@ -475,7 +475,7 @@
   color: var(--ink-mute);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-saved-pop__add:hover {
   border-style: solid;
@@ -485,7 +485,7 @@
   margin-top: 8px;
   padding: 4px 6px 2px;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-style: italic;
 }
 
@@ -493,7 +493,7 @@
 .kb-iconbtn {
   width: 32px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--rule);
   background: var(--bg-panel);
   color: var(--ink);
@@ -526,7 +526,7 @@
   border-top: 1px solid var(--rule);
   background: var(--bg-panel-2);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-status-cell {
@@ -600,9 +600,9 @@
   background: var(--rule);
   color: var(--ink);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 
 /* Hide the keyboard chips on narrow screens so the warn cluster + extra
@@ -643,11 +643,11 @@
   border-bottom: 1px solid var(--rule);
   background: var(--bg-panel-2);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-qribbon__lbl {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -680,7 +680,7 @@
 .kb-qribbon__tok {
   padding: 2px 7px;
   border-radius: 5px;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-qribbon__tok.k {
   color: var(--ink);
@@ -713,7 +713,7 @@
 }
 .kb-qribbon__tok-edit {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   padding: 2px 7px;
   border-radius: 5px;
   background: var(--bg);
@@ -730,7 +730,7 @@
   background: transparent;
   color: var(--ink-mute);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1;
   opacity: 0;
   transition: opacity 100ms var(--ease), color 100ms var(--ease);
@@ -753,14 +753,14 @@
 .kb-qribbon__op {
   color: var(--ink-dim);
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-qribbon__cnt {
   margin-left: 6px;
   padding-left: 12px;
   border-left: 1px solid var(--rule);
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
 }
 .kb-qribbon__warn-dot {
@@ -772,11 +772,11 @@
   display: flex;
   gap: 14px;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-qribbon__save {
   color: var(--ink-mute);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 3px 8px;
   border: 1px dashed var(--rule);
   border-radius: 5px;
@@ -805,7 +805,7 @@
   background: var(--bg-panel);
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kb-qribbon__density:hover {
@@ -821,7 +821,7 @@
   color: var(--ink-dim);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .kb-qribbon__seg {
   display: flex;
@@ -833,7 +833,7 @@
 .kb-qribbon__seg b,
 .kb-qribbon__seg span {
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
   cursor: pointer;
 }
@@ -854,7 +854,7 @@
   padding: 14px 0 14px 14px;
   overflow-y: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   background: var(--bg);
   /* Sidebar lives in the route's body--with-rail grid cell — fills it. */
   height: 100%;
@@ -862,7 +862,7 @@
 }
 .kb-side__sect {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   margin: 14px 8px 6px 0;
   text-transform: uppercase;
@@ -904,11 +904,11 @@
 .kb-side__ct {
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-side__empty {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 4px 10px 4px 2px;
   font-style: italic;
 }
@@ -940,7 +940,7 @@
   border: 0;
   color: var(--ink-dim);
   cursor: pointer;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 0;
   line-height: 1;
 }
@@ -969,7 +969,7 @@
 .kb-side__folders .rail-folder-n {
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 /* checkboxes (capabilities + index-only) */
@@ -1034,7 +1034,7 @@
   color: var(--ink-mute);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-side__dates button:hover {
   border-color: var(--rule-hi);
@@ -1048,7 +1048,7 @@
 
 .kb-side__foot {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   padding: 14px 0 0 2px;
   border-top: 1px solid var(--rule);
@@ -1061,7 +1061,7 @@
   margin-bottom: 22px;
   padding: 18px 22px;
   border: 1px solid var(--accent-bor);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background:
     radial-gradient(110% 130% at 100% 0%, color-mix(in oklab, var(--accent) 14%, transparent), transparent 55%),
     var(--bg-card);
@@ -1087,20 +1087,20 @@
   gap: 6px;
   padding: 2px 8px;
   border: 1px solid var(--accent-bor);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
 }
 .kb-pin__folder {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   margin-top: 6px;
 }
 .kb-pin__title {
   font-family: var(--font-serif);
-  font-size: 30px;
+  font-size: var(--fs-hero);
   font-weight: 400;
   margin: 4px 0 8px;
   letter-spacing: -0.01em;
@@ -1113,7 +1113,7 @@
 .kb-pin__excerpt {
   margin: 0 0 12px;
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   max-width: 64ch;
 }
@@ -1132,7 +1132,7 @@
   justify-content: space-between;
   gap: 12px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   padding: 8px 0;
   border-top: 1px solid var(--rule);
@@ -1168,7 +1168,7 @@
   background: transparent;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   text-decoration: none;
 }
@@ -1292,7 +1292,7 @@
 
 .kb-card__folder {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   letter-spacing: 0.02em;
   margin-bottom: 6px;
@@ -1306,7 +1306,7 @@
 .kb-card__title {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 18px;
+  font-size: var(--fs-xl);
   line-height: 1.2;
   margin: 0 0 8px;
   letter-spacing: -0.01em;
@@ -1330,7 +1330,7 @@
 }
 .kb-card__excerpt {
   margin: 0;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--ink-mute);
   /* Fills the space between the (clamped) title and the footer, and is
@@ -1371,7 +1371,7 @@
   align-items: center;
   gap: 10px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   flex: none;
 }
@@ -1383,7 +1383,7 @@
   opacity: 0.85;
 }
 .kb-card__stitle {
-  font-size: 16px;
+  font-size: var(--fs-lg);
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
@@ -1396,7 +1396,7 @@
    `-webkit-line-clamp`/`line-clamp` to 2 here if so. */
 .kb-card__soutcome {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.35;
   color: var(--ink-mute);
   overflow: hidden;
@@ -1411,7 +1411,7 @@
 }
 .kb-card__smeta {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   letter-spacing: 0.01em;
   position: relative;
@@ -1427,7 +1427,7 @@
 }
 .kb-card__sbadge {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--accent);
@@ -1446,14 +1446,14 @@
 }
 .kb-card__scommits {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   color: var(--ok, #5bb98b);
 }
 /* R4/S7 — the husk badge (quiet, never hidden — see .kb-card--husk below). */
 .kb-card__shusk {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   opacity: 0.6;
 }
 /* R4/S7 — a trivial husk stays IN the gallery (truth over hiding) but reads
@@ -1475,12 +1475,12 @@
   margin: 0 0 14px;
   padding: 9px 13px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel));
   color: var(--ink);
   text-decoration: none;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   transition: border-color 0.12s ease;
 }
 .gallery-sessions-strip:hover {
@@ -1510,10 +1510,10 @@
   margin: 0 0 14px;
   padding: 9px 13px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel));
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .gallery-resurface-strip__lead {
   font-weight: 600;
@@ -1529,11 +1529,11 @@
   color: var(--ink);
   text-decoration: none;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background-color 0.12s ease;
 }
 .gallery-resurface-strip__item:hover {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
 }
 .gallery-resurface-strip__title {
   font-weight: 600;
@@ -1552,11 +1552,11 @@
   border: none;
   background: none;
   color: var(--ink-mute);
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1;
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .gallery-resurface-strip__hide:hover {
   color: var(--ink);
@@ -1574,11 +1574,11 @@
 }
 .gallery-resurface-strip__chip .kb-scx__chip {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   padding: 1px 5px;
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-card);
 }
 .gallery-resurface-strip__chip .kb-scx__chip:hover {
@@ -1596,9 +1596,9 @@
   background: none;
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1619,10 +1619,10 @@
   margin: 0 0 14px;
   padding: 9px 13px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel));
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .gallery-echo-strip__lead {
   font-weight: 600;
@@ -1644,11 +1644,11 @@
   color: var(--ink);
   text-decoration: none;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background-color 0.12s ease;
 }
 .gallery-echo-strip__item:hover {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
 }
 .gallery-echo-strip__item--static {
   cursor: default;
@@ -1671,11 +1671,11 @@
 }
 .gallery-echo-strip__chip {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   padding: 1px 5px;
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-card);
   white-space: nowrap;
 }
@@ -1703,18 +1703,18 @@
 .gallery-echo-strip__belief-caveat {
   margin: 2px 0 0;
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   white-space: normal;
 }
 .gallery-echo-strip__hide {
   border: none;
   background: none;
   color: var(--ink-mute);
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1;
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-left: auto;
 }
 .gallery-echo-strip__hide:hover {
@@ -1831,9 +1831,9 @@
   left: 14px;
   z-index: 2;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--accent-bor);
   color: var(--accent-soft);
   background: var(--accent-bg);
@@ -1884,7 +1884,7 @@
   flex-direction: column;
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--ink);
 }
 .kb-pinsp__head {
@@ -1928,7 +1928,7 @@
 }
 .kb-pinsp__lab {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1943,7 +1943,7 @@
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1;
 }
 .kb-pinsp__collapse:hover {
@@ -1964,7 +1964,7 @@
   background: var(--bg-panel);
   color: var(--ink-mute);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1;
 }
 .kb-pinsp__expand:hover {
@@ -2021,7 +2021,7 @@
   border-radius: var(--radius-pill);
   background: var(--accent-fill);
   color: var(--accent-fill-fg);
-  font-size: 9px;
+  font-size: var(--fs-xs);
   display: grid;
   place-items: center;
 }
@@ -2055,7 +2055,7 @@
 }
 .kb-pinsp h4 {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -2089,7 +2089,7 @@
   cursor: pointer;
   padding: 5px 8px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2158,7 +2158,7 @@
 /* RP-track — "Read by you" sub-lines under the inspector Reading block. */
 .kb-pinsp__readby {
   margin-top: 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kb-pinsp__readby--stop {
@@ -2229,7 +2229,7 @@
   border-radius: 11px;
   background: var(--bg-panel);
   color: var(--ink-mute);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   text-decoration: none;
 }
@@ -2282,7 +2282,7 @@
   border-radius: 11px;
   background: var(--bg-panel);
   color: var(--ink-mute);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   text-decoration: none;
 }
@@ -2319,7 +2319,7 @@ a.kb-idschip:hover {
 .kb-pinsp__tags-empty {
   color: var(--ink-dim);
   font-style: italic;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__tagchip {
   display: inline-flex;
@@ -2329,7 +2329,7 @@ a.kb-idschip:hover {
   padding: 0 3px 0 7px;
   border: 1px solid currentColor;
   border-radius: 3px;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1;
   background: transparent;
 }
@@ -2344,7 +2344,7 @@ a.kb-idschip:hover {
   border-radius: 2px;
   background: transparent;
   color: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1;
   cursor: pointer;
   opacity: 0.7;
@@ -2362,12 +2362,12 @@ a.kb-idschip:hover {
   width: 100%;
   margin-top: 6px;
   padding: 5px 7px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-radius: 3px;
   background: var(--bg);
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__taginput:focus,
 .kb-pinsp__catinput:focus {
@@ -2381,7 +2381,7 @@ a.kb-idschip:hover {
 .kb-pinsp__meta-err {
   margin-top: 6px;
   color: var(--warn);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__nbr {
   display: grid;
@@ -2409,11 +2409,11 @@ a.kb-idschip:hover {
 }
 .kb-pinsp__nbr-d {
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__hint {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-style: italic;
 }
 /* v0.24 X4 — the About tab's "exclude from index" row. */
@@ -2422,7 +2422,7 @@ a.kb-idschip:hover {
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 4px 10px;
   border-radius: 6px;
   border: 1px solid var(--rule);
@@ -2449,7 +2449,7 @@ a.kb-idschip:hover {
   justify-content: space-between;
   gap: 4px 10px;
   padding: 2px 0 4px;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-pinsp__folder-crumbs {
@@ -2470,7 +2470,7 @@ a.kb-idschip:hover {
 }
 .kb-pinsp__folder-crumb {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   background: none;
   border: none;
@@ -2504,7 +2504,7 @@ a.kb-idschip:hover {
 .kb-pinsp__folder-move,
 .kb-pinsp__folder-note,
 .kb-pinsp__folder-gallery {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   background: none;
   border: none;
@@ -2528,11 +2528,11 @@ a.kb-idschip:hover {
 }
 .kb-pinsp__folder-sort {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink);
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
   cursor: pointer;
 }
@@ -2540,7 +2540,7 @@ a.kb-idschip:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   user-select: none;
 }
@@ -2599,17 +2599,17 @@ a.kb-idschip:hover {
 .kb-pinsp__folder-glyph {
   color: var(--ink-dim);
   margin-right: 4px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__folder-count {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
 }
 .kb-pinsp__folder-empty {
   padding: 8px;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-align: center;
 }
@@ -2621,7 +2621,7 @@ a.kb-idschip:hover {
 }
 .kb-pinsp__folder-name {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
@@ -2632,7 +2632,7 @@ a.kb-idschip:hover {
   margin-right: 2px;
 }
 .kb-pinsp__folder-title {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   white-space: nowrap;
   overflow: hidden;
@@ -2646,7 +2646,7 @@ a.kb-idschip:hover {
 }
 .kb-pinsp__folder-date {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -2673,12 +2673,12 @@ a.kb-idschip:hover {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--rule);
   background: var(--bg-panel);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -2721,7 +2721,7 @@ a.kb-idschip:hover {
   gap: 6px;
   width: 100%;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -2743,12 +2743,12 @@ a.kb-idschip:hover {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--rule);
   background: var(--bg-panel);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition: background 80ms ease, border-color 80ms ease;
 }
@@ -2786,7 +2786,7 @@ a.kb-idschip:hover {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .atlas-cluster-legend__explain-table td {
   padding: 2px 6px 2px 0;
@@ -2807,7 +2807,7 @@ a.kb-idschip:hover {
 }
 .atlas-cluster-legend__explain-foot {
   margin: 6px 0 0;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
   color: var(--ink-mute);
   font-style: italic;
@@ -2817,7 +2817,7 @@ a.kb-idschip:hover {
  * row, sitting beside the chip (see AtlasView's ClusterGalleryLink). */
 .atlas-cluster-legend__open-gallery {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-decoration: none;
   padding: 2px 0 2px 12px;
@@ -2850,7 +2850,7 @@ a.kb-idschip:hover {
   width: 220px;
   padding: 10px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel);
   /* SH.A1 — theme-aware float shadow (static popover; was a hardcoded
      dark-mode black). */
@@ -2865,7 +2865,7 @@ a.kb-idschip:hover {
 .atlas-cameras__btn {
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 5px 8px;
   background: var(--bg);
   color: var(--ink);
@@ -2891,7 +2891,7 @@ a.kb-idschip:hover {
   min-width: 0;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 5px 6px;
   background: var(--bg);
   color: var(--ink);
@@ -2900,7 +2900,7 @@ a.kb-idschip:hover {
 }
 .atlas-cameras__empty {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   font-style: italic;
 }
@@ -2928,7 +2928,7 @@ a.kb-idschip:hover {
   white-space: nowrap;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 5px 6px;
   background: transparent;
   color: var(--ink);
@@ -2992,7 +2992,7 @@ a.kb-idschip:hover {
   flex-direction: column;
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-atlas-insp__head {
   display: flex;
@@ -3010,7 +3010,7 @@ a.kb-idschip:hover {
 }
 .kb-atlas-insp__lab {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -3038,7 +3038,7 @@ a.kb-idschip:hover {
 }
 .kb-atlas-insp__crumb {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -3047,13 +3047,13 @@ a.kb-idschip:hover {
 .kb-atlas-insp__title {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 22px;
+  font-size: var(--fs-title);
   margin: 8px 0 10px;
   line-height: 1.2;
   letter-spacing: -0.01em;
 }
 .kb-atlas-insp__excerpt {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   color: var(--ink-mute);
   margin: 0 0 14px;
@@ -3064,7 +3064,7 @@ a.kb-idschip:hover {
   padding: 7px 0;
   border-top: 1px solid var(--rule);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kb-atlas-insp__stat b {
@@ -3073,7 +3073,7 @@ a.kb-idschip:hover {
 }
 .kb-atlas-insp h4 {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -3110,7 +3110,7 @@ a.kb-idschip:hover {
   color: var(--ink);
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-align: left;
   cursor: pointer;
   transition: background 80ms ease, border-color 80ms ease;
@@ -3144,7 +3144,7 @@ a.kb-idschip:hover {
 }
 .kb-atlas-insp__stress {
   margin: 6px 0 0;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
   color: var(--ink-mute);
   font-style: italic;
@@ -3166,7 +3166,7 @@ a.kb-idschip:hover {
   background: transparent;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -3195,7 +3195,7 @@ a.kb-idschip:hover {
   color: var(--ink-mute);
   font-style: italic;
   line-height: 1.55;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-atlas-insp--empty {
   background: var(--bg-panel-2);
@@ -3214,7 +3214,7 @@ a.kb-idschip:hover {
   background: var(--bg-panel);
   color: var(--ink-mute);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1;
 }
 .kb-atlas-insp__expand:hover {
@@ -3226,7 +3226,7 @@ a.kb-idschip:hover {
 .cmdk__section {
   padding: 6px 12px 4px;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -3242,9 +3242,9 @@ a.kb-idschip:hover {
   background: var(--rule);
   color: var(--ink);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   margin-right: 6px;
 }
 .cmdk__hit--recent {
@@ -3255,12 +3255,12 @@ a.kb-idschip:hover {
 }
 .cmdk__recent-when {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   margin-right: 8px;
   padding: 1px 5px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* ── hotkeys + help overlay (S2) ─────────────────────────────────── */
@@ -3270,12 +3270,12 @@ a.kb-idschip:hover {
   left: 14px;
   z-index: var(--z-hint);
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
   color: var(--accent-soft);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.04em;
   box-shadow: var(--shadow);
 }
@@ -3309,7 +3309,7 @@ a.kb-idschip:hover {
 .kb-keyhelp__head h2 {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 22px;
+  font-size: var(--fs-title);
   margin: 0;
 }
 .kb-keyhelp__close {
@@ -3332,7 +3332,7 @@ a.kb-idschip:hover {
 }
 .kb-keyhelp__sect h3 {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -3350,7 +3350,7 @@ a.kb-idschip:hover {
   padding: 5px 0;
   border-bottom: 1px dashed var(--rule);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-keyhelp__row:last-child {
@@ -3360,9 +3360,9 @@ a.kb-idschip:hover {
   background: var(--rule);
   color: var(--ink);
   padding: 2px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   text-align: center;
 }
@@ -3392,8 +3392,8 @@ a.kb-idschip:hover {
   margin-right: 8px;
   padding: 1px 6px;
   border: 1px solid var(--rule);
-  border-radius: 999px;
-  font-size: 9px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -3410,7 +3410,7 @@ a.kb-idschip:hover {
   background: var(--bg-card);
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 8px;
   cursor: pointer;
 }
@@ -3421,7 +3421,7 @@ a.kb-idschip:hover {
 .kb-keyhelp__foot {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   line-height: 1.55;
 }
@@ -3429,8 +3429,8 @@ a.kb-idschip:hover {
   background: var(--rule);
   color: var(--ink);
   padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
 }
 
 /* ── hint mode (W2.6b) ────────────────────────────────────────────── */
@@ -3444,11 +3444,11 @@ a.kb-idschip:hover {
   position: absolute;
   transform: translate(-4px, -4px);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--accent-fill);
   color: var(--accent-fill-fg);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-transform: uppercase;
   line-height: 1.4;
@@ -3471,17 +3471,17 @@ a.kb-idschip:hover {
 .kb-peek__loading {
   color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-peek__title {
   font-family: var(--font-serif);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   font-weight: 500;
   margin-bottom: 4px;
 }
 .kb-peek__summary {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   line-height: 1.45;
   display: -webkit-box;
@@ -3494,7 +3494,7 @@ a.kb-idschip:hover {
   align-items: center;
   gap: 10px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kb-peek__folder {
@@ -3528,7 +3528,7 @@ a.kb-idschip:hover {
 }
 .kb-peek__tag {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border: 1px solid var(--rule);
   border-radius: var(--radius-pill);
@@ -3544,7 +3544,7 @@ a.kb-idschip:hover {
 .kb-peek__act {
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 4px 10px;
   border-radius: 5px;
   border: 1px solid var(--rule);
@@ -3568,7 +3568,7 @@ a.kb-idschip:hover {
 .kb-ctxbar__flow-btn {
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-ctxbar__flow-lbl {
   max-width: 22ch;
@@ -3579,7 +3579,7 @@ a.kb-idschip:hover {
 .kb-ctxbar__flow-depth {
   margin-left: 5px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border: 1px solid var(--rule);
   border-radius: var(--radius-pill);
@@ -3593,7 +3593,7 @@ a.kb-idschip:hover {
   min-width: 220px;
   max-width: 340px;
   padding: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--rule);
   background: var(--bg-panel);
   box-shadow: var(--shadow);
@@ -3608,7 +3608,7 @@ a.kb-idschip:hover {
   width: 100%;
   text-align: left;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink);
   background: none;
   border: 0;
@@ -3626,7 +3626,7 @@ a.kb-idschip:hover {
 }
 .kb-ctxbar__flow-row-sec {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   white-space: nowrap;
 }
@@ -3656,12 +3656,12 @@ a.kb-idschip:hover {
   margin: 0;
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 22px;
+  font-size: var(--fs-title);
 }
 .kb-move__body {
   padding: 14px 22px 6px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   color: var(--ink-mute);
 }
@@ -3670,10 +3670,10 @@ a.kb-idschip:hover {
 }
 .kb-move__lead code {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   background: var(--bg-card);
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
   color: var(--ink);
 }
@@ -3686,7 +3686,7 @@ a.kb-idschip:hover {
 .kb-move__field > span {
   color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -3697,7 +3697,7 @@ a.kb-idschip:hover {
   color: var(--ink);
   padding: 6px 8px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-move__input:focus {
   outline: 1px solid var(--accent);
@@ -3709,7 +3709,7 @@ a.kb-idschip:hover {
   align-items: center;
   gap: 2px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-move__crumb {
   background: none;
@@ -3717,7 +3717,7 @@ a.kb-idschip:hover {
   padding: 2px 4px;
   color: var(--ink-mute);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .kb-move__crumb:hover:not(:disabled) {
   color: var(--accent-soft);
@@ -3745,7 +3745,7 @@ a.kb-idschip:hover {
 .kb-move__dirs-empty {
   padding: 8px 10px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kb-move__dir {
@@ -3757,11 +3757,11 @@ a.kb-idschip:hover {
   text-align: left;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 5px 8px;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kb-move__dir:hover:not(:disabled) {
@@ -3770,7 +3770,7 @@ a.kb-idschip:hover {
 }
 .kb-move__dir-count {
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .kb-move__preview {
   margin-top: 4px;
@@ -3779,7 +3779,7 @@ a.kb-idschip:hover {
   border-radius: 6px;
   background: var(--bg-card);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.45;
   word-break: break-all;
   color: var(--ink);
@@ -3814,7 +3814,7 @@ a.kb-idschip:hover {
   background: var(--bg-card);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kb-move__btn:hover:not(:disabled) {
@@ -3851,12 +3851,12 @@ a.kb-idschip:hover {
   margin: 0;
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 22px;
+  font-size: var(--fs-title);
 }
 .kb-promote__body {
   padding: 14px 22px 6px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   color: var(--ink-mute);
 }
@@ -3865,10 +3865,10 @@ a.kb-idschip:hover {
 }
 .kb-promote__body code {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   background: var(--bg-card);
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
   color: var(--ink);
 }
@@ -3881,7 +3881,7 @@ a.kb-idschip:hover {
 .kb-promote__field span {
   color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -3892,7 +3892,7 @@ a.kb-idschip:hover {
   color: var(--ink);
   padding: 6px 8px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-promote__error {
   margin-top: 10px;
@@ -3902,7 +3902,7 @@ a.kb-idschip:hover {
   background: color-mix(in oklab, var(--red) 10%, transparent);
   color: var(--red);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-promote__foot {
   padding: 12px 22px 18px;
@@ -3917,7 +3917,7 @@ a.kb-idschip:hover {
   background: var(--bg-card);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kb-promote__btn:hover {
@@ -3943,7 +3943,7 @@ a.kb-idschip:hover {
   overflow-y: auto;
   z-index: 4;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border-left: 1px solid var(--rule);
   padding-left: 10px;
@@ -3960,7 +3960,7 @@ a.kb-idschip:hover {
 }
 .kb-toc-spy__head {
   color: var(--ink-mute);
-  font-size: 9.5px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   padding-bottom: 2px;
@@ -4076,7 +4076,7 @@ a.kb-idschip:hover {
 .kb-toc-spy__rune {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font-size: 9.5px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
@@ -4139,14 +4139,14 @@ a.kb-idschip:hover {
 .kb-mem__head h1 {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 28px;
+  font-size: var(--fs-hero);
   margin: 0;
   letter-spacing: -0.01em;
 }
 .kb-mem__head-meta {
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__scope {
   display: flex;
@@ -4154,7 +4154,7 @@ a.kb-idschip:hover {
   align-items: center;
   margin-bottom: 14px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__scope button {
   padding: 4px 12px;
@@ -4182,7 +4182,7 @@ a.kb-idschip:hover {
   border-radius: 6px;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__search:focus {
   outline: none;
@@ -4208,7 +4208,7 @@ a.kb-idschip:hover {
 }
 .kb-mem__axis {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   margin-left: 14px;
   align-self: flex-end;
@@ -4238,7 +4238,7 @@ a.kb-idschip:hover {
   height: 30px;
   border-bottom: 1px solid var(--rule);
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   font-family: var(--font-mono);
@@ -4266,16 +4266,16 @@ a.kb-idschip:hover {
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-mem__pill {
   padding: 2px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid color-mix(in oklab, var(--blue) 28%, transparent);
   background: color-mix(in oklab, var(--blue) 10%, transparent);
   color: var(--blue);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.04em;
 }
 .kb-mem__scope-tag {
@@ -4284,7 +4284,7 @@ a.kb-idschip:hover {
 .kb-mem__title {
   color: var(--ink);
   font-family: var(--font-serif);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   line-height: 1.35;
   cursor: pointer;
   min-width: 0;
@@ -4337,7 +4337,7 @@ a.kb-idschip:hover {
 }
 .kb-mem__salnum {
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   min-width: 32px;
   text-align: right;
@@ -4360,7 +4360,7 @@ button.kb-mem__salnum--edit:focus-visible {
 .kb-mem__salinput {
   width: 52px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   text-align: right;
   border: 1px solid var(--accent-bor);
@@ -4371,12 +4371,12 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-mem__salience-err {
   color: var(--warn);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 4px 0;
 }
 .kb-mem__score {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -4432,7 +4432,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-mem__panel h4 {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -4446,7 +4446,7 @@ button.kb-mem__salnum--edit:focus-visible {
   border-bottom: 1px dashed var(--rule);
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__kv b {
   color: var(--ink);
@@ -4472,26 +4472,26 @@ button.kb-mem__salnum--edit:focus-visible {
   display: flex;
   justify-content: space-between;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   letter-spacing: 0.08em;
 }
 .kb-mem__decay {
   padding: 14px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg);
 }
 .kb-mem__decay h5 {
   margin: 0 0 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink);
 }
 .kb-mem__decay p {
   margin: 0 0 10px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   line-height: 1.55;
 }
@@ -4508,7 +4508,7 @@ button.kb-mem__salnum--edit:focus-visible {
   color: var(--ink-mute);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__decay-ctl button:hover {
   background: var(--bg-card-hi);
@@ -4523,7 +4523,7 @@ button.kb-mem__salnum--edit:focus-visible {
   margin-top: 8px;
   color: var(--red);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 
 /* SH.B1 — /memory mobile (≤860px). Mirrors /sessions' collapse
@@ -4649,7 +4649,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-decayspark__base {
   fill: none;
-  stroke: var(--muted);
+  stroke: var(--ink-mute);
   stroke-width: 1.4;
 }
 .kb-decayspark__stable {
@@ -4666,17 +4666,17 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-decayspark__label {
   font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
   white-space: nowrap;
 }
 .kb-decayspark--pinned .kb-decayspark__base {
   stroke: var(--accent);
 }
 .kb-decayspark--empty {
-  color: var(--muted-2);
+  color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 /* MI-W4.1(revision) — below-floor-now: a REAL, current fact (this memory
    is invisible to recall today), so it gets an unmissable treatment — the
@@ -4684,7 +4684,7 @@ button.kb-mem__salnum--edit:focus-visible {
    than the muted "just a stat" styling every other state gets. */
 .kb-decayspark--below-floor {
   background: color-mix(in oklab, var(--danger) 10%, transparent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 3px;
 }
 .kb-decayspark--below-floor .kb-decayspark__floor {
@@ -4736,9 +4736,9 @@ button.kb-mem__salnum--edit:focus-visible {
   background: var(--accent-soft);
 }
 .kb-injecthist--empty {
-  color: var(--muted-2);
+  color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .kb-injecthist-wrap {
   display: flex;
@@ -4748,9 +4748,9 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 /* CT-C5 — the "N recalls · M referenced" caption beneath the bars. */
 .kb-injecthist__used {
-  color: var(--muted-2);
+  color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -4763,15 +4763,15 @@ button.kb-mem__salnum--edit:focus-visible {
 .kb-mem__simulator h4 {
   margin: 0 0 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-mem__simulator-hint {
   margin: 0 0 10px;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
   max-width: 60em;
 }
 .kb-mem__simulator-input {
@@ -4784,18 +4784,18 @@ button.kb-mem__salnum--edit:focus-visible {
   color: var(--ink);
   padding: 8px 10px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kb-mem__simulator-loading,
 .kb-mem__simulator-empty {
   margin-top: 8px;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-mem__simulator-error {
   margin-top: 8px;
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__simulator-block {
   margin-top: 10px;
@@ -4804,7 +4804,7 @@ button.kb-mem__salnum--edit:focus-visible {
   border: 1px solid var(--rule);
   border-radius: 6px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   white-space: pre-wrap;
   color: var(--ink);
@@ -4820,10 +4820,10 @@ button.kb-mem__salnum--edit:focus-visible {
 .kb-mem__quadrant h4 {
   margin: 0 0 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-mem__quadrant-svg {
   background: var(--bg-card);
@@ -4831,18 +4831,18 @@ button.kb-mem__salnum--edit:focus-visible {
   border-radius: 6px;
 }
 .kb-mem__quadrant-axis {
-  fill: var(--muted-2);
+  fill: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__quadrant-quad-label {
-  fill: var(--muted-2);
+  fill: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
 }
 .kb-mem__quadrant-point {
-  fill: var(--muted);
+  fill: var(--ink-mute);
   stroke: var(--bg-card);
   stroke-width: 1;
   cursor: pointer;
@@ -4869,12 +4869,12 @@ button.kb-mem__salnum--edit:focus-visible {
   gap: 14px;
   flex-wrap: wrap;
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-mem__quadrant-focus {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__quadrant-focus a {
   color: var(--accent-soft);
@@ -4889,25 +4889,25 @@ button.kb-mem__salnum--edit:focus-visible {
 .kb-mem__hygiene h4 {
   margin: 0 0 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-mem__hygiene-scanned {
   margin: 0 0 10px;
-  font-size: 11.5px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-mem__hygiene-loading,
 .kb-mem__hygiene-empty {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-mem__hygiene-err,
 .kb-mem__hygiene-item-err {
   color: var(--red);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   margin: 4px 0;
 }
 .kb-mem__hygiene-list {
@@ -4921,7 +4921,7 @@ button.kb-mem__salnum--edit:focus-visible {
 .kb-mem__hygiene-item {
   background: var(--bg-card);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 12px;
 }
 .kb-mem__hygiene-item-head {
@@ -4931,7 +4931,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-mem__hygiene-urgency {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--warn);
   min-width: 3em;
 }
@@ -4942,13 +4942,13 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-mem__hygiene-kb {
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
 }
 .kb-mem__hygiene-reason {
   margin: 4px 0 8px;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-mem__hygiene-actions {
   display: flex;
@@ -4960,7 +4960,7 @@ button.kb-mem__salnum--edit:focus-visible {
   border-radius: 5px;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 4px 9px;
   cursor: pointer;
 }
@@ -4988,16 +4988,16 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-mem__rollup a {
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__rollup-label {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--warn);
 }
 .kb-mem__rollup-empty {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 
 /* ── MI-W4.3 — lineage viewer ─────────────────────────────────────── */
@@ -5027,13 +5027,13 @@ button.kb-mem__salnum--edit:focus-visible {
   margin: 0;
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 20px;
+  font-size: var(--fs-title);
 }
 .kb-lineage__close {
   background: none;
   border: none;
-  color: var(--muted);
-  font-size: 20px;
+  color: var(--ink-mute);
+  font-size: var(--fs-title);
   line-height: 1;
   cursor: pointer;
 }
@@ -5043,12 +5043,12 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-lineage__loading,
 .kb-lineage__none {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 .kb-lineage__error {
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-lineage__chain {
   display: flex;
@@ -5064,7 +5064,7 @@ button.kb-mem__salnum--edit:focus-visible {
 .kb-lineage__node {
   background: var(--bg-card);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 8px 10px;
 }
 .kb-lineage__node--forgotten {
@@ -5082,16 +5082,16 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-lineage__node-tag {
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
-  color: var(--muted-2);
+  color: var(--ink-dim);
 }
 .kb-lineage__node-meta {
   display: flex;
   gap: 8px;
   margin: 2px 0 6px;
-  font-size: 10.5px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
 }
 .kb-lineage__node-id {
   font-family: var(--font-mono);
@@ -5101,8 +5101,8 @@ button.kb-mem__salnum--edit:focus-visible {
   display: block;
   text-align: center;
   font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
   padding: 4px 0;
 }
 .kb-lineage__overlap-bar--ongoing {
@@ -5111,8 +5111,8 @@ button.kb-mem__salnum--edit:focus-visible {
 .kb-lineage__truncated {
   text-align: center;
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
   margin: 2px 0;
 }
 
@@ -5143,13 +5143,13 @@ button.kb-mem__salnum--edit:focus-visible {
   margin: 0;
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 20px;
+  font-size: var(--fs-title);
 }
 .kb-prov__close {
   background: none;
   border: none;
-  color: var(--muted);
-  font-size: 20px;
+  color: var(--ink-mute);
+  font-size: var(--fs-title);
   line-height: 1;
   cursor: pointer;
 }
@@ -5162,15 +5162,15 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-prov__loading,
 .kb-prov__none {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 .kb-prov__hop h3 {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted-2);
+  color: var(--ink-dim);
 }
 .kb-prov__session {
   display: flex;
@@ -5183,13 +5183,13 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-prov__session-chip {
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
 }
 .kb-prov__session-outcome {
   margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-prov__session-links {
   display: flex;
@@ -5197,7 +5197,7 @@ button.kb-mem__salnum--edit:focus-visible {
   margin-top: 8px;
 }
 .kb-prov__link {
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-prov__commit-list {
   list-style: none;
@@ -5215,15 +5215,15 @@ button.kb-mem__salnum--edit:focus-visible {
   padding: 4px 0;
   cursor: pointer;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-prov__commit-toggle:disabled {
   cursor: default;
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-prov__commit-sha {
   font-family: var(--font-mono);
-  color: var(--muted-2);
+  color: var(--ink-dim);
 }
 .kb-prov__files {
   list-style: none;
@@ -5237,7 +5237,7 @@ button.kb-mem__salnum--edit:focus-visible {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-prov__file-path {
   font-family: var(--font-mono);
@@ -5246,7 +5246,7 @@ button.kb-mem__salnum--edit:focus-visible {
   white-space: nowrap;
 }
 .kb-prov__file-staleness {
-  color: var(--muted-2);
+  color: var(--ink-dim);
   white-space: nowrap;
 }
 .kb-prov__file-staleness.is-changed {
@@ -5254,13 +5254,13 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-prov__files-status,
 .kb-prov__files-truncated {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
   margin: 4px 0 8px 18px;
 }
 .kb-prov__hint {
-  font-size: 11px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
   margin: 0;
 }
 
@@ -5278,26 +5278,26 @@ button.kb-mem__salnum--edit:focus-visible {
   align-items: baseline;
   flex-wrap: wrap;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-prov__recall-sid {
   font-family: var(--font-mono);
-  color: var(--muted-2);
+  color: var(--ink-dim);
 }
 .kb-prov__recall-when {
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-prov__recall-turn {
   font-family: var(--font-mono);
-  color: var(--muted-2);
+  color: var(--ink-dim);
 }
 /* CT-C5 — "referenced" marker on a recall-history row: the session went on
    to explicitly name the memory in a later turn. */
 .kb-prov__recall-used {
-  color: var(--ok, var(--muted));
-  font-size: 11px;
+  color: var(--ok, var(--ink-mute));
+  font-size: var(--fs-xs);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0 6px;
 }
 
@@ -5307,15 +5307,15 @@ button.kb-mem__salnum--edit:focus-visible {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-prov__origin-class {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0 6px;
   white-space: nowrap;
 }
@@ -5326,53 +5326,53 @@ button.kb-mem__salnum--edit:focus-visible {
   color: var(--accent, var(--ink));
 }
 .kb-prov__origin-class--hand-written {
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-prov__origin-gloss {
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-prov__origin-meta {
   margin: 6px 0 0;
   display: flex;
   gap: 12px;
-  font-size: 11px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
 }
 .kb-prov__currency-line {
   margin: 0;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-prov__currency-line.is-superseded {
   color: var(--warn);
 }
 .kb-prov__flagged {
   margin: 0 0 6px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--warn);
 }
 .kb-prov__code-line {
   margin: 6px 0 0;
-  font-size: 11px;
-  color: var(--muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .kb-prov__code-drift.is-drifted {
   color: var(--warn);
 }
 .kb-prov__code-unreachable,
 .kb-prov__code-unpinned {
-  color: var(--muted-2);
+  color: var(--ink-dim);
   font-style: italic;
 }
 .kb-prov__code-resolved {
-  color: var(--muted-2);
+  color: var(--ink-dim);
 }
 .kb-prov__code-refresh {
   background: none;
   border: none;
-  color: var(--muted-2);
+  color: var(--ink-dim);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 0 0 0 6px;
 }
 .kb-prov__code-refresh:hover {
@@ -5380,17 +5380,17 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-prov__receipts {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink);
 }
 .kb-prov__readstate {
   margin: 4px 0 0;
-  font-size: 11px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
 }
 .kb-prov__tension {
   margin: 4px 0 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--warn);
 }
 .kb-prov__recall-hist {
@@ -5398,10 +5398,10 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-prov__subhead {
   margin: 0 0 4px;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted-2);
+  color: var(--ink-dim);
 }
 
 /* ── MI-W4.7 — scope overlap (UpSet-style) ───────────────────────── */
@@ -5410,13 +5410,13 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-scopeup__title {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 .kb-scopeup__empty {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
 }
 .kb-scopeup__rows {
   display: flex;
@@ -5449,7 +5449,7 @@ button.kb-mem__salnum--edit:focus-visible {
   color: var(--warn);
 }
 .kb-scopeup__label {
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
@@ -5459,18 +5459,18 @@ button.kb-mem__salnum--edit:focus-visible {
   position: relative;
   height: 8px;
   background: var(--bg-card);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .kb-scopeup__bar {
   position: absolute;
   inset: 0 auto 0 0;
   background: var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .kb-scopeup__count {
-  font-size: 11px;
-  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
   text-align: right;
 }
 .kb-scopeup__dots {
@@ -5488,7 +5488,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .kb-scopeup__dot--all {
   width: 16px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--warn);
 }
 
@@ -5507,7 +5507,7 @@ button.kb-mem__salnum--edit:focus-visible {
 .anchors-view__title {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 28px;
+  font-size: var(--fs-hero);
   letter-spacing: -0.01em;
   margin: 0;
 }
@@ -5515,7 +5515,7 @@ button.kb-mem__salnum--edit:focus-visible {
   display: flex;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .anchors-view__tabs button {
   padding: 5px 12px;
@@ -5541,17 +5541,17 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .anchors-view__empty {
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   max-width: 60ch;
   margin-top: 24px;
 }
 .anchors-view__empty code {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
 }
 .anchors-view__list,
@@ -5569,10 +5569,10 @@ button.kb-mem__salnum--edit:focus-visible {
   gap: 10px;
   padding: 8px 12px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-card);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .anchors-view__row:hover {
   border-color: var(--rule-hi);
@@ -5596,11 +5596,11 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .anchors-view__kb {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
 }
 .anchors-view__sep {
@@ -5608,7 +5608,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .anchors-view__title-text {
   font-family: var(--font-serif);
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
@@ -5617,11 +5617,11 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .anchors-view__folder {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .anchors-view__age {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   margin-left: auto;
 }
 .anchors-view__row-x {
@@ -5632,7 +5632,7 @@ button.kb-mem__salnum--edit:focus-visible {
   background: transparent;
   color: var(--ink-mute);
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--fs-lg);
   line-height: 1;
 }
 .anchors-view__row-x:hover {
@@ -5641,14 +5641,14 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .anchors-view__stale-count {
   color: var(--ink-mute);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   margin: 0 0 12px;
 }
 .anchors-view__badge {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   padding: 1px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-left: auto;
 }
 .anchors-view__badge--warn {
@@ -5669,7 +5669,7 @@ button.kb-mem__salnum--edit:focus-visible {
 .inbox-view__title {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 28px;
+  font-size: var(--fs-hero);
   letter-spacing: -0.01em;
   margin: 0;
   display: flex;
@@ -5678,7 +5678,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .inbox-view__count {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--accent-soft);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
@@ -5688,12 +5688,12 @@ button.kb-mem__salnum--edit:focus-visible {
 .inbox-view__sub {
   margin: 4px 0 0;
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .inbox-view__error {
   margin-top: 18px;
   color: var(--red);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .inbox-list {
   list-style: none;
@@ -5722,17 +5722,17 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .inbox-card__kb {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
   flex: none;
 }
 .inbox-card__title {
   font-family: var(--font-serif);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   color: var(--ink);
   text-decoration: none;
   flex: 1;
@@ -5751,7 +5751,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .inbox-card__age {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   flex: none;
 }
@@ -5810,7 +5810,7 @@ button.kb-mem__salnum--edit:focus-visible {
   align-items: baseline;
   gap: 10px;
   padding: 8px 14px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   background: var(--bg-card);
   transition: transform 0.2s var(--ease);
 }
@@ -5823,7 +5823,7 @@ button.kb-mem__salnum--edit:focus-visible {
   gap: 6px;
   padding: 0 16px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -5844,7 +5844,7 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .inbox-comment__author {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   flex: none;
@@ -5867,7 +5867,7 @@ button.kb-mem__salnum--edit:focus-visible {
   gap: 8px;
   flex: none;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .inbox-comment__stale {
@@ -5932,7 +5932,7 @@ button.kb-mem__salnum--edit:focus-visible {
 .proposals-section__title {
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 20px;
+  font-size: var(--fs-title);
   letter-spacing: -0.01em;
   margin: 0;
   display: flex;
@@ -5942,7 +5942,7 @@ button.kb-mem__salnum--edit:focus-visible {
 .proposals-section__sub {
   margin: 4px 0 0;
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .proposal-list {
   list-style: none;
@@ -5971,17 +5971,17 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .proposal-row__kb {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
   flex: none;
 }
 .proposal-row__title {
   font-family: var(--font-serif);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   color: var(--ink);
   flex: 1;
   min-width: 0;
@@ -5991,14 +5991,14 @@ button.kb-mem__salnum--edit:focus-visible {
 }
 .proposal-row__age {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   flex: none;
 }
 .proposal-row__excerpt {
   margin: 0;
   color: var(--ink-mute);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 .proposal-row__meta {
@@ -6016,7 +6016,7 @@ button.kb-mem__salnum--edit:focus-visible {
   background: var(--bg-panel);
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
   white-space: nowrap;
   text-decoration: none;
@@ -6039,12 +6039,12 @@ a.proposal-row__chip:hover {
   border: 1px solid color-mix(in oklab, var(--warn) 45%, var(--rule));
   background: color-mix(in oklab, var(--warn) 12%, var(--bg-panel));
   color: var(--ink-mute);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
 }
 .proposal-row__supersedes code {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .proposal-row__actions {
   display: flex;
@@ -6053,7 +6053,7 @@ a.proposal-row__chip:hover {
 }
 .proposal-row__act {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 4px 12px;
   border-radius: 6px;
   border: 1px solid var(--rule);
@@ -6084,7 +6084,7 @@ a.proposal-row__chip:hover {
   border-bottom: 1px solid var(--rule);
   background: var(--bg-panel-2);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-ctxbar__back {
@@ -6149,7 +6149,7 @@ a.proposal-row__chip:hover {
   border: 1px solid var(--accent-bor);
   border-radius: 5px;
   color: var(--accent-soft);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   margin-left: 6px;
 }
 .kb-ctxbar__nav {
@@ -6160,7 +6160,7 @@ a.proposal-row__chip:hover {
 }
 .kb-ctxbar__pos {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   margin-right: 4px;
   font-variant-numeric: tabular-nums;
 }
@@ -6172,7 +6172,7 @@ a.proposal-row__chip:hover {
   color: var(--ink);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-ctxbar__nav-btn:hover {
   background: var(--bg-card-hi);
@@ -6195,7 +6195,7 @@ a.proposal-row__chip:hover {
   color: var(--ink);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-decoration: none;
 }
 .kb-ctxbar__act:hover {
@@ -6225,7 +6225,7 @@ a.proposal-row__chip:hover {
   border-radius: var(--radius-pill);
   background: var(--accent-fill);
   color: var(--accent-fill-fg);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   display: inline-grid;
   place-items: center;
@@ -6258,7 +6258,7 @@ a.proposal-row__chip:hover {
   justify-content: center;
   gap: 8px;
   padding: 6px 12px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   background: color-mix(in oklab, var(--warn) 16%, var(--bg-panel));
   border-bottom: 1px solid color-mix(in oklab, var(--warn) 50%, var(--rule));
@@ -6274,7 +6274,7 @@ a.proposal-row__chip:hover {
   position: fixed;
   bottom: 16px;
   right: 16px;
-  z-index: 1000;
+  z-index: var(--z-top);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -6287,11 +6287,11 @@ a.proposal-row__chip:hover {
   align-items: center;
   gap: 10px;
   padding: 9px 10px 9px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--rule);
   background: var(--bg-panel);
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   /* SH.A1 — theme-aware float shadow (static toast overlay; was a
      hardcoded dark-mode black). */
   box-shadow: var(--shadow);
@@ -6311,7 +6311,7 @@ a.proposal-row__chip:hover {
   background: var(--bg-card-hi);
   color: var(--ink);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kb-toast__action:hover {
@@ -6372,10 +6372,10 @@ a.proposal-row__chip:hover {
   padding: 2px 4px;
   border: 1px solid transparent;
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   max-width: 100%;
 }
@@ -6393,7 +6393,7 @@ a.proposal-row__chip:hover {
   background: var(--bg-panel);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -6434,7 +6434,7 @@ a.proposal-row__chip:hover {
   gap: 8px;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   padding: 2px 0;
 }
 .kb-mem__links-sep {
@@ -6450,13 +6450,13 @@ a.proposal-row__chip:hover {
 }
 .kb-mem__links-loading,
 .kb-mem__links-empty {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   padding: 4px 0;
 }
 .kb-mem__links-err {
   color: var(--red);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__links-actions {
   display: flex;
@@ -6465,9 +6465,9 @@ a.proposal-row__chip:hover {
 }
 .kb-mem__links-actions button {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 3px 10px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--rule);
   background: var(--bg-card);
   color: var(--ink);
@@ -6486,10 +6486,10 @@ a.proposal-row__chip:hover {
   display: block;
   padding: 4px 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-decoration: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .kb-side__memlink:hover {
   background: var(--bg-card);
@@ -6516,7 +6516,7 @@ a.proposal-row__chip:hover {
   display: inline-block;
   padding: 4px 0;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   color: var(--accent);
   text-decoration: none;
@@ -6535,7 +6535,7 @@ a.proposal-row__chip:hover {
 }
 .kb-pinsp__session-name {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6574,7 +6574,7 @@ a.proposal-row__chip:hover {
 }
 .kb-pinsp__why-prompt {
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6582,7 +6582,7 @@ a.proposal-row__chip:hover {
 }
 .kb-pinsp__why-snippet {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--accent);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6603,7 +6603,7 @@ a.proposal-row__chip:hover {
   gap: 4px;
   padding: 2px 8px;
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-panel);
   color: var(--ink-mute);
   font: 600 11px/1.4 var(--font-sans);
@@ -6620,7 +6620,7 @@ a.proposal-row__chip:hover {
 }
 .kb-pinsp__sess-pill-n {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   opacity: 0.8;
 }
 .kb-pinsp__sess-head {
@@ -6637,7 +6637,7 @@ a.proposal-row__chip:hover {
   color: var(--accent-soft);
   background: var(--accent-bg);
   border: 1px solid var(--accent-bor);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 4px;
 }
 .kb-pinsp__sess-meta {
@@ -6759,7 +6759,7 @@ a.proposal-row__chip:hover {
   flex: 1;
   min-width: 0;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6773,7 +6773,7 @@ a.proposal-row__chip:hover {
 /* W3.R-c — "replay" link on a session-rooted biography row. */
 .kb-bio__replay {
   flex: none;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-decoration: none;
 }
@@ -6791,11 +6791,11 @@ a.proposal-row__chip:hover {
   white-space: nowrap;
 }
 .kb-bio__excerpt {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-bio__answer {
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kb-bio__ago {
@@ -6809,11 +6809,11 @@ a.proposal-row__chip:hover {
   flex: none;
   padding: 1px 5px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel);
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .kb-bio__sha:hover {
@@ -6824,7 +6824,7 @@ a.proposal-row__chip:hover {
   flex: none;
   padding: 2px 5px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--ink-mute);
   font: 600 9px/1 var(--font-mono);
   text-transform: uppercase;
@@ -6876,7 +6876,7 @@ a.proposal-row__chip:hover {
   margin: 0;
   color: var(--ink-mute);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-style: italic;
 }
 .kb-promptpanel__body {
@@ -6891,11 +6891,11 @@ a.proposal-row__chip:hover {
   padding: 8px;
   overflow: auto;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -6907,7 +6907,7 @@ a.proposal-row__chip:hover {
 .kb-promptpanel__act {
   padding: 3px 8px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel);
   color: var(--ink-mute);
   font: 600 11px/1 var(--font-sans);
@@ -6927,7 +6927,7 @@ a.proposal-row__chip:hover {
   gap: 6px;
   padding: 8px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel);
 }
 .kb-promptpanel__comparerow {
@@ -6939,24 +6939,24 @@ a.proposal-row__chip:hover {
   min-width: 0;
   padding: 3px 6px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-promptpanel__err {
   color: var(--red);
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-promptpanel__diff {
   max-height: 260px;
   overflow: auto;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
 }
 .kb-promptpanel__diffline {
@@ -7001,7 +7001,7 @@ a.proposal-row__chip:hover {
 }
 .kb-pinsp__memtitle {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   text-decoration: none;
   overflow: hidden;
@@ -7015,7 +7015,7 @@ a.proposal-row__chip:hover {
 /* RA4 — one-line summary gloss beneath a related-memory title. */
 .kb-pinsp__memsummary {
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   line-height: 1.35;
   color: var(--ink-soft, var(--ink-mute));
   overflow: hidden;
@@ -7029,7 +7029,7 @@ a.proposal-row__chip:hover {
   flex-wrap: wrap;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-pinsp__memkb {
@@ -7045,7 +7045,7 @@ a.proposal-row__chip:hover {
 .kb-pinsp__mempin {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   padding: 2px 8px;
   border-radius: 3px;
   border: 1px solid var(--rule);
@@ -7102,7 +7102,7 @@ a.proposal-row__chip:hover {
   padding: 3px 9px;
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-transform: lowercase;
 }
@@ -7131,7 +7131,7 @@ a.proposal-row__chip:hover {
   padding: 3px 8px;
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .cp__verdict-clear:hover {
@@ -7139,7 +7139,7 @@ a.proposal-row__chip:hover {
 }
 .cp__verdict-meta {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   text-transform: lowercase;
 }
@@ -7155,7 +7155,7 @@ a.proposal-row__chip:hover {
   border-radius: var(--radius-sm);
   padding: 3px 8px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .cp__verdict-mustfix:hover {
@@ -7174,7 +7174,7 @@ a.proposal-row__chip:hover {
   padding: 8px;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow);
 }
 .cp__verdict-popover-input {
@@ -7187,7 +7187,7 @@ a.proposal-row__chip:hover {
   background: var(--bg);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .cp__verdict-popover-actions {
   display: flex;
@@ -7202,7 +7202,7 @@ a.proposal-row__chip:hover {
   color: var(--ink);
   padding: 3px 9px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 .cp__verdict-popover-confirm:hover {
@@ -7243,7 +7243,7 @@ a.proposal-row__chip:hover {
   color: var(--ink);
   cursor: pointer;
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 .kb-selact__btn:hover {
@@ -7274,7 +7274,7 @@ a.proposal-row__chip:hover {
  * (below), one line. */
 .kb-pinsp__coderef-truncated {
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   margin: 0 0 8px;
 }
 /* CT-E3 — the honest-staleness summary line (tier a/b), directly under the
@@ -7283,7 +7283,7 @@ a.proposal-row__chip:hover {
  * (never on a degrade/unpinned rung — those keep the dim tier-(a) tone). */
 .kb-pinsp__coderef-fresh {
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   margin: 0 0 8px;
 }
 .kb-pinsp__coderef-fresh.is-drifted {
@@ -7306,7 +7306,7 @@ a.proposal-row__chip:hover {
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1;
   flex: none;
 }
@@ -7317,7 +7317,7 @@ a.proposal-row__chip:hover {
 .kb-pinsp__coderef-lens-link {
   color: var(--ink-mute);
   text-decoration: none;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -7345,7 +7345,7 @@ a.proposal-row__chip:hover {
   gap: 5px;
   padding: 4px 9px;
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-panel);
   color: var(--ink-mute);
   font: 600 11px/1.4 var(--font-sans);
@@ -7373,7 +7373,7 @@ a.proposal-row__chip:hover {
 }
 .kb-pinsp__coderef-repo-n {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   opacity: 0.8;
 }
 .kb-pinsp__coderef-dirty-dot {
@@ -7388,19 +7388,19 @@ a.proposal-row__chip:hover {
   border-left: 2px solid var(--warn);
   padding: 4px 8px;
   margin: 4px 0 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__coderef-resolved {
   display: flex;
   align-items: center;
   gap: 6px;
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   margin: 0 0 10px;
 }
 .kb-pinsp h5.kb-pinsp__coderef-group {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -7421,7 +7421,7 @@ a.proposal-row__chip:hover {
   padding: 5px 0 5px 8px;
   border-left: 2px solid var(--rule);
   border-bottom: 1px dashed var(--rule);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__coderef-row a {
   color: var(--ink);
@@ -7444,10 +7444,10 @@ a.proposal-row__chip:hover {
 .kb-pinsp__coderef-line {
   align-self: flex-start;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .kb-pinsp__coderef-line--confirmed {
   color: var(--success);
@@ -7471,22 +7471,22 @@ a.proposal-row__chip:hover {
 }
 .kb-pinsp__coderef-search {
   color: var(--ink-mute);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .kb-pinsp__coderef-search:hover {
   color: var(--accent-soft);
 }
 .kb-pinsp__coderef-note {
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   font-style: italic;
 }
 .kb-pinsp__coderef-external-tag {
   align-self: flex-start;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }

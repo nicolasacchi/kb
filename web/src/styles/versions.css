@@ -13,9 +13,9 @@
   flex-direction: column;
   width: 360px;
   height: 100%;
-  background: var(--bg-alt);
-  border-left: 1px solid var(--border);
-  font-size: 13px;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--rule);
+  font-size: var(--fs-sm);
   overflow: hidden;
 }
 
@@ -24,17 +24,17 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--rule);
   flex: 0 0 auto;
 }
 .vp__title {
   font-weight: 600;
-  color: var(--fg);
+  color: var(--ink);
 }
 .vp__mode {
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
 .vp__toggle {
   margin-left: auto;
@@ -43,16 +43,16 @@
 }
 .vp__toggle button {
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 2px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--ink-mute);
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
 .vp__toggle button.is-on {
-  color: var(--fg);
+  color: var(--ink);
   border-color: var(--accent);
   background: var(--bg-card);
 }
@@ -63,28 +63,28 @@
 .vp__memento {
   margin: 0;
   padding: 6px 10px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
-  color: var(--fg-muted);
+  color: var(--ink-mute);
   background: var(--bg-card);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--rule);
   box-shadow: inset 2px 0 0 var(--accent);
   flex: 0 0 auto;
 }
 .vp__memento--miss {
-  box-shadow: inset 2px 0 0 var(--border);
+  box-shadow: inset 2px 0 0 var(--rule);
 }
 .vp__memento-lab {
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .vp__memento-hit {
   font-family: var(--font-mono);
-  color: var(--fg);
+  color: var(--ink);
 }
 .vp__memento-rel {
-  color: var(--fg-muted);
+  color: var(--ink-mute);
 }
 
 .vp__timeline {
@@ -93,17 +93,17 @@
   padding: 4px 0;
   max-height: 40%;
   overflow-y: auto;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--rule);
   flex: 0 0 auto;
 }
 .vp__hint {
   padding: 8px 10px;
-  color: var(--fg-muted);
+  color: var(--ink-mute);
 }
 .vp__err {
   padding: 8px 10px;
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   white-space: pre-wrap;
 }
 
@@ -119,7 +119,7 @@
   text-align: left;
   border: 0;
   background: transparent;
-  color: var(--fg);
+  color: var(--ink);
   font: inherit;
   padding: 5px 10px;
   cursor: pointer;
@@ -142,7 +142,7 @@
 }
 .vp__glyph {
   grid-area: glyph;
-  color: var(--fg-muted);
+  color: var(--ink-mute);
 }
 .vp__ver--working .vp__glyph {
   color: var(--accent);
@@ -150,19 +150,19 @@
 .vp__short {
   grid-area: short;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .vp__when {
   grid-area: when;
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
   justify-self: end;
 }
 .vp__lbl {
   grid-area: lbl;
-  color: var(--fg-muted);
-  font-size: 12px;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -172,16 +172,16 @@
   flex: 1 1 auto;
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
 }
 .vp__diffhead {
   position: sticky;
   top: 0;
   padding: 6px 10px;
-  color: var(--fg-muted);
-  background: var(--bg-alt);
-  border-bottom: 1px solid var(--border);
+  color: var(--ink-mute);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--rule);
 }
 .vp__hunkhead {
   padding: 2px 10px;
@@ -195,7 +195,7 @@
   padding: 0 8px;
 }
 .vp__ln {
-  color: var(--fg-muted);
+  color: var(--ink-mute);
   opacity: 0.7;
   text-align: right;
   user-select: none;
@@ -216,7 +216,7 @@
   color: var(--red);
 }
 .vp__line--equal {
-  color: var(--fg-muted);
+  color: var(--ink-mute);
 }
 .vp__text {
   white-space: pre-wrap;
@@ -246,17 +246,17 @@
 .vp__galley-rule {
   flex: 1 1 auto;
   height: 3px;
-  border-top: 1px solid var(--fg);
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--rule);
   opacity: 0.6;
 }
 .vp__galley-title {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
-  color: var(--fg);
+  color: var(--ink);
 }
 .vp__galley-hunk {
   padding: 2px 0;

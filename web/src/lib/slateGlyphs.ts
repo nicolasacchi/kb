@@ -9,7 +9,7 @@
 //   2. colour is a `tokens.css` custom property NAME, never a literal —
 //      families per the design: status `--accent`, work `--blue`,
 //      questions `--warn`, knowledge `--ok`, tried `--danger`,
-//      housekeeping `--muted`.
+//      housekeeping `--ink-mute`.
 //
 // The injected digest gets NONE of this (an emoji costs 2–3 tokens on
 // OpenAI encodings and more on Claude's, a kind word costs one, and no
@@ -30,7 +30,7 @@ export type SlateColorToken =
   | "--warn"
   | "--ok"
   | "--danger"
-  | "--muted";
+  | "--ink-mute";
 
 export type SlateGlyph = {
   /// The emoji. Always rendered `aria-hidden`.
@@ -60,9 +60,9 @@ export const KIND_GLYPHS: Readonly<Record<SlateKind, SlateGlyph>> = {
   idea: { glyph: "\u{1F4A1}", word: "IDEA", token: "--ok" },
   // tried — --danger
   tried: { glyph: "⛔", word: "TRIED", token: "--danger" },
-  // housekeeping — --muted
-  drop: { glyph: "\u{1F5D1}️", word: "DROP", token: "--muted" },
-  mark: { glyph: "⭕", word: "MARK", token: "--muted" },
+  // housekeeping — --ink-mute
+  drop: { glyph: "\u{1F5D1}️", word: "DROP", token: "--ink-mute" },
+  mark: { glyph: "⭕", word: "MARK", token: "--ink-mute" },
 };
 
 /// The STATE glyphs — the badges a card wears beside its kind. Same
@@ -78,11 +78,11 @@ export type SlateStateId =
 
 export const STATE_GLYPHS: Readonly<Record<SlateStateId, SlateGlyph>> = {
   pin: { glyph: "\u{1F4CC}", word: "pinned", token: "--accent" },
-  mark: { glyph: "⭕", word: "marks", token: "--muted" },
+  mark: { glyph: "⭕", word: "marks", token: "--ink-mute" },
   contested: { glyph: "⚡", word: "contested", token: "--danger" },
   live: { glyph: "\u{1F7E2}", word: "live", token: "--ok" },
   stale: { glyph: "\u{1F7E1}", word: "stale?", token: "--warn" },
-  expired: { glyph: "⚫", word: "expired", token: "--muted" },
+  expired: { glyph: "⚫", word: "expired", token: "--ink-mute" },
   human: { glyph: "\u{1F464}", word: "you", token: "--accent" },
 };
 
@@ -94,7 +94,7 @@ export function glyphForKind(kind: SlateKind): SlateGlyph {
     KIND_GLYPHS[kind] ?? {
       glyph: "•",
       word: String(kind).toUpperCase(),
-      token: "--muted" as const,
+      token: "--ink-mute" as const,
     }
   );
 }

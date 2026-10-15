@@ -52,7 +52,7 @@
 .kb-ses__empty {
   padding: 24px 16px;
   color: var(--ink-mute, #999);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .kb-ses__empty--err {
   color: var(--ink-warn, #c44);
@@ -125,7 +125,7 @@
   gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px dotted var(--rule, #2a2a2a);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-now__row:last-child {
   border-bottom: none;
@@ -197,7 +197,7 @@
   align-items: center;
   gap: 4px;
   padding: 3px 7px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--rule, #2a2a2a);
   background: transparent;
   color: var(--ink-mute, #8a857d);
@@ -480,7 +480,7 @@
 /* S10 — resume-context block. */
 .kb-ses__resume {
   font: 400 11.5px/1.5 var(--font-mono, ui-monospace);
-  background: var(--surface, #1a1a1a);
+  background: var(--bg-panel, #1a1a1a);
   border: 1px solid var(--rule, #2a2a2a);
   border-radius: 6px;
   padding: 8px 10px;
@@ -516,7 +516,7 @@
   gap: 7px;
   margin: 8px 0 4px;
   padding: 7px 10px;
-  background: var(--surface, #1a1a1a);
+  background: var(--bg-panel, #1a1a1a);
   border: 1px solid var(--rule, #2a2a2a);
   border-radius: 6px;
   min-width: 0;
@@ -625,7 +625,7 @@
 .kb-ses__viewtoggle {
   display: inline-flex;
   border: 1px solid var(--rule, #2a2a2a);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .kb-ses__viewtoggle button {
@@ -691,9 +691,9 @@
 .kb-ses__search {
   font: 400 12.5px/1.3 var(--font-sans, system-ui);
   color: inherit;
-  background: var(--surface, #1a1a1a);
+  background: var(--bg-panel, #1a1a1a);
   border: 1px solid var(--rule, #2a2a2a);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 3px 8px;
   min-width: 16ch;
 }
@@ -739,7 +739,7 @@
   gap: 10px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--rule, #2a2a2a);
-  background: var(--surface, rgba(255, 255, 255, 0.02));
+  background: var(--bg-panel, rgba(255, 255, 255, 0.02));
 }
 .kb-ses__project-name {
   font: 650 13.5px/1.3 var(--font-sans, system-ui);
@@ -764,9 +764,9 @@
 .kb-ses__folder-select {
   font: 500 12px/1.2 var(--font-sans, system-ui);
   color: inherit;
-  background: var(--surface, #1a1a1a);
+  background: var(--bg-panel, #1a1a1a);
   border: 1px solid var(--rule, #2a2a2a);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 3px 6px;
   max-width: 22ch;
 }
@@ -786,9 +786,9 @@
 .kb-ses__harness-select {
   font: 500 12px/1.2 var(--font-sans, system-ui);
   color: inherit;
-  background: var(--surface, #1a1a1a);
+  background: var(--bg-panel, #1a1a1a);
   border: 1px solid var(--rule, #2a2a2a);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 3px 6px;
   max-width: 18ch;
 }
@@ -798,7 +798,7 @@
    writer-activity evidence, W7 — see --live below). */
 .kb-ses__row-presence {
   color: var(--accent, #4caf50);
-  font-size: 9px;
+  font-size: var(--fs-xs);
   line-height: 1;
 }
 
@@ -834,7 +834,7 @@
 
 .kb-ses__rail-empty {
   color: var(--ink-mute, #999);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .kb-ses__ins-head h2 {
@@ -850,12 +850,12 @@
 }
 .kb-ses__ins-sid code {
   color: var(--ink, inherit);
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 
 .kb-ses__ins-actions {
   margin: 8px 0 16px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-ses__ins-actions a {
   color: var(--accent, #b9a6ff);
@@ -885,7 +885,7 @@
 .kb-ses__ins-loading,
 .kb-ses__ins-empty,
 .kb-ses__ins-note {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute, #999);
   margin: 0;
 }
@@ -894,7 +894,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-ses__ins-list li {
   padding: 4px 0;
@@ -922,7 +922,7 @@
 
 .kb-ses__ins-confidence {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute, #999);
 }
 .kb-ses__conf {
@@ -963,7 +963,7 @@
 }
 .kb-mem__lens-id {
   color: var(--accent, #b9a6ff);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-mem__lens-clear {
   background: transparent;
@@ -971,7 +971,7 @@
   color: var(--ink-mute, #999);
   cursor: pointer;
   padding: 0 4px;
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1;
 }
 .kb-mem__lens-clear:hover {
@@ -1015,7 +1015,7 @@
 }
 .kb-mem__from-session code {
   color: inherit;
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 
 /* CT-A1 (U3 parse-back) — "Lifted from …" provenance chip, same sub-line
@@ -1066,7 +1066,7 @@
   align-items: center;
   gap: 6px;
   padding: 3px 10px 3px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--rule);
   background: var(--bg-panel);
   color: var(--ink);
@@ -1103,7 +1103,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-atlas-insp__sessions li {
   border-bottom: 1px solid var(--rule-soft, rgba(255, 255, 255, 0.05));
@@ -1180,7 +1180,7 @@
    non-null, so a row with nothing to report has no empty chip slots. */
 .kb-ses__row-harness {
   flex: none;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute, #999);
 }
 .kb-ses__row-chips {
@@ -1295,7 +1295,7 @@
 .kb-ses__project-ledger-toggle:hover { color: var(--accent, #b9a6ff); }
 .kb-ses__project-ledger-body {
   margin-top: 6px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-ses__project-ledger-days {
   list-style: none;

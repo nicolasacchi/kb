@@ -42,8 +42,8 @@ const FAMILIES: Record<string, SlateColorToken> = {
   found: "--ok",
   idea: "--ok",
   tried: "--danger",
-  drop: "--muted",
-  mark: "--muted",
+  drop: "--ink-mute",
+  mark: "--ink-mute",
 };
 
 describe("slateGlyphs — every kind and state has a glyph AND a word", () => {
@@ -71,7 +71,7 @@ describe("slateGlyphs — every kind and state has a glyph AND a word", () => {
       ...Object.values(KIND_GLYPHS),
       ...Object.values(STATE_GLYPHS),
     ]) {
-      expect(g.token).toMatch(/^--[a-z]+$/);
+      expect(g.token).toMatch(/^--[a-z]+(-[a-z]+)*$/);
     }
   });
 

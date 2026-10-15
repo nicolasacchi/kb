@@ -29,26 +29,26 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--pad-2);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--rule);
   padding-bottom: var(--pad-3);
 }
 
 .kb-ambient__kb {
   margin: 0;
-  font-size: 2.25rem;
+  font-size: var(--fs-hero);
   font-weight: 600;
-  color: var(--text-strong);
+  color: var(--ink-strong);
 }
 
 .kb-ambient__clock {
-  font-size: 1.1rem;
-  color: var(--muted);
+  font-size: var(--fs-xl);
+  color: var(--ink-mute);
   font-variant-numeric: tabular-nums;
 }
 
 .kb-ambient__status {
-  color: var(--muted);
-  font-size: 1.1rem;
+  color: var(--ink-mute);
+  font-size: var(--fs-xl);
 }
 
 .kb-ambient__grid {
@@ -61,7 +61,7 @@
 
 .kb-ambient__panel {
   background: var(--bg-panel);
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-md);
   padding: var(--pad-3);
   overflow: auto;
@@ -69,10 +69,10 @@
 
 .kb-ambient__panel h2 {
   margin: 0 0 var(--pad-2);
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--muted);
+  color: var(--ink-mute);
 }
 
 .kb-ambient__activity {
@@ -91,16 +91,16 @@
 }
 
 .kb-ambient__activity-label {
-  font-size: 1.1rem;
-  color: var(--text);
+  font-size: var(--fs-xl);
+  color: var(--ink);
 }
 
 .kb-ambient__activity-value {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: var(--fs-hero);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--text-strong);
+  color: var(--ink-strong);
 }
 
 .kb-ambient__list {
@@ -114,7 +114,7 @@
 
 .kb-ambient__list li {
   padding: var(--pad-2) 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--rule);
 }
 
 .kb-ambient__list li:last-child {
@@ -122,8 +122,8 @@
 }
 
 .kb-ambient__list a {
-  font-size: 1.15rem;
-  color: var(--text);
+  font-size: var(--fs-xl);
+  color: var(--ink);
   text-decoration: none;
 }
 
@@ -136,12 +136,12 @@
 .kb-ambient__sub {
   display: block;
   margin-top: 2px;
-  font-size: 0.9rem;
-  color: var(--muted);
+  font-size: var(--fs-md);
+  color: var(--ink-mute);
 }
 
 .kb-ambient__empty {
-  color: var(--muted);
+  color: var(--ink-mute);
   font-style: italic;
   margin: 0;
 }

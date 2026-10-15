@@ -1365,8 +1365,8 @@ export default function AtlasView({
     }
     const cs = getComputedStyle(document.documentElement);
     return {
-      fg: cs.getPropertyValue("--fg").trim() || "#e8eaed",
-      fgMuted: cs.getPropertyValue("--fg-muted").trim() || "#9aa0a6",
+      fg: cs.getPropertyValue("--ink").trim() || "#e8eaed",
+      fgMuted: cs.getPropertyValue("--ink-mute").trim() || "#9aa0a6",
       bg: cs.getPropertyValue("--bg").trim() || "#1f2024",
     };
   }, []);

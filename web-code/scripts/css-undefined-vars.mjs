@@ -107,6 +107,14 @@ for (const f of cssFiles) {
   cssTextByFile.set(f, text);
   for (const found of text.matchAll(DEF_RE)) defined.add(found[1]);
 }
+// OL F3 — the shared tokens (`@kb/ui/tokens.css`) are imported by
+// src/styles/tokens.css, so the names ui/src declares are defined here too.
+// They count as DEFINITIONS only; ui/src is not scanned for references yet.
+for (const f of walk(join(__dirname, "..", "..", "ui", "src"), [".css"], [])) {
+  for (const found of stripCssComments(readFileSync(f, "utf8")).matchAll(DEF_RE)) {
+    defined.add(found[1]);
+  }
+}
 
 // ── Fallback-chain resolution --------------------------------------------
 // Given the text strictly INSIDE a var(...) call's parens (i.e. everything

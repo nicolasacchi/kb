@@ -114,7 +114,7 @@
 }
 .kb-drawer__title {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--ink);
@@ -126,10 +126,10 @@
   width: 36px;
   height: 36px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-panel);
   color: var(--ink-mute);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   cursor: pointer;
 }
 .kb-drawer__close:hover {
@@ -151,7 +151,7 @@
 .kb-drawer__sect,
 .kb-navlist__sect {
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   margin: 14px 16px 6px;
@@ -172,7 +172,7 @@
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--fs-md);
   text-align: left;
   text-decoration: none;
   cursor: pointer;
@@ -201,7 +201,7 @@
 .kb-navlist__badge {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   color: var(--ink-mute);
 }
@@ -282,7 +282,7 @@
     background: var(--bg-panel);
     color: var(--ink-mute);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     cursor: pointer;
   }
   .kb-qribbon__viewopts:hover,
@@ -525,7 +525,7 @@ body.kb-immersive .kb-folio-colophon {
     border: 1px solid var(--rule-hi);
     background: var(--bg-panel);
     color: var(--ink);
-    font-size: 18px;
+    font-size: var(--fs-xl);
     box-shadow: var(--shadow);
     cursor: pointer;
   }
@@ -614,9 +614,9 @@ body.kb-immersive .kb-folio-colophon {
     border: 1px solid var(--accent);
     border-radius: var(--radius-sm);
     background: var(--accent-bg);
-    color: var(--fg);
+    color: var(--ink);
     font: inherit;
-    font-size: 13px;
+    font-size: var(--fs-sm);
     cursor: pointer;
   }
 
@@ -772,7 +772,7 @@ body.kb-immersive .kb-folio-colophon {
   background: transparent;
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.02em;
   text-decoration: none;
   cursor: pointer;
@@ -878,11 +878,11 @@ body.kb-immersive .kb-tabbar {
   gap: 3px;
   min-height: 44px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--ink-mute);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.02em;
   cursor: pointer;
 }
@@ -984,7 +984,7 @@ body.kb-immersive .kb-tabbar {
   .list-row__title {
     grid-column: 1 / -1;
     grid-row: 1;
-    font-size: 13.5px;
+    font-size: var(--fs-md);
   }
   .list-row__folder {
     grid-column: 1;
@@ -1069,7 +1069,7 @@ body.kb-immersive .kb-tabbar {
    * though the padded button box is now 44px tall). */
   .kb-selact__btn {
     min-height: 44px;
-    font-size: 13px;
+    font-size: var(--fs-sm);
   }
   /* Comment-composer controls the first MB5 audit missed — the MarkdownEditor
    * toolbar (measured 26×24px) and the file-scope/reply/edit-modal action
@@ -1103,7 +1103,7 @@ body.kb-immersive .kb-tabbar {
     gap: 2px;
   }
   .cfg__input {
-    font-size: 16px;
+    font-size: var(--fs-lg);
   }
 
   /* Operator-dashboard tab strip has 10 tabs; on a phone they overflow the
@@ -1143,7 +1143,7 @@ body.kb-immersive .kb-tabbar {
   .capture-sheet__field select,
   .capture-sheet__field textarea,
   .cme .cm-content {
-    font-size: 16px;
+    font-size: var(--fs-lg);
   }
 }
 
@@ -1208,7 +1208,7 @@ body.kb-immersive .kb-tabbar {
     gap: 4px;
   }
   .slate-col--acc {
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--rule);
   }
   .slate-col--acc .slate-col__head {
     margin: 0;

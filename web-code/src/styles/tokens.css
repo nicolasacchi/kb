@@ -39,6 +39,8 @@
  *     never reassign one. `npm run lint:themes` is the executable gate.
  */
 
+@import "@kb/ui/tokens.css";
+
 /* V4.U1 — self-hosted (no Google Fonts CDN round-trip; the SPA must load
  * offline-ish, same reasoning as kb's own web/ A-w4/X1). Two disjoint
  * `unicode-range` subsets per face/weight — latin-ext (Latin Extended-A/B +
@@ -190,55 +192,9 @@
   --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
     Menlo, monospace;
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 14px;
-  --radius-pill: 999px;
-
-  /* Type ramp — static px. V80-R0 re-based the whole ramp up (the reading
-   * contract, D16, deferred this at the time) — every page's captions/
-   * chips/table cells inherit from these, one change moves every page.
-   * `--fs-body`/`--lh-body` set the HTML base (below); `--lh-tight` is for
-   * dense single-line rows (chip/badge/table-cell) that don't want the
-   * body line-height. COMPACT density now steps this ramp down one notch
-   * too (`[data-density="compact"]` below) — no longer a "do NOT port"
-   * (that warned off web's full density machinery, not a one-step type
-   * override). */
-  --fs-xs: 12px;
-  --fs-sm: 13px;
-  --fs-md: 14px;
-  --fs-lg: 15px;
-  --fs-title: 20px;
-  --fs-hero: 28px;
-  --fs-body: 15px;
-  --lh-body: 1.5;
-  --lh-tight: 1.3;
-
-  /* Spacing — static, matching web's undensified pad steps. */
-  --pad-1: 4px;
-  --pad-2: 8px;
-  --pad-3: 16px;
-  --pad-4: 24px;
-
-  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-
-  /* z-index layers — APP-LEVEL stacking only, one ordered scale:
-   * bars < popovers < raised popovers / mobile panel < floating
-   * buttons < drawer scrim < drawer < overlay hints/pills < modal <
-   * always-on-top. Values match web's 9-rung ladder verbatim so the
-   * two SPAs share one stacking language. Component-LOCAL z-index
-   * (1–11 inside a card/cell/editor) deliberately stays literal —
-   * those order siblings within one stacking context, not app layers.
-   * Existing files keep their literals until a later phase remaps them. */
-  --z-bar: 5; /* sticky chrome bars */
-  --z-popover: 20; /* anchored popovers: .kbc-repopopover, .kbc-refpicker__menu (reader.css) */
-  --z-popover-hi: 30; /* popovers above popovers */
-  --z-float: 35; /* floating buttons above panels */
-  --z-scrim: 40; /* mobile drawer/sheet scrim (mobile.css) */
-  --z-drawer: 41; /* mobile drawer (mobile.css, above its scrim) */
-  --z-hint: 50; /* transient overlays */
-  --z-modal: 100; /* modal layer: omnibox backdrop (search.css), skip-link */
-  --z-top: 1000; /* always-on-top */
+  /* --radius-*, the --fs-* ramp, --pad-*, --ease and the --z-* ladder now
+   * live in @kb/ui/tokens.css (imported at the top of this file); values are
+   * unchanged. Only web-code-only tokens remain below. */
 
   --topbar-h: 44px;
   /* F5 — the tree drawer's width (mirrors kb's own `--drawer-w`). */
@@ -644,17 +600,10 @@
   --density-pad: var(--pad-1);
   --density-row: 20px;
 
-  /* V80-R0 — compact is one step DOWN the ramp too, not just tighter
-   * padding. Floors: body text never drops below 14px, captions never
-   * below 12px (readability floor, not merely "smaller"). `--fs-xs` is
-   * already at its floor so it's unchanged; `html`'s `font-size:
-   * var(--fs-body)` (above) recomputes from this same element. */
-  --fs-sm: 12px;
-  --fs-md: 13px;
-  --fs-lg: 14px;
-  --fs-title: 18px;
-  --fs-hero: 24px;
-  --fs-body: 14px;
+  /* V80-R0 — compact is one step DOWN the ramp too (the --fs-* overrides and
+   * their 14px/12px floors live in @kb/ui/tokens.css under this same
+   * selector); `html`'s `font-size: var(--fs-body)` (below) recomputes from
+   * it. */
 }
 
 /* The reading contract's OPT-IN. `--measure` is deliberately not imposed on
