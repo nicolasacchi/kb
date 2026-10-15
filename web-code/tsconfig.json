@@ -23,7 +23,9 @@
       "react": ["./node_modules/@types/react", "./node_modules/react"],
       "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime", "./node_modules/react/jsx-runtime"],
       "react-dom": ["./node_modules/@types/react-dom", "./node_modules/react-dom"],
-      "react-dom/*": ["./node_modules/@types/react-dom/*", "./node_modules/react-dom/*"]
+      "react-dom/*": ["./node_modules/@types/react-dom/*", "./node_modules/react-dom/*"],
+      "vitest": ["./node_modules/vitest"],
+      "vitest/*": ["./node_modules/vitest/*"]
     }
   },
   "include": ["src", "../ui/src"]

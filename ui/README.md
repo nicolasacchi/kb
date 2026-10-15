@@ -12,7 +12,7 @@ the file.
 
 - `tsconfig.json`: `include` gains `../ui/src`; `paths` maps `@kb/ui/*` to
   `../ui/src/*`, and pins `react`, `react/jsx-runtime`, `react-dom` and
-  `react-dom/*` to the app's own `node_modules` (its `@types/*` first), so a file under `ui/src`
+  `react-dom/*` (and `vitest`, for the tests) to the app's own `node_modules` (its `@types/*` first for react), so a file under `ui/src`
   type-checks against that app's React and not a missing sibling copy.
 - `vite.config.ts` / `vitest.config.ts`: `resolve.alias` maps `@kb/ui` to
   `ui/src`; `resolve.dedupe` lists `react` and `react-dom`, so ui files resolve
