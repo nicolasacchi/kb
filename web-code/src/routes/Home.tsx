@@ -37,7 +37,7 @@ export default function Home() {
         }
         actions={
           // S2-A — the unified inbox's second documented entry point
-          // besides the TopBar Explore menu.
+          // besides the TopBar inbox icon link.
           <Link to="/~inbox" className="kbc-home__inbox-link" data-kbc-home-inbox>
             <Icon.List width={13} height={13} aria-hidden />
             Inbox
