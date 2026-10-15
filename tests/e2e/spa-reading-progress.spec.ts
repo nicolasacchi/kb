@@ -91,12 +91,17 @@ test.describe("spa reading-progress chip", () => {
       .getByRole("link", { name: /^Open INC-0315 · Action Items/ })
       .first();
     await expect(targetCard).toBeVisible();
-    const cardChip = targetCard.locator(".reading-chip").first();
-    await expect(cardChip).toContainText("50%");
-    await expect(cardChip).not.toHaveClass(/reading-chip--done/);
+    // OL L4: the card shows progress as a 2px bar on its bottom edge (a
+    // sibling of the link inside the article), not a ReadingChip.
+    const cardBar = page
+      .locator(".kb-card")
+      .filter({ has: targetCard })
+      .locator(".kb-card__progress");
+    await expect(cardBar).toHaveAttribute("aria-label", "50% read");
+    await expect(cardBar).not.toHaveClass(/kb-card__progress--done/);
     // The fill style carries the percentage as a width.
-    const fillWidth = await cardChip
-      .locator(".reading-chip__fill")
+    const fillWidth = await cardBar
+      .locator("i")
       .evaluate((el) => (el as HTMLElement).style.width);
     expect(fillWidth).toBe("50%");
 
@@ -121,15 +126,11 @@ test.describe("spa reading-progress chip", () => {
     // Seed pm[2] to 96% (960 / 1000).
     await seedProgress(request, pm[2].id, 960, 1000);
 
-    // Gallery card shows ✓ instead of the bar.
+    // Gallery card bar flips to the done treatment.
     await page.goto(`${BASE}/?folder=pm`);
-    const doneChip = page
-      .getByRole("link", { name: /^Open / })
-      .locator(".reading-chip--done");
-    await expect(doneChip.first()).toBeVisible();
-    await expect(doneChip.first()).toHaveText("✓");
-    // No bar inside a done chip.
-    await expect(doneChip.first().locator(".reading-chip__bar")).toHaveCount(0);
+    const doneBar = page.locator(".kb-card__progress--done");
+    await expect(doneBar.first()).toBeVisible();
+    await expect(doneBar.first()).toHaveAttribute("aria-label", "fully read");
 
     // Folder section row for pm[2] (viewing from a different sibling).
     await page.goto(`${BASE}/a/canon/${pm[0].source_relative}`);
@@ -161,10 +162,8 @@ test.describe("spa reading-progress chip", () => {
     expect(target).toBeDefined();
 
     await page.goto(`${BASE}/?folder=`);
-    const card = page.getByRole("link", {
-      name: new RegExp(`Open `),
-    }).filter({
-      hasNot: page.locator(".reading-chip"),
+    const card = page.locator(".kb-card").filter({
+      hasNot: page.locator(".kb-card__progress"),
     });
     // At least one root card has no chip (the unread fixture above).
     await expect(card.first()).toBeVisible();

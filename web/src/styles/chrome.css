@@ -1360,21 +1360,10 @@
   line-clamp: 2;
   -webkit-box-orient: vertical;
   color: var(--ink-mute);
-  /* Fills the space between the (clamped) title and the footer, and is
-   * the only element allowed to shrink — `min-height: 0` overrides the
-   * flex default `min-height: auto` so it can shrink below its content
-   * inside the fixed-height card instead of pushing the footer out of
-   * the box. The bottom fade mask makes the overflow cut read as a clean
-   * truncation rather than a sliced half-line. */
-  flex: 1 1 auto;
-  min-height: 0;
+  /* `flex: none`: a flex-grown line-clamped box stretches past its clamp and
+   * shows extra lines; the meta line's `margin-top: auto` absorbs the slack. */
+  flex: none;
   overflow: hidden;
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    #000 calc(100% - 14px),
-    transparent
-  );
 }
 .kb-card__tags {
   display: flex;
