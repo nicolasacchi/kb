@@ -12,7 +12,7 @@
 //
 //  1. TEXT LEGIBILITY (fail). Every foreground role against every background
 //     it can ACTUALLY co-occur with — not all pairs. The co-occurrence
-//     contract is the Lane Budget, exported from `src/themes/derive.ts` as
+//     contract is the Lane Budget, exported from `ui/src/themes/derive.ts` as
 //     CODE_*/CHROME_*/DECORATIVE_* role lists, so the lint and the repair
 //     pass can never disagree about which pairs exist. Diff-tinted and
 //     age-band backgrounds are in the sets: a comment inside an added line

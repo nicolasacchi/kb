@@ -11,7 +11,7 @@ import "./styles/tokens.css";
 // after tokens.css, so the palette layer is complete before the first
 // component stylesheet; the blocks also carry a higher-specificity
 // selector (`html:root[…]`) so route-lazy CSS cannot out-cascade them.
-import "./themes/themes.gen.css";
+import "@kb/ui/themes/themes.gen.css";
 import "./styles/reader.css";
 import "./styles/topbar.css";
 import "./styles/diff.css";

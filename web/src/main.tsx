@@ -5,7 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./app";
 import { UI_PROBE } from "@kb/ui/probe";
 import { LiveTailPortalProvider } from "./context/LiveTailPortalContext";
-import { applyPrefs, loadPrefs, watchSystemTheme } from "./api/prefs";
+import { applyPrefs, loadPrefs } from "./api/prefs";
 import { queryClient, startSseInvalidationBridge } from "./api/queryClient";
 import "./styles/tokens.css";
 import "./styles/app.css";
@@ -42,8 +42,6 @@ document.documentElement.dataset.kbUi = UI_PROBE;
 
 // Apply saved prefs before first paint to avoid a theme flash on reload.
 applyPrefs(loadPrefs());
-// When theme=system, follow OS light/dark flips live (swaps the inline accent).
-watchSystemTheme();
 
 // One SSE → query-invalidation bridge for the app's lifetime (the
 // subscriptions wire onto every daemon source, current and future).

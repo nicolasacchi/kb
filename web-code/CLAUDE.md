@@ -373,7 +373,7 @@ polling were all classified SAFE and were not touched.
 ## Themes (`kbc-theme/1`, `V70-A7`)
 
 **The role list IS the theme contract.** `SYNTAX_ROLES` in
-`themes/derive.ts` is not a convenience list — it is one of THREE literals
+`ui/src/themes/derive.ts` is not a convenience list — it is one of THREE literals
 that must stay byte-identical to `highlight::HighlightClass`'s wire names
 (`crates/kb-code-server/src/highlight.rs`, exported there as
 `highlight::ROLES`): the others are `api/types.ts`'s `HighlightClass` union
@@ -395,7 +395,11 @@ rendering) and gets its own hue only through `SYNTAX_SOURCE` — inventing a
 hue `tokens.css` does not have would have meant shipping an unmeasured
 contrast pair.
 
-`themes/derive.ts` is a pure, one-way, side-effect-free derivation:
+`ui/src/themes/derive.ts` is a pure, one-way, side-effect-free derivation
+(OL F2: the engine, the generated `registry.gen.ts`/`themes.gen.css`, `apply.ts`
+and the shared `ThemePicker` moved to `ui/` so kb uses them too; web-code imports
+`@kb/ui/themes/*`; `lib/prefs.ts` keeps kb-code's storage and passes
+`builtinFamily: "kbc"` so the built-in family still sets no `data-kbc-theme`):
 authored ANCHORS (26 OKLCH values per theme, sourced from
 `kb-code-server/themes/registry.json` — see that crate's CLAUDE.md #7) →
 ~80 ROLES (CSS custom properties) → SURFACES (chrome vars, the 18
@@ -408,7 +412,7 @@ is nudged (hue and chroma preserved), and every repair is emitted as a
 comment in the generated CSS — a repaired vendor value must never be
 presented as an authored one. `derive.ts` is deliberately a single
 self-contained file with no relative imports (the dev-time node scripts
-`scripts/gen-themes.mjs`/`theme-lint.mjs` import it directly by its `.ts`
+`ui/scripts/gen-themes.mjs`/`theme-lint.mjs` import it directly by its `.ts`
 specifier, relying on node's built-in type stripping, which has no
 `.js`→`.ts` resolution rewrite) — do not split it without checking both
 scripts still resolve it. `npm run lint:themes` (WCAG AA + APCA + Oklab

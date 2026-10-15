@@ -293,6 +293,10 @@ ci-code-spa:
     # APCA + Oklab state separation incl. CVD simulation). It runs BEFORE the
     # unit suite so a palette regression fails on its own named step with a
     # table of offending pairs, rather than inside a vitest assertion.
+    # OL F2 — the generator and the lint now live in ui/scripts/ (`npm run
+    # lint:themes` runs `node ../ui/scripts/theme-lint.mjs`); the registry
+    # stays in kb-code-server and the generated copy in ui/src/themes/ feeds
+    # both SPAs (its drift test runs in each app's vitest).
     # V80-C1 — `lint:css-vars` is the undefined-CSS-custom-property gate (R0/
     # R4/R5 each independently found a `var(--name)` referencing a `--name`
     # nothing declares — an invalid var() silently falls back to inherited/

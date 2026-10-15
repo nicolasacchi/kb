@@ -30,6 +30,21 @@ the file.
   with `react-dom/server` `renderToString` in the node environment.
 - Both apps' vitest default to the node environment; a ui/ test that needs the
   DOM must start with a `// @vitest-environment jsdom` docblock.
-- web-code's `lint:css-vars` / `lint:themes` do not scan `ui/src` yet; a later
-  unit widens them.
-- `ui/scripts/` holds node scripts (generators, ratchets) added by later units.
+- web-code's `lint:css-vars` counts the names `ui/src/**/*.css` declares as
+  defined (incl. the generated `themes.gen.css`) but does not scan `ui/src` for
+  references yet; a later unit widens that.
+- `ui/scripts/` holds node scripts: `gen-themes.mjs` + `theme-lint.mjs` (the
+  kbc-theme/1 generator and contrast oracle, OL F2; run them with plain `node`)
+  and the type codemod.
+
+## Themes (kbc-theme/1)
+
+`crates/kb-code-server/themes/registry.json` is the single source (26 OKLCH
+anchors per theme). `node ui/scripts/gen-themes.mjs` writes
+`ui/src/themes/registry.gen.ts` + `themes.gen.css`, both committed and pinned
+byte-for-byte by `registry.gen.test.ts` (run under both apps). `derive.ts` is
+the pure derivation, `apply.ts` the DOM half (`applyTheme(appearance, family,
+{ builtinFamily })` sets `data-theme`, `data-kbc-theme`, `color-scheme`), and
+`ThemePicker.tsx` the shared picker (storage is the host's, via a controller).
+kb's default family is `kb-classic` (registry `lead` flag); kb-code keeps its
+built-in `kbc` family painted from its own tokens.css.

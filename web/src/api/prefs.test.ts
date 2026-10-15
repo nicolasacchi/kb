@@ -8,6 +8,7 @@ import {
   loadLastSessionsView,
   loadPrefs,
   saveHome,
+  savePrefs,
   saveLastKb,
   saveLastSessionsView,
   DEFAULT_PREFS,
@@ -147,14 +148,14 @@ describe("lastKb persistence", () => {
     expect(loadLastKb()).toBe("beta");
   });
 
-  it("is kept out of the other prefs (theme/accent/density preserved)", () => {
+  it("is kept out of the other prefs (theme/family/density preserved)", () => {
     saveLastKb("beta");
     const p = loadPrefs();
     expect(p.lastKb).toBe("beta");
     // The styling prefs keep their defaults — lastKb rides the same blob but is
     // an independent field (and stays out of the patchSettings allow-list).
     expect(p.theme).toBe("dark");
-    expect(p.accent).toBe("violet");
+    expect(p.themeFamily).toBe("kb-classic");
     expect(p.density).toBe("comfy");
   });
 });
@@ -204,5 +205,36 @@ describe("coldSeedSessionsView (W3.C/D3 cold-entry gating)", () => {
         coldSeedSessionsView({ search, lastSessionsView: "projects" }),
       ).toBeNull();
     }
+  });
+});
+
+describe("themeFamily + the retired accent pref (OL F2)", () => {
+  beforeEach(() => stubLocalStorage());
+
+  it("defaults to kb-classic", () => {
+    expect(DEFAULT_PREFS.themeFamily).toBe("kb-classic");
+    expect(loadPrefs().themeFamily).toBe("kb-classic");
+  });
+
+  it("round-trips a registry family and coerces an unknown one to the default", () => {
+    localStorage.setItem("kb:prefs", JSON.stringify({ themeFamily: "nord" }));
+    expect(loadPrefs().themeFamily).toBe("nord");
+    localStorage.setItem("kb:prefs", JSON.stringify({ themeFamily: "not-a-family" }));
+    expect(loadPrefs().themeFamily).toBe("kb-classic");
+  });
+
+  it("ignores a stored accent on load and never writes it back", () => {
+    localStorage.setItem("kb:prefs", JSON.stringify({ theme: "light", accent: "teal" }));
+    const p = loadPrefs();
+    expect("accent" in p).toBe(false);
+    expect(p.theme).toBe("light");
+    savePrefs(p);
+    expect(JSON.parse(localStorage.getItem("kb:prefs") ?? "{}")).not.toHaveProperty("accent");
+  });
+
+  it("no longer exports the per-theme accent tables", async () => {
+    const mod = await import("./prefs");
+    expect(mod).not.toHaveProperty("ACCENTS");
+    expect(mod).not.toHaveProperty("ACCENTS_LIGHT");
   });
 });

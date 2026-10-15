@@ -207,11 +207,11 @@ invariant #2 records).
    breaking.
 
 7. **`kbc-theme/1` follows the identical one-source-of-truth shape as
-   cmd/1** — `crates/kb-code-server/themes/registry.json` (27 themes × 26
+   cmd/1** — `crates/kb-code-server/themes/registry.json` (29 themes, kb-classic included, × 26
    OKLCH-shaped anchors, Rosé-Pine role vocabulary) served verbatim via
    `include_str!` at `GET /api/themes`, an ordinary `auth_bearer` read;
-   `web-code/scripts/gen-themes.mjs` generates the checked-in
-   `src/themes/registry.gen.ts` + `themes.gen.css`, pinned by
+   `ui/scripts/gen-themes.mjs` generates the checked-in
+   `ui/src/themes/registry.gen.ts` + `themes.gen.css`, pinned by
    `registry.gen.test.ts` the same byte-equality way commands are. Add or
    edit a theme by editing `registry.json` and regenerating — never by
    hand-editing the generated TS/CSS.

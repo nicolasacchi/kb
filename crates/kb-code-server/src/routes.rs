@@ -934,9 +934,9 @@ fn watcher_state(git: &GitRepo, base: &'static str) -> &'static str {
 /// The palette catalogue lives in THIS crate (`themes/registry.json`), not in
 /// `web-code/`, for the same reason the command registry does: it is data the
 /// daemon owns and every consumer must read the same bytes of. The SPA gets a
-/// checked-in generated copy (`web-code/src/themes/registry.gen.ts`, pinned
+/// checked-in generated copy (`ui/src/themes/registry.gen.ts`, pinned
 /// byte-for-byte by `registry.gen.test.ts`) because its Docker build stage
-/// only copies `web-code/` and so cannot reach across the crate boundary at
+/// only copies the app plus `ui/` and so cannot reach across the crate boundary at
 /// build time; an agent or a CLI caller reads it from here.
 ///
 /// `include_str!` rather than a runtime file read: the registry is a build
