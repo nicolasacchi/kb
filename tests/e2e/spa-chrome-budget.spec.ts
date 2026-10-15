@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 import { BASE } from "./helpers";
 
@@ -7,7 +7,7 @@ import { BASE } from "./helpers";
 // on the top edge of the gallery. ui/chrome-budget.json holds the frozen number;
 // the L units lower it in the PR that removes chrome.
 const budgets = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../../ui/chrome-budget.json", import.meta.url)), "utf8"),
+  readFileSync(resolve(__dirname, "..", "..", "ui", "chrome-budget.json"), "utf8"),
 ) as { kb: { gallery: number } };
 
 test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });

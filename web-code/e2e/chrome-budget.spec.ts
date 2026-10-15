@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { BASE, REPO_DIR, REPO_NAME } from "./helpers";
 import { KNOWN_FILE } from "./fixture-repo";
@@ -8,7 +8,7 @@ import { KNOWN_FILE } from "./fixture-repo";
 /// on the top edge of Home and of the reader. ui/chrome-budget.json holds the
 /// frozen numbers; the C units lower them in the PR that removes chrome.
 const budgets = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../../../ui/chrome-budget.json", import.meta.url)), "utf8"),
+  readFileSync(resolve(__dirname, "..", "..", "ui", "chrome-budget.json"), "utf8"),
 ) as { "kb-code": { home: number; reader: number } };
 
 test.use({ viewport: { width: 1280, height: 720 }, reducedMotion: "reduce" });
