@@ -11,9 +11,10 @@ the file.
 ## Wiring (done once, per app)
 
 - `tsconfig.json`: `include` gains `../ui/src`; `paths` maps `@kb/ui/*` to
-  `../ui/src/*`, and pins `react`, `react/jsx-runtime`, `react-dom` and
-  `react-dom/*` (and `vitest`, for the tests) to the app's own `node_modules` (its `@types/*` first for react), so a file under `ui/src`
-  type-checks against that app's React and not a missing sibling copy.
+  `../ui/src/*`, and maps `react`, `react/jsx-runtime`, `react-dom`,
+  `react-dom/*`, `vitest` and `vitest/*` to the app's own `node_modules`
+  (for react, the app's `@types/*` is tried first), so a file under `ui/src`
+  type-checks against that app's React and vitest.
 - `vite.config.ts` / `vitest.config.ts`: `resolve.alias` maps `@kb/ui` to
   `ui/src`; `resolve.dedupe` lists `react` and `react-dom`, so ui files resolve
   them from the app root. `server.fs.allow` admits `../ui` for the dev server.
@@ -22,8 +23,13 @@ the file.
 ## Rules
 
 - Code here runs under React 18.3 AND 19.3. Use only APIs common to both.
+  This is currently exercised by the Probe tests, which run in both apps' vitest.
 - Do not add a `package.json` or any dependency beyond `react` / `react-dom`.
 - Tests live beside the source as `*.test.ts(x)` and are run by BOTH apps'
   vitest (each app's `test.include` has `../ui/src/**`). Component tests render
   with `react-dom/server` `renderToString` in the node environment.
+- Both apps' vitest default to the node environment; a ui/ test that needs the
+  DOM must start with a `// @vitest-environment jsdom` docblock.
+- web-code's `lint:css-vars` / `lint:themes` do not scan `ui/src` yet; a later
+  unit widens them.
 - `ui/scripts/` holds node scripts (generators, ratchets) added by later units.

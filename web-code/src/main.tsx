@@ -50,7 +50,7 @@ import "./styles/rails.css";
 // every desktop rule above (mirrors kb's own `main.tsx` import order).
 import "./styles/mobile.css";
 
-// Witness: the shared ui/ source dir is in this bundle (OL F1).
+// Witness: imports the shared ui/ source dir so it is compiled into this bundle (OL F1).
 document.documentElement.dataset.kbUi = UI_PROBE;
 
 // Apply saved theme before first paint to avoid a theme flash on reload.

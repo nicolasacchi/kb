@@ -37,7 +37,7 @@ import "./styles/mobile.css";
 // before the virtualizer lays out, causing a one-frame jump).
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
-// Witness: the shared ui/ source dir is in this bundle (OL F1).
+// Witness: imports the shared ui/ source dir so it is compiled into this bundle (OL F1).
 document.documentElement.dataset.kbUi = UI_PROBE;
 
 // Apply saved prefs before first paint to avoid a theme flash on reload.

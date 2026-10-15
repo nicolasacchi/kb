@@ -39,8 +39,10 @@ export default defineConfig({
   // runner has room to resolve. Local runs keep Playwright's 5s default.
   expect: {
     timeout: isCI ? 10_000 : 5_000,
-    // Same shapes as web-code/e2e/playwright.config.ts (OL F1): ARIA goldens
-    // under __snapshots__/, screenshots tolerate 2% pixel drift.
+    // OL F1: ARIA goldens and screenshots both live under __snapshots__/
+    // (CI uploads that directory); screenshots tolerate 2% pixel drift.
+    // web-code/e2e/playwright.config.ts uses the same ARIA template but keeps
+    // its screenshots in visual/.
     toMatchAriaSnapshot: {
       pathTemplate: "__snapshots__/{testFilePath}/{arg}{ext}",
     },
