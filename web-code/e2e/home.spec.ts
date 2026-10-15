@@ -33,16 +33,16 @@ test.describe("Home dashboard", () => {
     await expect(headChip).toBeVisible();
     await expect(headChip).toContainText("main");
 
-    // Continue reading — the working set's own entry for the file just
-    // opened (sessionStorage-scoped, survives the hard navigation to "/").
-    const continueSection = card.locator("[data-kbc-home-continue]");
-    await expect(continueSection).toBeVisible({ timeout: 10_000 });
-    await expect(continueSection).toContainText(KNOWN_FILE);
-
-    // Recent files — the files lane's empty-query frecency (server-side
-    // `file_opens` bump), independent of sessionStorage.
-    const recentSection = card.locator("[data-kbc-home-recent]");
-    await expect(recentSection).toContainText(KNOWN_FILE, { timeout: 10_000 });
+    // OL-C7 — the per-card "Continue reading" / "Recent files" duplicates
+    // are gone; the file just opened leads Home's own Continue section.
+    await expect(card.locator("[data-kbc-home-continue]")).toHaveCount(0);
+    await expect(card.locator("[data-kbc-home-recent]")).toHaveCount(0);
+    await expect(card.locator("[data-kbc-home-store]")).toHaveCount(0);
+    const hero = page.locator("[data-kbc-home-continue-hero]");
+    await expect(hero).toBeVisible({ timeout: 10_000 });
+    await expect(hero).toContainText(KNOWN_FILE);
+    // Real code under the location: the file's first lines, highlighted.
+    await expect(hero.locator("[data-kbc-hl-snippet]")).toBeVisible({ timeout: 10_000 });
   });
 
   test("Active branches lists feature-x with an ahead chip that links into a prefilled compare", async ({ page }) => {
@@ -75,20 +75,33 @@ test.describe("Home — One Inbox summary + Continue card (V70-A3S)", () => {
 
     await page.goto(`${BASE}/`);
 
-    // Inbox summary — always renders (even an all-zero inbox still shows
-    // the section + the "Inbox" link into `/~inbox`), independent of the
-    // fixture repo having any reviews/annotations.
+    // Needs-you section — always renders. OL-C7: only non-empty lanes show;
+    // an all-zero inbox is ONE quiet line, never four.
     const inboxSummary = page.locator("[data-kbc-home-inbox-summary]");
     await expect(inboxSummary).toBeVisible({ timeout: 10_000 });
-    await expect(inboxSummary.locator('[data-kbc-home-inbox-lane="reviews"]')).toBeVisible({
-      timeout: 10_000,
-    });
+    await expect(
+      inboxSummary.locator("[data-kbc-home-inbox-lane], [data-kbc-home-inbox-empty]").first(),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(inboxSummary.locator("[data-kbc-home-inbox-empty]")).toHaveCount(
+      (await inboxSummary.locator("[data-kbc-home-inbox-lane]").count()) === 0 ? 1 : 0,
+    );
 
     // Continue card — the file just opened is in the ring.
     const continueCard = page.locator("[data-kbc-home-continue-global]");
     await expect(continueCard).toBeVisible({ timeout: 10_000 });
     await expect(continueCard).toContainText(KNOWN_FILE);
     await expect(continueCard).toContainText(REPO_NAME);
+  });
+});
+
+test.describe("Home — Daemon status (OL-C7)", () => {
+  test("review-store diagnostics live in a collapsed section that opens on demand", async ({ page }) => {
+    await page.goto(`${BASE}/`);
+    const status = page.locator("[data-kbc-home-status]");
+    await expect(status).toBeVisible();
+    await expect(status.locator("[data-kbc-home-store]")).toHaveCount(0);
+    await status.locator("summary").click();
+    await expect(status.locator("[data-kbc-home-store]").first()).toBeVisible({ timeout: 10_000 });
   });
 });
 

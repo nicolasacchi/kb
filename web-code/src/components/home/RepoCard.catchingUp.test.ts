@@ -10,7 +10,7 @@ import RepoCard from "./RepoCard";
 // badge. `renderToStaticMarkup` (no effects, no hydration) is this repo's
 // established way to vitest-pin a component's rendered markup without
 // React Testing Library (see `components/prose/ProseBlock.test.ts`'s same
-// pattern) — `useBranches`/`useRecentFiles` are left unseeded (they render
+// pattern) — `useBranches` is left unseeded (they render
 // their honest loading skeleton, never touched by this test) since neither
 // bears on the header chip this unit adds.
 function fixtureRepo(overrides: Partial<RepoListEntry> = {}): RepoListEntry {
