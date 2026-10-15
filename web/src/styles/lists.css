@@ -20,7 +20,7 @@
   margin-bottom: var(--pad-3);
 }
 .kb-lists__title {
-  font-size: 18px;
+  font-size: var(--fs-xl);
   margin: 0;
   margin-right: auto;
 }
@@ -64,7 +64,7 @@
 }
 .kb-lists__new-err {
   color: var(--warn);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-lists__error {
   color: var(--warn);
@@ -74,7 +74,7 @@
   margin-bottom: var(--pad-3);
 }
 .kb-lists__section-title {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -129,7 +129,7 @@
 }
 .kb-list-card__kb {
   flex: none;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   border: 1px solid var(--rule);
   border-radius: var(--radius-pill);
@@ -143,7 +143,7 @@
   background: none;
   border: 0;
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   padding: 0 2px;
 }
@@ -154,7 +154,7 @@
 .kb-list-card__desc {
   margin: 0;
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
@@ -167,7 +167,7 @@
   gap: var(--pad-1);
 }
 .kb-list-card__stats {
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 .kb-list-card__continue {
@@ -175,7 +175,7 @@
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   padding: 3px 8px;
   cursor: pointer;
 }
@@ -219,7 +219,7 @@
 .kb-listd__back {
   color: var(--ink-dim);
   text-decoration: none;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .kb-listd__back:hover {
   color: var(--accent-soft);
@@ -231,7 +231,7 @@
   min-width: 0;
 }
 .kb-listd__title {
-  font-size: 18px;
+  font-size: var(--fs-xl);
   margin: 0;
   cursor: text;
   overflow: hidden;
@@ -249,7 +249,7 @@
   min-width: 50%;
 }
 .kb-listd__title-edit {
-  font-size: 18px;
+  font-size: var(--fs-xl);
   font-weight: 600;
 }
 .kb-listd__delete:hover {
@@ -261,7 +261,7 @@
   padding: 0;
   text-align: left;
   color: var(--ink-dim);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   cursor: text;
 }
 .kb-listd__desc.is-empty {
@@ -285,7 +285,7 @@
    route's GET default makes a fresh board implicit). */
 .kb-listd__board-link {
   color: var(--ink-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -330,7 +330,7 @@
 }
 .kb-listd__add-err {
   color: var(--warn);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   margin-top: 4px;
 }
 .kb-listd__add-picker {
@@ -362,7 +362,7 @@
 }
 .kb-listd__add-cand-path {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 /* entry rows */
@@ -390,7 +390,7 @@
 }
 .kb-listd__idx {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding-top: 3px;
   text-align: right;
 }
@@ -398,7 +398,7 @@
   background: none;
   border: 0;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
   color: var(--ink-dim);
   padding: 0;
@@ -437,18 +437,18 @@
 a.kb-listd__title {
   color: var(--ink);
   text-decoration: none;
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   font-weight: 500;
 }
 a.kb-listd__title:hover {
   color: var(--accent-soft);
 }
 span.kb-listd__title.is-dead {
-  font-size: 13.5px;
+  font-size: var(--fs-md);
 }
 .kb-listd__chip {
   flex: none;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
   border: 1px solid var(--accent-bor);
   border-radius: var(--radius-pill);
@@ -456,17 +456,17 @@ span.kb-listd__title.is-dead {
 }
 .kb-listd__folder {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .kb-listd__min {
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .kb-listd__stale {
   color: var(--warn);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .kb-listd__note {
   display: block;
@@ -476,7 +476,7 @@ span.kb-listd__title.is-dead {
   margin-top: 1px;
   text-align: left;
   color: var(--ink-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   cursor: text;
   max-width: 100%;
 }
@@ -494,7 +494,7 @@ span.kb-listd__title.is-dead {
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   padding: 3px 6px;
   margin-top: 2px;
   resize: vertical;
@@ -533,7 +533,7 @@ span.kb-listd__title.is-dead {
   align-items: center;
   gap: var(--pad-1);
   margin-top: var(--pad-3);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 .kb-listd__export-lbl {
   color: var(--ink-dim);
@@ -560,7 +560,7 @@ span.kb-listd__title.is-dead {
   color: var(--ink-dim);
   cursor: pointer;
   padding: 0 4px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   opacity: 0;
 }
 .kb-toc-spy__row:hover .kb-atl__iconbtn,
@@ -594,7 +594,7 @@ span.kb-listd__title.is-dead {
   right: calc(100% + 6px);
 }
 .kb-atl__scope {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--accent-soft);
   padding: 2px 6px;
   border-bottom: 1px solid var(--rule);
@@ -602,7 +602,7 @@ span.kb-listd__title.is-dead {
 }
 .kb-atl__empty {
   color: var(--ink-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   padding: 4px 6px;
 }
 .kb-atl__row {
@@ -612,7 +612,7 @@ span.kb-listd__title.is-dead {
   padding: 3px 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--ink);
 }
 .kb-atl__row:hover {
@@ -626,7 +626,7 @@ span.kb-listd__title.is-dead {
 }
 .kb-atl__count {
   color: var(--ink-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
 }
 .kb-atl__new {
   display: flex;
@@ -642,7 +642,7 @@ span.kb-listd__title.is-dead {
   border-radius: var(--radius-sm);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 3px 6px;
 }
 .kb-atl__new button {
@@ -651,7 +651,7 @@ span.kb-listd__title.is-dead {
   border-radius: var(--radius-sm);
   color: var(--accent-soft);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 3px 8px;
   cursor: pointer;
 }
@@ -669,7 +669,7 @@ span.kb-listd__title.is-dead {
   padding: 4px var(--pad-2);
   background: color-mix(in srgb, var(--accent-bg) 70%, transparent);
   border-bottom: 1px solid var(--accent-bor);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   min-height: 26px;
 }
 .kb-queuebar__list {
@@ -697,7 +697,7 @@ span.kb-listd__title.is-dead {
   border: 1px solid var(--rule);
   border-radius: var(--radius-pill);
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 1px 8px;
   cursor: pointer;
   white-space: nowrap;
@@ -717,7 +717,7 @@ span.kb-listd__title.is-dead {
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   padding: 2px 8px;
   cursor: pointer;
   white-space: nowrap;
@@ -735,7 +735,7 @@ span.kb-listd__title.is-dead {
   border: 0;
   color: var(--ink-dim);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 0 4px;
 }
 .kb-queuebar__exit:hover {

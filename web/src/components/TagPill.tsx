@@ -20,8 +20,8 @@ export default function TagPill({
 }) {
   const c = tagColor(tag);
   const style = {
-    borderColor: accent ? c : "var(--border)",
-    color: accent ? c : "var(--muted)",
+    borderColor: accent ? c : "var(--rule)",
+    color: accent ? c : "var(--ink-mute)",
   };
   if (to) {
     return (

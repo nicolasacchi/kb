@@ -20,7 +20,7 @@
 }
 
 .kb-notes__title {
-  font-size: 1.1rem;
+  font-size: var(--fs-xl);
   font-weight: 600;
   margin: 0;
 }
@@ -33,7 +33,7 @@
 
 .kb-notes__chip {
   font: inherit;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   padding: 2px 10px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--rule);
@@ -51,7 +51,7 @@
   flex: 1 1 160px;
   min-width: 120px;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   padding: 5px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--rule);
@@ -64,7 +64,7 @@
 .kb-notes-panel__new,
 .kb-notes-panel__start {
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   padding: 5px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--accent-bor);
@@ -108,11 +108,11 @@
 .kb-notes__empty {
   color: var(--ink-mute);
   padding: var(--pad);
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
 }
 
 .kb-notes__kb-head {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-mute);
@@ -120,7 +120,7 @@
 }
 .kb-notes__scope-head {
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
   margin: 8px 0 2px;
 }
@@ -138,7 +138,7 @@
   width: 100%;
   text-align: left;
   font: inherit;
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
   padding: 5px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -157,11 +157,11 @@
   white-space: nowrap;
 }
 .kb-note-row__pin {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
 }
 .kb-note-row__progress {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   padding: 1px 6px;
   border-radius: var(--radius-pill);
@@ -186,7 +186,7 @@
 }
 .kb-note__title {
   flex: 1 1 auto;
-  font-size: 1rem;
+  font-size: var(--fs-lg);
   font-weight: 600;
   margin: 0;
   display: flex;
@@ -196,7 +196,7 @@
 .kb-note__title-input {
   flex: 1 1 auto;
   font: inherit;
-  font-size: 1rem;
+  font-size: var(--fs-lg);
   font-weight: 600;
   padding: 4px 8px;
   border: 1px solid var(--rule);
@@ -205,7 +205,7 @@
   color: var(--ink);
 }
 .kb-note__pin {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
 }
 .kb-note__meta {
   display: flex;
@@ -213,7 +213,7 @@
   gap: 8px;
 }
 .kb-note__status {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--ink-mute);
@@ -222,7 +222,7 @@
   padding: 1px 8px;
 }
 .kb-note__comments {
-  font-size: 0.76rem;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 .kb-note__progress {
@@ -245,7 +245,7 @@
 .kb-note__progress-label {
   position: relative;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--ink);
 }
 .kb-note__actions {
@@ -255,7 +255,7 @@
 .kb-note__err,
 .kb-notes-panel__err {
   color: var(--red);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   margin: 4px 0;
 }
 .kb-note__add {
@@ -267,7 +267,7 @@
 .kb-note__editor-input {
   flex: 1;
   font: inherit;
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   padding: 5px 10px;
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -284,7 +284,7 @@
 
 /* --- interactive markdown (checkboxes) --- */
 .kb-note-md {
-  font-size: 0.92rem;
+  font-size: var(--fs-lg);
   line-height: 1.55;
   color: var(--ink);
 }
@@ -329,7 +329,7 @@
 }
 .kb-note-md .kb-callout__title {
   font-weight: 700;
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--cal);
@@ -408,7 +408,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-mute);
@@ -416,7 +416,7 @@
 }
 .kb-backlinks__count {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   background: var(--bg-card);
   border: 1px solid var(--rule);
@@ -440,14 +440,14 @@
   border: 1px solid transparent;
   color: var(--ink);
   text-decoration: none;
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
 }
 .kb-backlinks__item:hover {
   background: var(--bg-card-hi);
   border-color: var(--rule);
 }
 .kb-backlinks__icon {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   flex: 0 0 auto;
 }
 .kb-backlinks__title {
@@ -458,7 +458,7 @@
 }
 .kb-backlinks__folder {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
   flex: 0 0 auto;
 }
@@ -476,19 +476,19 @@
   gap: 1px;
 }
 .kb-notes-panel__title {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-mute);
 }
 .kb-notes-panel__scope {
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   color: var(--ink);
 }
 .kb-notes-panel__empty {
   color: var(--ink-mute);
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
 }
 .kb-notes-panel__list {
   list-style: none;
@@ -520,7 +520,7 @@
 }
 .gallery-notes-toggle {
   font: inherit;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   padding: 4px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--rule);
@@ -546,7 +546,7 @@
   border-bottom: 1px solid var(--rule);
 }
 .detail__note-tag {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--accent-soft);

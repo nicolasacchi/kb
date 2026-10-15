@@ -42,8 +42,8 @@ const FAMILIES: Record<string, SlateColorToken> = {
   found: "--ok",
   idea: "--ok",
   tried: "--danger",
-  drop: "--muted",
-  mark: "--muted",
+  drop: "--ink-mute",
+  mark: "--ink-mute",
 };
 
 describe("slateGlyphs — every kind and state has a glyph AND a word", () => {

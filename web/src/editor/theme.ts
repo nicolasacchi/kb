@@ -12,27 +12,27 @@ import { tags as t } from "@lezer/highlight";
 // reads cleanly even in raw "Write" mode; this is the syntax-highlight layer,
 // distinct from the Phase-4 live-preview decorations that hide markers entirely.
 export const kbHighlightStyle = HighlightStyle.define([
-  { tag: t.heading1, fontSize: "1.45em", fontWeight: "700", color: "var(--fg)" },
-  { tag: t.heading2, fontSize: "1.28em", fontWeight: "700", color: "var(--fg)" },
-  { tag: t.heading3, fontSize: "1.14em", fontWeight: "600", color: "var(--fg)" },
+  { tag: t.heading1, fontSize: "1.45em", fontWeight: "700", color: "var(--ink)" },
+  { tag: t.heading2, fontSize: "1.28em", fontWeight: "700", color: "var(--ink)" },
+  { tag: t.heading3, fontSize: "1.14em", fontWeight: "600", color: "var(--ink)" },
   {
     tag: [t.heading4, t.heading5, t.heading6],
     fontWeight: "600",
-    color: "var(--fg)",
+    color: "var(--ink)",
   },
-  { tag: t.strong, fontWeight: "700", color: "var(--fg)" },
+  { tag: t.strong, fontWeight: "700", color: "var(--ink)" },
   { tag: t.emphasis, fontStyle: "italic" },
   {
     tag: t.strikethrough,
     textDecoration: "line-through",
-    color: "var(--fg-muted)",
+    color: "var(--ink-mute)",
   },
   { tag: [t.link, t.url], color: "var(--accent-soft)" },
   { tag: t.monospace, fontFamily: "var(--font-mono)", color: "var(--accent-soft)" },
   { tag: t.list, color: "var(--accent-soft)" },
-  { tag: t.quote, color: "var(--fg-muted)", fontStyle: "italic" },
+  { tag: t.quote, color: "var(--ink-mute)", fontStyle: "italic" },
   // Markdown markup characters (the `*`/`#`/`` ` ``/`>` syntax).
-  { tag: [t.meta, t.processingInstruction], color: "var(--fg-muted)" },
+  { tag: [t.meta, t.processingInstruction], color: "var(--ink-mute)" },
   { tag: t.contentSeparator, color: "var(--accent-bor)" },
 ]);
 
@@ -56,9 +56,9 @@ export const makeEditorTheme = (dark: boolean) =>
   EditorView.theme(
   {
     "&": {
-      color: "var(--fg)",
+      color: "var(--ink)",
       backgroundColor: "var(--bg)",
-      border: "1px solid var(--border)",
+      border: "1px solid var(--rule)",
       borderRadius: "var(--radius-sm)",
     },
     "&.cm-focused": {
@@ -80,22 +80,22 @@ export const makeEditorTheme = (dark: boolean) =>
     ".cm-activeLine": {
       backgroundColor: "color-mix(in srgb, var(--accent) 6%, transparent)",
     },
-    ".cm-placeholder": { color: "var(--fg-muted)" },
+    ".cm-placeholder": { color: "var(--ink-mute)" },
     // Autocomplete (slash menu) popover.
     ".cm-tooltip": {
-      border: "1px solid var(--border-hi)",
+      border: "1px solid var(--rule-hi)",
       borderRadius: "var(--radius-sm)",
-      backgroundColor: "var(--elev-hi)",
+      backgroundColor: "var(--bg-card-hi)",
       boxShadow: "var(--shadow)",
     },
     ".cm-tooltip.cm-tooltip-autocomplete > ul": {
       fontFamily: "var(--font-sans)",
-      fontSize: "12px",
+      fontSize: "var(--fs-xs)",
       maxHeight: "16em",
     },
     ".cm-tooltip-autocomplete ul li": {
       padding: "3px 8px",
-      color: "var(--fg)",
+      color: "var(--ink)",
     },
     ".cm-tooltip-autocomplete ul li[aria-selected]": {
       backgroundColor: "var(--accent-bg)",
@@ -103,7 +103,7 @@ export const makeEditorTheme = (dark: boolean) =>
     },
     ".cm-completionLabel": { color: "inherit" },
     ".cm-completionDetail": {
-      color: "var(--fg-muted)",
+      color: "var(--ink-mute)",
       fontStyle: "normal",
       fontFamily: "var(--font-mono)",
       marginLeft: "0.5em",

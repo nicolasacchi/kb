@@ -8,31 +8,30 @@
  *   --warn, --green, --red, --blue
  *   --font-sans (Inter Tight) / --font-mono (JetBrains Mono) / --font-serif (Source Serif 4)
  *
- * Legacy names from the v0.6 gallery refresh (--surface, --elev, --elev-hi,
- * --border, --border-hi, --text, --text-strong, --muted, --muted-2, --err,
- * --ok, --info) are kept as aliases pointed at the new values so unrelated
- * views (settings, comments, history, share modal) keep rendering until
- * each is refreshed in subsequent phases. They retire in X1.
+ * The legacy v0.6 aliases (--surface, --elev, --elev-hi, --border,
+ * --border-hi, --text, --text-strong, --muted, --muted-2, --bg-alt, --fg,
+ * --fg-muted) were retired in OL F3: every use now names its role directly
+ * (--bg-panel, --bg-card, --bg-card-hi, --rule, --rule-hi, --ink,
+ * --ink-strong, --ink-mute, --ink-dim). --err / --ok / --info remain.
  *
  * Light theme is now first-class (kb2 redesign): a warm-paper palette with
  * its own semantic + accent halo + card-glow values, mirrored into the
  * prefers-color-scheme:light system block. Per-theme accent hexes live in
  * api/prefs.ts (ACCENTS / ACCENTS_LIGHT), applied inline by applyPrefs().
  *
- * SH.A1 (design-token foundations + theme-correctness pass) added, ported
- * from web-code's V4.U1 conventions — adopt-opportunistically, NOT a
- * repo-wide sweep of existing rules:
- *   --accent-fill / --accent-fill-fg  — solid-fill contexts where light
- *     text sits ON the accent (buttons/badges); the raw --accent fails AA
- *     with white in both themes, this is the fixed-contrast alternative.
- *   --ink-faint                        — the pre-SH.A1 --ink-dim value,
- *     for decorative rules/disabled glyphs ONLY, never running text.
- *   --fs-xs/sm/md/lg/title/hero        — static type ramp (px, not
- *     density-scaled).
- *   --radius-lg                        — sheets/modals.
- *   --dur-fast / --dur-base            — transition durations, pair with
- *     --ease.
+ * SH.A1 added --accent-fill / --accent-fill-fg (solid-fill contexts where
+ * light text sits ON the accent; the raw --accent fails AA with white in both
+ * themes) and --ink-faint (the pre-SH.A1 --ink-dim value, decorative rules and
+ * disabled glyphs ONLY, never running text).
+ *
+ * OL F3: the type ramp (--fs-*), radii, the z-ladder (--z-*) and motion
+ * (--dur-*, --ease) now live in ui/src/tokens.css, imported below, and every
+ * font-size / radius / z-index literal in web/src was swept onto them by
+ * ui/scripts/codemod-type.mjs. Only the density-scaled --pad-* steps stay here
+ * (kb multiplies them by --density).
  */
+
+@import "@kb/ui/tokens.css";
 
 /* A-w4/X1 — self-hosted (no Google Fonts CDN round-trip; the SPA must load
  * offline-ish, same reasoning as the empty API base URL). Two disjoint
@@ -286,40 +285,6 @@
   --pad-3: calc(16px * var(--density));
   --pad-4: calc(24px * var(--density));
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 14px; /* SH.A1 — sheets/modals (port of web-code V4.U1) */
-  --radius-pill: 999px;
-
-  /* SH.A1 — static type ramp, ported from web-code's V4.U1 tokens.css.
-   * Adopt-opportunistically: reach for these on NEW or TOUCHED font-size
-   * rules; this is not a sweep of existing literals, and density stays
-   * orthogonal (the ramp is static px, unlike --pad-*'s --density scaling —
-   * do not multiply these by var(--density)). */
-  --fs-xs: 10px;
-  --fs-sm: 11px;
-  --fs-md: 12px;
-  --fs-lg: 13px;
-  --fs-title: 18px;
-  --fs-hero: 24px;
-
-  /* z-index layers — APP-LEVEL stacking only, one ordered scale:
-   * bars < popovers < raised popovers / mobile panel < floating
-   * buttons < drawer scrim < drawer < overlay hints/pills < modal <
-   * always-on-top. Values mirror what each surface already used, so
-   * computed stacking is unchanged. Component-LOCAL z-index (1–11
-   * inside a card/cell/editor) deliberately stays literal — those
-   * order siblings within one stacking context, not app layers. */
-  --z-bar: 5; /* sticky chrome bars: .kb-head, .topbar, .cfg__bar */
-  --z-popover: 20; /* anchored popovers: .kb-popover, .kb-mem__links-pop */
-  --z-popover-hi: 30; /* popovers above popovers + the mobile comments panel */
-  --z-float: 35; /* floating buttons above panels: .kb-immersive-toggle */
-  --z-scrim: 40; /* mobile drawer scrim */
-  --z-drawer: 41; /* mobile drawer (above its scrim) */
-  --z-hint: 50; /* transient overlays: .kb-chord, .pill-container */
-  --z-modal: 100; /* modal layer: cmdk backdrop, keyhelp, skip-link */
-  --z-top: 1000; /* always-on-top: .cp__export */
-
   --topbar-h: 52px;
   --statusbar-h: 28px;
   --ribbon-h: 34px; /* kb2 redesign — context line (was 38px) */
@@ -330,13 +295,6 @@
    * gates the mobile shell is a literal in styles/mobile.css —
    * MOBILE_MAX_WIDTH in hooks/useIsMobile.ts mirrors it. */
   --drawer-w: min(86vw, 320px);
-
-  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  /* SH.A1 — adopt-opportunistically durations (same convention as --fs-*
-   * above), ported from web-code's V4.U1. Pair with --ease; existing
-   * transition literals are untouched until a rule is next touched. */
-  --dur-fast: 100ms;
-  --dur-base: 160ms;
 
   /* Semantic colors moved per-theme (kb2 redesign) — see the dark + light
    * blocks below. Light gets its own legible-on-white values. The legacy
@@ -417,21 +375,9 @@
   --card-glow-pct: 18%;
   --card-ring: rgba(255, 255, 255, 0.04);
 
-  /* Legacy surface aliases — values point at the new design palette so
-   * unrefreshed CSS keeps rendering with the new look. */
-  --surface: var(--bg-panel);
-  --elev: var(--bg-card);
-  --elev-hi: var(--bg-card-hi);
-  --border: var(--rule);
-  --border-hi: var(--rule-hi);
-  --text: var(--ink);
-  --text-strong: #f4f4f8;
-  --muted: var(--ink-mute);
-  --muted-2: var(--ink-dim);
-
-  --bg-alt: var(--surface);
-  --fg: var(--text);
-  --fg-muted: var(--muted);
+  /* Strongest ink (headings on emphasis surfaces); was the legacy
+   * `--text-strong`. */
+  --ink-strong: #f4f4f8;
 }
 
 /* --- Light palette --------------------------------------------------- */
@@ -506,19 +452,7 @@
   --card-glow-pct: 8%;
   --card-ring: rgba(0, 0, 0, 0.04);
 
-  --surface: var(--bg-panel);
-  --elev: var(--bg-card);
-  --elev-hi: var(--bg-card-hi);
-  --border: var(--rule);
-  --border-hi: var(--rule-hi);
-  --text: var(--ink);
-  --text-strong: #0a0a0c;
-  --muted: var(--ink-mute);
-  --muted-2: var(--ink-dim);
-
-  --bg-alt: var(--surface);
-  --fg: var(--text);
-  --fg-muted: var(--muted);
+  --ink-strong: #0a0a0c;
 }
 
 /* --- System pref --------------------------------------------------- */
@@ -577,14 +511,6 @@
     --card-glow-pct: 8%;
     --card-ring: rgba(0, 0, 0, 0.04);
 
-    --surface: var(--bg-panel);
-    --elev: var(--bg-card);
-    --elev-hi: var(--bg-card-hi);
-    --border: var(--rule);
-    --border-hi: var(--rule-hi);
-    --text: var(--ink);
-    --text-strong: #0a0a0c;
-    --muted: var(--ink-mute);
-    --muted-2: var(--ink-dim);
+    --ink-strong: #0a0a0c;
   }
 }

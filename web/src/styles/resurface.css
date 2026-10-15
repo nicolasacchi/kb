@@ -55,14 +55,14 @@
 
 .kb-rsv__pos {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--ink-dim);
 }
 
 .kb-rsv__title {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 16px;
+  font-size: var(--fs-lg);
   line-height: 1.3;
   color: var(--ink);
 }
@@ -74,7 +74,7 @@
   padding: 0;
   display: grid;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--ink-mute);
 }
 .kb-rsv__reason::before {
@@ -88,7 +88,7 @@
 .kb-rsv__score {
   padding: 10px 12px;
   border: 1px solid var(--rule);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-card);
 }
 .kb-rsv__score-head {
@@ -104,7 +104,7 @@
   flex-wrap: wrap;
   gap: 12px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--ink-mute);
 }
 
@@ -121,7 +121,7 @@
   background: var(--bg-card);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 .kb-rsv__btn:hover {

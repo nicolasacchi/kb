@@ -54,16 +54,16 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  color: var(--fg-muted);
+  color: var(--ink-mute);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1;
   cursor: pointer;
   transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
 }
 .cme__tb-btn:hover {
   background: var(--bg-card-hi);
-  color: var(--fg);
+  color: var(--ink);
 }
 .cme__tb-btn:focus-visible {
   outline: 2px solid var(--accent);
