@@ -6257,3 +6257,22 @@ export interface SyntaxOut {
   total?: number;
   truncated?: boolean;
 }
+
+/// `GET /api/seq?repo=` (kbc-seq/1) — hand-typed: the wire struct has no ts
+/// export. Only the fields the Collections page reads; `projection` and
+/// `source` stay `string` so a daemon that grows a new value cannot break the
+/// parse (the page counts the values it knows and ignores the rest).
+export interface SeqProjectionOut {
+  projection: string;
+  id: string;
+  name: string;
+  size?: number;
+  source: string;
+  updated_at: number;
+}
+
+export interface SeqListOut {
+  schema: string;
+  repo: string;
+  projections: SeqProjectionOut[];
+}

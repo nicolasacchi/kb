@@ -7,6 +7,7 @@ import RankedBranchList from "../components/branches/RankedBranchList";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
+import ReviewTabs from "../components/nav/ReviewTabs";
 import { useBranches } from "../hooks/useBranches";
 import { useWorkspaceGroups } from "../hooks/useSets";
 import { readerUrl } from "../lib/breadcrumbs";
@@ -61,6 +62,7 @@ export default function Branches() {
 
   return (
     <div className="kbc-branches">
+      <ReviewTabs />
       <PageHeader title="Branches" />
       {truncated && (
         <div className="kbc-branches__truncated" data-kbc-branches-truncated>

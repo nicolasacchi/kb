@@ -6,6 +6,7 @@ import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/iconSet";
 import MetaLine from "../components/MetaLine";
 import PageHeader from "../components/PageHeader";
+import ReviewTabs from "../components/nav/ReviewTabs";
 import { useCreateReviewPr, useReviews } from "../hooks/useReviews";
 import { usePrs } from "../hooks/usePrs";
 import { compareUrl, reviewUrl } from "../lib/codeUrl";
@@ -118,6 +119,7 @@ export default function Prs() {
 
   return (
     <div className="kbc-prs">
+      <ReviewTabs />
       <PageHeader title="Pull requests" />
       {data.unavailable_reason && (
         <div className="kbc-prs__unavailable" role="status" data-kbc-prs-unavailable>

@@ -4,6 +4,7 @@ import type { ReviewSummary, ReviewSummaryPr } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
+import ReviewTabs from "../components/nav/ReviewTabs";
 import AnalyticsSection from "../components/reviews/AnalyticsSection";
 import InboxList from "../components/reviews/InboxList";
 import StartReviewDialog from "../components/reviews/StartReviewDialog";
@@ -81,6 +82,7 @@ export default function Reviews() {
 
   return (
     <div className="kbc-reviews" id="main">
+      <ReviewTabs />
       <PageHeader
         title={`Review Room — ${repo}`}
         lede="Local Gerrit-lite review sessions — patchset snapshots, viewed-file tracking, annotations."

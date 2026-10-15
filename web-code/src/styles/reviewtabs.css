@@ -1,0 +1,34 @@
+/* OL-C1 — the Review door's sub-nav row. Tokens only; the active tab uses
+ * an inset underline so the row's height never shifts (same device as the
+ * top bar's doors). */
+
+.kbc-reviewtabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--pad-1);
+  margin-bottom: var(--pad-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.kbc-reviewtabs__tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--pad-3);
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: var(--fs-md);
+  white-space: nowrap;
+}
+.kbc-reviewtabs__tab:hover {
+  color: var(--ink);
+}
+.kbc-reviewtabs__tab.is-active,
+.kbc-reviewtabs__tab[aria-current="page"] {
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.kbc-reviewtabs__tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
