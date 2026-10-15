@@ -86,12 +86,14 @@ import type { DeskRegionId, RailTab } from "./deskState";
 export const MAIN_MIN_COLS = 80;
 export const MAIN_MIN_ROWS = 28;
 /// 28 lines at the default 13px reader font (≈18.2px each ⇒ ≈510px),
-/// plus the reader center mode's own chrome inside the main region (the
-/// header row and the working-set strip, ≈70px). Measured, not guessed —
-/// `e2e/desk-viewport.spec.ts` reports the real column/row count on every
-/// run, and its short-viewport case pins the overlay branch this
+/// plus the reader center mode's own chrome inside the main region. OL-C11
+/// collapsed that chrome (breadcrumbs moved to the top bar, the working-set
+/// strip gone) to ONE pane-header row of ≈40px, so the floor dropped from
+/// 580 (≈70px of chrome) to 550. `e2e/desk-viewport.spec.ts` reports the real
+/// column/row count on every run (the proof the floor still holds at
+/// 1280×720), and its short-viewport case pins the overlay branch this
 /// constant selects.
-const MAIN_MIN_HEIGHT_PX = 580;
+const MAIN_MIN_HEIGHT_PX = 550;
 
 export interface DeskRailSlotCtx {
   /// `true` only on mobile, where the rail is promoted to the single
