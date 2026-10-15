@@ -1413,10 +1413,14 @@ select:focus-visible,
 .list-row {
   position: relative;
   display: grid;
-  grid-template-columns: 100px 1fr 120px 200px 100px 28px 24px;
+  /* OL L5 — the track list is set per Index by lib/listColumns.ts
+   * (`--list-cols` on the row / list container); this is the fallback. */
+  grid-template-columns: var(--list-cols, minmax(0, 1fr) 180px 64px 64px 56px 28px);
   align-items: center;
   gap: var(--pad-2);
-  padding: 6px var(--pad-3);
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 var(--pad-3);
   border-bottom: 1px solid var(--rule);
   background: var(--bg);
   color: var(--ink);
@@ -1439,19 +1443,90 @@ select:focus-visible,
   background: var(--bg-card-hi);
   text-decoration: none;
 }
+/* The Index header: sticky under the Spine, quiet labels, same tracks as the
+ * rows. `position: sticky` needs a non-scrolling `.virtual-list` ancestor, so
+ * that container opts out of `.list`'s overflow:hidden below. */
+.virtual-list.list {
+  overflow: visible;
+}
 .list-row--head {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 3;
   background: var(--bg-panel);
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--ink-mute);
-  font-weight: 600;
+  font-weight: 500;
 }
-.list-row__id {
+.list-head__cell {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  min-width: 0;
+}
+.list-head__cell--right {
+  justify-content: flex-end;
+}
+.list-head__sort,
+.list-head__columns {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.list-head__sort:hover,
+.list-head__columns:hover,
+[aria-sort="ascending"] > .list-head__sort,
+[aria-sort="descending"] > .list-head__sort {
+  color: var(--ink);
+}
+.list-head__dir {
+  margin-left: 4px;
+}
+.list-head__chooser {
+  position: relative;
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.list-head__columns {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+}
+.list-head__menu {
+  left: auto;
+  right: 0;
+  min-width: 180px;
+}
+.list-head__menu label {
+  cursor: pointer;
+}
+.list-row__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--ink-mute);
+}
+.list-row__caps {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.list-row__caps .prev-hyb-glyph {
+  width: 20px;
+  height: 20px;
 }
 .list-row__title {
   font-weight: 500;
@@ -1459,8 +1534,7 @@ select:focus-visible,
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.list-row__folder,
-.list-row__file {
+.list-row__folder {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--ink-mute);
@@ -1473,9 +1547,6 @@ select:focus-visible,
 }
 .list-row__cat--empty {
   color: var(--ink-mute);
-}
-.list-row__open {
-  color: var(--accent);
 }
 .list-row__download {
   /* Above the stretched overlay link so the button receives its own
@@ -4770,4 +4841,7 @@ select:focus-visible,
   height: auto;
   flex: 1 1 auto;
   min-height: 240px;
+}
+.list-row--head:hover {
+  background: var(--bg-panel);
 }

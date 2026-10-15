@@ -52,7 +52,7 @@ import { artifactHref } from "../lib/artifactHref";
 import { isIndexPage, tagsFor } from "../lib/derive";
 import { composeDraftExclusion, DRAFT_TAG, isDraftView } from "../lib/draft";
 import {
-  defaultDir,
+  parseSortParams,
   groupByFolder,
   type GroupKey,
   type SortDir,
@@ -144,19 +144,7 @@ export default function Gallery() {
   const folderExact = params.get("folder_exact") === "1";
   const indexOnly = params.get("index") === "1";
   const q = params.get("q") || "";
-  const sort: SortKey = ((): SortKey => {
-    const v = params.get("sort");
-    return v === "indexed" ||
-      v === "created" ||
-      v === "title" ||
-      v === "words"
-      ? v
-      : "recent";
-  })();
-  const dir: SortDir = ((): SortDir => {
-    const v = params.get("dir");
-    return v === "asc" || v === "desc" ? v : defaultDir(sort);
-  })();
+  const { sort, dir }: { sort: SortKey; dir: SortDir } = parseSortParams(params);
   const group: GroupKey = params.get("group") === "folder" ? "folder" : "none";
   // v0.22 — positive category include + absolute mtime window (the reader's
   // clickable-category and "modified around this time" deep-links land here).

@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  type CSSProperties,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -8,6 +9,21 @@ import {
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import ListRow from "./ListRow";
 import type { DocSummary } from "../api/client";
+import { useUrl } from "../hooks/useUrl";
+import { useCodeRefCounts } from "../hooks/useCodeRefs";
+import { galleryRefCount } from "../lib/codeRefCounts";
+import { parseSortParams } from "../lib/sort";
+import {
+  LIST_COLUMNS,
+  ariaSort,
+  columnsStorageKey,
+  gridTemplate,
+  nextSort,
+  parseColumns,
+  serializeColumns,
+  toggleColumn,
+  type ListColumnId,
+} from "../lib/listColumns";
 
 // S-milestone S5 — virtualised list rendering. Mirrors VirtualGrid:
 // window-scroll virtualisation so the SPA scroll model is preserved.
@@ -36,6 +52,45 @@ const VirtualList = forwardRef<VirtualListHandle, Props>(function VirtualList(
   handleRef,
 ) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const { params, setMany } = useUrl();
+  const { sort, dir } = parseSortParams(params);
+  const [columns, setColumns] = useState<ListColumnId[]>(() =>
+    parseColumns(readStored(kb)),
+  );
+  // The choice is per kb: reload it when the corpus changes.
+  const [columnsKb, setColumnsKb] = useState(kb);
+  if (columnsKb !== kb) {
+    setColumnsKb(kb);
+    setColumns(parseColumns(readStored(kb)));
+  }
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const chooserRef = useRef<HTMLDivElement>(null);
+  const applyColumns = (next: ListColumnId[]) => {
+    setColumns(next);
+    try {
+      localStorage.setItem(columnsStorageKey(kb), serializeColumns(next));
+    } catch {
+      // storage denied/full: the choice holds for this session only.
+    }
+  };
+  useEffect(() => {
+    if (!chooserOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!chooserRef.current?.contains(e.target as Node)) setChooserOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setChooserOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [chooserOpen]);
+  // The shared coderef feed walk only runs while the Refs column is visible.
+  const showRefs = columns.includes("refs");
+  const refCounts = useCodeRefCounts(showRefs ? kb : null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
   useEffect(() => {
@@ -81,48 +136,123 @@ const VirtualList = forwardRef<VirtualListHandle, Props>(function VirtualList(
 
   return (
     <div
-      ref={parentRef}
       className="virtual-list list"
       aria-label={`${docs.length} artifacts in ${kb}`}
-      style={{
-        position: "relative",
-        height: rowVirtualizer.getTotalSize(),
-        width: "100%",
-      }}
+      style={{ "--list-cols": gridTemplate(columns) } as CSSProperties}
     >
-      <div className="list-row list-row--head" aria-hidden="true">
-        <span>id</span>
-        <span>title</span>
-        <span>folder</span>
-        <span>file</span>
-        <span>category</span>
-        <span></span>
-        <span></span>
+      <div className="list-row list-row--head" role="row" data-testid="index-head">
+        {LIST_COLUMNS.filter((c) => columns.includes(c.id)).map((c) => {
+          const next = nextSort(c, sort, dir);
+          const label = next ? (
+            <button
+              type="button"
+              className="list-head__sort"
+              data-testid={`index-sort-${c.id}`}
+              onClick={() => setMany({ sort: next.sort, dir: next.dir })}
+            >
+              {c.label}
+              {c.sort === sort && (
+                <span className="list-head__dir" aria-hidden="true">
+                  {dir === "asc" ? "\u2191" : "\u2193"}
+                </span>
+              )}
+            </button>
+          ) : (
+            <span className="list-head__label">{c.label}</span>
+          );
+          return (
+            <div
+              key={c.id}
+              className={`list-head__cell list-head__cell--${c.align}`}
+              data-col={c.id}
+              role="columnheader"
+              aria-sort={ariaSort(c, sort, dir)}
+            >
+              {label}
+              {c.id === "title" && (
+                <div className="list-head__chooser" ref={chooserRef}>
+                  <button
+                    type="button"
+                    className="list-head__columns"
+                    aria-haspopup="true"
+                    aria-expanded={chooserOpen}
+                    data-testid="index-columns"
+                    onClick={() => setChooserOpen((o) => !o)}
+                  >
+                    Columns
+                  </button>
+                  {chooserOpen && (
+                    <ul className="kb-popover list-head__menu" aria-label="Columns">
+                      {LIST_COLUMNS.map((col) => (
+                        <li key={col.id}>
+                          <label className="kb-popover__item">
+                            <span>{col.label}</span>
+                            <input
+                              type="checkbox"
+                              checked={columns.includes(col.id)}
+                              disabled={col.locked}
+                              data-testid={`index-col-${col.id}`}
+                              onChange={() => applyColumns(toggleColumn(columns, col.id))}
+                            />
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <span aria-hidden="true" />
       </div>
-      {items.map((row) => {
-        const d = docs[row.index];
-        const isFocused = focusedIndex === row.index;
-        return (
-          <div
-            key={d.id}
-            className={isFocused ? "list-row--focused" : undefined}
-            role="option"
-            aria-selected={isFocused}
-            data-kb-cursor={isFocused ? "true" : undefined}
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              width: "100%",
-              transform: `translateY(${row.start - scrollMargin}px)`,
-            }}
-          >
-            <ListRow doc={d} kb={kb} />
-          </div>
-        );
-      })}
+      <div
+        ref={parentRef}
+        className="virtual-list__body"
+        style={{
+          position: "relative",
+          height: rowVirtualizer.getTotalSize(),
+          width: "100%",
+        }}
+      >
+        {items.map((row) => {
+          const d = docs[row.index];
+          const isFocused = focusedIndex === row.index;
+          return (
+            <div
+              key={d.id}
+              className={isFocused ? "list-row--focused" : undefined}
+              role="option"
+              aria-selected={isFocused}
+              data-kb-cursor={isFocused ? "true" : undefined}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${row.start - scrollMargin}px)`,
+              }}
+            >
+              <ListRow
+                doc={d}
+                kb={kb}
+                columns={columns}
+                refs={showRefs ? galleryRefCount(refCounts.data, d.id) : 0}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 });
+
+function readStored(kb: string): string | null {
+  try {
+    return localStorage.getItem(columnsStorageKey(kb));
+  } catch {
+    return null;
+  }
+}
 
 export default VirtualList;
