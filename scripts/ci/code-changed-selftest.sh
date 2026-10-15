@@ -61,11 +61,16 @@ done < <(sed -n '/^EXACT=(/,/^)/p' "$sut" | grep -o '"[^"]*"' | tr -d '"')
 for p in ci/test-floors.toml scripts/ci/witness.py .config/nextest.toml scripts/ci/selfcheck.py; do
   printf '%s\n' "$p" > "$work/one"; expect run=true "ci machinery $p" "$work/one"
 done
+printf 'ui/src/probe.ts\n' > "$work/one"; expect run=true "ui-only change runs the code lanes" "$work/one"
 printf 'README.md\ndocs/foo.md\n' > "$work/one"; expect run=false "docs-only change" "$work/one"
 
 # 4. no usable base -> run=true (never silently skip).
 got="$(cd "$work" && git init -q . && GITHUB_OUTPUT= BASE_SHA=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef HEAD_SHA=HEAD "$sut")"
 [ "$got" = run=true ] && echo "ok: unresolvable base runs ($got)" || { echo "SELFTEST FAIL: unresolvable base gave $got" >&2; fail=1; }
+
+# 4b. EMPTY base (workflow_dispatch: github.event.before is empty) -> run=true.
+got="$(cd "$work" && GITHUB_OUTPUT= BASE_SHA= HEAD_SHA=HEAD "$sut")"
+[ "$got" = run=true ] && echo "ok: empty base runs ($got)" || { echo "SELFTEST FAIL: empty base gave $got" >&2; fail=1; }
 
 # 5. the skip message names every prefix and exact path.
 msg="$("$sut" --skip-message)"

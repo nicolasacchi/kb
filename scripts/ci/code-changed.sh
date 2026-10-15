@@ -34,6 +34,7 @@ PREFIXES=(
   "plugins/kb-code/"
   "web-code/"
   "web/"
+  "ui/"
   "scripts/review-store/"
 )
 # Exact file paths.
