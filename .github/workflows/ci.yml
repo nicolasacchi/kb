@@ -632,16 +632,17 @@ jobs:
         # step's exit status is no longer the only evidence.
         env:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
+          UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
         working-directory: tests/e2e
         run: |
           mkdir -p "$KB_WITNESS_DIR"
           # workflow_dispatch update_snapshots=true regenerates goldens (OL F1).
           args=()
-          if [ "${{ inputs.update_snapshots }}" = true ]; then args+=(--update-snapshots); fi
+          if [ "$UPDATE_SNAPSHOTS" = true ]; then args+=(--update-snapshots); fi
           set -o pipefail; npx playwright test "${args[@]}" 2>&1 | tee playwright-output.log
 
       - name: Upload Playwright goldens
-        if: always()
+        if: ${{ always() && inputs.update_snapshots }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-snapshots
@@ -1334,16 +1335,23 @@ jobs:
         # KB_WITNESS_DIR -> web-code/e2e/playwright.config.ts adds the JSON reporter.
         env:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
-          # workflow_dispatch update_snapshots=true -> justfile passes it to playwright (OL F1).
-          KB_PW_ARGS: ${{ inputs.update_snapshots && '--update-snapshots' || '' }}
-        run: just ci-code-e2e
+          UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
+        # workflow_dispatch update_snapshots=true -> the justfile passes
+        # KB_PW_ARGS on to playwright (OL F1).
+        run: |
+          if [ "$UPDATE_SNAPSHOTS" = true ]; then export KB_PW_ARGS=--update-snapshots; fi
+          just ci-code-e2e
 
       - name: Upload Playwright goldens
-        if: ${{ always() && steps.changes.outputs.run == 'true' }}
+        if: ${{ always() && steps.changes.outputs.run == 'true' && inputs.update_snapshots }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: code-e2e-snapshots
-          path: web-code/e2e/__snapshots__
+          # ARIA goldens live in __snapshots__/, screenshot goldens in visual/
+          # (web-code/e2e/playwright.config.ts).
+          path: |
+            web-code/e2e/__snapshots__
+            web-code/e2e/visual
           retention-days: 14
           if-no-files-found: warn
           include-hidden-files: true
@@ -1625,6 +1633,26 @@ jobs:
   # was legitimately skipped is allowed, anything else is a failure. Add every
   # new job of this file to `needs` — the `jobs-covered` step below fails if
   # one is missing, so the list cannot rot quietly.
+  spa-image:
+    permissions:
+      contents: read
+    name: spa-image (Dockerfile SPA stages build)
+    # The image build (build-image.yml) only runs after ci on main, so nothing
+    # on a PR built the Dockerfile's two SPA stages. They copy web/ and
+    # web-code/ into an isolated context; anything those apps import from
+    # outside their own directory (ui/) must be copied in explicitly, or tsc
+    # and vite fail only at image-build time. Unconditional: node stages only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the kb SPA stage
+        run: docker build --target spa --build-arg KB_GIT_SHA=ci-check -t kb-spa-check .
+
+      - name: Build the kb-code SPA stage
+        run: docker build --target kb-code-spa -t kb-code-spa-check .
+
   ci-gate:
     permissions:
       contents: read
@@ -1645,6 +1673,7 @@ jobs:
       - web-unit
       - hook-omp
       - supply-chain
+      - spa-image
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
