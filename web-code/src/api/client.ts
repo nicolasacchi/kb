@@ -5,6 +5,7 @@
 // `/api/...` fetch, proxied to 127.0.0.1:4747 in dev (`vite.config.ts`) and
 // same-origin once `web-code/dist` is served by the daemon itself.
 
+import type { SeqListOut } from "./seq";
 import type {
   AnchorKind,
   AnnotationIntent,
@@ -138,7 +139,6 @@ import type {
   BoardStatusOut,
   BoardSweepOut,
   BoardsListOut,
-  SeqListOut,
   ToursListOut,
   TourOut,
   TourApplyOut,
