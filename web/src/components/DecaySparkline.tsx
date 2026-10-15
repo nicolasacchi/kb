@@ -32,6 +32,12 @@ import {
 } from "../lib/decayProjection";
 
 export interface DecaySparklineProps {
+  /**
+   * Omit the half-life caption under the curve (a page that states the decay
+   * policy once, e.g. /memory). The pinned / below-floor state label still
+   * shows, and the tooltip keeps the full text.
+   */
+  compact?: boolean;
   salience: number | null | undefined;
   ageDays: number | null | undefined;
   decayK: number | null | undefined;
@@ -57,6 +63,7 @@ export default function DecaySparkline({
   pinned,
   width = DEFAULT_WIDTH,
   height = DEFAULT_HEIGHT,
+  compact = false,
 }: DecaySparklineProps) {
   const haveData = salience != null && ageDays != null && decayK != null;
 
@@ -108,11 +115,11 @@ export default function DecaySparkline({
     // every other state (above the floor, or no floor at all) the more
     // informative primary label is the TRUE half-life stat. The full
     // picture (state + half-life) is always available via the tooltip.
-    const label = belowFloorNow || pinned ? stateLabel : half;
+    const label = belowFloorNow || pinned ? stateLabel : compact ? null : half;
     const title = `${stateLabel} — ${half}`;
 
     return { basePath, stablePath, floorY, belowFloorNow, label, title };
-  }, [haveData, salience, ageDays, decayK, stability, floor, pinned, width, height]);
+  }, [haveData, salience, ageDays, decayK, stability, floor, pinned, width, height, compact]);
 
   if (!haveData) {
     return (
@@ -152,9 +159,11 @@ export default function DecaySparkline({
         )}
         <path className="kb-decayspark__base" d={basePath} data-testid="decay-sparkline-base" />
       </svg>
-      <span className="kb-decayspark__label" data-testid="decay-sparkline-label">
-        {label}
-      </span>
+      {label != null && (
+        <span className="kb-decayspark__label" data-testid="decay-sparkline-label">
+          {label}
+        </span>
+      )}
     </span>
   );
 }

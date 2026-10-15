@@ -254,9 +254,42 @@ describe("Memory route — MI-W4.1/W4.3 row health column + lineage action", () 
     vi.clearAllMocks();
   });
 
-  it("renders a decay sparkline in the health column for each row", () => {
+  it("renders a decay sparkline in the health column for a recalled memory", () => {
+    vi.mocked(useMemories).mockReturnValue({
+      hits: [{ ...HIT, salience: 0.9, age_days: 0, decay_k: 0.01, recall_count: 2 }],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
     renderMemory();
     expect(screen.getByTestId("decay-sparkline")).toBeTruthy();
+  });
+
+  it("renders no sparkline for a memory that has never been recalled", () => {
+    renderMemory();
+    expect(screen.queryByTestId("decay-sparkline")).toBeNull();
+  });
+
+  it("states the half-life once in the header, never on a row", () => {
+    vi.mocked(useMemories).mockReturnValue({
+      hits: [{ ...HIT, salience: 0.9, age_days: 0, decay_k: 0.01, recall_count: 2 }],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+    renderMemory();
+    expect(screen.getByTestId("memory-halflife").textContent).toContain("score halves every ~69d");
+    expect(screen.queryByTestId("decay-sparkline-label")).toBeNull();
+    const row = screen.getByTestId("memory-item");
+    expect(row.textContent).not.toContain("score halves every");
+  });
+
+  it("the more-actions button toggles the strip open state", () => {
+    renderMemory();
+    const more = screen.getByRole("button", { name: "more actions" });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(more);
+    expect(more.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("opens the lineage viewer when the lineage action is clicked", async () => {

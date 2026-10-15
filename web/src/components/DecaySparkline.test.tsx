@@ -138,4 +138,15 @@ describe("DecaySparkline", () => {
     const el = screen.getByTestId("decay-sparkline");
     expect(el.title).toBe("salience 0.40 — above the 0.15 floor — score halves every ~69d");
   });
+
+  it("compact drops the half-life caption but keeps it in the tooltip", () => {
+    render(<DecaySparkline salience={0.4} ageDays={10} decayK={0.01} floor={0.15} pinned={false} compact />);
+    expect(screen.queryByTestId("decay-sparkline-label")).toBeNull();
+    expect(screen.getByTestId("decay-sparkline").title).toContain("score halves every ~69d");
+  });
+
+  it("compact still shows the pinned state label", () => {
+    render(<DecaySparkline salience={0.4} ageDays={10} decayK={0.01} floor={0.15} pinned compact />);
+    expect(screen.getByTestId("decay-sparkline-label")).toBeTruthy();
+  });
 });

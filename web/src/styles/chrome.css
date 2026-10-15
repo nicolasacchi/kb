@@ -4240,7 +4240,7 @@ a.kb-idschip:hover {
 .kb-mem__thead,
 .kb-mem__row {
   display: grid;
-  grid-template-columns: 120px 1fr 220px 140px minmax(120px, 200px) 70px 80px;
+  grid-template-columns: minmax(0, 1fr) 96px 140px 44px;
   align-items: center;
   gap: 14px;
 }
@@ -4311,9 +4311,11 @@ a.kb-idschip:hover {
   line-height: 1.35;
   cursor: pointer;
   min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   text-decoration: none;
 }
 .kb-mem__title:hover {
@@ -4328,7 +4330,7 @@ a.kb-idschip:hover {
 }
 .kb-mem__salbar {
   flex: 1;
-  height: 6px;
+  height: 4px;
   background: var(--rule);
   border-radius: 3px;
   position: relative;
@@ -4397,25 +4399,63 @@ button.kb-mem__salnum--edit:focus-visible {
   font-size: var(--fs-xs);
   padding: 4px 0;
 }
-.kb-mem__score {
+.kb-mem__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  position: relative;
+}
+/* Actions are present in the DOM (and focusable) but quiet until the row is
+ * hovered, focused, or the ⋯ button has opened them. Opacity only: the
+ * buttons stay hit-testable so keyboard and automation can reach them. */
+.kb-mem__strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 120ms var(--ease);
+}
+.kb-mem__row:hover .kb-mem__strip,
+.kb-mem__row:focus-within .kb-mem__strip,
+.kb-mem__actions.is-open .kb-mem__strip {
+  opacity: 1;
+}
+.kb-mem__actions.is-open .kb-mem__strip {
+  position: absolute;
+  right: 40px;
+  background: var(--bg-card-hi);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  z-index: 3;
+}
+.kb-mem__more {
+  padding: 5px 7px;
+}
+@media (hover: none) {
+  .kb-mem__strip {
+    opacity: 1;
+  }
+}
+/* One quiet meta line under the gloss. */
+.kb-mem__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--ink-mute);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  /* SH.B1 — a fixed-width grid cell (70px on desktop) doesn't clip its
-   * own overflow by default; paired with the healthcell fix below (which
-   * stops the decay-projection label bleeding into this column from the
-   * left), this keeps the score readable rather than visually clipped. */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.kb-mem__actions {
-  display: flex;
-  justify-content: flex-end;
+.kb-mem__metaitem {
+  display: inline-flex;
+  align-items: baseline;
   gap: 4px;
+}
+.kb-mem__halflife {
+  margin-left: 14px;
 }
 .kb-mem__act {
   padding: 5px 8px;
@@ -4590,12 +4630,9 @@ button.kb-mem__salnum--edit:focus-visible {
     overflow-y: visible;
   }
 
-  /* Defect 2 — the fixed 7-column row grid (120px 1fr 220px 140px
-   * minmax(120,200) 70px 80px) can't fit 390px. Restack each row as a
-   * 3-cluster card via named grid areas — every cell keeps its existing
-   * class and DOM order (memory.tsx unchanged); grid-area placement
-   * doesn't require source order to match visual order. The header row
-   * is meaningless once rows are cards. */
+  /* Rows are cards at phone width: the memory (title, gloss, meta, chips)
+   * leads, the salience bar and health sparkline follow, and the action
+   * strip is always shown (no hover on touch). */
   .kb-mem__thead {
     display: none;
   }
@@ -4603,21 +4640,13 @@ button.kb-mem__salnum--edit:focus-visible {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "type    type"
-      "title   title"
-      "sal     score"
-      "health  health"
-      "links   links"
-      "actions actions";
+      "title   actions"
+      "sal     sal"
+      "health  health";
     column-gap: 10px;
     row-gap: 6px;
     padding: 14px 16px;
     align-items: start;
-  }
-  /* Line 1 — type/scope chip, then the title cell (title, summary, and
-   * the from-session link stack inside it via flex-column). */
-  .kb-mem__type {
-    grid-area: type;
   }
   .kb-mem__titlecell {
     grid-area: title;
@@ -4626,18 +4655,9 @@ button.kb-mem__salnum--edit:focus-visible {
     gap: 3px;
     min-width: 0;
   }
-  /* Line 2 — salience bar + score share a row; the health sparklines get
-   * their own full-width row directly under it (tight row-gap keeps the
-   * pair reading as one stats cluster) since the decay projection +
-   * injection histogram need more than the salience/score row's leftover
-   * width. */
   .kb-mem__salcell {
     grid-area: sal;
     min-width: 0;
-  }
-  .kb-mem__score {
-    grid-area: score;
-    align-self: center;
   }
   .kb-mem__healthcell {
     grid-area: health;
@@ -4648,15 +4668,14 @@ button.kb-mem__salnum--edit:focus-visible {
     min-width: 0;
     margin-top: 2px;
   }
-  /* Line 3 — link chips, then actions. */
-  .kb-mem__linkscell {
-    grid-area: links;
+  .kb-mem__healthcell:empty {
+    display: none;
   }
   .kb-mem__actions {
     grid-area: actions;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    margin-top: 2px;
+  }
+  .kb-mem__strip {
+    opacity: 1;
   }
 }
 
