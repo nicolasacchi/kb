@@ -4763,7 +4763,7 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [ammonia 4.2.0](https://github.com/rust-ammonia/ammonia)
+- [ammonia 4.2.3](https://github.com/rust-ammonia/ammonia)
 
 ```
 Copyright (c) 2015-2022 The ammonia Developers
@@ -5014,7 +5014,7 @@ Used by:
 
 - [hyper-rustls 0.27.9](https://github.com/rustls/hyper-rustls)
 - [rustls-native-certs 0.8.3](https://github.com/rustls/rustls-native-certs)
-- [rustls 0.23.45](https://github.com/rustls/rustls)
+- [rustls 0.23.46](https://github.com/rustls/rustls)
 
 ```
 Copyright (c) 2016 Joseph Birr-Pixton &lt;jpixton@gmail.com&gt;
