@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+// OL F3 -- one-shot codemod that re-bases an app's literal font sizes, radii and
+// z-indexes onto the shared tokens in ui/src/tokens.css.
+//
+//   node ui/scripts/codemod-type.mjs <appdir> [--dry]
+//
+// Rewrites, under <appdir>/src (skipping *.test.* and src/scripts/, which is
+// injected into artifact iframes where no tokens exist):
+//   css      font-size: <N>px | <N>rem        -> var(--fs-*)
+//   ts/tsx   fontSize: <number> | "<N>px"     -> "var(--fs-*)"
+//   css      border-radius: 4|8|14|999px      -> var(--radius-sm|md|lg|pill)
+//   css      z-index: <ladder value>          -> var(--z-*)
+// em / % / inherit font sizes, shorthand `font:` and other radii / z-indexes are
+// left alone and listed in the report. A `/* kb-literal: <reason> */` comment on
+// the same line opts a line out of every rewrite (counted in the report).
+//
+// Bucketing (rem x 16, then Math.round for fractional px):
+//   <=12 xs | 13 sm | 14 md | 15-16 lg | 17-19 xl | 20-23 title | >=24 hero
+import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const args = process.argv.slice(2);
+const dry = args.includes("--dry");
+const appdir = args.find((a) => !a.startsWith("--"));
+if (!appdir) {
+  console.error("usage: codemod-type.mjs <appdir> [--dry]");
+  process.exit(2);
+}
+const root = resolve(appdir);
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+export function bucket(px) {
+  const n = Math.round(px);
+  if (n <= 12) return "xs";
+  if (n === 13) return "sm";
+  if (n === 14) return "md";
+  if (n <= 16) return "lg";
+  if (n <= 19) return "xl";
+  if (n <= 23) return "title";
+  return "hero";
+}
+const RADIUS = { 4: "sm", 8: "md", 14: "lg", 999: "pill" };
+const Z = {
+  5: "bar", 20: "popover", 30: "popover-hi", 35: "float", 40: "scrim",
+  41: "drawer", 50: "hint", 100: "modal", 1000: "top",
+};
+
+function walk(dir, out = []) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) {
+      if (name === "node_modules" || name === "generated" || p === join(root, "src", "scripts")) continue;
+      walk(p, out);
+    } else if (!/\.test\./.test(name) && /\.(css|tsx?)$/.test(name)) out.push(p);
+  }
+  return out;
+}
+
+const changes = [];
+const optOuts = [];
+const leftover = { fontSize: [], radius: [], z: [] };
+const OPT = /\/\*\s*kb-literal:\s*(.*?)\s*\*\//;
+
+for (const file of walk(join(root, "src"))) {
+  const isCss = file.endsWith(".css");
+  const rel = relative(repo, file);
+  const lines = readFileSync(file, "utf8").split("\n");
+  let dirty = false;
+  lines.forEach((line, i) => {
+    const opt = line.match(OPT);
+    const rewrite = (re, fn, kind) => {
+      line = line.replace(re, (...m) => {
+        if (opt) {
+          optOuts.push({ rel, n: i + 1, text: m[0], reason: opt[1] });
+          return m[0];
+        }
+        const out = fn(...m);
+        if (out === null) return m[0];
+        changes.push({ kind, rel, n: i + 1, before: m[0].trim(), after: out.trim() });
+        return out;
+      });
+    };
+    if (isCss) {
+      rewrite(
+        /(font-size\s*:\s*)(\d*\.?\d+)(px|rem)(?=\s*(?:!important)?\s*(?:;|\}|$))/g,
+        (_, p, num, unit) => `${p}var(--fs-${bucket(unit === "rem" ? num * 16 : +num)})`,
+        "font-size",
+      );
+      rewrite(
+        /(border-radius\s*:\s*)(\d+)px(?=\s*(?:;|\}|$))/g,
+        (_, p, num) => (RADIUS[num] ? `${p}var(--radius-${RADIUS[num]})` : null),
+        "radius",
+      );
+      rewrite(
+        /(z-index\s*:\s*)(\d+)(?=\s*(?:!important)?\s*(?:;|\}|$))/g,
+        (_, p, num) => (Z[num] ? `${p}var(--z-${Z[num]})` : null),
+        "z-index",
+      );
+      if (!opt) {
+        for (const m of line.matchAll(/font-size\s*:\s*[^;}]*/g))
+          if (!m[0].includes("var(")) leftover.fontSize.push({ rel, n: i + 1, text: m[0].trim() });
+        for (const m of line.matchAll(/border-radius\s*:\s*[^;}]*/g))
+          if (!m[0].includes("var(")) leftover.radius.push({ rel, n: i + 1, text: m[0].trim() });
+        for (const m of line.matchAll(/z-index\s*:\s*[^;}]*/g))
+          if (!m[0].includes("var(")) leftover.z.push({ rel, n: i + 1, text: m[0].trim() });
+      }
+    } else {
+      rewrite(
+        /(fontSize\s*:\s*)(?:"(\d*\.?\d+)px"|(\d*\.?\d+))(?=\s*[,}\n]|$)/g,
+        (_, p, a, b) => `${p}"var(--fs-${bucket(+(a ?? b))})"`,
+        "fontSize",
+      );
+    }
+    if (line !== lines[i]) {
+      lines[i] = line;
+      dirty = true;
+    }
+  });
+  if (dirty && !dry) writeFileSync(file, lines.join("\n"));
+}
+
+const by = (k) => changes.filter((c) => c.kind === k);
+const tbl = (rows, cols) =>
+  rows.map((r) => `| ${cols.map((c) => String(r[c]).replace(/\|/g, "\\|")).join(" | ")} |`).join("\n");
+let md = `# codemod-type report (OL F3)\n\nApp: \`${relative(repo, root)}\`. Generated by \`ui/scripts/codemod-type.mjs\`.\n\n`;
+md += `- font-size / fontSize rewrites: ${by("font-size").length + by("fontSize").length}\n`;
+md += `- border-radius rewrites: ${by("radius").length}\n- z-index rewrites: ${by("z-index").length}\n`;
+md += `- opt-outs (\`kb-literal\`): ${optOuts.length}\n\n`;
+const hist = {};
+for (const c of [...by("font-size"), ...by("fontSize")]) {
+  const k = `${c.before.replace(/.*?:\s*/, "").replace(/^"|"$/g, "")} -> ${c.after.match(/--fs-\w+/)?.[0]}`;
+  hist[k] = (hist[k] ?? 0) + 1;
+}
+md += `## Font-size mapping histogram\n\n| literal -> token | count |\n|---|---|\n`;
+md += Object.entries(hist).sort((a, b) => b[1] - a[1]).map(([k, v]) => `| ${k} | ${v} |`).join("\n") + "\n\n";
+md += `## Opt-outs\n\n| file | line | literal | reason |\n|---|---|---|---|\n${tbl(optOuts.map((o) => ({ ...o })), ["rel", "n", "text", "reason"])}\n\n`;
+md += `## Left alone (not rewritten)\n\n`;
+for (const [k, label] of [["fontSize", "font-size (em / % / inherit / other)"], ["radius", "border-radius (other values)"], ["z", "z-index (non-ladder values)"]]) {
+  const hs = {};
+  for (const l of leftover[k]) hs[l.text] = (hs[l.text] ?? 0) + 1;
+  md += `### ${label}: ${leftover[k].length} declarations\n\n| declaration | count |\n|---|---|\n`;
+  md += Object.entries(hs).sort((a, b) => b[1] - a[1]).map(([t, v]) => `| \`${t}\` | ${v} |`).join("\n") + "\n\n";
+}
+md += `## Every rewrite\n\n| kind | file | line | before | after |\n|---|---|---|---|---|\n${tbl(changes, ["kind", "rel", "n", "before", "after"])}\n`;
+console.log(md.split("## Every rewrite")[0]);
+if (!dry) writeFileSync(join(repo, "ui", "scripts", "codemod-type.report.md"), md);
