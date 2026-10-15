@@ -14,6 +14,7 @@
 import { sessionUrl } from "../../lib/searchLanes";
 import { useHunkTurns } from "../../hooks/useReviews";
 import TurnTierBadge, { type TurnTier } from "./TurnTierBadge";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface HunkTurnsPanelProps {
   repo: string;
@@ -28,7 +29,7 @@ export default function HunkTurnsPanel({ repo, reviewId, hunkId, ps }: HunkTurns
   if (q.isLoading) {
     return (
       <div className="kbc-hunkturns" data-kbc-hunk-turns-panel={hunkId} data-kbc-hunk-turns-state="loading">
-        Loading turns…
+        <StateCard size="inline" kind="loading" title="Loading turns…" />
       </div>
     );
   }

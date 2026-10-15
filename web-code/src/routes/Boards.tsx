@@ -26,6 +26,7 @@ import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { boardHref, parseBoardsStatus } from "../lib/boardsUrl";
 import { canvasPageUrl, mergeCurrentSearch } from "../lib/codeUrl";
 import { relativeTime } from "../lib/format";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/boards.css";
 
 export default function Boards() {
@@ -136,7 +137,7 @@ export default function Boards() {
       )}
 
       {query.isLoading ? (
-        <div className="kbc-reader__hint">Loading boards…</div>
+        <StateCard kind="loading" title="Loading boards…" />
       ) : query.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error">
           {(query.error as Error).message}

@@ -46,6 +46,7 @@ import { toast } from "../lib/toast";
 import { tokenOf, resolve as resolveCommand } from "../commands/dispatch";
 import { useCommandScope } from "../commands/CommandRoot";
 import type { RecipeHandlers } from "./recipeCommands";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/recipes.css";
 
 const LEGACY_LIMIT_OPTIONS = [25, 50, 100, 250, 500] as const;
@@ -115,7 +116,7 @@ function RecipeHomeSection({ repo }: { repo: string }) {
   const catalogQ = useRecipeCatalog(repo);
   return (
     <section data-kbc-recipe-home-section>
-      {catalogQ.isLoading && <div className="kbc-recipes__muted">Loading catalog…</div>}
+      {catalogQ.isLoading && <StateCard size="inline" kind="loading" title="Loading catalog…" />}
       {catalogQ.error && (
         <div className="kbc-recipes__error">{(catalogQ.error as Error).message}</div>
       )}
@@ -236,7 +237,7 @@ function LegacyRecipesBody({
     <div className="kbc-recipes__layout" data-kbc-recipes-legacy-body>
       <aside className="kbc-recipes__catalog" data-kbc-recipes-catalog>
         <h2 className="kbc-recipes__sub">Catalog</h2>
-        {catalogQ.isLoading && <div className="kbc-recipes__muted">Loading…</div>}
+        {catalogQ.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
         {catalogQ.error && (
           <div className="kbc-recipes__error">{(catalogQ.error as Error).message}</div>
         )}
@@ -477,7 +478,7 @@ function RecipeReplay({ repo, id }: { repo: string; id: string }) {
   const [activeViewByStep, setActiveViewByStep] = useState<Record<string, string>>({});
   const [censusExpanded, setCensusExpanded] = useState<Record<string, boolean>>({});
 
-  if (replayQ.isLoading) return <div className="kbc-recipes__muted">Loading replay…</div>;
+  if (replayQ.isLoading) return <StateCard size="inline" kind="loading" title="Loading replay…" />;
   if (replayQ.error) {
     return (
       <div className="kbc-recipes kbc-recipe-page" id="main">

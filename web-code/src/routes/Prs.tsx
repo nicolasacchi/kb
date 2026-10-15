@@ -17,6 +17,7 @@ import { toast } from "../lib/toast";
 import "../styles/history.css";
 import "../styles/review-inbox.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// `/r/:repo/~prs` (Phase G4's SPA half) — the GitHub PR read overlay: every
 /// open PR on `repo`'s GitHub origin (`GET /api/prs`). A non-GitHub-origin/
@@ -108,7 +109,7 @@ export default function Prs() {
     </div>
   );
 
-  if (prs.isLoading) return withTabs(<div className="kbc-reader__hint">Loading pull requests…</div>);
+  if (prs.isLoading) return withTabs(<StateCard kind="loading" title="Loading pull requests…" />);
 
   if (prs.error) {
     if (prs.error instanceof ApiError && prs.error.status === 400) {

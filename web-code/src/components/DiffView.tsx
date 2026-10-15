@@ -5,6 +5,7 @@ import { useDiffHighlights } from "../hooks/useDiffHighlights";
 import { parseUnifiedDiff } from "../lib/diff";
 import { loadDiffMode, saveDiffMode } from "../lib/prefs";
 import type { DiffMode } from "../lib/prefs";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface DiffViewProps {
   repo: string;
@@ -37,7 +38,7 @@ export default function DiffView({ repo, path, from, to }: DiffViewProps) {
     { hasRemoves, hasAdds, parsed },
   );
 
-  if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
+  if (isLoading) return <StateCard size="inline" kind="loading" title="Loading diff…" />;
   if (error) return <div className="kbc-diff kbc-diff--error">Failed to load diff</div>;
   if (!parsed) return null;
 

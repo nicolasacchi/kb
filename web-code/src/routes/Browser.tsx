@@ -24,6 +24,7 @@ import { speedFilterItems } from "../lib/speedSearch";
 import { resolve as resolveCommand, tokenOf } from "../commands/dispatch";
 import { useCommandScope } from "../commands/CommandRoot";
 import type { BrowserHandlers } from "./browserCommands";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/browser.css";
 
 /** Kinds shown in the containers/types pane (classes, traits, free functions). */
@@ -474,7 +475,7 @@ export default function BrowserPage() {
         >
           <h2 className="kbc-browser__pane-title">Containers / types</h2>
           {symbolsQ.isLoading && (
-            <div className="kbc-browser__muted">Loading symbols…</div>
+            <StateCard size="inline" kind="loading" title="Loading symbols…" />
           )}
           {symbolsQ.error && (
             <div className="kbc-browser__error">
@@ -580,7 +581,7 @@ export default function BrowserPage() {
             </div>
           )}
           {selectedContainer && fileQ.isLoading && (
-            <div className="kbc-browser__muted">Loading file…</div>
+            <StateCard size="inline" kind="loading" title="Loading file…" />
           )}
           {selectedContainer && langUnsupported && (
             <EmptyState
@@ -737,7 +738,7 @@ export default function BrowserPage() {
           {memberSym && callTab === "callers" && (
             <div data-kbc-browser-callers>
               {callersQ.isLoading && (
-                <div className="kbc-browser__muted">Loading callers…</div>
+                <StateCard size="inline" kind="loading" title="Loading callers…" />
               )}
               {callersQ.error && (
                 <div className="kbc-browser__error">
@@ -787,7 +788,7 @@ export default function BrowserPage() {
           {memberSym && callTab === "callees" && (
             <div data-kbc-browser-callees>
               {calleesQ.isLoading && (
-                <div className="kbc-browser__muted">Loading callees…</div>
+                <StateCard size="inline" kind="loading" title="Loading callees…" />
               )}
               {calleesQ.error && (
                 <div className="kbc-browser__error">

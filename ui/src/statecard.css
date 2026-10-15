@@ -97,3 +97,28 @@
   padding: var(--pad-1);
   cursor: pointer;
 }
+
+/* size="inline": panel/rail variant. No icon, no card chrome, muted small text. */
+.kb-statecard--inline {
+  align-items: flex-start;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  gap: var(--pad-1);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  animation: none;
+}
+.kb-statecard--inline .kb-statecard__title,
+.kb-statecard--inline .kb-statecard__reason {
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  color: var(--ink-mute);
+}
+.kb-statecard--inline .kb-statecard__actions {
+  justify-content: flex-start;
+}

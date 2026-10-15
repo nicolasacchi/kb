@@ -30,6 +30,7 @@ import { formatBytes, relativeTime } from "../../lib/format";
 import { failureClassHint, gcRefusal, parseLastGcApply, parseLastGcDryRun, parseLastMaint } from "../../lib/reviewStore";
 import MetaLine from "../MetaLine";
 import { isLoopbackRefusal, LOOPBACK_HINT } from "../reviews/ReviewHeader";
+import { StateCard } from "@kb/ui/StateCard";
 
 function lastGcRefusedLine(refused: string | null, dry: { at: number } | null) {
   if (!refused || !dry) return null;
@@ -57,7 +58,7 @@ export function ReviewStoreSection({ repo }: { repo: string }) {
     <section className="kbc-home-card__section" data-kbc-home-store>
       <h3 className="kbc-home-card__section-title">Review store</h3>
       {storeQ.isLoading ? (
-        <p className="kbc-home-card__muted">Loading…</p>
+        <StateCard size="inline" kind="loading" title="Loading…" />
       ) : storeQ.error ? (
         // `GET /api/repos/{name}/store` is LOOPBACK-ONLY (the router pins the
         // whole family there — the card reports `store.git_dir`, the daemon's
@@ -173,7 +174,7 @@ export function ReviewCredentialSection({ repo }: { repo: string }) {
     <section className="kbc-home-card__section" data-kbc-home-credentials>
       <h3 className="kbc-home-card__section-title">Fetch credential</h3>
       {credQ.isLoading ? (
-        <p className="kbc-home-card__muted">Loading…</p>
+        <StateCard size="inline" kind="loading" title="Loading…" />
       ) : credQ.error ? (
         <p className="kbc-home-card__error">Couldn't load the fetch credential</p>
       ) : credQ.data ? (

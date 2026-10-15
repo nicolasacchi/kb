@@ -13,6 +13,7 @@ import type { ReviewDocCard } from "../../api/types";
 import PublishCard from "./PublishCard";
 import SuggestionsBatchCard from "./SuggestionsBatchCard";
 import type { FindingSeverityFilter } from "./ReviewThreadsCard";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface ReviewSidePanelProps {
   repo: string;
@@ -178,7 +179,7 @@ export default function ReviewSidePanel({
             session detail is loopback-only
           </p>
         ) : sessionDiff.isLoading ? (
-          <p className="kbc-review__card-empty">Loading session…</p>
+          <StateCard size="inline" kind="loading" title="Loading session…" />
         ) : (
           <p className="kbc-review__card-empty">
             Session{" "}

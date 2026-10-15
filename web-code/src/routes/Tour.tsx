@@ -16,6 +16,7 @@ import { createTourUrlSync } from "../lib/tourUrlSync";
 import { setUrl } from "../lib/setsUrl";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { spanLineLabel } from "./SetDetail";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/sets.css";
 
 // Phase E4 ("kb-code v2 — The Operable Reader") — tour mode: a guided
@@ -124,7 +125,7 @@ export default function Tour() {
   });
 
   if (set.isLoading) {
-    return <div className="kbc-reader__hint">Loading tour…</div>;
+    return <StateCard kind="loading" title="Loading tour…" />;
   }
   if (set.error) {
     return <div className="kbc-reader__hint kbc-reader__hint--error">{(set.error as Error).message}</div>;
@@ -167,7 +168,7 @@ export default function Tour() {
 
       <div className="kbc-tour__stage">
         {file.isLoading ? (
-          <div className="kbc-reader__hint">Loading…</div>
+          <StateCard size="inline" kind="loading" title="Loading…" />
         ) : file.error ? (
           <div className="kbc-reader__hint kbc-reader__hint--error">{(file.error as Error).message}</div>
         ) : file.data && file.data.encoding === "utf8" ? (

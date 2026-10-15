@@ -33,6 +33,7 @@ import {
   type StatusSection,
 } from "../../lib/reviewFileTree";
 import { mapRowTitle, type MapRowState } from "../../lib/reviewMapColumn";
+import { StateCard } from "@kb/ui/StateCard";
 
 const PATH_BUDGET = 28;
 
@@ -457,9 +458,9 @@ export default function ReviewFileTree({
         allTree && allTree.length > 0 ? (
           <ul className="kbc-ftree__list">{allTree.map((n) => renderNodeAll(n, 0))}</ul>
         ) : (
-          <p className="kbc-rmap__note" data-kbc-ftree-all-loading>
-            Loading the full tree…
-          </p>
+          <div data-kbc-ftree-all-loading>
+            <StateCard size="inline" kind="loading" title="Loading the full tree…" />
+          </div>
         )
       ) : (
         sections.map((sec) => {

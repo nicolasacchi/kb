@@ -28,6 +28,7 @@ import { toast } from "../../lib/toast";
 import { useConfirm } from "../ConfirmProvider";
 import IntentChip from "./IntentChip";
 import ReviewBindSelector from "./ReviewBindSelector";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface AnnotationsPanelProps {
   repo: string;
@@ -342,7 +343,7 @@ export default function AnnotationsPanel({
       </div>
 
       {isLoading ? (
-        <div className="kbc-annotations__empty">Loading…</div>
+        <StateCard size="inline" kind="loading" title="Loading…" />
       ) : visibleThreads.length === 0 ? (
         <div className="kbc-annotations__empty">
           {threads.length === 0 ? "No annotations on this file yet." : "No annotations match this filter."}

@@ -3,6 +3,7 @@ import type { SetSpanInput } from "../../api/client";
 import { useAppendSetSpan, useCreateSet, useSets } from "../../hooks/useSets";
 import { setUrl } from "../../lib/setsUrl";
 import { toast } from "../../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface AddToSetMenuProps {
   repo: string;
@@ -83,7 +84,7 @@ export default function AddToSetMenu({ repo, path, getSelection }: AddToSetMenuP
       {open && (
         <div className="kbc-addset__menu" role="menu" data-kbc-addset-menu>
           {sets.isLoading ? (
-            <div className="kbc-addset__hint">Loading sets…</div>
+            <StateCard size="inline" kind="loading" title="Loading sets…" />
           ) : list.length === 0 ? (
             <div className="kbc-addset__hint">No sets yet.</div>
           ) : (

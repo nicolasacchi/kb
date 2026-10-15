@@ -9,6 +9,7 @@ import { parseUnifiedDiff } from "../../lib/diff";
 import { authorOnlyCaption, filterAuthorFiles } from "../../lib/reviewSince";
 import { loadDiffMode, saveDiffMode } from "../../lib/prefs";
 import type { DiffMode } from "../../lib/prefs";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface InterdiffPanelProps {
   repo: string;
@@ -32,7 +33,7 @@ export default function InterdiffPanel({
   since,
 }: InterdiffPanelProps) {
   const [authorOnly, setAuthorOnly] = useState(false);
-  if (loading) return <div className="kbc-reader__hint">Loading interdiff…</div>;
+  if (loading) return <StateCard size="inline" kind="loading" title="Loading interdiff…" />;
   if (error) return <div className="kbc-reader__hint kbc-reader__hint--error">{error.message}</div>;
   if (!data) return null;
   const shown = authorOnly ? filterAuthorFiles(data.files, since) : data.files;
@@ -163,7 +164,7 @@ function InterdiffFileDiff({
   );
   const [mode, setMode] = useState<DiffMode>(() => loadDiffMode());
 
-  if (diff.isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
+  if (diff.isLoading) return <StateCard size="inline" kind="loading" title="Loading diff…" />;
   if (diff.error) return <div className="kbc-diff kbc-diff--error">Failed to load diff</div>;
   if (!parsed) return null;
 

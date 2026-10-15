@@ -13,6 +13,7 @@ import GithubDiffCard from "./GithubDiffCard";
 import PromoteToFinding from "./PromoteToFinding";
 import { reviewDiffHref } from "./ReviewHeader";
 import { rungForMouse, type RampRung, type RampTarget } from "../../nav/ramp";
+import { StateCard } from "@kb/ui/StateCard";
 
 export type ThreadFilter = "all" | "open" | "resolved" | "orphaned" | "github" | QuestionFilterKey;
 
@@ -455,7 +456,7 @@ export default function ReviewThreadsCard({
       </div>
       {filter === "github" ? (
         githubQ.isLoading ? (
-          <p className="kbc-review__card-empty">Loading…</p>
+          <StateCard size="inline" kind="loading" title="Loading…" />
         ) : githubThreads.length === 0 ? (
           <p className="kbc-review__card-empty" data-kbc-review-threads-github-empty>
             {prNumber == null ? "This review isn't bound to a PR." : "No GitHub threads."}
@@ -490,7 +491,7 @@ export default function ReviewThreadsCard({
           ))
         )
       ) : q.isLoading ? (
-        <p className="kbc-review__card-empty">Loading…</p>
+        <StateCard size="inline" kind="loading" title="Loading…" />
       ) : groups.length === 0 ? (
         <p className="kbc-review__card-empty">
           {filter === "all" ? "No threads on this change set." : `No ${filter} threads.`}

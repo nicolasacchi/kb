@@ -11,6 +11,7 @@ import { setUrl } from "../lib/setsUrl";
 import { toast } from "../lib/toast";
 import "../styles/sets.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// Phase E4 ("kb-code v2 — The Operable Reader") — `/r/{repo}/~sets`: the
 /// reading-sets list. One row per set (name, description, span count,
@@ -110,7 +111,7 @@ export default function Sets() {
       </form>
 
       {sets.isLoading ? (
-        <div className="kbc-reader__hint">Loading sets…</div>
+        <StateCard kind="loading" title="Loading sets…" />
       ) : sets.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error">{(sets.error as Error).message}</div>
       ) : list.length === 0 ? (

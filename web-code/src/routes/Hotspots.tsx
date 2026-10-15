@@ -13,6 +13,7 @@ import { speedFilterItems } from "../lib/speedSearch";
 import "../styles/hotspots.css";
 import "../styles/browser.css"; // sparkline styles
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 const LIMIT_OPTIONS = [25, 50, 100, 250, 500] as const;
 
@@ -175,7 +176,7 @@ export default function Hotspots() {
         )}
       </div>
 
-      {hotspots.isLoading && <div className="kbc-hotspots__muted">Loading…</div>}
+      {hotspots.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
       {hotspots.error && (
         <div className="kbc-hotspots__error">{(hotspots.error as Error).message}</div>
       )}

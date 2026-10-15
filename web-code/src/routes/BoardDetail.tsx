@@ -46,6 +46,7 @@ import {
 } from "../lib/boardsUrl";
 import { codeUrl, mergeCurrentSearch } from "../lib/codeUrl";
 import { toast } from "../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/boards.css";
 
 /// How long `p` (play) waits between steps. A visible indicator names it, and
@@ -355,7 +356,7 @@ export default function BoardDetail() {
     "dismiss.mode": () => goToStep(null),
   });
 
-  if (board.isLoading) return <div className="kbc-reader__hint">Loading board…</div>;
+  if (board.isLoading) return <StateCard kind="loading" title="Loading board…" />;
   if (board.error) {
     return (
       <div className="kbc-reader__hint kbc-reader__hint--error" data-kbc-board-error>

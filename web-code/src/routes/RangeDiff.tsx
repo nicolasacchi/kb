@@ -10,6 +10,7 @@ import RefTypeahead from "../components/RefTypeahead";
 import { useRangeDiff } from "../hooks/useRangeDiff";
 import { useRefs } from "../hooks/useRefs";
 import { rangeDiffUrl } from "../lib/codeUrl";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/history.css";
 
 /// `/r/:repo/~range-diff?old=&new=` (Phase C6's SPA half) — `git range-diff`
@@ -117,7 +118,7 @@ export default function RangeDiff() {
           rebase/amend (e.g. old <code>main..topic-v1</code>, new <code>main..topic-v2</code>).
         </div>
       ) : rangeDiff.isLoading ? (
-        <div className="kbc-reader__hint">Loading range-diff…</div>
+        <StateCard kind="loading" title="Loading range-diff…" />
       ) : rangeDiff.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error">{(rangeDiff.error as Error).message}</div>
       ) : data ? (

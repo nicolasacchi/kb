@@ -20,6 +20,7 @@ import { useReviewDiffComments } from "../../hooks/useReviewComments";
 import { paintLine, type PaintedSegment } from "../../lib/diffHighlight";
 import { paintSpans } from "../../lib/paintSpans";
 import { orphansAt, threadsAt, type DiffCommentsApi } from "../../lib/reviewComments";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface PseudoFileViewProps {
   repo: string;
@@ -118,7 +119,7 @@ export default function PseudoFileView({ repo, reviewId, name, ps }: PseudoFileV
   const [composeLine, setComposeLine] = useState<number | null>(null);
 
   if (q.isLoading) {
-    return <div className="kbc-pseudo kbc-pseudo--loading">Loading {path}…</div>;
+    return <StateCard size="inline" kind="loading" title={`Loading ${path}…`} />;
   }
   if (!q.data) {
     return (

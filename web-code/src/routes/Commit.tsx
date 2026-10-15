@@ -12,6 +12,7 @@ import { formatUnixSeconds, shortSha } from "../lib/format";
 import { sessionUrl } from "../lib/searchLanes";
 import { toast } from "../lib/toast";
 import { copyToClipboard } from "../editor/vimReader";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/history.css";
 
 /// `/r/:repo/~commit/:sha` (Phase C1's SPA half) — the commit page hub:
@@ -25,7 +26,7 @@ export default function Commit() {
   const { repo = "", sha = "" } = useParams<{ repo: string; sha: string }>();
   const { data, isLoading, error } = useCommit(repo, sha);
 
-  if (isLoading) return <div className="kbc-reader__hint">Loading commit…</div>;
+  if (isLoading) return <StateCard kind="loading" title="Loading commit…" />;
   if (error) {
     // A 404 is honestly "nothing here" (a bad/stale sha, or one that hasn't
     // been indexed yet) — worth an EmptyState with a next step, distinct

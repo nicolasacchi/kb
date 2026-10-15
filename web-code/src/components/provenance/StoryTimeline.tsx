@@ -2,6 +2,7 @@ import type { StoryEntry } from "../../api/types";
 import { useStory } from "../../hooks/useStory";
 import { formatUnixSeconds } from "../../lib/format";
 import { gapBeatLabel, isGapBeat } from "../../lib/storyBeats";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface StoryTimelineProps {
   repo: string;
@@ -30,7 +31,7 @@ export default function StoryTimeline({ repo, path }: StoryTimelineProps) {
   return (
     <div className="kbc-story-timeline" data-kbc-story-timeline>
       <div className="kbc-story-timeline__title">File story</div>
-      {story.isLoading && <div className="kbc-story-timeline__hint">Loading story…</div>}
+      {story.isLoading && <StateCard size="inline" kind="loading" title="Loading story…" />}
       {story.isError && <div className="kbc-story-timeline__hint">Story unavailable.</div>}
       {story.data && entries.length === 0 && (
         <div className="kbc-story-timeline__hint">No history.</div>

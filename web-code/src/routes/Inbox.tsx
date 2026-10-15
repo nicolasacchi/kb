@@ -26,6 +26,7 @@ import { relativeTime } from "../lib/format";
 import "../styles/review-inbox.css";
 import "../styles/inbox.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 export default function Inbox() {
   // V70-A6 — root CLAUDE.md #31, ported: this list scrolls the WINDOW, so
@@ -75,7 +76,7 @@ export default function Inbox() {
       />
 
       {inbox.isLoading ? (
-        <div className="kbc-reader__hint">Loading inbox…</div>
+        <StateCard kind="loading" title="Loading inbox…" />
       ) : inbox.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error">{(inbox.error as Error).message}</div>
       ) : !data ? null : (

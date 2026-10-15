@@ -64,6 +64,7 @@ import {
 import { loadDensity, setThemePrefs } from "../lib/prefs";
 import { RESIZE_SUBMODE_HINT } from "../desk/resizeSubmode";
 import { toast } from "../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/reviews.css";
 import "../styles/review-room.css";
 import "../styles/recipes.css";
@@ -615,7 +616,7 @@ export default function ReviewDetail() {
     return <div className="kbc-reader__hint kbc-reader__hint--error">Invalid review id.</div>;
   }
   if (reviewQ.isLoading) {
-    return <div className="kbc-reader__hint">Loading review…</div>;
+    return <StateCard kind="loading" title="Loading review…" />;
   }
   if (reviewQ.error || !review) {
     return (
@@ -669,7 +670,7 @@ export default function ReviewDetail() {
     <TimelinePanel repo={repo} reviewId={id} prBound={prNumberForThreads != null} />
   ) : !compareMode && cockpitView === "doc" ? (
     docQ.isLoading ? (
-      <div className="kbc-reader__hint">Loading the review document…</div>
+      <StateCard kind="loading" title="Loading the review document…" />
     ) : docQ.error ? (
       <div className="kbc-reader__hint kbc-reader__hint--error">
         {(docQ.error as Error).message}

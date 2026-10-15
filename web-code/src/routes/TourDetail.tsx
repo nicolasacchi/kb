@@ -41,6 +41,7 @@ import {
   parseTourStep,
   toursHref,
 } from "../lib/toursUrl";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/tours.css";
 
 /// `BoardDetail`'s own autoplay cadence, deliberately the same number: two
@@ -166,7 +167,7 @@ export default function TourDetail() {
     },
   });
 
-  if (tour.isLoading) return <div className="kbc-reader__hint">Loading tour…</div>;
+  if (tour.isLoading) return <StateCard kind="loading" title="Loading tour…" />;
   if (tour.error) {
     return (
       <div className="kbc-reader__hint kbc-reader__hint--error" data-kbc-tour-error>

@@ -5,6 +5,7 @@ import PageHeader from "../components/PageHeader";
 import { useLanes } from "../hooks/useLanes";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { formatLastIngest, isFamilyTemplate } from "../lib/lanes";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/lanes.css";
 
 /// V76-R3a — `/r/:repo/~lanes`: the aug-lane/1 registry dock.
@@ -35,7 +36,7 @@ export default function Lanes() {
     return (
       <div className="kbc-lanes" data-kbc-lanes data-kbc-lanes-state="loading" id="main">
         {header}
-        <p className="kbc-reader__hint">Loading…</p>
+        <StateCard size="inline" kind="loading" title="Loading…" />
       </div>
     );
   }

@@ -11,6 +11,7 @@ import { commentsUrl } from "../lib/codeUrl";
 import { speedFilterItems } from "../lib/speedSearch";
 import "../styles/todos.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// Group items by path, preserving first-seen path order.
 function groupByPath(items: TodoItem[]): { path: string; items: TodoItem[] }[] {
@@ -174,7 +175,7 @@ export default function Todos() {
         </div>
       </div>
 
-      {todos.isLoading && <div className="kbc-todos__muted">Loading…</div>}
+      {todos.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
       {todos.error && (
         <div className="kbc-todos__error">{(todos.error as Error).message}</div>
       )}

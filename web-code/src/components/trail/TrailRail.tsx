@@ -28,6 +28,7 @@ import { useConfirm } from "../ConfirmProvider";
 import { useForkTrail, usePurgeTrails, useTrail, useTrails } from "../../hooks/useTrails";
 import { appendTrail, codeUrl } from "../../lib/codeUrl";
 import { toast } from "../../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// How a `via` reads in a row. The wire vocabulary is snake_case (it has to
 /// match `trails::VIA_KINDS`); this is the display twin, and it is the ONLY
@@ -102,7 +103,7 @@ function TrailSteps({
     [fork, trailId],
   );
 
-  if (detail.isLoading) return <p className="kbc-trailrail__hint">Loading…</p>;
+  if (detail.isLoading) return <StateCard size="inline" kind="loading" title="Loading…" />;
   if (detail.error) {
     return <p className="kbc-trailrail__hint">{(detail.error as Error).message}</p>;
   }

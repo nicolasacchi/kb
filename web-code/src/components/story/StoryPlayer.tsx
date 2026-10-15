@@ -18,6 +18,7 @@ import { clampStep, initialStepIndex, playbackSteps } from "../../lib/storyPlaye
 import { createStoryUrlSync } from "../../lib/storyUrlSync";
 import type { CommitSummary } from "../../api/types";
 import StepperBar from "./StepperBar";
+import { StateCard } from "@kb/ui/StateCard";
 import "../../styles/story.css";
 
 // Phase C7 ("kb-code v2 — The Operable Reader") — "watch this file being
@@ -238,7 +239,7 @@ export default function StoryPlayer({ repo, path, atSha, onExit }: StoryPlayerPr
   }, [clamped, steps.length, current, prefersReducedMotion]);
 
   if (fileHistory.isLoading) {
-    return <div className="kbc-reader__hint">Loading history…</div>;
+    return <StateCard size="inline" kind="loading" title="Loading history…" />;
   }
   if (steps.length === 0) {
     return (
@@ -271,7 +272,7 @@ export default function StoryPlayer({ repo, path, atSha, onExit }: StoryPlayerPr
 
       <div className="kbc-story__stage">
         {file.isLoading ? (
-          <div className="kbc-reader__hint">Loading…</div>
+          <StateCard size="inline" kind="loading" title="Loading…" />
         ) : file.error ? (
           <div className="kbc-reader__hint kbc-reader__hint--error">{(file.error as Error).message}</div>
         ) : file.data && file.data.encoding === "utf8" ? (
@@ -289,7 +290,7 @@ export default function StoryPlayer({ repo, path, atSha, onExit }: StoryPlayerPr
 
       <footer className="kbc-story__narration" data-kbc-story-narration>
         {commit.isLoading ? (
-          <div className="kbc-reader__hint">Loading commit…</div>
+          <StateCard size="inline" kind="loading" title="Loading commit…" />
         ) : commit.data ? (
           <>
             <div className="kbc-story__narration-head">

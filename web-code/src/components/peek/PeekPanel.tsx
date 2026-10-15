@@ -17,6 +17,7 @@ import { buildSym, langIdForPath, symbolPermalinkFor } from "../../lib/codeUrl";
 import { useCommands } from "../../commands/CommandRoot";
 import { copyToClipboard } from "../../editor/vimReader";
 import { toast } from "../../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// Fixed panel width used to keep the cursor-anchored placement on-screen
 /// (`computeStyle` below) — matches the CSS `width` on `.kbc-peek`.
@@ -573,7 +574,7 @@ export default function PeekPanel({
         </>
       ) : (
         <div className="kbc-peek__body" role="listbox" aria-label={`${MODE_LABEL[state.mode]} results`}>
-          {state.loading && <div className="kbc-peek__hint kbc-peek__loading">Loading…</div>}
+          {state.loading && <StateCard size="inline" kind="loading" title="Loading…" />}
           {!state.loading && state.error && <div className="kbc-peek__hint kbc-peek__error">{state.error}</div>}
           {!state.loading && !state.error && state.rows.length === 0 && (
             <EmptyState

@@ -13,6 +13,7 @@ import {
 } from "../../lib/suggestions";
 import { toast } from "../../lib/toast";
 import UnifiedHunks from "./UnifiedHunks";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface SuggestionEditorProps {
   repo: string;
@@ -101,7 +102,7 @@ export default function SuggestionEditor({
 
   return (
     <div className="kbc-suggestion" data-kbc-suggestion-editor={thread.id}>
-      {loading && <p className="kbc-suggestion__hint">Loading anchored lines…</p>}
+      {loading && <StateCard size="inline" kind="loading" title="Loading anchored lines…" />}
       {loadErr && (
         <p className="kbc-suggestion__hint kbc-suggestion__hint--err">
           Couldn&apos;t load the tip blob to seed the editor.

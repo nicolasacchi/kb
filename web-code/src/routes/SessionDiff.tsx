@@ -7,6 +7,7 @@ import { formatUnixMillis } from "../lib/format";
 import { readerUrl } from "../lib/breadcrumbs";
 import { commitUrl } from "../lib/codeUrl";
 import { commitFileStat, commitShortSha, totalsSummary } from "../lib/sessionDiff";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/provenance.css";
 import "../styles/sets.css";
 
@@ -24,7 +25,7 @@ export default function SessionDiff() {
   const { data, isLoading, isError, error } = useSessionDiff(sid, repo);
 
   if (isLoading) {
-    return <div className="kbc-sessiondiff kbc-sessiondiff--loading">Loading session diff…</div>;
+    return <StateCard size="inline" kind="loading" title="Loading session diff…" />;
   }
   if (isError) {
     return (

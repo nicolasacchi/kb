@@ -3,6 +3,7 @@ import type { RailsOrphansOut } from "../../api/types";
 import TrustBadge from "../TrustBadge";
 import { codeUrl } from "../../lib/codeUrl";
 import { honestyLine, laneCaption } from "../../lib/railsCards";
+import { StateCard } from "@kb/ui/StateCard";
 
 // V72-I2 — the orphan report, rendered as a TRIAGE QUEUE.
 //
@@ -26,7 +27,7 @@ export default function RailsOrphans({ repo, report, error, loading }: RailsOrph
     <section className="kbc-rails__section kbc-rails__orphans" data-kbc-rails-orphans>
       <h2 className="kbc-rails__section-title">Orphan report</h2>
 
-      {loading && <p className="kbc-rails__muted">Loading…</p>}
+      {loading && <StateCard size="inline" kind="loading" title="Loading…" />}
       {error && (
         <p className="kbc-rails__error" data-kbc-rails-error>
           {error.message}

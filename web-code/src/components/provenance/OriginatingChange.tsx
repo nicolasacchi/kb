@@ -8,6 +8,7 @@ import { commitUrl } from "../../lib/codeUrl";
 import { parseUnifiedDiff } from "../../lib/diff";
 import { shortSha } from "../../lib/format";
 import { sliceHunksForLine, slicedAsParsed } from "../../lib/hunkSlice";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface OriginatingChangeProps {
   repo: string;
@@ -89,8 +90,8 @@ export default function OriginatingChange({
         </Link>
       </div>
       {diff.isLoading ? (
-        <div className="kbc-why__timeline-loading" data-kbc-why-origin-loading>
-          Loading diff…
+        <div data-kbc-why-origin-loading>
+          <StateCard size="inline" kind="loading" title="Loading diff…" />
         </div>
       ) : diff.isError ? (
         <p className="kbc-why__absence" data-kbc-why-origin-error>

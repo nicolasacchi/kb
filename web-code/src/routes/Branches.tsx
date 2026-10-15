@@ -15,6 +15,7 @@ import "../styles/branches.css";
 import "../styles/history.css";
 import "../styles/landing.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// `/r/:repo/~branches`.
 ///
@@ -59,7 +60,7 @@ export default function Branches() {
       {body}
     </div>
   );
-  if (branches.isLoading) return withTabs(<div className="kbc-reader__hint">Loading branches…</div>);
+  if (branches.isLoading) return withTabs(<StateCard kind="loading" title="Loading branches…" />);
   if (branches.error) {
     return withTabs(
       <div className="kbc-reader__hint kbc-reader__hint--error">{(branches.error as Error).message}</div>,

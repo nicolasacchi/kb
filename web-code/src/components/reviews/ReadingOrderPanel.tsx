@@ -3,6 +3,7 @@ import type { ReviewReadingOrderOut } from "../../api/types";
 import EmptyState from "../EmptyState";
 import { Icon } from "../iconSet";
 import { reviewDiffHref } from "./ReviewHeader";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface ReadingOrderPanelProps {
   repo: string;
@@ -25,7 +26,7 @@ export default function ReadingOrderPanel({
   setTourIdx,
   onOpenFile,
 }: ReadingOrderPanelProps) {
-  if (loading) return <div className="kbc-reader__hint">Loading reading order…</div>;
+  if (loading) return <StateCard size="inline" kind="loading" title="Loading reading order…" />;
   if (error) return <div className="kbc-reader__hint kbc-reader__hint--error">{error.message}</div>;
   if (data === null) {
     return (

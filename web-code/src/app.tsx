@@ -38,6 +38,7 @@ import { useLearnMode } from "./commands/learn";
 import { deepLinkDisposition } from "./commands/commandRows";
 import KeyboardHelp from "./components/KeyboardHelp";
 import { toast } from "./lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 
 // F3a — every route chunk is now lazy (was a plain static import), each
 // wrapped by the ErrorBoundary below so a render throw in ANY of them keeps
@@ -155,7 +156,7 @@ function ReaderRoute() {
 }
 
 function RouteFallback() {
-  return <div className="kbc-reader__hint">Loading…</div>;
+  return <StateCard kind="loading" title="Loading…" />;
 }
 
 /// Root route table + the Omnibox overlay's open state (W4.3) - mounted

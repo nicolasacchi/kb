@@ -9,6 +9,7 @@ import RailsSection from "../components/rails/RailsSection";
 import { useRailsHome, useRailsOrphans } from "../hooks/useRails";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { honestyLine, orphanIndex, passportFacts, sectionHeads } from "../lib/railsCards";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// V72-I2 — `/r/:repo/~rails`: the `rails/1` dashboard.
 ///
@@ -117,7 +118,7 @@ export default function Rails() {
     <div className="kbc-rails" id="main" data-kbc-rails data-kbc-rails-detected={String(home.data?.detected ?? "")}>
       {head}
 
-      {home.isLoading && <p className="kbc-rails__muted">Loading…</p>}
+      {home.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
 
       {home.data && (
         <section className="kbc-rails__passport" data-kbc-rails-passport>

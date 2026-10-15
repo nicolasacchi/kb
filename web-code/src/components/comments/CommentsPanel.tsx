@@ -11,6 +11,7 @@ import {
 import type { CommentOut } from "../../api/types";
 import { toast } from "../../lib/toast";
 import SafeMarkdown from "../SafeMarkdown";
+import { StateCard } from "@kb/ui/StateCard";
 import "../../styles/comments.css";
 
 export interface CommentsPanelProps {
@@ -178,7 +179,7 @@ export default function CommentsPanel({ repo, path, activeLine, onGotoLine }: Co
     }
   }
 
-  if (file.isLoading) return <div className="kbc-inspector__hint">Loading…</div>;
+  if (file.isLoading) return <StateCard size="inline" kind="loading" title="Loading…" />;
   if (file.error) {
     return <div className="kbc-inspector__hint">{(file.error as Error).message}</div>;
   }

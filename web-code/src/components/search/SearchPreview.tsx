@@ -21,6 +21,7 @@ import CodeView, { type GotoSel } from "../CodeView";
 import EmptyState from "../EmptyState";
 import { Icon } from "../iconSet";
 import { useFile } from "../../hooks/useFile";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface SearchPreviewProps {
   repo: string | null;
@@ -58,7 +59,7 @@ export default function SearchPreview({ repo, path, line }: SearchPreviewProps) 
             variant="rail"
           />
         ) : file.isLoading ? (
-          <p className="kbc-reader__hint">Loading…</p>
+          <StateCard size="inline" kind="loading" title="Loading…" />
         ) : file.error ? (
           <p className="kbc-reader__hint kbc-reader__hint--error">{(file.error as Error).message}</p>
         ) : !file.data ? null : file.data.encoding !== "utf8" ? (

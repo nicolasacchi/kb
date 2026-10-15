@@ -5,6 +5,7 @@ import LayeredDag from "../graph/LayeredDag";
 import { Icon } from "../iconSet";
 import { layoutLayeredDag } from "../../lib/egoGraph";
 import { pathBasename } from "../../lib/stacksFormat";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface ReviewMapPanelProps {
   repo: string;
@@ -43,7 +44,7 @@ export default function ReviewMapPanel({
     });
   }, [data]);
 
-  if (loading) return <div className="kbc-reader__hint">Loading map…</div>;
+  if (loading) return <StateCard size="inline" kind="loading" title="Loading map…" />;
   if (error) return <div className="kbc-reader__hint kbc-reader__hint--error">{error.message}</div>;
   if (data === null) {
     return (

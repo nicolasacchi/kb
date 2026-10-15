@@ -15,6 +15,7 @@ import {
 import { formatUnixSeconds } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { useConfirm } from "../ConfirmProvider";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface WorkspaceNotesPanelProps {
   repo: string;
@@ -109,7 +110,7 @@ export default function WorkspaceNotesPanel({
   }
 
   if (isLoading) {
-    return <div className="kbc-ws-notes__empty">Loading notes…</div>;
+    return <StateCard size="inline" kind="loading" title="Loading notes…" />;
   }
 
   const groups = groupWorkspaceNotes(data?.annotations ?? []);
