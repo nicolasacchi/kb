@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { buildRegionRoutes } from "./regions-routes";
+import { expect, test, type APIRequestContext } from "@playwright/test";
+import { buildRegionRoutes, type RegionRoutesResult } from "./regions-routes";
 import { REPO_DIR } from "./helpers";
 
 /// V70-A0 — the visual regression PASS for kb-code v7's Track A (the Desk
@@ -25,44 +25,56 @@ import { REPO_DIR } from "./helpers";
 
 const VIEWPORT = { width: 1280, height: 720 };
 
+// OL-P1 — fixtures live in beforeAll/afterAll on a dedicated request context,
+// for the reason `regions.spec.ts` records (a timed-out walk must not leak
+// "regions e2e set" into `sets.spec.ts`).
+let api: APIRequestContext | undefined;
+let fixture: RegionRoutesResult | undefined;
+
+test.beforeAll(async ({ playwright }) => {
+  if (process.env.KBC_VISUAL !== "1" || !REPO_DIR) return;
+  api = await playwright.request.newContext();
+  fixture = await buildRegionRoutes(api);
+});
+
+test.afterAll(async () => {
+  await fixture?.cleanup();
+  await api?.dispose();
+});
+
 test.describe("visual baselines (V70-A0, opt-in via KBC_VISUAL=1)", () => {
   test.use({ viewport: VIEWPORT });
 
-  test("every reachable client route matches its committed screenshot", async ({ page, request }) => {
+  test("every reachable client route matches its committed screenshot", async ({ page }) => {
+    test.setTimeout(180_000);
     test.skip(process.env.KBC_VISUAL !== "1", "opt-in — set KBC_VISUAL=1 to run the visual pass");
-    test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
+    test.skip(!REPO_DIR || !fixture, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
 
-    const { routes, cleanup } = await buildRegionRoutes(request);
+    const { routes } = fixture!;
     const skipped: string[] = [];
     let taken = 0;
 
-    try {
-      for (const route of routes) {
-        if (route.skip) {
-          skipped.push(`${route.name}: ${route.skip}`);
-          continue;
-        }
-        await test.step(route.name, async () => {
-          await page.goto(route.url);
-          // Same settle signal `regions.spec.ts` uses — the one element
-          // every route renders (the global TopBar), so a route that's
-          // still loading its OWN content doesn't get screenshotted mid-
-          // skeleton. Full-page capture still includes below-the-fold
-          // content once it's painted; `toHaveScreenshot` itself polls
-          // until the render is stable.
-          await expect(page.locator('[data-region="topbar"]')).toBeVisible();
-          await expect(page).toHaveScreenshot(`${route.name}.png`, {
-            fullPage: true,
-            animations: "disabled",
-            maxDiffPixelRatio: 0.02,
-          });
-          taken++;
-        });
+    for (const route of routes) {
+      if (route.skip) {
+        skipped.push(`${route.name}: ${route.skip}`);
+        continue;
       }
-    } finally {
-      // See `regions-routes.ts`'s header doc — this daemon is shared with
-      // the rest of the suite when run without a `--grep`/project filter.
-      await cleanup();
+      await test.step(route.name, async () => {
+        await page.goto(route.url);
+        // Same settle signal `regions.spec.ts` uses — the one element
+        // every route renders (the global TopBar), so a route that's
+        // still loading its OWN content doesn't get screenshotted mid-
+        // skeleton. Full-page capture still includes below-the-fold
+        // content once it's painted; `toHaveScreenshot` itself polls
+        // until the render is stable.
+        await expect(page.locator('[data-region="topbar"]')).toBeVisible();
+        await expect(page).toHaveScreenshot(`${route.name}.png`, {
+          fullPage: true,
+          animations: "disabled",
+          maxDiffPixelRatio: 0.02,
+        });
+        taken++;
+      });
     }
 
     console.log(

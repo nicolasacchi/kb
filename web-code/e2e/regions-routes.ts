@@ -66,6 +66,8 @@ export async function buildRegionRoutes(request: APIRequestContext): Promise<Reg
     { name: "home", url: `${BASE}/` },
     { name: "search", url: `${BASE}/search` },
     { name: "inbox", url: `${BASE}/~inbox` },
+    // OL-C8 — repo-less, top-level.
+    { name: "settings", url: `${BASE}/~settings` },
   ];
 
   if (!REPO_DIR) {
@@ -120,6 +122,8 @@ export async function buildRegionRoutes(request: APIRequestContext): Promise<Reg
     },
     { name: "prs", url: `${BASE}/r/${REPO_NAME}/~prs` },
     { name: "sets", url: `${BASE}/r/${REPO_NAME}/~sets` },
+    // OL-C1 — the Collections door's page.
+    { name: "collections", url: `${BASE}/r/${REPO_NAME}/~collections` },
     // V70-A10 ("Workspaces v0") — the list page IS the only workspace
     // surface (`lib/setsUrl.ts`'s `workspacesUrl` doc: "unlike `~sets`,
     // there is no separate detail route"), so unlike `set-detail` below this

@@ -27,8 +27,12 @@ test.describe("reading sets", () => {
     await page.locator("[data-kbc-sets-create-desc]").fill("how a request flows in");
     await page.locator("[data-kbc-sets-create-submit]").click();
 
-    await expect(page.locator("[data-kbc-sets-row-link]")).toBeVisible();
-    await page.locator("[data-kbc-sets-row-link]").click();
+    // Scoped to the set THIS test created: a fixture leaked by another spec
+    // (regions/visual's "regions e2e set") must not make this strict-mode
+    // locator ambiguous.
+    const mine = page.locator("[data-kbc-sets-row-link]", { hasText: "the ingest path" });
+    await expect(mine).toBeVisible();
+    await mine.click();
     await expect(page).toHaveURL(/~sets\/set_/);
 
     // --- add two spans via the "Add span" form -----------------------------
@@ -78,7 +82,7 @@ test.describe("reading sets", () => {
     await page.locator("[data-kbc-set-delete]").click();
     await page.locator(".confirm__go").click();
     await expect(page).toHaveURL(/~sets$/);
-    await expect(page.locator("[data-kbc-sets-list]")).toHaveCount(0);
+    await expect(page.locator("[data-kbc-sets-row-link]", { hasText: "the ingest path" })).toHaveCount(0);
   });
 
   // From-session materialization needs a real transcript-backed session —
