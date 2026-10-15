@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { ReviewSummaryPr } from "../api/types";
 import { ApiError, postPrFetch } from "../api/client";
@@ -98,20 +98,32 @@ export default function Prs() {
     }
   }
 
-  if (prs.isLoading) return <div className="kbc-reader__hint">Loading pull requests…</div>;
+  // The Review sub-nav rides every state of the page, not only the loaded
+  // one — an error or "not a GitHub origin" view must not strand the reader
+  // without the other tabs.
+  const withTabs = (body: ReactNode) => (
+    <div className="kbc-prs">
+      <ReviewTabs />
+      {body}
+    </div>
+  );
+
+  if (prs.isLoading) return withTabs(<div className="kbc-reader__hint">Loading pull requests…</div>);
 
   if (prs.error) {
     if (prs.error instanceof ApiError && prs.error.status === 400) {
-      return (
+      return withTabs(
         <EmptyState
           icon={<Icon.Branch />}
           title="Not a GitHub origin"
           hint={`${repo}'s origin isn't a github.com remote (or has none configured) — the PR overlay only works against a GitHub-hosted repo.`}
           variant="view"
-        />
+        />,
       );
     }
-    return <div className="kbc-reader__hint kbc-reader__hint--error">{(prs.error as Error).message}</div>;
+    return withTabs(
+      <div className="kbc-reader__hint kbc-reader__hint--error">{(prs.error as Error).message}</div>,
+    );
   }
 
   const data = prs.data;
