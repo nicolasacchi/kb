@@ -151,12 +151,13 @@
 }
 
 /* OL-C11 — the pane header row: [← →] filename … toolbar. OL-P1: the
- * filename keeps at least 12ch and does not shrink (ellipsis only past 40ch,
- * a pathological basename); the toolbar wraps below instead. The full path
- * lives in the top-bar breadcrumb. */
+ * filename takes its natural width and does not shrink (ellipsis only past
+ * 40ch, a pathological basename); the toolbar gives way (tighter gaps in
+ * reader.css, then wrapping below). The full path lives in the top-bar
+ * breadcrumb. */
 .kbc-panechrome__file {
   flex: 0 0 auto;
-  min-width: 12ch;
+  min-width: 0;
   max-width: 40ch;
   overflow: hidden;
   text-overflow: ellipsis;
