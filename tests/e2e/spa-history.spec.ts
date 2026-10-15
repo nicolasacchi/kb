@@ -10,9 +10,14 @@ test.describe("gallery history view", () => {
     return `http://127.0.0.1:${PORT}`;
   }
 
-  test("history view toggle is visible alongside grid/list/atlas", async ({ page }) => {
-    await page.goto(`${base()}/`);
-    await expect(page.getByRole("tab", { name: "History" })).toBeVisible();
+  test("history view is a Library view: the Library door stays lit on ?view=history", async ({
+    page,
+  }) => {
+    await page.goto(`${base()}/?view=history`);
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   test("opening an artifact then visiting history shows an open row", async ({
@@ -29,9 +34,9 @@ test.describe("gallery history view", () => {
 
     // Switch to history view.
     await page.goto(`${base()}/?view=history`);
-    await expect(page.getByRole("tab", { name: "History" })).toHaveAttribute(
-      "aria-selected",
-      "true",
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
 
     // The artifact title shows up as an open row.

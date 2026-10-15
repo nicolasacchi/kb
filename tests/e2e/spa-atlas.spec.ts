@@ -46,9 +46,9 @@ test.describe("atlas v0.3", () => {
     page,
   }) => {
     await page.goto(`http://127.0.0.1:${PORT}/?view=atlas`);
-    await expect(page.getByRole("tab", { name: "atlas" })).toHaveAttribute(
-      "aria-selected",
-      "true",
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
     const canvas = page.locator(".atlas__canvas");
     await expect(canvas).toBeVisible();
@@ -171,10 +171,10 @@ test.describe("map-home shell (W3.M-d)", () => {
     page,
   }) => {
     await page.goto(`http://127.0.0.1:${PORT}/`);
-    // The grid tab is the selected view…
-    await expect(page.getByRole("tab", { name: "grid" })).toHaveAttribute(
-      "aria-selected",
-      "true",
+    // The Library door is lit (the grid is its default view)…
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
     // …the shell is nowhere on the page…
     await expect(page.locator(".map-shell")).toHaveCount(0);
@@ -186,12 +186,20 @@ test.describe("map-home shell (W3.M-d)", () => {
     page,
   }) => {
     // A prominent placement would manufacture the very evidence the census
-    // is supposed to measure, so the view tabs must NOT grow a map tab and
-    // the existing ones must keep their labels.
+    // is supposed to measure, so the primary nav must NOT grow a map door:
+    // it stays exactly the five labelled doors.
     await page.goto(`http://127.0.0.1:${PORT}/`);
-    await expect(page.getByRole("tab", { name: "grid" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "atlas" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: /^map/i })).toHaveCount(0);
+    const doors = page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("link");
+    await expect(doors).toHaveText([
+      "Library",
+      "Search",
+      "Memory",
+      "Worklog",
+      "Lists",
+    ]);
+    await expect(page.getByRole("link", { name: /^map/i })).toHaveCount(0);
   });
 
   test("?shell=map renders the full-bleed map beside its projection panel", async ({

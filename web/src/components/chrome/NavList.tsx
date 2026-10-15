@@ -1,4 +1,4 @@
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Icon } from "@kb/ui/icons";
 import { NAV_ITEMS, withKb } from "../../lib/navItems";
 import { useExplicitKb } from "../../hooks/useActiveKb";
@@ -8,7 +8,7 @@ import { useSlatesAttention } from "../../hooks/useSlates";
 import { cycleTheme } from "../../api/prefs";
 
 // Destination list shown inside the mobile hamburger drawer. Reuses the
-// shared NAV_ITEMS so it never drifts from the desktop header's view strip,
+// shared NAV_ITEMS so it never drifts from the desktop header's doors,
 // and folds in the chrome actions the compact mobile header drops (Settings
 // + theme toggle, plus — W3 — the Inbox/Anchors pills the ≤860px header
 // hides: at 390px the two pills overflow the fixed-height no-wrap command
@@ -19,7 +19,6 @@ import { cycleTheme } from "../../api/prefs";
 // onNavigate after any pick so the drawer closes.
 export default function NavList({ onNavigate }: { onNavigate: () => void }) {
   const loc = useLocation();
-  const [params] = useSearchParams();
   const kb = useExplicitKb();
   const onSettings = loc.pathname === "/settings";
   const onInbox = loc.pathname === "/inbox";
@@ -39,11 +38,11 @@ export default function NavList({ onNavigate }: { onNavigate: () => void }) {
     <nav className="kb-navlist" aria-label="views">
       <div className="kb-navlist__sect">Navigate</div>
       {NAV_ITEMS.map((item) => {
-        const active = item.isActive(loc, params);
+        const active = item.isActive(loc.pathname);
         return (
           <Link
             key={item.id}
-            to={item.href({ params, kb })}
+            to={item.href({ kb })}
             className={`kb-navlist__row ${active ? "is-active" : ""}`}
             aria-current={active ? "page" : undefined}
             onClick={onNavigate}
@@ -52,7 +51,7 @@ export default function NavList({ onNavigate }: { onNavigate: () => void }) {
               <item.Glyph />
             </span>
             <span className="kb-navlist__label">{item.label}</span>
-            {item.id === "slates" && slateAttention > 0 && (
+            {item.id === "worklog" && slateAttention > 0 && (
               <span className="kb-navlist__badge kb-navlist__badge--slate">
                 {slateAttention}
               </span>

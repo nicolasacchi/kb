@@ -199,8 +199,8 @@
    * chip, capture, saved queries, theme, settings, daemon status) and shows its
    * menu button at <=860px; the compact bar keeps menu + workspace + search.
    * The anchor/inbox pills fold into the sheet's NavList as badge rows (W3).
-   * Only the switcher's view strip needs hiding here. */
-  .kb-head .kb-viewtoggle {
+   * Only the switcher's doors need hiding here (the sheet lists them). */
+  .kb-head .kb-doors {
     display: none;
   }
 

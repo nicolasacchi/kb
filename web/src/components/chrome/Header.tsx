@@ -18,7 +18,7 @@ import { Spine } from "@kb/ui/Spine";
 
 // kb2 redesign — Band-1 command bar, recomposed on the shared Spine (OL-L1).
 //
-// switcher = workspace pill + view-toggle strip · scope = empty (L7) ·
+// switcher = workspace pill + the five doors (OL-L2) · scope = empty (L7) ·
 // search = the launcher · right = identity/pills/capture/saved/keys/theme/
 // settings/daemon status. The old footer StatusBar lives in `DaemonStatus`.
 //
@@ -42,7 +42,7 @@ export default function Header({
   warnings?: string[];
 }) {
   const loc = useLocation();
-  const { params, set, navigate } = useUrl();
+  const { set, navigate } = useUrl();
 
   const { data: kbs = [] } = useKbs();
   // Resolved kb drives the workspace pill (never blank once kbs load); the
@@ -78,25 +78,23 @@ export default function Header({
                 else set("kb", name);
               }}
             />
-            {/* L2 relabels this strip; until then it keeps its icon form. */}
-            <div className="kb-viewtoggle" role="tablist" aria-label="view mode">
+            <nav className="kb-doors" aria-label="Primary">
               {NAV_ITEMS.map((item) => {
-                const active = item.isActive(loc, params);
+                const active = item.isActive(loc.pathname);
                 return (
                   <Link
                     key={item.id}
-                    to={item.href({ params, kb: explicitKb })}
-                    role="tab"
-                    aria-selected={active}
-                    className={active ? "on" : ""}
-                    title={item.label}
+                    to={item.href({ kb: explicitKb })}
+                    className={"kb-door" + (active ? " is-active" : "")}
+                    aria-current={active ? "page" : undefined}
                     data-testid={item.testid}
                   >
                     <item.Glyph />
+                    <span className="kb-door__label">{item.label}</span>
                   </Link>
                 );
               })}
-            </div>
+            </nav>
           </>
         }
         search={

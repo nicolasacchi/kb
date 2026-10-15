@@ -82,7 +82,7 @@ test.describe("/sessions view", () => {
     // 4. Header tab is highlighted on this route.
     await expect(
       page.locator('[data-testid="header-sessions-tab"]'),
-    ).toHaveAttribute("aria-selected", "true");
+    ).toHaveAttribute("aria-current", "page");
 
     // 5. Click the row → inspector populates the right rail.
     await row.locator(".kb-ses__row-btn").click();

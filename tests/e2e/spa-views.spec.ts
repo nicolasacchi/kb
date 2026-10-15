@@ -8,10 +8,7 @@ test.describe("gallery views", () => {
 
   test("Grid renders cards for each canon artifact", async ({ page }) => {
     await page.goto(`http://127.0.0.1:${port()}/`);
-    await expect(page.getByRole("tab", { name: "grid" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute("aria-current", "page");
     // 4 root canon files plus pages from multi-page expansion → ≥ 4.
     // Wait for the async docs fetch to paint at least one card before
     // counting — `.count()` is a non-waiting snapshot.
@@ -26,13 +23,7 @@ test.describe("gallery views", () => {
 
   test("List view renders rows", async ({ page }) => {
     await page.goto(`http://127.0.0.1:${port()}/?view=list`);
-    await expect(
-      // exact — the RL-track "Lists" tab is a substring match otherwise
-      page.getByRole("tab", { name: "List", exact: true }),
-    ).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute("aria-current", "page");
     const rows = page.getByRole("link", { name: /^Open / });
     await expect(rows.first()).toBeVisible();
     const count = await rows.count();
@@ -47,10 +38,7 @@ test.describe("gallery views", () => {
     // instead of a DOM `<circle>` enumeration. Detailed canvas
     // semantics live in spa-atlas.spec.ts.
     await page.goto(`http://127.0.0.1:${port()}/?view=atlas`);
-    await expect(page.getByRole("tab", { name: "atlas" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute("aria-current", "page");
     const canvas = page.locator(".atlas__canvas");
     await expect(canvas).toBeVisible();
     const count = await canvas.getAttribute("data-atlas-count");

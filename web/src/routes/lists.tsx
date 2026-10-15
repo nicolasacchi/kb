@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ListsTabs } from "../components/nav/SectionTabs";
 import { useQuery } from "@tanstack/react-query";
 import { fetchKbs, type ListSummary } from "../api/client";
 import { useLists } from "../hooks/useLists";
@@ -124,6 +125,7 @@ export default function ListsRoute() {
 
   return (
     <div className="kb-lists" data-testid="lists-view">
+      <ListsTabs />
       <header className="kb-lists__head">
         <h1 className="kb-lists__title">Reading lists</h1>
         <NewListForm

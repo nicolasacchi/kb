@@ -357,36 +357,67 @@
   background: transparent;
 }
 
-/* view toggle (5-strip: grid/list/atlas/memory/history) */
-.kb-viewtoggle {
+/* OL-L2 — the five doors in the Spine's switcher slot: icon + label, the
+ * active door marked by an inset underline so the bar's height never shifts. */
+.kb-doors {
   display: flex;
+  align-items: stretch;
   gap: 2px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-md);
-  padding: 2px;
-  background: var(--bg-panel);
+  align-self: stretch;
 }
-.kb-viewtoggle button,
-.kb-viewtoggle a {
-  width: 30px;
-  height: 26px;
-  border-radius: 6px;
-  background: transparent;
+.kb-door {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
   color: var(--ink-mute);
-  border: 0;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
   text-decoration: none;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  border-radius: var(--radius-md);
 }
-.kb-viewtoggle button:hover,
-.kb-viewtoggle a:hover {
+.kb-door:hover {
   color: var(--ink);
 }
-.kb-viewtoggle button.on,
-.kb-viewtoggle a.on {
-  background: var(--rule);
+.kb-door.is-active,
+.kb-door[aria-current="page"] {
   color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.kb-door:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* OL-L2 — the labelled sub-nav row at the top of a door's family pages. */
+.kb-sectiontabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--pad-1);
+  margin-bottom: var(--pad-3);
+  border-bottom: 1px solid var(--rule);
+}
+.kb-sectiontabs__tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--pad-3);
+  color: var(--ink-mute);
+  text-decoration: none;
+  font-size: var(--fs-md);
+  white-space: nowrap;
+}
+.kb-sectiontabs__tab:hover {
+  color: var(--ink);
+}
+.kb-sectiontabs__tab.is-active,
+.kb-sectiontabs__tab[aria-current="page"] {
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.kb-sectiontabs__tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* v0.12 Q4 — saved-queries popover anchored to the bookmark button. */
