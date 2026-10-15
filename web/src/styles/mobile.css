@@ -1105,24 +1105,6 @@ body.kb-immersive .kb-tabbar {
   .cfg__input {
     font-size: var(--fs-lg);
   }
-
-  /* Operator-dashboard tab strip has 10 tabs; on a phone they overflow the
-   * viewport and the scrollbar is intentionally hidden — leaving no hint that
-   * Shares / Live / Admin / Config / Preferences exist off-screen. Fade the
-   * right edge so the cut-off tab reads as "swipe for more", and snap so the
-   * swipe lands cleanly on a tab boundary. */
-  .settings__tabs {
-    -webkit-mask-image: linear-gradient(
-      to right,
-      #000 calc(100% - 28px),
-      transparent
-    );
-    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
-    scroll-snap-type: x proximity;
-  }
-  .settings__tab {
-    scroll-snap-align: start;
-  }
 }
 
 /* SH.B2 — iOS Safari auto-zooms the whole viewport when a focused input's

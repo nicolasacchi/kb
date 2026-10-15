@@ -4,6 +4,9 @@ export type TabSpec = {
   id: string;
   label: string;
   badge?: ReactNode;
+  /** Heading the tab is listed under. Consecutive tabs sharing a group form
+   * one labelled section; an ungrouped list renders flat. */
+  group?: string;
   body: () => ReactNode;
 };
 
@@ -68,50 +71,100 @@ export default function Tabs({
 
   const body = tabs.find((t) => t.id === active)?.body;
 
+  const move = (id: string | undefined) => {
+    if (!id) return;
+    setActive(id);
+    document.getElementById(`settings-tab-${id}`)?.focus();
+  };
+
+  // Group headings are presentational (`role=presentation`) so the tablist
+  // still owns only `tab` children; consecutive same-group tabs share one.
+  const items: ReactNode[] = [];
+  let lastGroup: string | undefined;
+  for (const t of tabs) {
+    if (t.group && t.group !== lastGroup) {
+      items.push(
+        <div key={`g:${t.group}`} role="presentation" className="settings__group">
+          {t.group}
+        </div>,
+      );
+    }
+    lastGroup = t.group;
+    items.push(
+      <button
+        key={t.id}
+        role="tab"
+        id={`settings-tab-${t.id}`}
+        aria-selected={t.id === active}
+        aria-controls={`settings-panel-${t.id}`}
+        tabIndex={t.id === active ? 0 : -1}
+        className={`settings__tab ${t.id === active ? "is-active" : ""}`}
+        onClick={() => setActive(t.id)}
+        onKeyDown={(e) => {
+          const i = tabs.findIndex((x) => x.id === active);
+          if (
+            e.key === "ArrowRight" ||
+            e.key === "ArrowLeft" ||
+            e.key === "ArrowDown" ||
+            e.key === "ArrowUp"
+          ) {
+            e.preventDefault();
+            const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+            move(tabs[(i + dir + tabs.length) % tabs.length]?.id);
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            move(tabs[0]?.id);
+          } else if (e.key === "End") {
+            e.preventDefault();
+            move(tabs[tabs.length - 1]?.id);
+          }
+        }}
+      >
+        <span>{t.label}</span>
+        {t.badge != null && <span className="settings__tab-badge">{t.badge}</span>}
+      </button>,
+    );
+  }
+
+  // Both the vertical tablist and the phone <select> are always in the DOM;
+  // CSS (≤860px, the mobile-shell breakpoint) shows exactly one.
+  const groups: { label: string | undefined; tabs: TabSpec[] }[] = [];
+  for (const t of tabs) {
+    const g = groups[groups.length - 1];
+    if (g && g.label === t.group) g.tabs.push(t);
+    else groups.push({ label: t.group, tabs: [t] });
+  }
+  const option = (t: TabSpec) => (
+    <option key={t.id} value={t.id}>
+      {t.label}
+    </option>
+  );
+
   return (
-    <>
-      <div className="settings__tabs" role="tablist" aria-label={label}>
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            id={`settings-tab-${t.id}`}
-            aria-selected={t.id === active}
-            aria-controls={`settings-panel-${t.id}`}
-            tabIndex={t.id === active ? 0 : -1}
-            className={`settings__tab ${t.id === active ? "is-active" : ""}`}
-            onClick={() => setActive(t.id)}
-            onKeyDown={(e) => {
-              const i = tabs.findIndex((x) => x.id === active);
-              if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-                e.preventDefault();
-                const dir = e.key === "ArrowRight" ? 1 : -1;
-                const next = tabs[(i + dir + tabs.length) % tabs.length];
-                if (next) {
-                  setActive(next.id);
-                  document.getElementById(`settings-tab-${next.id}`)?.focus();
-                }
-              } else if (e.key === "Home") {
-                e.preventDefault();
-                const first = tabs[0];
-                if (first) {
-                  setActive(first.id);
-                  document.getElementById(`settings-tab-${first.id}`)?.focus();
-                }
-              } else if (e.key === "End") {
-                e.preventDefault();
-                const last = tabs[tabs.length - 1];
-                if (last) {
-                  setActive(last.id);
-                  document.getElementById(`settings-tab-${last.id}`)?.focus();
-                }
-              }
-            }}
-          >
-            <span>{t.label}</span>
-            {t.badge != null && <span className="settings__tab-badge">{t.badge}</span>}
-          </button>
-        ))}
+    <div className="settings__layout">
+      <select
+        className="settings__select"
+        aria-label={label}
+        value={active}
+        onChange={(e) => setActive(e.target.value)}
+      >
+        {groups.map((g) =>
+          g.label ? (
+            <optgroup key={g.label} label={g.label}>
+              {g.tabs.map(option)}
+            </optgroup>
+          ) : (
+            g.tabs.map(option)
+          ),
+        )}
+      </select>
+      <div
+        className="settings__tabs"
+        role="tablist"
+        aria-orientation="vertical"
+        aria-label={label}
+      >
+        {items}
       </div>
       <div
         role="tabpanel"
@@ -121,6 +174,6 @@ export default function Tabs({
       >
         {body ? body() : null}
       </div>
-    </>
+    </div>
   );
 }

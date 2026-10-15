@@ -2257,15 +2257,9 @@ select:focus-visible,
 .settings__header {
   display: flex;
   flex-direction: column;
-  gap: var(--pad-2);
+  gap: var(--pad-1, 4px);
   padding-bottom: var(--pad-3);
   border-bottom: 1px solid var(--rule);
-}
-.settings__header-main {
-  display: flex;
-  align-items: baseline;
-  gap: var(--pad-2);
-  flex-wrap: wrap;
 }
 .settings__title {
   margin: 0;
@@ -2273,10 +2267,26 @@ select:focus-visible,
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.settings__badges {
+/* One quiet meta line under the title (plain text, dot-separated) in place
+ * of the old chip row. `.settings__badge` stays the class on each part (the
+ * Users tab reuses it as a real chip), so the plain look is scoped here. */
+.settings__meta {
+  margin: 0;
   display: flex;
-  gap: 6px;
   flex-wrap: wrap;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.settings__meta .settings__badge {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.settings__meta-sep {
+  white-space: pre;
 }
 .settings__badge {
   font-family: var(--font-mono);
@@ -2297,41 +2307,56 @@ select:focus-visible,
   font-size: var(--fs-xs);
   color: var(--err);
 }
+.settings__layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--pad-3);
+  align-items: start;
+}
+.settings__select {
+  display: none;
+}
 .settings__tabs {
   display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--rule);
-  overflow-x: auto;
-  /* Hide the scrollbar — the tabs already wrap visually and a
-   * horizontal scrollbar on a tab strip reads as a UX failure. */
-  scrollbar-width: none;
+  flex-direction: column;
+  gap: 1px;
+  position: sticky;
+  top: var(--pad-3);
 }
-.settings__tabs::-webkit-scrollbar {
-  display: none;
+.settings__group {
+  padding: var(--pad-3) 12px 4px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.settings__group:first-child {
+  padding-top: 0;
 }
 .settings__tab {
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
-  padding: 8px 14px;
+  border-left: 2px solid transparent;
+  padding: 6px 12px;
   font-family: var(--font-sans);
   font-size: var(--fs-sm);
   color: var(--ink-mute);
   cursor: pointer;
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
+  text-align: left;
   white-space: nowrap;
-  /* Pull the underline up so the bottom edge of the active tab
-   * sits on the border line of the tab strip. */
-  margin-bottom: -1px;
 }
 .settings__tab:hover {
   color: var(--ink);
 }
 .settings__tab.is-active {
   color: var(--ink);
-  border-bottom-color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--bg-panel);
 }
 .settings__tab:focus-visible {
   outline: 2px solid var(--accent);
@@ -2347,35 +2372,26 @@ select:focus-visible,
   color: var(--ink-mute);
   border: 1px solid var(--rule);
 }
-/* SH.B2 — the ≤860px phone rule for this same overflow (mobile.css's CE
- * block) already fades + snaps the tab strip; the audit found the strip can
- * ALSO overflow at plain desktop widths once the container narrows below
- * ~1100px (13 operator-dashboard tabs, not a phone-only problem). Pure CSS
- * can't detect "is this actually scrollable", so — same call as the ≤860px
- * rule — applied unconditionally across the whole 861-1100px band rather
- * than gated on it; harmless (no-op fade) on a strip that already fits.
- * Left OFF above 1100px on purpose: that's comfortably wide enough for
- * every current tab, and a permanent fade there would be visual noise for
- * no reason. */
-@media (max-width: 1100px) and (min-width: 861px) {
-  .settings__tabs {
-    -webkit-mask-image: linear-gradient(
-      to right,
-      #000 calc(100% - 28px),
-      transparent
-    );
-    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
-    scroll-snap-type: x proximity;
+/* ≤860px (the mobile-shell breakpoint, see hooks/useIsMobile.ts): the
+ * vertical list collapses to a grouped <select> above the panel. */
+@media (max-width: 860px) {
+  .settings__layout {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .settings__tab {
-    scroll-snap-align: start;
+  .settings__tabs {
+    display: none;
+  }
+  .settings__select {
+    display: block;
+    width: 100%;
+    font-size: 16px;
   }
 }
 .settings__panel {
   display: flex;
   flex-direction: column;
   gap: var(--pad-3);
-  padding-top: var(--pad-3);
+  min-width: 0;
 }
 .settings__panel .settings__section {
   /* Form-style sections (Preferences) keep the original 640px feel
