@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { KeyboardHelp as SharedKeyboardHelp } from "@kb/ui/keys/KeyboardHelp";
+import type { KeyRow } from "@kb/ui/keys/types";
 import { Icon } from "./iconSet";
 import { useCommands } from "../commands/CommandRoot";
 import { displayKey } from "../commands/dispatch";
@@ -88,6 +90,23 @@ export function scopeSections(context: KeyboardHelpContext): {
   return { primary: groupCommands(local), global: groupCommands(global) };
 }
 
+/// Pure: map registry rows onto the shared sheet's generic rows for one
+/// preset. A row with no key in the preset keeps `keys: []` (the sheet shows
+/// the em dash); `planned` is every non-shipped lifecycle.
+export function toRows(commands: readonly KbcCommand[], preset: KbcPreset): KeyRow[] {
+  return commands.map((c) => {
+    const key = displayKey(c, preset);
+    return {
+      keys: key ? [key] : [],
+      verb: c.title,
+      scope: c.scope,
+      group: c.group,
+      id: c.id,
+      planned: c.lifecycle !== "shipped",
+    };
+  });
+}
+
 export default function KeyboardHelp({
   open,
   onClose,
@@ -102,117 +121,38 @@ export default function KeyboardHelp({
   const bus = useCommands();
   const [preset, setPreset] = useState<KbcPreset>(() => loadKeyPreset());
 
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    }
-    // Capture phase so this Esc wins over the surface's own handlers while
-    // the overlay is up — `dismiss.help` is dismiss_order 2, the second
-    // innermost thing that can be on screen.
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
-
   // An explicit `context` wins; otherwise follow whatever surface last
   // published its scope, so `?` on a route that never passed a context is
   // still scoped rather than dumping all 181 rows.
   const scope: KeyboardHelpContext = context === "all" ? bus.scope : context;
   const { primary, global } = useMemo(() => scopeSections(scope), [scope]);
+  const rows = useMemo(() => toRows(primary.flatMap((g) => g.rows), preset), [primary, preset]);
+  const globalRows = useMemo(() => toRows(global.flatMap((g) => g.rows), preset), [global, preset]);
   const scopeId = normaliseContext(scope);
   const scopeTitle =
     scopeId === "all" ? "Everywhere" : (KBC_SCOPES.find((s) => s.id === scopeId)?.title ?? scopeId);
 
-  if (!open) return null;
-
-  function renderGroup(g: HelpGroup, emphasize: boolean) {
-    return (
-      <section
-        key={g.title}
-        className={"kbc-kbdhelp__group" + (emphasize ? " kbc-kbdhelp__group--primary" : "")}
-      >
-        <h3>{g.title}</h3>
-        <dl>
-          {g.rows.map((c) => {
-            const key = displayKey(c, preset);
-            return (
-              <div
-                key={c.id}
-                className={"kbc-kbdhelp__row" + (c.lifecycle === "shipped" ? "" : " is-planned")}
-                data-kbc-cmd={c.id}
-              >
-                <dt>{key ? <kbd>{key}</kbd> : <span className="kbc-kbdhelp__nokey">—</span>}</dt>
-                <dd>
-                  {c.title}
-                  {c.lifecycle !== "shipped" && (
-                    <span className="kbc-kbdhelp__planned"> planned</span>
-                  )}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
-      </section>
-    );
-  }
-
   return (
-    <div className="kbc-kbdhelp__scrim" onClick={onClose} data-kbc-kbdhelp>
-      <div
-        className="kbc-kbdhelp"
-        role="dialog"
-        aria-modal="true"
-        aria-label="keyboard shortcuts"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="kbc-kbdhelp__head">
-          <h2>
-            Keyboard <span className="kbc-kbdhelp__scopename">{scopeTitle}</span>
-          </h2>
-          <label className="kbc-kbdhelp__preset">
-            Keys
-            <select
-              value={preset}
-              data-kbc-preset
-              aria-label="key preset"
-              onChange={(e) => {
-                const next = e.target.value as KbcPreset;
-                setPreset(next);
-                saveKeyPreset(next);
-                bus.setPreset(next);
-              }}
-            >
-              {KBC_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className="kbc-kbdhelp__close" onClick={onClose} aria-label="close">
-            <Icon.X />
-          </button>
-        </header>
-        <div className="kbc-kbdhelp__cols">
-          {primary.map((g) => renderGroup(g, global.length > 0))}
-        </div>
-        {global.length > 0 && (
-          <>
-            <div className="kbc-kbdhelp__break" role="separator">
-              <span>Everywhere</span>
-            </div>
-            <div className="kbc-kbdhelp__cols kbc-kbdhelp__cols--rest">
-              {global.map((g) => renderGroup(g, false))}
-            </div>
-          </>
-        )}
-        <footer className="kbc-kbdhelp__foot">
+    <SharedKeyboardHelp
+      open={open}
+      onClose={onClose}
+      rows={rows}
+      globalRows={globalRows}
+      scopeName={scopeTitle}
+      profile={preset}
+      profiles={KBC_PRESETS.map((p) => ({ id: p.id, title: p.title }))}
+      onProfileChange={(id) => {
+        const next = id as KbcPreset;
+        setPreset(next);
+        saveKeyPreset(next);
+        bus.setPreset(next);
+      }}
+      closeIcon={<Icon.X />}
+      footer={
+        <>
           Printable cheatsheet: <code>kb-code commands cheatsheet --scope {scopeId} --md</code>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    />
   );
 }

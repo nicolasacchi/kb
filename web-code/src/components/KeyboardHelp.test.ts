@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { groupCommands, normaliseContext, scopeSections } from "./KeyboardHelp";
+import { groupCommands, normaliseContext, scopeSections, toRows } from "./KeyboardHelp";
+import { displayKey } from "../commands/dispatch";
 import { KBC_ACTIVE_COMMANDS } from "../commands/registry.gen";
 
 // V70-A5 — the sheet's content is no longer a literal in this file, so this
@@ -75,5 +76,28 @@ describe("scopeSections", () => {
     expect(planned).not.toContain("action.panel");
     expect(planned).toContain("hint.jump");
     expect(planned).toContain("scope.edit");
+  });
+});
+
+describe("toRows", () => {
+  it("maps registry rows onto the generic shape for the preset", () => {
+    const cmds = KBC_ACTIVE_COMMANDS.filter((c) => c.scope === "reader");
+    const rows = toRows(cmds, "vim");
+    expect(rows).toHaveLength(cmds.length);
+    rows.forEach((r, i) => {
+      const c = cmds[i];
+      expect(r.id).toBe(c.id);
+      expect(r.verb).toBe(c.title);
+      expect(r.group).toBe(c.group);
+      expect(r.scope).toBe(c.scope);
+      expect(r.planned).toBe(c.lifecycle !== "shipped");
+      expect(r.keys).toEqual(displayKey(c, "vim") ? [displayKey(c, "vim")] : []);
+    });
+  });
+
+  it("gives an unbound row an empty key list, not a vim fallback", () => {
+    const ego = KBC_ACTIVE_COMMANDS.find((c) => c.id === "graph.ego")!;
+    expect(toRows([ego], "plain")[0].keys).toEqual([]);
+    expect(toRows([ego], "vim")[0].keys.length).toBe(1);
   });
 });
