@@ -538,7 +538,15 @@ pub fn extract(html: &str) -> Fields {
     let headings = collect_text_lines(&doc, &p.headings);
     let code = collect_text_blocks(&doc, &p.code_blocks);
     let body = body_text(&doc, &p.body);
-    let body_text_excerpt = body
+    // The excerpt is derived from its OWN walk (`excerpt_text`) that also
+    // skips page chrome; `body` itself (word_count + FTS) is untouched.
+    let excerpt_src = excerpt_text(&doc, &p.body);
+    let excerpt_from: &str = if excerpt_src.is_empty() {
+        &body
+    } else {
+        &excerpt_src
+    };
+    let body_text_excerpt = excerpt_from
         .chars()
         .take(BODY_EXCERPT_MAX_CHARS)
         .collect::<String>();
@@ -1065,6 +1073,77 @@ fn body_text(doc: &Html, body_sel: &Selector) -> String {
             }
             out.push_str(trimmed);
         }
+    }
+    out
+}
+
+/// True when `el` (an ancestor-or-self of a text node) is page chrome that must
+/// not lead a card excerpt: `<nav>`, `[role=navigation]`, a page-level
+/// `<header>` (direct child of `<body>` or inside `[role=banner]`), a skip
+/// link (`a.skip-link`, or `a[href^="#"]` whose text starts with "Skip"), or
+/// anything `aria-hidden="true"`.
+fn is_excerpt_chrome(el: scraper::ElementRef<'_>) -> bool {
+    let v = el.value();
+    if v.attr("aria-hidden") == Some("true") || v.attr("role") == Some("navigation") {
+        return true;
+    }
+    match v.name() {
+        "nav" => true,
+        "header" => {
+            let under_body = el
+                .parent()
+                .and_then(|p| p.value().as_element())
+                .is_some_and(|p| p.name() == "body");
+            under_body
+                || el
+                    .ancestors()
+                    .filter_map(scraper::ElementRef::wrap)
+                    .any(|a| a.value().attr("role") == Some("banner"))
+        }
+        "a" => {
+            v.classes().any(|c| c == "skip-link")
+                || (v.attr("href").is_some_and(|h| h.starts_with('#'))
+                    && el
+                        .text()
+                        .next()
+                        .is_some_and(|t| t.trim_start().starts_with("Skip")))
+        }
+        _ => false,
+    }
+}
+
+/// Visible body text for the card EXCERPT only: [`body_text`]'s walk (same
+/// join, same skipped `script`/`style`/`template`/`noscript`) minus the page
+/// chrome named by [`is_excerpt_chrome`], so an artifact with a skip link and
+/// a nav TOC leads with its first paragraph. A page with no chrome yields
+/// exactly [`body_text`]. `body_text` itself is unchanged (word_count + FTS).
+fn excerpt_text(doc: &Html, body_sel: &Selector) -> String {
+    let Some(body) = doc.select(body_sel).next() else {
+        return String::new();
+    };
+    const SKIP_TAGS: &[&str] = &["script", "style", "template", "noscript"];
+
+    let mut out = String::new();
+    for descendant in body.descendants() {
+        let Some(text) = descendant.value().as_text() else {
+            continue;
+        };
+        if has_skip_ancestor(descendant, SKIP_TAGS)
+            || descendant
+                .ancestors()
+                .filter_map(scraper::ElementRef::wrap)
+                .any(is_excerpt_chrome)
+        {
+            continue;
+        }
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(trimmed);
     }
     out
 }
@@ -1710,6 +1789,56 @@ mod tests {
             "sidecar-text <pre> text missing from fields.code: {}",
             f.code
         );
+    }
+
+    #[test]
+    fn excerpt_skips_skip_link_and_nav_but_body_text_keeps_them() {
+        let html = r##"<html><body>
+            <a class="skip-link" href="#main">Skip to content</a>
+            <header><span>kb · research</span></header>
+            <nav><a href="#a">Topics</a> <a href="#b">Other</a></nav>
+            <main id="main"><h1>Real Title</h1><p>The first paragraph.</p></main>
+        </body></html>"##;
+        let f = extract(html);
+        assert!(
+            f.body_text_excerpt
+                .starts_with("Real Title The first paragraph."),
+            "{}",
+            f.body_text_excerpt
+        );
+        // word_count + FTS body still see the chrome.
+        assert!(f.body.contains("Skip to content"));
+        assert!(f.body.contains("Topics"));
+        assert!(f.word_count > 8);
+    }
+
+    #[test]
+    fn excerpt_skips_role_chrome_aria_hidden_and_href_skip_links() {
+        let html = r##"<body>
+            <a href="#top">Skip to main</a>
+            <div role="banner"><header>Site banner</header></div>
+            <div role="navigation">Menu items</div>
+            <span aria-hidden="true">decor</span>
+            <article><header>Article header stays</header><p>Body text.</p></article>
+        </body>"##;
+        let f = extract(html);
+        assert_eq!(f.body_text_excerpt, "Article header stays Body text.");
+    }
+
+    #[test]
+    fn excerpt_without_chrome_is_identical_to_body_text() {
+        let html = "<html><body><h1>T</h1><p>one two</p><p>three</p></body></html>";
+        let f = extract(html);
+        assert_eq!(f.body_text_excerpt, f.body);
+        // A normal (non-skip) in-page anchor is not chrome.
+        let g = extract(r##"<body><p>See <a href="#x">the section</a> now</p></body>"##);
+        assert_eq!(g.body_text_excerpt, g.body);
+    }
+
+    #[test]
+    fn excerpt_falls_back_to_body_text_when_everything_is_chrome() {
+        let f = extract("<body><nav>Only navigation</nav></body>");
+        assert_eq!(f.body_text_excerpt, "Only navigation");
     }
 
     #[test]

@@ -13,38 +13,30 @@ import {
   tagColor,
   tagsFor,
 } from "../lib/derive";
+import { cardMetaParts } from "../lib/cardMeta";
 import { navigateWithTitleTransition } from "../lib/viewTransition";
-import CapabilityGlyphs, { glyphsFor } from "./CapabilityGlyphs";
 import { Icon } from "@kb/ui/icons";
 import TagPill from "./TagPill";
-import ReadingChip from "./ReadingChip";
 import SessionCardBody from "./SessionCard";
 import Illumination from "./Illumination";
 import type { SessionRow } from "../api/sessions";
 import type { Progress } from "../hooks/useReadingProgress";
-import { useCodeRefCounts } from "../hooks/useCodeRefs";
-import { galleryRefCount } from "../lib/codeRefCounts";
 
 // v0.14 S8 (sessions.tsx) precedent — long enough that a fast cursor sweep
 // across the grid doesn't fire N parallel prefetches, short enough that a
 // deliberate hover-then-click feels instant.
 const PREFETCH_DELAY_MS = 300;
 
-// v0.10 G1 — refined-cartographic card.
-//
-// Anatomy (top → bottom):
+// OL L4 — a card says one thing loudly. Anatomy (top → bottom):
 //   ┌──────────────────────────┐
-//   │ ✦┃ folder/slug   [⤓][⌃]  │  illumination + accent stripe + hover actions
-//   │  │                    ● │  read-state dot (top-RIGHT — see below)
-//   │  │ Serif title (h3)     │
-//   │  │ Mono excerpt (1.5l)  │
-//   │  │ #tag #tag            │
-//   │  ┕ glyph⁵ ▰▰▰▰▱ · 4↵ 1d │  caps + word-tape + age in footer
+//   │  ┃ Serif title (2 lines) │  accent stripe + hover actions top-right
+//   │  ┃ one-line excerpt      │
+//   │  ┃ #tag #tag             │  at most two tags
+//   │  ┃ folder · 3d · 5 min   │  ONE quiet meta line
+//   │▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱│  2px reading-progress bar on the bottom edge
 //   └──────────────────────────┘
-//
-// The 3px accent stripe pinned to the left lives in ::before; the
-// soft top-left radial glow in ::after. Word-tape fills proportional
-// to min(1, words/4000).
+// Capability glyphs, the word tape, link/ref/kept counts and the MD/pages
+// badges left the face; they live in the Index view.
 //
 // W2.12 — the `<Illumination>` ornament (✦ above) is pinned top-LEFT,
 // z-index 0 (gallery.css `.kb-illum`), deliberately NOT top-right: the
@@ -78,26 +70,8 @@ function Card({ doc, kb, progress, session }: CardProps) {
   const accentTag = tags[0];
   const accent = accentTag ? tagColor(accentTag) : "var(--accent)";
   const age = relativeAge(doc.indexed_at_unix ?? doc.mtime_unix);
-  const glyphs = glyphsFor(doc);
-  const pages = doc.pages ?? null;
   const indexPage = isIndexPage(doc);
-  const words = doc.word_count ?? 0;
-  const wordPct = Math.min(1, words / 4000);
-
-  // CT-E3 tier (a) — the "N refs" chip. One shared, hard-capped headers-only
-  // walk of the coderef/1 feed per kb (useCodeRefCounts dedupes across every
-  // mounted card); `galleryRefCount` returns 0 for EVERY doc when the walk
-  // came back incomplete, so a too-big corpus degrades to no chips at all
-  // rather than a partial set that reads as "this doc cites nothing".
-  const refCountsQuery = useCodeRefCounts(kb);
-  const codeRefN = isSession ? 0 : galleryRefCount(refCountsQuery.data, doc.id);
-
-  // CT-F4 tier — the "N kept" session-residue chip. No extra query: the
-  // docs-list route already decorates the visible page (absent when zero, so
-  // an old daemon or a doc with no birth session simply renders nothing).
-  // Session cards carry their own body/chrome, so they skip it like the
-  // coderef chip above.
-  const residueN = isSession ? 0 : (doc.session_residue ?? 0);
+  const meta = cardMetaParts(doc.folder, doc.word_count);
 
   // Antilibrary read-state corner marks (W1.A wire fields). "unseen" and
   // "updated" are mutually exclusive by construction: a never-opened doc has
@@ -149,13 +123,6 @@ function Card({ doc, kb, progress, session }: CardProps) {
     }
   };
   useEffect(() => cancelPrefetch, []);
-  // Markdown source indicator — derived from the path (no lance `kind`
-  // column; P3 deferred). `.md`/`.markdown` artifacts render to HTML at
-  // serve time but the gallery still flags their source format. The badge is
-  // static/in-flow (see chrome.css) so it stacks cleanly under the multi-file
-  // pills and above the folder slug.
-  const isMd = /\.(md|markdown)$/i.test(doc.source_relative);
-
   const accentStyle = { "--card-accent": accent } as React.CSSProperties;
 
   return (
@@ -319,28 +286,6 @@ function Card({ doc, kb, progress, session }: CardProps) {
             ⌂ index
           </span>
         )}
-        {pages && pages.length > 1 && (
-          <span
-            className="kb-card__badge kb-card__badge--pages"
-            title={`${pages.length}-file artifact`}
-          >
-            {pages.length} files
-          </span>
-        )}
-        {isMd && (
-          <span
-            className="kb-card__badge kb-card__badge--markdown"
-            title="markdown source — rendered to HTML on open"
-          >
-            MD
-          </span>
-        )}
-
-        {doc.folder && (
-          <div className="kb-card__folder" title={doc.folder}>
-            {doc.folder}
-          </div>
-        )}
         <h3 className="kb-card__title" ref={titleRef}>
           {doc.title || "(untitled)"}
         </h3>
@@ -348,47 +293,34 @@ function Card({ doc, kb, progress, session }: CardProps) {
 
         {tags.length > 0 && (
           <div className="kb-card__tags">
-            {tags.slice(0, 3).map((t) => (
+            {tags.slice(0, 2).map((t) => (
               <TagPill key={t} tag={t} accent={t === accentTag} />
             ))}
           </div>
         )}
 
-        <div className="kb-card__foot">
-          {glyphs.length > 0 ? <CapabilityGlyphs doc={doc} /> : <span />}
-          <span className="kb-card__tape" aria-hidden>
-            <i style={{ width: `${wordPct * 100}%` }} />
-          </span>
-          <span className="kb-card__words">
-            {words ? `${words.toLocaleString()}w` : ""}
-          </span>
-          {doc.backlinks ? (
-            <span className="kb-card__links">· {doc.backlinks}↵</span>
-          ) : null}
-          {codeRefN > 0 && (
-            <span
-              className="kb-card__coderefs"
-              title={`cites ${codeRefN} code ref${codeRefN === 1 ? "" : "s"} — open the reader's Code section for freshness`}
-            >
-              · {codeRefN} ref{codeRefN === 1 ? "" : "s"}
+        <div className="kb-card__meta">
+          {meta.folder && (
+            <span className="kb-card__folder" title={meta.folder}>
+              {meta.folder}
             </span>
           )}
-          {residueN > 0 && (
-            <span
-              className="kb-card__residue"
-              title={`${residueN} memor${residueN === 1 ? "y" : "ies"} kept from this artifact's birth session — sort the gallery with ?sort=residue`}
-            >
-              · {residueN} kept
-            </span>
-          )}
-          {progress && (
-            <ReadingChip pct={progress.pct} isDone={progress.isDone} />
-          )}
-          {age && <span className="kb-card__age">· {age}</span>}
+          {age && <span className="kb-card__age">{age}</span>}
+          {meta.read && <span className="kb-card__read">{meta.read}</span>}
         </div>
           </>
         )}
       </Link>
+      {!isSession && progress && (progress.isDone || progress.pct > 0) && (
+        <span
+          className={`kb-card__progress${progress.isDone ? " kb-card__progress--done" : ""}`}
+          role="img"
+          title={progress.isDone ? "fully read" : `${progress.pct}% read`}
+          aria-label={progress.isDone ? "fully read" : `${progress.pct}% read`}
+        >
+          <i style={{ width: `${progress.isDone ? 100 : progress.pct}%` }} />
+        </span>
+      )}
     </article>
   );
 }
