@@ -15,6 +15,22 @@ export function defaultDir(sort: SortKey): SortDir {
   return sort === "title" ? "asc" : "desc";
 }
 
+/// The gallery's `sort`/`dir` URL params, parsed once. Unknown / absent
+/// values fall back to `recent` and that key's default direction.
+export function parseSortParams(params: URLSearchParams): {
+  sort: SortKey;
+  dir: SortDir;
+} {
+  const v = params.get("sort");
+  const sort: SortKey =
+    v === "indexed" || v === "created" || v === "title" || v === "words"
+      ? v
+      : "recent";
+  const d = params.get("dir");
+  const dir: SortDir = d === "asc" || d === "desc" ? d : defaultDir(sort);
+  return { sort, dir };
+}
+
 /// Build a comparator for the given sort key + direction. Missing
 /// time fields sort last (the desc default treats them as -Infinity);
 /// missing word counts sort as 0.

@@ -922,22 +922,23 @@ body.kb-immersive .kb-tabbar {
 
 /* ───────────────────── SH.B2: gallery list-view escape ──────────────── */
 @media (max-width: 860px) {
-  /* `.list-row` (app.css) is a dense 7-col desktop grid (id · title ·
-   * folder · file · category · download · open-arrow) — at 390px the
-   * columns crush to unreadable slivers, and the view-toggle strip that
-   * would let you switch back to grid view is itself hidden on mobile
-   * (folded into the drawer), so `?view=list` was a dead end on a phone.
-   * Collapse to a usable 2-line card instead of hiding the view: title
-   * spans the full first row, folder + file share a second row, id/
-   * category/the redundant ↗ arrow (the whole row is already a tap target)
-   * are dropped as low-value, and the download button is pinned to the
-   * right (spanning both rows) and always visible — there's no hover state
-   * on touch to reveal it. */
+  /* `.list-row` (app.css) is a dense multi-column desktop grid (OL L5: the
+   * Index columns) — at 390px the columns crush to unreadable slivers, and
+   * the view-toggle strip that would let you switch back to grid view is
+   * itself hidden on mobile, so `?view=list` must stay usable on a phone.
+   * Collapse to a 2-line row: title across the first line, folder + the
+   * quiet age on the second; every other column and the sticky desktop
+   * header are dropped, and the download button is pinned right and always
+   * visible (no hover on touch). */
   .list-row {
-    grid-template-columns: 1fr 1fr auto;
+    grid-template-columns: 1fr auto auto;
     grid-template-rows: auto auto;
     row-gap: 2px;
+    height: auto;
     padding: 10px var(--pad-3);
+  }
+  .list-row--head {
+    display: none;
   }
   .list-row__title {
     grid-column: 1 / -1;
@@ -948,13 +949,17 @@ body.kb-immersive .kb-tabbar {
     grid-column: 1;
     grid-row: 2;
   }
-  .list-row__file {
+  .list-row__age {
     grid-column: 2;
     grid-row: 2;
   }
-  .list-row__id,
   .list-row__cat,
-  .list-row__open {
+  .list-row__words,
+  .list-row__links,
+  .list-row__refs,
+  .list-row__kept,
+  .list-row__caps,
+  .list-row__read {
     display: none;
   }
   .list-row__download {
