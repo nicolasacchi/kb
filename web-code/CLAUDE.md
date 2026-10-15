@@ -430,7 +430,7 @@ computed-value time, which silently falls back to the inherited value
 (`color`, `font-family`, …) or the property's initial value (`background`,
 `border`, `box-shadow`, …: transparent / none / 0) — a plausible-looking
 render that is simply wrong, and worse under a theme nobody's screen was on.
-`npm run lint:css-vars` (`scripts/css-undefined-vars.mjs`, wired into
+`npm run lint:css-vars` (`../ui/scripts/css-undefined-vars.mjs`, wired into
 `ci-code-spa`) statically scans every `var(--…)` under `src/**/*.css` (and
 `.ts`/`.tsx` string literals) and fails on any reference that has no
 fallback, or whose fallback chain (however many `var(--x, var(--y, …))`

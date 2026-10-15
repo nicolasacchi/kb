@@ -36,7 +36,7 @@
  * trailbar, inpeek), `--surface-3`→`--bg-card-hi` (hover/target row),
  * `--border`/`--border-subtle`→`--rule` (no separate "subtle" rule token
  * exists), `--fg-subtle`→`--ink-mute` (matches R4's `--fg-dim` mapping).
- * `npm run lint:css-vars` (web-code/scripts/css-undefined-vars.mjs) is the
+ * `npm run lint:css-vars` (ui/scripts/css-undefined-vars.mjs) is the
  * permanent gate against this bug class returning.
  */
 

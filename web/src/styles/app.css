@@ -430,7 +430,7 @@ select:focus-visible,
   font-weight: 600;
 }
 .stale-anchors__sep {
-  color: var(--fg-dim);
+  color: var(--ink-dim);
 }
 .stale-anchors__artifact-id {
   color: var(--ink);
@@ -475,7 +475,7 @@ select:focus-visible,
   text-align: right;
 }
 .stale-anchors__age {
-  color: var(--fg-dim);
+  color: var(--ink-dim);
 }
 
 /* P2: fleet metrics block inside the status pill panel. */

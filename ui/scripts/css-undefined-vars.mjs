@@ -13,10 +13,18 @@
 // simply wrong — worse under a theme the developer's screen wasn't on.
 //
 // This script is the permanent gate: every `var(--name …)` under
-// `web-code/src` must resolve to a real value with NO possible dead end.
+// `<app>/src` and `ui/src` must resolve to a real value with NO possible dead end.
 //
-//   npm run lint:css-vars            # human report, exit 1 on any hit
-//   npm run lint:css-vars -- --json  # machine-readable
+//   node ../ui/scripts/css-undefined-vars.mjs .          # from an app dir
+//   node ui/scripts/css-undefined-vars.mjs web-code      # from the repo root
+//   ... --json                                           # machine-readable
+//
+// OL F10 — moved here from web-code/scripts and parameterised by app dir so
+// kb (web/) is gated too. Both `<app>/src` and `ui/src` are scanned for
+// DEFINITIONS and for REFERENCES. `<app>/scripts/ci/css-vars-allowlist.txt`
+// (optional; one `--name` per line, `#` comments) grandfathers names that are
+// referenced but undeclared; it is TWO-WAY: an entry that no longer matches a
+// reference is itself a failure, so the list can only shrink.
 //
 // ── What counts as "defined" ────────────────────────────────────────────
 // A custom property name is DEFINED if `--name:` appears as a declaration
@@ -58,14 +66,23 @@
 // etc. reach for real tokens directly, so this is a cheap extra net for the
 // same bug class outside `.css`.
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SRC_DIR = join(__dirname, "..", "src");
+const UI_SRC = join(__dirname, "..", "src");
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes("--json");
+const appArg = argv.find((a) => !a.startsWith("--"));
+if (!appArg) {
+  console.error("usage: css-undefined-vars.mjs <appdir> [--json]");
+  process.exit(2);
+}
+const APP_DIR = resolve(appArg);
+const SRC_DIR = join(APP_DIR, "src");
+const ALLOWLIST = join(APP_DIR, "scripts", "ci", "css-vars-allowlist.txt");
 
 function walk(dir, exts, out) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -92,8 +109,8 @@ function stripJsComments(text) {
   return out;
 }
 
-const cssFiles = walk(SRC_DIR, [".css"], []);
-const tsFiles = walk(SRC_DIR, [".ts", ".tsx"], []).filter(
+const cssFiles = [...walk(SRC_DIR, [".css"], []), ...walk(UI_SRC, [".css"], [])];
+const tsFiles = [...walk(SRC_DIR, [".ts", ".tsx"], []), ...walk(UI_SRC, [".ts", ".tsx"], [])].filter(
   (f) => !f.endsWith(".gen.ts") && !f.endsWith(".gen.tsx") && !f.includes("/generated/"),
 );
 
@@ -107,18 +124,6 @@ for (const f of cssFiles) {
   cssTextByFile.set(f, text);
   for (const found of text.matchAll(DEF_RE)) defined.add(found[1]);
 }
-// OL F3 — the shared tokens (`@kb/ui/tokens.css`) are imported by
-// src/styles/tokens.css, so the names ui/src declares are defined here too.
-// OL F2 — this is also what keeps the generated palette visible to the lint:
-// `themes.gen.css` now lives in `ui/src/themes/`, outside `src`, and without
-// this loop every `var(--bg)` in web-code would read as undefined. They count
-// as DEFINITIONS only; ui/src is not scanned for references yet.
-for (const f of walk(join(__dirname, "..", "..", "ui", "src"), [".css"], [])) {
-  for (const found of stripCssComments(readFileSync(f, "utf8")).matchAll(DEF_RE)) {
-    defined.add(found[1]);
-  }
-}
-
 // ── Fallback-chain resolution --------------------------------------------
 // Given the text strictly INSIDE a var(...) call's parens (i.e. everything
 // after `var(`, up to its matching close paren, exclusive), split into the
@@ -214,6 +219,20 @@ for (const f of tsFiles) {
   scanText(f, stripJsComments(raw), false);
 }
 
+// Two-way allowlist: grandfathered names are dropped from the hit list, and an
+// entry that matches no remaining reference is stale and fails.
+const allow = new Set(
+  existsSync(ALLOWLIST)
+    ? readFileSync(ALLOWLIST, "utf8")
+        .split("\n")
+        .map((l) => l.replace(/#.*/, "").trim())
+        .filter(Boolean)
+    : [],
+);
+const referenced = new Set(hits.map((h) => h.name));
+const stale = [...allow].filter((n) => !referenced.has(n));
+for (let i = hits.length - 1; i >= 0; i--) if (allow.has(hits[i].name)) hits.splice(i, 1);
+
 hits.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
 
 if (JSON_OUT) {
@@ -222,29 +241,36 @@ if (JSON_OUT) {
       {
         definedCount: defined.size,
         hitCount: hits.length,
-        hits: hits.map((h) => ({ ...h, file: relative(join(__dirname, ".."), h.file) })),
+        hits: hits.map((h) => ({ ...h, file: relative(APP_DIR, h.file) })),
       },
       null,
       2,
     ),
   );
 } else {
-  console.log(`css-undefined-vars: ${defined.size} defined custom properties across ${cssFiles.length} CSS files.`);
+  console.log(`css-undefined-vars (${relative(process.cwd(), APP_DIR) || "."}): ${defined.size} defined custom properties across ${cssFiles.length} CSS files.`);
   if (hits.length === 0) {
     console.log("No unresolved var(--…) references. ✓");
   } else {
     console.log(`${hits.length} unresolved var(--…) reference(s):\n`);
     for (const h of hits) {
-      console.log(`  ${relative(join(__dirname, ".."), h.file)}:${h.line}  ${h.name}`);
+      console.log(`  ${relative(APP_DIR, h.file)}:${h.line}  ${h.name}`);
       console.log(`    ${h.text}`);
     }
     console.log(
       "\nEach name above is never declared as `--name:` in any src/**/*.css file, and has no " +
         "fallback (or only a fallback chain to another undefined name) — the declaration is " +
         "invalid at computed-value time and silently falls back to inherited/initial. Map it to " +
-        "a real tokens.css name (see web-code/CLAUDE.md § Themes).",
+        "a real tokens.css name (see ui/src/tokens.css).",
     );
   }
 }
 
-process.exit(hits.length ? 1 : 0);
+if (stale.length) {
+  console.log(
+    `\nStale allowlist entries (no longer referenced; delete them from ${relative(APP_DIR, ALLOWLIST)}):\n  ` +
+      stale.join("\n  "),
+  );
+}
+
+process.exit(hits.length || stale.length ? 1 : 0);
