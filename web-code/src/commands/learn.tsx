@@ -30,10 +30,14 @@ import { KBC_COMMANDS, KBC_LEADER } from "./registry.gen";
 /// The one always-visible teaching chip. `?` is the other half and is a real
 /// binding, so it is named rather than rendered as a button — the sheet it
 /// opens is one keystroke away and does not need a second door.
+export const SPACE_HINT_TEXT = `${KBC_LEADER} for everything · ? for keys`;
+
+/// OL-C11 — compact: two key chips, the sentence is their tooltip.
 export function SpaceHint() {
   return (
-    <span className="kbc-spacehint" data-kbc-spacehint>
-      <kbd>{KBC_LEADER}</kbd> for everything · <kbd>?</kbd> for keys
+    <span className="kbc-spacehint" data-kbc-spacehint title={SPACE_HINT_TEXT}>
+      <kbd>{KBC_LEADER}</kbd>
+      <kbd>?</kbd>
     </span>
   );
 }
