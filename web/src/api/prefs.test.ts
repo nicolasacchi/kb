@@ -11,6 +11,7 @@ import {
   savePrefs,
   saveLastKb,
   saveLastSessionsView,
+  settingsPatchBody,
   DEFAULT_PREFS,
 } from "./prefs";
 
@@ -236,5 +237,30 @@ describe("themeFamily + the retired accent pref (OL F2)", () => {
     const mod = await import("./prefs");
     expect(mod).not.toHaveProperty("ACCENTS");
     expect(mod).not.toHaveProperty("ACCENTS_LIGHT");
+  });
+});
+
+describe("settingsPatchBody (OL S1: the family travels to the daemon)", () => {
+  it("carries theme, density and the palette family", () => {
+    expect(settingsPatchBody({ ...DEFAULT_PREFS, themeFamily: "catppuccin" })).toEqual({
+      theme: "dark",
+      density: "comfy",
+      themeFamily: "catppuccin",
+    });
+  });
+
+  it("sends the default family when none was chosen, never undefined", () => {
+    expect(settingsPatchBody(DEFAULT_PREFS).themeFamily).toBe("kb-classic");
+  });
+
+  it("coerces an unknown stored family to one the registry carries", () => {
+    expect(settingsPatchBody({ ...DEFAULT_PREFS, themeFamily: "no-such-family" }).themeFamily).toBe(
+      "kb-classic",
+    );
+  });
+
+  it("stays out of the browser-local nav prefs", () => {
+    const body = settingsPatchBody({ ...DEFAULT_PREFS, lastKb: "beta", home: "map" });
+    expect(Object.keys(body).sort()).toEqual(["density", "themeFamily", "theme"].sort());
   });
 });

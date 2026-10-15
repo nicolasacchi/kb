@@ -36,11 +36,10 @@ export type Home = "grid" | "map";
 
 export type Prefs = {
   theme: Theme;
-  // OL F2 — the kbc-theme/1 family (`kb-classic` by default). Browser-local
-  // ONLY: deliberately NOT in the patchSettings allow-list (the daemon's `ui`
-  // blob carries theme/accent/density; persisting the family there is S2's
-  // job). The pre-F2 `accent` pref is gone: a stored `accent` is ignored on
-  // load and never written back.
+  // OL F2 — the kbc-theme/1 family (`kb-classic` by default). localStorage is
+  // the source of truth; OL S1 also PATCHes it to the daemon's `ui` blob
+  // (`settingsPatchBody`) so kb-code can follow it. The pre-F2 `accent` pref
+  // is gone: a stored `accent` is ignored on load and never written back.
   themeFamily: string;
   density: Density;
   // K1 — the last corpus the user was in, written on every active-kb change
@@ -280,20 +279,31 @@ export function cycleDensity(): Density {
 let patchTimer: ReturnType<typeof setTimeout> | null = null;
 const PATCH_DEBOUNCE_MS = 500;
 
-// The daemon-side allow-list is theme/density (the retired accent is no longer
-// sent; `themeFamily` joins in S2) — `lastKb` (K1)
-// and `home` (W3.M-d) are browser-local nav preferences and are deliberately
-// NOT sent: they are per-browser, and the daemon has no noun for either.
+// The daemon-side allow-list is theme/density/themeFamily (the retired accent
+// is no longer sent) — `lastKb` (K1) and `home` (W3.M-d) are browser-local nav
+// preferences and are deliberately NOT sent: they are per-browser, and the
+// daemon has no noun for either. OL S1: `themeFamily` rides along so the
+// sibling kb-code daemon can read it back (`GET /api/kb/ui`) and follow it
+// until its user picks a family there.
+export function settingsPatchBody(prefs: Prefs): {
+  theme: Theme;
+  density: Density;
+  themeFamily: string;
+} {
+  return {
+    theme: prefs.theme,
+    density: prefs.density,
+    themeFamily: loadFamilyFrom(prefs.themeFamily),
+  };
+}
+
 export function patchSettingsDebounced(prefs: Prefs) {
   if (patchTimer) clearTimeout(patchTimer);
   patchTimer = setTimeout(() => {
     fetch(`${currentDaemonBase()}/api/settings`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        theme: prefs.theme,
-        density: prefs.density,
-      }),
+      body: JSON.stringify(settingsPatchBody(prefs)),
     }).catch(() => {
       // Best-effort. localStorage is the durable cache; the daemon's
       // copy is convenience-only in v0.1.
