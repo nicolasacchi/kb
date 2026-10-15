@@ -49,9 +49,13 @@ test.describe("theme family follows kb", () => {
     });
 
     await page.locator("[data-kbc-theme-toggle]").click();
+    // Choosing a row commits it AND closes the popover.
     await page.locator('[data-kbc-theme-family="nord"]').click();
-    await expect(page.locator("[data-kbc-theme-source]")).toHaveText("Chosen here");
     await expect(page.locator("html")).toHaveAttribute("data-kbc-theme", /^nord/);
+    await expect(page.locator("[data-kbc-themepicker]")).toHaveCount(0);
+
+    await page.locator("[data-kbc-theme-toggle]").click();
+    await expect(page.locator("[data-kbc-theme-source]")).toHaveText("Chosen here");
 
     // Survives a reload even though kb still says catppuccin.
     await page.reload();
