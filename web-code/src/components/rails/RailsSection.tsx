@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useRailsNoun } from "../../hooks/useRails";
 import { honestyLine, nounTitle, orphanKey, pageCaption, pageNav } from "../../lib/railsCards";
 import RailsCard from "./RailsCard";
+import { StateCard } from "@kb/ui/StateCard";
 
 // V72-I2 — one noun's section on `~rails`.
 //
@@ -99,7 +100,7 @@ export default function RailsSection({
             </p>
           )}
 
-          {list.isLoading && <p className="kbc-rails__muted">Loading…</p>}
+          {list.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
           {list.error && (
             <p className="kbc-rails__error" data-kbc-rails-error>
               {(list.error as Error).message}

@@ -103,6 +103,7 @@ import { useReviewDiffState } from "./reviewDiff/useReviewDiffState";
 import { rangeFileRows } from "../lib/reviewSince";
 import type { ReviewFileTreeHandle } from "../components/reviews/ReviewFileTree";
 import type { ReviewMapSplitHandle } from "../components/reviews/ReviewMapSplit";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// `/r/:repo/~reviews/:id/diff` and `/r/:repo/~reviews/:id/diff/*`.
 /// Query: `ps` `view` `line` `side` `file` `thread` `finding` `overlay`
@@ -1546,7 +1547,7 @@ export default function ReviewDiff() {
     return <div className="kbc-reader__hint kbc-reader__hint--error">Invalid review id.</div>;
   }
   if (reviewQ.isLoading || filesQ.isLoading) {
-    return <div className="kbc-reader__hint">Loading review…</div>;
+    return <StateCard kind="loading" title="Loading review…" />;
   }
   if (reviewQ.error || !review) {
     return (

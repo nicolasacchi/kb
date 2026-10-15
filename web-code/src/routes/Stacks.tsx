@@ -15,6 +15,7 @@ import {
 import "../styles/stacks.css";
 import "../styles/history.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// V3.3-U1 — `/r/:repo/~stacks`: dependent-branch stacks + layer-diff.
 export default function Stacks() {
@@ -104,7 +105,7 @@ export default function Stacks() {
         </div>
       )}
 
-      {stacksQ.isLoading && <div className="kbc-stacks__muted">Loading…</div>}
+      {stacksQ.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
       {stacksQ.error && (
         <div className="kbc-stacks__error">{(stacksQ.error as Error).message}</div>
       )}
@@ -177,7 +178,7 @@ export default function Stacks() {
 
         {selectedBranch && (
           <div className="kbc-stacks__diff" data-kbc-stacks-diff>
-            {layerDiffQ.isLoading && <div className="kbc-stacks__muted">Loading layer diff…</div>}
+            {layerDiffQ.isLoading && <StateCard size="inline" kind="loading" title="Loading layer diff…" />}
             {layerDiffQ.error && (
               <div className="kbc-stacks__error">{(layerDiffQ.error as Error).message}</div>
             )}

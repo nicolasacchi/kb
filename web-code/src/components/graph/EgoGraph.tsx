@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EgoLaidOutEdge, EgoLaidOutNode, EgoLayoutResult } from "../../lib/egoGraph";
 import { Icon } from "../iconSet";
+import { StateCard } from "@kb/ui/StateCard";
 
 const NODE_W = 112;
 const NODE_H = 28;
@@ -133,7 +134,7 @@ export default function EgoGraph({
         </button>
       </header>
       <div className="kbc-ego__body">
-        {loading && <div className="kbc-peek__hint kbc-peek__loading">Loading…</div>}
+        {loading && <StateCard size="inline" kind="loading" title="Loading…" />}
         {error && <div className="kbc-peek__hint kbc-peek__error">{error}</div>}
         {!loading && !error && (
           <>

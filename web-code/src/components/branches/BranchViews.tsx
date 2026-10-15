@@ -21,6 +21,7 @@ import { compareUrl, reviewUrl } from "../../lib/codeUrl";
 import type { BranchesHandlers } from "../../routes/branchesCommands";
 import BranchFactRow from "./BranchFactRow";
 import ConflictRadarPanel from "./ConflictRadarPanel";
+import { StateCard } from "@kb/ui/StateCard";
 
 // V75-M3 (D15) — `~branches` as VIEWS, not tabs.
 //
@@ -321,7 +322,7 @@ export default function BranchViews({ repo }: BranchViewsProps) {
         />
       )}
 
-      {facts.isLoading && <p className="kbc-reader__hint">Loading branch facts…</p>}
+      {facts.isLoading && <StateCard size="inline" kind="loading" title="Loading branch facts…" />}
       {facts.error && (
         <p className="kbc-reader__hint kbc-reader__hint--error" data-kbc-bviews-error>
           {(facts.error as Error).message}

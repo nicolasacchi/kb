@@ -4,6 +4,7 @@ import type {
   LayeredDagLaidOutEdge,
   LayeredDagLayoutResult,
 } from "../../lib/egoGraph";
+import { StateCard } from "@kb/ui/StateCard";
 
 const NODE_W = 112;
 const NODE_H = 28;
@@ -128,7 +129,7 @@ export default function LayeredDag({
       aria-label={title ?? "Dependency map"}
       data-kbc-layered-dag
     >
-      {loading && <div className="kbc-peek__hint kbc-peek__loading">Loading…</div>}
+      {loading && <StateCard size="inline" kind="loading" title="Loading…" />}
       {error && <div className="kbc-peek__hint kbc-peek__error">{error}</div>}
       {!loading && !error && (
         <>

@@ -52,6 +52,7 @@ import { canvasUrl, parseCanvasSearch } from "../lib/canvasUrl";
 import { readerUrl } from "../lib/breadcrumbs";
 import { relativeTime } from "../lib/format";
 import { toast } from "../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/canvas.css";
 
 const SAVE_DEBOUNCE_MS = 1000;
@@ -403,7 +404,7 @@ export default function CanvasPage() {
             </button>
           </form>
 
-          {listQ.isLoading && <div className="kbc-canvas__muted">Loading…</div>}
+          {listQ.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
           {listQ.error && (
             <div className="kbc-canvas__error">{(listQ.error as Error).message}</div>
           )}
@@ -465,7 +466,7 @@ export default function CanvasPage() {
               Select or create a canvas to open the surface.
             </div>
           ) : canvasQ.isLoading ? (
-            <div className="kbc-canvas__empty-main">Loading canvas…</div>
+            <StateCard size="inline" kind="loading" title="Loading canvas…" />
           ) : canvasQ.error ? (
             <div className="kbc-canvas__error">{(canvasQ.error as Error).message}</div>
           ) : (
@@ -1048,7 +1049,7 @@ function CanvasSurface({
                   </div>
                 </div>
                 {!file ? (
-                  <div className="kbc-canvas__card-loading">Loading…</div>
+                  <StateCard size="inline" kind="loading" title="Loading…" />
                 ) : stale ? (
                   <div className="kbc-canvas__card-stale" data-kbc-canvas-card-stale>
                     stale — symbol not found at HEAD

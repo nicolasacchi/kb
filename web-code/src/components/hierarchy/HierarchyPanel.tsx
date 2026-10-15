@@ -9,6 +9,7 @@ import {
   type HierarchyNode,
   type HierarchyState,
 } from "../../lib/hierarchyState";
+import { StateCard } from "@kb/ui/StateCard";
 
 const PANEL_WIDTH = 440;
 const VIEWPORT_MARGIN = 12;
@@ -255,7 +256,7 @@ export default function HierarchyPanel({
         </button>
       </header>
       <div className="kbc-peek__body" role="listbox" aria-label={`${MODE_LABEL[state.mode]} tree`}>
-        {state.loading && <div className="kbc-peek__hint kbc-peek__loading">Loading…</div>}
+        {state.loading && <StateCard size="inline" kind="loading" title="Loading…" />}
         {!state.loading && state.error && (
           <div className="kbc-peek__hint kbc-peek__error">{state.error}</div>
         )}

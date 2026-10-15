@@ -15,6 +15,7 @@ import { formatUnixSeconds, shortSha } from "../lib/format";
 import { prNumberFromRef } from "../lib/prRef";
 import { defaultGroupedView, groupCommitsBySession } from "../lib/reviewGroups";
 import { sessionUrl } from "../lib/searchLanes";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/history.css";
 
 type ViewMode = "flat" | "grouped";
@@ -191,7 +192,7 @@ export default function Compare() {
       {!fromParam || !toParam ? (
         <div className="kbc-reader__hint">Enter both a base and a compare ref.</div>
       ) : compare.isLoading ? (
-        <div className="kbc-reader__hint">Loading compare…</div>
+        <StateCard kind="loading" title="Loading compare…" />
       ) : compare.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error">{(compare.error as Error).message}</div>
       ) : data ? (

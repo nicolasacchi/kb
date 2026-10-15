@@ -4,6 +4,7 @@ import { rangeFromDiagnostic } from "../../lib/codeActions";
 import { buildDiagnosticsView, formatSeveritySummary, severityLabel } from "../../lib/diagnostics";
 import { formatFactValue, laneSeverityLabel } from "../../lib/lanes";
 import QuickFixes from "./QuickFixes";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface DiagnosticsCardProps {
   repo: string;
@@ -63,9 +64,9 @@ export default function DiagnosticsCard({
         )}
       </div>
       {view.kind === "loading" && (
-        <p className="kbc-diagnostics__hint" data-kbc-diagnostics-loading>
-          Loading…
-        </p>
+        <div data-kbc-diagnostics-loading>
+          <StateCard size="inline" kind="loading" title="Loading…" />
+        </div>
       )}
       {view.kind === "reason" && (
         <p className="kbc-diagnostics__reason" data-kbc-diagnostics-reason>

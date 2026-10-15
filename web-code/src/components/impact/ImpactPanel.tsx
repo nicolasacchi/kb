@@ -14,6 +14,7 @@ import {
   type ImpactFlatRow,
   type ImpactState,
 } from "../../lib/impactState";
+import { StateCard } from "@kb/ui/StateCard";
 /** SPA session-diff route (`app.tsx` `/session/:sid/diff`). */
 function sessionDiffHref(sessionId: string): string {
   return `/session/${encodeURIComponent(sessionId)}/diff`;
@@ -265,7 +266,7 @@ export default function ImpactPanel({
         </div>
       )}
       <div className="kbc-peek__body" role="listbox" aria-label="Impact buckets">
-        {state.loading && <div className="kbc-peek__hint kbc-peek__loading">Loading…</div>}
+        {state.loading && <StateCard size="inline" kind="loading" title="Loading…" />}
         {!state.loading && state.error && (
           <div className="kbc-peek__hint kbc-peek__error">{state.error}</div>
         )}

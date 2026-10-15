@@ -65,6 +65,7 @@ import {
 import { draftsInSpan, type DraftsState } from "../../lib/reviewDrafts";
 import type { DiffCommentsApi, DiffSide } from "../../lib/reviewComments";
 import type { DiffMode } from "../../lib/prefs";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// V73-K2a — everything diff v2 hands ONE file's body, in one bag rather
 /// than a dozen props. Built once at the route level from data the page
@@ -424,7 +425,7 @@ export function FileDiffBody({
     <HunkTurnsPanel repo={repo} reviewId={reviewId} ps={ps} hunkId={turnsOpenHunkId} />
   ) : null;
 
-  if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
+  if (isLoading) return <StateCard size="inline" kind="loading" title="Loading diff…" />;
   if (error) return <div className="kbc-diff kbc-diff--error">Failed to load diff</div>;
   if (!parsed) return null;
   // `effectiveParsed` only ever diverges from `parsed` inside the

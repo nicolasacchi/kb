@@ -12,6 +12,7 @@ import { Navigate, useLocation, useParams } from "react-router";
 import { useActiveRepo } from "../hooks/useActiveRepo";
 import { useRepos } from "../hooks/useRepos";
 import { lensUrl } from "../lib/docLensUrl";
+import { StateCard } from "@kb/ui/StateCard";
 
 export default function LensEntry() {
   const { kb = "", docId = "" } = useParams<{ kb: string; docId: string }>();
@@ -28,7 +29,7 @@ export default function LensEntry() {
     );
   }
   if (repos.isLoading || !activeRepo) {
-    return <div className="kbc-reader__hint">Loading…</div>;
+    return <StateCard kind="loading" title="Loading…" />;
   }
   return <Navigate replace to={lensUrl(activeRepo, kb, docId) + location.search} />;
 }

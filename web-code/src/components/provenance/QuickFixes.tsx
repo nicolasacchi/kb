@@ -10,6 +10,7 @@ import {
   type CodeActionsRange,
 } from "../../lib/codeActions";
 import { toast } from "../../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface QuickFixesProps {
   repo: string;
@@ -144,9 +145,9 @@ export default function QuickFixes({ repo, path, range, reviewId, ps }: QuickFix
       {open && (
         <div className="kbc-quickfixes__panel" data-kbc-quickfixes-state={view.kind}>
           {view.kind === "loading" && (
-            <p className="kbc-quickfixes__hint" data-kbc-quickfixes-loading>
-              Loading fixes…
-            </p>
+            <div data-kbc-quickfixes-loading>
+              <StateCard size="inline" kind="loading" title="Loading fixes…" />
+            </div>
           )}
           {view.kind === "reason" && (
             <p className="kbc-quickfixes__reason" data-kbc-quickfixes-reason>

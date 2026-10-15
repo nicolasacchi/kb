@@ -18,6 +18,7 @@ import { ApiError } from "../../api/client";
 import { useFromDocSet } from "../../hooks/useSets";
 import { setUrl } from "../../lib/setsUrl";
 import { toast } from "../../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface ScorecardProps {
   kb: string;
@@ -122,7 +123,7 @@ export default function Scorecard({
         )}
       </div>
 
-      {loading && <div className="kbc-reader__hint">Loading checkouts…</div>}
+      {loading && <StateCard size="inline" kind="loading" title="Loading checkouts…" />}
       {!loading && !!error && (
         <div className="kbc-reader__hint kbc-reader__hint--error">
           {error instanceof ApiError || error instanceof Error ? error.message : "Failed to load checkouts."}

@@ -14,6 +14,7 @@ import { speedFilterItems } from "../../lib/speedSearch";
 import { codeUrl, reviewDiffHref } from "../../lib/codeUrl";
 import { useNavigate } from "react-router";
 import type { MapRowState } from "../../lib/reviewMapColumn";
+import { StateCard } from "@kb/ui/StateCard";
 
 export type FileSort = "diff" | "risk" | "path";
 
@@ -116,7 +117,7 @@ export default function FilesPanel({
   }, [files, pathFilter, fileSort, riskAvailable, riskByPath]);
 
   if (loading) {
-    return <div className="kbc-reader__hint">Loading files…</div>;
+    return <StateCard size="inline" kind="loading" title="Loading files…" />;
   }
   if (error) {
     return (

@@ -23,11 +23,12 @@ import { lensUrl, pinCorrection, refsForGroup, truncationCaption } from "../lib/
 // by a render-time `location.search` snapshot.
 import { mergeCurrentSearch } from "../lib/codeUrl";
 import type { CodeLensRef } from "../api/types";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/doclens.css";
 
 function LensCodeView({ repo, path, gotoSel }: { repo: string; path: string; gotoSel: GotoSel | null }) {
   const file = useFile(repo, path, undefined);
-  if (file.isLoading) return <div className="kbc-reader__hint">Loading…</div>;
+  if (file.isLoading) return <StateCard size="inline" kind="loading" title="Loading…" />;
   if (file.error) {
     return <div className="kbc-reader__hint kbc-reader__hint--error">{(file.error as Error).message}</div>;
   }
@@ -233,7 +234,7 @@ export default function Lens() {
         </div>
       )}
 
-      {lens.isLoading && !lens.data && <div className="kbc-reader__hint">Loading…</div>}
+      {lens.isLoading && !lens.data && <StateCard size="inline" kind="loading" title="Loading…" />}
       {lens.error && (
         <div className="kbc-reader__hint kbc-reader__hint--error">{(lens.error as Error).message}</div>
       )}

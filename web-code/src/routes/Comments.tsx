@@ -15,6 +15,7 @@ import {
 } from "../lib/comments";
 import "../styles/comments.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 const KIND_LABELS: Record<string, string> = {
   doc: "Doc",
@@ -90,7 +91,7 @@ function ActionableSection({
     return (
       <section className="kbc-comments-dash__section" data-kbc-comments-dash-section={state}>
         <h2>{STATE_LABELS[state] ?? state}</h2>
-        <p className="kbc-comments-dash__muted">Loading…</p>
+        <StateCard size="inline" kind="loading" title="Loading…" />
       </section>
     );
   }
@@ -306,7 +307,7 @@ export default function Comments() {
 
       {showEverything && (
         <div className="kbc-comments-dash__sections" data-kbc-comments-dash-everything>
-          {everythingQuery.isLoading && <div className="kbc-comments-dash__muted">Loading…</div>}
+          {everythingQuery.isLoading && <StateCard size="inline" kind="loading" title="Loading…" />}
           {everythingQuery.error && (
             <div className="kbc-comments-dash__error">{(everythingQuery.error as Error).message}</div>
           )}

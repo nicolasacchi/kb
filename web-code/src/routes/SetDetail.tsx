@@ -11,6 +11,7 @@ import { codeUrl } from "../lib/codeUrl";
 import { shortSha } from "../lib/format";
 import { setsUrl, setUrl, tourUrl } from "../lib/setsUrl";
 import { toast } from "../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/sets.css";
 
 /// Repo-relative "path:start-end" label for one span — used both for the
@@ -82,7 +83,7 @@ export default function SetDetail() {
   }, [set.data?.id]);
 
   if (set.isLoading) {
-    return <div className="kbc-reader__hint">Loading set…</div>;
+    return <StateCard kind="loading" title="Loading set…" />;
   }
   if (set.error) {
     return <div className="kbc-reader__hint kbc-reader__hint--error">{(set.error as Error).message}</div>;

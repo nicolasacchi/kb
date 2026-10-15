@@ -5,6 +5,7 @@ import { UNCOMMITTED_SHA } from "../api/types";
 import { useBlameTimeline } from "../hooks/useBlameTimeline";
 import { commitUrl } from "../lib/codeUrl";
 import { formatUnixSeconds, shortSha } from "../lib/format";
+import { StateCard } from "@kb/ui/StateCard";
 
 export interface LineHistoryPopupProps {
   open: boolean;
@@ -101,7 +102,7 @@ export default function LineHistoryPopup({
           </button>
         </div>
         {timeline.isLoading ? (
-          <div className="kbc-reader__hint">Loading timeline…</div>
+          <StateCard size="inline" kind="loading" title="Loading timeline…" />
         ) : timeline.isError ? (
           <div className="kbc-reader__hint kbc-reader__hint--error">
             {(timeline.error as Error).message}

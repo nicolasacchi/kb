@@ -23,6 +23,7 @@ import "../styles/review-inbox.css";
 import "../styles/review-room.css";
 import "../styles/review-analytics.css";
 import { useListScrollRestoration } from "../hooks/useScrollRestoration";
+import { StateCard } from "@kb/ui/StateCard";
 
 /// V3.R2 → PRR-U1 (kb v0.39 "The PR Room," design-ui.md §2 S1) — `/r/{repo}/
 /// ~reviews`: the Review Room landing. Four tiers, top to bottom:
@@ -106,7 +107,7 @@ export default function Reviews() {
       <section className="kbc-inbox" data-kbc-inbox>
         <h2 className="kbc-inbox__title">Inbox — needs a human</h2>
         {inboxQ.isLoading ? (
-          <div className="kbc-reader__hint">Loading inbox…</div>
+          <StateCard kind="loading" title="Loading inbox…" />
         ) : inboxQ.error ? (
           <div className="kbc-reader__hint kbc-reader__hint--error">{(inboxQ.error as Error).message}</div>
         ) : inboxRows.length === 0 ? (
@@ -138,7 +139,7 @@ export default function Reviews() {
         </label>
 
         {reviews.isLoading ? (
-          <div className="kbc-reader__hint">Loading reviews…</div>
+          <StateCard kind="loading" title="Loading reviews…" />
         ) : reviews.error ? (
           <div className="kbc-reader__hint kbc-reader__hint--error">{(reviews.error as Error).message}</div>
         ) : list.length === 0 ? (

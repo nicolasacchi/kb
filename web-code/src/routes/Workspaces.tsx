@@ -11,6 +11,7 @@ import { codeUrl } from "../lib/codeUrl";
 import { relativeTime } from "../lib/format";
 import { toast } from "../lib/toast";
 import { parseWorkspaceSnapshot } from "../lib/workspaceSnapshot";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/sets.css";
 
 /// Append `?workspace=<id>` (or `&workspace=<id>` when the URL already has
@@ -153,7 +154,7 @@ export default function Workspaces() {
       />
 
       {groups.isLoading ? (
-        <div className="kbc-reader__hint">Loading workspaces…</div>
+        <StateCard kind="loading" title="Loading workspaces…" />
       ) : groups.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error">{(groups.error as Error).message}</div>
       ) : visibleGroups.length === 0 ? (

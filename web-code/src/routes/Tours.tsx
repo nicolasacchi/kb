@@ -24,6 +24,7 @@ import { useListScrollRestoration } from "../hooks/useScrollRestoration";
 import { boardsPageUrl, mergeCurrentSearch } from "../lib/codeUrl";
 import { parseToursStatus, tourHref } from "../lib/toursUrl";
 import { relativeTime } from "../lib/format";
+import { StateCard } from "@kb/ui/StateCard";
 import "../styles/tours.css";
 
 export default function Tours() {
@@ -101,7 +102,7 @@ export default function Tours() {
       />
 
       {query.isLoading ? (
-        <div className="kbc-reader__hint">Loading tours…</div>
+        <StateCard kind="loading" title="Loading tours…" />
       ) : query.error ? (
         <div className="kbc-reader__hint kbc-reader__hint--error" data-kbc-tours-error>
           {(query.error as Error).message}

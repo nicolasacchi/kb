@@ -14,6 +14,7 @@ import { parseUnifiedDiff } from "../../lib/diff";
 import { loadDiffMode, saveDiffMode, type DiffMode } from "../../lib/prefs";
 import { highlightSegments, type MatchRange } from "../../lib/speedSearch";
 import { toast } from "../../lib/toast";
+import { StateCard } from "@kb/ui/StateCard";
 
 export function statusGlyph(status: string): string {
   const s = status.toUpperCase();
@@ -214,7 +215,7 @@ export function ReviewAwareDiff({
   );
   const comments = useReviewDiffComments(repo, reviewId, ps, path);
 
-  if (isLoading) return <div className="kbc-diff kbc-diff--loading">Loading diff…</div>;
+  if (isLoading) return <StateCard size="inline" kind="loading" title="Loading diff…" />;
   if (error) return <div className="kbc-diff kbc-diff--error">Failed to load diff</div>;
   if (!parsed) return null;
 
