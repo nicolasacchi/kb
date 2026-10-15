@@ -3,7 +3,7 @@ import type { LaneSection } from "../api/types";
 import { laneRowCount, orderSections } from "./searchLanes";
 import { resolveSearchTarget } from "./searchTargets";
 import { sectionsToRowCounts } from "./omniSearch";
-import { buildPageView, refineSection, splitByGroups } from "./searchPage";
+import { buildPageView, laneCounts, refineSection, splitByGroups } from "./searchPage";
 import { parseRefinement } from "./refine";
 
 function filesSection(): LaneSection {
@@ -122,5 +122,15 @@ describe("searchPage — server grouping, client refinement", () => {
     const sessions: LaneSection = { lane: "sessions", truncated: false, results: [] };
     const { view } = buildPageView([sessions, filesSection()], "");
     expect(view.map((v) => v.section.lane)).toEqual(["files", "files", "sessions"]);
+  });
+});
+
+describe("laneCounts", () => {
+  it("lists only lanes that have rows, with their labels", () => {
+    const empty: LaneSection = { lane: "symbols", truncated: false, results: [] };
+    const counts = laneCounts([empty, filesSection()]);
+    expect(counts).toHaveLength(1);
+    expect(counts[0]).toMatchObject({ lane: "files", count: 3 });
+    expect(laneCounts([empty])).toEqual([]);
   });
 });

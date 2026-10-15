@@ -380,80 +380,57 @@
   padding: 8px 10px;
   font-size: 12px;
 }
-.kbc-searchpage__bar {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 16px;
-  justify-content: space-between;
-}
-/* V80-R1 — the prefix chips as ONE labelled group: a visible caption
- * beside the SAME `role="group"` `PrefixChips` already wraps itself in
- * (`components/search/PrefixChips.tsx`), matching the toolbar's own
- * visible group labels below. */
-.kbc-searchpage__chipgroup {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.kbc-searchpage__grouplabel {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
-}
-/* V80-R1 — the 7 action pills as 3 labelled groups (Results · Query ·
- * Set), replacing the old flat `.kbc-searchpage__controls` row. */
-.kbc-searchpage__toolbar {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-.kbc-searchpage__toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.kbc-searchpage__toolbar-label {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
-  margin-right: 2px;
-}
-/* The collapsed <1100px overflow menu: a native `<details>` disclosure —
- * keyboard-operable with no extra outside-click JS — whose panel stacks
- * the SAME three groups `renderToolbarGroups()` also renders inline on a
- * wide viewport (`routes/Search.tsx`, one source of buttons, never two). */
-.kbc-searchpage__toolbar-menu {
+/* "Syntax" — the prefix grammar offered on request, never wallpaper. */
+.kbc-searchpage__syntax {
   position: relative;
+  display: inline-flex;
 }
-.kbc-searchpage__toolbar-menu > summary {
-  list-style: none;
+.kbc-searchpage__syntax-btn {
+  background: none;
+  border: 0;
+  padding: 4px 6px;
+  color: var(--ink-dim);
+  font-size: var(--fs-sm);
+  text-decoration: underline;
   cursor: pointer;
 }
-.kbc-searchpage__toolbar-menu > summary::-webkit-details-marker {
-  display: none;
+.kbc-searchpage__syntax-btn:hover {
+  color: var(--ink);
 }
-.kbc-searchpage__toolbar-menu-panel {
+.kbc-searchpage__syntax-pop {
   position: absolute;
   top: calc(100% + 4px);
-  right: 0;
+  left: 0;
   z-index: var(--z-popover);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-  min-width: 220px;
+  min-width: 200px;
+  padding: 6px;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lift);
 }
-.kbc-searchpage__toolbar-menu-panel .kbc-searchpage__toolbar-group {
-  flex-wrap: wrap;
+.kbc-searchpage__syntax-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 8px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.kbc-searchpage__syntax-row:hover {
+  background: var(--bg-card);
+}
+.kbc-searchpage__syntax-row code {
+  min-width: 2ch;
+  font-family: var(--font-mono);
+  color: var(--accent);
 }
 .kbc-searchpage__ran,
 .kbc-searchpage__diag,

@@ -71,7 +71,7 @@ export default function FacetRail({ query, facets, scopes, onQuery }: FacetRailP
           ))}
         </>
       ) : (
-        <p className="kbc-facets__empty">Facets are off — Alt-f writes `facets:1` into the query.</p>
+        <p className="kbc-facets__empty">Facets hidden</p>
       )}
 
       {scopeNames.length > 0 && (

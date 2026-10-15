@@ -153,3 +153,15 @@ export function buildPageView(sections: LaneSection[], refineText: string): Page
   const shown = view.reduce((n, v) => n + laneRowCount(v.section), 0);
   return { view, total, shown, refined: !r.empty };
 }
+
+/// Per-lane row counts of the page the daemon returned, in canonical lane
+/// order, lanes with no rows omitted. Feeds the "N results · lanes: …" line;
+/// counts are the same navigable rows `buildPageView` totals.
+export function laneCounts(sections: LaneSection[]): { lane: string; label: string; count: number }[] {
+  const out: { lane: string; label: string; count: number }[] = [];
+  for (const s of orderSections(sections)) {
+    const count = laneRowCount(s);
+    if (count > 0) out.push({ lane: s.lane, label: LANE_LABELS[s.lane] ?? s.lane, count });
+  }
+  return out;
+}
