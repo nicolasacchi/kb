@@ -20,6 +20,18 @@ import { loadKeyPreset, saveKeyPreset } from "../lib/prefs";
 import "../styles/home.css";
 import "../styles/settings.css";
 
+/// The kb-sibling/1 Hello fields `routes::IdentityResponse` always sends and
+/// this page prints. Local (not an `api/types.ts` export: that file's hand
+/// mirrors are ratcheted down, never up); optional because an older daemon
+/// never sends them, and the page then omits the line rather than invent one.
+type IdentityFacts = IdentityOut & {
+  build_sha?: string;
+  sibling_protocol?: string;
+  sibling_major?: number;
+  /// RFC 3339 (`IdentityResponse::started_at` is a `String`).
+  started_at?: string;
+};
+
 function Row({ label, children, attr }: { label: string; children: ReactNode; attr?: string }) {
   return (
     <div className="kbc-settings__row" {...(attr ? { [attr]: true } : {})}>
@@ -231,7 +243,7 @@ export default function Settings() {
   const repos = useRepos();
   const bus = useCommands();
   const list = repos.data?.repos ?? [];
-  const id = identity.data;
+  const id: IdentityFacts | undefined = identity.data;
   return (
     <div className="kbc-settings" id="main" data-kbc-settings>
       <PageHeader title="Settings" lede="How this instrument is set up." />

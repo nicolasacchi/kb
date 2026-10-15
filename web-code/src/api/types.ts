@@ -6257,16 +6257,3 @@ export interface SyntaxOut {
   total?: number;
   truncated?: boolean;
 }
-
-/// OL-C8 — declaration-merged onto `IdentityOut` (declared above): the
-/// kb-sibling/1 Hello fields `routes::IdentityResponse` always sends, which
-/// the Settings page prints. Optional here for the same reason as every other
-/// additive field: an older daemon never sends them, and the page then omits
-/// the line rather than inventing a value.
-export interface IdentityOut {
-  build_sha?: string;
-  sibling_protocol?: string;
-  sibling_major?: number;
-  /// RFC 3339 timestamp (`IdentityResponse::started_at` is a `String`).
-  started_at?: string;
-}
