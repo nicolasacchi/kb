@@ -29,8 +29,13 @@ async function setTheme(page: Page, theme: "dark" | "light") {
 }
 
 async function settle(page: Page) {
+  // Not "networkidle": the SPA keeps an SSE stream open, so the network never
+  // idles. Fonts loaded + two animation frames + a short beat is the settle.
   await page.evaluate(() => document.fonts.ready);
-  await page.waitForLoadState("networkidle");
+  await page.evaluate(
+    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+  );
+  await page.waitForTimeout(500);
 }
 
 for (const theme of ["dark", "light"] as const) {
