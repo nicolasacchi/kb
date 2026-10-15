@@ -822,7 +822,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "central",
-    note: "V72-J2 (D8) — the current file's comments/1 blocks (doc/annotation/directive/…), ALWAYS offered (unlike Review/Dossier, comments/1 has no conditional gate — every file the scanner covers has an honest, possibly-empty, list).",
+    note: "V72-J2 (D8) — the current file's comments/1 blocks (doc/annotation/directive/…). Comments is a section of the Facts home, so this opens the Facts home and scrolls the Comments section into view; it is ALWAYS offered (unlike Review/Dossier, comments/1 has no conditional gate — every file the scanner covers has an honest, possibly-empty, list).",
   },
   {
     id: "rail.tab.trail",
@@ -1918,7 +1918,7 @@ export const KBC_COMMANDS: readonly KbcCommand[] = [
     sideEffect: "none",
     lifecycle: "shipped",
     dispatch: "central",
-    note: "V72-J2 — the keyboard door to the same small card a gutter-marker hover/click opens (kind, keyword fields, state + reason, jump-to-symbol for a `doc` block); opens the rail's Comments tab scrolled to the block at the cursor's line.",
+    note: "V72-J2 — the keyboard door to the same small card a gutter-marker hover/click opens (kind, keyword fields, state + reason, jump-to-symbol for a `doc` block); opens the rail's Facts home (its Comments section) scrolled to the block at the cursor's line.",
   },
   {
     id: "permalink.copy",
