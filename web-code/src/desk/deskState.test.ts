@@ -172,13 +172,13 @@ describe("deskState — retired rail tab ids (OL-C4)", () => {
   it("a persisted dossier/comments/trail railTab lands on the home that now holds it", () => {
     const want = { dossier: "understand", comments: "facts", trail: "notes" } as const;
     for (const [old, home] of Object.entries(want)) {
-      expect(migrateDeskState({ v: 1, preset: "read", railTab: old }).railTab).toBe(home);
+      expect(migrateDeskState({ v: 1, preset: "read", railTab: old })?.railTab).toBe(home);
     }
   });
 
   it("an unknown railTab still falls back to the preset's own", () => {
-    expect(migrateDeskState({ v: 1, preset: "review", railTab: "nope" }).railTab).toBe("review");
-    expect(migrateDeskState({ v: 1, preset: "read", railTab: "toString" }).railTab).toBe("all");
+    expect(migrateDeskState({ v: 1, preset: "review", railTab: "nope" })?.railTab).toBe("review");
+    expect(migrateDeskState({ v: 1, preset: "read", railTab: "toString" })?.railTab).toBe("all");
   });
 });
 
