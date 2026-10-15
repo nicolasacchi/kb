@@ -17,9 +17,10 @@ const MASKS = [
   ".kb-card__age",
   ".kb-card__new",
   "time",
-  "[class*='age']",
-  "[class*='mtime']",
-  "[aria-label*='daemon status' i]",
+  // Status bar: ingest rate, artifact/kb counts and warning count move with
+  // whatever the earlier specs left behind.
+  ".kb-status-cell",
+  ".kb-status-counts",
 ];
 
 // Clock- and visit-dependent text (timestamps in the passport, "active 4s",
