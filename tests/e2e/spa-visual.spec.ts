@@ -36,6 +36,15 @@ function textMasks(page: Page) {
   ];
 }
 
+// The inspector's Reading / Read-by-you blocks show this browser's reading
+// progress, which earlier specs leave in varying states; the "stopped at"
+// line even changes how many lines the column takes. Hide them (and their
+// headings) outright rather than mask, so nothing below them shifts.
+const HIDE_READING_STATE = `
+  .kb-pinsp__reading, .kb-pinsp__progress, .kb-pinsp__readby,
+  .kb-pinsp__body h4:has(+ .kb-pinsp__reading) { display: none !important; }
+`;
+
 async function setTheme(page: Page, theme: "dark" | "light") {
   await page.addInitScript((t) => {
     localStorage.setItem("kb:prefs", JSON.stringify({ theme: t }));
@@ -70,6 +79,7 @@ for (const theme of ["dark", "light"] as const) {
       await setTheme(page, theme);
       await page.goto(`${BASE}/a/canon/kitchen-sink.html`);
       await expect(page.locator("iframe").first()).toBeVisible();
+      await page.addStyleTag({ content: HIDE_READING_STATE });
       await settle(page);
       await expect(page).toHaveScreenshot(`reader-${theme}.png`, {
         mask: [...MASKS.map((s) => page.locator(s)), ...textMasks(page), page.locator("iframe")],
