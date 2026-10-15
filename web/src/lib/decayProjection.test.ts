@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   decayHalfLifeDays,
   decayHalfLifeLabel,
+  decayHalfLifeSummary,
+  modalDecayK,
   decayValueAt,
   floorState,
   floorStateLabel,
@@ -158,5 +160,26 @@ describe("decayHalfLifeLabel", () => {
 
   it("says so for a non-decaying rate", () => {
     expect(decayHalfLifeLabel(0)).toBe("score never decays");
+  });
+});
+
+describe("decayHalfLifeSummary", () => {
+  it("says the single label once when every rate agrees", () => {
+    expect(decayHalfLifeSummary([DECAY_SLOW, DECAY_SLOW])).toBe("score halves every ~69d");
+  });
+  it("spans the range when buckets differ", () => {
+    expect(decayHalfLifeSummary([DECAY_SLOW, DECAY_FAST])).toBe("score halves every ~7-69d");
+  });
+  it("is null for no rates and honest about non-decaying ones", () => {
+    expect(decayHalfLifeSummary([])).toBeNull();
+    expect(decayHalfLifeSummary([0])).toBe("score never decays");
+    expect(decayHalfLifeSummary([0, DECAY_FAST])).toBe("score halves every ~7d (some never decay)");
+  });
+});
+
+describe("modalDecayK", () => {
+  it("picks the most common rate and ignores missing ones", () => {
+    expect(modalDecayK([DECAY_SLOW, DECAY_FAST, DECAY_SLOW, undefined])).toBe(DECAY_SLOW);
+    expect(modalDecayK([undefined, null])).toBeNull();
   });
 });

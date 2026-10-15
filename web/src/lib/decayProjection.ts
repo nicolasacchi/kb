@@ -148,8 +148,40 @@ export function decayHalfLifeDays(decayK: number): number {
   return decayK > 0 ? Math.LN2 / decayK : Infinity;
 }
 
+/**
+ * The page-level decay caption for a set of rates: the single common
+ * half-life label when every rate agrees, a "~Ad-Bd" span when they differ,
+ * `null` for an empty set. Missing rates are skipped by the caller.
+ */
+export function decayHalfLifeSummary(decayKs: number[]): string | null {
+  if (decayKs.length === 0) return null;
+  const halves = decayKs.map(decayHalfLifeDays);
+  const finite = halves.filter((d) => Number.isFinite(d)).map((d) => Math.round(d));
+  if (finite.length === 0) return "score never decays";
+  const lo = Math.min(...finite);
+  const hi = Math.max(...finite);
+  const mixed = finite.length < halves.length;
+  const span = lo === hi ? `${lo}d` : `${lo}-${hi}d`;
+  return `score halves every ~${span}${mixed ? " (some never decay)" : ""}`;
+}
+
 /** Render-ready half-life label, e.g. "score halves every ~7d". */
 export function decayHalfLifeLabel(decayK: number): string {
   const half = decayHalfLifeDays(decayK);
   return Number.isFinite(half) ? `score halves every ~${Math.round(half)}d` : "score never decays";
+}
+
+/** The most frequent decay rate in a list (null when none is a number). */
+export function modalDecayK(ks: Array<number | null | undefined>): number | null {
+  const counts = new Map<number, number>();
+  for (const k of ks) if (typeof k === "number") counts.set(k, (counts.get(k) ?? 0) + 1);
+  let best: number | null = null;
+  let n = 0;
+  for (const [k, c] of counts) {
+    if (c > n) {
+      best = k;
+      n = c;
+    }
+  }
+  return best;
 }
