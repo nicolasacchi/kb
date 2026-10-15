@@ -212,6 +212,9 @@ WORKDIR /web
 # Lockfile-first so `npm ci`'s layer is cached until deps actually change.
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
+# The shared ui/ source dir (imported as ../ui/src from /web) sits beside the
+# app, outside its package; copied after npm ci to keep the dep layer cached.
+COPY ui/ /ui/
 # Now the sources. `.dockerignore` excludes web/node_modules + web/dist, so
 # this neither clobbers the installed deps nor ships a stale prior build.
 COPY web/ ./
@@ -269,6 +272,8 @@ FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0
 WORKDIR /web-code
 COPY web-code/package.json web-code/package-lock.json ./
 RUN npm ci
+# Shared ui/ source dir (../ui/src from /web-code); see the `spa` stage.
+COPY ui/ /ui/
 COPY web-code/ ./
 RUN npm run build
 

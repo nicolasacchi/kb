@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./app";
+import { UI_PROBE } from "@kb/ui/probe";
 import { LiveTailPortalProvider } from "./context/LiveTailPortalContext";
 import { applyPrefs, loadPrefs, watchSystemTheme } from "./api/prefs";
 import { queryClient, startSseInvalidationBridge } from "./api/queryClient";
@@ -35,6 +36,9 @@ import "./styles/mobile.css";
 // back/forward + reload (both target the same offset, but the browser can fire
 // before the virtualizer lays out, causing a one-frame jump).
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+
+// Witness: imports the shared ui/ source dir so it is compiled into this bundle (OL F1).
+document.documentElement.dataset.kbUi = UI_PROBE;
 
 // Apply saved prefs before first paint to avoid a theme flash on reload.
 applyPrefs(loadPrefs());

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 // Pin the timezone to UTC for EVERY launch path, not just `npm test`. The
@@ -32,12 +33,18 @@ process.env.TZ = "UTC";
 // executed >= the ci/test-floors.toml floor), not from the exit code alone.
 const witnessDir = process.env.KB_WITNESS_DIR;
 export default defineConfig({
+  // Mirrors vite.config.ts: ui/ is a source dir outside this app's root, so its
+  // files must resolve react / react-dom from THIS app's node_modules.
+  resolve: {
+    alias: { "@kb/ui": fileURLToPath(new URL("../ui/src", import.meta.url)) },
+    dedupe: ["react", "react-dom"],
+  },
   test: {
     ...(witnessDir
       ? { reporters: ["default", "json"], outputFile: { json: `${witnessDir}/vitest-web.json` } }
       : {}),
     environment: "node",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "../ui/src/**/*.test.ts", "../ui/src/**/*.test.tsx"],
     clearMocks: true,
   },
 });

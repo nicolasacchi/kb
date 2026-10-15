@@ -15,6 +15,11 @@ on:
   # is therefore in a DIFFERENT group — deliberately, so dispatching on a
   # branch can never cancel that branch's open PR checks.
   workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: "Regenerate Playwright goldens on this runner (--update-snapshots); the e2e and code-e2e jobs upload them as artifacts"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -627,10 +632,24 @@ jobs:
         # step's exit status is no longer the only evidence.
         env:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
+          UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
         working-directory: tests/e2e
         run: |
           mkdir -p "$KB_WITNESS_DIR"
-          set -o pipefail; npx playwright test 2>&1 | tee playwright-output.log
+          # workflow_dispatch update_snapshots=true regenerates goldens (OL F1).
+          args=()
+          if [ "$UPDATE_SNAPSHOTS" = true ]; then args+=(--update-snapshots); fi
+          set -o pipefail; npx playwright test "${args[@]}" 2>&1 | tee playwright-output.log
+
+      - name: Upload Playwright goldens
+        if: ${{ always() && inputs.update_snapshots }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-snapshots
+          path: tests/e2e/__snapshots__
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
 
       - name: Previous main e2e report (flaky-twice check input)
         # A12.f5 -- the same spec flaky on main twice in a row is a defect,
@@ -1316,7 +1335,26 @@ jobs:
         # KB_WITNESS_DIR -> web-code/e2e/playwright.config.ts adds the JSON reporter.
         env:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
-        run: just ci-code-e2e
+          UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
+        # workflow_dispatch update_snapshots=true -> the justfile passes
+        # KB_PW_ARGS on to playwright (OL F1).
+        run: |
+          if [ "$UPDATE_SNAPSHOTS" = true ]; then export KB_PW_ARGS=--update-snapshots; fi
+          just ci-code-e2e
+
+      - name: Upload Playwright goldens
+        if: ${{ always() && steps.changes.outputs.run == 'true' && inputs.update_snapshots }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: code-e2e-snapshots
+          # ARIA goldens live in __snapshots__/, screenshot goldens in visual/
+          # (web-code/e2e/playwright.config.ts).
+          path: |
+            web-code/e2e/__snapshots__
+            web-code/e2e/visual
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
 
       - name: Witness (Playwright JSON report -> floor + zero failures)
         if: ${{ !cancelled() }}
@@ -1595,6 +1633,26 @@ jobs:
   # was legitimately skipped is allowed, anything else is a failure. Add every
   # new job of this file to `needs` — the `jobs-covered` step below fails if
   # one is missing, so the list cannot rot quietly.
+  spa-image:
+    permissions:
+      contents: read
+    name: spa-image (Dockerfile SPA stages build)
+    # The image build (build-image.yml) only runs after ci on main, so nothing
+    # on a PR built the Dockerfile's two SPA stages. They copy web/ and
+    # web-code/ into an isolated context; anything those apps import from
+    # outside their own directory (ui/) must be copied in explicitly, or tsc
+    # and vite fail only at image-build time. Unconditional: node stages only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the kb SPA stage
+        run: docker build --target spa --build-arg KB_GIT_SHA=ci-check -t kb-spa-check .
+
+      - name: Build the kb-code SPA stage
+        run: docker build --target kb-code-spa -t kb-code-spa-check .
+
   ci-gate:
     permissions:
       contents: read
@@ -1615,6 +1673,7 @@ jobs:
       - web-unit
       - hook-omp
       - supply-chain
+      - spa-image
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

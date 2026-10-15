@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 
 // Stamp the git commit this bundle was built from into `__KB_BUILD_SHA__`.
@@ -67,7 +68,8 @@ export default defineConfig({
   // chunk only; never imported from `annotate.ts`, whose 12 KiB CI guard would
   // otherwise trip.)
   resolve: {
-    dedupe: ["@codemirror/state", "@lezer/common"],
+    dedupe: ["@codemirror/state", "@lezer/common", "react", "react-dom"],
+    alias: { "@kb/ui": fileURLToPath(new URL("../ui/src", import.meta.url)) },
   },
   define: {
     __KB_BUILD_SHA__: JSON.stringify(gitSha()),
@@ -157,6 +159,7 @@ export default defineConfig({
   server: {
     port: 4738,
     strictPort: true,
+    fs: { allow: [".", "../ui"] },
     proxy: {
       "/api": "http://127.0.0.1:4737",
       "/a": "http://127.0.0.1:4737",
