@@ -31,6 +31,8 @@
 // HotkeyRoot), and every `scope: "global"` entry below IS a real, single
 // space-separated key sequence `resolve()` can parse.
 
+import type { KeyRow, KeyScopeView } from "@kb/ui/keys/types";
+
 export type Scope =
   | "global"
   | "gallery"
@@ -277,6 +279,84 @@ export function groupRegistry(): RegistryGroup[] {
     byGroup.get(b.group)!.push(b);
   }
   return order.map((group) => ({ group, bindings: byGroup.get(group)! }));
+}
+
+// ── shared which-key / help-sheet adapters (pure) ──────────────────────────
+//
+// Presentation only: these map `REGISTRY` onto the registry-agnostic shapes of
+// `@kb/ui/keys` (the shared which-key overlay and help sheet). They never feed
+// `resolve()` and add no binding.
+
+/// Letter-capture prefixes (`m`, `` ` ``, `"`, `'`): after one of these
+/// HotkeyRoot awaits an a–z slot. Shown as ONE row, not 26.
+const LETTER_PREFIX_ROWS: Readonly<Record<string, { verb: string; group: string }>> = {
+  m: { verb: "mark slot", group: "Marks" },
+  "`": { verb: "jump to mark slot", group: "Marks" },
+  '"': { verb: "register slot (store)", group: "Registers" },
+  "'": { verb: "register slot (paste)", group: "Registers" },
+};
+
+/// The `?` sheet's rows. `scope` omitted = every binding (the sheet lists all
+/// surfaces, grouped by the registry's own `group`); given = that scope plus
+/// `global`. The key cell is `keys` split on spaces, so `join(" ")` restores
+/// the registry string byte-for-byte.
+export function toKeyRows(registry: readonly Binding[], scope?: Scope): KeyRow[] {
+  return registry
+    .filter((b) => scope === undefined || scopeMatches(b, scope))
+    .map((b) => ({
+      keys: tokensOf(b.keys),
+      verb: b.label,
+      scope: b.scope,
+      group: b.group,
+      id: b.actionId,
+    }));
+}
+
+/// The which-key view for a pending `prefix`: one row per distinct next token
+/// among the bindings reachable in `scope`. A next token that completes
+/// exactly one binding names it; one that leads on to more keys is a group row
+/// ("N more…"). Letter-capture prefixes yield the single "a–z" slot row.
+/// `null` when nothing can follow.
+export function toKeyView(
+  prefix: readonly string[],
+  registry: readonly Binding[],
+  scope: Scope,
+): KeyScopeView | null {
+  if (prefix.length === 0) return null;
+  if (prefix.length === 1 && LETTER_PREFIX_ROWS[prefix[0]]) {
+    const r = LETTER_PREFIX_ROWS[prefix[0]];
+    return {
+      prefix: [...prefix],
+      rows: [{ keys: ["a–z"], verb: r.verb, group: r.group }],
+      scope: r.group,
+    };
+  }
+  const byNext = new Map<string, Binding[]>();
+  for (const b of registry) {
+    if (!scopeMatches(b, scope)) continue;
+    const toks = tokensOf(b.keys);
+    if (toks.length <= prefix.length || !startsWith(toks, prefix)) continue;
+    const next = toks[prefix.length];
+    const list = byNext.get(next);
+    if (list) list.push(b);
+    else byNext.set(next, [b]);
+  }
+  if (byNext.size === 0) return null;
+  const rows: KeyRow[] = [...byNext.entries()].map(([next, bs]) => {
+    const leaf = bs.length === 1 && tokensOf(bs[0].keys).length === prefix.length + 1 ? bs[0] : null;
+    return {
+      keys: [next],
+      verb: leaf ? leaf.label : `${bs.length} more…`,
+      group: bs[0].group,
+      isGroup: !leaf,
+    };
+  });
+  const groups = new Set(rows.map((r) => r.group));
+  return {
+    prefix: [...prefix],
+    rows,
+    scope: groups.size === 1 ? [...groups][0] : undefined,
+  };
 }
 
 // ── the chord machine ───────────────────────────────────────────────────────

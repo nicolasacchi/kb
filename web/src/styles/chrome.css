@@ -3303,53 +3303,6 @@ a.kb-idschip:hover {
   box-shadow: var(--shadow);
 }
 
-.kb-keyhelp {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  background: var(--backdrop);
-  backdrop-filter: blur(6px);
-  display: grid;
-  place-items: center;
-}
-.kb-keyhelp__card {
-  width: min(720px, calc(100vw - 48px));
-  max-height: calc(100vh - 96px);
-  overflow-y: auto;
-  background: var(--bg-panel);
-  border: 1px solid var(--rule);
-  border-radius: 12px;
-  padding: 22px 26px;
-  box-shadow: var(--shadow);
-  color: var(--ink);
-}
-.kb-keyhelp__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-.kb-keyhelp__head h2 {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-size: var(--fs-title);
-  margin: 0;
-}
-.kb-keyhelp__close {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  border: 1px solid var(--rule);
-  background: var(--bg-card);
-  color: var(--ink-mute);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-}
-.kb-keyhelp__close:hover {
-  color: var(--ink);
-  background: var(--bg-card-hi);
-}
 .kb-keyhelp__sect {
   margin-bottom: 18px;
 }
