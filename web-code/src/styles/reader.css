@@ -61,6 +61,48 @@
 .kbc-reader-toolbar::-webkit-scrollbar {
   display: none;
 }
+/* OL-C3 — the ViewBar inside the toolbar keeps the old row height: no
+ * 40px min-height, no panel chrome, compact buttons, and cluster legends as
+ * small sans labels (not mono caps). The wrapper's own overflow is released
+ * so the More menu is not clipped; the bar itself is what shrinks. */
+.kbc-reader-toolbar:has([data-kb-viewbar]) {
+  overflow: visible;
+}
+.kbc-reader-toolbar .kb-viewbar {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
+  gap: var(--pad-2);
+}
+.kbc-reader-toolbar .kb-viewbar__clusters {
+  margin-left: 0;
+  flex-wrap: nowrap;
+}
+.kbc-reader-toolbar .kb-viewbar__cluster {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.kbc-reader-toolbar .kb-viewbar__legend {
+  font-family: var(--font-sans, inherit);
+  font-size: var(--fs-xs);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.kbc-reader-toolbar .kb-viewbar__btn {
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+.kbc-reader-toolbar .kb-viewbar__btn[aria-pressed="true"] {
+  border-color: var(--accent-bor);
+  color: var(--accent-soft);
+  background: var(--accent-bg);
+}
+.kbc-reader-toolbar .kb-viewbar__menu {
+  background: var(--bg-panel);
+}
 .kbc-toolbar-group {
   display: inline-flex;
   align-items: center;
