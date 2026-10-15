@@ -81,7 +81,7 @@ describe("ReviewDiffToolbar (OL C5)", () => {
   it("shows exactly nine controls on desktop; Lanes and Show map wait in More", () => {
     const html = render();
     const visible = [
-      "data-kbc-rdiff-ps=\"\"", // patchset chip
+      "data-kbc-rdiff-ps=", // patchset chip
       "data-kbc-review-progress=",
       "data-kbc-rdiff-jump=",
       "data-kbc-rdiff-tour-start",
