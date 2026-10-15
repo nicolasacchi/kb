@@ -26,7 +26,7 @@ body,
   font-family: var(--font-mono);
 }
 
-/* App shell — owned by app.css (3-row grid: topbar / body / statusbar
+/* App shell — owned by app.css (3-row grid: topbar / ribbon / body
  * after D2; 4-row with the ribbon after D3). This file's earlier
  * `.app { grid-template-rows: var(--topbar-h) 1fr }` clobbered the new
  * grid because gallery.css loads after app.css. Rule retired here. */

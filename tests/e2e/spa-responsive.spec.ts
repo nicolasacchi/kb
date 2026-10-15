@@ -8,11 +8,11 @@ import { BASE } from "./helpers";
 // hamburger drawer + compact header + immersive reading actually engage.
 //
 // Selectors are the SPA's stable chrome classes (matching the other specs):
-//   .kb-burger              hamburger (mobile-only)
-//   .kb-head > .kb-viewtoggle   desktop 7-tab strip
-//   .kb-head > .kb-inbox / .kb-anchor   header pills (hidden ≤860px — W3)
+//   [data-kb-spine-menu]    Spine menu button (mobile-only)
+//   .kb-head .kb-viewtoggle   desktop view strip (Spine switcher slot)
+//   .kb-head .kb-inbox / .kb-anchor   header pills (Spine right slot; hidden ≤860px — W3)
 //   .body--with-rail > .kb-side in-route filter rail (desktop-only on mobile)
-//   .kb-drawer / .kb-navlist    off-canvas nav+filters drawer
+//   [data-kb-sheet] / .kb-navlist    nav+filters Sheet (OL-L1)
 //   [data-testid=drawer-inbox/-anchors]  the pills' mobile homes (drawer rows)
 //   .kb-ctxbar__lbl         word labels on detail action buttons (icon-only on mobile)
 //   .kb-immersive-toggle    full-screen reading FAB (mobile-only)
@@ -56,9 +56,9 @@ test.describe("desktop layout", () => {
   }) => {
     await page.goto(`${base()}/`);
     await expect(page.locator(".kb-selector-wrap .kb-ws")).toBeVisible();
-    await expect(page.locator(".kb-head > .kb-viewtoggle")).toBeVisible();
+    await expect(page.locator(".kb-head .kb-viewtoggle")).toBeVisible();
     await expect(page.locator(".body--with-rail > .kb-side")).toBeVisible();
-    await expect(page.locator(".kb-burger")).toBeHidden();
+    await expect(page.locator("[data-kb-spine-menu]")).toBeHidden();
     await expectNoHorizontalScroll(page);
   });
 
@@ -118,18 +118,18 @@ test.describe("mobile layout", () => {
   }) => {
     await page.goto(`${base()}/`);
     await expect(page.locator(".kb-selector-wrap .kb-ws")).toBeVisible();
-    await expect(page.locator(".kb-burger")).toBeVisible();
-    await expect(page.locator(".kb-head > .kb-viewtoggle")).toBeHidden();
+    await expect(page.locator("[data-kb-spine-menu]")).toBeVisible();
+    await expect(page.locator(".kb-head .kb-viewtoggle")).toBeHidden();
     // W3 — the seeded comment + anchor guarantee both pills RENDER (attached:
     // proves the ["inbox"]/["anchors"] queries resolved with a count) and the
     // ≤860px CSS hides them (hidden: they'd otherwise overflow 390px by ~48px;
     // a bare toBeHidden would pass vacuously on a not-yet-fetched pill).
-    await expect(page.locator(".kb-head > .kb-inbox")).toBeAttached();
-    await expect(page.locator(".kb-head > .kb-inbox")).toBeHidden();
-    await expect(page.locator(".kb-head > .kb-anchor")).toBeAttached();
-    await expect(page.locator(".kb-head > .kb-anchor")).toBeHidden();
+    await expect(page.locator(".kb-head .kb-inbox")).toBeAttached();
+    await expect(page.locator(".kb-head .kb-inbox")).toBeHidden();
+    await expect(page.locator(".kb-head .kb-anchor")).toBeAttached();
+    await expect(page.locator(".kb-head .kb-anchor")).toBeHidden();
     await expect(page.locator(".body--with-rail > .kb-side")).toBeHidden();
-    await expect(page.locator(".kb-drawer")).toHaveCount(0);
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
     await expectNoHorizontalScroll(page);
   });
 
@@ -137,9 +137,9 @@ test.describe("mobile layout", () => {
     page,
   }) => {
     await page.goto(`${base()}/`);
-    await page.locator(".kb-burger").click();
+    await page.locator("[data-kb-spine-menu]").click();
 
-    const drawer = page.locator(".kb-drawer");
+    const drawer = page.locator("[data-kb-sheet]");
     await expect(drawer).toBeVisible();
     await expect(drawer.locator(".kb-navlist__row").first()).toBeVisible();
 
@@ -166,9 +166,9 @@ test.describe("mobile layout", () => {
 
   test("a drawer nav row navigates and closes the drawer", async ({ page }) => {
     await page.goto(`${base()}/`);
-    await page.locator(".kb-burger").click();
+    await page.locator("[data-kb-spine-menu]").click();
 
-    const drawer = page.locator(".kb-drawer");
+    const drawer = page.locator("[data-kb-sheet]");
     await expect(drawer).toBeVisible();
     // The destination rows are <Link>s; pick by accessible name.
     await drawer.getByRole("link", { name: "Sessions" }).click();

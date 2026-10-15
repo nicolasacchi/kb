@@ -1,6 +1,6 @@
 /* v0.10 D2 — refined-cartographic chrome.
  *
- * Header (52px) + StatusBar (28px) selectors. Rules lifted from the
+ * Header (44px Spine wrapper) + daemon-status selectors. Rules lifted from the
  * design handoff's KB.css (kb-system.jsx), translated to plain CSS
  * with the project's CSS-vars instead of inline interpolations.
  *
@@ -9,16 +9,17 @@
 
 /* ── header ─────────────────────────────────────────────────────── */
 .kb-head {
+  /* OL-L1 — wrapper around `@kb/ui/Spine` (which draws the bar itself); keeps
+   * the grid row, the sticky + z-index and the `.kb-head` selector family. */
+  --spine-h: var(--topbar-h);
   height: var(--topbar-h);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--rule);
-  background: var(--bg);
   position: sticky;
   top: 0;
   z-index: var(--z-bar);
+}
+
+.kb-head .kb-spine__switcher {
+  gap: var(--pad-2);
 }
 
 /* workspace pill (kb selector) */
@@ -516,18 +517,72 @@
   color: var(--accent-soft);
 }
 
-/* ── status bar ─────────────────────────────────────────────────── */
-.kb-statusbar {
-  height: var(--statusbar-h);
-  display: flex;
+/* ── daemon status indicator (Spine right slot; was the footer bar) ─── */
+.kb-statusind {
+  position: relative;
+}
+.kb-statusind__btn {
+  display: inline-flex;
   align-items: center;
-  padding: 0 14px;
-  gap: 14px;
-  border-top: 1px solid var(--rule);
-  background: var(--bg-panel-2);
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.kb-statusind__btn:hover {
+  background: var(--bg-card-hi);
+}
+/* The word is always in the accessibility tree (never hue-only); it is only
+ * painted at >=1280px. Fixed width so the right-aligned cluster to its left
+ * never shifts when idle flips to active. */
+.kb-statusind__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (min-width: 1280px) {
+  .kb-statusind__label {
+    position: static;
+    width: 7ch;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    text-align: left;
+  }
+}
+.kb-statusind__pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-popover-hi);
+  min-width: 260px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--ink-mute);
+}
+.kb-statusind__warnlist {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--ink-mute);
+  cursor: text;
 }
 .kb-status-cell {
   display: inline-flex;
@@ -567,18 +622,11 @@
 .kb-status-mute {
   color: var(--ink-mute);
 }
-.kb-status-div {
-  color: var(--ink-dim);
-}
 .kb-status-counts {
   font-variant-numeric: tabular-nums;
 }
 .kb-status-warn {
   color: var(--warn);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  cursor: help;
 }
 .kb-status-warn svg {
   vertical-align: middle;
@@ -586,32 +634,7 @@
 .kb-status-extra {
   color: var(--ink-mute);
 }
-.kb-status-keys {
-  margin-left: auto;
-  display: flex;
-  gap: 14px;
-}
-.kb-status-keys > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.kb-status-keys b {
-  background: var(--rule);
-  color: var(--ink);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  font-weight: 500;
-  font-size: var(--fs-xs);
-}
-
-/* Hide the keyboard chips on narrow screens so the warn cluster + extra
- * have breathing room. The chrome is desktop-first per the design's
- * 1440×900 frame; narrower viewports get a leaner status bar. */
 @media (max-width: 900px) {
-  .kb-status-keys {
-    display: none;
-  }
   /* v0.34 W — the identity chip is desktop-only chrome. On mobile the
    * header is already at its width budget (the compact-header specs
    * assert zero horizontal overflow), and "who am I" is not a reading
@@ -3266,7 +3289,7 @@ a.kb-idschip:hover {
 /* ── hotkeys + help overlay (S2) ─────────────────────────────────── */
 .kb-chord {
   position: fixed;
-  bottom: calc(var(--statusbar-h) + 12px);
+  bottom: 12px;
   left: 14px;
   z-index: var(--z-hint);
   padding: 6px 12px;
@@ -3939,7 +3962,7 @@ a.kb-idschip:hover {
   top: calc(var(--topbar-h) + var(--ribbon-h) + 24px);
   right: 14px;
   width: 168px;
-  max-height: calc(100vh - var(--topbar-h) - var(--ribbon-h) - var(--statusbar-h) - 56px);
+  max-height: calc(100vh - var(--topbar-h) - var(--ribbon-h) - 56px);
   overflow-y: auto;
   z-index: 4;
   font-family: var(--font-mono);

@@ -21,10 +21,9 @@ const MASKS = [
   ".kb-card__age",
   ".kb-card__new",
   "time",
-  // Status bar: ingest rate, artifact/kb counts and warning count move with
-  // whatever the earlier specs left behind.
-  ".kb-status-cell",
-  ".kb-status-counts",
+  // Daemon-status indicator in the Spine: idle/active/warn follows whatever
+  // the earlier specs left behind.
+  ".kb-statusind",
   // Bottom-right StatusPill: mounted only while it has something to show, so
   // it comes and goes between runs.
   ".pill-container",
