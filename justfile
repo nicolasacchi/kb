@@ -326,7 +326,8 @@ ci-code-e2e: ci-code-spa
     # `cd` scopes over both branches of the fallback (bare `a && b || c`
     # would run `c` from the original directory on failure).
     cd web-code/e2e && (npx playwright install chromium --with-deps || npx playwright install chromium)
-    cd web-code/e2e && npm test
+    # KB_PW_ARGS (ci.yml's update_snapshots dispatch input) carries --update-snapshots.
+    cd web-code/e2e && npm test -- ${KB_PW_ARGS:-}
 
 # Regenerate web/src/api/generated/ from the Rust wire types (ts-rs,
 # feature ts-export). TS_RS_LARGE_INT=number — this API serialises

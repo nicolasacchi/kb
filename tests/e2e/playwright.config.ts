@@ -37,7 +37,19 @@ export default defineConfig({
   // CI-only widening of the PER-ASSERTION budget (load, not a logic change):
   // doubles the 5s default so a slow-under-contention `expect` on a hosted
   // runner has room to resolve. Local runs keep Playwright's 5s default.
-  expect: { timeout: isCI ? 10_000 : 5_000 },
+  expect: {
+    timeout: isCI ? 10_000 : 5_000,
+    // Same shapes as web-code/e2e/playwright.config.ts (OL F1): ARIA goldens
+    // under __snapshots__/, screenshots tolerate 2% pixel drift.
+    toMatchAriaSnapshot: {
+      pathTemplate: "__snapshots__/{testFilePath}/{arg}{ext}",
+    },
+    toHaveScreenshot: {
+      pathTemplate: "__snapshots__/{testFilePath}/{arg}{-projectName}{ext}",
+      maxDiffPixelRatio: 0.02,
+      animations: "disabled",
+    },
+  },
   fullyParallel: false, // single daemon per run
   workers: 1,
   // CI gets exactly one retry to absorb a hosted-runner-load stall rather

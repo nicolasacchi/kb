@@ -15,6 +15,11 @@ on:
   # is therefore in a DIFFERENT group — deliberately, so dispatching on a
   # branch can never cancel that branch's open PR checks.
   workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: "Regenerate Playwright goldens on this runner (--update-snapshots); the e2e and code-e2e jobs upload them as artifacts"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -630,7 +635,20 @@ jobs:
         working-directory: tests/e2e
         run: |
           mkdir -p "$KB_WITNESS_DIR"
-          set -o pipefail; npx playwright test 2>&1 | tee playwright-output.log
+          # workflow_dispatch update_snapshots=true regenerates goldens (OL F1).
+          args=()
+          if [ "${{ inputs.update_snapshots }}" = true ]; then args+=(--update-snapshots); fi
+          set -o pipefail; npx playwright test "${args[@]}" 2>&1 | tee playwright-output.log
+
+      - name: Upload Playwright goldens
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-snapshots
+          path: tests/e2e/__snapshots__
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
 
       - name: Previous main e2e report (flaky-twice check input)
         # A12.f5 -- the same spec flaky on main twice in a row is a defect,
@@ -1316,7 +1334,19 @@ jobs:
         # KB_WITNESS_DIR -> web-code/e2e/playwright.config.ts adds the JSON reporter.
         env:
           KB_WITNESS_DIR: ${{ runner.temp }}/witness
+          # workflow_dispatch update_snapshots=true -> justfile passes it to playwright (OL F1).
+          KB_PW_ARGS: ${{ inputs.update_snapshots && '--update-snapshots' || '' }}
         run: just ci-code-e2e
+
+      - name: Upload Playwright goldens
+        if: ${{ always() && steps.changes.outputs.run == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: code-e2e-snapshots
+          path: web-code/e2e/__snapshots__
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
 
       - name: Witness (Playwright JSON report -> floor + zero failures)
         if: ${{ !cancelled() }}
