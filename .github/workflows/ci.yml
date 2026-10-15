@@ -638,7 +638,7 @@ jobs:
           mkdir -p "$KB_WITNESS_DIR"
           # workflow_dispatch update_snapshots=true regenerates goldens (OL F1).
           args=()
-          if [ "$UPDATE_SNAPSHOTS" = true ]; then args+=(--update-snapshots); fi
+          if [ "$UPDATE_SNAPSHOTS" = true ]; then args+=(--update-snapshots=all); fi
           set -o pipefail; npx playwright test "${args[@]}" 2>&1 | tee playwright-output.log
 
       - name: Upload Playwright goldens
@@ -1340,10 +1340,14 @@ jobs:
         # KB_PW_ARGS on to playwright (OL F1). The same dispatch also sets
         # KBC_VISUAL=1, so web-code/e2e/visual.spec.ts (opt-in, skipped on
         # every PR run) renders all its route screenshots on this runner and
-        # the artifact below carries them for review. PR runs never set it:
+        # the artifact below carries them for review. `=all` re-renders every
+        # golden: the default (`changed`) keeps any file whose diff stays under
+        # the per-pixel colour tolerance, and dim-text-on-dark changes do, so a
+        # review artifact would silently mix fresh and stale screenshots.
+        # PR runs never set it:
         # full-page screenshots stay out of the PR gate (machine-sensitive).
         run: |
-          if [ "$UPDATE_SNAPSHOTS" = true ]; then export KB_PW_ARGS=--update-snapshots KBC_VISUAL=1; fi
+          if [ "$UPDATE_SNAPSHOTS" = true ]; then export KB_PW_ARGS=--update-snapshots=all KBC_VISUAL=1; fi
           just ci-code-e2e
 
       - name: Upload Playwright goldens
