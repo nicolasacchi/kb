@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, type ReactNode } from "react";
+import { forwardRef, useImperativeHandle, useRef, type ReactNode } from "react";
 import type { AnnotationIntent, Symbol } from "../api/types";
 import {
   INSPECTOR_TABS,
@@ -15,45 +15,116 @@ import BookmarksPanel from "./bookmarks/BookmarksPanel";
 
 export type { InspectorTab };
 
-// V70-A4 — the rail re-cut from six SOURCE tabs to the design's TASK
-// tabs (docs/research/kb-code-v7-continuum-2026-09.html §P1):
+// OL-C4 — the rail is five HOMES plus the stacked All view (it was nine
+// tabs; several answered neighbouring questions):
 //
 //   All        everything stacked — tab one, hides nothing
-//   Understand outline + the entity passport ("what is this?")
+//   Understand outline + entity passport + the dossier's members ("what is this?")
 //   History    blame/why/story + file history ("how did it get here?")
-//   Notes      annotations + bookmarks ("what did I mark?")
+//   Notes      annotations + bookmarks + workspace notes + the trail
+//   Facts      aug-lane facts + the source's own comments
 //   Review     threads + findings ("what's contested?") — CONDITIONAL
+//
+// `dossier`, `comments` and `trail` are no longer tabs: their bodies render
+// as SECTIONS inside Understand, Facts and Notes (and in All). Their old
+// ids stay ACCEPTED by `openTab` / `normalizeInspectorTab` / persisted desk
+// state and land on the new home, scrolled to the section.
 //
 // Review is rendered only when the open file belongs to an open review.
 // When it is selected without one, the body says so ("no review context
 // for this file") rather than going blank: the research report's rail
 // rule (panel-layout-system.md §3.3) is "**Never blank.** If a lens has
 // nothing for the current subject, show the file-level fallback with a
-// caption … NN/g: recognition over recall."
-//
-// Everything else about the component is unchanged on purpose: the same
-// props, the same three ALWAYS-VISIBLE passport cards above the body,
-// the same `asSheet` mobile promotion, the same imperative
-// `openTab` handle (which now also accepts the legacy six-tab ids, so
-// the blame gutter and the `a` key keep working without a call-site
-// sweep). Root CLAUDE.md invariant #30's
-// grammar — ONE rail, one home per action, badge on the tab that has
-// something to show — is the thing being preserved, not the tab count.
+// caption". The same props, the three-plus ALWAYS-VISIBLE passport cards
+// above the body, the `asSheet` mobile promotion and the imperative
+// `openTab` handle are unchanged. Root CLAUDE.md invariant #30's grammar,
+// ONE rail, one home per action, a badge on the tab that has something to
+// show, is the thing being preserved.
 const TAB_META: Record<InspectorTab, { label: string; icon: ReactNode; hint: string }> = {
   all: { label: "All", icon: <Icon.Layers />, hint: "everything about this subject, stacked" },
   understand: { label: "Understand", icon: <Icon.Entity />, hint: "what is this?" },
   history: { label: "History", icon: <Icon.History />, hint: "how did it get here?" },
-  notes: { label: "Notes", icon: <Icon.Note />, hint: "what did I mark?" },
-  comments: { label: "Comments", icon: <Icon.Comment />, hint: "what does the source say about itself?" },
-  review: { label: "Review", icon: <Icon.ClipboardCheck />, hint: "what's contested?" },
-  dossier: { label: "Dossier", icon: <Icon.List />, hint: "what does this entity have?" },
-  // V74-L3b — kbc-trail/1's own read. "Where have I been?" is a question
-  // about the reader, not about the file, which is why this tab's body does
-  // not change when the open file does.
-  trail: { label: "Trail", icon: <Icon.Record />, hint: "where have I been?" },
+  notes: { label: "Notes", icon: <Icon.Note />, hint: "what did I mark, where have I been?" },
   // V76-R3a — aug-lane/1 Facts. A RAIL tab (Lane Budget: "gutter slot four
   // or a rail row, never a fifth slot"; slot four is comments/1).
-  facts: { label: "Facts", icon: <Icon.Facts />, hint: "what do the lanes say?" },
+  facts: { label: "Facts", icon: <Icon.Facts />, hint: "what do the lanes and the source say?" },
+  review: { label: "Review", icon: <Icon.ClipboardCheck />, hint: "what's contested?" },
+};
+
+export type RailSectionId =
+  | "workspace-notes"
+  | "outline"
+  | "entity"
+  | "members"
+  | "provenance"
+  | "history"
+  | "annotations"
+  | "bookmarks"
+  | "trail"
+  | "comments"
+  | "facts"
+  | "review";
+
+const SECTION_TITLE: Record<RailSectionId, string> = {
+  "workspace-notes": "Workspace notes",
+  outline: "Outline",
+  entity: "Entity",
+  members: "Members",
+  provenance: "Provenance",
+  history: "History",
+  annotations: "Annotations",
+  bookmarks: "Bookmarks",
+  trail: "Trail",
+  comments: "Comments",
+  facts: "Facts",
+  review: "Review",
+};
+
+/// Which sections each home renders, in order. Pure so the placement is
+/// pinned by a unit test rather than by reading JSX. `workspaceNotes`,
+/// `dossier` and `review` are the conditional sections (a workspace is open,
+/// the dossier center is mounted, the open file belongs to a review).
+export function railSections(
+  tab: InspectorTab,
+  has: { workspaceNotes: boolean; dossier: boolean; review: boolean },
+): RailSectionId[] {
+  const ws: RailSectionId[] = has.workspaceNotes ? ["workspace-notes"] : [];
+  const members: RailSectionId[] = has.dossier ? ["members"] : [];
+  switch (tab) {
+    case "all":
+      return [
+        ...ws,
+        "outline",
+        "entity",
+        ...members,
+        "provenance",
+        "history",
+        "annotations",
+        "bookmarks",
+        "trail",
+        "comments",
+        "facts",
+        ...(has.review ? (["review"] as const) : []),
+      ];
+    case "understand":
+      return ["outline", "entity", ...members];
+    case "history":
+      return ["provenance", "history"];
+    case "notes":
+      return [...ws, "annotations", "bookmarks", "trail"];
+    case "facts":
+      return ["facts", "comments"];
+    case "review":
+      return ["review"];
+  }
+}
+
+/// The section a retired tab id pointed at, so `openTab("comments")` lands on
+/// its new home AND brings the section into view.
+const RETIRED_TAB_SECTION: Partial<Record<LegacyInspectorTab, string>> = {
+  dossier: "members",
+  comments: "comments",
+  trail: "trail",
 };
 
 export interface InspectorRailHandle {
@@ -62,8 +133,9 @@ export interface InspectorRailHandle {
   /// OUTSIDE it, mirroring `FileTree.tsx`'s own `FileTreeHandle`
   /// imperative-ref convention (the established idiom in this codebase
   /// for "an external event needs to reach into a component's own UI
-  /// state"). Accepts the V70-A4 tab ids AND the pre-A4 six, so a
-  /// caller that has not been re-worded still lands on the right tab.
+  /// state"). Also accepts the retired ids (the pre-A4 six, plus
+  /// `dossier`/`comments`/`trail` since OL-C4), so a caller that has not been
+  /// re-worded still lands on the right tab.
   openTab: (tab: InspectorTab | LegacyInspectorTab) => void;
 }
 
@@ -106,10 +178,9 @@ export interface InspectorRailProps {
   onMobileClose?: () => void;
   /// V3.1-H3b — the entity passport (built by Reader; needs cursor + lenses).
   entityPanel?: ReactNode | null;
-  /// V72-G1.2 — the Dossier tab's body (the member jump list). Supplied ONLY
-  /// while the dossier center is mounted; its presence is what OFFERS the tab
-  /// (`hasDossierContext` below), the exact shape `reviewPanel`/
-  /// `hasReviewContext` already take.
+  /// V72-G1.2 — the dossier's member jump list. Since OL-C4 it is the
+  /// "Members" SECTION of Understand (and All), rendered only while
+  /// `hasDossierContext` says the dossier center is mounted.
   dossierPanel?: ReactNode | null;
   hasDossierContext?: boolean;
   /// DCB W3.B — the "Cited by" strip, ALWAYS visible above the tab body
@@ -295,7 +366,7 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     claimsCard = null,
     reviewPanel = null,
     hasReviewContext = false,
-    subject,
+    subject = null,
     caretSubject = null,
     pinned = false,
     onTogglePin,
@@ -310,32 +381,41 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
   handleRef,
 ) {
   const own = useInspectorTab("reader");
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const tab = tabProp ?? own.tab;
   const setTab = (next: InspectorTab) => {
     own.setTab(next);
     onTabChange?.(next);
   };
 
-  useImperativeHandle(handleRef, () => ({ openTab: (t) => setTab(normalizeInspectorTab(t)) }));
+  useImperativeHandle(handleRef, () => ({
+    openTab: (t) => {
+      setTab(normalizeInspectorTab(t));
+      const section = RETIRED_TAB_SECTION[t as LegacyInspectorTab];
+      if (section) {
+        // The home renders on the next frame; bring the moved section into view.
+        requestAnimationFrame(() =>
+          rootRef.current
+            ?.querySelector(`[data-kbc-rail-section="${section}"]`)
+            ?.scrollIntoView?.({ block: "nearest" }),
+        );
+      }
+    },
+  }));
 
   const badgeFor = (t: InspectorTab): number => {
     if (t === "notes") return unresolvedAnnotations + bookmarkCount;
-    if (t === "comments") return commentsBadgeCount;
+    // Facts carries the source-comments section, so it carries that badge.
+    if (t === "facts") return commentsBadgeCount;
     // Understand/History/All/Review have no unread concept — never invent one.
     return 0;
   };
 
-  // Review is offered only when there IS one. A selected-but-absent
-  // Review tab still renders (with its honest empty body) so a persisted
-  // choice never silently becomes a different tab.
-  // Review is offered only when there IS one; Dossier only while the dossier
-  // center is mounted. Both keep the same carve-out: a selected-but-absent tab
-  // still renders (with its own honest empty body) so a persisted choice never
+  // Review is offered only when there IS one. A selected-but-absent Review
+  // tab still renders (with its honest empty body) so a persisted choice never
   // silently becomes a different tab.
   const visibleTabs = INSPECTOR_TABS.filter(
-    (t) =>
-      (t !== "review" || hasReviewContext || tab === "review") &&
-      (t !== "dossier" || hasDossierContext || tab === "dossier"),
+    (t) => t !== "review" || hasReviewContext || tab === "review",
   );
 
   const outlineBody = <OutlineRail symbols={symbols} onJump={onJumpOutline} />;
@@ -376,13 +456,9 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
       No file open.
     </div>
   );
-  const dossierBody = hasDossierContext ? (
-    (dossierPanel ?? <div className="kbc-inspector__hint">No members in this dossier.</div>)
-  ) : (
-    <div className="kbc-inspector__hint" data-kbc-rail-no-dossier>
-      Open an entity dossier to jump through its members.
-    </div>
-  );
+  const dossierBody = hasDossierContext
+    ? (dossierPanel ?? <div className="kbc-inspector__hint">No members in this dossier.</div>)
+    : null;
   const reviewBody = hasReviewContext ? (
     (reviewPanel ?? <div className="kbc-inspector__hint">No threads on this file yet.</div>)
   ) : (
@@ -391,8 +467,24 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
     </div>
   );
 
+  const sectionBodies: Record<RailSectionId, ReactNode> = {
+    "workspace-notes": workspaceNotesPanel,
+    outline: outlineBody,
+    entity: entityBody,
+    members: dossierBody,
+    provenance: provenanceBody,
+    history: historyBody,
+    annotations: annotationsBody,
+    bookmarks: bookmarksBody,
+    trail: trailBody,
+    comments: commentsBody,
+    facts: factsBody,
+    review: reviewBody,
+  };
+
   return (
     <div
+      ref={rootRef}
       className="kbc-inspector"
       {...(asSheet
         ? { role: "dialog" as const, "aria-modal": true, id: "kbc-reader-sheet" }
@@ -443,61 +535,27 @@ const InspectorRail = forwardRef<InspectorRailHandle, InspectorRailProps>(functi
           );
         })}
       </nav>
-      {/* Only when the host actually tracks a subject (the Desk reader
-          always does; a host that omits the prop gets the bare
-          nav → cards → body shape). */}
-      {subject !== undefined && (
-        <SubjectChip
-          subject={subject}
-          caretSubject={caretSubject}
-          pinned={pinned}
-          onTogglePin={onTogglePin}
-        />
-      )}
+      <SubjectChip
+        subject={subject}
+        caretSubject={caretSubject}
+        pinned={pinned}
+        onTogglePin={onTogglePin}
+      />
       {citedBy}
       {frameworkCard}
       {diagnosticsCard}
       {schemaCard}
       {claimsCard}
       <div className="kbc-inspector__body" data-kbc-rail-body={tab}>
-        {tab === "all" && (
-          <>
-            {workspaceNotesPanel && <Section title="Workspace notes">{workspaceNotesPanel}</Section>}
-            <Section title="Outline">{outlineBody}</Section>
-            <Section title="Entity">{entityBody}</Section>
-            <Section title="Provenance">{provenanceBody}</Section>
-            <Section title="History">{historyBody}</Section>
-            <Section title="Annotations">{annotationsBody}</Section>
-            <Section title="Bookmarks">{bookmarksBody}</Section>
-            <Section title="Comments">{commentsBody}</Section>
-            <Section title="Facts">{factsBody}</Section>
-            {hasReviewContext && <Section title="Review">{reviewBody}</Section>}
-          </>
-        )}
-        {tab === "understand" && (
-          <>
-            <Section title="Outline">{outlineBody}</Section>
-            <Section title="Entity">{entityBody}</Section>
-          </>
-        )}
-        {tab === "history" && (
-          <>
-            <Section title="Provenance">{provenanceBody}</Section>
-            <Section title="History">{historyBody}</Section>
-          </>
-        )}
-        {tab === "notes" && (
-          <>
-            {workspaceNotesPanel && <Section title="Workspace notes">{workspaceNotesPanel}</Section>}
-            <Section title="Annotations">{annotationsBody}</Section>
-            <Section title="Bookmarks">{bookmarksBody}</Section>
-          </>
-        )}
-        {tab === "comments" && <Section title="Comments">{commentsBody}</Section>}
-        {tab === "trail" && <Section title="Trail">{trailBody}</Section>}
-        {tab === "facts" && <Section title="Facts">{factsBody}</Section>}
-        {tab === "review" && <Section title="Review">{reviewBody}</Section>}
-        {tab === "dossier" && <Section title="Members">{dossierBody}</Section>}
+        {railSections(tab, {
+          workspaceNotes: workspaceNotesPanel != null,
+          dossier: dossierBody != null,
+          review: hasReviewContext,
+        }).map((id) => (
+          <Section key={id} title={SECTION_TITLE[id]}>
+            {sectionBodies[id]}
+          </Section>
+        ))}
       </div>
     </div>
   );

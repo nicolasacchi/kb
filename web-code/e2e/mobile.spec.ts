@@ -83,12 +83,9 @@ test.describe("Reader mobile shell (390×844)", () => {
     await expect(sheet).toBeVisible();
     await expect(page.locator("[data-kbc-sheet-scrim]")).toBeVisible();
     // The full icon rail rides inside the sheet — same tabs as desktop.
-    // V70-A4 re-cut the six SOURCE tabs into the design's TASK tabs: All,
-    // Understand, History, Notes (Review appears only with an open review
-    // for this file, and this fixture has none). V72-J2 added Comments,
-    // UNCONDITIONAL like the first four, V74-L3b added Trail, and V76-R3a
-    // added Facts (aug-lane/1) on the same footing. Seven visible tabs.
-    await expect(sheet.locator("[data-kbc-itab]")).toHaveCount(7);
+    // OL-C4: five homes (All, Understand, History, Notes, Facts); Review
+    // appears only with an open review for this file, and this fixture has none.
+    await expect(sheet.locator("[data-kbc-itab]")).toHaveCount(5);
 
     await sheet.locator('[data-kbc-itab="notes"]').click();
     await expect(sheet.locator(".kbc-annotations")).toBeVisible();

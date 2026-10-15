@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { RAIL_TABS, type RailTab } from "../desk/deskState";
+import { RAIL_TABS, RETIRED_RAIL_TABS, type RailTab } from "../desk/deskState";
 
 // F3b — which sub-panel the reader's right-rail inspector is showing,
 // persisted per surface (localStorage), mirroring kb's own
@@ -36,7 +36,11 @@ export type LegacyInspectorTab =
   | "history"
   | "annotations"
   | "bookmarks"
-  | "entity";
+  | "entity"
+  // OL-C4 — the three ids that stopped being tabs (sections now).
+  | "dossier"
+  | "comments"
+  | "trail";
 
 /// Old id → the tab that now CONTAINS that content. `history` is the one
 /// name that survives with the same meaning; `provenance` folds into it
@@ -49,6 +53,9 @@ export const LEGACY_TAB_MAP: Record<LegacyInspectorTab, InspectorTab> = {
   history: "history",
   annotations: "notes",
   bookmarks: "notes",
+  dossier: RETIRED_RAIL_TABS.dossier,
+  comments: RETIRED_RAIL_TABS.comments,
+  trail: RETIRED_RAIL_TABS.trail,
 };
 
 /// Total: a current id passes through, a legacy id translates, anything
@@ -56,7 +63,7 @@ export const LEGACY_TAB_MAP: Record<LegacyInspectorTab, InspectorTab> = {
 /// untrusted input.
 export function normalizeInspectorTab(v: string | null | undefined): InspectorTab {
   if (v && (INSPECTOR_TABS as readonly string[]).includes(v)) return v as InspectorTab;
-  if (v && v in LEGACY_TAB_MAP) return LEGACY_TAB_MAP[v as LegacyInspectorTab];
+  if (v && Object.hasOwn(LEGACY_TAB_MAP, v)) return LEGACY_TAB_MAP[v as LegacyInspectorTab];
   return DEFAULT_TAB;
 }
 

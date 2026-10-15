@@ -46,52 +46,34 @@ export type DeskRegionId = "dock" | "rail" | "drawer";
 /// exists while the URL names a second pane (see `DeskPanesState`).
 export type ResizeTarget = DeskRegionId | "panes";
 
-/// The re-cut right rail (§P1: "tab one is All (everything stacked),
-/// then Understand …, History …, Review …, Notes"). `"review"` is
-/// conditional at RENDER time (only when the open file belongs to an
-/// open review) but is always a legal persisted value — a stored
-/// `"review"` on a file with no review context renders the honest empty
-/// state, never a blank rail and never a silent tab substitution.
-/// V72-G1.2 added `dossier`. Like `review` it is a CONDITIONAL tab —
-/// `InspectorRail` only offers it while the dossier center is mounted (or
-/// while it is the persisted choice, so a stored selection never silently
-/// becomes a different tab). It is a real member of the union rather than a
-/// mode-local widget because the Desk persists the rail's tab and a tab the
-/// reducer could not name would be a tab the desk could not restore.
-///
-/// V72-J2 added `comments` (D8's comments/1) — UNCONDITIONAL, unlike
-/// `review`/`dossier`: every file the scanner covers has an honest
-/// (possibly empty) comments/1 list, so there is no "no context for this
-/// tab" gate to write.
-/// V74-L3b added `trail` (kbc-trail/1's own read) — UNCONDITIONAL like
-/// `comments`, because the tab always has an honest body: with the ledger off
-/// it says so, and off is a state to render rather than an absence to hide
-/// (design D17's "visible indicator", one surface over).
-/// V76-R3a added `facts` (aug-lane/1) — UNCONDITIONAL like comments/trail:
-/// a file with every lane off still has an honest empty-with-reason body,
-/// and the Lane Budget forbids a fifth gutter, so this is a rail tab.
-export type RailTab =
-  | "all"
-  | "understand"
-  | "history"
-  | "notes"
-  | "comments"
-  | "review"
-  | "dossier"
-  | "trail"
-  | "facts";
+/// The right rail's five homes plus the stacked All view (OL-C4): All,
+/// Understand, History, Notes, Facts, and Review. `"review"` is conditional at
+/// RENDER time (only when the open file belongs to an open review) but is
+/// always a legal persisted value: a stored `"review"` on a file with no
+/// review context renders the honest empty state, never a blank rail and never
+/// a silent tab substitution. The dossier members, the source comments and the
+/// trail are SECTIONS inside Understand, Facts and Notes (see
+/// `RETIRED_RAIL_TABS` for the ids that used to be tabs).
+export type RailTab = "all" | "understand" | "history" | "notes" | "facts" | "review";
 
 export const RAIL_TABS: readonly RailTab[] = [
   "all",
   "understand",
   "history",
   "notes",
-  "comments",
-  "review",
-  "dossier",
-  "trail",
   "facts",
+  "review",
 ];
+
+/// OL-C4 — the nine-tab rail became five homes plus Review. The three ids that
+/// stopped being tabs still arrive from persisted desk state (localStorage),
+/// so they translate to the home that now CONTAINS their section instead of
+/// resetting the operator to the preset's tab.
+export const RETIRED_RAIL_TABS: Readonly<Record<string, RailTab>> = {
+  dossier: "understand",
+  comments: "facts",
+  trail: "notes",
+};
 
 export interface DeskRegionState {
   /// Percentage of the region's own axis (0..100) — the unit
@@ -374,7 +356,9 @@ export function migrateDeskState(raw: unknown): DeskState | null {
   const railTab: RailTab =
     typeof o.railTab === "string" && (RAIL_TABS as readonly string[]).includes(o.railTab)
       ? (o.railTab as RailTab)
-      : base.railTab;
+      : typeof o.railTab === "string" && Object.hasOwn(RETIRED_RAIL_TABS, o.railTab)
+        ? RETIRED_RAIL_TABS[o.railTab]
+        : base.railTab;
 
   return {
     v: DESK_STATE_VERSION,
