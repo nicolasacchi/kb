@@ -1,0 +1,131 @@
+.kb-spine {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-bar);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--pad-3);
+  height: var(--spine-h, 44px);
+  padding: 0 var(--pad-3);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  font-size: var(--fs-md);
+}
+
+.kb-spine__slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.kb-spine__switcher,
+.kb-spine__right {
+  flex: 0 0 auto;
+}
+
+.kb-spine__scope {
+  flex: 0 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-mute);
+}
+
+.kb-spine__search {
+  flex: 1 1 0;
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+.kb-spine__search > * {
+  width: 100%;
+}
+
+.kb-spine__right {
+  margin-left: auto;
+  gap: var(--pad-2);
+}
+
+.kb-spine__menu {
+  display: none;
+  margin-left: auto;
+  padding: var(--pad-1) var(--pad-2);
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-lg);
+  cursor: pointer;
+}
+
+@media (min-width: 861px) and (max-width: 1100px) {
+  .kb-spine__search {
+    min-width: 12rem;
+  }
+}
+
+@media (max-width: 860px) {
+  .kb-spine__scope,
+  .kb-spine__right {
+    display: none;
+  }
+  .kb-spine__menu {
+    display: inline-flex;
+  }
+}
+
+.kb-spine-crumbs {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+
+.kb-spine-crumbs__item {
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-spine-crumbs__item + .kb-spine-crumbs__item::before {
+  content: "/";
+  padding: 0 var(--pad-2);
+  color: var(--ink-mute);
+}
+
+.kb-spine-crumbs a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.kb-spine-crumbs [aria-current="page"] {
+  color: var(--ink);
+}
+
+/* Beyond 4 crumbs at <=1100px the middle ones collapse to a single "…". */
+@media (max-width: 1100px) {
+  .kb-spine-crumbs:has(> li:nth-child(5)) > [data-kb-crumb-middle] {
+    display: none;
+  }
+  .kb-spine-crumbs:has(> li:nth-child(5)) > li:nth-child(2) {
+    display: inline-flex;
+    width: 1.5ch;
+    overflow: hidden;
+    color: transparent;
+    position: relative;
+  }
+  .kb-spine-crumbs:has(> li:nth-child(5)) > li:nth-child(2)::after {
+    content: "…";
+    position: absolute;
+    right: 0;
+    color: var(--ink-mute);
+  }
+}
