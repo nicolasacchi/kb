@@ -2,17 +2,22 @@ import { describe, expect, it } from "vitest";
 
 // ui/src/tokens.css is the ONE home of the type ramp, spacing steps, radii,
 // the z-ladder and motion. Each app imports it from its own tokens.css and
-// must not redeclare what it provides. The files are read as raw text via
-// import.meta.glob (not node:fs) so the test needs no Node typings and runs
-// under both apps' vitest (React 18 and 19 alike -- it touches neither).
-const raw = import.meta.glob(
-  ["./tokens.css", "../../web/src/styles/tokens.css", "../../web-code/src/styles/tokens.css"],
-  { query: "?raw", import: "default", eager: true },
-) as Record<string, string>;
+// must not redeclare what it provides.
+//
+// The files are read with Node's fs, reached through `process.getBuiltinModule`
+// (Node >= 22.3, which both apps' engines require) typed as `any`, so the test
+// needs no Node typings under `tsc -b`. `import.meta.glob(..., "?raw")` is not
+// usable here: vitest's CSS handling returns "" for CSS files, which made every
+// map empty. It runs under both apps' vitest (React 18 and 19 alike -- it
+// touches neither).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fs = (globalThis as any).process.getBuiltinModule("node:fs") as {
+  readFileSync(url: URL, enc: "utf8"): string;
+};
 
-function text(path: string): string {
-  const t = raw[path];
-  if (typeof t !== "string") throw new Error(`tokens.test: ${path} was not loaded`);
+function text(rel: string): string {
+  const t = fs.readFileSync(new URL(rel, import.meta.url), "utf8");
+  if (!t.includes("--")) throw new Error(`tokens.test: ${rel} read back empty`);
   return t;
 }
 

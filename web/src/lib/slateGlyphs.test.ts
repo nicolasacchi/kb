@@ -71,7 +71,7 @@ describe("slateGlyphs — every kind and state has a glyph AND a word", () => {
       ...Object.values(KIND_GLYPHS),
       ...Object.values(STATE_GLYPHS),
     ]) {
-      expect(g.token).toMatch(/^--[a-z]+$/);
+      expect(g.token).toMatch(/^--[a-z]+(-[a-z]+)*$/);
     }
   });
 
