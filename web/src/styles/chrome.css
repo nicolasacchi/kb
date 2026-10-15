@@ -1221,7 +1221,7 @@
 
 /* (the .virtual-grid's column count is computed in JS by VirtualGrid;
  * G2 dropped CARD_MIN_WIDTH from 280→210 and ROW_GAP from 18→14 to
- * hit 5 cols at the design's 1440×900 frame. Below 1280px the
+ * hit 5 cols at the design's 1440×900 frame; OL L4 then raised it to 280. Below 1280px the
  * computation steps down to 4/3/2 automatically.) */
 
 /* ── card (v0.10 G1) ─────────────────────────────────────────────── */
@@ -1231,12 +1231,12 @@
   flex-direction: column;
   /* Fixed (not min-) height so every card is uniform and the window
    * virtualiser's fixed row stride is exact. VirtualGrid positions each
-   * row absolutely at `index * ESTIMATED_ROW_HEIGHT` (260px) and never
+   * row absolutely at `index * ESTIMATED_ROW_HEIGHT` (210px) and never
    * measures, so a card taller than the stride would overlap the row
-   * below it. 246px + the 14px ROW_GAP = the 260px stride — keep these
+   * below it. 196px + the 14px ROW_GAP = the 210px stride — keep these
    * coupled (VirtualGrid.tsx ESTIMATED_ROW_HEIGHT). `overflow: hidden`
    * + the title/excerpt clamps below keep content inside the box. */
-  height: 246px;
+  height: 196px;
   border-radius: 10px;
   border: 1px solid var(--rule);
   background: var(--bg-card);
@@ -1337,7 +1337,7 @@
   color: var(--ink);
   position: relative;
   z-index: 1;
-  /* Clamp to 3 lines — an unbounded title (e.g. a long sentence-style
+  /* Clamp to 2 lines (OL L4) — an unbounded title (e.g. a long sentence-style
    * heading) would otherwise grow the fixed-height card's content past
    * its box. The clamp caps the title; the flex excerpt below absorbs
    * the remaining space. `flex: none` keeps the title at its clamped
@@ -1346,15 +1346,19 @@
    * collapsing a 3-line title down to ~1 line. */
   flex: none;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 .kb-card__excerpt {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-md);
   line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   color: var(--ink-mute);
   /* Fills the space between the (clamped) title and the footer, and is
    * the only element allowed to shrink — `min-height: 0` overrides the
@@ -1378,8 +1382,61 @@
   margin-top: 8px;
   position: relative;
   z-index: 1;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
   flex: none;
+}
+/* OL L4 — the ONE quiet meta line: folder · age · N min read. */
+.kb-card__meta {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  position: relative;
+  z-index: 1;
+  white-space: nowrap;
+  flex: none;
+}
+.kb-card__meta > * + *::before {
+  content: "·";
+  margin: 0 6px;
+  opacity: 0.5;
+}
+.kb-card__meta .kb-card__folder {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  letter-spacing: 0;
+}
+.kb-card__meta .kb-card__age,
+.kb-card__meta .kb-card__read {
+  flex: none;
+}
+/* OL L4 — reading progress as a 2px bar along the card's bottom edge. */
+.kb-card__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: transparent;
+  z-index: 2;
+  pointer-events: none;
+}
+.kb-card__progress i {
+  display: block;
+  height: 100%;
+  background: var(--card-accent, var(--accent));
+  opacity: 0.8;
+}
+.kb-card__progress--done i {
+  background: var(--ok, #5bb98b);
 }
 .kb-card__foot {
   /* `margin-top: auto` pins the footer to the card's bottom edge even
@@ -1411,7 +1468,7 @@
   line-clamp: 2;
 }
 /* TODO-W3GATE — W3.F/S7 — the outcome line. Deviation from the design's
-   literal "2-line-clamped": 1-line here, since the fixed-246px card's height
+   literal "2-line-clamped": 1-line here, since the fixed-196px card's height
    budget couldn't be visually verified in this build pass (no running app to
    screenshot) — 1 line is the conservative choice that can't blow the
    VirtualGrid stride. GATE CHECK: load the gallery on a session-heavy kb and
@@ -1744,43 +1801,6 @@
   color: var(--ink);
 }
 
-.kb-card__tape {
-  flex: 1;
-  max-width: 90px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--rule);
-  position: relative;
-  overflow: hidden;
-  margin-left: auto;
-}
-.kb-card__tape i {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: var(--card-accent, var(--accent));
-  opacity: 0.7;
-}
-.kb-card__words {
-  font-variant-numeric: tabular-nums;
-}
-.kb-card__links {
-  font-variant-numeric: tabular-nums;
-}
-/* CT-E3 — the "N refs" code-citation chip in the card foot (tier a; only
- * rendered when the per-kb feed walk completed AND ref_count > 0). */
-.kb-card__coderefs {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-/* CT-F4 — the "N kept" session-residue chip in the card foot (only
- * rendered when the daemon decorated a non-zero count; absent-when-zero on
- * the wire, so there is no empty state to style). */
-.kb-card__residue {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
 .kb-card__age {
   color: var(--ink-dim);
 }
@@ -1860,26 +1880,6 @@
   border: 1px solid var(--accent-bor);
   color: var(--accent-soft);
   background: var(--accent-bg);
-}
-.kb-card__badge--pages {
-  position: static;
-  border-color: var(--rule);
-  color: var(--ink-mute);
-  background: var(--bg-panel);
-  display: inline-block;
-  align-self: flex-start;
-  margin-bottom: 6px;
-}
-/* markdown-source pill. Static + in-flow so it stacks under the multi-file
- * `--pages` pill and above the folder slug without absolute-position
- * collisions; keeps the base purple accent, which matches the
- * rendered-markdown prose theme's accent bar. */
-.kb-card__badge--markdown {
-  position: static;
-  display: inline-block;
-  align-self: flex-start;
-  margin-bottom: 6px;
-  letter-spacing: 0.08em;
 }
 /* When both index badge + folder slug exist, push the folder slug down so
  * the index pill doesn't overlap it. */

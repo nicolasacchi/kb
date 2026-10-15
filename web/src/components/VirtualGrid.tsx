@@ -55,19 +55,18 @@ type Props = {
   onColsChange?: (cols: number) => void;
 };
 
-// v0.10 G2 — design wants 5 cols at 1440×900. With the 240px sidebar +
-// gallery padding the usable content area is ~1148px; a 210px min-width
-// yields 5 cols at that size (floor((1148+14)/(210+14)) = 5). Step
-// down to 4/3/2/1 below 1280 / 1024 / 768 / 480 respectively.
-const CARD_MIN_WIDTH = 210;
+// OL L4 — calmer, wider cards: a 280px min-width gives
+// floor((W + 14) / (280 + 14)) columns for a content width W (e.g. 4 once W
+// reaches 1162px) and steps down as the viewport narrows.
+const CARD_MIN_WIDTH = 280;
 const ROW_GAP = 14;
 // Rows are positioned at a FIXED `index * ESTIMATED_ROW_HEIGHT` stride and
 // never measured, so this must equal the real per-row height or rows
-// overlap/gap. `.kb-card` is a fixed 246px (chrome.css) + this 14px
-// ROW_GAP = 260 — keep the two coupled. (A card taller than the stride is
+// overlap/gap. `.kb-card` is a fixed 196px (chrome.css) + this 14px
+// ROW_GAP = 210 — keep the two coupled. (A card taller than the stride is
 // what caused the gallery overflow; the fixed card height + content clamps
 // guarantee it can't happen.)
-const ESTIMATED_ROW_HEIGHT = 260;
+const ESTIMATED_ROW_HEIGHT = 210;
 
 const VirtualGrid = forwardRef<VirtualGridHandle, Props>(function VirtualGrid(
   { docs, kb, progress, sessions, onEnd, hasMore, focusedIndex, onColsChange },

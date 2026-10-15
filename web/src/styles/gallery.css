@@ -1384,15 +1384,15 @@ body,
    * three "highlight" cards read as a strip, not a full section. */
   gap: 12px;
 }
-/* SH.D.R — the shared .kb-card fixes height at 246px because VirtualGrid
+/* SH.D.R — the shared .kb-card fixes height at 196px because VirtualGrid
  * positions grid rows at a fixed stride (chrome.css's own doc). The lobby
  * strip is a STATIC three-card row rendered outside the virtualiser, so
  * that coupling doesn't apply here — and the SH.D.2 reorder (tags above a
- * 3-line excerpt) can exceed 246px, slicing the footer mid-height
+ * 3-line excerpt) can exceed 196px, slicing the footer mid-height
  * (after-shot 2026-08-20). Let lobby cards size to content instead. */
 .gallery-lobby__highlights .kb-card {
   height: auto;
-  min-height: 246px;
+  min-height: 196px;
 }
 /* SH.D.2 — the highlight strip's picks (most-backlinked docs) can carry
  * unusually long summaries, which hard-clipped mid-line with a tag pill
