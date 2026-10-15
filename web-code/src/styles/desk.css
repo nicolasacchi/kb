@@ -231,11 +231,6 @@
   overflow-y: hidden;
   scrollbar-width: thin;
 }
-.kbc-desk__drawer-empty-tab {
-  font-size: var(--fs-sm);
-  color: var(--ink-dim);
-  white-space: nowrap;
-}
 .kbc-desk__drawer-tab {
   display: inline-flex;
   align-items: center;

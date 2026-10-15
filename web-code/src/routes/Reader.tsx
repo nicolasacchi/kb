@@ -263,6 +263,7 @@ import type { AttributionOut, EntryKind, LensDeclaration, Span } from "../api/ty
 import { useLenses } from "../hooks/useLenses";
 import { useLoopback } from "../hooks/useLoopback";
 import TrailRail from "../components/trail/TrailRail";
+import { ViewBar } from "@kb/ui/ViewBar";
 import {
   TRAIL_FOCUS_EVENT,
   type TrailFocusDetail,
@@ -4021,166 +4022,167 @@ export default function Reader() {
         {/* F1 — the search launcher moved to the global TopBar (app.tsx),
             mounted once above every route; this header no longer duplicates
             it. */}
-        {/* V80-R2 — the flat 12-chip strip (Sticky Params Lenses Wrap A−
-            A+ Off Dots Age Comments Working-tree +Set) read as one
-            undifferentiated row at a glance; grouped into named, separated
-            clusters (`.kbc-toolbar-group`, CSS adjacent-sibling border) so
-            "which four things does Wrap belong with" is visible without
-            reading every label. Each group keeps its OWN `role="group"
-            aria-label`, so this is a rendering change only — every
-            `data-kbc-*` hook the e2e suite drives stays exactly where it
-            was. */}
+        {/* OL-C3 — the toolbar is a labelled ViewBar of verbs: three named
+            clusters (Gutter / Text / Lines), each control a verb, active
+            toggles pressed via `aria-pressed`. `maxVisible={6}` keeps Sticky
+            scope in the More menu; every `data-kbc-*` hook the e2e suite
+            drives is carried by `attrs` or by the `renderControl` markup.
+            The Ref group stays outside the bar at the row's right end. */}
         <div className="kbc-reader-toolbar" data-kbc-reader-toolbar>
           {isFile && !diffMode && !storyMode && (
-            <div className="kbc-toolbar-group" role="group" aria-label="View">
-              <button
-                type="button"
-                className={"kbc-sticky-toggle" + (stickyEnabled ? " is-on" : "")}
-                aria-pressed={stickyEnabled}
-                title="Sticky context lines"
-                data-kbc-sticky-toggle
-                onClick={() => {
-                  setStickyEnabled((v) => {
-                    const next = !v;
-                    saveStickyContext(next);
-                    return next;
-                  });
-                }}
-              >
-                Sticky
-              </button>
-              <button
-                type="button"
-                className={"kbc-sticky-toggle" + (paramHintsEnabled ? " is-on" : "")}
-                aria-pressed={paramHintsEnabled}
-                title="Param-name inlay hints at call sites"
-                data-kbc-param-hints-toggle
-                onClick={() => {
-                  setParamHintsEnabled((v) => {
-                    const next = !v;
-                    saveParamHints(next);
-                    return next;
-                  });
-                }}
-              >
-                Params
-              </button>
-              <button
-                type="button"
-                className={"kbc-sticky-toggle" + (codeLensesEnabled ? " is-on" : "")}
-                aria-pressed={codeLensesEnabled}
-                title="Code Vision lens chips above declarations"
-                data-kbc-lenses-toggle
-                onClick={() => {
-                  setCodeLensesEnabled((v) => {
-                    const next = !v;
-                    saveCodeLenses(next);
-                    return next;
-                  });
-                }}
-              >
-                Lenses
-              </button>
-              <button
-                type="button"
-                className={"kbc-sticky-toggle" + (wrapEnabled ? " is-on" : "")}
-                aria-pressed={wrapEnabled}
-                title="Wrap long lines"
-                data-kbc-wrap-toggle
-                onClick={() => {
-                  setWrapEnabled((v) => {
-                    const next = !v;
-                    saveWrap(next);
-                    return next;
-                  });
-                }}
-              >
-                Wrap
-              </button>
-            </div>
-          )}
-          {isFile && !diffMode && !storyMode && (
-            <div
-              className="kbc-toolbar-group kbc-fontsize-stepper"
-              role="group"
-              aria-label="Text size"
-              data-kbc-fontsize-stepper
-            >
-              <button
-                type="button"
-                className="kbc-fontsize-stepper__btn"
-                aria-label="Decrease code font size"
-                title="Smaller text"
-                data-kbc-fontsize-dec
-                disabled={codeFontSize <= CODE_FONT_SIZE_MIN}
-                onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur - 1))}
-              >
-                A−
-              </button>
-              <button
-                type="button"
-                className="kbc-fontsize-stepper__btn"
-                aria-label="Increase code font size"
-                title="Larger text"
-                data-kbc-fontsize-inc
-                disabled={codeFontSize >= CODE_FONT_SIZE_MAX}
-                onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur + 1))}
-              >
-                A+
-              </button>
-            </div>
-          )}
-          {isFile && !diffMode && !storyMode && (
-            <div className="kbc-toolbar-group kbc-provenance-toggle" role="group" aria-label="Blame">
-              <button
-                type="button"
-                className={"kbc-provenance-toggle__opt" + (provenanceMode === "off" ? " is-active" : "")}
-                aria-pressed={provenanceMode === "off"}
-                onClick={() => setProvenanceMode("off")}
-                data-kbc-provenance-mode="off"
-              >
-                Off
-              </button>
-              <button
-                type="button"
-                className={"kbc-provenance-toggle__opt" + (provenanceMode === "dots" ? " is-active" : "")}
-                aria-pressed={provenanceMode === "dots"}
-                onClick={() => setProvenanceMode((m) => (m === "dots" ? "off" : "dots"))}
-                data-kbc-provenance-toggle
-                data-kbc-provenance-mode="dots"
-                title="Show blame provenance dots in the gutter"
-              >
-                Dots
-              </button>
-              <button
-                type="button"
-                className={"kbc-provenance-toggle__opt" + (provenanceMode === "age" ? " is-active" : "")}
-                aria-pressed={provenanceMode === "age"}
-                onClick={() => setProvenanceMode((m) => (m === "age" ? "off" : "age"))}
-                data-kbc-provenance-mode="age"
-                title="Tint lines by author age"
-              >
-                Age
-              </button>
-            </div>
-          )}
-          {/* V72-J2 (D8) — the comments/1 gutter's mode chip (`Space C c`
-              cycles it). A mode NEVER hides a comment class silently — this
-              chip is the on-screen indicator naming which of the three
-              filters is currently active, always visible whenever a file is
-              open (same gate as the toggles above it). */}
-          {isFile && !diffMode && !storyMode && (
-            <div className="kbc-toolbar-group" role="group" aria-label="Comments">
-              <button
-                type="button"
-                className="kbc-sticky-toggle"
-                title="Comment gutter mode (all / quiet / doc-only) — Space C c cycles it"
-                data-kbc-comment-gutter-mode={commentGutterMode}
-                onClick={cycleCommentGutterMode}
-              >
-                Comments: {commentGutterMode}
-              </button>
-            </div>
+            <ViewBar
+              title="Reader view"
+              maxVisible={6}
+              clusters={[
+                {
+                  label: "Gutter",
+                  controls: [
+                    {
+                      id: "provenance",
+                      label: "Provenance",
+                      kind: "segment",
+                      value: provenanceMode,
+                    },
+                    {
+                      id: "comments",
+                      label: `Comments: ${commentGutterMode}`,
+                      key: "Space C c",
+                      kind: "button",
+                      attrs: { "data-kbc-comment-gutter-mode": commentGutterMode },
+                      onSelect: cycleCommentGutterMode,
+                    },
+                  ],
+                },
+                {
+                  label: "Text",
+                  controls: [{ id: "text-size", label: "Text size", kind: "segment" }],
+                },
+                {
+                  label: "Lines",
+                  controls: [
+                    {
+                      id: "wrap",
+                      label: "Wrap lines",
+                      kind: "toggle",
+                      active: wrapEnabled,
+                      attrs: { "data-kbc-wrap-toggle": "" },
+                      onSelect: () =>
+                        setWrapEnabled((v) => {
+                          const next = !v;
+                          saveWrap(next);
+                          return next;
+                        }),
+                    },
+                    {
+                      id: "param-hints",
+                      label: "Parameter hints",
+                      kind: "toggle",
+                      active: paramHintsEnabled,
+                      attrs: { "data-kbc-param-hints-toggle": "" },
+                      onSelect: () =>
+                        setParamHintsEnabled((v) => {
+                          const next = !v;
+                          saveParamHints(next);
+                          return next;
+                        }),
+                    },
+                    {
+                      id: "lenses",
+                      label: "Code lenses",
+                      kind: "toggle",
+                      active: codeLensesEnabled,
+                      attrs: { "data-kbc-lenses-toggle": "" },
+                      onSelect: () =>
+                        setCodeLensesEnabled((v) => {
+                          const next = !v;
+                          saveCodeLenses(next);
+                          return next;
+                        }),
+                    },
+                    {
+                      id: "sticky",
+                      label: "Sticky scope",
+                      kind: "toggle",
+                      active: stickyEnabled,
+                      attrs: { "data-kbc-sticky-toggle": "" },
+                      onSelect: () =>
+                        setStickyEnabled((v) => {
+                          const next = !v;
+                          saveStickyContext(next);
+                          return next;
+                        }),
+                    },
+                  ],
+                },
+              ]}
+              renderControl={(control, node) => {
+                if (control.id === "provenance") {
+                  return (
+                    <div className="kbc-provenance-toggle" role="group" aria-label="Provenance">
+                      <button
+                        type="button"
+                        className={"kbc-provenance-toggle__opt" + (provenanceMode === "off" ? " is-active" : "")}
+                        aria-pressed={provenanceMode === "off"}
+                        onClick={() => setProvenanceMode("off")}
+                        data-kbc-provenance-mode="off"
+                      >
+                        Off
+                      </button>
+                      <button
+                        type="button"
+                        className={"kbc-provenance-toggle__opt" + (provenanceMode === "dots" ? " is-active" : "")}
+                        aria-pressed={provenanceMode === "dots"}
+                        onClick={() => setProvenanceMode((m) => (m === "dots" ? "off" : "dots"))}
+                        data-kbc-provenance-toggle
+                        data-kbc-provenance-mode="dots"
+                        title="Show blame provenance dots in the gutter"
+                      >
+                        Dots
+                      </button>
+                      <button
+                        type="button"
+                        className={"kbc-provenance-toggle__opt" + (provenanceMode === "age" ? " is-active" : "")}
+                        aria-pressed={provenanceMode === "age"}
+                        onClick={() => setProvenanceMode((m) => (m === "age" ? "off" : "age"))}
+                        data-kbc-provenance-mode="age"
+                        title="Tint lines by author age"
+                      >
+                        Age
+                      </button>
+                    </div>
+                  );
+                }
+                if (control.id === "text-size") {
+                  return (
+                    <div className="kbc-fontsize-stepper" role="group" aria-label="Text size" data-kbc-fontsize-stepper>
+                      <button
+                        type="button"
+                        className="kbc-fontsize-stepper__btn"
+                        aria-label="Decrease code font size"
+                        title="Smaller text"
+                        data-kbc-fontsize-dec
+                        disabled={codeFontSize <= CODE_FONT_SIZE_MIN}
+                        onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur - 1))}
+                      >
+                        A−
+                      </button>
+                      <button
+                        type="button"
+                        className="kbc-fontsize-stepper__btn"
+                        aria-label="Increase code font size"
+                        title="Larger text"
+                        data-kbc-fontsize-inc
+                        disabled={codeFontSize >= CODE_FONT_SIZE_MAX}
+                        onClick={() => setCodeFontSize((cur) => saveCodeFontSize(cur + 1))}
+                      >
+                        A+
+                      </button>
+                    </div>
+                  );
+                }
+                return node;
+              }}
+            />
           )}
           <div className="kbc-toolbar-group" role="group" aria-label="Ref">
             <RefPicker repo={repo} path={path} activeRef={gitRef} pane2={pane2Loc ?? undefined} />

@@ -157,9 +157,6 @@ export default function Drawer({
       aria-label="result sets"
     >
       <div className="kbc-desk__drawer-bar" role="tablist" aria-label="result sets">
-        {tabs.length === 0 && (
-          <span className="kbc-desk__drawer-empty-tab">no result sets — keep one from a references popup</span>
-        )}
         {tabs.map((s) => {
           const sel = !s.evicted && s.id === state.activeId;
           return (
