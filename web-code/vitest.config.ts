@@ -32,6 +32,9 @@ export default defineConfig({
     alias: { "@kb/ui": fileURLToPath(new URL("../ui/src", import.meta.url)) },
     dedupe: ["react", "react-dom"],
   },
+  // jsdom-environment files outside the app root are fetched via /@fs/, which
+  // the dev-server fs guard rejects unless ui/ is allowed (vite.config.ts does this too).
+  server: { fs: { allow: [".", "../ui"] } },
   test: {
     ...(witnessDir
       ? { reporters: ["default", "json"], outputFile: { json: `${witnessDir}/vitest-web-code.json` } }
