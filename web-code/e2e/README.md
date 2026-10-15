@@ -47,6 +47,13 @@ cd web-code/e2e
 KBC_VISUAL=1 npx playwright test visual --update-snapshots=all
 ```
 
+Or render them on a GitHub runner instead of locally: dispatch the ci
+workflow with the golden-update input
+(`gh workflow run ci.yml --ref <branch> -f update_snapshots=true`). That run
+sets `KBC_VISUAL=1` for the `code-e2e` job, and its `code-e2e-snapshots`
+artifact carries `visual/*.png` rendered on the CI image. PR runs still never
+set it, so these screenshots remain a review artifact, not a PR gate.
+
 Baselines land under `visual/` (this directory's own `visual/`, set via
 `playwright.config.ts`'s `expect.toHaveScreenshot.pathTemplate`), committed
 to git. Regenerate them after any INTENTIONAL visual change and review the
