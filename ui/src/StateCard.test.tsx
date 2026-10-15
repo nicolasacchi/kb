@@ -83,4 +83,23 @@ describe("StateCard", () => {
     expect(out).toContain('<a data-router="/x">Go</a>');
     expect(out).not.toContain('href="/x"');
   });
+
+  it("size defaults to the page card", () => {
+    const out = html({ kind: "loading", title: "T" });
+    expect(out).toContain('class="kb-statecard"');
+    expect(out).toContain("kb-statecard__icon");
+    expect(out).not.toContain("kb-statecard--inline");
+  });
+
+  it("size=inline drops the icon and marks the card inline, keeping role and kind", () => {
+    const l = html({ kind: "loading", title: "Loading x…", size: "inline" });
+    expect(l).toContain("kb-statecard--inline");
+    expect(l).not.toContain("kb-statecard__icon");
+    expect(l).toContain('role="status"');
+    expect(l).toContain("Loading x…");
+    const d = html({ kind: "degraded", title: "Couldn't load", reason: "boom", size: "inline" });
+    expect(d).toContain("kb-statecard--inline");
+    expect(d).toContain('data-kb-state-kind="degraded"');
+    expect(d).toContain("boom");
+  });
 });

@@ -27,6 +27,9 @@ export type StateCardProps = {
   /** ui/ imports no router: the app passes its own link renderer. */
   renderLink?: (href: string, children: ReactNode) => ReactNode;
   headingLevel?: 1 | 2 | 3 | 4 | 5 | 6;
+  /** "page" (default) is the centred card; "inline" is a left-aligned muted
+   * line with no icon and no card chrome, for panels and rail sections. */
+  size?: "page" | "inline";
 };
 
 function defaultIcon(kind: StateKind): ReactNode {
@@ -58,15 +61,20 @@ export function StateCard({
   icon,
   renderLink,
   headingLevel = 2,
+  size = "page",
 }: StateCardProps) {
   const titleId = useId();
   const loading = kind === "loading";
+  const inline = size === "inline";
+  const cls = inline ? "kb-statecard kb-statecard--inline" : "kb-statecard";
   const H = `h${headingLevel}` as "h2";
   const body = (
     <>
-      <div className="kb-statecard__icon" aria-hidden="true">
-        {icon ?? defaultIcon(kind)}
-      </div>
+      {!inline && (
+        <div className="kb-statecard__icon" aria-hidden="true">
+          {icon ?? defaultIcon(kind)}
+        </div>
+      )}
       {loading ? (
         <p className="kb-statecard__title">{title}</p>
       ) : (
@@ -131,11 +139,11 @@ export function StateCard({
     </>
   );
   return loading ? (
-    <div className="kb-statecard" data-kb-state-kind={kind} role="status" aria-live="polite">
+    <div className={cls} data-kb-state-kind={kind} role="status" aria-live="polite">
       {body}
     </div>
   ) : (
-    <section className="kb-statecard" data-kb-state-kind={kind} role="region" aria-labelledby={titleId}>
+    <section className={cls} data-kb-state-kind={kind} role="region" aria-labelledby={titleId}>
       {body}
     </section>
   );
