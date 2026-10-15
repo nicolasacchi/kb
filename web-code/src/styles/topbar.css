@@ -4,18 +4,48 @@
  * --shadow, --radius-lg, --ease. Active route uses an inset box-shadow
  * underline so chip height never shifts. */
 
+/* OL-C1 — `.kbc-topbar` is now only the `data-region="topbar"` wrapper
+ * around `@kb/ui/Spine` (which draws the bar: 44px, border, background). */
 .kbc-topbar {
-  display: flex;
-  align-items: center;
-  gap: var(--pad-2);
-  height: var(--topbar-h);
-  padding: 0 12px;
-  border-bottom: 1px solid var(--rule);
-  background: var(--bg-panel);
   flex: 0 0 auto;
 }
-.kbc-topbar__spacer {
+/* The Spine is sticky + z-indexed, so it is its own stacking context: raise
+ * it to the popover rung so the repo/ref/theme popovers hanging out of the
+ * bar are not painted over by the sticky `--z-bar` headers below it. */
+.kbc-topbar .kb-spine {
+  z-index: var(--z-popover);
+}
+/* Let the doors stretch the full bar height so the active underline sits on
+ * the bar's bottom rule. */
+.kbc-topbar .kb-spine__switcher {
+  align-self: stretch;
+  gap: var(--pad-2);
+}
+.kbc-topbar__doors {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: var(--pad-1);
+  margin-left: var(--pad-2);
+}
+.kbc-topbar__door {
+  gap: var(--pad-2);
+}
+.kbc-topbar .kbc-search-mini__label {
   flex: 1 1 auto;
+  text-align: left;
+}
+@media (max-width: 860px) {
+  .kbc-topbar .kb-spine__search {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+  }
+  .kbc-topbar .kb-spine__search > * {
+    width: auto;
+  }
+  .kbc-topbar .kb-spine__menu {
+    margin-left: var(--pad-2);
+  }
 }
 /* V70-A7 — positioning context for the ThemePicker popover, so it anchors to
  * the theme button rather than to whatever ancestor happens to be
@@ -89,8 +119,7 @@
   padding-bottom: 10px;
 }
 
-.kbc-topbar__chip,
-.kbc-topbar__nav-toggle {
+.kbc-topbar__chip {
   display: inline-flex;
   align-items: center;
   align-self: stretch;
@@ -106,8 +135,7 @@
   cursor: pointer;
   box-shadow: none;
 }
-.kbc-topbar__chip:hover,
-.kbc-topbar__nav-toggle:hover {
+.kbc-topbar__chip:hover {
   color: var(--ink);
 }
 .kbc-topbar__chip.is-active,
@@ -115,8 +143,7 @@
   color: var(--accent);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
-.kbc-topbar__chip:focus-visible,
-.kbc-topbar__nav-toggle:focus-visible {
+.kbc-topbar__chip:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
@@ -256,133 +283,10 @@
   }
 }
 
-/* --- desktop Explore popover ------------------------------------------ */
+/* --- mobile nav sheet (OL-C1) -----------------------------------------
+ * The panel, scrim, handle and close behaviour come from `@kb/ui/Sheet`;
+ * only the rows inside it are styled here. */
 
-.kbc-navmenu-wrap {
-  position: relative;
-  align-self: stretch;
-  display: flex;
-}
-.kbc-navmenu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: var(--z-popover);
-  min-width: 180px;
-  padding: var(--pad-1);
-  background: var(--bg-panel);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow);
-}
-.kbc-navmenu__item {
-  display: flex;
-  align-items: center;
-  gap: var(--pad-2);
-  width: 100%;
-  padding: var(--pad-2) 10px;
-  color: var(--ink);
-  text-decoration: none;
-  font-size: var(--fs-sm);
-  border-radius: var(--radius-sm);
-}
-.kbc-navmenu__item:hover,
-.kbc-navmenu__item:focus {
-  background: var(--bg-card-hi);
-  outline: none;
-}
-.kbc-navmenu__item.is-active,
-.kbc-navmenu__item[aria-current="page"] {
-  color: var(--accent);
-}
-
-/* --- mobile nav bottom sheet ------------------------------------------
- * Base styles live outside a media query (same as .kbc-drawer / sheet
- * in mobile.css): the component only mounts when useIsMobile is true. */
-
-.kbc-navsheet-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-scrim);
-  background: var(--backdrop);
-  opacity: 0;
-  transition: opacity 0.22s var(--ease);
-}
-.kbc-navsheet-scrim.is-open {
-  opacity: 1;
-}
-.kbc-navsheet {
-  position: fixed;
-  inset: auto 0 0 0;
-  z-index: var(--z-drawer);
-  max-height: min(80vh, 620px);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-panel);
-  /* SH.C1 — dark-theme depth: a bottom sheet needs to visibly separate from
-   * the page behind it, not read flat against it. */
-  border-top: 1px solid var(--rule-hi);
-  border-top-left-radius: var(--radius-lg);
-  border-top-right-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lift);
-  padding-bottom: env(safe-area-inset-bottom);
-  transform: translateY(100%);
-  transition: transform 0.24s var(--ease);
-  overflow: hidden;
-  overscroll-behavior: contain;
-}
-.kbc-navsheet.is-open {
-  transform: translateY(0);
-}
-.kbc-navsheet__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--pad-2);
-  padding: 12px 12px 8px 16px;
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--rule);
-}
-.kbc-navsheet__title {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink);
-}
-.kbc-navsheet__close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel);
-  color: var(--ink-mute);
-  cursor: pointer;
-}
-.kbc-navsheet__close:hover {
-  color: var(--ink);
-  background: var(--bg-card-hi);
-}
-.kbc-navsheet__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--pad-2) 0 var(--pad-3);
-}
-.kbc-navsheet__sec {
-  padding: 0 var(--pad-2);
-}
-.kbc-navsheet__h {
-  margin: var(--pad-2) var(--pad-2) var(--pad-1);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-}
 .kbc-navsheet__row {
   display: flex;
   align-items: center;
@@ -421,11 +325,4 @@
 }
 .kbc-navsheet__theme:hover {
   color: var(--ink);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .kbc-navsheet,
-  .kbc-navsheet-scrim {
-    transition: none;
-  }
 }

@@ -271,6 +271,12 @@ export function reviewsUrl(repo: string): string {
   return `${codeBasePath(repo, "")}/~reviews`;
 }
 
+/// `collectionsUrl(repo)` → `/r/{repo}/~collections` — OL-C1, the page that
+/// groups the former Explore destinations (sets, boards, instruments).
+export function collectionsUrl(repo: string): string {
+  return `${codeBasePath(repo, "")}/~collections`;
+}
+
 /// The cockpit's view-tab vocabulary — `CockpitTabs.tsx`'s own `CockpitView`
 /// union, mirrored here (not imported — `lib/` doesn't reach into
 /// `components/`, same posture `ReviewDiffHrefOpts.overlay` already takes

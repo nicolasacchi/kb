@@ -2,7 +2,6 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import RepoPill from "./RepoPill";
 import CurrentReviewChip from "./CurrentReviewChip";
-import NavMenu from "./NavMenu";
 import NavSheet from "./NavSheet";
 import { Icon } from "./iconSet";
 import TrailIndicator from "./trail/TrailIndicator";
@@ -10,8 +9,10 @@ import { SpaceHint } from "../commands/learn";
 import { useExplicitRepo } from "../hooks/useActiveRepo";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { loadTheme, loadThemeFamily } from "../lib/prefs";
+import { Spine } from "@kb/ui/Spine";
 import {
   NAV_ITEMS,
+  inboxUrl,
   matchActiveNavItem,
   navTestAttr,
 } from "../lib/navItems";
@@ -19,9 +20,10 @@ import RefChip from "./RefChip";
 
 // F1 — the ONE chrome bar shared by every route, mounted once at the app
 // root (app.tsx), mirroring kb's own `Header` (also mounted once above
-// `<Routes>` in `web/src/app.tsx`). V4.U5 restructures the destination
-// cluster: desktop keeps review chips always visible + an Explore popover
-// for the rest; mobile (≤860px) collapses destinations into a nav-sheet.
+// `<Routes>` in `web/src/app.tsx`). OL-C1: the bar is `@kb/ui/Spine` —
+// RepoPill + RefChip + four labelled doors (Code · Search · Review ·
+// Collections) on the left, the omnibox button in the middle, status on the
+// right; mobile (≤860px) puts every destination in a `@kb/ui/Sheet`.
 // V70-A7 — the theme control is no longer a three-way cycle. `data-kbc-theme
 // -toggle` keeps its name (and its place in the bar) but now opens the
 // ThemePicker popover: a family catalogue is not a cycle, and reaching
@@ -36,88 +38,106 @@ export default function TopBar() {
   const { pathname } = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  const reviewItems = NAV_ITEMS.filter((i) => i.group === "review");
-  const exploreItems = NAV_ITEMS.filter((i) => i.group === "explore");
   const active = explicitRepo ? matchActiveNavItem(pathname, explicitRepo) : null;
+  const inboxOn = pathname === "/~inbox";
 
   useEffect(() => {
     setSheetOpen(false);
   }, [pathname]);
 
+  // OL-C1 — `<Spine>` is the one 44px bar. The `data-region="topbar"` wrapper
+  // is what regions.spec / visual.spec settle on; the sheet is mounted OUTSIDE
+  // it so its fixed scrim is not trapped in the bar's stacking context.
   return (
-    <header className="kbc-topbar" data-region="topbar">
-      <RepoPill />
-      <RefChip />
-      {explicitRepo && !isMobile && (
-        <>
-          {/* V80-M3 — "which review am I working," hidden entirely when
-              unset (see the component's own doc). ≤860px it moves into the
-              NavSheet instead (below). */}
-          <CurrentReviewChip />
-          {reviewItems.map((item) => {
-            const on = active?.key === item.key;
-            const ItemIcon = item.icon;
-            return (
-              <Link
-                key={item.key}
-                to={item.url(explicitRepo)}
-                className={"kbc-topbar__chip kbc-topbar__" + item.key + (on ? " is-active" : "")}
-                aria-current={on ? "page" : undefined}
-                {...{ [navTestAttr(item.key)]: true }}
-              >
-                <ItemIcon />
-                {item.label}
-              </Link>
-            );
-          })}
-          <NavMenu repo={explicitRepo} items={exploreItems} />
-        </>
-      )}
-      {explicitRepo && isMobile && (
-        <button
-          type="button"
-          className="kbc-topbar__nav-toggle"
-          aria-controls="kbc-navsheet"
-          aria-expanded={sheetOpen}
-          data-kbc-nav-toggle
-          onClick={() => setSheetOpen((o) => !o)}
-        >
-          nav
-          <Icon.ChevDown />
-        </button>
-      )}
-      <div className="kbc-topbar__spacer" />
-      {/* D24 — "the only teaching chrome above the fold is a Space hint and
-          `?`". One chip, in the chrome, on every route. Hidden on mobile,
-          where there is no keyboard to teach (recon R9). */}
-      {!isMobile && <SpaceHint />}
-      {/* V74-L3b — D17 requires the kbc-trail/1 opt-in to carry "a visible
-          indicator", so it lives in the ONE chrome bar every route shares,
-          beside the other always-present state control. It renders NOTHING on
-          a daemon where `[trails] enabled` is false: a permanent "off" chip
-          for a feature that will never record anything is noise, not an
-          indicator (see the component's own rule 1). */}
-      <TrailIndicator />
-      <ThemeControl />
-      <button
-        type="button"
-        className="kbc-search-mini kbc-topbar__search"
-        onClick={() => window.dispatchEvent(new CustomEvent("kbc:omnibox.open"))}
-        aria-label="open search (cmd-k)"
-        title="search (⌘K)"
-      >
-        {/* F5 — mobile (≤860px) hides the label + `⌘K` hint (a shortcut
-            that's meaningless without a physical keyboard) and keeps just
-            this icon, so the button stays a recognizable, ≥40px tap target
-            instead of collapsing to a bare, unlabeled kbd. */}
-        <Icon.Search />
-        <span className="kbc-search-mini__label">Search…</span>
-        <kbd>⌘K</kbd>
-      </button>
-      {isMobile && explicitRepo && (
+    <>
+      <div className="kbc-topbar" data-region="topbar">
+        <Spine
+          switcher={
+            <>
+              <RepoPill />
+              <RefChip />
+              {explicitRepo && !isMobile && (
+                <nav className="kbc-topbar__doors" aria-label="Sections">
+                  {NAV_ITEMS.map((item) => {
+                    const on = active?.key === item.key;
+                    const ItemIcon = item.icon;
+                    return (
+                      <Link
+                        key={item.key}
+                        to={item.url(explicitRepo)}
+                        className={
+                          "kbc-topbar__chip kbc-topbar__door kbc-topbar__" +
+                          item.key +
+                          (on ? " is-active" : "")
+                        }
+                        aria-current={on ? "page" : undefined}
+                        {...{ [navTestAttr(item.key)]: true }}
+                      >
+                        <ItemIcon aria-hidden />
+                        {item.label}
+                      </Link>
+                    );
+                  })}
+                </nav>
+              )}
+            </>
+          }
+          search={
+            <button
+              type="button"
+              className="kbc-search-mini kbc-topbar__search"
+              onClick={() => window.dispatchEvent(new CustomEvent("kbc:omnibox.open"))}
+              aria-label="open search (cmd-k)"
+              title="search (⌘K)"
+            >
+              {/* F5 — mobile (≤860px) hides the label + `⌘K` hint (a shortcut
+                  that's meaningless without a physical keyboard) and keeps just
+                  this icon, so the button stays a recognizable, ≥40px tap target
+                  instead of collapsing to a bare, unlabeled kbd. */}
+              <Icon.Search />
+              <span className="kbc-search-mini__label">Search…</span>
+              <kbd>⌘K</kbd>
+            </button>
+          }
+          right={
+            !isMobile && (
+              <>
+                {/* V80-M3 — "which review am I working," hidden entirely when
+                    unset. ≤860px it moves into the NavSheet instead. */}
+                {explicitRepo && <CurrentReviewChip />}
+                {/* D24 — "the only teaching chrome above the fold is a Space
+                    hint and `?`". Hidden on mobile, where there is no
+                    keyboard to teach (recon R9). */}
+                <SpaceHint />
+                {/* V74-L3b — the kbc-trail/1 opt-in's visible indicator; it
+                    renders NOTHING on a daemon where `[trails] enabled` is
+                    false (see the component's own rule 1). */}
+                <TrailIndicator />
+                <Link
+                  to={inboxUrl("")}
+                  className="kbc-iconbtn kbc-topbar__inbox"
+                  aria-label="Inbox"
+                  title="Inbox"
+                  aria-current={inboxOn ? "page" : undefined}
+                  {...{ [navTestAttr("inbox")]: true }}
+                >
+                  <Icon.List />
+                </Link>
+                <ThemeControl />
+              </>
+            )
+          }
+          onMenu={isMobile ? () => setSheetOpen((o) => !o) : undefined}
+          menuOpen={sheetOpen}
+          menuLabel="Open navigation"
+          menuControls="kbc-navsheet"
+          menuIcon={<Icon.List aria-hidden />}
+        />
+      </div>
+      {isMobile && (
         <NavSheet repo={explicitRepo} open={sheetOpen} onClose={() => setSheetOpen(false)} />
       )}
-    </header>
+    </>
   );
 }
 

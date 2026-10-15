@@ -1,104 +1,222 @@
-// V4.U5 — the ONE destination catalog for web-code's TopBar. Desktop review
-// chips, the Explore popover, and the mobile nav sheet all consume this
-// array so the three surfaces cannot drift. Each `url` builder is a real
-// export from `codeUrl` / `setsUrl` (repo-scoped `~` sentinels).
+// OL-C1 — the ONE destination catalogue for web-code's TopBar, NavSheet and
+// the Collections page. Four labelled DOORS (Code · Search · Review ·
+// Collections) replace the old Branches/PRs/Reviews chips + the 12-item
+// Explore popover; Inbox stays an icon link in the Spine's right slot.
+//
+// `matchActiveNavItem` maps EVERY former route onto its door (table-tested in
+// `navItems.test.ts` against each path in `app.tsx`), so a destination that
+// has no chip of its own still lights the door that contains it. Every `url`
+// is a real export from `codeUrl` / `setsUrl` / `searchLanes`.
 
 import { Icon } from "../components/iconSet";
+import { readerUrl } from "./breadcrumbs";
 import {
-  branchesUrl,
-  browserPageUrl,
+  boardsPageUrl,
   canvasPageUrl,
+  collectionsUrl,
   commentsUrl,
   hotspotsUrl,
-  prsUrl,
+  lanesUrl,
   railsUrl,
   recipesPageUrl,
   reviewsUrl,
-  toursPageUrl,
   stacksPageUrl,
   todosUrl,
+  toursPageUrl,
 } from "./codeUrl";
+import { fullSearchUrl } from "./searchLanes";
 import { setsUrl, workspacesUrl } from "./setsUrl";
 
-// ── S2-A: unified inbox — kb-code v6.0 "One Inbox" (design-s2.md §S2-A) ───
-// `/~inbox` is a top-level, repo-LESS route (kb items in its "From kb" lane
-// aren't scoped to any one configured repo) — every other NAV_ITEMS entry
-// is repo-scoped, so this is the one `url` that ignores its `repo`
-// argument. Kept in the catalog anyway (rather than a bespoke TopBar link)
-// so the Explore popover + mobile nav sheet + active-item highlighting all
-// pick it up for free, same "one destination catalog" rationale this
-// file's header doc states.
+// ── S2-A: unified inbox ───────────────────────────────────────────────────
+// `/~inbox` is top-level and repo-LESS, so this one `url` ignores its `repo`.
 export function inboxUrl(_repo: string): string {
   return "/~inbox";
 }
-// ── /S2-A ──
 
 type IconComp = (typeof Icon)[keyof typeof Icon];
 
-export type NavGroup = "review" | "explore";
-
-export type NavKey =
-  | "branches"
-  | "prs"
-  | "reviews"
-  | "browser"
-  | "sets"
-  | "workspaces"
-  | "hotspots"
-  | "todos"
-  | "comments"
-  | "rails"
-  | "recipes"
-  | "stacks"
-  | "canvas"
-  | "tours"
-  | "inbox";
+export type DoorKey = "code" | "search" | "review" | "collections";
 
 export interface NavItem {
-  key: NavKey;
+  key: DoorKey;
   label: string;
   icon: IconComp;
-  group: NavGroup;
   url: (repo: string) => string;
 }
 
+/// The four doors, in bar order. `code` lands on the reader root — the same
+/// target the Home repo cards link to (`readerUrl(repo, "")`).
 export const NAV_ITEMS: readonly NavItem[] = [
-  { key: "branches", label: "Branches", icon: Icon.Branch, group: "review", url: branchesUrl },
-  { key: "prs", label: "PRs", icon: Icon.PullRequest, group: "review", url: prsUrl },
-  { key: "reviews", label: "Reviews", icon: Icon.ClipboardCheck, group: "review", url: reviewsUrl },
-  { key: "browser", label: "Browser", icon: Icon.Grid, group: "explore", url: browserPageUrl },
-  { key: "sets", label: "Sets", icon: Icon.Bookmark, group: "explore", url: setsUrl },
-  // V70-A10 — `workspacesUrl` takes an optional `ref` second arg (the
-  // `~branches` chip); the catalog's own `url: (repo: string) => string`
-  // signature only ever calls it with one, which is exactly `workspacesUrl`
-  // with no `ref` — the full list, same as every other entry here.
-  { key: "workspaces", label: "Workspaces", icon: Icon.Layers, group: "explore", url: workspacesUrl },
-  { key: "hotspots", label: "Hotspots", icon: Icon.Flame, group: "explore", url: hotspotsUrl },
-  { key: "todos", label: "TODOs", icon: Icon.Tasks, group: "explore", url: todosUrl },
-  // V72-J2 (D8) — comments/1's dashboard: the richer, kind-aware surface
-  // TODOs above now links forward to.
-  { key: "comments", label: "Comments", icon: Icon.Comment, group: "explore", url: commentsUrl },
-  // V72-I2 — `~rails` (`rails/1`). In the catalog for the same reason every
-  // other sentinel is: the Explore popover, the mobile nav sheet and
-  // active-item highlighting all read THIS array, so a keyboard-only door
-  // (`Space g R`) would otherwise be the surface's only one.
-  { key: "rails", label: "Rails", icon: Icon.Entity, group: "explore", url: railsUrl },
-  { key: "recipes", label: "Recipes", icon: Icon.Terminal, group: "explore", url: recipesPageUrl },
-  { key: "stacks", label: "Stacks", icon: Icon.Layers, group: "explore", url: stacksPageUrl },
-  { key: "canvas", label: "Canvas", icon: Icon.Graph, group: "explore", url: canvasPageUrl },
-  // V74-L3b — `~tours` (kbc-tour/1). In the catalog for the same reason
-  // `~rails` is: the Explore popover, the mobile nav sheet and active-item
-  // highlighting all read THIS array, so a keyboard-only door (`Space g T`)
-  // would otherwise be the surface's only one.
-  { key: "tours", label: "Tours", icon: Icon.Spark, group: "explore", url: toursPageUrl },
-  // S2-A — unified inbox (design-s2.md §S2-A). Repo-less; see `inboxUrl`'s
-  // own doc above for why its `url` ignores `repo`.
-  { key: "inbox", label: "Inbox", icon: Icon.List, group: "explore", url: inboxUrl },
+  { key: "code", label: "Code", icon: Icon.Code, url: (repo) => readerUrl(repo, "") },
+  { key: "search", label: "Search", icon: Icon.Search, url: (repo) => fullSearchUrl("", repo) },
+  { key: "review", label: "Review", icon: Icon.ClipboardCheck, url: reviewsUrl },
+  { key: "collections", label: "Collections", icon: Icon.Layers, url: collectionsUrl },
 ];
 
-/// Decode both sides so an encoded `item.url` still matches react-router's
-/// (typically decoded) `location.pathname`. Query strings are ignored —
-/// sentinels don't put routing state in the path's `?`.
+export type CollectionGroup = "sets" | "boards" | "instruments";
+
+export type CollectionKey =
+  | "sets"
+  | "stacks"
+  | "workspaces"
+  | "tours"
+  | "boards"
+  | "canvas"
+  | "rails"
+  | "lanes"
+  | "recipes"
+  | "todos"
+  | "hotspots"
+  | "comments";
+
+/// A kbc-seq/1 count: which projection (+ which physical table, when a
+/// projection spans two) a card's number is read from. Absent = no count.
+export interface SeqCount {
+  projection: "set" | "workspace" | "tour" | "board";
+  source?: "reading_sets" | "canvas_boards" | "canvas_sets";
+}
+
+export interface CollectionItem {
+  key: CollectionKey;
+  label: string;
+  group: CollectionGroup;
+  icon: IconComp;
+  purpose: string;
+  url: (repo: string) => string;
+  count?: SeqCount;
+}
+
+export const COLLECTION_GROUPS: readonly { group: CollectionGroup; label: string }[] = [
+  { group: "sets", label: "Sets" },
+  { group: "boards", label: "Boards" },
+  { group: "instruments", label: "Instruments" },
+];
+
+/// The 12 former Explore items (Browser lives under the Code door) plus the
+/// Boards and Lanes surfaces that no menu used to reach.
+export const COLLECTION_ITEMS: readonly CollectionItem[] = [
+  {
+    key: "sets",
+    label: "Sets",
+    group: "sets",
+    icon: Icon.Bookmark,
+    purpose: "Ordered file and span walkthroughs.",
+    url: setsUrl,
+    count: { projection: "set" },
+  },
+  {
+    key: "stacks",
+    label: "Stacks",
+    group: "sets",
+    icon: Icon.Layers,
+    purpose: "Dependent-branch stacks with each layer's own diff.",
+    url: stacksPageUrl,
+  },
+  {
+    key: "workspaces",
+    label: "Workspaces",
+    group: "sets",
+    icon: Icon.Panel,
+    purpose: "Saved open-file sets from the reader.",
+    url: workspacesUrl,
+    count: { projection: "workspace" },
+  },
+  {
+    key: "tours",
+    label: "Tours",
+    group: "sets",
+    icon: Icon.Spark,
+    purpose: "Walks through references, re-resolved on every read.",
+    url: toursPageUrl,
+    count: { projection: "tour", source: "canvas_boards" },
+  },
+  {
+    key: "boards",
+    label: "Boards",
+    group: "boards",
+    icon: Icon.Grid,
+    purpose: "Ordered sets of references into this repo, never copies.",
+    url: boardsPageUrl,
+    count: { projection: "board", source: "canvas_boards" },
+  },
+  {
+    key: "canvas",
+    label: "Canvas",
+    group: "boards",
+    icon: Icon.Graph,
+    purpose: "Symbol fragments on a pan-zoom surface.",
+    url: canvasPageUrl,
+    count: { projection: "board", source: "canvas_sets" },
+  },
+  {
+    key: "rails",
+    label: "Rails",
+    group: "instruments",
+    icon: Icon.Entity,
+    purpose: "Convention edges joined to the entity index.",
+    url: (repo) => railsUrl(repo),
+  },
+  {
+    key: "lanes",
+    label: "Lanes",
+    group: "instruments",
+    icon: Icon.Table,
+    purpose: "The augmentation-lane registry.",
+    url: lanesUrl,
+  },
+  {
+    key: "recipes",
+    label: "Recipes",
+    group: "instruments",
+    icon: Icon.Terminal,
+    purpose: "Named, parameterised questions over the repo's indexes.",
+    url: recipesPageUrl,
+  },
+  {
+    key: "todos",
+    label: "TODOs",
+    group: "instruments",
+    icon: Icon.Tasks,
+    purpose: "Comment markers from the live index.",
+    url: todosUrl,
+  },
+  {
+    key: "hotspots",
+    label: "Hotspots",
+    group: "instruments",
+    icon: Icon.Flame,
+    purpose: "Where to look first, from change history.",
+    url: hotspotsUrl,
+  },
+  {
+    key: "comments",
+    label: "Comments",
+    group: "instruments",
+    icon: Icon.Comment,
+    purpose: "Every kind of comment, with drift and age state.",
+    url: commentsUrl,
+  },
+];
+
+/// Pure: read a kbc-seq/1 list into per-card counts. `size`-less rows still
+/// count as rows (a row is a row); a card whose projection is absent from
+/// the list gets no entry, never a 0.
+export function seqCounts(
+  rows: readonly { projection: string; source: string }[],
+): Partial<Record<CollectionKey, number>> {
+  const out: Partial<Record<CollectionKey, number>> = {};
+  for (const item of COLLECTION_ITEMS) {
+    const c = item.count;
+    if (!c) continue;
+    out[item.key] = rows.filter(
+      (r) => r.projection === c.projection && (c.source === undefined || r.source === c.source),
+    ).length;
+  }
+  return out;
+}
+
+/// Decode so an encoded builder URL still matches react-router's decoded
+/// `location.pathname`; the query string is ignored.
 function pathOnly(s: string): string {
   const noQuery = s.split("?")[0] ?? s;
   try {
@@ -108,20 +226,56 @@ function pathOnly(s: string): string {
   }
 }
 
-/// Pure: does `pathname` sit on `itemUrl` or a nested child
-/// (`/r/{repo}/~reviews/12` matches `reviewsUrl(repo)`).
+/// Pure: does `pathname` sit on `itemUrl` or a nested child.
 export function navItemMatches(pathname: string, itemUrl: string): boolean {
   const path = pathOnly(pathname);
   const base = pathOnly(itemUrl);
   return path === base || path.startsWith(`${base}/`);
 }
 
-/// First NAV_ITEMS entry whose url-shape matches `pathname` for `repo`,
-/// or `null` when the location is not a catalog destination (reader, home).
+/// The `~sentinel` segment (first one after `/r/{repo}`) → the door that
+/// contains it. A `~` segment not listed here (`~commit`, `~story`,
+/// `~diff`, `~lens`, `~browser`, …) is reader territory and falls through
+/// to Code, exactly like a file path under the repo.
+const SENTINEL_DOOR: Record<string, DoorKey> = {
+  "~reviews": "review",
+  "~prs": "review",
+  "~branches": "review",
+  "~compare": "review",
+  "~range-diff": "review",
+  "~collections": "collections",
+  "~sets": "collections",
+  "~stacks": "collections",
+  "~workspaces": "collections",
+  "~tours": "collections",
+  "~boards": "collections",
+  "~canvas": "collections",
+  "~rails": "collections",
+  "~lanes": "collections",
+  "~recipes": "collections",
+  "~todos": "collections",
+  "~hotspots": "collections",
+  "~comments": "collections",
+};
+
+/// The door containing `pathname` for `repo`, or `null` off every door
+/// (Home, Inbox, another repo, a repo-less route).
 export function matchActiveNavItem(pathname: string, repo: string): NavItem | null {
-  return NAV_ITEMS.find((item) => navItemMatches(pathname, item.url(repo))) ?? null;
+  const path = pathOnly(pathname);
+  let key: DoorKey | null = null;
+  if (path === "/search") {
+    key = "search";
+  } else {
+    const root = pathOnly(`/r/${encodeURIComponent(repo)}`);
+    if (path === root) key = "code";
+    else if (path.startsWith(`${root}/`)) {
+      const seg = path.slice(root.length + 1).split("/")[0] ?? "";
+      key = SENTINEL_DOOR[seg] ?? "code";
+    }
+  }
+  return key ? (NAV_ITEMS.find((i) => i.key === key) ?? null) : null;
 }
 
-export function navTestAttr(key: NavKey): string {
+export function navTestAttr(key: DoorKey | "inbox"): string {
   return `data-kbc-topbar-${key}`;
 }
