@@ -14,10 +14,10 @@
  * (--bg-panel, --bg-card, --bg-card-hi, --rule, --rule-hi, --ink,
  * --ink-strong, --ink-mute, --ink-dim). --err / --ok / --info remain.
  *
- * Light theme is now first-class (kb2 redesign): a warm-paper palette with
- * its own semantic + accent halo + card-glow values, mirrored into the
- * prefers-color-scheme:light system block. Per-theme accent hexes live in
- * api/prefs.ts (ACCENTS / ACCENTS_LIGHT), applied inline by applyPrefs().
+ * OL F2: the palette is generated (kbc-theme/1), not hand-written. See the
+ * "Palette" block below and ui/src/themes/; the old dark/light/system blocks
+ * and the per-theme accent hexes (api/prefs.ts ACCENTS) are gone. The
+ * `kb-classic` family reproduces them.
  *
  * SH.A1 added --accent-fill / --accent-fill-fg (solid-fill contexts where
  * light text sits ON the accent; the raw --accent fails AA with white in both
@@ -32,6 +32,7 @@
  */
 
 @import "@kb/ui/tokens.css";
+@import "@kb/ui/themes/themes.gen.css";
 
 /* A-w4/X1 — self-hosted (no Google Fonts CDN round-trip; the SPA must load
  * offline-ish, same reasoning as the empty API base URL). Two disjoint
@@ -261,13 +262,6 @@
 }
 
 :root {
-  /* Accent (overridable from Settings) — refined purple. */
-  --accent: #8a7fff;
-  --accent-soft: #aaa2ff;
-  --accent-bg: #1a1830;
-  --accent-bor: #3a3870;
-  --accent-fg: #ffffff;
-
   --font-sans:
     "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
@@ -311,206 +305,68 @@
   --danger: var(--red);
 }
 
-/* --- Dark palette (default + explicit) ------------------------------ */
-:root,
-:root[data-theme="dark"] {
-  /* Surfaces (authoritative names). */
-  --bg: #0e0e10;
-  --bg-panel: #141417;
-  --bg-panel-2: #0c0c0e;
-  --bg-card: #151518;
-  --bg-card-hi: #1a1a1f;
+/* --- Palette (OL F2) --------------------------------------------------
+ * The palette itself is GENERATED: `@kb/ui/themes/themes.gen.css` carries one
+ * `html:root[data-kbc-theme="<id>"]` block per kbc-theme/1 theme, and
+ * `api/prefs.ts` (applyPrefs -> the shared applyTheme) sets that attribute.
+ * kb's default family, `kb-classic`, reproduces the hand-written dark and
+ * light palettes that used to live here; `index.html` carries the
+ * `kb-classic-dark` attribute so the first paint is already themed.
+ *
+ * Roles the generator does not emit stay here, but only as `color-mix()` /
+ * `var()` / `light-dark()` expressions over generated roles, never raw hex, so
+ * every family (not just kb-classic) gets a coherent value. `light-dark()`
+ * follows the `color-scheme` that applyTheme sets on <html>, which is the
+ * resolved appearance for light/dark and the OS for system. */
+:root {
+  /* Solid-fill accent for contexts where light text sits ON the accent
+   * (buttons, badges): the raw --accent fails AA with white. Darkened toward
+   * black; dark needs more of it than light. */
+  --accent-fill: light-dark(
+    color-mix(in srgb, var(--accent) 88%, black),
+    color-mix(in srgb, var(--accent) 72%, black)
+  );
+  --accent-fill-fg: white;
 
-  /* Ink. */
-  --ink: #e8e6df;
-  --ink-mute: #8a857d;
-  /* SH.A1 — bumped from #5a554f: --ink-dim is used as real running text
-   * (captions, secondary labels) at 2.4–2.7:1 against --bg/--bg-panel,
-   * failing WCAG AA. #726c65 clears AA against both. Existing call sites
-   * are NOT repointed — they become legible from this value change alone. */
-  --ink-dim: #726c65;
-  /* SH.A1 — the OLD --ink-dim value, kept for decorative rules/disabled
-   * glyphs ONLY (never running text): rule hairlines, disabled-icon tints,
-   * anything that was never meant to clear AA in the first place. */
-  --ink-faint: #5a554f;
+  /* Strongest ink (headings on emphasis surfaces): --ink pushed further from
+   * the surface in OKLCH lightness, in whichever direction --ink already
+   * leans (lighter on dark, darker on light). */
+  --ink-strong: oklch(from var(--ink) calc(l + (l - 0.5) * 0.12) c h);
 
-  /* Rules. */
-  --rule: #23232a;
-  --rule-hi: #2c2c36;
+  /* Reader prose canvas: the SPA-side reader chrome (gutter, native-note
+   * markdown, article frame). Iframed artifacts bring their own styling.
+   * Light is true paper (the panel surface); dark sits between bg and panel. */
+  --paper: light-dark(
+    var(--bg-panel),
+    color-mix(in srgb, var(--bg) 55%, var(--bg-panel))
+  );
+  --paper-ink: light-dark(color-mix(in srgb, var(--ink) 95%, var(--bg)), var(--ink));
+  --paper-rule: light-dark(color-mix(in srgb, var(--rule) 70%, var(--bg-panel)), var(--rule));
 
-  --shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.4);
-  --shadow-card:
-    0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-card-hover:
-    0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 14px 30px rgba(0, 0, 0, 0.5),
-    0 2px 6px rgba(0, 0, 0, 0.3);
-  --backdrop: rgba(8, 8, 10, 0.6);
-  --card-bg: linear-gradient(180deg, var(--bg-card) 0%, #131318 100%);
-  --collage-bg: #0e0e12;
-  --term-bg: #0c0c10;
-
-  /* Semantic colors (dark). */
-  --warn: #d8a04b;
-  --green: #7eb98f;
-  --red: #d77a6a;
-  --blue: #7aa9ff;
-
-  /* SH.A1 — solid-fill accent for contexts where white text sits ON the
-   * accent (buttons, badges): the raw --accent (#8a7fff dark default)
-   * measures 3.2:1 with white, failing AA. Darkened via color-mix so it
-   * tracks whichever accent hex Settings picks (api/prefs.ts ACCENTS) —
-   * verified every ACCENTS entry clears ≥5.16:1 with white at 72%. */
-  --accent-fill: color-mix(in srgb, var(--accent) 72%, #14121f);
-  --accent-fill-fg: #ffffff;
-
-  /* Reader prose canvas — the SPA-side reader chrome (gutter, native-note
-   * markdown, article frame). Iframed artifacts bring their own styling. */
-  --paper: #111114;
-  --paper-ink: var(--ink);
-  --paper-rule: var(--rule);
-
-  /* Card accent treatment. Dark cards lean on a top-left accent radial glow;
-   * the spine + glow-% are tuned per theme (white needs far less glow). */
+  /* Cards: dark cards fade to a slightly deeper stop; light cards are flat
+   * (both stops equal). */
+  --card-bg-end: light-dark(
+    var(--bg-card),
+    color-mix(in srgb, var(--bg-card) 80%, var(--bg-panel-2))
+  );
+  --card-bg: linear-gradient(180deg, var(--bg-card) 0%, var(--card-bg-end) 100%);
+  --card-ring: light-dark(
+    color-mix(in srgb, black 4%, transparent),
+    color-mix(in srgb, white 4%, transparent)
+  );
   --card-glow-pct: 18%;
-  --card-ring: rgba(255, 255, 255, 0.04);
 
-  /* Strongest ink (headings on emphasis surfaces); was the legacy
-   * `--text-strong`. */
-  --ink-strong: #f4f4f8;
+  --collage-bg: var(--bg);
+  --term-bg: light-dark(var(--bg), var(--bg-panel-2));
 }
-
-/* --- Light palette --------------------------------------------------- */
-/* First-class light theme (kb2 redesign). Concrete values from the design
- * handoff's THEMES() — a warm-paper light, not a flat white. The accent
- * itself is set inline by applyPrefs() from the per-theme ACCENTS_LIGHT map
- * (api/prefs.ts); accent-soft/bg/bor below give it a legible-on-white halo. */
+/* The glow percentage is a number, which light-dark() cannot carry: white
+ * needs far less glow, so light overrides it the same way chrome.css's
+ * `.kb-card::before` does (attribute for explicit light, media for system). */
 :root[data-theme="light"] {
-  --bg: #f3f1ec;
-  --bg-panel: #ffffff;
-  --bg-panel-2: #ecebe5;
-  --bg-card: #ffffff;
-  --bg-card-hi: #faf9f6;
-
-  --ink: #1c1b19;
-  --ink-mute: #6d685f;
-  /* SH.A1 — bumped from #a39d92 (same rationale as the dark block above). */
-  --ink-dim: #8a8376;
-  /* SH.A1 — the OLD --ink-dim value; decorative rules/disabled glyphs ONLY. */
-  --ink-faint: #a39d92;
-
-  --rule: #e4e1da;
-  --rule-hi: #d6d2c9;
-
-  /* Accent halo (the user's chosen --accent hex is applied inline; these
-   * are the violet-default soft/bg/bor tuned for white). */
-  --accent: #6657f5;
-  --accent-soft: #5546e0;
-  --accent-bg: rgba(102, 87, 245, 0.1);
-  --accent-bor: rgba(102, 87, 245, 0.28);
-
-  /* SH.A1 — solid-fill accent (see the dark block's own doc). Light needs a
-   * lighter mix-toward ratio than dark's 72% (light text sits on already-
-   * darker accent hexes) — verified every ACCENTS_LIGHT entry (api/prefs.ts)
-   * clears ≥4.5:1 with white at 88% (min: teal #1f857d → 5.32:1; raw teal
-   * alone is 4.46:1, failing AA — this mix is what fixes exactly that). */
-  --accent-fill: color-mix(in srgb, var(--accent) 88%, #141414);
-  --accent-fill-fg: #ffffff;
-
-  /* SH.A1/F5 port — WCAG AA text-AND-badge colors (mirrors web-code
-   * tokens.css:296-314's rationale): these four are used as real running
-   * text (prose, labels) AND as text painted directly on a same-hue tinted
-   * badge/chip background. The OLD values here read fine against dark
-   * canvases but measured 2.95–4.0:1 against light's near-white surfaces
-   * (WCAG AA text needs 4.5:1). Darkened just enough to clear 4.5:1 against
-   * --bg AND against color-mix badge tints already in use — verified via
-   * the relative-luminance formula, not eyeballed. */
-  --warn: #78541f;
-  --green: #366547;
-  --red: #954131;
-  --blue: #385a9a;
-
-  --shadow:
-    0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 8px 24px rgba(0, 0, 0, 0.06);
-  --shadow-card:
-    0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(0, 0, 0, 0.05),
-    0 0 0 1px rgba(0, 0, 0, 0.03);
-  --shadow-card-hover:
-    0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 12px 28px rgba(0, 0, 0, 0.1),
-    0 2px 6px rgba(0, 0, 0, 0.05);
-  --backdrop: rgba(20, 20, 22, 0.4);
-  --card-bg: #ffffff;
-  --collage-bg: #f3f1ec;
-  --term-bg: #f3f1ec;
-
-  /* Reader prose canvas — true paper in light. */
-  --paper: #ffffff;
-  --paper-ink: #26241f;
-  --paper-rule: #ece8e0;
-
-  /* Card accent: white needs far less glow + a faint dark hairline ring. */
   --card-glow-pct: 8%;
-  --card-ring: rgba(0, 0, 0, 0.04);
-
-  --ink-strong: #0a0a0c;
 }
-
-/* --- System pref --------------------------------------------------- */
-/* applyPrefs() sets data-theme="system" when the user picks Settings →
- * theme = system. The base rule above already gives us dark; this
- * media block switches to light when the OS reports light. */
 @media (prefers-color-scheme: light) {
   :root[data-theme="system"] {
-    --bg: #f3f1ec;
-    --bg-panel: #ffffff;
-    --bg-panel-2: #ecebe5;
-    --bg-card: #ffffff;
-    --bg-card-hi: #faf9f6;
-
-    --ink: #1c1b19;
-    --ink-mute: #6d685f;
-    /* SH.A1 — see the light block's own doc above. */
-    --ink-dim: #8a8376;
-    --ink-faint: #a39d92;
-
-    --rule: #e4e1da;
-    --rule-hi: #d6d2c9;
-
-    --accent: #6657f5;
-    --accent-soft: #5546e0;
-    --accent-bg: rgba(102, 87, 245, 0.1);
-    --accent-bor: rgba(102, 87, 245, 0.28);
-
-    /* SH.A1 — see the light block's own doc above. */
-    --accent-fill: color-mix(in srgb, var(--accent) 88%, #141414);
-    --accent-fill-fg: #ffffff;
-
-    /* SH.A1/F5 port — see the light block's own doc above. */
-    --warn: #78541f;
-    --green: #366547;
-    --red: #954131;
-    --blue: #385a9a;
-
-    --shadow:
-      0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 8px 24px rgba(0, 0, 0, 0.06);
-    --shadow-card:
-      0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(0, 0, 0, 0.05),
-      0 0 0 1px rgba(0, 0, 0, 0.03);
-    --shadow-card-hover:
-      0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 12px 28px rgba(0, 0, 0, 0.1),
-      0 2px 6px rgba(0, 0, 0, 0.05);
-    --backdrop: rgba(20, 20, 22, 0.4);
-    --card-bg: #ffffff;
-    --collage-bg: #f3f1ec;
-    --term-bg: #f3f1ec;
-
-    --paper: #ffffff;
-    --paper-ink: #26241f;
-    --paper-rule: #ece8e0;
-
     --card-glow-pct: 8%;
-    --card-ring: rgba(0, 0, 0, 0.04);
-
-    --ink-strong: #0a0a0c;
   }
 }

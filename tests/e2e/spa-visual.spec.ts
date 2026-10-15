@@ -13,6 +13,10 @@ import { BASE } from "./helpers";
 
 test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
 
+// OL F2 -- the theme swap (hand-written palette -> generated kb-classic) must
+// not move a pixel beyond rounding. Tighter than the config-wide 0.02.
+const MAX_DIFF = 0.01;
+
 const MASKS = [
   ".kb-card__age",
   ".kb-card__new",
@@ -71,6 +75,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(page.locator(".kb-card").first()).toBeVisible();
       await settle(page);
       await expect(page).toHaveScreenshot(`gallery-${theme}.png`, {
+        maxDiffPixelRatio: MAX_DIFF,
         mask: [...MASKS.map((s) => page.locator(s)), ...textMasks(page)],
       });
     });
@@ -82,6 +87,7 @@ for (const theme of ["dark", "light"] as const) {
       await page.addStyleTag({ content: HIDE_READING_STATE });
       await settle(page);
       await expect(page).toHaveScreenshot(`reader-${theme}.png`, {
+        maxDiffPixelRatio: MAX_DIFF,
         mask: [...MASKS.map((s) => page.locator(s)), ...textMasks(page), page.locator("iframe")],
       });
     });

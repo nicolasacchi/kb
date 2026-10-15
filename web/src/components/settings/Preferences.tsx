@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import ThemePicker, { type ThemePickerController } from "@kb/ui/ThemePicker";
+import { applyTheme } from "@kb/ui/themes/apply";
 import {
-  ACCENTS,
   applyPrefs,
   loadPrefs,
   patchSettingsDebounced,
   savePrefs,
-  type Accent,
   type Density,
   type Home,
   type Prefs,
@@ -13,7 +13,6 @@ import {
 } from "../../api/prefs";
 import DaemonsManager from "../DaemonsManager";
 
-const ACCENT_NAMES: Accent[] = ["blue", "teal", "violet", "orange", "pink"];
 const DENSITIES: Density[] = ["compact", "comfy", "spacious"];
 const THEMES: Theme[] = ["light", "dark", "system"];
 // W3.M-d — where a bare "/" lands. "grid" first AND default: map-home is an
@@ -28,12 +27,28 @@ const HOMES: { value: Home; label: string; hint: string }[] = [
   },
 ];
 
-// Browser-scope preferences: theme/accent/density (persisted to
+// Browser-scope preferences: theme (appearance + palette family)/density (persisted to
 // localStorage + PATCH'd to /api/settings) plus the daemon URL list.
 // Distinct from the dashboard tabs (which control the daemon's state)
 // because these settings are per-user-per-browser, not per-daemon.
 export default function Preferences() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
+
+  // The shared picker reads and writes through this controller; the ref keeps
+  // it pointing at the CURRENT prefs without re-creating it per render.
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  const controller = useMemo<ThemePickerController>(
+    () => ({
+      appearance: () => prefsRef.current.theme,
+      family: () => prefsRef.current.themeFamily,
+      setAppearance: (theme) => setPrefs((p) => ({ ...p, theme })),
+      setFamily: (themeFamily) => setPrefs((p) => ({ ...p, themeFamily })),
+      preview: (family, appearance) => applyTheme(appearance, family),
+      revert: () => applyPrefs(loadPrefs()),
+    }),
+    [],
+  );
 
   useEffect(() => {
     applyPrefs(prefs);
@@ -63,22 +78,18 @@ export default function Preferences() {
           </select>
         </div>
 
-        <div className="settings__field">
-          <span className="settings__label">accent</span>
-          <div className="settings__swatches" role="radiogroup" aria-label="accent">
-            {ACCENT_NAMES.map((a) => (
-              <button
-                key={a}
-                role="radio"
-                aria-checked={prefs.accent === a}
-                aria-label={a}
-                title={a}
-                className={`settings__swatch ${prefs.accent === a ? "is-active" : ""}`}
-                style={{ background: ACCENTS[a] }}
-                onClick={() => setPrefs({ ...prefs, accent: a })}
-              />
-            ))}
-          </div>
+        {/* OL F2 — the shared theme picker replaces the old accent swatches:
+            palette FAMILY (kb-classic first) + appearance. Browser-local; the
+            daemon copy still carries theme/density only. Re-keyed on the
+            appearance select above so both always show the same value. */}
+        <div className="settings__field" style={{ alignItems: "flex-start" }}>
+          <span className="settings__label">palette</span>
+          <ThemePicker
+            key={prefs.theme}
+            inline
+            leadFirst
+            controller={controller}
+          />
         </div>
 
         <div className="settings__field">

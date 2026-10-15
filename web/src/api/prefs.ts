@@ -3,10 +3,12 @@
 // debounce so the daemon also has a copy. localStorage is the durable
 // cache (since the daemon's `ui` is in-memory only in v0.1).
 
+import { applyTheme, coerceFamily } from "@kb/ui/themes/apply";
 import { currentDaemonBase } from "./base";
 
+/// The APPEARANCE axis (light | dark | system). The palette family is the
+/// separate `themeFamily` pref below.
 export type Theme = "light" | "dark" | "system";
-export type Accent = "blue" | "teal" | "violet" | "orange" | "pink";
 export type Density = "compact" | "comfy" | "spacious";
 
 // W3.M-d — where a BARE "/" cold entry lands. "grid" is the default and
@@ -34,7 +36,12 @@ export type Home = "grid" | "map";
 
 export type Prefs = {
   theme: Theme;
-  accent: Accent;
+  // OL F2 — the kbc-theme/1 family (`kb-classic` by default). Browser-local
+  // ONLY: deliberately NOT in the patchSettings allow-list (the daemon's `ui`
+  // blob carries theme/accent/density; persisting the family there is S2's
+  // job). The pre-F2 `accent` pref is gone: a stored `accent` is ignored on
+  // load and never written back.
+  themeFamily: string;
   density: Density;
   // K1 — the last corpus the user was in, written on every active-kb change
   // and read ONCE on a cold bare-"/" entry to restore their space across
@@ -67,25 +74,9 @@ export type Prefs = {
 
 const PREFS_KEY = "kb:prefs";
 
-// Per-theme accent hexes. Dark values are the saturated originals (violet =
-// the prototype's #8a7fff default); light values are darkened so the accent
-// stays legible on white. applyPrefs() picks the set by resolved theme and
-// writes --accent inline (accent-soft/bg/bor come from tokens.css per theme).
-export const ACCENTS: Record<Accent, string> = {
-  blue: "#268bd2",
-  teal: "#2aa198",
-  violet: "#8a7fff",
-  orange: "#cb4b16",
-  pink: "#d33682",
-};
-
-export const ACCENTS_LIGHT: Record<Accent, string> = {
-  blue: "#1f6fb0",
-  teal: "#1f857d",
-  violet: "#6657f5",
-  orange: "#b5430f",
-  pink: "#bd2f74",
-};
+/// kb's default palette family: reproduces the hand-written dark/light palettes
+/// kb shipped before kbc-theme/1 became the fleet theme.
+export const KB_DEFAULT_FAMILY = "kb-classic";
 
 export const DENSITY_SCALE: Record<Density, number> = {
   compact: 0.85,
@@ -95,7 +86,7 @@ export const DENSITY_SCALE: Record<Density, number> = {
 
 export const DEFAULT_PREFS: Prefs = {
   theme: "dark",
-  accent: "violet",
+  themeFamily: KB_DEFAULT_FAMILY,
   density: "comfy",
   lastKb: null,
   // The gate: grid is home until the census says otherwise.
@@ -111,13 +102,21 @@ export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      return { ...DEFAULT_PREFS, ...parsed };
+      // `accent` is a retired pref (OL F2): drop it so it is never written
+      // back. `themeFamily` is coerced to a family the registry carries.
+      const { accent: _retired, ...parsed } = JSON.parse(raw);
+      void _retired;
+      const merged = { ...DEFAULT_PREFS, ...parsed };
+      return { ...merged, themeFamily: loadFamilyFrom(merged.themeFamily) };
     }
   } catch {
     // fallthrough
   }
   return DEFAULT_PREFS;
+}
+
+function loadFamilyFrom(family: unknown): string {
+  return coerceFamily(typeof family === "string" ? family : null, KB_DEFAULT_FAMILY);
 }
 
 export function savePrefs(prefs: Prefs) {
@@ -235,40 +234,17 @@ export function saveHideSessionsTrivial(hide: boolean) {
   savePrefs({ ...cur, hideSessionsTrivial: hide });
 }
 
-// True when the resolved theme (following the OS for "system") is dark.
-function resolvedDark(theme: Theme): boolean {
-  if (theme === "dark") return true;
-  if (theme === "light") return false;
-  // system → follow the OS; default to dark when matchMedia is unavailable.
-  return !window.matchMedia?.("(prefers-color-scheme: light)").matches;
-}
-
-// Apply prefs to <html> via CSS vars + data-theme. Re-running is cheap.
+// Apply prefs to <html>: density as a CSS var, and the theme via the shared
+// kbc-theme/1 engine, which sets data-theme (appearance), data-kbc-theme (the
+// resolved family member the generated CSS selects on) and color-scheme, and
+// follows OS light/dark flips for `system` on its own. Re-running is cheap.
 export function applyPrefs(prefs: Prefs) {
   const root = document.documentElement;
-  const accents = resolvedDark(prefs.theme) ? ACCENTS : ACCENTS_LIGHT;
-  root.style.setProperty("--accent", accents[prefs.accent]);
+  // The retired inline accent (pre-OL-F2 applyPrefs wrote it): clear any copy
+  // still on a live document so the generated --accent is what paints.
+  root.style.removeProperty("--accent");
   root.style.setProperty("--density", String(DENSITY_SCALE[prefs.density]));
-  // tokens.css base palette is dark; data-theme="light" or
-  // data-theme="system" + light OS pref flips it. Always set the
-  // attribute so the system-pref CSS rule has a hook to match on.
-  root.setAttribute("data-theme", prefs.theme);
-  root.style.colorScheme = prefs.theme === "system" ? "light dark" : prefs.theme;
-}
-
-// When theme=system, re-apply prefs on OS scheme flips so the inline --accent
-// swaps to the light/dark set live (the surface tokens flip via the CSS media
-// block on their own). Installed once from main.tsx; idempotent.
-let systemThemeWatched = false;
-export function watchSystemTheme() {
-  if (systemThemeWatched || !window.matchMedia) return;
-  systemThemeWatched = true;
-  const mq = window.matchMedia("(prefers-color-scheme: light)");
-  const onChange = () => {
-    if (loadPrefs().theme === "system") applyPrefs(loadPrefs());
-  };
-  if (mq.addEventListener) mq.addEventListener("change", onChange);
-  else mq.addListener(onChange); // older Safari
+  applyTheme(prefs.theme, loadFamilyFrom(prefs.themeFamily));
 }
 
 // v0.10 D2 — header Sun icon cycles dark → light → system. Returns the
@@ -304,7 +280,8 @@ export function cycleDensity(): Density {
 let patchTimer: ReturnType<typeof setTimeout> | null = null;
 const PATCH_DEBOUNCE_MS = 500;
 
-// The daemon-side allow-list is exactly theme/accent/density — `lastKb` (K1)
+// The daemon-side allow-list is theme/density (the retired accent is no longer
+// sent; `themeFamily` joins in S2) — `lastKb` (K1)
 // and `home` (W3.M-d) are browser-local nav preferences and are deliberately
 // NOT sent: they are per-browser, and the daemon has no noun for either.
 export function patchSettingsDebounced(prefs: Prefs) {
@@ -315,7 +292,6 @@ export function patchSettingsDebounced(prefs: Prefs) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         theme: prefs.theme,
-        accent: ACCENTS[prefs.accent],
         density: prefs.density,
       }),
     }).catch(() => {
