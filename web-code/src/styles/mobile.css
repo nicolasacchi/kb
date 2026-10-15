@@ -665,7 +665,6 @@
    * base rule in reviews.css, where same-file source order makes the
    * override unconditionally win. `.kbc-review__risk-sum` has the same
    * fix in the same place for the same reason (its own `padding` conflict). */
-  .kbc-rdiff__cluster-trigger,
   .kbc-rdiff__file-legend-btn,
   /* the Reviews landing's "all sessions" + the Room's "Analytics"
    * `<details>` disclosures (review-inbox.css / review-analytics.css)
@@ -829,7 +828,7 @@
     margin: -13px 0;
   }
   /* `.kbc-review__risk-sum`'s own fix lives in reviews.css, next to its
-   * base rule — see the comment on `.kbc-rdiff__cluster-trigger` above. */
+   * base rule — see the comment on the review-diff toolbar icon-button note above. */
   /* Home's "recent file" list row and the Inbox-summary lane link are
    * real, full-width-ish list rows (not inline prose) — grow them for
    * real rather than hit-slop, same idiom as `.kbc-ftree__row` above. */

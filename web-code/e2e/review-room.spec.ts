@@ -156,12 +156,17 @@ test.describe("review room — findings, disposition, diff overlay, ask, publish
     );
 
     // --- overlay cycle hides/shows the finding thread -----------------------
-    const overlaySelect = page.locator("[data-kbc-rdiff-overlay-select]");
-    await overlaySelect.selectOption("findings");
+    // The Lanes select lives in the ViewBar's More menu, which closes after
+    // every pick, so each pick re-opens it first.
+    const pickLane = async (lane: string) => {
+      await page.locator("[data-kb-viewbar-more]").click();
+      await page.locator("[data-kbc-rdiff-overlay-select] select").selectOption(lane);
+    };
+    await pickLane("findings");
     await expect(findingThread).toBeVisible();
-    await overlaySelect.selectOption("none");
+    await pickLane("none");
     await expect(findingThread).not.toBeVisible();
-    await overlaySelect.selectOption("all");
+    await pickLane("all");
     await expect(findingThread).toBeVisible();
 
     // --- back to the cockpit: ask the agent posts a General thread ---------

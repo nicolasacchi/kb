@@ -34,7 +34,6 @@ import {
   initialDiffKeysState,
 } from "../lib/diffKeys";
 import {
-  countByOverlay,
   dispositionLabel,
   findingsByAnnotationId,
   findingsBySlug,
@@ -212,15 +211,6 @@ export default function ReviewDiff() {
   const findingsSlugMap = useMemo(
     () => findingsBySlug(findingsQ.data?.findings ?? []),
     [findingsQ.data],
-  );
-  const allThreadIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const g of commentsQ.data?.groups ?? []) for (const c of g.comments) ids.push(c.id);
-    return ids;
-  }, [commentsQ.data]);
-  const overlayCounts = useMemo(
-    () => countByOverlay(allThreadIds, findingsById),
-    [allThreadIds, findingsById],
   );
   const threadsByPath = useMemo(() => {
     const m = new Map<string, { id: string }[]>();
@@ -1614,8 +1604,6 @@ export default function ReviewDiff() {
         onSetView={setView}
         overlay={overlay}
         onSetOverlay={setOverlay}
-        overlayCounts={overlayCounts}
-        githubThreadsData={reviewGithubThreadsQ.data}
         ctxDial={ctxDial}
         onSetCtx={setCtx}
         noiseMode={noiseMode}

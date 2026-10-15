@@ -879,7 +879,7 @@
    * to line 2 the moment line 1's UNSHRUNK content overflows, which is
    * exactly how this toolbar ended up two lines even well above 1280px
    * (cffe0ac's finding) and is why grouping alone did not fix it (see the
-   * comment on `.kbc-rdiff__cluster` below). `nowrap` makes the title +
+   * comment on `.kb-viewbar__clusters` below). `nowrap` makes the title +
    * every cluster share the SAME single line and lets flex-shrink (each
    * shrinkable item's own `min-width: 0`) do real work — the title
    * truncates via its existing ellipsis before anything else gives, and
@@ -904,7 +904,6 @@
  * descendant rule, never touching `.kbc-review__action`'s own shared
  * base (Reviews list/Room, R3 territory). */
 .kbc-rdiff__toolbar button,
-.kbc-rdiff__toolbar .kbc-rdiff__overlay-counts,
 .kbc-rdiff__toolbar .kbc-rdiff__tour-progress {
   white-space: nowrap;
 }
@@ -916,131 +915,34 @@
 .kbc-rdiff__toolbar .kbc-review__action:not(.kbc-review__action--icon) {
   padding: 5px 8px;
 }
-/* V80-R4 — the toolbar's ~17 controls, grouped into THREE labelled
- * clusters (Navigate / View / Overlays — `ReviewDiffToolbar.tsx`'s own
- * doc) instead of one flat unbroken row. At `>= 1200px` a cluster is a
- * thin-ruled group (no extra chrome, no width cost beyond the divider —
- * the group's own `aria-label` carries the name for a screen reader,
- * `.kbc-rdiff__cluster-label` stays visually hidden) so the existing
- * controls keep almost the SAME total width as the flat row; below that,
- * each cluster collapses to its icon `kbc-rdiff__cluster-trigger` and its
- * body becomes a floating popover — the "icon+overflow menus" the brief
- * asks for. Every wrapped control keeps its pre-existing `data-kbc-*`
- * attribute and stays mounted at ALL widths; only visibility/position
- * change.
- *
- * The breakpoint is 1200px, not the brief's literal 1100px: measured
- * (`e2e`'s own scratch harness, not a committed spec) against THIS
- * content, the fully-expanded clusters' true combined floor — after
- * every width cut in this file and `ReviewDiffToolbar.tsx`/
- * `PatchsetSwitcher.tsx` — sits at ~1182px. A collapse threshold at 1100
- * would leave a genuine 1101–1181px dead zone where the toolbar is
- * neither collapsed (that only engages at <=1100) NOR able to fit its
- * fully-expanded content on one line — real overflow, title pushed to
- * zero width, the help button clipped past the right edge. 1200 clears
- * that floor with an honest margin; the brief's hard requirement (one
- * line at >= 1280px) holds either way, and "collapses under 1100px" is
- * still true, it just ALSO collapses a bit above it. */
-.kbc-rdiff__cluster {
-  position: relative;
+/* OL C5 — the toolbar's controls are ONE `ViewBar` (`@kb/ui/ViewBar`) of
+ * labelled clusters (Patchset / Navigate / View / Unsent) plus a More menu
+ * (Lanes, Show map). The ViewBar ships its own bar chrome; inside this
+ * header it only needs to give up that chrome and share the row. */
+.kbc-rdiff__toolbar .kb-viewbar {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
+}
+.kbc-rdiff__toolbar .kb-viewbar__clusters {
+  flex-wrap: wrap;
+  row-gap: var(--pad-1);
+}
+.kbc-rdiff__toolbar .kb-viewbar__legend {
+  font-family: var(--font-sans, inherit);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+.kbc-rdiff__ps,
+.kbc-rdiff__step {
   display: inline-flex;
   align-items: center;
-  /* V80-R4 — deliberately NOT `min-width: 0`. A cluster's own children
-   * (native `<select>`s, fixed-text buttons) mostly have no shrink give
-   * of their own (root CLAUDE.md's honesty rules rule out clipping a
-   * word mid-render), so the AUTOMATIC min-width (content-based, the
-   * default) is exactly the floor the outer toolbar-level shrink must
-   * respect — this cluster's box can never be squeezed narrower than
-   * what its own children truly need. Overriding this to 0 (an earlier
-   * version of this rule did) let the outer shrink push a cluster BELOW
-   * that floor, and the excess spilled into the NEXT cluster's box
-   * rather than the title's — the same silent-overlap failure mode as
-   * the missing `white-space: nowrap` above, one level up. Only the
-   * title (its own `min-width: 0` + `max-width` + ellipsis) is meant to
-   * absorb the toolbar's shrink pressure.
-   */
-  flex: 0 1 auto;
-}
-.kbc-rdiff__cluster:not(:last-of-type) {
-  padding-right: var(--pad-1);
-  border-right: 1px solid var(--rule);
-}
-.kbc-rdiff__cluster-trigger {
-  display: none;
-}
-.kbc-rdiff__cluster-label {
-  display: none;
-}
-.kbc-rdiff__cluster-body {
-  display: flex;
-  align-items: center;
-  /* V80-R4 — `nowrap` at >= 1200px: with the toolbar itself `nowrap` (see
-   * `.kbc-rdiff__toolbar`'s own comment), a cluster's own row shrinks as
-   * ONE unit rather than reflowing its controls onto a second internal
-   * row (which would defeat "one line"). Below 1200px this is irrelevant
-   * — the popover sizes itself and CAN wrap (its own media-query rule
-   * below sets `flex-wrap: wrap` back on, since the popover has real
-   * width to spend and reads better wrapped than horizontally scrolled). */
-  flex-wrap: nowrap;
-  /* V80-R4 — deliberately NOT `min-width: 0` either, for the SAME reason
-   * as `.kbc-rdiff__cluster` just above: this row's floor must stay its
-   * children's true combined min-content, or the outer shrink can push
-   * it (and them) narrower than that and the last child spills into the
-   * next cluster. */
-  /* V80-R4 — tighter than the old flat row's `--pad-2` (8px) between EVERY
-   * control: a cluster's own controls are already grouped by the divider,
-   * so a slightly denser gap inside one reads as "related," not cramped,
-   * and buys back the width the divider/border itself costs. */
   gap: var(--pad-1);
-}
-@media (max-width: 1200px) {
-  .kbc-rdiff__cluster {
-    border-right: none;
-    padding-right: 0;
-  }
-  .kbc-rdiff__cluster-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 8px;
-    border: 1px solid var(--rule);
-    border-radius: var(--radius-sm, 4px);
-    background: var(--bg-card-hi, var(--bg-panel-2));
-    color: var(--ink-mute);
-    cursor: pointer;
-  }
-  .kbc-rdiff__cluster-trigger:hover,
-  .kbc-rdiff__cluster.is-open .kbc-rdiff__cluster-trigger {
-    color: var(--ink);
-    border-color: var(--accent);
-  }
-  .kbc-rdiff__cluster-label {
-    display: block;
-    flex: 1 1 100%;
-    margin-bottom: var(--pad-1);
-    color: var(--fg-dim);
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .kbc-rdiff__cluster-body {
-    display: none;
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    z-index: var(--z-popover);
-    min-width: 260px;
-    max-width: min(360px, calc(100vw - 32px));
-    padding: var(--pad-2);
-    background: var(--bg-panel);
-    border: 1px solid var(--rule);
-    border-radius: var(--radius-sm, 4px);
-    box-shadow: var(--shadow, 0 6px 24px rgb(0 0 0 / 35%));
-  }
-  .kbc-rdiff__cluster.is-open .kbc-rdiff__cluster-body {
-    display: flex;
-  }
 }
 .kbc-rdiff__back {
   display: inline-flex;
@@ -1077,11 +979,11 @@
   flex: 0 0 auto;
 }
 /* V80-R4 — the ctx dial and the patchset switcher's two `<select>`s had
- * NO styling of their own (unlike `.kbc-rdiff__overlay-select select`,
+ * NO styling of their own (unlike `[data-kbc-rdiff-overlay-select] select`,
  * `--fs-sm`/`2px 6px`), so they rendered at the BROWSER's native default
  * select padding/font — visually inconsistent with every other control in
  * the toolbar and measurably wider for it. This is the SAME compact rule
- * `.kbc-rdiff__overlay-select select` already uses. */
+ * `[data-kbc-rdiff-overlay-select] select` already uses. */
 .kbc-rdiff__dial select,
 .kbc-rdiff__psw select {
   background: var(--bg-card);
@@ -1185,14 +1087,7 @@
 
 /* --- PRR-U3 — findings overlay selector (design-ui.md §S3) --------------- */
 
-.kbc-rdiff__overlay {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--pad-1);
-  flex: 0 0 auto;
-}
-
-.kbc-rdiff__overlay-select select {
+[data-kbc-rdiff-overlay-select] select {
   background: var(--bg-card);
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
@@ -1200,28 +1095,6 @@
   font: inherit;
   font-size: var(--fs-sm);
   padding: 2px 6px;
-}
-
-/* V80-R4 — icon + number per lane (was "Findings N · Comments N · GitHub
- * N" as plain words, the single widest string in the toolbar); the
- * `aria-label` on this element (`ReviewDiffToolbar.tsx`) still spells the
- * words out for a screen reader. */
-.kbc-rdiff__overlay-counts {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--pad-1);
-  font-size: var(--fs-sm);
-  color: var(--ink-mute);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.kbc-rdiff__overlay-counts > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-.kbc-rdiff__overlay-counts svg {
-  color: var(--fg-dim);
 }
 
 /* --- PRR-U3 — keyboard disposition menu (§6) ------------------------------
@@ -2557,7 +2430,7 @@ span.kbc-diff__impact-chip {
 /* --- the toolbar dials -------------------------------------------------- */
 /* V80-R4 — `.kbc-rdiff__dials` (the old ctx/noise/map wrapper `<div>`)
  * was retired when those controls moved into the View cluster's own
- * `.kbc-rdiff__cluster-body` (`ReviewDiffToolbar.tsx`); `.kbc-rdiff__psw`
+ * the ViewBar View cluster (`ReviewDiffToolbar.tsx`); `.kbc-rdiff__psw`
  * (PatchsetSwitcher's own wrapper) keeps the shared rule. */
 .kbc-rdiff__psw {
   display: inline-flex;
@@ -2580,7 +2453,7 @@ span.kbc-diff__impact-chip {
    * the caller when present) still shows the full sentence on hover. */
   /* Explicit (not relying on the overflow-based automatic-minimum
    * reduction alone) — this is a LEAF span with no descendants of its
-   * own, so unlike `.kbc-rdiff__cluster`'s own doc above, there is no
+   * own, so there is no
    * child floor this could hide. */
   min-width: 0;
   max-width: 70px;
