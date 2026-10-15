@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import Admin from "../components/settings/Admin";
@@ -47,6 +47,10 @@ function shortSha(sha: string | undefined): string | null {
   if (!sha || sha === "unknown") return null;
   return sha.replace(/-dirty$/, "").slice(0, 7) + (sha.endsWith("-dirty") ? "-dirty" : "");
 }
+
+export const GROUP_DAEMON = "This daemon";
+export const GROUP_PIPELINE = "Pipeline";
+export const GROUP_YOU = "You";
 
 const CENSUS_ZERO_HIT_LIMIT = 100;
 
@@ -190,10 +194,9 @@ function CensusSection() {
 }
 
 // Operator dashboard. Header strip surfaces daemon identity (name +
-// version + build + uptime); the tab strip below holds eight panels
-// covering observability (Overview/Pipeline/Traffic/Errors/Live),
-// daemon actions (Shares/Admin) and browser-local prefs (Preferences).
-// Phases S2-S5 fill the staged panels — S1 ships the shell + Preferences.
+// version + build + uptime); the tab list below holds fourteen panels in
+// three labelled groups: "This daemon" (observability + daemon actions),
+// "Pipeline" (Pipeline/Traffic) and "You" (browser-local Preferences/Census).
 export default function Settings() {
   useDocumentTitle("Settings");
   const activeKb = useActiveKb();
@@ -227,116 +230,100 @@ export default function Settings() {
 
   const tabs: TabSpec[] = useMemo(
     () => [
-      {
-        id: "overview",
-        label: "Overview",
-        body: () => <Overview />,
-      },
-      {
-        id: "pipeline",
-        label: "Pipeline",
-        body: () => <Pipeline />,
-      },
-      {
-        id: "traffic",
-        label: "Traffic",
-        body: () => <Traffic />,
-      },
-      {
-        id: "errors",
-        label: "Errors",
-        body: () => <Errors />,
-      },
+      { id: "overview", label: "Overview", group: GROUP_DAEMON, body: () => <Overview /> },
+      { id: "live", label: "Live", group: GROUP_DAEMON, body: () => <Live /> },
+      // CT-F5 — corpus-health SLOs; `/settings#slo` resolves via Tabs'
+      // hash-selects-tab-by-id.
+      { id: "slo", label: "SLOs", group: GROUP_DAEMON, body: () => <Slo /> },
+      { id: "errors", label: "Errors", group: GROUP_DAEMON, body: () => <Errors /> },
       {
         id: "quarantine",
         label: "Quarantine",
+        group: GROUP_DAEMON,
         body: () => <Quarantine />,
       },
-      {
-        id: "excluded",
-        label: "Excluded",
-        body: () => <Excluded />,
-      },
-      {
-        id: "shares",
-        label: "Shares",
-        body: () => <Shares />,
-      },
-      {
-        id: "live",
-        label: "Live",
-        body: () => <Live />,
-      },
-      // CT-F5 — corpus-health SLOs. An observability panel, so it sits with
-      // the other read-only ones (Overview…Live) and BEFORE the daemon-action
-      // tabs; `/settings#slo` resolves via Tabs' hash-selects-tab-by-id.
-      {
-        id: "slo",
-        label: "SLOs",
-        body: () => <Slo />,
-      },
-      {
-        id: "admin",
-        label: "Admin",
-        body: () => <Admin />,
-      },
-      {
-        id: "config",
-        label: "Config",
-        body: () => <DaemonConfig />,
-      },
+      { id: "excluded", label: "Excluded", group: GROUP_DAEMON, body: () => <Excluded /> },
+      { id: "shares", label: "Shares", group: GROUP_DAEMON, body: () => <Shares /> },
+      { id: "config", label: "Config", group: GROUP_DAEMON, body: () => <DaemonConfig /> },
+      { id: "users", label: "Users", group: GROUP_DAEMON, body: () => <Users /> },
+      { id: "admin", label: "Admin", group: GROUP_DAEMON, body: () => <Admin /> },
+      { id: "pipeline", label: "Pipeline", group: GROUP_PIPELINE, body: () => <Pipeline /> },
+      { id: "traffic", label: "Traffic", group: GROUP_PIPELINE, body: () => <Traffic /> },
       {
         id: "preferences",
         label: "Preferences",
+        group: GROUP_YOU,
         body: () => <Preferences />,
       },
-      {
-        id: "users",
-        label: "Users",
-        body: () => <Users />,
-      },
-      {
-        id: "census",
-        label: "Census",
-        body: () => <CensusSection />,
-      },
+      { id: "census", label: "Census", group: GROUP_YOU, body: () => <CensusSection /> },
     ],
     [],
   );
 
+  const metaParts: { key: string; node: ReactNode }[] = [];
+  if (identity?.host && identity.host !== identity.name)
+    metaParts.push({
+      key: "host",
+      node: (
+        <span className="settings__badge settings__badge--host" title="hostname">
+          {identity.host}
+        </span>
+      ),
+    });
+  if (identity?.version)
+    metaParts.push({
+      key: "version",
+      node: (
+        <span className="settings__badge" title="kb version">
+          v{identity.version}
+        </span>
+      ),
+    });
+  const sha = shortSha(identity?.build_sha);
+  if (sha)
+    metaParts.push({
+      key: "sha",
+      node: (
+        <span className="settings__badge" title="build commit">
+          {sha}
+        </span>
+      ),
+    });
+  if (identity?.started_at)
+    metaParts.push({
+      key: "up",
+      node: (
+        <span className="settings__badge" title={`started ${identity.started_at}`}>
+          up {fmtUptime(identity.started_at)}
+        </span>
+      ),
+    });
+  if (identity?.kbs && identity.kbs.length > 0)
+    metaParts.push({
+      key: "kbs",
+      node: (
+        <span className="settings__badge" title="kbs on this daemon">
+          {identity.kbs.length} kb{identity.kbs.length === 1 ? "" : "s"}
+        </span>
+      ),
+    });
+
   return (
     <div className="settings">
       <header className="settings__header" aria-label="daemon identity">
-        <div className="settings__header-main">
-          <h1 className="settings__title">{identity?.name ?? "daemon"}</h1>
-          {identity?.host && identity.host !== identity.name && (
-            <span className="settings__badge settings__badge--host" title="hostname">
-              {identity.host}
-            </span>
-          )}
-        </div>
-        <div className="settings__badges">
-          {identity?.version && (
-            <span className="settings__badge" title="kb version">
-              v{identity.version}
-            </span>
-          )}
-          {shortSha(identity?.build_sha) && (
-            <span className="settings__badge" title="build commit">
-              {shortSha(identity?.build_sha)}
-            </span>
-          )}
-          {identity?.started_at && (
-            <span className="settings__badge" title={`started ${identity.started_at}`}>
-              up {fmtUptime(identity.started_at)}
-            </span>
-          )}
-          {identity?.kbs && identity.kbs.length > 0 && (
-            <span className="settings__badge" title="kbs on this daemon">
-              {identity.kbs.length} kb{identity.kbs.length === 1 ? "" : "s"}
-            </span>
-          )}
-        </div>
+        <h1 className="settings__title">{identity?.name ?? "daemon"}</h1>
+        <p className="settings__meta">
+          {metaParts.map((m, i) => (
+            <Fragment key={m.key}>
+              {i > 0 && (
+                <span className="settings__meta-sep" aria-hidden="true">
+                  {" \u00b7 "}
+                </span>
+              )}
+              {m.node}
+            </Fragment>
+          ))}
+        </p>
         {identityError && (
           <div className="settings__error" role="alert">
             identity unreachable: {identityError}
