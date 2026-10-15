@@ -1,0 +1,263 @@
+/* Shared which-key overlay and keyboard help sheet (ui/src/keys). Moved verbatim
+ * from web-code's reader.css and commands.css. */
+
+/* ── which-key ──────────────────────────────────────────────────────────
+ * Bottom-anchored, non-modal, pointer-transparent: it must never steal a
+ * click or dim the code you are mid-sentence in. It is a passive observer of
+ * the chord state, and it should feel like one.
+ */
+.kbc-whichkey {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-3, 12px);
+  transform: translateX(-50%);
+  z-index: var(--z-hint);
+  max-width: min(920px, calc(100vw - 32px));
+  max-height: 42vh;
+  overflow-y: auto;
+  pointer-events: none;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-2, 8px);
+  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  font-size: var(--fs-sm);
+}
+
+.kbc-whichkey__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding-bottom: var(--space-1, 4px);
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: var(--space-1, 4px);
+}
+
+.kbc-whichkey__pending {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.kbc-whichkey__scope {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+
+.kbc-whichkey__esc {
+  margin-left: auto;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+}
+
+.kbc-whichkey__rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 2px var(--space-3, 12px);
+}
+
+.kbc-whichkey__cell {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2, 8px);
+  min-width: 0;
+}
+
+.kbc-whichkey__cell kbd {
+  flex: 0 0 auto;
+  min-width: 1.6em;
+  text-align: center;
+}
+
+.kbc-whichkey__group {
+  flex: 0 0 100%;
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: var(--space-1, 4px);
+}
+
+.kbc-whichkey__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A group node is a promise of more keys, not an action — say so. */
+.kbc-whichkey__label.is-group {
+  color: var(--ink-mute);
+  font-style: italic;
+}
+
+/* --- A3 — keyboard cheatsheet overlay (`?`) --------------------------- */
+.kbc-kbdhelp__scrim {
+  position: fixed;
+  inset: 0;
+  /* F5 light-theme audit fix — was `color-mix(in srgb, var(--bg) 62%,
+   * transparent)`. That reads as a genuine dimming scrim in dark theme
+   * (`--bg` is near-black), but in light theme `--bg` is near-WHITE
+   * (`#f3f1ec`), so the "scrim" was actually a translucent near-white veil
+   * that barely dimmed the reader behind it — the opposite of what a modal
+   * backdrop needs. `--backdrop` (tokens.css) is the same themed scrim
+   * color the omnibox/confirm-dialog overlays already use, so all three
+   * overlays are visually consistent AND correct in both themes. */
+  background: var(--backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* V4.U4 — ties with omnibox `--z-modal` 100; DOM order breaks the tie
+   * (Omnibox mounts after Routes), so today's behavior is preserved. */
+  z-index: var(--z-modal);
+}
+.kbc-kbdhelp {
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule-hi);
+  border-radius: 10px;
+  padding: 16px 20px 20px;
+  box-shadow: var(--shadow-lift);
+}
+.kbc-kbdhelp__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.kbc-kbdhelp__head h2 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.kbc-kbdhelp__close {
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.kbc-kbdhelp__close:hover {
+  color: var(--ink);
+}
+.kbc-kbdhelp__cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 26px;
+}
+.kbc-kbdhelp__group h3 {
+  margin: 10px 0 6px;
+  font-size: var(--fs-sm);
+  color: var(--accent-soft, var(--accent));
+}
+.kbc-kbdhelp__group dl {
+  margin: 0;
+}
+.kbc-kbdhelp__row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.kbc-kbdhelp__row dt {
+  flex: 0 0 108px;
+}
+.kbc-kbdhelp__row dt kbd {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.kbc-kbdhelp__row dd {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+
+/* SH.C3 — context-aware ordering: the current surface's group(s) get a
+ * subtle accent rail + brighter title so they read as "start here" without
+ * hiding anything else (discoverability > decluttering for a cheatsheet). */
+.kbc-kbdhelp__group--primary {
+  padding-left: 8px;
+  border-left: 2px solid var(--accent-bor);
+}
+.kbc-kbdhelp__group--primary h3 {
+  color: var(--accent);
+}
+.kbc-kbdhelp__break {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 2px;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kbc-kbdhelp__break::before,
+.kbc-kbdhelp__break::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--rule);
+}
+.kbc-kbdhelp__cols--rest {
+  opacity: 0.85;
+}
+
+/* ── the `?` sheet's new chrome ─────────────────────────────────────────── */
+.kbc-kbdhelp__scopename {
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.kbc-kbdhelp__preset {
+  margin-left: auto;
+  margin-right: var(--space-2, 8px);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
+
+.kbc-kbdhelp__preset select {
+  background: var(--bg-card);
+  color: var(--fg);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-1, 4px);
+  padding: 1px 4px;
+  font: inherit;
+}
+
+/* A row with no key in this preset is still listed — "reachable from the
+ * palette, not from the keyboard here" is a real answer. */
+.kbc-kbdhelp__nokey {
+  color: var(--ink-mute);
+}
+
+.kbc-kbdhelp__row.is-planned {
+  opacity: 0.66;
+}
+
+.kbc-kbdhelp__planned {
+  color: var(--ink-mute);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kbc-kbdhelp__foot {
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-top: 1px solid var(--rule);
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
