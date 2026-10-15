@@ -107,7 +107,7 @@ export default function NavSheet({
             data-kbc-nav-row="inbox"
             onClick={onClose}
           >
-            <Icon.List aria-hidden />
+            <Icon.Inbox aria-hidden />
             Inbox
           </Link>
           <Link

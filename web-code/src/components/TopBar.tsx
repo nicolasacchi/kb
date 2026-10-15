@@ -125,7 +125,7 @@ export default function TopBar() {
                   aria-current={inboxOn ? "page" : undefined}
                   {...{ [navTestAttr("inbox")]: true }}
                 >
-                  <Icon.List />
+                  <Icon.Inbox />
                 </Link>
                 <Link
                   to={settingsUrl()}

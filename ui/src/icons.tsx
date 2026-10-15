@@ -22,6 +22,7 @@ export const DEFAULT_ICON_SIZES = {
   Search: 14,
   Grid: 14,
   List: 14,
+  Inbox: 14,
   Atlas: 14,
   Press: 14,
   History: 14,
@@ -123,6 +124,14 @@ export function createIconSet(overrides: IconSizeOverrides = {}) {
     List: (p: P) => (
       <svg {...base(sz("List"))} {...p}>
         <path d="M3 4h10M3 8h10M3 12h10" strokeLinecap="round" />
+      </svg>
+    ),
+    // OL-P1 — a tray: open-top box with the shelf notch, distinct from `List`
+    // (which is also the hamburger).
+    Inbox: (p: P) => (
+      <svg {...base(sz("Inbox"))} {...p}>
+        <path d="M2 9.5l1.7-5.6A1 1 0 0 1 4.65 3.2h6.7a1 1 0 0 1 .95.7L14 9.5v2.7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V9.5z" strokeLinejoin="round" />
+        <path d="M2 9.5h3.2a1 1 0 0 1 1 .9 1.8 1.8 0 0 0 3.6 0 1 1 0 0 1 1-.9H14" strokeLinejoin="round" />
       </svg>
     ),
     Atlas: (p: P) => (
