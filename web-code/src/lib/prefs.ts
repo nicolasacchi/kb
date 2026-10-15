@@ -25,8 +25,17 @@
 // Preferences stay BROWSER-LOCAL by the D16 ruling: no daemon write, no
 // server noun, no CLI verb — exactly like `lastRepo` above it.
 import { KBC_DEFAULT_PRESET, KBC_PRESETS, type KbcPreset } from "../commands/registry.gen";
-import { KBC_THEMES } from "../themes/registry.gen";
-import { fromOklch, parseHex, toHex, toOklch } from "../themes/derive";
+import {
+  CONTRAST_MAX,
+  CONTRAST_MIN,
+  CONTRAST_STEP_L,
+  applyTheme as applySharedTheme,
+  coerceFamily,
+  resolveThemeId as resolveSharedThemeId,
+  setThemeAttributes,
+  applyContrast,
+  applyThemeColorMeta,
+} from "@kb/ui/themes/apply";
 import { COMMENT_GUTTER_MODES, type CommentGutterMode } from "./comments";
 
 export type Theme = "dark" | "light" | "system";
@@ -47,9 +56,7 @@ export type Density = "comfortable" | "compact";
 /// applies a fixed OKLCH LIGHTNESS delta to the five background roles and
 /// leaves every foreground alone, so the direction of the change is always
 /// "surfaces move, ink stays".
-export const CONTRAST_MIN = -2;
-export const CONTRAST_MAX = 2;
-export const CONTRAST_STEP_L = 0.018;
+export { CONTRAST_MAX, CONTRAST_MIN, CONTRAST_STEP_L };
 
 /// V4.D1 — unified (default) or side-by-side hunk layout.
 export type DiffMode = "unified" | "split";
@@ -239,9 +246,7 @@ export function saveDiffSyntaxHighlight(on: boolean): void {
 /// carries. An unknown id (a downgrade, a hand-edited blob) degrades to the
 /// built-in rather than leaving the app on an attribute nothing styles.
 export function loadThemeFamily(): string {
-  const f = loadPrefs().themeFamily;
-  if (!f || f === BUILTIN_FAMILY) return BUILTIN_FAMILY;
-  return KBC_THEMES.some((t) => t.family === f) ? f : BUILTIN_FAMILY;
+  return coerceFamily(loadPrefs().themeFamily, BUILTIN_FAMILY, HOST);
 }
 
 export function loadContrast(): number {
@@ -254,89 +259,28 @@ export function loadDensity(): Density {
   return loadPrefs().density === "compact" ? "compact" : "comfortable";
 }
 
-/// Does the OS currently ask for light? Only consulted when `appearance` is
-/// `system` AND a registry family is active — the built-in family lets
-/// tokens.css's own `prefers-color-scheme` block answer, unchanged.
-function prefersLight(): boolean {
-  return typeof window !== "undefined" && typeof window.matchMedia === "function"
-    ? window.matchMedia("(prefers-color-scheme: light)").matches
-    : false;
-}
+/// The shared engine's host knob: kb-code paints its built-in `kbc` family
+/// from its own tokens.css, so that family resolves to NO `data-kbc-theme`.
+const HOST = { builtinFamily: BUILTIN_FAMILY } as const;
 
 /// Resolve (family, appearance) to a `data-kbc-theme` value, or `null` for
-/// "leave the attribute off and let tokens.css paint". PURE except for the
-/// injected `light` flag, so it is unit-testable without a DOM.
+/// "leave the attribute off and let tokens.css paint". Pure except for the
+/// injected `light` flag; the resolution itself is the shared engine's.
 export function resolveThemeId(
   family: string,
   appearance: Appearance,
   light: boolean,
 ): string | null {
-  if (family === BUILTIN_FAMILY) return null;
-  const members = KBC_THEMES.filter((t) => t.family === family);
-  if (members.length === 0) return null;
-  const want = appearance === "system" ? (light ? "light" : "dark") : appearance;
-  return (members.find((t) => t.appearance === want) ?? members[0]).id;
+  return resolveSharedThemeId(family, appearance, light, HOST);
 }
-
-const CONTRAST_BG_ROLES = ["bg", "bg-panel", "bg-panel-2", "bg-card", "bg-card-hi"];
-
-/// Apply the contrast slider as inline OKLCH lightness deltas on the five
-/// background roles. The inline properties are REMOVED first so the read
-/// back sees the theme's own value, never a previous delta compounding on
-/// itself. The arithmetic is done in JS (not `oklch(from …)` in CSS) so the
-/// result is a plain hex a browser without relative-colour support still
-/// paints — and so the value is the same one `theme lint` would measure.
-function applyContrast(delta: number): void {
-  const root = document.documentElement;
-  for (const role of CONTRAST_BG_ROLES) root.style.removeProperty(`--${role}`);
-  if (!delta) return;
-  const cs = getComputedStyle(root);
-  for (const role of CONTRAST_BG_ROLES) {
-    const raw = cs.getPropertyValue(`--${role}`).trim();
-    if (!/^#[0-9a-fA-F]{6}$/.test(raw)) continue;
-    const lch = toOklch(parseHex(raw));
-    // Positive contrast pushes surfaces AWAY from the ink: darker on a dark
-    // theme, lighter on a light one. `lch.l < 0.5` is the cheap, stable test
-    // for which side of the ramp this palette sits on.
-    const dir = lch.l < 0.5 ? -1 : 1;
-    const l = Math.max(0, Math.min(1, lch.l + dir * delta * CONTRAST_STEP_L));
-    root.style.setProperty(`--${role}`, toHex(fromOklch({ l, c: lch.c, h: lch.h })));
-  }
-}
-
-/// Keep the `theme-color` meta on the theme the user actually chose. R11:
-/// `index.html` keys two of these to `prefers-color-scheme`, so picking
-/// light on a dark OS left the mobile browser chrome dark. We resolve the
-/// live `--bg` and collapse them to one unconditional meta.
-function applyThemeColorMeta(): void {
-  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
-  if (!bg) return;
-  const head = document.head;
-  if (!head) return;
-  const metas = Array.from(head.querySelectorAll('meta[name="theme-color"]'));
-  for (const m of metas.slice(1)) m.remove();
-  const meta = (metas[0] as HTMLMetaElement | undefined) ?? document.createElement("meta");
-  meta.setAttribute("name", "theme-color");
-  meta.removeAttribute("media");
-  meta.setAttribute("content", bg);
-  if (!meta.parentNode) head.appendChild(meta);
-}
-
-let osSchemeListener: ((e: MediaQueryListEvent) => void) | null = null;
 
 /// Sets `<html data-theme>` (appearance), `<html data-kbc-theme>` (the
 /// resolved registry theme, absent for the built-in family),
 /// `<html data-density>`, `color-scheme`, the contrast deltas and the
-/// `theme-color` meta. Re-running is cheap and idempotent.
+/// `theme-color` meta. Re-running is cheap and idempotent. The attribute and
+/// contrast mechanics live in `@kb/ui/themes/apply`; density is kb-code's own.
 export function applyTheme(theme: Theme, family: string = loadThemeFamily()): void {
   const root = document.documentElement;
-  root.setAttribute("data-theme", theme);
-  root.style.colorScheme = theme === "system" ? "light dark" : theme;
-
-  const id = resolveThemeId(family, theme, prefersLight());
-  if (id) root.setAttribute("data-kbc-theme", id);
-  else root.removeAttribute("data-kbc-theme");
-
   // `comfortable` is tokens.css's `:root` default, so the ATTRIBUTE is only
   // set for `compact`. That keeps a fresh browser's DOM byte-identical to
   // pre-V70-A7 — the reading contract adds a lever, not a marker.
@@ -344,22 +288,7 @@ export function applyTheme(theme: Theme, family: string = loadThemeFamily()): vo
   if (density === "compact") root.setAttribute("data-density", density);
   else root.removeAttribute("data-density");
 
-  // A registry family resolves `system` in JS, so it needs the OS flip that
-  // tokens.css's media block gives the built-in family for free. One
-  // listener, re-registered on every apply (the closure captures `family`).
-  const mq =
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia("(prefers-color-scheme: light)")
-      : null;
-  if (mq && osSchemeListener) mq.removeEventListener("change", osSchemeListener);
-  osSchemeListener = null;
-  if (mq && theme === "system" && family !== BUILTIN_FAMILY) {
-    osSchemeListener = () => applyTheme(theme, family);
-    mq.addEventListener("change", osSchemeListener);
-  }
-
-  applyContrast(loadContrast());
-  applyThemeColorMeta();
+  applySharedTheme(theme, family, { ...HOST, contrast: loadContrast() });
 }
 
 /// V70-A7 — persist + apply an appearance/family/contrast/density change and
@@ -384,12 +313,7 @@ export function setThemePrefs(next: {
 /// reason the theme is one attribute and not a stylesheet swap: previewing is
 /// free. `applyTheme()` (from the live prefs) is the revert.
 export function previewTheme(family: string, appearance: Appearance): void {
-  const root = document.documentElement;
-  root.setAttribute("data-theme", appearance);
-  root.style.colorScheme = appearance === "system" ? "light dark" : appearance;
-  const id = resolveThemeId(family, appearance, prefersLight());
-  if (id) root.setAttribute("data-kbc-theme", id);
-  else root.removeAttribute("data-kbc-theme");
+  setThemeAttributes(appearance, family, HOST);
   applyContrast(loadContrast());
   applyThemeColorMeta();
 }

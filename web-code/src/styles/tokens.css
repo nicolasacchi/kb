@@ -25,7 +25,7 @@
  * V70-A7 — kbc-theme/1. Two more conventions, and one contract:
  *
  *   • a THEME is declared in `crates/kb-code-server/themes/registry.json`
- *     and generated into `src/themes/themes.gen.css` — NEVER as a new
+ *     and generated into `ui/src/themes/themes.gen.css` — NEVER as a new
  *     hand-written block in this file. This file owns the built-in
  *     `kb-code` palette (the default) and the invariant contract below;
  *     everything else is data.
@@ -448,7 +448,7 @@
  * Every role below is a NEW name with a default that resolves to a token
  * this app already ships, so the built-in `kb-code` palette renders
  * byte-identically to pre-V70-A7. A registry theme overrides these per
- * `[data-kbc-theme]` in `src/themes/themes.gen.css`; the aliases here are
+ * `[data-kbc-theme]` in `ui/src/themes/themes.gen.css`; the aliases here are
  * what the built-in (attribute-absent) default resolves to.
  *
  * `var()` aliases on the bare `:root` resolve against the ACTIVE theme

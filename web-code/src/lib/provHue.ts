@@ -20,7 +20,7 @@
 //     trusted" — trust is line STYLE in one hue (the adjacent channel), and
 //     mixing the two is how a decorative axis starts reading as a verdict.
 
-import { PROV_HUES } from "../themes/derive";
+import { PROV_HUES } from "@kb/ui/themes/derive";
 
 /// FNV-1a, 32-bit. A stable, dependency-free string hash — the same value
 /// in every browser and in vitest, which is what makes the rail a property

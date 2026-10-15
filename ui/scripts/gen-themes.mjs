@@ -3,19 +3,19 @@
 //
 //   crates/kb-code-server/themes/registry.json   (the SOURCE, kbc-theme/1)
 //        ↓
-//   web-code/src/themes/registry.gen.ts          (metadata for the picker)
-//   web-code/src/themes/themes.gen.css           (one block per theme)
+//   ui/src/themes/registry.gen.ts                (metadata for the picker)
+//   ui/src/themes/themes.gen.css                 (one block per theme)
 //
 // The registry lives in the SERVER crate (same ruling as the command
 // registry): the daemon serves it verbatim at `GET /api/themes` via
 // `include_str!`, so a CLI/agent caller and the SPA read the same bytes.
-// The SPA must NEVER import from `../crates` at build time — the Docker SPA
-// stage only copies `web-code/`, so a build-time reach across the crate
+// The SPAs must NEVER import from `../crates` at build time — the Docker SPA
+// stages only copy their app plus `ui/`, so a build-time reach across the crate
 // boundary would work locally and break in the image. Hence: a dev-time
 // script writes checked-in artefacts, and `registry.gen.test.ts` regenerates
 // them in memory and asserts byte equality so the copies cannot go stale.
 //
-// Run: `npm run gen:themes` (from web-code/).
+// Run: `node ui/scripts/gen-themes.mjs` (or `npm run gen:themes` in web-code/).
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { generateRegistryTs, generateThemesCss } from "../src/themes/derive.ts";

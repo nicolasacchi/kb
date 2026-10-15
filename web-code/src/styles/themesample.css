@@ -1,0 +1,92 @@
+/* V70-A7 — the theme picker's live sample (real markup in the real
+ * `.kbc-hl-*` / diff / trust classes). Split out of the shared picker CSS in
+ * OL F2: it is kb-code's own vocabulary, so it stays with kb-code. */
+
+/* --- the live sample --------------------------------------------------- */
+
+.kbc-themesample {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg);
+}
+.kbc-themesample__code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-code);
+  padding: var(--pad-1) 0;
+}
+.kbc-themesample__line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: pre;
+  overflow: hidden;
+}
+.kbc-themesample__line--add {
+  background: var(--diff-add-bg);
+}
+.kbc-themesample__line--del {
+  background: var(--diff-del-bg);
+}
+.kbc-themesample__gut {
+  flex: 0 0 30px;
+  text-align: right;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+  user-select: none;
+}
+/* Lane Budget: the sign column is PERMANENT — it is the load-bearing cue for
+ * add-vs-del, and the tint is reinforcement, not the signal. */
+.kbc-themesample__sign {
+  color: var(--ink-mute);
+}
+/* Lane Budget: blame age is a single-hue lightness ramp in gutter A. */
+.kbc-themesample__age[data-band="0"] {
+  background: var(--age-band-0);
+}
+.kbc-themesample__age[data-band="4"] {
+  background: var(--age-band-4);
+}
+.kbc-themesample__age[data-band="8"] {
+  background: var(--age-band-8);
+}
+/* Lane Budget: trust is LINE STYLE in ONE hue, never a hue of its own. */
+.kbc-themesample__usage {
+  text-decoration-line: underline;
+  text-decoration-style: var(--kbc-trust-style, solid);
+  text-decoration-color: var(--kbc-trust-color, var(--trust-hue));
+  text-underline-offset: 3px;
+}
+.kbc-themesample__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: var(--pad-1);
+  border-top: 1px solid var(--rule);
+  background: var(--bg-panel);
+}
+.kbc-themesample__chip {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+}
+.kbc-themesample__chip--blocker {
+  background: color-mix(in srgb, var(--red) 20%, transparent);
+  color: var(--red);
+}
+.kbc-themesample__chip--concern {
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+.kbc-themesample__chip--ok {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  color: var(--green);
+}
+.kbc-themesample__trust {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+  border: 1px var(--kbc-trust-style, solid) var(--kbc-trust-color, var(--rule-hi));
+}

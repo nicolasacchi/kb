@@ -12,34 +12,37 @@
 // That leaves a checked-in copy, and a checked-in copy can go stale. This
 // test is why it cannot: it re-runs the exact generator in memory and
 // asserts byte equality. Edit the registry without running
-// `npm run gen:themes` and this fails, naming the file to regenerate.
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+// `node ui/scripts/gen-themes.mjs` and this fails, naming the file to regenerate.
 import { describe, expect, it } from "vitest";
 import { ANCHOR_KEYS, deriveTheme, generateRegistryTs, generateThemesCss } from "./derive";
 import { KBC_THEMES, KBC_THEME_FAMILIES, KBC_THEME_SCHEMA } from "./registry.gen";
 
-const REGISTRY_PATH = fileURLToPath(
-  new URL("../../../crates/kb-code-server/themes/registry.json", import.meta.url),
-);
-const TS_PATH = fileURLToPath(new URL("./registry.gen.ts", import.meta.url));
-const CSS_PATH = fileURLToPath(new URL("./themes.gen.css", import.meta.url));
+// Node's fs via `process.getBuiltinModule` typed as `any`: web/'s tsconfig pulls
+// ui/src in but carries no Node typings (same trick as ui/src/tokens.test.ts).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fs = (globalThis as any).process.getBuiltinModule("node:fs") as {
+  readFileSync(url: URL, enc: "utf8"): string;
+};
 
-const registry = JSON.parse(readFileSync(REGISTRY_PATH, "utf8"));
+const REGISTRY_URL = new URL("../../../crates/kb-code-server/themes/registry.json", import.meta.url);
+const TS_URL = new URL("./registry.gen.ts", import.meta.url);
+const CSS_URL = new URL("./themes.gen.css", import.meta.url);
+
+const registry = JSON.parse(fs.readFileSync(REGISTRY_URL, "utf8"));
 
 describe("the checked-in generated theme artefacts", () => {
   it("registry.gen.ts is byte-identical to a fresh generation", () => {
     expect(
       generateRegistryTs(registry),
-      "stale — run `npm run gen:themes` in web-code/",
-    ).toBe(readFileSync(TS_PATH, "utf8"));
+      "stale — run `node ui/scripts/gen-themes.mjs`",
+    ).toBe(fs.readFileSync(TS_URL, "utf8"));
   });
 
   it("themes.gen.css is byte-identical to a fresh generation", () => {
     expect(
       generateThemesCss(registry),
-      "stale — run `npm run gen:themes` in web-code/",
-    ).toBe(readFileSync(CSS_PATH, "utf8"));
+      "stale — run `node ui/scripts/gen-themes.mjs`",
+    ).toBe(fs.readFileSync(CSS_URL, "utf8"));
   });
 });
 
@@ -49,12 +52,28 @@ describe("the registry itself", () => {
     expect(KBC_THEME_SCHEMA).toBe("kbc-theme/1");
   });
 
-  it("carries twelve named families plus the built-in", () => {
+  it("carries twelve named families plus the two built-ins", () => {
     const families = [...new Set(registry.themes.map((t: { family: string }) => t.family))];
     expect(families).toContain("kbc");
-    // Twelve catalogue families (D16) + the built-in `kbc` palette.
-    expect(families).toHaveLength(13);
-    expect(KBC_THEME_FAMILIES).toHaveLength(13);
+    expect(families).toContain("kb-classic");
+    // Twelve catalogue families (D16) + kb-code's built-in `kbc` palette +
+    // kb's `kb-classic` (OL F2).
+    expect(families).toHaveLength(14);
+    expect(KBC_THEME_FAMILIES).toHaveLength(14);
+  });
+
+  it("flags exactly kb-classic as a lead family", () => {
+    expect(KBC_THEME_FAMILIES.filter((f) => f.lead).map((f) => f.family)).toEqual(["kb-classic"]);
+    // The flag is an ordering hint only: registry order is untouched.
+    expect(KBC_THEME_FAMILIES[0].family).toBe("kbc");
+  });
+
+  it("kb-classic members carry the appearance their id claims", () => {
+    // The host picks a member by `appearance`, never by id suffix; this pins
+    // that both kb-classic members carry the appearance their id claims.
+    const byId = new Map(KBC_THEMES.map((t) => [t.id, t.appearance]));
+    expect(byId.get("kb-classic-dark")).toBe("dark");
+    expect(byId.get("kb-classic-light")).toBe("light");
   });
 
   it("ships a light AND a dark member for every family", () => {

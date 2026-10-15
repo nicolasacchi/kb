@@ -109,7 +109,10 @@ for (const f of cssFiles) {
 }
 // OL F3 — the shared tokens (`@kb/ui/tokens.css`) are imported by
 // src/styles/tokens.css, so the names ui/src declares are defined here too.
-// They count as DEFINITIONS only; ui/src is not scanned for references yet.
+// OL F2 — this is also what keeps the generated palette visible to the lint:
+// `themes.gen.css` now lives in `ui/src/themes/`, outside `src`, and without
+// this loop every `var(--bg)` in web-code would read as undefined. They count
+// as DEFINITIONS only; ui/src is not scanned for references yet.
 for (const f of walk(join(__dirname, "..", "..", "ui", "src"), [".css"], [])) {
   for (const found of stripCssComments(readFileSync(f, "utf8")).matchAll(DEF_RE)) {
     defined.add(found[1]);

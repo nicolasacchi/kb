@@ -1,11 +1,10 @@
-/* V70-A7 — the theme picker + its live sample.
- *
- * Its own file (not topbar.css / reader.css) so this unit adds ZERO lines to
- * a stylesheet another unit in this milestone is editing. Imported by
- * `components/ThemePicker.tsx`, i.e. lazily with the component — which is
- * also why nothing here defines a palette token: route-lazy CSS evaluates
- * AFTER main.tsx's eager imports (recon R10), so a palette definition here
- * could out-cascade tokens.css. Chrome only. */
+/* V70-A7 / OL F2 — the shared theme picker chrome (family list, appearance
+ * segment, receipt, sliders). Imported by `ui/src/ThemePicker.tsx`, i.e.
+ * lazily with the component in both apps — which is also why nothing here
+ * defines a palette token: route-lazy CSS evaluates AFTER the apps' eager
+ * imports (recon R10), so a palette definition here could out-cascade the
+ * generated themes. Chrome only. The live code/diff SAMPLE a host may slot
+ * into the picker is the host's own CSS (web-code: styles/themesample.css). */
 
 .kbc-themepicker {
   position: absolute;
@@ -160,93 +159,22 @@
   color: var(--ink-dim);
 }
 
-/* --- the live sample --------------------------------------------------- */
-
-.kbc-themesample {
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--bg);
-}
-.kbc-themesample__code {
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-code);
-  padding: var(--pad-1) 0;
-}
-.kbc-themesample__line {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  white-space: pre;
-  overflow: hidden;
-}
-.kbc-themesample__line--add {
-  background: var(--diff-add-bg);
-}
-.kbc-themesample__line--del {
-  background: var(--diff-del-bg);
-}
-.kbc-themesample__gut {
-  flex: 0 0 30px;
-  text-align: right;
-  font-size: var(--fs-xs);
-  color: var(--ink-dim);
-  user-select: none;
-}
-/* Lane Budget: the sign column is PERMANENT — it is the load-bearing cue for
- * add-vs-del, and the tint is reinforcement, not the signal. */
-.kbc-themesample__sign {
-  color: var(--ink-mute);
-}
-/* Lane Budget: blame age is a single-hue lightness ramp in gutter A. */
-.kbc-themesample__age[data-band="0"] {
-  background: var(--age-band-0);
-}
-.kbc-themesample__age[data-band="4"] {
-  background: var(--age-band-4);
-}
-.kbc-themesample__age[data-band="8"] {
-  background: var(--age-band-8);
-}
-/* Lane Budget: trust is LINE STYLE in ONE hue, never a hue of its own. */
-.kbc-themesample__usage {
-  text-decoration-line: underline;
-  text-decoration-style: var(--kbc-trust-style, solid);
-  text-decoration-color: var(--kbc-trust-color, var(--trust-hue));
-  text-underline-offset: 3px;
-}
-.kbc-themesample__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+/* The close button: the host's own icon-button class (web-code's
+ * `.kbc-iconbtn`) may also be on it; this keeps it usable where there is none. */
+.kbc-themepicker__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: var(--pad-1);
-  border-top: 1px solid var(--rule);
-  background: var(--bg-panel);
-}
-.kbc-themesample__chip {
-  padding: 1px 6px;
-  border-radius: var(--radius-pill);
-  font-size: var(--fs-xs);
-}
-.kbc-themesample__chip--blocker {
-  background: color-mix(in srgb, var(--red) 20%, transparent);
-  color: var(--red);
-}
-.kbc-themesample__chip--concern {
-  background: color-mix(in srgb, var(--warn) 20%, transparent);
-  color: var(--warn);
-}
-.kbc-themesample__chip--ok {
-  background: color-mix(in srgb, var(--green) 20%, transparent);
-  color: var(--green);
-}
-.kbc-themesample__trust {
-  padding: 1px 6px;
+  background: transparent;
+  border: 0;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
   color: var(--ink-mute);
-  border: 1px var(--kbc-trust-style, solid) var(--kbc-trust-color, var(--rule-hi));
+  cursor: pointer;
+}
+.kbc-themepicker__close:hover {
+  color: var(--ink);
+  background: var(--bg-panel-2);
 }
 
 /* Mobile: the same component as a bottom sheet, mirroring the NavSheet. */
@@ -266,4 +194,17 @@
   .kbc-themepicker__segbtn {
     transition: none;
   }
+}
+
+/* Embedded in a page (kb Settings): flow in the document instead of floating. */
+.kbc-themepicker--inline {
+  position: static;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  width: 100%;
+  max-width: 420px;
+  max-height: none;
+  overflow: visible;
+  box-shadow: none;
 }

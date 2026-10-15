@@ -38,7 +38,7 @@
 //!
 //! The class set IS the `kbc-theme/1` contract — every member is bound to
 //! a `--syn-*` CSS variable in `web-code/src/styles/tokens.css`, derived
-//! per theme by `web-code/src/themes/derive.ts`, and rendered as
+//! per theme by `ui/src/themes/derive.ts`, and rendered as
 //! `.kbc-hl-<role>` (`web-code/src/lib/decorations.ts`). D16 widens it
 //! from fifteen to EIGHTEEN, and the three new members were picked by
 //! counting the capture names the queries in this build actually emit —
