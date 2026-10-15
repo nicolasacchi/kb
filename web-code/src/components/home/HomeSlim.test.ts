@@ -48,4 +48,3 @@ describe("Home slimming (OL-C7)", () => {
     expect(html).not.toContain("data-kbc-home-store");
   });
 });
-});
