@@ -1,0 +1,99 @@
+/* Shared StateCard. Tokens present in both apps only. */
+.kb-statecard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--pad-2);
+  max-width: 32rem;
+  margin: var(--pad-4) auto;
+  padding: var(--pad-4);
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  color: var(--ink);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .kb-statecard {
+    animation: kb-statecard-in 120ms ease-out;
+  }
+}
+@keyframes kb-statecard-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.kb-statecard__icon {
+  color: var(--ink-mute);
+  display: inline-flex;
+}
+.kb-statecard__title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+.kb-statecard__reason {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--ink-mute);
+}
+.kb-statecard__progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--pad-1);
+  width: 100%;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.kb-statecard__progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.kb-statecard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--pad-2);
+}
+.kb-statecard__action,
+.kb-statecard__action a {
+  color: var(--accent);
+  font-size: var(--fs-md);
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: var(--pad-1) var(--pad-3);
+  cursor: pointer;
+  text-decoration: none;
+}
+.kb-statecard__action a {
+  border: 0;
+  padding: 0;
+}
+.kb-statecard__cli {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.kb-statecard__cli code {
+  font-family: inherit;
+  overflow-wrap: anywhere;
+}
+.kb-statecard__copy {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-mute);
+  background: none;
+  border: 0;
+  padding: var(--pad-1);
+  cursor: pointer;
+}
