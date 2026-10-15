@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import { KBC_THEME_FAMILIES, KBC_THEMES } from "../themes/registry.gen";
 import {
   applyTheme,

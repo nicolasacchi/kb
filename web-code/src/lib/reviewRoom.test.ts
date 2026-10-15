@@ -4,7 +4,7 @@
 // HERE, by name.
 import { describe, expect, it } from "vitest";
 import type { ReviewComment, ReviewCommentsOut, ReviewFileRow, ReviewFinding } from "../api/types";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import {
   ACT_CHIPS,
   CATEGORY_CHIPS,

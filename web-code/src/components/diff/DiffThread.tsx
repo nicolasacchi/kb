@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { useParams } from "react-router";
 import { ApiError, ApplyConflictError } from "../../api/client";
 import type { ReviewComment } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import IntentChip from "../annotations/IntentChip";
 import { useConfirm } from "../ConfirmProvider";
 import { reviewDiffHref, reviewUrl } from "../../lib/codeUrl";

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EgoLaidOutEdge, EgoLaidOutNode, EgoLayoutResult } from "../../lib/egoGraph";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 const NODE_W = 112;
 const NODE_H = 28;

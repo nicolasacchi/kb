@@ -23,7 +23,7 @@
 // it client-side would be the actual reimplementation to avoid.
 
 import { useState } from "react";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import { relativeAge } from "../lib/time";
 import { harnessGlyph } from "../lib/sessionChips";
 import type { LiveStatusRow } from "../api/sessions";

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import { fetchEchoes } from "../api/client";
 import type { BeliefOut, EchoOut } from "../api/client";
 import { artifactHref } from "../lib/artifactHref";

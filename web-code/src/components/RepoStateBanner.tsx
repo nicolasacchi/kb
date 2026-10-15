@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import { useRepoState } from "../hooks/useRepoState";
 import { readerUrl } from "../lib/breadcrumbs";
 import { commitUrl } from "../lib/codeUrl";

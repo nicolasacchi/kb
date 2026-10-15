@@ -22,7 +22,7 @@ import {
   useInspectorTab,
   type InspectorTab,
 } from "../hooks/useInspectorTab";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import CapabilityGlyphs, { glyphsFor } from "./CapabilityGlyphs";
 import ReadingChip from "./ReadingChip";
 import type { ReadingSummary } from "../api/reading";

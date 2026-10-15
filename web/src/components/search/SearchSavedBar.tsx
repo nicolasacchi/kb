@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { useSavedQueries } from "../../hooks/useSavedQueries";
 import { useRecentQueries } from "../../hooks/useRecentQueries";
 import { useUrl } from "../../hooks/useUrl";

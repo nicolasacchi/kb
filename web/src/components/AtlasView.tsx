@@ -88,7 +88,7 @@ import { useListDetail, useLists } from "../hooks/useLists";
 import { useReadingProgress } from "../hooks/useReadingProgress";
 import AtlasInspector from "./AtlasInspector";
 import { useConfirm } from "./ConfirmProvider";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import { toast } from "../lib/toast";
 
 // v0.14 S7 — cap on how many recent sessions the overlay draws as

@@ -6,7 +6,7 @@ import { useIdentity } from "../hooks/useArtifactHost";
 import NoteEditor from "../components/NoteEditor";
 import EmptyState from "../components/EmptyState";
 import Loading from "../components/Loading";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import NotesPanel, { NoteRow } from "../components/NotesPanel";
 import type { NoteSummary } from "../api/notes";
 

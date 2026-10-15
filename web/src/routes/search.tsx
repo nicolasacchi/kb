@@ -21,7 +21,7 @@ import { formatReadWindow } from "../components/search/temporalRange";
 import EmptyState from "../components/EmptyState";
 import MobileDrawer from "../components/chrome/MobileDrawer";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import {
   defaultSearchDir,
   SEARCH_SORTS,

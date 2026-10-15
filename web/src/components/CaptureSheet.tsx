@@ -8,7 +8,7 @@ import { artifactHref } from "../lib/artifactHref";
 import { DRAFT_TAG } from "../lib/draft";
 import { buildPastedFile, type PasteFormat } from "../lib/pasteFile";
 import { toast } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // U4 (v0.25 quick capture) — the SPA's "get a file into a kb" sheet. A
 // native <dialog> via .showModal() (focus trap + ::backdrop + Escape),

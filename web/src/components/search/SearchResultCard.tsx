@@ -4,7 +4,7 @@ import type { SearchHit, SearchMode } from "../../api/client";
 import { artifactHref } from "../../lib/artifactHref";
 import { recordSearch } from "../../api/history";
 import { pathToTags, relativeAge, tagColor } from "../../lib/derive";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import TagPill from "../TagPill";
 import ReadingChip from "../ReadingChip";
 import type { Progress } from "../../hooks/useReadingProgress";

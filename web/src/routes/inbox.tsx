@@ -15,7 +15,7 @@ import {
   type ProposalsResponse,
 } from "../api/client";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import ProposalRow from "../components/ProposalRow";
 import {
   ArchiveArtifactButton,

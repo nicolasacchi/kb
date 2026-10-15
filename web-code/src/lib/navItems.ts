@@ -3,7 +3,7 @@
 // array so the three surfaces cannot drift. Each `url` builder is a real
 // export from `codeUrl` / `setsUrl` (repo-scoped `~` sentinels).
 
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import {
   branchesUrl,
   browserPageUrl,

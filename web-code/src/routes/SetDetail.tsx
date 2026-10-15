@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { ApiError, type SetSpanInput } from "../api/client";
 import type { SetSpanOut } from "../api/types";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useDocLens } from "../hooks/useDocLens";
 import { useAppendSetSpan, useDeleteSet, useFromDocSet, usePatchSet, useSet } from "../hooks/useSets";

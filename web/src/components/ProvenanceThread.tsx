@@ -49,7 +49,7 @@ import type {
 } from "../api/client";
 import ProvenanceChip from "./ProvenanceChip";
 import { COMPOUND_UNAVAILABLE } from "./CodeRefsSection";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 /// CT-B2 — one row of the "Recall history" section below. Links go to the
 /// recalling session at the SESSION level only (`sessionsUrl({ focus })`,

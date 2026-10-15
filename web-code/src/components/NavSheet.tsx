@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Link, useLocation } from "react-router";
 import CurrentReviewChip from "./CurrentReviewChip";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import { cycleTheme, loadTheme, loadThemeFamily } from "../lib/prefs";
 import {
   NAV_ITEMS,

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
 import type { FindingSeverity, ReviewDetailPr, ReviewPatchset } from "../api/types";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import CockpitTabs, { type CockpitView } from "../components/reviews/CockpitTabs";
 // ── V73-K2b (kbc-review/1, design D9/D9-a) — the Document tab ──
 import DocPanel from "../components/reviews/DocPanel";

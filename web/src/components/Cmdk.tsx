@@ -8,7 +8,7 @@ import {
   type SVGProps,
 } from "react";
 import { Link, useMatch, useNavigate } from "react-router-dom";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import { useSearch } from "../hooks/useSearch";
 import { useExplicitKb } from "../hooks/useActiveKb";
 import {

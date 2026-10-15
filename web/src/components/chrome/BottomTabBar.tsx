@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { useExplicitKb } from "../../hooks/useActiveKb";
 import { withKb } from "../../lib/navItems";
 

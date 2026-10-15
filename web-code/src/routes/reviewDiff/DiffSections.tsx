@@ -12,7 +12,7 @@ import { Link, useNavigate } from "react-router";
 import type { GithubThread, ReviewFileRow } from "../../api/types";
 import DiffFile from "../../components/diff/DiffFile";
 import FileHeaderLegend from "../../components/diff/FileHeaderLegend";
-import { Icon } from "../../components/icons";
+import { Icon } from "../../components/iconSet";
 // S2-C — the shared Diagnostics inspector card (Reader mounts it via
 // `InspectorRail`'s `diagnosticsCard` slot; here it's the diagnostics
 // chip's on-demand expansion, `FileDiffBody`'s own doc).

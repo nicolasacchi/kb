@@ -7,7 +7,7 @@ import {
 } from "../../hooks/useReviewMutationsAdmitted";
 import { usePutReviewVerdict, useReviewSince } from "../../hooks/useReviews";
 import { canReaffirm, reaffirmLabel, sinceApplies } from "../../lib/reviewSince";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { isLoopbackRefusal } from "./ReviewHeader";
 
 const STATES: { key: ReviewVerdictState; label: string }[] = [

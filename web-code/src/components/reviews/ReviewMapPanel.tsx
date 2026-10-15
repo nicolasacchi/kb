@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { ReviewMapOut } from "../../api/types";
 import EmptyState from "../EmptyState";
 import LayeredDag from "../graph/LayeredDag";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { layoutLayeredDag } from "../../lib/egoGraph";
 import { pathBasename } from "../../lib/stacksFormat";
 

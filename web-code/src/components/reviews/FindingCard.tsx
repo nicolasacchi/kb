@@ -4,7 +4,7 @@
 // IS an annotation with severity/category/slug — this card is a projection
 // over `ReviewFinding`, not a second comment component.
 import type { FindingLocation, FindingSeverity, ReviewFinding } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import RefCard from "./RefCard";
 import { actChipClass, findingCites, findingTombstoneText } from "../../lib/reviewDoc";
 import { relativeTime } from "../../lib/format";

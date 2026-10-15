@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMergeCheck } from "../../hooks/useMergeCheck";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface MergeCheckButtonProps {
   repo: string;

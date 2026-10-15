@@ -19,7 +19,7 @@
 
 import CodeView, { type GotoSel } from "../CodeView";
 import EmptyState from "../EmptyState";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { useFile } from "../../hooks/useFile";
 
 export interface SearchPreviewProps {

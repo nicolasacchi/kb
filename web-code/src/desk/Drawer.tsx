@@ -21,7 +21,7 @@
 import { useEffect, useRef } from "react";
 import { rungForMouse, type RampRung } from "../nav/ramp";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import TrustBadge from "../components/TrustBadge";
 import {
   activeDrawerSet,

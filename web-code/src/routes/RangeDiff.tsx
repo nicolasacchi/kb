@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import MetaLine from "../components/MetaLine";
 import PageHeader from "../components/PageHeader";
 import RangeDiffTable from "../components/reviews/RangeDiffTable";

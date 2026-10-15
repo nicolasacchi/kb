@@ -1,4 +1,4 @@
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { glyphForKind, authorChip, opacityForAge } from "../../lib/slateGlyphs";
 import { ageLabel } from "./SlateCard";
 import { GENERAL_LANE, seenChipFor, type NowRow } from "../../lib/slateLanes";

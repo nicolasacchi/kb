@@ -6,7 +6,7 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import SortControl from "../SortControl";
 import GroupControl from "../GroupControl";
 import ViewOptionsSheet from "./ViewOptionsSheet";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { cycleDensity, loadPrefs, type Density } from "../../api/prefs";
 import {
   defaultDir,

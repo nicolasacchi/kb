@@ -246,7 +246,7 @@ export function langIdFromSyntax(
 }
 
 /// V80-F1 — a coarse, CLOSED vocabulary a `lang` id (from `langIdFromSyntax`)
-/// maps into for the tree's kind icon. `components/icons.tsx` is a small
+/// maps into for the tree's kind icon. `@kb/ui/icons` is a small
 /// 16x16-outline UI-chrome set with no per-language glyphs, so this picks
 /// among the few EXISTING icons that already carry a fitting semantic (a
 /// page for prose, a prompt for shell, a grid for tabular config) rather

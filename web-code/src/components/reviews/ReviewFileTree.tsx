@@ -17,7 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ReviewFileRow, ReviewRiskFile, SyntaxRowOut } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import RiskBadge from "./RiskBadge";
 import {
   buildStatusSections,

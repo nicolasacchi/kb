@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import type { ListEntry } from "../../api/client";
 import { useListDetail } from "../../hooks/useLists";
 import { entryTrailHref, nextReadToggle } from "../../lib/listTrail";

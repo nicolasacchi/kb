@@ -20,7 +20,7 @@ import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { useNowTick } from "../hooks/useNowTick";
 import { useReportQueryStats } from "../components/chrome/queryStats";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import {
   fetchResearchRollup,
   fetchSession,

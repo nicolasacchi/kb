@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import { useCommands } from "../commands/CommandRoot";
 import { displayKey } from "../commands/dispatch";
 import {

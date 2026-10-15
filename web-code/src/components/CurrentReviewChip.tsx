@@ -3,7 +3,7 @@ import { useExplicitRepo } from "../hooks/useActiveRepo";
 import { mergeCurrentSearch, reviewUrl } from "../lib/codeUrl";
 import { clearCurrentReview } from "../lib/currentReview";
 import { useValidatedCurrentReview } from "../hooks/useValidatedCurrentReview";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 
 export interface CurrentReviewChipProps {
   /// `"bar"` (desktop TopBar) vs `"sheet"` (mobile NavSheet row) — same

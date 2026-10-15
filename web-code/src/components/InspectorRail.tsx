@@ -8,7 +8,7 @@ import {
   type LegacyInspectorTab,
 } from "../hooks/useInspectorTab";
 import { pinnedHeaderText, subjectLabel, type RailSubject } from "../desk/railSubject";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import OutlineRail from "./OutlineRail";
 import AnnotationsPanel from "./annotations/AnnotationsPanel";
 import BookmarksPanel from "./bookmarks/BookmarksPanel";

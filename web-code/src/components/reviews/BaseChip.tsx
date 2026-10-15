@@ -34,7 +34,7 @@ import {
   type BaseChipSpec,
   type StoreCardFailure,
 } from "../../lib/reviewBase";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { toast } from "../../lib/toast";
 
 function Glyph({ name }: { name: string }) {

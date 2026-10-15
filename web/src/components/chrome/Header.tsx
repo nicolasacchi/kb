@@ -9,7 +9,7 @@ import { useActiveKb, useExplicitKb } from "../../hooks/useActiveKb";
 import { useSavedQueries } from "../../hooks/useSavedQueries";
 import { useUrl } from "../../hooks/useUrl";
 import { cycleTheme, loadPrefs } from "../../api/prefs";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { NAV_ITEMS, withKb } from "../../lib/navItems";
 import WaitingChip from "./WaitingChip";
 import DeskPill from "./DeskPill";

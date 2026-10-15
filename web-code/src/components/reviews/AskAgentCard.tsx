@@ -8,7 +8,7 @@ import { useState, useSyncExternalStore } from "react";
 import { ApiError } from "../../api/client";
 import { useAskAgentMutation } from "../../hooks/useReviewComments";
 import { toast } from "../../lib/toast";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 /// Session-wide latch, same idiom as `DiffThread.tsx`'s
 /// `applyLoopbackLatched`/`dispositionLoopbackLatched`: one 404 from the

@@ -1,6 +1,6 @@
 import type { ComponentType, SVGProps } from "react";
 import type { Comment } from "../api/client";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // R3 — one-tap responses to Claude's comments. Two flavours, both posting
 // a "you" reply on click:

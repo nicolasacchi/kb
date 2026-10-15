@@ -59,7 +59,7 @@ import {
   type ReactNode,
 } from "react";
 import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import MobileDrawer from "../components/MobileDrawer";
 import Drawer, { DRAWER_STRIP_PX } from "./Drawer";
 import type { RampRung } from "../nav/ramp";

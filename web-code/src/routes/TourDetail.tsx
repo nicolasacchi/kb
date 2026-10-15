@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import BoardCard from "../components/boards/BoardCard";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { useTour } from "../hooks/useTours";
 import { useLoopback } from "../hooks/useLoopback";

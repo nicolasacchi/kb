@@ -5,7 +5,7 @@ import BranchViews from "../components/branches/BranchViews";
 import BrowseAllBranches from "../components/branches/BrowseAllBranches";
 import RankedBranchList from "../components/branches/RankedBranchList";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import PageHeader from "../components/PageHeader";
 import { useBranches } from "../hooks/useBranches";
 import { useWorkspaceGroups } from "../hooks/useSets";

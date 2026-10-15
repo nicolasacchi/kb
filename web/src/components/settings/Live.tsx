@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { KNOWN_EVENT_KINDS, useEventLog } from "../../hooks/useEventLog";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // Group event kinds for the filter checklist so the picker stays
 // scannable. Order is intentional: highest-volume groups at the top

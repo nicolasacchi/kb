@@ -33,7 +33,7 @@ import VirtualGrid, { type VirtualGridHandle } from "../components/VirtualGrid";
 import VirtualList, { type VirtualListHandle } from "../components/VirtualList";
 import FolderBreadcrumb from "../components/FolderBreadcrumb";
 import RenameFolderModal from "../components/RenameFolderModal";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import { folderDownloadUrl } from "../lib/download";
 import { folderIndexNote } from "../lib/folderIndexNote";
 import { galleryUrl, type GallerySort } from "../lib/galleryUrl";

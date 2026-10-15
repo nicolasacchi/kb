@@ -13,7 +13,7 @@
 // one more consumer of one shared cache entry.
 
 import { Link } from "react-router-dom";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 import { useLiveSessions } from "../../hooks/useLiveSessions";
 import { waitingCount } from "../../lib/liveSessionLanes";
 

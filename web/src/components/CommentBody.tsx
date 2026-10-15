@@ -6,7 +6,7 @@ import type { Components } from "react-markdown";
 import { ATTACHMENT_SCHEME, attachmentServeUrl } from "../lib/attachmentUrl";
 import { rehypeCitations } from "../lib/linkifyCitations";
 import { useCodeUrlForKb } from "../hooks/useCodeUrlForKb";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import Sketch from "./slate/Sketch";
 
 // Renders a kb-comments/1 body as GitHub-flavored Markdown.

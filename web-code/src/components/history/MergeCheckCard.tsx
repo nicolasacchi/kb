@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { useMergeCheck } from "../../hooks/useMergeCheck";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { readerUrl } from "../../lib/breadcrumbs";
 import { commitUrl } from "../../lib/codeUrl";
 import { shortSha } from "../../lib/format";

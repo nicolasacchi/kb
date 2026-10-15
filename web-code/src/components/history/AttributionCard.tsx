@@ -1,6 +1,6 @@
 import type { LadderAttribution } from "../../api/types";
 import { sessionUrl } from "../../lib/searchLanes";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface AttributionCardProps {
   attribution: LadderAttribution;

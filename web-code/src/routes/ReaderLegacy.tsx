@@ -45,7 +45,7 @@ import CodeView, { type CodeViewHandle, type GotoSel } from "../components/CodeV
 import DiffView from "../components/DiffView";
 import EmptyState from "../components/EmptyState";
 import FileTree, { type FileTreeHandle } from "../components/FileTree";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import InspectorRail, { type InspectorRailHandle } from "../components/InspectorRail";
 import KeyboardHelp from "../components/KeyboardHelp";
 import LineHistoryPopup from "../components/LineHistoryPopup";

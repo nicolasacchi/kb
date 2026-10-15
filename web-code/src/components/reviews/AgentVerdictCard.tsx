@@ -3,7 +3,7 @@
 // translated to tokens (`color-mix(in srgb, var(--warn) 12%, transparent)`,
 // mock's `.kbc-averdict::before`).
 import type { FindingSeverity, ReviewReport } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import ProseBlock from "../prose/ProseBlock";
 import RiskDial from "./RiskDial";
 

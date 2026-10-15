@@ -4,7 +4,7 @@ import { Link } from "react-router";
 // F6 — kb-code's own on-brand empty-state pattern, mirroring kb's own
 // `web/src/components/EmptyState.tsx` shape (icon + title + hint + optional
 // action) under a `kbc-` prefix — kb-code has no cross-app import of that
-// component (see `components/icons.tsx`'s own header doc on the crate
+// component (see `@kb/ui/icons`'s own header doc on the crate
 // boundary), so this is a small, deliberate re-implementation, not a port.
 // Replaces the ad-hoc per-view "nothing here" `<div>`s that used to be
 // scattered across Home/Search/Branches/Commit/Reader/PeekPanel/

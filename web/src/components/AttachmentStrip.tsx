@@ -1,6 +1,6 @@
 import type { Attachment } from "../api/client";
 import { attachmentServeUrl, humanSize, isImageType } from "../lib/attachmentUrl";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // Y-track — the attachment "strip" rendered under a comment/reply body:
 // image thumbnails + file chips for every attachment the comment owns,

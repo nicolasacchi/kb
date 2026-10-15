@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNotes, useScopeNotes } from "../hooks/useNotes";
 import type { NoteSummary } from "../api/notes";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // N-track — contextual "Notes for <scope>" panel. Shown in the gallery
 // right rail (scoped to the active folder filter) and reused in the /notes

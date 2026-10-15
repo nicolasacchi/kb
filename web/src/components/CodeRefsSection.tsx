@@ -1,6 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import { artifactHref } from "../lib/artifactHref";
 import { codeReaderUrl, codeSearchUrl } from "../lib/codeLensUrl";
 import { relativeAge } from "../lib/time";

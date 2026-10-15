@@ -5,7 +5,7 @@ import {
   type KbSummary,
   type RecallHit,
 } from "../api/client";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 /// L9 — chip strip + popover editor for one memory's link set.
 ///

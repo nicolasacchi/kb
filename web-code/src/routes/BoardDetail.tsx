@@ -28,7 +28,7 @@ import { ApiError } from "../api/client";
 import BoardCanvas from "../components/boards/BoardCanvas";
 import BoardThreadPanel from "../components/boards/BoardThreadPanel";
 import PeekPanel from "../components/peek/PeekPanel";
-import { Icon } from "../components/icons";
+import { Icon } from "../components/iconSet";
 import { useCommandHandlers, useCommandScope } from "../commands/CommandRoot";
 import { useAcceptBoard, useApplyBoard, useBoard, useBoardSweep } from "../hooks/useBoards";
 import { useIdentPeek } from "../hooks/useIdentPeek";

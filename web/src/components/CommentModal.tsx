@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Comment } from "../api/client";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import CommentBody from "./CommentBody";
 import AttachmentStrip from "./AttachmentStrip";
 import UserChip from "./UserChip";

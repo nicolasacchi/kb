@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { fetchTimeline } from "../api/client";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import { dayBoundsUnix, unixToUtcDay } from "../lib/calendar";
 import {
   brushFromIndices,

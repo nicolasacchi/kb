@@ -7,7 +7,7 @@ import {
 } from "../api/client";
 import { saveBlob } from "../lib/download";
 import { toast } from "../lib/toast";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 
 // kb share — one entry point ("Share"), three methods:
 //   • Publish online — to a static host (Cloudflare Pages + Access, gated; or

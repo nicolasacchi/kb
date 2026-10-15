@@ -23,7 +23,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { ClaimOut, ReviewDocLintOut, ReviewDocOut } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import ClaimRegister from "./ClaimRegister";
 import DocLintPanel from "./DocLintPanel";
 import DocMarkdown from "./DocMarkdown";

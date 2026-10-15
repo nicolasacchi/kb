@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import EmptyState from "../EmptyState";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import TrustBadge from "../TrustBadge";
 import {
   currentRow,

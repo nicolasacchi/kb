@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { GithubThreadsOut, ReviewPatchset } from "../../api/types";
-import { Icon } from "../../components/icons";
+import { Icon } from "../../components/iconSet";
 import PatchsetSwitcher from "../../components/reviews/PatchsetSwitcher";
 import { githubThreadCountTotal } from "../../lib/githubThreads";
 import { parseOverlayParam, type OverlayMode } from "../../lib/diffFindings";

@@ -8,7 +8,7 @@ import { buildCiteUrl } from "../lib/quote";
 import { relativeAge } from "../lib/time";
 import EmptyState from "../components/EmptyState";
 import Loading from "../components/Loading";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import type { ReviewNoteRow, ReviewNoteStatus } from "../api/reviewNotes";
 import "../styles/reviewNotes.css";
 

@@ -1,4 +1,4 @@
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 
 function displayRef(r: string): string {
   return /^[0-9a-f]{40}$/i.test(r) ? r.slice(0, 7) : r;

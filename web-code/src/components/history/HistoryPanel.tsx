@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import type { CommitSummary } from "../../api/types";
 import EmptyState from "../EmptyState";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { commitUrl } from "../../lib/codeUrl";
 import { currentHistoryIndex } from "../../lib/historyStep";
 import { relativeTime, shortSha } from "../../lib/format";

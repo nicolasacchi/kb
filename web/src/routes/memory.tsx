@@ -28,7 +28,7 @@ import { decayHalfLifeDays, decayHalfLifeLabel, floorState, floorStateLabel } fr
 import { isAgentHotHumanCold, orderUnverifiedFirst, tensionLabel } from "../lib/attention";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useReportQueryStats } from "../components/chrome/queryStats";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import EmptyState from "../components/EmptyState";
 import CitationText from "../components/CitationText";
 import { useCodeUrlForKb } from "../hooks/useCodeUrlForKb";

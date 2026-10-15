@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { fetchCrossStats, type CrossStats } from "../../api/client";
 import { useIdentity } from "../../hooks/useArtifactHost";
 import { sse } from "../../api/sse";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // v0.10 D2 — refined-cartographic StatusBar.
 //

@@ -11,7 +11,7 @@
 import { Link } from "react-router";
 import type { ReviewDetailPr, ReviewFileRow, ReviewFinding, ReviewReport } from "../../api/types";
 import type { FindingSeverity } from "../../api/types";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import {
   filesViewedOf,
   heroAgentOf,

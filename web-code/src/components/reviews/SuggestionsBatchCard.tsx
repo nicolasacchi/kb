@@ -17,7 +17,7 @@ import {
 } from "../../lib/suggestionsBatch";
 import { toast } from "../../lib/toast";
 import { useConfirm } from "../ConfirmProvider";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { isLoopbackRefusal, LOOPBACK_HINT, msg } from "./ReviewHeader";
 
 // Session-wide latch — same idiom as `DispositionMenu.tsx`'s

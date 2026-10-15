@@ -26,7 +26,7 @@ import { useApplyBoard } from "../../hooks/useBoards";
 import { buildCreatePayload, buildReplyPayload, groupThreads } from "../../lib/annotations";
 import { composeThread, threadAnchorFor } from "../../lib/boardDoc";
 import { toast } from "../../lib/toast";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface BoardThreadPanelProps {
   board: BoardOut;

@@ -4,7 +4,7 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { attentionCount, orderSlates } from "../lib/slateLanes";
 import { glyphForKind } from "../lib/slateGlyphs";
 import EmptyState from "../components/EmptyState";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 import { relativeAge } from "../lib/time";
 
 // SL4 — the slate list (the `/inbox` route's shape: one query, one ordered

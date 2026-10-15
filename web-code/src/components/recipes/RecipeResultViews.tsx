@@ -5,7 +5,7 @@ import { layoutLayeredDag } from "../../lib/egoGraph";
 import { addrLabel } from "../../lib/recipeAddr";
 import AddressCell from "./AddressCell";
 import TrustBadge from "../TrustBadge";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface RecipeResultViewsProps {
   repo: string;

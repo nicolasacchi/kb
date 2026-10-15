@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import { useAgentReplyToast, useReviewComments } from "../../hooks/useReviewComments";
 import { useReviewFindings } from "../../hooks/useReviews";
 import { useSessionDiff } from "../../hooks/useSessionDiff";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import AskAgentCard from "./AskAgentCard";
 import ReviewThreadsCard from "./ReviewThreadsCard";
 // ── V73-K2b (kbc-review/1) — the Document tab's ref jump list ──

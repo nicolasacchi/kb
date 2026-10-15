@@ -13,7 +13,7 @@ import { useMemoryPolicy } from "../hooks/useMemoryPolicy";
 import { planLineageDisplay } from "../lib/lineageDisplay";
 import { computeOverlapWindow, ongoingOverlapDays } from "../lib/lineageOverlap";
 import DecaySparkline from "./DecaySparkline";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import IdsGalleryChip from "./IdsGalleryChip";
 
 function formatDate(unix: number | null | undefined): string {

@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchFacets, fetchTags, type DocSummary } from "../api/client";
 import Card from "./Card";
-import { Icon } from "./icons";
+import { Icon } from "@kb/ui/icons";
 import { galleryUrl } from "../lib/galleryUrl";
 import { tagColor } from "../lib/derive";
 import type { Progress } from "../hooks/useReadingProgress";

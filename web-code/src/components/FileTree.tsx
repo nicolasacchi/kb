@@ -9,7 +9,7 @@ import {
 } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Icon } from "./icons";
+import { Icon } from "./iconSet";
 import { fetchTree, fetchTreeV2 } from "../api/client";
 import { rungForMouse, type RampRung } from "../nav/ramp";
 import type {

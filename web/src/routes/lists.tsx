@@ -6,7 +6,7 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import ListCard from "../components/lists/ListCard";
 import EmptyState from "../components/EmptyState";
 import Loading from "../components/Loading";
-import { Icon } from "../components/icons";
+import { Icon } from "@kb/ui/icons";
 
 // RL-track (v0.18) — /lists index: every reading list across the fleet's
 // kbs, pinned first, archived collapsed. Lives entirely on the ["lists"]

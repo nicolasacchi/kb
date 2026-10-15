@@ -8,7 +8,7 @@ import {
 } from "../../api/client";
 import { useKbs } from "../../hooks/useKbs";
 import { toast } from "../../lib/toast";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // CT-F5 — corpus-health SLOs, one card per kb.
 //

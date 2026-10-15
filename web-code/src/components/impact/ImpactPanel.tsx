@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { rungForMouse, type RampRung } from "../../nav/ramp";
 import EmptyState from "../EmptyState";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { ClassBadge } from "../hierarchy/HierarchyPanel";
 import type { PeekAnchor } from "../peek/PeekPanel";
 import {

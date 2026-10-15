@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import type { DaemonStatus } from "../../api/sse";
-import { Icon } from "../icons";
+import { Icon } from "@kb/ui/icons";
 
 // E1 — has any daemon actually CONNECTED yet? The latch the banner gates on.
 // True iff some daemon's per-daemon phase is anything but `disconnected`. The

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { KbcStepCensus } from "../../api/types";
 import { censusExplain } from "../../lib/recipeAddr";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export interface CensusPanelProps {
   census: KbcStepCensus;

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 import { fetchDiff, fetchFile, fetchImpactAnalysis } from "../../api/client";
 import type { ImpactAnalysisOut, Symbol } from "../../api/types";
 import { changedNewLines, symbolsInChangedHunks } from "../../lib/blastRadius";

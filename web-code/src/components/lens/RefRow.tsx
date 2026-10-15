@@ -10,7 +10,7 @@ import type { CodeLensRef } from "../../api/types";
 import { readerUrl } from "../../lib/breadcrumbs";
 import { refTier } from "../../lib/refTier";
 import { WHEN_WRITTEN_BADGE_LABEL, whenWrittenBadge } from "../../lib/whenWritten";
-import { Icon } from "../icons";
+import { Icon } from "../iconSet";
 
 export { refTier } from "../../lib/refTier";
 export type { RefTier } from "../../lib/refTier";
