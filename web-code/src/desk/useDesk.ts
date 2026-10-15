@@ -141,13 +141,11 @@ export function useDesk(repo: string): DeskApi {
   // (`lib/deskParam.ts`). A ONE-SHOT override: applied when the param
   // appears or changes, never re-applied on every render, so an
   // operator who lands on `?desk=review` and then drags a separator
-  // keeps their drag. `legacy` is not a preset — `app.tsx` resolves that
-  // one by mounting the pre-Desk reader instead, and it never reaches
-  // here.
+  // keeps their drag.
   const override = useDeskOverride();
   const lastOverride = useRef<string | null>(null);
   useEffect(() => {
-    if (override === null || override === "legacy") return;
+    if (override === null) return;
     if (lastOverride.current === override) return;
     lastOverride.current = override;
     // Explicit, not implicit: a URL a human pasted IS a deliberate ask,

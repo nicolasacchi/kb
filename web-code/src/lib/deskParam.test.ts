@@ -12,8 +12,8 @@ describe("parseDeskParam (V70-A0 — the ?desk= override contract)", () => {
     expect(parseDeskParam("?desk=present")).toBe("present");
   });
 
-  it("parses the legacy escape hatch distinctly from a preset", () => {
-    expect(parseDeskParam("?desk=legacy")).toBe("legacy");
+  it("treats the retired legacy value as absent (OL C9)", () => {
+    expect(parseDeskParam("?desk=legacy")).toBeNull();
   });
 
   it("is null when the param is absent", () => {
