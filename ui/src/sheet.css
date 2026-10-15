@@ -1,0 +1,71 @@
+/* Shared Sheet. Tokens present in both apps only. */
+.kb-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--backdrop);
+  z-index: var(--z-scrim);
+}
+
+.kb-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--sheet-h, 40vh);
+  max-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  color: var(--ink);
+  border-top: 1px solid var(--rule);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow);
+  z-index: var(--z-drawer);
+  outline: none;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .kb-sheet {
+    transition: height 200ms ease;
+  }
+  .kb-sheet[data-dragging] {
+    transition: none;
+  }
+}
+
+.kb-sheet__handle {
+  flex: none;
+  display: block;
+  width: 100%;
+  padding: var(--pad-2) 0;
+  background: transparent;
+  border: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.kb-sheet__handle::before {
+  content: "";
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: 2px;
+  background: var(--ink-mute);
+}
+
+.kb-sheet__title {
+  flex: none;
+  margin: 0;
+  padding: 0 var(--pad-4) var(--pad-2);
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.kb-sheet__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--pad-4) var(--pad-4);
+}
