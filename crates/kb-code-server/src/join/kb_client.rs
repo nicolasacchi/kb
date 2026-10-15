@@ -1138,6 +1138,103 @@ impl KbClient {
     }
 }
 
+impl KbClient {
+    /// `GET {url}/api/search?q=<q>&scope=all&mode=keyword&limit=<limit>` —
+    /// OL S1's read-only relay for kb-code's omnibox "Documents" lane.
+    /// Keyword mode on purpose: it needs no embedder on kb's side and a
+    /// popup lane wants predictable latency. `scope=all` never opts into
+    /// `?category=`, so kb's R0 default (transcripts excluded) holds. Only
+    /// the fields the lane renders are kept; unknown fields are ignored.
+    /// `limit` is clamped to [`SEARCH_RELAY_MAX_LIMIT`] here, not just by
+    /// the route, so a future direct caller cannot ask for a bigger page.
+    pub async fn search(&self, q: &str, limit: u32) -> Result<KbSearchRelay> {
+        if !self.cfg.enabled {
+            return Err(KbClientError::Disabled);
+        }
+        self.ensure_sibling().await?;
+        let client = self.client()?;
+        let url = format!("{}/api/search", self.cfg.url_str().trim_end_matches('/'));
+        let limit = limit.clamp(1, SEARCH_RELAY_MAX_LIMIT);
+        let resp = self
+            .get(client, &url)
+            .query(&[
+                ("q", q.to_string()),
+                ("scope", "all".to_string()),
+                ("mode", "keyword".to_string()),
+                ("limit", limit.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|e| KbClientError::Unreachable(url.clone(), e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(KbClientError::BadStatus(resp.status()));
+        }
+        resp.json()
+            .await
+            .map_err(|e| KbClientError::Parse(e.to_string()))
+    }
+
+    /// `GET {url}/api/settings` — kb's daemon-level UI prefs, for the
+    /// theme-family relay (`GET /api/kb/ui`). Read-only; kb-code never
+    /// writes a preference back to kb.
+    pub async fn ui_settings(&self) -> Result<KbUiRelay> {
+        if !self.cfg.enabled {
+            return Err(KbClientError::Disabled);
+        }
+        self.ensure_sibling().await?;
+        let client = self.client()?;
+        let url = format!("{}/api/settings", self.cfg.url_str().trim_end_matches('/'));
+        let resp = self
+            .get(client, &url)
+            .send()
+            .await
+            .map_err(|e| KbClientError::Unreachable(url.clone(), e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(KbClientError::BadStatus(resp.status()));
+        }
+        resp.json()
+            .await
+            .map_err(|e| KbClientError::Parse(e.to_string()))
+    }
+}
+
+/// Ceiling on a relayed kb search page (OL S1) — the omnibox lane shows a
+/// handful of rows; 20 is the brief's hard cap.
+pub const SEARCH_RELAY_MAX_LIMIT: u32 = 20;
+
+/// The subset of kb's `GET /api/search` body the Documents lane needs.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct KbSearchRelay {
+    #[serde(default)]
+    pub hits: Vec<KbSearchHit>,
+}
+
+/// One kb search hit — `kb` is only populated on `scope=all` responses
+/// (which is the only scope this client asks for); a hit without it has no
+/// resolvable permalink and the route drops it.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct KbSearchHit {
+    #[serde(default)]
+    pub kb: Option<String>,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub source_relative: String,
+    #[serde(default)]
+    pub snippet: Option<String>,
+}
+
+/// The subset of kb's `GET /api/settings` body the theme relay needs.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct KbUiRelay {
+    #[serde(default)]
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub theme_family: Option<String>,
+}
+
 /// The RELAY shape of `GET /api/desk` — see [`KbClient::desk`]'s doc.
 /// `items` is left as raw JSON on purpose (kb-code does not re-model kb's
 /// `DeskListItem`); `#[serde(default)]` on both fields so a future kb
@@ -2587,6 +2684,158 @@ mod tests {
         assert!(matches!(
             client.doc_meta("platform", "abc123").await.unwrap_err(),
             KbClientError::BadStatus(_)
+        ));
+    }
+
+    // --- OL S1 — `search` / `ui_settings` --------------------------------
+
+    #[tokio::test]
+    async fn search_and_ui_settings_disabled_short_circuit() {
+        let client = KbClient::new(KbDaemonSection {
+            enabled: false,
+            url: Some("http://127.0.0.1:0".to_string()),
+            token_file: None,
+            public_url: None,
+        });
+        assert!(matches!(
+            client.search("x", 5).await.unwrap_err(),
+            KbClientError::Disabled
+        ));
+        assert!(matches!(
+            client.ui_settings().await.unwrap_err(),
+            KbClientError::Disabled
+        ));
+    }
+
+    #[tokio::test]
+    async fn search_unreachable_daemon_is_reported_not_panicked() {
+        let client = KbClient::new(cfg("http://127.0.0.1:0".to_string()));
+        assert!(matches!(
+            client.search("x", 5).await.unwrap_err(),
+            KbClientError::Unreachable(_, _)
+        ));
+    }
+
+    /// The relay asks for scope=all keyword mode, URL-encodes the query, and
+    /// clamps `limit` to the 20-row ceiling before it ever reaches kb.
+    #[tokio::test]
+    async fn search_sends_scope_all_keyword_and_clamps_limit() {
+        use std::collections::HashMap;
+        let router = Router::new().route(
+            "/api/search",
+            get(
+                |axum::extract::Query(p): axum::extract::Query<HashMap<String, String>>| async move {
+                    Json(serde_json::json!({
+                        "hits": [{
+                            "kb": "platform",
+                            "id": "abc",
+                            "title": "echo",
+                            "source_relative": "docs/a b.html",
+                            "snippet": "…hit…",
+                            "future_field": 1
+                        }],
+                        "echo": p,
+                    }))
+                },
+            ),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let relay = client.search("a&b c", 500).await.unwrap();
+        assert_eq!(relay.hits.len(), 1);
+        assert_eq!(relay.hits[0].kb.as_deref(), Some("platform"));
+        assert_eq!(relay.hits[0].source_relative, "docs/a b.html");
+
+        // Re-ask against a mock that echoes the params back as the title.
+        let router = Router::new().route(
+            "/api/search",
+            get(
+                |axum::extract::Query(p): axum::extract::Query<HashMap<String, String>>| async move {
+                    let mut keys: Vec<_> = p.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    keys.sort();
+                    Json(serde_json::json!({
+                        "hits": [{"kb": "k", "id": "i", "title": keys.join("|"), "source_relative": "x.html"}]
+                    }))
+                },
+            ),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let relay = client.search("a&b c", 500).await.unwrap();
+        assert_eq!(
+            relay.hits[0].title,
+            "limit=20|mode=keyword|q=a&b c|scope=all"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_bad_status_and_unparseable_body_are_reported() {
+        let router = Router::new().route(
+            "/api/search",
+            get(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "nope") }),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert!(matches!(
+            client.search("x", 5).await.unwrap_err(),
+            KbClientError::BadStatus(_)
+        ));
+
+        let router = Router::new().route("/api/search", get(|| async { "not json" }));
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert!(matches!(
+            client.search("x", 5).await.unwrap_err(),
+            KbClientError::Parse(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn ui_settings_relays_theme_and_family_and_tolerates_absence() {
+        let router = Router::new().route(
+            "/api/settings",
+            get(|| async {
+                Json(serde_json::json!({
+                    "theme": "dark",
+                    "accent": null,
+                    "density": "comfy",
+                    "theme_family": "catppuccin"
+                }))
+            }),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let ui = client.ui_settings().await.unwrap();
+        assert_eq!(ui.theme.as_deref(), Some("dark"));
+        assert_eq!(ui.theme_family.as_deref(), Some("catppuccin"));
+
+        // An older kb (no theme_family field) parses to None, not an error.
+        let router = Router::new().route(
+            "/api/settings",
+            get(|| async { Json(serde_json::json!({ "theme": "ink" })) }),
+        );
+        let (addr, _server) = mock_kb_server(router).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        let ui = client.ui_settings().await.unwrap();
+        assert_eq!(ui.theme_family, None);
+    }
+
+    /// OL S1 — both new verbs ride the same fail-closed kb-sibling/1 gate.
+    #[tokio::test]
+    async fn search_and_ui_settings_fail_closed_on_sibling_mismatch() {
+        let (addr, _server) = mock_kb_server(hello_router(serde_json::json!({
+            "sibling_protocol": "kb-sibling/2",
+            "sibling_major": 2
+        })))
+        .await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert!(matches!(
+            client.search("x", 5).await.unwrap_err(),
+            KbClientError::SiblingMismatch(_)
+        ));
+        assert!(matches!(
+            client.ui_settings().await.unwrap_err(),
+            KbClientError::SiblingMismatch(_)
         ));
     }
 }

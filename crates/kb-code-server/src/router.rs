@@ -451,6 +451,7 @@ use crate::bookmarks;
 use crate::canvas;
 use crate::claims;
 use crate::doclens;
+use crate::kb_relay;
 use crate::provenance;
 use crate::reading_sets;
 use crate::resolve;
@@ -952,6 +953,12 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // doc above); a literal `/inbox`, unambiguous with `/reviews/
         // inbox` above (different path entirely, not a param collision).
         .route("/inbox", get(unified_inbox::unified_inbox_route))
+        // OL S1 — read-only kb relays for the omnibox Documents lane and the
+        // theme-family follow (`crate::kb_relay`). Ordinary `auth_bearer`
+        // reads on the `api` router: deliberately NOT on either doc-lens
+        // sub-router, so no CORS layer ever covers them.
+        .route("/kb/search", get(kb_relay::kb_search_route))
+        .route("/kb/ui", get(kb_relay::kb_ui_route))
         // PRR-R9 — the disposition-analytics calibration instrument
         // (design-addendum-2 §C, `crate::review_analytics`). Same
         // literal-before-param placement as `/reviews/inbox` just above.
