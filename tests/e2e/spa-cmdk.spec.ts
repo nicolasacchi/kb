@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { PORT } from "./helpers";
+import { BASE, PORT } from "./helpers";
 
 test.describe("Cmd+K search", () => {
   function port(): number {
@@ -59,5 +59,41 @@ test.describe("Cmd+K search", () => {
     await expect(
       dialog.getByRole("alert").getByText(/embedding_model/),
     ).toBeVisible({ timeout: 5_000 });
+  });
+});
+
+// OL S3 — kb's chords teach themselves: the shared which-key overlay and help sheet.
+test.describe("which-key overlay and help sheet", () => {
+  test("g pending shows the overlay after ~400ms; a navigates to the atlas", async ({ page }) => {
+    await page.goto(`${BASE}/`);
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("g");
+    const overlay = page.locator("[data-kbc-whichkey]");
+    await expect(overlay).toBeVisible();
+    await expect(overlay).toContainText(/atlas/i);
+    await page.keyboard.press("a");
+    await expect(page).toHaveURL(/view=atlas/);
+    await expect(overlay).toHaveCount(0);
+  });
+
+  test("Escape clears the overlay with the chord", async ({ page }) => {
+    await page.goto(`${BASE}/`);
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("g");
+    await expect(page.locator("[data-kbc-whichkey]")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-kbc-whichkey]")).toHaveCount(0);
+  });
+
+  test("? opens the shared help sheet with gallery and reader sections", async ({ page }) => {
+    await page.goto(`${BASE}/`);
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("?");
+    const sheet = page.getByRole("dialog", { name: "keyboard shortcuts" });
+    await expect(sheet).toBeVisible();
+    await expect(sheet.locator(".kbc-kbdhelp__group h3", { hasText: /^Gallery$/ })).toBeVisible();
+    await expect(sheet.locator(".kbc-kbdhelp__group h3", { hasText: /^Reader$/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
   });
 });

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { matchPath, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { Icon } from "@kb/ui/icons";
+import { KeyboardHelp } from "@kb/ui/keys/KeyboardHelp";
+import { WhichKey } from "@kb/ui/keys/WhichKey";
 import { useExplicitKb } from "../../hooks/useActiveKb";
 import { useArtifactHostSuffix } from "../../hooks/useArtifactHost";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
@@ -29,10 +31,12 @@ import { toast } from "../../lib/toast";
 import HintOverlay, { type HintActivateMode } from "../HintOverlay";
 import PeekCard, { type PeekAnchorRect, type PeekTarget } from "../PeekCard";
 import {
-  groupRegistry,
+  REGISTRY,
   initialKeymapState,
   isEditableTarget,
   resolve,
+  toKeyRows,
+  toKeyView,
   type KeymapState,
 } from "../../lib/keymap";
 
@@ -59,6 +63,8 @@ import {
 // bare `?`/`/`/`Escape`, so an unrelated `j`/`k` keydown reaches the other
 // listener untouched.
 const CHORD_TIMEOUT_MS = 800;
+// OL S3 — a pending chord prefix shows the which-key overlay after this long.
+const WHICHKEY_DELAY_MS = 400;
 // W2.6b — Alt-hover peek's hover delay. Mirrors `Card.tsx`'s own
 // `PREFETCH_DELAY_MS` (300ms) rather than importing it — that constant
 // isn't exported and `Card.tsx` isn't owned by this phase.
@@ -577,6 +583,29 @@ export default function HotkeyRoot() {
     };
   }, [cancelPeekHide, schedulePeekHide, closePeek]);
 
+  // OL S3 — which-key: presentation only. Shown once the SAME pending state
+  // that drives `.kb-chord` has lived for WHICHKEY_DELAY_MS; it goes away
+  // exactly when that state clears (completion, Escape, the 800ms timeout, a
+  // non-matching key), because the effect re-runs on the state and resets.
+  const chordPrefix: string[] =
+    keymapState.pending.length > 0
+      ? [...keymapState.pending]
+      : letterMode
+        ? [LETTER_MODE_LABEL[letterMode]]
+        : [];
+  const chordKey = chordPrefix.join(" ");
+  const [whichKeyShown, setWhichKeyShown] = useState(false);
+  useEffect(() => {
+    setWhichKeyShown(false);
+    if (chordKey === "") return;
+    const t = setTimeout(() => setWhichKeyShown(true), WHICHKEY_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [chordKey]);
+  const whichKeyView = useMemo(
+    () => (whichKeyShown && chordKey !== "" ? toKeyView(chordKey.split(" "), REGISTRY, "global") : null),
+    [whichKeyShown, chordKey],
+  );
+
   const chordLabel =
     keymapState.pending.length > 0
       ? keymapState.pending.join(" ")
@@ -592,6 +621,7 @@ export default function HotkeyRoot() {
           {chordLabel} _
         </div>
       )}
+      {whichKeyView && <WhichKey view={whichKeyView} />}
       {helpOpen && <KeyHelp onClose={() => setHelpOpen(false)} />}
       {hintMode && <HintOverlay mode={hintMode} onClose={() => setHintMode(null)} />}
       {peek && (
@@ -611,7 +641,6 @@ export default function HotkeyRoot() {
 function KeyHelp({ onClose }: { onClose: () => void }) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   useFocusTrap(cardRef, true);
-  const groups = groupRegistry();
   // W2.6b — "the smallest honest surface": marks have no dedicated route,
   // so their listing rides here, in the one place every binding is
   // already documented. Read once per open (marks rarely change while the
@@ -630,75 +659,56 @@ function KeyHelp({ onClose }: { onClose: () => void }) {
   const [registers, setRegisters] = useState<Register[]>(() =>
     [...listRegisters()].sort((a, b) => a.letter.localeCompare(b.letter)),
   );
+  const rows = useMemo(() => toKeyRows(REGISTRY), []);
+  // The shared sheet owns the dialog, the registry-generated rows and Esc;
+  // the personal slots (marks, registers) and the chord note ride its footer.
+  // The wrapper only gives the focus trap a node to scope to.
   return (
-    <div
-      className="kb-keyhelp"
-      role="dialog"
-      aria-modal="true"
-      aria-label="keyboard shortcuts"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="kb-keyhelp__card" ref={cardRef}>
-        <header className="kb-keyhelp__head">
-          <h2>Keyboard shortcuts</h2>
-          <button
-            type="button"
-            className="kb-keyhelp__close"
-            onClick={onClose}
-            aria-label="close"
-          >
-            <Icon.X />
-          </button>
-        </header>
-        {groups.map(({ group, bindings }) => (
-          <Section key={group} title={group}>
-            {bindings.map((b, i) => (
-              <Row
-                key={`${b.keys}|${b.when ?? i}`}
-                k={b.keys}
-                desc={b.label}
-                scope={b.scope !== "global" ? b.scope : undefined}
-              />
-            ))}
-          </Section>
-        ))}
-        {marks.length > 0 && (
-          <Section title="Your marks">
-            {marks.map((m) => (
-              <div className="kb-keyhelp__row" key={m.letter}>
-                <kbd>{m.letter}</kbd>
-                <span>
-                  {m.title}
-                  <span className="kb-keyhelp__scope"> · {m.kb}</span>
-                </span>
-              </div>
-            ))}
-          </Section>
-        )}
-        {registers.length > 0 && (
-          <Section title="Your registers">
-            {registers.map((r) => (
-              <RegisterRow
-                key={r.letter}
-                reg={r}
-                onClear={() =>
-                  setRegisters(
-                    [...clearRegister(r.letter)].sort((a, b) =>
-                      a.letter.localeCompare(b.letter),
-                    ),
-                  )
-                }
-              />
-            ))}
-          </Section>
-        )}
-        <p className="kb-keyhelp__foot">
-          Chord prefix <kbd>g</kbd> holds for {CHORD_TIMEOUT_MS} ms — type
-          the letter before then to jump.
-        </p>
-      </div>
+    <div ref={cardRef} style={{ display: "contents" }}>
+      <KeyboardHelp
+        open
+        onClose={onClose}
+        rows={rows}
+        title="Keyboard shortcuts"
+        footer={
+          <>
+            {marks.length > 0 && (
+              <Section title="Your marks">
+                {marks.map((m) => (
+                  <div className="kb-keyhelp__row" key={m.letter}>
+                    <kbd>{m.letter}</kbd>
+                    <span>
+                      {m.title}
+                      <span className="kb-keyhelp__scope"> · {m.kb}</span>
+                    </span>
+                  </div>
+                ))}
+              </Section>
+            )}
+            {registers.length > 0 && (
+              <Section title="Your registers">
+                {registers.map((r) => (
+                  <RegisterRow
+                    key={r.letter}
+                    reg={r}
+                    onClear={() =>
+                      setRegisters(
+                        [...clearRegister(r.letter)].sort((a, b) =>
+                          a.letter.localeCompare(b.letter),
+                        ),
+                      )
+                    }
+                  />
+                ))}
+              </Section>
+            )}
+            <p className="kb-keyhelp__foot">
+              Chord prefix <kbd>g</kbd> holds for {CHORD_TIMEOUT_MS} ms — type
+              the letter before then to jump.
+            </p>
+          </>
+        }
+      />
     </div>
   );
 }
@@ -782,18 +792,6 @@ function RegisterRow({ reg, onClear }: { reg: Register; onClear: () => void }) {
         >
           <Icon.X />
         </button>
-      </span>
-    </div>
-  );
-}
-
-function Row({ k, desc, scope }: { k: string; desc: string; scope?: string }) {
-  return (
-    <div className="kb-keyhelp__row">
-      <kbd>{k}</kbd>
-      <span>
-        {desc}
-        {scope && <span className="kb-keyhelp__scope"> · {scope}</span>}
       </span>
     </div>
   );

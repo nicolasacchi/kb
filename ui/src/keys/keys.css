@@ -231,7 +231,7 @@
 
 .kbc-kbdhelp__preset select {
   background: var(--bg-card);
-  color: var(--fg);
+  color: var(--ink);
   border: 1px solid var(--rule);
   border-radius: var(--radius-1, 4px);
   padding: 1px 4px;
