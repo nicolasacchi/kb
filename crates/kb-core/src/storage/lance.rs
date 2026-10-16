@@ -937,6 +937,24 @@ impl Storage {
         Ok(())
     }
 
+    /// OL FX1 — remove duplicate rows for one artifact id, keeping the
+    /// newest. Returns the number of surplus rows removed.
+    pub async fn dedupe_docs(&self) -> Result<u64> {
+        Ok(0)
+    }
+
+    /// Test-only: append rows verbatim with `table.add`, bypassing
+    /// `upsert_docs`, to plant the duplicates older binaries left behind.
+    #[cfg(test)]
+    pub(crate) async fn plant_raw_rows_for_test(&self, docs: &[Doc]) {
+        let batches = docs_to_batches(docs, self.dim).unwrap();
+        let reader = arrow::record_batch::RecordBatchIterator::new(
+            batches.into_iter().map(Ok),
+            Arc::new(schema(self.dim)),
+        );
+        self.table.add(Box::new(reader)).execute().await.unwrap();
+    }
+
     /// Delete a single artifact by id.
     pub async fn delete_by_id(&self, id: &str) -> Result<()> {
         self.table
@@ -4290,6 +4308,62 @@ mod tests {
         d.title = title.into();
         d.body = body.into();
         d
+    }
+
+    // OL FX1 — one artifact, one row. A single `merge_insert` whose SOURCE
+    // carries the same key twice has no matched target row, so lance inserts
+    // both: two concurrent walks of one path landing in one prepared batch
+    // used to leave two physical rows for one id.
+    #[tokio::test]
+    async fn upsert_docs_with_a_repeated_id_in_one_batch_leaves_one_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        let mut older = fixture_doc("dup", "Older", "old body");
+        older.indexed_at_unix = 100;
+        let mut newer = fixture_doc("dup", "Newer", "new body");
+        newer.indexed_at_unix = 200;
+        s.upsert_docs(&[older, fixture_doc("other", "Other", "x"), newer])
+            .await
+            .unwrap();
+        assert_eq!(s.count_rows().await.unwrap(), 2, "one row per id");
+        let kept = s.get_full_doc("dup").await.unwrap().unwrap();
+        assert_eq!(kept.title, "Newer", "the last occurrence in the batch wins");
+    }
+
+    // OL FX1 — after ANY sequence of upserts there is one row per id.
+    #[tokio::test]
+    async fn sequential_upserts_of_one_id_keep_one_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        for i in 0..5 {
+            s.upsert_docs(&[fixture_doc("same", &format!("T{i}"), "b")])
+                .await
+                .unwrap();
+        }
+        assert_eq!(s.count_rows().await.unwrap(), 1);
+    }
+
+    // OL FX1 — repair: a table that ALREADY holds duplicate rows (written
+    // before the batch dedupe, planted here straight through `merge_insert`)
+    // is healed by `dedupe_docs`, keeping the newest `indexed_at_unix`.
+    #[tokio::test]
+    async fn dedupe_docs_removes_existing_duplicate_rows_keeping_the_newest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        let mut older = fixture_doc("dup", "Older", "old body");
+        older.indexed_at_unix = 100;
+        let mut newer = fixture_doc("dup", "Newer", "new body");
+        newer.indexed_at_unix = 200;
+        let solo = fixture_doc("solo", "Solo", "s");
+        s.plant_raw_rows_for_test(&[older, newer, solo]).await;
+        assert_eq!(s.count_rows().await.unwrap(), 3, "setup: duplicate planted");
+
+        assert_eq!(s.dedupe_docs().await.unwrap(), 1, "one surplus row removed");
+        assert_eq!(s.count_rows().await.unwrap(), 2);
+        let kept = s.get_full_doc("dup").await.unwrap().unwrap();
+        assert_eq!(kept.title, "Newer");
+        // Idempotent on a clean table.
+        assert_eq!(s.dedupe_docs().await.unwrap(), 0);
     }
 
     // Q-track (board B1) — `get_bodies_by_ids` projects the FULL `body`
