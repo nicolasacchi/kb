@@ -61,7 +61,9 @@ export function buildGalleryClusters(a: GalleryControlsArgs): Cluster[] {
       controls: [
         {
           id: "view",
-          label: "View",
+          // The cluster legend already says "View"; the select reads "as Shelf".
+          label: "as",
+          attrs: { "aria-label": "View" },
           kind: "select",
           value: a.view,
           options: GALLERY_VIEWS.map((v) => ({ value: v.value, label: v.label })),

@@ -40,6 +40,7 @@ describe("GalleryViewBar", () => {
     expect(legends).toEqual(["View", "Arrange", "Density"]);
     const sel = c.container.querySelector<HTMLSelectElement>('[data-kb-viewbar-control="view"]')!;
     expect(sel.value).toBe("grid");
+    expect(sel.getAttribute("aria-label")).toBe("View");
     expect(Array.from(sel.options).map((o) => o.textContent)).toContain("Timeline");
     // the e2e-pinned sort select survives
     expect(c.container.querySelector(".sort-control__select")).not.toBeNull();
