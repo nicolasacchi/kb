@@ -13,7 +13,7 @@ export interface PageHeaderProps {
   /// the text (e.g. Inbox's unread count) puts it here, not in `actions`.
   title: ReactNode;
   /// V80-R5 — an extra class on the `<h1>` ITSELF (not the outer
-  /// `<header>` — that's `className` below). Only for a caller with a
+  /// element — that's `className` below). Only for a caller with a
   /// pre-existing test-selected class on its title (e.g. Commit's
   /// `.kbc-commit__subject`, asserted by `time.spec.ts`) that must keep
   /// resolving after adopting this component; a fresh page never needs it.
@@ -28,11 +28,13 @@ export interface PageHeaderProps {
   /// A small caption ABOVE the title (e.g. a breadcrumb-ish label). Rare;
   /// none of this unit's five adopters use it yet.
   kicker?: ReactNode;
-  /// Extra class(es) for the outer `<header>`, so a caller can still hang
+  /// Extra class(es) for the outer element, so a caller can still hang
   /// its own `data-kbc-*`/layout hook off the header element itself.
   className?: string;
 }
 
+// The outer element is a `<div>`, not a `<header>`: a top-level `<header>`
+// maps to the `banner` landmark and the Spine already is the page's one banner.
 export default function PageHeader({
   title,
   titleClassName,
@@ -42,7 +44,7 @@ export default function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <header className={className ? `kbc-page-head ${className}` : "kbc-page-head"}>
+    <div className={className ? `kbc-page-head ${className}` : "kbc-page-head"}>
       <div className="kbc-page-head__row">
         <div className="kbc-page-head__titlewrap">
           {kicker !== undefined && kicker !== null && (
@@ -57,6 +59,6 @@ export default function PageHeader({
         )}
       </div>
       {lede !== undefined && lede !== null && <p className="kbc-page-head__lede">{lede}</p>}
-    </header>
+    </div>
   );
 }
