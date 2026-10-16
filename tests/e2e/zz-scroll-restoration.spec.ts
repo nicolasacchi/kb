@@ -47,6 +47,20 @@ test.describe("gallery scroll restoration (X1)", () => {
     // Narrow viewport (single-column per gallery.css) so the 9-doc canon
     // corpus has a real, if modest, window-scrollable range.
     await page.setViewportSize({ width: 420, height: 640 });
+    // The window's scrollable range used to come from the 34px context-line
+    // row nudging the body grid item past the shell (the body's min-height is
+    // a full viewport minus the top bar). With that row gone the shell fits
+    // the viewport exactly, so give the document a deliberate range instead
+    // of leaning on a layout accident (an absolutely positioned 1px marker below
+    // the fold; padding would be swallowed by the border-box 100% body). The
+    // restore arm under test is unchanged.
+    await page.addInitScript(() => {
+      document.addEventListener("DOMContentLoaded", () => {
+        const st = document.createElement("style");
+        st.textContent = 'body::after { content: ""; position: absolute; top: 1200px; left: 0; width: 1px; height: 1px; }';
+        document.head.appendChild(st);
+      });
+    });
     await page.goto(`${BASE}/?kb=canon`);
     await expect(page.getByRole("link", { name: /^Open /}).first()).toBeVisible();
     const maxScroll = await page.evaluate(

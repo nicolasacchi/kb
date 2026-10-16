@@ -13,6 +13,7 @@ import {
 import NotesPanel from "../components/NotesPanel";
 import { sse } from "../api/sse";
 import PinnedIndexCard from "../components/PinnedIndexCard";
+import GalleryViewBar from "../components/GalleryViewBar";
 import { useReportQueryStats } from "../components/chrome/queryStats";
 // Lazy: the atlas canvas (+ AtlasInspector) is heavy and only renders in the
 // atlas view, so keep it out of the gallery/initial chunk until ?view=atlas.
@@ -320,7 +321,7 @@ export default function Gallery() {
       edited: sessionFolders.reduce((a, f) => a + f.edited_total, 0),
     };
   }, [hasSessionDocs, sessionFolders]);
-  // Q2 — feed the ribbon's match counter + ms timing + parser warnings.
+  // Q2 — feed the ViewBar's match counter + ms timing + parser warnings.
   useReportQueryStats(
     scaleHook.ms !== undefined
       ? {
@@ -632,6 +633,7 @@ export default function Gallery() {
   return (
     <div className={notesOpen ? "gallery-shell gallery-shell--notes" : "gallery-shell"}>
     <div className="gallery">
+      <GalleryViewBar scope={activeKb ?? docsKb} chromeless={chromelessView} />
       <header className="gallery__header">
         <h1 className="gallery-h1">
           {activeFolder ? (
@@ -716,7 +718,7 @@ export default function Gallery() {
                 </a>
               </>
             )}
-            {/* Sort + group lifted into the Band-2 context line (C1). */}
+            {/* Sort, group and density live in the Library's ViewBar above. */}
             <button
               type="button"
               className={`gallery-notes-toggle ${notesOpen ? "is-on" : ""}`}

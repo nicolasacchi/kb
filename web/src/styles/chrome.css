@@ -675,97 +675,70 @@
   }
 }
 
-/* v0.13 X2 hotfix — placeholder for routes without a QueryRibbon.
- * The .app grid needs a child in the auto row even when the ribbon
- * isn't shown; this is that child, zero height + invisible. */
-.kb-qribbon-placeholder {
-  height: 0;
-  visibility: hidden;
+/* ── Library view row (OL L7) ─────────────────────────────────────────
+ * The ViewBar (scope · matches · View · Arrange · Density) sits at the top
+ * of the Library body; active filters wrap onto one extra line only while
+ * there are any. The filter chips below are the old context line's tokens. */
+.kb-gallery-viewbar {
+  min-width: 0;
 }
-
-/* ── context line (kb2 — Band 2; was the D3 query ribbon) ─────────────
- * scope ▸ filters · N matches · in M ms          [per-view controls]
- * Four columns: scope (auto) · prompt (auto) · query (1fr, truncates) ·
- * right controls (auto). */
-.kb-qribbon {
-  display: grid;
-  grid-template-columns: auto auto 1fr auto;
-  align-items: center;
-  gap: 10px;
-  padding: 0 16px;
-  height: var(--ribbon-h);
-  border-bottom: 1px solid var(--rule);
-  background: var(--bg-panel-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--ink-mute);
+.kb-gallery-viewbar .kb-viewbar {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+  row-gap: var(--pad-1);
+  padding-top: var(--pad-1);
+  padding-bottom: var(--pad-1);
 }
-.kb-qribbon__lbl {
-  font-size: var(--fs-xs);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-}
-.kb-qribbon__scope {
-  color: var(--accent);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.kb-qribbon__q {
+.kb-gallery-viewbar__filters {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  min-width: 0;
-  overflow: hidden;
+  padding: 6px var(--pad-3);
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-panel-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
 }
-.kb-qribbon__pair {
+.kb-gallery-viewbar__warn {
+  color: var(--warn);
+  cursor: help;
+}
+.kb-fchip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
-.kb-qribbon__prompt {
-  color: var(--accent);
-}
-.kb-qribbon__hint {
-  color: var(--ink-dim);
-  font-style: italic;
-}
-.kb-qribbon__tok {
+.kb-fchip__tok {
   padding: 2px 7px;
   border-radius: 5px;
   font-size: var(--fs-xs);
 }
-.kb-qribbon__tok.k {
+.kb-fchip__tok.k {
   color: var(--ink);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--rule);
 }
-.kb-qribbon__tok.v {
+.kb-fchip__tok.v {
   color: var(--accent-soft);
   background: color-mix(in oklab, var(--accent) 10%, transparent);
   border: 1px solid color-mix(in oklab, var(--accent) 25%, transparent);
 }
-.kb-qribbon__tok.v.warn {
-  color: var(--warn);
-  background: color-mix(in oklab, var(--warn) 10%, transparent);
-  border-color: color-mix(in oklab, var(--warn) 25%, transparent);
-}
-/* v0.11 Q3 — removable + editable token chips. */
-.kb-qribbon__tok--removable {
+.kb-fchip__tok--removable {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding-right: 4px;
 }
-.kb-qribbon__tok--editable .kb-qribbon__tok-val {
+.kb-fchip__tok--editable .kb-fchip__val {
   cursor: text;
 }
-.kb-qribbon__tok--editable:hover .kb-qribbon__tok-val {
+.kb-fchip__tok--editable:hover .kb-fchip__val {
   text-decoration: underline dotted;
   text-underline-offset: 2px;
 }
-.kb-qribbon__tok-edit {
+.kb-fchip__edit {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   padding: 2px 7px;
@@ -776,7 +749,7 @@
   outline: none;
   min-width: 60px;
 }
-.kb-qribbon__tok-x {
+.kb-fchip__x {
   width: 14px;
   height: 14px;
   border-radius: 3px;
@@ -792,114 +765,27 @@
   place-items: center;
   padding: 0;
 }
-.kb-qribbon__tok--removable:hover .kb-qribbon__tok-x {
+.kb-fchip__tok--removable:hover .kb-fchip__x {
   opacity: 1;
 }
-.kb-qribbon__tok-x:hover {
+.kb-fchip__x:hover {
   color: var(--red);
   background: color-mix(in oklab, var(--red) 12%, transparent);
 }
-.kb-qribbon__tok-x:focus-visible {
+.kb-fchip__x:focus-visible {
   opacity: 1;
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
-.kb-qribbon__op {
+.kb-fchip__op {
   color: var(--ink-dim);
   font-weight: 600;
   font-size: var(--fs-xs);
 }
-.kb-qribbon__cnt {
-  margin-left: 6px;
-  padding-left: 12px;
-  border-left: 1px solid var(--rule);
-  color: var(--ink-mute);
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-}
-.kb-qribbon__warn-dot {
-  color: var(--warn);
-  margin-left: 4px;
-  cursor: help;
-}
-.kb-qribbon__right {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  font-size: var(--fs-xs);
-}
-.kb-qribbon__save {
-  color: var(--ink-mute);
-  font-size: var(--fs-xs);
-  padding: 3px 8px;
-  border: 1px dashed var(--rule);
-  border-radius: 5px;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-}
-.kb-qribbon__save:hover {
-  border-style: solid;
-  color: var(--ink);
-}
-.kb-qribbon__save.is-on {
-  border: 1px solid var(--accent-bor);
-  background: var(--accent-bg);
-  color: var(--accent-soft);
-}
-/* Inline density cycle (kb2 C4). */
-.kb-qribbon__density {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 9px;
-  border: 1px solid var(--rule);
-  border-radius: 5px;
-  background: var(--bg-panel);
-  color: var(--ink-mute);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  cursor: pointer;
-}
-.kb-qribbon__density:hover {
-  border-color: var(--rule-hi);
-  color: var(--ink);
-}
-.kb-qribbon__seg-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.kb-qribbon__seg-lab {
-  color: var(--ink-dim);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-size: var(--fs-xs);
-}
-.kb-qribbon__seg {
-  display: flex;
-  gap: 1px;
-  padding: 1px;
-  background: var(--rule);
-  border-radius: 5px;
-}
-.kb-qribbon__seg b,
-.kb-qribbon__seg span {
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  font-weight: 500;
-  cursor: pointer;
-}
-.kb-qribbon__seg b {
-  background: var(--accent-bg);
-  color: var(--accent-soft);
-}
-.kb-qribbon__seg span {
-  color: var(--ink-mute);
-}
-.kb-qribbon__seg span[title]:hover {
-  color: var(--ink);
+@media (pointer: coarse) {
+  .kb-fchip__x {
+    opacity: 1;
+  }
 }
 
 /* ── sidebar (D4 — replaces v0.6 LeftRail) ───────────────────────── */
@@ -6364,6 +6250,13 @@ a.proposal-row__chip:hover {
  * live SSE link drops; clears itself on reconnect. Warn-tinted, not error-red,
  * because the daemon auto-reconnects ("working on it", not a dead end). */
 .kb-daemon-down {
+  /* Out of the .app grid flow: the shell is topbar + body, so an in-flow
+   * banner would take the body's row. */
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  z-index: var(--z-bar);
   display: flex;
   align-items: center;
   justify-content: center;

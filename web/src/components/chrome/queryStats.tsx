@@ -8,10 +8,10 @@ import {
 } from "react";
 
 // Query-stats context — the match count + ms timing + parser warnings a
-// route reports for the current query, shown by the ContextLine (Band 2).
+// route reports for the current query, shown by the Library's ViewBar.
 // Gallery populates it on every useDocs fetch; elsewhere it stays undefined
 // and the context line hides the "N matches · in M ms" tail. Lives in its
-// own module (split out of the old QueryRibbon) so the visual ContextLine
+// own module (split out of the old QueryRibbon) so the visual ViewBar
 // and the routes that report stats don't import each other.
 
 export type Stats = { total: number; ms: number; warnings: string[] };

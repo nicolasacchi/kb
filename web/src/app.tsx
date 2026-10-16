@@ -8,7 +8,6 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import Header from "./components/chrome/Header";
-import ContextLine from "./components/chrome/ContextLine";
 import { QueryStatsProvider } from "./components/chrome/queryStats";
 import { StatusBarProvider } from "./components/chrome/DaemonStatus";
 import Sidebar from "./components/chrome/Sidebar";
@@ -233,7 +232,7 @@ export default function App() {
     <div className="app">
       {/* A-w3 (wave-1 wire-don't-build) — the `.skip-link` CSS existed with
           no element rendering it. First focusable node in the shell so a
-          keyboard/screen-reader user can jump straight past Header/ContextLine
+          keyboard/screen-reader user can jump straight past the Header
           to the routed content (`<main id="main">`, set on every route below). */}
       <a className="skip-link" href="#main">
         Skip to content
@@ -244,7 +243,6 @@ export default function App() {
         menuOpen={drawerOpen && isMobile}
         warnings={identityWarnings}
       />
-      <ContextLine />
       <DaemonDownBanner />
       {/* One Suspense at the Routes boundary: React Router renders exactly one
           matched lazy element, so a single fallback covers every route's chunk

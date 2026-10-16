@@ -59,13 +59,14 @@ select:focus-visible,
 
 .app {
   display: grid;
-  /* topbar / optional ribbon (auto = collapses when null) / body.
+  /* topbar / body (the context-line row is gone; each view carries its own
+   * ViewBar inside the body).
    * `minmax(0, 1fr)` rather than `1fr`: a plain 1fr honours min-content,
    * so the gallery's scrollable inner column (folder trees, tag lists)
    * grew the body row past its allotted share and pushed the body
    * below the viewport (v0.13.2 hotfix). minmax forces the row to its
    * grid-track share; overflow is handled inside .body. */
-  grid-template-rows: var(--topbar-h) auto minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
   height: 100%;
 }
 
