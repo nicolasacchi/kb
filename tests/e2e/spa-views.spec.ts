@@ -173,11 +173,14 @@ test.describe("gallery views", () => {
               .filter((e) => !e.closest(".kb-fp"))
               .map((e) => e.getAttribute("aria-label") || ""),
           );
-        if (labels.length < 4) return false;
+        if (labels.length < 4) return `only ${labels.length} cards`;
         const sorted = [...labels].sort((a, b) => a.localeCompare(b));
-        return JSON.stringify(labels) === JSON.stringify(sorted);
+        // On failure the received value names the order the page showed.
+        return JSON.stringify(labels) === JSON.stringify(sorted)
+          ? "sorted"
+          : labels.join(" | ");
       })
-      .toBe(true);
+      .toBe("sorted");
   });
 
   test("the unfiltered Library has no header of its own (OL P3)", async ({
