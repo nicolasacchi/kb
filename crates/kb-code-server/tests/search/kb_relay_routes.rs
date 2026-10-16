@@ -250,3 +250,42 @@ async fn ui_relays_kbs_theme_family_read_only() {
     assert!(body.get("unavailable").is_none());
     assert!(headers.get("access-control-allow-origin").is_none());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enabled_kb_without_a_public_url_never_leaks_the_internal_url() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let kb = spawn_mock(hello_ok(), calls.clone()).await;
+    let b = boot(KbDaemonSection {
+        enabled: true,
+        url: Some(format!("http://{kb}")),
+        token_file: None,
+        public_url: None,
+    })
+    .await;
+    let (status, _h, body) = get_json(&b.base, "/api/kb/search?q=theme").await;
+    assert_eq!(status, 200);
+    assert_eq!(body["hits"], json!([]));
+    assert_eq!(body["unavailable"], "kb public url not configured");
+    assert_eq!(body["kb_public_url"], "");
+    assert!(!body.to_string().contains(&kb.to_string()));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_overlong_query_is_truncated_before_it_reaches_kb() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let kb = spawn_mock(hello_ok(), calls.clone()).await;
+    let b = boot(KbDaemonSection {
+        enabled: true,
+        url: Some(format!("http://{kb}")),
+        token_file: None,
+        public_url: Some("https://kb.example.com".to_string()),
+    })
+    .await;
+    let q = "é".repeat(1000);
+    let (status, _h, body) = get_json(&b.base, &format!("/api/kb/search?q={q}")).await;
+    assert_eq!(status, 200);
+    // the mock echoes the q it received in the hit title
+    let title = body["hits"][0]["title"].as_str().unwrap();
+    assert_eq!(title, format!("hit for {}", "é".repeat(256)));
+}

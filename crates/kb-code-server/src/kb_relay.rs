@@ -31,6 +31,8 @@ use serde::{Deserialize, Serialize};
 pub const MIN_QUERY_CHARS: usize = 2;
 /// Rows returned when the caller names no `limit`.
 pub const DEFAULT_LIMIT: u32 = 8;
+/// A relayed query is cut to this many chars (on a char boundary).
+pub const MAX_QUERY_CHARS: usize = 256;
 /// A relayed snippet is cut to this many chars.
 const SNIPPET_CAP: usize = 300;
 
@@ -61,6 +63,24 @@ fn parse_limit(raw: Option<&str>) -> u32 {
     raw.and_then(|s| s.trim().parse::<u32>().ok())
         .map(|n| n.clamp(1, SEARCH_RELAY_MAX_LIMIT))
         .unwrap_or(DEFAULT_LIMIT)
+}
+
+/// Truncate `q` to [`MAX_QUERY_CHARS`] chars, never splitting a char.
+pub fn cap_query(q: &str) -> &str {
+    match q.char_indices().nth(MAX_QUERY_CHARS) {
+        Some((i, _)) => &q[..i],
+        None => q,
+    }
+}
+
+/// A permalink segment kb-code will put on the wire: not `.`/`..`. A browser
+/// normalises such a segment out of `/a/{kb}/...`, escaping the artifact route.
+fn segment_ok(seg: &str) -> bool {
+    seg != "." && seg != ".."
+}
+
+fn hit_path_ok(kb: &str, source_relative: &str) -> bool {
+    segment_ok(kb) && source_relative.split('/').all(segment_ok)
 }
 
 fn cap_snippet(s: &str) -> String {
@@ -119,6 +139,9 @@ pub fn search_body(result: Result<KbSearchRelay, KbClientError>, public_base: &s
                 .iter()
                 .filter_map(|h| {
                     let kb = h.kb.as_deref().filter(|k| !k.is_empty())?;
+                    if !hit_path_ok(kb, &h.source_relative) {
+                        return None;
+                    }
                     let url = doc_href(public_base, kb, &h.source_relative)?;
                     Some(KbDocHitOut {
                         kb: kb.to_string(),
@@ -168,22 +191,43 @@ pub fn ui_body(result: Result<KbUiRelay, KbClientError>) -> KbUiOut {
     }
 }
 
+/// Caption when kb is enabled but no browser-facing `public_url` is set.
+pub const PUBLIC_URL_UNSET: &str = "kb public url not configured";
+
+/// Is `[kb_daemon] public_url` set to something non-blank?
+pub fn has_public_url(cfg: &crate::config::KbDaemonSection) -> bool {
+    cfg.public_url
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty())
+}
+
 /// `GET /api/kb/search`.
 pub async fn kb_search_route(
     State(state): State<SharedState>,
     Query(params): Query<SearchParams>,
 ) -> impl IntoResponse {
-    let public_base = state.kb_daemon.public_base().to_string();
-    let q = params.q.trim();
-    let body = if q.chars().count() < MIN_QUERY_CHARS {
+    let cfg = &state.kb_daemon;
+    let body = if cfg.enabled && !has_public_url(cfg) {
+        // `public_base()` would fall back to the internal federation url (a
+        // container hostname); never put that in a browser-bound permalink.
         KbSearchOut {
             hits: Vec::new(),
-            kb_public_url: public_base,
-            unavailable: None,
+            kb_public_url: String::new(),
+            unavailable: Some(PUBLIC_URL_UNSET.to_string()),
         }
     } else {
-        let limit = parse_limit(params.limit.as_deref());
-        search_body(state.kb_client.search(q, limit).await, &public_base)
+        let public_base = cfg.public_base().to_string();
+        let q = cap_query(params.q.trim());
+        if q.chars().count() < MIN_QUERY_CHARS {
+            KbSearchOut {
+                hits: Vec::new(),
+                kb_public_url: public_base,
+                unavailable: None,
+            }
+        } else {
+            let limit = parse_limit(params.limit.as_deref());
+            search_body(state.kb_client.search(q, limit).await, &public_base)
+        }
     };
     ([(header::CACHE_CONTROL, "no-store")], Json(body))
 }
@@ -245,6 +289,50 @@ mod tests {
         );
         assert_eq!(body.hits.len(), 1);
         assert_eq!(body.hits[0].url, "https://kb.example.com/a/k/ok.html");
+    }
+
+    #[test]
+    fn search_body_drops_dot_segment_hits() {
+        let body = search_body(
+            Ok(KbSearchRelay {
+                hits: vec![
+                    hit(Some("k"), "../../x.html"),
+                    hit(Some("k"), "a/./b.html"),
+                    hit(Some(".."), "x.html"),
+                    hit(Some("k"), "a/..b/c.html"),
+                ],
+            }),
+            "https://kb.example.com",
+        );
+        assert_eq!(body.hits.len(), 1, "only the harmless `..b` name survives");
+        assert_eq!(body.hits[0].url, "https://kb.example.com/a/k/a/..b/c.html");
+    }
+
+    #[test]
+    fn query_is_capped_on_a_char_boundary() {
+        assert_eq!(cap_query("short"), "short");
+        let long = "é".repeat(MAX_QUERY_CHARS + 50);
+        let capped = cap_query(&long);
+        assert_eq!(capped.chars().count(), MAX_QUERY_CHARS);
+        assert!(long.starts_with(capped));
+        let exact = "a".repeat(MAX_QUERY_CHARS);
+        assert_eq!(cap_query(&exact), exact);
+    }
+
+    #[test]
+    fn public_url_must_be_set_and_non_blank() {
+        use crate::config::KbDaemonSection;
+        let mut c = KbDaemonSection {
+            enabled: true,
+            url: Some("http://kb:4000".into()),
+            token_file: None,
+            public_url: None,
+        };
+        assert!(!has_public_url(&c));
+        c.public_url = Some("  ".into());
+        assert!(!has_public_url(&c));
+        c.public_url = Some("https://kb.example.com".into());
+        assert!(has_public_url(&c));
     }
 
     #[test]

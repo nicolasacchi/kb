@@ -67,6 +67,7 @@ path = "${repoPath}"
 [kb_daemon]
 enabled = true
 url = "http://127.0.0.1:${DOCLENS_FIXTURE_PORT}"
+public_url = "http://127.0.0.1:${DOCLENS_FIXTURE_PORT}"
 
 [doclens]
 kbs = ["${DOCLENS_KB}"]
