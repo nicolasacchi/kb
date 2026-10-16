@@ -88,6 +88,11 @@ test.describe("suggestion editor + apply (V4.S2)", () => {
     await expect(composer).toBeVisible();
     await composer.locator("[data-kbc-review-composer-body]").fill("first suggestion thread");
     await composer.locator("[data-kbc-review-composer-submit]").click();
+    // OL-P5 — the review-diff title now has its own row, which moves this short
+    // diff down far enough that the tray the first draft just auto-opened
+    // (fixed, bottom-right) would sit over the next composer's Submit. Fold it;
+    // the second draft re-opens it.
+    await page.locator("[data-kbc-rdiff-drafts-close]").click();
 
     await diff.locator("[data-kbc-review-compose-new]").last().click();
     const composer2 = page.locator("[data-kbc-review-composer]");
