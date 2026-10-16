@@ -6,6 +6,7 @@ import { useQueryStats } from "./chrome/queryStats";
 import SortControl from "./SortControl";
 import GroupControl from "./GroupControl";
 import FilterChips, { type FilterToken } from "./FilterChips";
+import { Icon } from "@kb/ui/icons";
 import { cycleDensity, loadPrefs } from "../api/prefs";
 import { buildGalleryClusters, parseGalleryView } from "../lib/galleryControls";
 import { defaultDir, parseSortParams, type GroupKey, type SortDir, type SortKey } from "../lib/sort";
@@ -15,7 +16,21 @@ const csv = (v: string | null) => (v || "").split(",").filter(Boolean);
 // The Library's one quiet row under the Spine: where you are (scope, match
 // count), the labelled View choice, and this view's controls. Active filters
 // ride a second line only while there are any (or the query warned).
-export default function GalleryViewBar({ scope, chromeless }: { scope: string | null; chromeless: boolean }) {
+export default function GalleryViewBar({
+  scope,
+  chromeless,
+  notesOpen = false,
+  onToggleNotes,
+  shown,
+}: {
+  scope: string | null;
+  chromeless: boolean;
+  /** Notes panel state; the toggle is the bar's right-end control. */
+  notesOpen?: boolean;
+  onToggleNotes?: () => void;
+  /** Rows the Library actually lists; the count reads "N of M" when it differs from the query's total. */
+  shown?: number;
+}) {
   const { params, set, setMany } = useUrl();
   const isMobile = useIsMobile();
   const stats = useQueryStats();
@@ -27,7 +42,6 @@ export default function GalleryViewBar({ scope, chromeless }: { scope: string | 
 
   const tags = csv(params.get("tags"));
   const caps = csv(params.get("caps"));
-  const folder = params.get("folder") || "";
   const since = params.get("since") || "";
   const indexOnly = params.get("index") === "1";
 
@@ -38,9 +52,8 @@ export default function GalleryViewBar({ scope, chromeless }: { scope: string | 
       onRemove: () => set("tags", tags.filter((x) => x !== t).join(",") || null),
       onChange: (n: string) => set("tags", tags.map((x) => (x === t ? n : x)).join(",")),
     })),
-    ...(folder
-      ? [{ k: "folder", value: folder, onRemove: () => set("folder", null), onChange: (n: string) => set("folder", n) }]
-      : []),
+    // No folder chip: the folder header's breadcrumb already names (and
+    // navigates) the folder, so a chip would say it twice.
     ...caps.map((c) => ({
       k: "cap",
       value: c,
@@ -68,10 +81,17 @@ export default function GalleryViewBar({ scope, chromeless }: { scope: string | 
     onSort,
     onGroup,
     onDensity: () => setDensity(cycleDensity()),
+    notes: onToggleNotes && !chromeless ? { open: notesOpen, onToggle: onToggleNotes } : undefined,
   });
 
   const showStats = !chromeless && stats !== undefined;
-  const count = showStats ? `${stats.total.toLocaleString()} match${stats.total === 1 ? "" : "es"} · ${stats.ms} ms` : undefined;
+  const count = showStats
+    ? `${
+        shown !== undefined && shown !== stats.total
+          ? `showing ${shown.toLocaleString()} of ${stats.total.toLocaleString()}`
+          : `${stats.total.toLocaleString()} match${stats.total === 1 ? "" : "es"}`
+      } · ${stats.ms} ms`
+    : undefined;
   const warnings = showStats ? stats.warnings : [];
 
   return (
@@ -85,6 +105,18 @@ export default function GalleryViewBar({ scope, chromeless }: { scope: string | 
         maxVisible={isMobile ? 1 : 9}
         renderControl={(c, node) => {
           if (c.id === "sort") return <SortControl sort={sort} dir={dir} onSort={onSort} />;
+          if (c.id === "notes")
+            return (
+              <button
+                type="button"
+                className={`gallery-notes-toggle ${notesOpen ? "is-on" : ""}`}
+                onClick={onToggleNotes}
+                aria-pressed={notesOpen}
+                title="notes for the current folder / kb"
+              >
+                <Icon.Note /> Notes
+              </button>
+            );
           if (c.id === "group") return <GroupControl group={group} onGroup={onGroup} />;
           return node;
         }}

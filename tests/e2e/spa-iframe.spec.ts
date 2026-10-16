@@ -122,12 +122,15 @@ test.describe("spa detail view", () => {
 
     await page.goto(`http://kb-host.test:${port()}/`);
 
-    // Env-drift warnings moved from an always-visible banner onto the
-    // status pill (39cec07) — open it to read the alert.
+    // Env-drift warnings live in the Spine's daemon-status popover
+    // (they used to be an always-visible banner) — open it to read them.
     await page
       .getByRole("button", { name: /environment warning/i })
       .click();
-    const banner = page.getByRole("alert").filter({ hasText: /mismatch/ });
+    const banner = page
+      .getByRole("dialog", { name: "daemon status" })
+      .locator(".kb-status-warn")
+      .filter({ hasText: /mismatch/ });
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(/artifact host suffix mismatch/);
     // The same diagnostic also lands in the console.
@@ -163,12 +166,15 @@ test.describe("spa detail view", () => {
 
     await page.goto(`http://kb-host.test:${port()}/`);
 
-    // Env-drift warnings moved from an always-visible banner onto the
-    // status pill (39cec07) — open it to read the alert.
+    // Env-drift warnings live in the Spine's daemon-status popover
+    // (they used to be an always-visible banner) — open it to read them.
     await page
       .getByRole("button", { name: /environment warning/i })
       .click();
-    const banner = page.getByRole("alert").filter({ hasText: /mismatch/ });
+    const banner = page
+      .getByRole("dialog", { name: "daemon status" })
+      .locator(".kb-status-warn")
+      .filter({ hasText: /mismatch/ });
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(/parent origin mismatch/);
   });

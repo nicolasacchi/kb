@@ -631,26 +631,33 @@ export default function Gallery() {
   return (
     <div className={notesOpen ? "gallery-shell gallery-shell--notes" : "gallery-shell"}>
     <div className="gallery">
-      <GalleryViewBar scope={activeKb ?? docsKb} chromeless={chromelessView} />
+      <GalleryViewBar
+        scope={activeKb ?? docsKb}
+        chromeless={chromelessView}
+        notesOpen={notesOpen}
+        onToggleNotes={() => setNotesOpen((o) => !o)}
+        shown={filtered.length}
+      />
+      {/* The unfiltered Library has no header of its own: the Front Page
+          masthead is the title and the ViewBar carries the count. */}
+      {(activeFolder || activeTags.size > 0) && (
       <header className="gallery__header">
         <h1 className="gallery-h1">
           {activeFolder ? (
             <>
-              in{" "}
+              <span className="gallery-h1-in">in</span>{" "}
               <FolderBreadcrumb
                 path={activeFolder}
                 onNavigate={(f) => set("folder", f)}
               />
             </>
-          ) : activeTags.size > 0 ? (
+          ) : (
             <>
-              tagged{" "}
+              <span className="gallery-h1-in">tagged</span>{" "}
               <span className="gallery-h1-accent">
                 {[...activeTags].join(" + ")}
               </span>
             </>
-          ) : (
-            <>recent</>
           )}
         </h1>
         {/* v0.33 Y4 — compact folder-note strip (title + summary → artifact). */}
@@ -672,12 +679,8 @@ export default function Gallery() {
             ) : null}
           </Link>
         )}
-        {!chromelessView && (
+        {!chromelessView && activeFolder && activeKb && (
           <div className="gallery__controls">
-            <div className="gallery-count">
-              {`${filtered.length} of ${scaleHook.total}`}
-            </div>
-            {activeFolder && activeKb && (
               <>
                 <button
                   type="button"
@@ -715,20 +718,10 @@ export default function Gallery() {
                   <Icon.Download />
                 </a>
               </>
-            )}
-            {/* Sort, group and density live in the Library's ViewBar above. */}
-            <button
-              type="button"
-              className={`gallery-notes-toggle ${notesOpen ? "is-on" : ""}`}
-              onClick={() => setNotesOpen((o) => !o)}
-              aria-pressed={notesOpen}
-              title="notes for the current folder / kb"
-            >
-              <Icon.Note /> Notes
-            </button>
           </div>
         )}
       </header>
+      )}
 
       {/* The Front Page (OL L3) — ONE band for the unfiltered Library,
           replacing the corpus lobby, sessions, resurface and echo strips and

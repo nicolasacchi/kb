@@ -108,7 +108,7 @@ test.afterAll(async () => {
 });
 
 test.describe("multi-daemon", () => {
-  test("status pill aggregates all 3 daemons in the detail panel", async ({
+  test("status indicator aggregates all 3 daemons in the detail panel", async ({
     page,
   }) => {
     const all = [PORT, ...EXTRA_PORTS].map((p) => `http://127.0.0.1:${p}`);
@@ -118,12 +118,13 @@ test.describe("multi-daemon", () => {
 
     await page.goto(`http://127.0.0.1:${PORT}/`);
 
-    // Status pill renders. Click to expand the per-daemon panel.
+    // The Spine's daemon-status indicator is the one desktop status home;
+    // its popover carries the per-daemon rows.
     const pill = page.getByRole("button", { name: /daemon status/i });
     await expect(pill).toBeVisible();
     await pill.click();
 
-    const panel = page.getByRole("dialog", { name: "daemon detail" });
+    const panel = page.getByRole("dialog", { name: "daemon status" });
     await expect(panel).toBeVisible();
 
     // The panel shows one row per daemon. We assert by URL substring;

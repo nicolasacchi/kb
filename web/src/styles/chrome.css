@@ -590,6 +590,13 @@
     text-align: left;
   }
 }
+.kb-statusind__detail {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--pad-2);
+  font-size: var(--fs-xs);
+  max-height: 50vh;
+  overflow-y: auto;
+}
 .kb-statusind__pop {
   position: absolute;
   top: calc(100% + 6px);
@@ -835,6 +842,10 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
+}
+.kb-side__dot--none {
+  /* category rows keep the tag rows' 3-column grid; the dot slot is empty. */
+  background: transparent;
 }
 .kb-side__name {
   white-space: nowrap;

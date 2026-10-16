@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import GalleryViewBar from "./GalleryViewBar";
@@ -67,12 +67,50 @@ describe("GalleryViewBar", () => {
 
   it("renders active filters as removable chips and shows query warnings", () => {
     const c = mount("/?tags=a,b&folder=x/y&view=list", { warn: true });
-    expect(c.container.querySelectorAll(".kb-fchip").length).toBe(3);
+    // two tag chips; the folder is named by the header breadcrumb, not a chip
+    expect(c.container.querySelectorAll(".kb-fchip").length).toBe(2);
+    expect(c.container.querySelector(".kb-gallery-viewbar__filters")?.textContent).not.toContain("x/y");
     expect(c.container.querySelector(".kb-gallery-viewbar__warn")?.getAttribute("title")).toBe("bad token");
     fireEvent.click(c.getByLabelText("remove a"));
     expect(search(c)).toContain("tags=b");
-    fireEvent.click(c.getByLabelText("remove x/y"));
-    expect(search(c)).not.toContain("folder=");
+    fireEvent.click(c.getByLabelText("remove b"));
+    expect(search(c)).not.toContain("tags=");
+  });
+
+  const withProps = (props: { shown?: number; notes?: boolean }, onToggle = vi.fn()) =>
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <QueryStatsProvider>
+          <Report />
+          <GalleryViewBar
+            scope="canon"
+            chromeless={false}
+            notesOpen
+            onToggleNotes={props.notes === false ? undefined : onToggle}
+            shown={props.shown}
+          />
+        </QueryStatsProvider>
+      </MemoryRouter>,
+    );
+
+  it("carries Notes as a real ViewBar control: the last cluster, inside the toolbar, with its class and aria-pressed", () => {
+    const onToggle = vi.fn();
+    const c = withProps({}, onToggle);
+    const btn = c.container.querySelector<HTMLButtonElement>(
+      '[data-kb-viewbar] [data-kb-viewbar-cluster]:last-of-type .gallery-notes-toggle',
+    )!;
+    expect(btn).not.toBeNull();
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(btn.getAttribute("title")).toBe("notes for the current folder / kb");
+    fireEvent.click(btn);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(c.container.querySelector(".kb-gallery-viewbar__row")).toBeNull();
+  });
+
+  it("says 'M matches' when everything is loaded and 'showing N of M' under a partial page", () => {
+    expect(withProps({ shown: 1234 }).container.querySelector(".kb-viewbar__count")?.textContent).toBe("1,234 matches · 7 ms");
+    cleanup();
+    expect(withProps({ shown: 200 }).container.querySelector(".kb-viewbar__count")?.textContent).toBe("showing 200 of 1,234 · 7 ms");
   });
 
   it("has no filter line when nothing is filtered, and hides stats on chromeless views", () => {

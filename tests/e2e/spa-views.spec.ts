@@ -163,16 +163,32 @@ test.describe("gallery views", () => {
     // synchronously with the URL change.
     await expect
       .poll(async () => {
+        // Shelf cards only: the Front Page band (`.kb-fp`) also holds
+        // "Open …" links, in recency order, and shows until the sort leaves
+        // "recent".
         const labels = await page
           .getByRole("link", { name: /^Open / })
           .evaluateAll((els) =>
-            els.map((e) => e.getAttribute("aria-label") || ""),
+            els
+              .filter((e) => !e.closest(".kb-fp"))
+              .map((e) => e.getAttribute("aria-label") || ""),
           );
-        if (labels.length < 4) return false;
+        if (labels.length < 4) return `only ${labels.length} cards`;
         const sorted = [...labels].sort((a, b) => a.localeCompare(b));
-        return JSON.stringify(labels) === JSON.stringify(sorted);
+        // On failure the received value names the order the page showed.
+        return JSON.stringify(labels) === JSON.stringify(sorted)
+          ? "sorted"
+          : labels.join(" | ");
       })
-      .toBe(true);
+      .toBe("sorted");
+  });
+
+  test("the unfiltered Library has no header of its own (OL P3)", async ({
+    page,
+  }) => {
+    await page.goto(`http://127.0.0.1:${port()}/`);
+    await expect(page.locator(".kb-gallery-viewbar")).toBeVisible();
+    await expect(page.locator(".gallery__header")).toHaveCount(0);
   });
 
   test("folder filter narrows the gallery to the pm/ artifact set", async ({
@@ -180,6 +196,21 @@ test.describe("gallery views", () => {
   }) => {
     await page.goto(`http://127.0.0.1:${port()}/?folder=pm`);
     await expect(page.locator(".gallery-h1-accent")).toHaveText("pm");
+    // OL P3 — one header: the breadcrumb names the folder, so the ViewBar
+    // shows no `folder` chip, and the Notes toggle lives in the ViewBar.
+    await expect(page.locator(".kb-gallery-viewbar .kb-fchip")).toHaveCount(0);
+    await expect(
+      page.locator(".kb-gallery-viewbar .gallery-notes-toggle"),
+    ).toBeVisible();
+    // The selected folder row keeps a readable label (tinted, not solid).
+    const onRow = page.locator(".rail-folder.is-on");
+    await expect(onRow.locator(".rail-folder-name")).toContainText("pm");
+    // The old bug painted --accent-soft as both background and label colour.
+    const [fg, bg] = await onRow.evaluate((row) => [
+      getComputedStyle(row.querySelector(".rail-folder-name")!).color,
+      getComputedStyle(row).backgroundColor,
+    ]);
+    expect(fg).not.toBe(bg);
     // All four direct pm/ artifacts share the "INC-0315 ·" title prefix.
     await expect(
       page.getByRole("link", { name: /Open INC-0315 · Summary/ }),

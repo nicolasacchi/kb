@@ -3,6 +3,8 @@ import { fetchCrossStats, type CrossStats } from "../../api/client";
 import { useIdentity } from "../../hooks/useArtifactHost";
 import { sse } from "../../api/sse";
 import { Icon } from "@kb/ui/icons";
+import { useDaemonStatus } from "../../hooks/useDaemonStatus";
+import DaemonDetail from "../DaemonDetail";
 
 // OL-L1 — the footer status bar folded into ONE indicator in the Spine's right
 // slot: a dot + a short text label (never hue-only) that opens a popover with
@@ -36,6 +38,7 @@ export function useStatusExtra(node: ReactNode) {
 
 export default function DaemonStatus({ warnings }: { warnings: string[] }) {
   const identity = useIdentity();
+  const fleet = useDaemonStatus();
   const [stats, setStats] = useState<CrossStats | null>(null);
   // Unreachable only once the probe has actually failed -- not during the
   // first fetch, which would paint a warning dot on every cold load.
@@ -94,7 +97,7 @@ export default function DaemonStatus({ warnings }: { warnings: string[] }) {
   // Short, fixed-width-ish word for the button itself: the right slot is
   // right-aligned, so a label whose width tracks the request rate would shift
   // every neighbour once a second.
-  const hasWarn = warnings.length > 0 || embedderDegraded;
+  const hasWarn = warnings.length > 0 || embedderDegraded || fleet.openErrors > 0;
   const short = !reachable ? "offline" : hasWarn ? "warn" : active ? "active" : "idle";
   const dotClass = !reachable || hasWarn ? "is-warn" : active ? "is-active" : "";
 
@@ -125,6 +128,11 @@ export default function DaemonStatus({ warnings }: { warnings: string[] }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         title={`${daemonName}: ${statusLabel}`}
+        aria-label={`daemon status ${short}${
+          warnings.length > 0
+            ? `; ${warnings.length} environment warning${warnings.length === 1 ? "" : "s"}`
+            : ""
+        }; click for detail`}
         onClick={() => setOpen((o) => !o)}
       >
         <span className={`kb-status-pulse ${dotClass}`} aria-hidden="true" />
@@ -159,6 +167,15 @@ export default function DaemonStatus({ warnings }: { warnings: string[] }) {
                 : "embedder degraded: subprocess down — semantic search is keyword-only"}
             </div>
           )}
+          {/* What the bottom-right StatusPill showed on desktop: per-daemon
+              rows (phase, open errors, in-flight, open comments) and the
+              fleet metrics (req/s, storage queue depth, per-route p50/p95).
+              Mounted only while open: opening it adds one more metrics.tick
+              subscriber (the stream itself is already running for this
+              component's own subscription). */}
+          <div className="kb-statusind__detail">
+            <DaemonDetail />
+          </div>
           {extra && <div className="kb-status-extra">{extra}</div>}
         </div>
       )}

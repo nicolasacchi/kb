@@ -195,6 +195,7 @@ export default function Sidebar() {
               }}
               aria-pressed={activeCategory === c.value}
             >
+              <span className="kb-side__dot kb-side__dot--none" aria-hidden />
               <span className="kb-side__name">{c.value}</span>
               <span className="kb-side__ct">{c.count}</span>
             </div>
