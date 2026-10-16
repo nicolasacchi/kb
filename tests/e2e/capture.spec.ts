@@ -150,11 +150,10 @@ test.describe("quick capture (U6)", () => {
 
     // Passport — the category KV is a `capture` deep-link, stamped at
     // write time by kb-core's capture engine (U1).
-    const categoryRow = page.locator(".kb-pinsp__kv", { hasText: "category" });
-    await expect(categoryRow).toBeVisible();
-    await expect(categoryRow.locator(".kb-pinsp__kv-link")).toHaveText(
-      "capture",
-    );
+    const categoryLink = page
+      .locator(".kb-pinsp__passport-line .kb-pinsp__kv-link")
+      .filter({ hasText: /^capture$/ });
+    await expect(categoryLink).toBeVisible();
 
     // Provenance tag `from:spa` is slugified to `from-spa` at index time
     // (parser::slugify_tag) and rendered as a tag chip.
@@ -283,11 +282,10 @@ test.describe("capture ergonomics — paste text + chrome entry points (C3)", ()
       page.getByRole("navigation", { name: "artifact context" }),
     ).toBeVisible();
 
-    const categoryRow = page.locator(".kb-pinsp__kv", { hasText: "category" });
-    await expect(categoryRow).toBeVisible();
-    await expect(categoryRow.locator(".kb-pinsp__kv-link")).toHaveText(
-      "capture",
-    );
+    const categoryLink = page
+      .locator(".kb-pinsp__passport-line .kb-pinsp__kv-link")
+      .filter({ hasText: /^capture$/ });
+    await expect(categoryLink).toBeVisible();
     // Both provenance tags the capture engine stamps on every batch
     // (`build_tag_list`) — this is the one test asserting the paste path
     // stamps the SAME tags a picked file does, not just `from:spa`.
