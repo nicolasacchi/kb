@@ -313,18 +313,18 @@
  * `kb-classic-dark` attribute so the first paint is already themed.
  *
  * Roles the generator does not emit stay here, but only as `color-mix()` /
- * `var()` / `light-dark()` expressions over generated roles, never raw hex, so
- * every family (not just kb-classic) gets a coherent value. `light-dark()`
- * follows the `color-scheme` that applyTheme sets on <html>, which is the
- * resolved appearance for light/dark and the OS for system. */
+ * `var()` expressions over generated roles, never raw hex, so every family
+ * (not just kb-classic) gets a coherent value. The dark value is the base; the
+ * light value is set on `:root[data-theme="light"]` (and for `system` behind
+ * `prefers-color-scheme: light`) at the bottom of this block. `light-dark()`
+ * is NOT used in a custom property: Chromium serialises it there as the two
+ * arguments run together, so every `var()` use of the token is invalid
+ * (OL P6, tests/e2e/spa-accent-fill.spec.ts). */
 :root {
   /* Solid-fill accent for contexts where light text sits ON the accent
    * (buttons, badges): the raw --accent fails AA with white. Darkened toward
    * black; dark needs more of it than light. */
-  --accent-fill: light-dark(
-    color-mix(in srgb, var(--accent) 88%, black),
-    color-mix(in srgb, var(--accent) 72%, black)
-  );
+  --accent-fill: color-mix(in srgb, var(--accent) 72%, black);
   --accent-fill-fg: white;
 
   /* Strongest ink (headings on emphasis surfaces): --ink pushed further from
@@ -335,37 +335,43 @@
   /* Reader prose canvas: the SPA-side reader chrome (gutter, native-note
    * markdown, article frame). Iframed artifacts bring their own styling.
    * Light is true paper (the panel surface); dark sits between bg and panel. */
-  --paper: light-dark(
-    var(--bg-panel),
-    color-mix(in srgb, var(--bg) 55%, var(--bg-panel))
-  );
-  --paper-ink: light-dark(color-mix(in srgb, var(--ink) 95%, var(--bg)), var(--ink));
-  --paper-rule: light-dark(color-mix(in srgb, var(--rule) 70%, var(--bg-panel)), var(--rule));
+  --paper: color-mix(in srgb, var(--bg) 55%, var(--bg-panel));
+  --paper-ink: var(--ink);
+  --paper-rule: var(--rule);
 
   /* Cards: dark cards fade to a slightly deeper stop; light cards are flat
    * (both stops equal). */
-  --card-bg-end: light-dark(
-    var(--bg-card),
-    color-mix(in srgb, var(--bg-card) 80%, var(--bg-panel-2))
-  );
+  --card-bg-end: color-mix(in srgb, var(--bg-card) 80%, var(--bg-panel-2));
   --card-bg: linear-gradient(180deg, var(--bg-card) 0%, var(--card-bg-end) 100%);
-  --card-ring: light-dark(
-    color-mix(in srgb, black 4%, transparent),
-    color-mix(in srgb, white 4%, transparent)
-  );
+  --card-ring: color-mix(in srgb, white 4%, transparent);
   --card-glow-pct: 18%;
 
   --collage-bg: var(--bg);
-  --term-bg: light-dark(var(--bg), var(--bg-panel-2));
+  --term-bg: var(--bg-panel-2);
 }
-/* The glow percentage is a number, which light-dark() cannot carry: white
- * needs far less glow, so light overrides it the same way chrome.css's
- * `.kb-card::before` does (attribute for explicit light, media for system). */
+/* The light values of the roles above, and the glow percentage (a number,
+ * which no color function carries: white needs far less glow). The same
+ * pairing chrome.css's `.kb-card::before` uses: attribute for explicit light,
+ * media for system. */
 :root[data-theme="light"] {
+  --accent-fill: color-mix(in srgb, var(--accent) 88%, black);
+  --paper: var(--bg-panel);
+  --paper-ink: color-mix(in srgb, var(--ink) 95%, var(--bg));
+  --paper-rule: color-mix(in srgb, var(--rule) 70%, var(--bg-panel));
+  --card-bg-end: var(--bg-card);
+  --card-ring: color-mix(in srgb, black 4%, transparent);
+  --term-bg: var(--bg);
   --card-glow-pct: 8%;
 }
 @media (prefers-color-scheme: light) {
   :root[data-theme="system"] {
+    --accent-fill: color-mix(in srgb, var(--accent) 88%, black);
+    --paper: var(--bg-panel);
+    --paper-ink: color-mix(in srgb, var(--ink) 95%, var(--bg));
+    --paper-rule: color-mix(in srgb, var(--rule) 70%, var(--bg-panel));
+    --card-bg-end: var(--bg-card);
+    --card-ring: color-mix(in srgb, black 4%, transparent);
+    --term-bg: var(--bg);
     --card-glow-pct: 8%;
   }
 }

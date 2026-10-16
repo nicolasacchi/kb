@@ -32,5 +32,30 @@ for (const theme of ["dark", "light"] as const) {
     console.log(`accent-fill ${theme}: ${JSON.stringify(seen)}`);
     expect(seen.badgeBg, JSON.stringify(seen)).not.toBe("rgba(0, 0, 0, 0)");
     expect(seen.badgeBg, JSON.stringify(seen)).not.toBe("transparent");
+
+    // Every other role that used to be written as `light-dark()` in a custom
+    // property, and the mobile reader-tools count (`.kb-ctxbar__cnt`, which
+    // only renders with open comments) probed through a throwaway element.
+    const probes = await page.evaluate(() => {
+      const out: Record<string, string> = {};
+      const probe = (name: string, css: string, cls = "") => {
+        const el = document.createElement("div");
+        el.className = cls;
+        el.style.cssText = css;
+        document.body.appendChild(el);
+        out[name] = getComputedStyle(el).backgroundColor;
+        el.remove();
+      };
+      for (const t of ["accent-fill", "paper", "paper-ink", "paper-rule", "card-bg-end", "card-ring", "term-bg"]) {
+        probe(`--${t}`, `background-color: var(--${t})`);
+      }
+      probe(".kb-ctxbar__cnt", "", "kb-ctxbar__cnt");
+      probe(".kb-hints__chip", "", "kb-hints__chip");
+      return out;
+    });
+    console.log(`probes ${theme}: ${JSON.stringify(probes)}`);
+    for (const [name, bg] of Object.entries(probes)) {
+      expect(bg, `${name} (${theme}): ${JSON.stringify(probes)}`).not.toBe("rgba(0, 0, 0, 0)");
+    }
   });
 }
