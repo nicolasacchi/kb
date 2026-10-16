@@ -4933,6 +4933,7 @@ export default function Reader() {
         header={readerHeader}
         rail={railSlot}
         railAvailable={hasInspector}
+        hasReviewContext={!!currentReview}
         railBadges={{
           notes: unresolvedAnnotationsCount + bookmarkCount,
           facts: commentsBadgeCount,

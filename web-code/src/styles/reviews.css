@@ -863,7 +863,8 @@
    * sticky, now-taller toolbar instead of on the content below it. This
    * variable is its own budget — twice the single-line height plus a
    * little breathing room — sized for "the toolbar is at most three
-   * lines (OL-P5: the title row + the two cluster rows)", not tied to the unrelated global constant.
+   * lines (OL-P5: the title row + the two cluster rows)", not tied to the
+   * unrelated global constant.
    */
   --rdiff-toolbar-h: calc(3 * var(--topbar-h) + var(--pad-2));
 }
@@ -1189,6 +1190,12 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+}
+/* OL-P5 — the drafts tray is fixed bottom-right (up to 60vh) and auto-opens on
+ * every draft. While it is open the diff reserves the tray's own max height
+ * below the last line, so any composer can scroll clear of it. */
+.kbc-rdiff--drafts-open .kbc-rdiff__body {
+  padding-bottom: min(60vh, 620px);
 }
 .kbc-rdiff__section {
   border-bottom: 1px solid var(--rule);

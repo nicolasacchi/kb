@@ -290,39 +290,6 @@
   position: relative;
 }
 
-.kbc-trailind__btn {
-  display: inline-flex;
-  gap: var(--pad-1);
-  align-items: center;
-}
-
-.kbc-trailind__label {
-  font-size: var(--fs-xs);
-}
-
-.kbc-trailind__btn--recording {
-  color: var(--red);
-}
-
-.kbc-trailind__btn--paused {
-  color: var(--warn);
-}
-
-.kbc-trailind__btn--off {
-  color: var(--ink-mute);
-}
-
-/* OL-P5 — the indicator is a quiet, self-explaining chip in every state
- * (the same hairline-box grammar as the Space / ? hint beside it); "off" is
- * muted, never hidden to a bare dot. */
-.kbc-iconbtn.kbc-trailind__btn {
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-1, 4px);
-  min-height: 0;
-  padding: 0 var(--space-1, 4px);
-  white-space: nowrap;
-}
-
 .kbc-trailind__pop {
   position: absolute;
   right: 0;

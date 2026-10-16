@@ -82,8 +82,8 @@ export default function TrailIndicator() {
         className={`kbc-iconbtn kbc-trailind__btn kbc-trailind__btn--${mode}`}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label={`Trail recording: ${mode} — your reading trail, kept only on this box (Space k p toggles)`}
-        title={`Your reading trail (kbc-trail/1) is ${mode}. Click for the controls; Space k p toggles.`}
+        aria-label={`${TRAIL_MODE_LABEL[mode]} — your reading trail; click for the controls (Space k p toggles)`}
+        title={`Your reading trail (kbc-trail/1): ${TRAIL_MODE_LABEL[mode].toLowerCase()}. Click for the controls; Space k p toggles.`}
         data-kbc-trail-toggle
       >
         {mode === "recording" ? <Icon.Record /> : mode === "paused" ? <Icon.Pause /> : <Icon.Dot />}
