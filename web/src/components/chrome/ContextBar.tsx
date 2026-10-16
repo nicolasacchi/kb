@@ -6,6 +6,10 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
+import { excludeArtifact } from "../../api/client";
+import { galleryUrl } from "../../lib/galleryUrl";
+import { toast } from "../../lib/toast";
+import { useConfirm } from "../ConfirmProvider";
 import { Icon } from "@kb/ui/icons";
 import { useAnchors } from "../../hooks/useAnchors";
 import { artifactHref } from "../../lib/artifactHref";
@@ -125,6 +129,33 @@ export default function ContextBar({
   };
 }) {
   const navigate = useNavigate();
+  // OL R2 — "Exclude from index" moved here from the inspector rail. The
+  // confirm modal is the one destructive-prompt host (invariant #32); on
+  // success we leave the reader for the kb gallery, since the KeepUserData
+  // cascade is about to pull this doc from the index (the detail queries
+  // would 404 on the SSE invalidation).
+  const confirm = useConfirm();
+  const [excluding, setExcluding] = useState(false);
+  const onExclude = async () => {
+    const ok = await confirm({
+      title: "Exclude from index?",
+      body: `Exclude “${title || sourceRelative}” from search and the gallery? The file stays on disk and its comments + reading history survive — re-include it any time from Settings → Excluded.`,
+      confirmLabel: "Exclude",
+    });
+    if (!ok) return;
+    setExcluding(true);
+    excludeArtifact(kb, sourceRelative)
+      .then(() => {
+        toast.ok("excluded from index");
+        navigate(galleryUrl(kb));
+      })
+      .catch((err) =>
+        toast.err(
+          `exclude failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      )
+      .finally(() => setExcluding(false));
+  };
   const { isAnchored, toggle } = useAnchors();
   const anchored = isAnchored(kb, id);
   const [shareOpen, setShareOpen] = useState(false);
@@ -379,6 +410,16 @@ export default function ContextBar({
                   onClick={close}
                 />
               )}
+              <MenuRow
+                act="exclude"
+                icon={<Icon.X />}
+                label={excluding ? "Excluding\u2026" : "Exclude from index"}
+                title="exclude this artifact from search + gallery (comments and reading history survive; re-include from Settings → Excluded)"
+                onClick={() => {
+                  close();
+                  void onExclude();
+                }}
+              />
             </>
           )}
         </MoreMenu>

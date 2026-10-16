@@ -15,6 +15,10 @@ vi.mock("../lists/AddToListButton", () => ({
   default: () => <button data-kb-act="add-to-list" type="button" />,
 }));
 vi.mock("../ShareModal", () => ({ default: () => null }));
+const confirmMock = vi.hoisted(() => vi.fn());
+const excludeMock = vi.hoisted(() => vi.fn());
+vi.mock("../ConfirmProvider", () => ({ useConfirm: () => confirmMock }));
+vi.mock("../../api/client", () => ({ excludeArtifact: excludeMock }));
 
 afterEach(cleanup);
 
@@ -62,6 +66,7 @@ describe("ContextBar More menu", () => {
       "folio",
       "fullscreen",
       "bare",
+      "exclude",
     ]);
     const key = (a: string) =>
       menu.querySelector(`[data-kb-act="${a}"] .kb-ctxbar__mi-key`)?.textContent;
@@ -95,6 +100,23 @@ describe("ContextBar More menu", () => {
       "anchor",
       "copy-link",
       "fullscreen",
+      "exclude",
     ]);
+  });
+
+  it("Exclude from index asks via useConfirm first and only then calls the API", async () => {
+    confirmMock.mockResolvedValueOnce(false);
+    const { container } = bar();
+    fireEvent.click(container.querySelector('[data-kb-act="more"]')!);
+    fireEvent.click(container.querySelector('[data-kb-act="exclude"]')!);
+    await Promise.resolve();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(excludeMock).not.toHaveBeenCalled();
+
+    confirmMock.mockResolvedValueOnce(true);
+    excludeMock.mockResolvedValueOnce(undefined);
+    fireEvent.click(container.querySelector('[data-kb-act="more"]')!);
+    fireEvent.click(container.querySelector('[data-kb-act="exclude"]')!);
+    await vi.waitFor(() => expect(excludeMock).toHaveBeenCalledWith("k", "f.html"));
   });
 });
