@@ -66,6 +66,13 @@ export const CENSUS_LABELS: Record<string, string> = {
   // only — never a target, never a streak; kb records no goals.
   "selection.remember.open": "Highlight → memory prompts opened",
   "selection.remember.save": "Highlights saved as a memory",
+  // OL L3 — the Front Page band that opens the unfiltered Library. Added with
+  // the band: the census never counted the old landing strips or ?view=press,
+  // so there is no earlier usage to compare against (the band shipped on the
+  // operator's ruling, not on data). Density only — no goal, no target.
+  "frontpage.view": "Front Page bands shown",
+  "frontpage.lead.open": "Front Page lead stories opened",
+  "frontpage.collapse": "Front Page bands collapsed",
 };
 
 export function censusRead(): Census {

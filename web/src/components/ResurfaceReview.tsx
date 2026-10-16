@@ -26,7 +26,7 @@ const DEFAULT_WEIGHTS: ResurfaceWeights = {
 // signals change — exactly like the strip itself. The only client state
 // this component owns is "which card is showing right now."
 //
-// Shared with ResurfaceStrip's per-item scorechip so the arithmetic
+// Shared with the resurface score chips so the arithmetic
 // reads identically whether you're skimming the strip or working the
 // queue card-by-card.
 export function resurfaceScoreTerms(item: ResurfaceItem, weights?: ResurfaceWeights): ScoreTerm[] {

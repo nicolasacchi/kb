@@ -79,6 +79,29 @@ for (const theme of ["dark", "light"] as const) {
       });
     });
 
+    // OL L3 -- the unfiltered landing: the Front Page band above the shelf.
+    // The edition's content moves with the clock and with whatever earlier
+    // specs captured into the kb, so the stories, edition line and cards are
+    // masked; what the golden pins is the masthead and the band's frame.
+    test("front page", async ({ page }) => {
+      await setTheme(page, theme);
+      await page.goto(`${BASE}/?kb=canon`);
+      await expect(page.locator('[data-testid="frontpage"]')).toBeVisible();
+      await expect(page.locator(".kb-card").first()).toBeVisible();
+      await settle(page);
+      await expect(page).toHaveScreenshot(`frontpage-${theme}.png`, {
+        maxDiffPixelRatio: MAX_DIFF,
+        mask: [
+          ...MASKS.map((s) => page.locator(s)),
+          ...textMasks(page),
+          page.locator(".kb-fp__dateline"),
+          page.locator(".kb-fp__main"),
+          page.locator(".kb-fp__coverage"),
+          page.locator(".kb-card"),
+        ],
+      });
+    });
+
     test("artifact reader", async ({ page }) => {
       await setTheme(page, theme);
       await page.goto(`${BASE}/a/canon/kitchen-sink.html`);

@@ -11,6 +11,7 @@ import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/chrome.css";
 import "./styles/gallery.css";
+import "./styles/frontpage.css";
 import "./styles/search.css";
 import "./styles/history.css";
 import "./styles/sessions.css";

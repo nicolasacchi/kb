@@ -12,7 +12,6 @@ import {
 } from "../api/client";
 import NotesPanel from "../components/NotesPanel";
 import { sse } from "../api/sse";
-import PinnedIndexCard from "../components/PinnedIndexCard";
 import GalleryViewBar from "../components/GalleryViewBar";
 import { useReportQueryStats } from "../components/chrome/queryStats";
 // Lazy: the atlas canvas (+ AtlasInspector) is heavy and only renders in the
@@ -25,9 +24,8 @@ import HistoryTimeline from "../components/HistoryTimeline";
 import ReflectionCanvas from "../components/ReflectionCanvas";
 import Broadsheet from "../components/Broadsheet";
 import GallerySection from "../components/GallerySection";
-import GalleryLobby from "../components/GalleryLobby";
-import { ResurfaceStrip } from "../components/ResurfaceStrip";
-import { EchoStrip } from "../components/EchoStrip";
+import FrontPage from "../components/FrontPage";
+import { showsFrontPage } from "../lib/frontpage";
 import EmptyState from "../components/EmptyState";
 import Loading from "../components/Loading";
 import VirtualGrid, { type VirtualGridHandle } from "../components/VirtualGrid";
@@ -732,80 +730,36 @@ export default function Gallery() {
         )}
       </header>
 
-      {/* Corpus lobby — the generous, EMPTY-QUERY home for this kb (census
-          line, category bar, highlights, example searches). Stricter gate
-          than the strips below: any active query/filter/read facet means
-          intent, and the lobby's whole point is the moment before intent —
-          it also keeps its highlight cards out of filtered/sorted card
-          assertions (the grid alone answers a filter). W2.8: this gate
-          implies `!draftView` (activeTags is empty, `q` is falsy), so
-          `docs`/`scaleHook.total` below already went through
-          composeDraftExclusion server-side — drafts drop out with no
-          extra handling needed here. */}
-      {!activeFolder &&
-        activeTags.size === 0 &&
-        activeCaps.size === 0 &&
-        !q &&
-        !category &&
-        !readFilter &&
-        since === "all" &&
-        fromUnix == null &&
-        toUnix == null &&
-        sort === "recent" &&
-        (view === "grid" || view === "list") &&
-        docsKb && (
-          <GalleryLobby
-            kb={docsKb}
-            total={scaleHook.total}
+      {/* The Front Page (OL L3) — ONE band for the unfiltered Library,
+          replacing the corpus lobby, sessions, resurface and echo strips and
+          the pinned index card. Same gate the lobby had (`showsFrontPage`):
+          any filter, query or sort is intent and hides it. W2.8: an
+          unfiltered state implies `!draftView`, so `docs` already went
+          through composeDraftExclusion server-side. Cards stay below. */}
+      {showsFrontPage({
+        activeFolder,
+        tagCount: activeTags.size,
+        capCount: activeCaps.size,
+        q,
+        category,
+        readFilter,
+        since,
+        fromUnix,
+        toUnix,
+        sort,
+        view,
+      }) &&
+        activeKb &&
+        (docs.length > 0 || loading) && (
+          <FrontPage
+            kb={kbFilter || null}
+            kbs={kbs}
             rows={docs}
-            progress={progress}
+            total={scaleHook.total}
+            hasMore={scaleHook.hasMore}
+            loading={loading}
+            sessions={sessionRollup}
           />
-        )}
-
-      {/* First-class sessions landing — a rollup strip + a jump to the full
-          /sessions worklog, shown when the corpus holds captured transcripts
-          and the gallery isn't narrowed to a folder/tag. */}
-      {sessionRollup &&
-        !activeFolder &&
-        activeTags.size === 0 &&
-        (view === "grid" || view === "list") && (
-          <Link
-            to={`/sessions?kb=${encodeURIComponent(activeKb ?? "")}`}
-            className="gallery-sessions-strip"
-            title="open the full sessions worklog (folders, threads, decisions)"
-          >
-            <span className="gallery-sessions-strip__lead">◆ Sessions</span>
-            <span className="gallery-sessions-strip__stats">
-              {sessionRollup.sessions.toLocaleString()} session
-              {sessionRollup.sessions === 1 ? "" : "s"}
-              {" · "}
-              {sessionRollup.folders} folder
-              {sessionRollup.folders === 1 ? "" : "s"}
-              {sessionRollup.edited > 0 &&
-                ` · ${sessionRollup.edited.toLocaleString()} files edited`}
-            </span>
-            <span className="gallery-sessions-strip__go">
-              open worklog →
-            </span>
-          </Link>
-        )}
-
-      {/* Resurface — pull-only "pick up where you left off" strip (top 2
-          queue items: open comments + unfinished reads). Same gating as the
-          sessions strip; renders nothing when the queue is empty. */}
-      {!activeFolder &&
-        activeTags.size === 0 &&
-        (view === "grid" || view === "list") && (
-          <ResurfaceStrip kb={activeKb ?? null} />
-        )}
-
-      {/* On-this-day + session echoes (W2.2) — a calm second strip, same
-          gate as resurface above; renders nothing when there's nothing to
-          show. */}
-      {!activeFolder &&
-        activeTags.size === 0 &&
-        (view === "grid" || view === "list") && (
-          <EchoStrip kb={activeKb ?? null} />
         )}
 
       {error && (
@@ -814,15 +768,6 @@ export default function Gallery() {
         </div>
       )}
       {loading && <Loading icon={<Icon.Grid />} variant="inline" />}
-
-      {/* v0.7.x — featured README/index block. Only shown on grid/list
-          views (atlas + history have their own primary content); also
-          hidden when filters reduce the result set to zero, since
-          IndexHero filters off the same `filtered` list the grid uses
-          (a folder/tag filter that excludes the index just hides it). */}
-      {(view === "grid" || view === "list") && docsKb && filtered.length > 0 && (
-        <PinnedIndexCard docs={filtered} kb={docsKb} />
-      )}
 
       {/* Antilibrary framing (calm-computing contract: a reserve, never a
           backlog — no percentage, no progress bar, just the plain count).

@@ -17,7 +17,7 @@ test.describe("gallery views", () => {
     const count = await cards.count();
     expect(count).toBeGreaterThanOrEqual(4);
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
   });
 
@@ -193,7 +193,7 @@ test.describe("gallery views", () => {
     expect(count).toBe(5);
     // A canon root artifact must be filtered out.
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toHaveCount(0);
   });
 
