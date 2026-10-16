@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ListsTabs } from "../components/nav/SectionTabs";
 import { useSearchParams } from "react-router-dom";
 import { useNotes } from "../hooks/useNotes";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
@@ -83,6 +84,7 @@ export default function NotesRoute() {
 
   return (
     <div className="kb-notes" data-testid="notes-view">
+      <ListsTabs />
       <header className="kb-notes__head">
         <h1 className="kb-notes__title">Notes</h1>
         <nav className="kb-notes__filters" role="group" aria-label="status filter">

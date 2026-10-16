@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { WorklogTabs } from "../components/nav/SectionTabs";
 import { useSlates } from "../hooks/useSlates";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { attentionCount, orderSlates } from "../lib/slateLanes";
@@ -37,6 +38,7 @@ export default function SlatesRoute() {
 
   return (
     <div className="slates-view">
+      <WorklogTabs />
       <header className="slates-view__head">
         <h1 className="slates-view__title">Slates</h1>
         <p className="slates-view__sub">

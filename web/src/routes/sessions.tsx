@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
+import { WorklogTabs } from "../components/nav/SectionTabs";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { useQuery } from "@tanstack/react-query";
@@ -393,6 +394,7 @@ export default function SessionsRoute() {
   return (
     <div className="kb-ses" data-testid="sessions-view">
       <main className="kb-ses__main">
+        <WorklogTabs />
         <div className="kb-ses__head">
           <h1>sessions</h1>
           {/* W3.C/P6 — the project pill: dims to "click to pin" outside a

@@ -12,7 +12,7 @@ import { BASE } from "./helpers";
 // Here `mem` is the SECOND configured kb (kbs[0] is `canon`), so a regression
 // would visibly snap these links/pill back to `canon`.
 test.describe("kb-space continuity across the top nav", () => {
-  const SECTION_TABS = ["Search", "Memory", "Lists", "Notes", "Sessions"];
+  const DOORS = ["Search", "Memory", "Worklog", "Lists"];
 
   // invariant:33
   test("reading an artifact in the second kb keeps that kb on every top link", async ({
@@ -25,21 +25,24 @@ test.describe("kb-space continuity across the top nav", () => {
     await expect(page.locator(".kb-ws-name")).toHaveText("mem");
 
     // Standalone section links carry ?kb=mem …
-    for (const name of SECTION_TABS) {
-      await expect(
-        page.locator(`.kb-viewtoggle a[title="${name}"]`),
-      ).toHaveAttribute("href", /[?&]kb=mem(&|$)/);
+    const doors = page.getByRole("navigation", { name: "Primary" });
+    for (const name of DOORS) {
+      await expect(doors.getByRole("link", { name })).toHaveAttribute(
+        "href",
+        /[?&]kb=mem(&|$)/,
+      );
     }
-    // … and the gallery view links (which live at "/" behind ?view=) too.
-    await expect(
-      page.locator('.kb-viewtoggle a[title="Grid"]'),
-    ).toHaveAttribute("href", /^\/\?kb=mem$/);
-    await expect(
-      page.locator('.kb-viewtoggle a[title="Atlas"]'),
-    ).toHaveAttribute("href", /^\/\?view=atlas&kb=mem$/);
+    // … and the Library door (the gallery root) too.
+    await expect(doors.getByRole("link", { name: "Library" })).toHaveAttribute(
+      "href",
+      /^\/\?kb=mem$/,
+    );
 
     // Following a link actually lands on the kb-scoped route — not canon.
-    await page.locator('.kb-viewtoggle a[title="Search"]').click();
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("link", { name: "Search" })
+      .click();
     await expect(page).toHaveURL(/\/search\?kb=mem$/);
     await expect(page.locator(".kb-ws-name")).toHaveText("mem");
   });

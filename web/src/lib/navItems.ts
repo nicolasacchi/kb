@@ -1,32 +1,26 @@
 import type { FunctionComponent } from "react";
-import type { Location } from "react-router-dom";
 import { Icon } from "@kb/ui/icons";
 
-// Single source of truth for the SPA's primary view destinations. Consumed
-// by the desktop Header's view-toggle strip and the mobile hamburger
-// drawer's NavList so the two never drift. (Settings / theme / saved-queries
-// are chrome-level actions each consumer renders separately.)
+// OL-L2 — the ONE destination catalogue for the SPA's primary nav: five
+// labelled DOORS (Library · Search · Memory · Worklog · Lists). Consumed by the
+// desktop Header's door strip and the mobile sheet's NavList so the two never
+// drift. (Settings / theme / saved-queries are chrome-level actions each
+// consumer renders separately.)
+//
+// A door owns a FAMILY of routes: `isActive` lights it on every route of its
+// family, and Worklog / Lists additionally expose a sub-nav row (`WORKLOG_TABS`
+// / `LISTS_TABS`) so the family's members stay one click apart. The Library's
+// views (grid, list, atlas, press, history, canvas) are not doors; they are
+// chosen with `?view=` (and the `g` chords) inside the Library.
 
-export type NavId =
-  | "grid"
-  | "list"
-  | "atlas"
-  | "press"
-  | "search"
-  | "memory"
-  | "lists"
-  | "notes"
-  | "sessions"
-  | "slates"
-  | "history";
+export type NavId = "library" | "search" | "memory" | "worklog" | "lists";
 
-// Context handed to every href builder: the current query params (so gallery
-// view-switches keep the active filters) and the EXPLICIT active kb — the
+// Context handed to every href builder: the EXPLICIT active kb — the
 // path/query kb with no first-kb fallback (see useExplicitKb). A non-null kb
 // is carried into the destination so navigating between sections keeps the
 // user's space; a null kb leaves the URL kb-less so an unscoped view stays
 // clean.
-export type NavHrefCtx = { params: URLSearchParams; kb: string | null };
+export type NavHrefCtx = { kb: string | null };
 
 // Append ?kb= (or &kb= when the path already carries a query) to a
 // destination, URI-encoding the value. A null kb returns the path untouched.
@@ -36,87 +30,41 @@ export function withKb(path: string, kb: string | null): string {
   return `${path}${sep}kb=${encodeURIComponent(kb)}`;
 }
 
+/// True when `pathname` is `base` or lies beneath it (`/lists` matches
+/// `/lists` and `/lists/kb/id`, never `/listsx`).
+export function underPath(pathname: string, base: string): boolean {
+  return pathname === base || pathname.startsWith(`${base}/`);
+}
+
 export type NavItem = {
   id: NavId;
   label: string;
   Glyph: FunctionComponent;
-  // Canonical destination. Gallery views (grid/list/atlas/history) live at
-  // "/" behind `?view=` and preserve the current query params (filters) plus
-  // the active kb; the standalone routes carry the active kb as `?kb=`.
   href: (ctx: NavHrefCtx) => string;
-  isActive: (loc: Location, params: URLSearchParams) => boolean;
-  // Preserve existing e2e selectors when a tab grows a test hook.
+  // Pure on the pathname: no door depends on query params.
+  isActive: (pathname: string) => boolean;
+  // Preserve existing e2e selectors when a door grows a test hook.
   testid?: string;
 };
 
-// Gallery `?view=` href that keeps every other param (tags, folder, since, …)
-// and pins the active kb. `null` = the default Grid view (no `view` param).
-const galleryHref =
-  (
-    view: Exclude<
-      NavId,
-      "memory" | "lists" | "sessions" | "notes" | "search" | "slates"
-    > | null,
-  ) =>
-  ({ params, kb }: NavHrefCtx): string => {
-    const p = new URLSearchParams(params);
-    if (view === null || view === "grid") p.delete("view");
-    else p.set("view", view);
-    if (kb) p.set("kb", kb);
-    const qs = p.toString();
-    return qs ? `/?${qs}` : "/";
-  };
-
-const galleryActive =
-  (view: NavId | null) =>
-  (loc: Location, params: URLSearchParams): boolean =>
-    loc.pathname === "/" && (params.get("view") || null) === view;
-
-const routeActive =
-  (path: string) =>
-  (loc: Location): boolean =>
-    loc.pathname === path;
-
 export const NAV_ITEMS: NavItem[] = [
   {
-    id: "grid",
-    label: "Grid",
+    // The gallery root. The href is the bare root (+ kb): it drops `?view=`
+    // and every filter, so the door always lands on the default Library; a
+    // view is picked inside it. The reader (/a/...) belongs to the Library.
+    id: "library",
+    label: "Library",
     Glyph: Icon.Grid,
-    href: galleryHref(null),
-    isActive: galleryActive(null),
+    href: ({ kb }) => withKb("/", kb),
+    isActive: (p) => p === "/" || underPath(p, "/a"),
   },
   {
-    id: "list",
-    label: "List",
-    Glyph: Icon.List,
-    href: galleryHref("list"),
-    isActive: galleryActive("list"),
-  },
-  {
-    id: "atlas",
-    label: "Atlas",
-    Glyph: Icon.Atlas,
-    href: galleryHref("atlas"),
-    isActive: galleryActive("atlas"),
-  },
-  {
-    // W2.5 — the broadsheet: the current filter set as a deterministic
-    // front page (lead/features/briefs/coverage + issue masthead).
-    id: "press",
-    label: "Press",
-    Glyph: Icon.Press,
-    href: galleryHref("press"),
-    isActive: galleryActive("press"),
-  },
-  {
-    // Track F — the full search page (deeper + customizable than the
-    // Cmd+K popup). Standalone route; preserves the active kb so the page
-    // opens scoped to the corpus the user was browsing.
+    // The full search page (deeper than the Cmd+K popup).
     id: "search",
     label: "Search",
     Glyph: Icon.Search,
     href: ({ kb }) => withKb("/search", kb),
-    isActive: routeActive("/search"),
+    isActive: (p) => p === "/search",
     testid: "header-search-tab",
   },
   {
@@ -124,54 +72,79 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Memory",
     Glyph: Icon.Brain,
     href: ({ kb }) => withKb("/memory", kb),
-    isActive: routeActive("/memory"),
+    isActive: (p) => p === "/memory",
   },
   {
+    // Sessions, Slates and session replays: the record of work done.
+    id: "worklog",
+    label: "Worklog",
+    Glyph: Icon.Terminal,
+    href: ({ kb }) => withKb("/sessions", kb),
+    isActive: (p) =>
+      underPath(p, "/sessions") ||
+      underPath(p, "/slates") ||
+      underPath(p, "/replay"),
+    testid: "header-sessions-tab",
+  },
+  {
+    // Reading lists, their boards and Notes.
     id: "lists",
     label: "Lists",
     Glyph: Icon.Tasks,
     href: ({ kb }) => withKb("/lists", kb),
-    // Detail pages (/lists/:kb/:id) keep the tab lit — prefix match,
-    // unlike the exact-path routeActive the flat views use.
-    isActive: (loc) =>
-      loc.pathname === "/lists" || loc.pathname.startsWith("/lists/"),
+    isActive: (p) =>
+      underPath(p, "/lists") || underPath(p, "/notes") || underPath(p, "/board"),
+  },
+];
+
+/// The door that lights for `pathname`, or null (settings, inbox, anchors…).
+export function matchActiveNavItem(pathname: string): NavItem | null {
+  return NAV_ITEMS.find((item) => item.isActive(pathname)) ?? null;
+}
+
+// ── sub-nav rows ──────────────────────────────────────────────────────────
+// One row at the top of each family page keeps the family's members together.
+export type SectionTab = {
+  id: string;
+  label: string;
+  href: (ctx: NavHrefCtx) => string;
+  isActive: (pathname: string) => boolean;
+  testid: string;
+};
+
+export const WORKLOG_TABS: SectionTab[] = [
+  {
+    id: "sessions",
+    label: "Sessions",
+    href: ({ kb }) => withKb("/sessions", kb),
+    isActive: (p) => underPath(p, "/sessions") || underPath(p, "/replay"),
+    testid: "worklog-tab-sessions",
+  },
+  {
+    // A slate is per-PROJECT coordination keyed on a slug, not per-corpus, so
+    // the active kb is deliberately NOT carried (a `?kb=` would suggest a
+    // scoping the route does not have).
+    id: "slates",
+    label: "Slates",
+    href: () => "/slates",
+    isActive: (p) => underPath(p, "/slates"),
+    testid: "header-slates-tab",
+  },
+];
+
+export const LISTS_TABS: SectionTab[] = [
+  {
+    id: "lists",
+    label: "Lists",
+    href: ({ kb }) => withKb("/lists", kb),
+    isActive: (p) => underPath(p, "/lists") || underPath(p, "/board"),
+    testid: "lists-tab-lists",
   },
   {
     id: "notes",
     label: "Notes",
-    Glyph: Icon.Note,
     href: ({ kb }) => withKb("/notes", kb),
-    isActive: routeActive("/notes"),
+    isActive: (p) => underPath(p, "/notes"),
     testid: "header-notes-tab",
-  },
-  {
-    id: "sessions",
-    label: "Sessions",
-    Glyph: Icon.Terminal,
-    href: ({ kb }) => withKb("/sessions", kb),
-    isActive: routeActive("/sessions"),
-    testid: "header-sessions-tab",
-  },
-  {
-    // SL4 — the slate board. Standalone route like Search/Memory/Lists; the
-    // active kb is deliberately NOT carried: a slate is per-PROJECT
-    // coordination keyed on a slug, not per-corpus, so a `?kb=` here would
-    // suggest a scoping the route does not have.
-    id: "slates",
-    label: "Slates",
-    Glyph: Icon.Slate,
-    href: () => "/slates",
-    // Board pages (/slates/:slug) keep the tab lit — prefix match, like
-    // Lists' detail pages.
-    isActive: (loc) =>
-      loc.pathname === "/slates" || loc.pathname.startsWith("/slates/"),
-    testid: "header-slates-tab",
-  },
-  {
-    id: "history",
-    label: "History",
-    Glyph: Icon.History,
-    href: galleryHref("history"),
-    isActive: galleryActive("history"),
   },
 ];
