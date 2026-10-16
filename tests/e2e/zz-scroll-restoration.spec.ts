@@ -51,11 +51,13 @@ test.describe("gallery scroll restoration (X1)", () => {
     // row nudging the body grid item past the shell (the body's min-height is
     // a full viewport minus the top bar). With that row gone the shell fits
     // the viewport exactly, so give the document a deliberate range instead
-    // of leaning on a layout accident. The restore arm under test is unchanged.
+    // of leaning on a layout accident (an absolutely positioned 1px marker below
+    // the fold; padding would be swallowed by the border-box 100% body). The
+    // restore arm under test is unchanged.
     await page.addInitScript(() => {
       document.addEventListener("DOMContentLoaded", () => {
         const st = document.createElement("style");
-        st.textContent = "body { padding-bottom: 400px; }";
+        st.textContent = 'body::after { content: ""; position: absolute; top: 1200px; left: 0; width: 1px; height: 1px; }';
         document.head.appendChild(st);
       });
     });
