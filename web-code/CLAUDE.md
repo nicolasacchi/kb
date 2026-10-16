@@ -2144,7 +2144,15 @@ described the pre-OL shape.
   share a `ReviewTabs` sub-nav. The mobile nav is `NavSheet` on `@kb/ui/Sheet`.
   `data-region="topbar"` is on a wrapper div; the Spine is raised to
   `--z-popover` inside `.kbc-topbar` so repo/ref/theme popovers are not painted
-  under sticky `--z-bar` headers.
+  under sticky `--z-bar` headers. The doors render on every page: the target repo
+  comes from `resolveDoorRepo` (explicit repo, else the stored `lastRepo` if the
+  daemon still lists it, else the first repo; pinned by `navItems.test.ts`), and
+  `lastRepo` is written only from an explicit repo. `/search` mounts no search
+  slot in the Spine. The trail indicator is a visible chip ("Trail off" /
+  "Recording" / "Trail paused") on desktop when `[trails] enabled` (it returns
+  null while the read is pending or trails are disabled, and TopBar mounts it
+  only when `!isMobile`); its styles live in `topbar.css`, not the lazy
+  `tours.css` chunk.
 - **Breadcrumbs portal into the Spine's scope slot** (`components/ScopeSlot.tsx`,
   `ScopePortal`); the `nav.kbc-breadcrumbs[aria-label=Breadcrumb]` markup, the
   URL and the Location Contract are unchanged. The scope slot hides at <=860px.
@@ -2164,7 +2172,12 @@ described the pre-OL shape.
   desk state migrates on load; `openTab("comments")` lands on the home and scrolls
   to the section). The `rail.tab.dossier/comments/trail` registry rows keep their
   ids and now select Understand/Facts/Notes (handler change only). The desk's
-  collapsed stripe lost its Dossier button. "Cited by" stays in the
+  collapsed stripe lost its Dossier button. On desktop the Desk's right Stripe is
+  the one rail switcher (`.kbc-desk:not([data-desk-mobile]) .kbc-inspector__icons`
+  hides the panel's own strip; the mobile sheet keeps it, and `data-kbc-itab` /
+  `aria-selected` stay in the DOM). The Stripe has a Facts button and gates Review
+  on a review context or an already-selected Review (`railStripeMeta`, pinned by
+  `desk/railSwitcher.test.ts`); e2e clicks `[data-desk-stripe-btn]`. "Cited by" stays in the
   always-visible card slot above the tabs.
 - **ReaderLegacy is gone.** `ReaderRoute` always mounts the Desk reader;
   `?shell=legacy` / `?desk=legacy` redirect (`<Navigate replace>`) to the same URL
@@ -2180,6 +2193,9 @@ described the pre-OL shape.
 - **Review diff toolbar** is one ViewBar, `maxVisible` 9 (Patchset / Navigate /
   View / Unsent; Lanes and Show map in More). **Search** is a ViewBar with
   `maxVisible` 5. **Home** is Continue / Needs you / Repos.
+- **Review diff layout.** Above 860px the review title is its own row above the
+  toolbar (`--rdiff-toolbar-h` is three lines). `kbc-rdiff--drafts-open` pads the
+  diff body by `min(60vh, 620px)` while the drafts tray is open.
 - **Loading and failure go through `StateCard`** (`kind` loading / empty / refused
   / degraded / mismatch, `size="inline"` in panels); no ad-hoc strings.
 - **The visual spec is opt-in, but the golden dispatch renders it.**

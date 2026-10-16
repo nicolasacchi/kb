@@ -53,7 +53,9 @@ else comes from the daemon over HTTP + SSE.
 | `AtlasInspector` | 320px right-rail on Atlas (view=atlas): selected-node card · stat list · tag chips · preview / open / ⚓ action row. | `kb`, `doc?`, `onClear` |
 | `CommentsPanel` | 360px review panel: file/chapter/section/selection comments, replies, open/resolved filter. | see below |
 | `AnnotatorBridge` | Parent↔iframe postMessage relay for the in-page annotator (origin-validated). `forwardRef`. | see below |
-| `StatusPill` | Bottom-right aggregated status across daemons; expands to per-daemon metrics. | (reads SSE) |
+| `StatusPill` | Bottom-right aggregated status across daemons; mounted on phones only (desktop uses `chrome/DaemonStatus`). | (reads SSE) |
+| `DaemonDetail` | Per-daemon rows and fleet metrics, shared by the `chrome/DaemonStatus` popover and `StatusPill`. | (reads SSE) |
+| `search/SearchViewBar` | The `/search` control row: mode, scope, results (limit), sort; one muted caption when the kb has no embedding model. | see `lib/searchControls.ts` |
 | `DaemonsManager` | Settings UI to add/remove daemon URLs; pings `/api/identity` before adding. | (reads/writes localStorage) |
 | `icons.tsx` | `Icon` — a record of ~28 SVG icon components `(SVGProps) => JSX`. | — |
 
