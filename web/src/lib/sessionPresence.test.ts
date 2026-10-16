@@ -6,6 +6,7 @@ import {
   sessionPresenceStatus,
   presenceSummary,
   formatPresenceSummary,
+  presenceStripLabel,
 } from "./sessionPresence";
 
 const NOW_MS = 1_800_000_000_000; // fixed instant
@@ -184,5 +185,17 @@ describe("formatPresenceSummary", () => {
   it("returns 'idle' when both are zero", () => {
     const summary = { live: 0, active: 0 };
     expect(formatPresenceSummary(summary)).toBe("idle");
+  });
+});
+
+describe("presenceStripLabel", () => {
+  it("says what 'active' counts, so it cannot be misread as the waiting count", () => {
+    expect(presenceStripLabel({ live: 0, active: 3 })).toBe(
+      "3 active in this list · active = captured in the last 10 min",
+    );
+  });
+  it("adds nothing when no row is merely active", () => {
+    expect(presenceStripLabel({ live: 2, active: 0 })).toBe("2 live");
+    expect(presenceStripLabel({ live: 0, active: 0 })).toBe("idle");
   });
 });

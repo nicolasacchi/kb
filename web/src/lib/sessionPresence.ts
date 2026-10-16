@@ -136,3 +136,16 @@ export function formatPresenceSummary(summary: PresenceSummary): string {
   if (summary.active > 0) parts.push(`${summary.active} active`);
   return parts.join(" · ") || "idle";
 }
+
+/// The /sessions presence strip's line. "active" here is capture recency
+/// (ACTIVE_WINDOW_SECS), a property of the rows in the LIST below it — not
+/// the fleet-wide "waiting on you" count the Now band shows, which comes from
+/// the live registry. Say which it counts, so the two numbers read as two
+/// different questions instead of disagreeing.
+export function presenceStripLabel(summary: PresenceSummary): string {
+  const base = formatPresenceSummary(summary);
+  if (summary.active === 0) return base;
+  return `${base} in this list · active = captured in the last ${Math.round(
+    ACTIVE_WINDOW_SECS / 60,
+  )} min`;
+}

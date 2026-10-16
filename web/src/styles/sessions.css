@@ -797,11 +797,6 @@
   padding: 16px;
 }
 
-.kb-ses__rail-empty {
-  color: var(--ink-mute, #999);
-  font-size: var(--fs-xs);
-}
-
 .kb-ses__ins-head h2 {
   font: 600 14px/1.3 var(--font-sans, system-ui);
   margin: 0 0 4px;
@@ -1343,4 +1338,12 @@
 /* OL R4 — the single control row under the page head. */
 .kb-ses__viewbar {
   padding: 0 16px;
+}
+
+/* OL P4 — the presence strip sat flush against the viewport edge (no rule at
+   all); it takes the list's inline padding like the head row above it. */
+.kb-ses__presence-strip {
+  padding: 6px 16px;
+  color: var(--ink-mute, #999);
+  font-size: var(--fs-sm);
 }
