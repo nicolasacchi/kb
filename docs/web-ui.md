@@ -11,23 +11,106 @@ For the component/hook reference, see
 
 | Route | View |
 |---|---|
-| `/` | Gallery — the filterable artifact browser (grid / list / atlas / history). |
+| `/` | Library — the filterable artifact browser (Front page / Shelf / Index / Atlas / Timeline / Canvas, chosen with the View control; see below). |
 | `/a/<kb>/<path>` | Detail — one artifact, rendered in a sandboxed iframe. The path is the source-relative path, so these are stable, shareable permalinks. |
+| `/search` | The full search page: query, one labelled control row (mode, scope, sort), results. Cmd+K is the quick version. |
+| `/memory` | Agent memory — recall-ranked memories with decay, salience and recall counts. |
+| `/sessions` | Worklog — captured agent sessions as title, outcome and one facts line each. |
 | `/replay/<kb>/<sid>` | Session replay — one captured session, scrubbed beat by beat (see below). |
-| `/slates` | Slates — every coordination board, ranked by attention (see below). |
+| `/slates` | Slates — every coordination board, ranked by attention (see below). Sits under the Worklog door. |
 | `/slates/<slug>` | One slate's board. `?topic=` filters, `?history=1` opens the history drawer. |
-| `/stale-anchors` | Stale-anchors dashboard — comments whose anchors broke on reindex, fleet-wide. |
-| `/settings` | Theme / accent / density and the daemon list. |
+| `/lists` | Reading lists. |
+| `/lists/<kb>/<id>` | One reading list. |
+| `/board/<kb>/<listId>` | A reading list laid out as a board. |
+| `/notes` | Notes (Markdown artifacts). Sits under the Lists door. |
+| `/review-notes` | Your private review notes (operator-only comments). |
+| `/inbox` | The attention inbox: what needs you across comments, lists and sessions. |
+| `/anchors` | Comments whose anchors broke on reindex, fleet-wide (`?filter=stale`). |
+| `/stale-anchors` | Redirects to `/anchors?filter=stale`. |
+| `/ambient` | The desk radiator: a glanceable, low-chrome daycard for a spare monitor. |
+| `/settings` | Settings, grouped under This daemon, Pipeline and You (theme family, density, the daemon list). |
 
 Gallery state (view, kb, filters, sort, group, folder) lives in the URL,
 so any view is a shareable/reloadable link.
+
+## Chrome
+
+The persistent chrome is ONE 44px bar, the **Spine** (`@kb/ui/Spine`, shared
+with kb-code), plus a per-view control row. It replaced the old 52px header,
+34px context line and 28px status bar (114px of chrome, now 44px).
+
+- **Spine.** Left: the kb selector (and the view toggle). Centre: the search
+  button, which opens the Cmd+K palette. Right: identity, the inbox, waiting,
+  desk and capture chips, saved queries, the keyboard help, the theme control,
+  Settings, and the **status indicator**. The indicator is a dot and a word
+  (the word shows from 1280px wide); clicking it opens a popover with the daemon
+  name, artifact and kb counts, ingest rate, embedder state and warnings. It
+  replaced the footer status bar.
+- **Five doors.** The nav is five labelled doors with `aria-current="page"`:
+  **Library** (`/`, and the reader), **Search**, **Memory**, **Worklog**
+  (sessions, slates, replays) and **Lists** (lists, notes). Worklog and Lists
+  show a sub-nav row (Sessions · Slates, Lists · Notes) so a door's family
+  stays one click apart. The Library's views are not doors; they are picked with
+  the View control. On a phone the Spine's menu button opens a sheet with the
+  same doors plus the filters.
+- **Library ViewBar.** The Library has one control row at the top of its body:
+  the scope and "N matches · M ms", a labelled **View as** control (Front page ·
+  Shelf · Index · Atlas · Timeline · Canvas, which are `?view=` `press` · `grid`
+  · `list` · `atlas` · `history` · `canvas`, URLs unchanged), then **Arrange**
+  (sort, group) and **Density** on the Shelf and the Index. Active filters show
+  as removable chips on a line that exists only while a filter does. On a phone
+  the bar shows View and moves the rest behind More.
+- **Front Page band.** The unfiltered Library (Shelf or Index view, no filter or
+  query, `sort=recent`) opens with one serif band: a masthead (the kb name or
+  "All corpora", the date, an edition line), a lead story whose dateline says
+  why it surfaces, two to four features (what changed since your last visit,
+  otherwise the top-ranked), "On this day" briefs, and a quiet "Continuing
+  coverage" column (inbox, desk, slate NOW lines, the session worklog, reading
+  queue). It hides as soon as you filter, search, sort or change view, and comes
+  back with the browser Back button. **Collapse** shrinks it to the masthead
+  line, remembered per kb. Counts it cannot state honestly are left out rather
+  than guessed ("no earlier visit on record here" on a first visit). It
+  replaced the corpus lobby, sessions strip, resurface strip, echo strip and
+  pinned index card.
+- **Cards.** Shelf cards are calmer: a serif title, a two-line excerpt, at most
+  two tags, one meta line and a 2px reading-progress bar. Excerpts skip
+  skip-links, navigation and page headers; artifacts indexed before v0.50 keep
+  the old excerpt until `kb reindex`.
+- **Index view.** `?view=list` is the dense home: a sticky header with sortable
+  columns and 32px rows. Ten columns exist (Title, Folder, Category, Words,
+  Links, Refs, Kept, Capabilities, Read, Age); Title, Folder, Words, Read and
+  Age show by default. The **Columns** chooser in the header row toggles the
+  rest (Title is locked) and persists per kb. Clicking Title, Words or Age
+  sorts; the other headers are plain labels because the sort grammar has no such
+  key.
+- **Reader context bar.** Four visible actions (annotate while a review is
+  active, add to list, share, **More**). More holds anchor, copy link, split,
+  folio, fullscreen, open bare and exclude from index, each with its key. The
+  rail's About tab reads top-down: Explore from here, a two-line Passport (folder
+  · category · mtime, then the id; a Details disclosure holds the rest), one
+  Reading line, and a collapsed "Topics (N)".
+- **Memory, Worklog, Search, Settings.** Memory rows lead with the memory (a
+  two-line title, a gloss, one meta line); their actions appear on hover or
+  focus, and the decay policy and half-life are said once in the page header.
+  Worklog uses one control row (View · Filters · Find) with the funnel as a
+  muted line; rows are title, outcome and one facts line. Search puts its
+  controls in one labelled row and says up front when the kb has no embedding
+  model.
+- **Keys teach themselves.** After a chord prefix (`g`, `w`, marks, registers) a
+  which-key overlay lists the possible next keys 400ms later. `?` opens the
+  keyboard help sheet, generated from the same key registry that binds the keys.
+- **Themes.** The theme family comes from the shared kbc-theme/1 generator: the
+  default **kb-classic** plus 13 other families (29 themes, each with dark and
+  light variants where the family has them). The choice is stored in this
+  browser and, when you change it, also sent to the daemon so kb-code can follow
+  it. A stored accent colour from earlier versions is ignored.
 
 ### Bundle & code-splitting
 
 Each route view is `React.lazy`-loaded (one chunk per route, fetched on
 first navigation behind a single `<Suspense>` at the route boundary), and
 the atlas canvas is lazy even within the gallery. The persistent chrome
-(header, rails, status bar, command palette, the SSE SharedWorker wiring)
+(Spine, rails, command palette, the SSE SharedWorker wiring)
 stays eager so the initial paint and the realtime stream never flash. Vite
 also vendor-splits `node_modules` into long-cache chunks (`codemirror`,
 `markdown`, `react-vendor`, `tanstack`) via `manualChunks` in
@@ -50,15 +133,17 @@ pays for a renderer it never calls.
 
 ## Gallery
 
-Four view modes (toggle in the top bar):
+Six views, chosen with the **View as** control (`?view=`; the `g` chords also jump to them):
 
-- **Grid** / **List** — virtualized so large corpora stay smooth. Cards
-  show title, tags, age, a reading-progress chip, and capability glyphs
-  (code-heavy, longread, multi-page…).
+- **Front page** (`?view=press`) — the broadsheet: the current filter set packed into a deterministic front page. Not to be confused with the Front Page *band* that tops the unfiltered Shelf and Index (see Chrome).
+- **Shelf** (grid) / **Index** (list) — virtualized so large corpora stay
+  smooth. Shelf cards show title, excerpt, tags, age and a reading-progress
+  bar; the Index is a sortable table.
 - **Atlas** — the 2-D semantic map (see below).
-- **History** — the activity timeline (see below).
+- **Timeline** — the activity timeline (see below).
+- **Canvas** — the reflection canvas (see below).
 
-Filter and arrange via the left rail and top-bar controls:
+Filter via the left rail and arrange via the Library's ViewBar:
 
 - **Tags** — click chips to filter (any-of). Counts come from
   `/api/kb/{kb}/tags`.
@@ -79,8 +164,8 @@ A companion to the History view: four synchronized UTC-day tracks —
 creation, reading, sessions, comments — sharing one draggable brush, so
 you can see a burst of activity across all four facets at a glance
 instead of one timeline at a time. Reached via `?view=canvas` directly,
-or the "the same days as four density tracks →" crosslink on the History
-view; there's no separate top-bar toggle. Drag (or use the keyboard —
+or the "the same days as four density tracks →" crosslink on the Timeline
+view, or Canvas in the View as control. Drag (or use the keyboard —
 each end of the brush is a `role="slider"` handle, arrows/PageUp/
 PageDown/Home/End) to select a range, then pivot into a normal gallery
 list scoped to exactly what's brushed. The brush itself never refetches;
@@ -107,7 +192,8 @@ only — on mobile it degrades to the ordinary gallery.
 
 The artifact renders inside a cross-origin sandboxed iframe served from
 `<id>.artifacts.<suffix>` (so artifact scripts can't touch the parent
-SPA). A floating pill provides:
+SPA). The reader's context bar (four actions plus More, see Chrome) and
+the following features apply:
 
 - **Sibling navigation** — prev/next within the artifact's folder.
 - **Reading progress** — your scroll position is persisted per visit (a
@@ -332,6 +418,6 @@ stays live over SSE.
 ## Multiple daemons
 
 The SPA keeps its daemon list in `localStorage` (manage it on the
-Settings page; it pings `/api/identity` before adding one). The top-bar
-status pill aggregates the worst severity plus total in-flight work, open
+Settings page; it pings `/api/identity` before adding one). The Spine's
+status indicator aggregates the worst severity plus total in-flight work, open
 errors, and open comments across all configured daemons.

@@ -1590,3 +1590,68 @@ code beats a copied parser: the DNS-rebinding bypass lived in the copy.
 (d) Deferred is a state, not a verdict: the deliberately deferred items are
 listed under "Known issues" in `packaging/release-notes/v0.44.md` and none of
 them is scheduled.
+
+## v0.50 / kb-code v9.0 — "One Language": one interface language for both apps (OL)
+
+**What shipped.** Both SPAs now speak one chrome, navigation and state
+vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
+`paths` and a Vite alias; it runs under React 18.3 and 19.3).
+
+| Track | Units (PR) |
+|---|---|
+| Foundation | F1 `ui/` wiring + golden-update dispatch (#76), F2 kbc-theme/1 generated themes + kb-classic (#101), F3 tokens + type-ramp codemod (#93), F4 icon set (#82), F5 Spine (#79), F6 ViewBar (#80), F7 StateCard (#83), F8 Sheet (#81), F9 which-key + help sheet (#84), F10 ratchets, css-vars lint, chrome and nav budgets (#104) |
+| kb-code | C1 Spine, four doors, Collections (#86), C3 reader ViewBar (#87), C4 five rail homes (#91), C5 review-diff toolbar (#88), C6 search page (#89), C7 Home (#90), C8 Settings page (#103), C9 ReaderLegacy deleted (#85), C10 StateCard everywhere (#94), C11 the quiet reader (#96) |
+| kb | L1 Spine + DaemonStatus (#100), L2 five doors (#107), L3 Front Page band (#117), L4 calmer cards + excerpt parser (#98), L5 Index view (#111), L7 per-view ViewBars (#113), R1 context bar + More (#106), R2 rail About stack (#115), R3 memory rows (#99), R4 worklog rows (#112), R5 search controls (#97), R6 settings groups (#102), S3 which-key in kb (#108) |
+| Both | S1 federated Cmd+K lanes + theme family follows kb (#110), V0/V1 golden dispatch renders and re-renders everything (#92, #95), P1/P2 polish (#109, #116), SC dependency security bumps (#77) |
+
+**Measured, before to after.**
+
+| | Before | After |
+|---|---|---|
+| kb persistent chrome | 114px (52 + 34 + 28) | 44px (one Spine) |
+| kb nav | 11 icon tabs | 5 labelled doors |
+| kb-code nav | 3 chips + a 12-item Explore menu | 4 doors + Collections |
+| kb `font-size` literals | 883 | 3 (CodeMirror `em` values) |
+| kb legacy token aliases | 834 | 0 |
+| kb hex literals | 247 | 233 |
+| kb-code reader, top of code at 1280x720 | 147px | about 81px |
+| review-diff toolbar | 18 visible controls | 9 |
+| kb-code rail tabs | 9 | 5 homes + All |
+| ReaderLegacy | present | deleted (-2,753 lines) |
+| themes | two hand-written palettes in kb | 29 themes in 14 families, both apps |
+
+**Findings worth keeping.**
+
+1. *The kb-code visual spec had never run on CI.* `visual.spec.ts` is opt-in
+   (`KBC_VISUAL=1`) and nothing set it, so every "visual goldens unchanged" claim
+   on a kb-code PR was vacuous until V0 made the golden-update dispatch set it.
+2. *`--update-snapshots` in its default `changed` mode silently keeps
+   near-identical PNGs.* A dim-text-on-dark change stays under the per-pixel
+   colour tolerance, so the first pass returned 18 of 32 screens byte-identical
+   although the pages had changed. V1 passes `--update-snapshots=all`.
+3. *The Dockerfile's SPA stages needed `ui/`.* A source directory outside
+   `web/` and `web-code/` passes `tsc` on the host and breaks the image
+   (`TS2307 Cannot find module '@kb/ui/...'`); F1 added `COPY ui/ /ui/` and an
+   unconditional `spa-image` job that builds both stages on every PR.
+4. *S1 chose a link row over CORS for "Search code" in kb.* The doc-lens CORS
+   layers cover only the doc-lens routes, and the origin predicate admits every
+   loopback origin, so adding the code search route would have exposed
+   repository contents to any page open in the operator's browser. kb-code
+   instead relays kb (`/api/kb/search`, `/api/kb/ui`) one way, and
+   `cors_layer_route_set_is_pinned` asserts both are absent from the CORS set.
+5. *Honest numbers beat tidy ones.* The Front Page band states only counts it
+   can (no "N new" on a first visit); Collections shows no count until its wire
+   answers. The band shipped on the operator's ruling rather than on usage data:
+   the census never counted `?view=press` or the old landing strips.
+6. *Gates make the next unit cheap.* The two-way literal ratchet, the css-vars
+   lint that also reads `ui/`, and the chrome and nav budgets caught a dozen
+   regressions inside the milestone; F10 found three undefined variables in kb.
+
+**Not built.** S5 (semantic zoom). As of 2026-10-16 two units were still open: L6,
+the kb mobile pass for the Spine, Front Page band and ViewBars (#119), and the
+`zip` 2.4.2 to 9.0.3 bump for a yanked crate (#118), whose absence turned
+`supply-chain` and `ci-gate` red on main. Several e2e flakes were hardened
+without a captured failure log (P2: the `spa-views` sort race and the
+`spa-comments` selection retry address the plausible races, unproven). Known
+leftover: the Desk's `MAIN_MIN_HEIGHT_PX` was lowered 580 to 550 by derivation,
+not measurement.

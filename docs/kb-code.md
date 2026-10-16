@@ -1994,6 +1994,77 @@ legitimately has more than one. See
 [`providers/README.md`](../providers/README.md) for install/enable steps and
 live-smoke evidence per language.
 
+## The One Language interface (v9.0)
+
+kb-code v9.0 and kb v0.50 share one visual and navigational language: the same
+44px bar, labelled control rows, state cards, icon set and generated themes
+(the shared `ui/` source directory). What changed in kb-code:
+
+**The top bar.** One `@kb/ui/Spine`, 44px. Left: the repo pill, the ref chip and
+four labelled doors, **Code** (the reader), **Search**, **Review** and
+**Collections**. Centre: the omnibox button. Right: the current-review chip, the
+key hint (`Space` `?`), the trail indicator, an **Inbox** icon, **Settings**
+(the gear) and the theme control. The Explore menu is gone; the doors light up on
+every route of their family (`~browser` is Code; reviews, PRs, branches, compare
+and range-diff are Review). The five review-family pages share a Review sub-nav
+row (Reviews · PRs · Branches · Compare). On a phone the Spine's menu button
+opens a sheet with the doors, Inbox, current-review chip and theme.
+
+**Collections** (`/r/<repo>/~collections`). The former Explore destinations in
+three groups, Sets, Boards and Instruments, as cards linking to the existing
+routes. Counts come from `GET /api/seq` for sets, workspaces, tours, boards and
+canvas only; a card shows no count until that wire answers, and none for the
+rest.
+
+**Settings** (`/~settings`, not repo-scoped). Five sections: Appearance (the
+theme picker with kb-code's code/diff sample, contrast and density), Keyboard
+(keymap profile; opens the `?` sheet), Repositories (facts as label/value rows,
+intel providers, the `catching_up` state), Review store (including whether
+remote review mutations are on), and Sibling (kb-sibling/1 identity and build). Home's former
+"Daemon status" section is now one link to it.
+
+**Home.** Leads with where you were: a Continue hero (the latest location and its
+first lines) and up to four more recent locations; then "Needs you" (non-empty
+inbox lanes only, one quiet line otherwise); then Repos.
+
+**The quiet reader.** The chrome above line 1 is the top bar plus one pane-header
+row. Path breadcrumbs render in the top bar's scope slot; the pane header is
+`back/forward · filename · toolbar`. The toolbar is a labelled ViewBar of verbs:
+**Provenance**, **Comments** and **Text size** are visible, and **Wrap lines**,
+**Parameter hints**, **Code lenses** and **Sticky scope** sit in **More**. Pane 2
+gets arrows and filename only. The empty bottom drawer shows no resting caption.
+The pre-Desk reader (`ReaderLegacy`) is deleted; `?shell=legacy` and
+`?desk=legacy` redirect to the Desk with the param stripped. At 1280x720 the
+editor now starts about 81px from the top (it was about 147px).
+
+**Rail homes.** The reader rail's tabs are five homes plus **All**: **Understand**
+(what is this: the dossier members live here), **History** (how did it get
+here), **Notes** (what did I mark: the trail lives here), **Facts** (what do the
+lanes and the source say: comments live here) and **Review** (what is contested;
+shown only with a current review). The retired ids `dossier`, `comments` and
+`trail` are still accepted: persisted desk state and `openTab(...)` map them to
+the home that now holds them and scroll to the section. The `Space R` keys keep
+their ids.
+
+**Review diff toolbar.** One ViewBar of three labelled clusters plus the unsent
+cluster, with nine visible controls (it was eighteen): Patchset, Navigate, View
+and Unsent (drafts), with **Lanes** and **Show map** in More. Overlay counts
+moved to the Room chips and header.
+
+**Search page.** One input, one labelled row, a count line, results. The query
+grammar is offered on request: the placeholder shows the shape and a **Syntax**
+button opens the prefix list (the old always-visible prefix row is gone). The
+count line reads `N results · lanes: ...`, and a zero-hit result is a state card
+with next steps (search symbols, try the text lane, search every repo, clear the
+refinement). Copy CLI and Keep as set sit in More.
+
+**One surface for loading and failure.** Every route and panel says loading,
+empty, refused, degraded or mismatch through the shared state card instead of
+ad-hoc strings. There is one banner landmark per page.
+
+**Documents lane and the theme caption** are described under Sibling lanes
+below.
+
 ## Sibling lanes
 
 kb and kb-code are one fleet, so each app can show the other's side. The only
@@ -2336,11 +2407,11 @@ and dossier). The center is the snippet-list dossier in D6's order
 with sort + inherited toggle · hierarchy · grouped usages · the
 metaprogramming holes · the namespace tree); the file tree narrows to
 `?scope=ns:<fqn>` (kbc-scope/1's existing `ns` atom, with a "scoped to
-<fqn>" chip that clears it); and the inspector rail gains a Dossier tab
-holding the member table as a jump list. Keys: `Space e d` opens the
+<fqn>" chip that clears it); and the inspector rail shows the member table as a jump list
+(a Dossier tab until v9.0, now a section of the Understand home). Keys: `Space e d` opens the
 dossier for the class/module under the cursor, `i` toggles inherited
 (re-fetching with `inherited=1`), `M` cycles the member sort, `] s`/`[ s`
-step the sections, and `Space R d` selects the rail tab — the four
+step the sections, and `Space R d` selects the Understand home — the four
 in-dossier rows are gated `center == dossier`, so they are inert
 elsewhere. Every count on screen is the wire's own (`total` beside
 `truncated`, never `rows.length`), "show more" re-asks with a higher

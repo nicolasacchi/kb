@@ -2358,11 +2358,19 @@ same way HTML `<a href>` links always have. Load-bearing shapes:
 Every reader-chrome feature has exactly ONE home, by altitude:
 
 - **ContextBar** (`web/src/components/chrome/ContextBar.tsx`) owns the
-  per-artifact verbs: anchor · add-to-list · copy-link · share · **fullscreen**
-  (icon-only `data-kb-act="fullscreen"` → `setImmersive(true)`, binds `o`,
-  replaced the old open-in-tab `<a>`) · **bare** (v0.22, `data-kb-act="bare"`,
-  binds `b`). Copy-link shows a 1.5 s inline "copied ✓" swap (`is-ok`/`is-fail`);
-  the failure path surfaces via the F1 toast.
+  per-artifact verbs. **Since v0.50 ("One Language", OL-R1) it shows four
+  actions and a More menu**: annotate (only while a review is active) ·
+  add-to-list · share · **More** (`data-kb-act="more"`). The More menu holds
+  anchor · copy-link · split · folio · **fullscreen** (`data-kb-act="fullscreen"`
+  → `setImmersive(true)`, binds `o`) · **bare** (`data-kb-act="bare"`, binds
+  `b`) · **exclude from index** (`data-kb-act="exclude"`, moved out of the rail
+  by OL-R2, still behind the `useConfirm` modal). Every row keeps its
+  `data-kb-act` value and shows its key; hotkeys are unchanged (they bypass the
+  menu). Mobile keeps `inspect` visible. Copy-link shows a 1.5 s inline
+  "copied ✓" swap (`is-ok`/`is-fail`); the failure path surfaces via the F1
+  toast. The six inspector sub-tabs and every other `data-kb-act` value are
+  unchanged; OL-R2 only reordered the About stack (Explore from here → Passport
+  → one Reading line → collapsed Topics).
 - **The right dock is a SINGLE icon rail** (`.kb-pinsp__icons`), owned by
   `PreviewInspector` — now the persistent shell of the column. **v0.21 merged
   the two old tab rows into one**: the `[inspect|comments|versions]` text pills
