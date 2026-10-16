@@ -5,11 +5,28 @@ import DaemonStatus from "./DaemonStatus";
 
 type Tick = (payload: Record<string, unknown>) => void;
 const h = vi.hoisted(() => ({ tick: null as null | Tick, unsub: vi.fn() }));
+const fleet = vi.hoisted(() => ({
+  status: {
+    phase: "idle",
+    inFlight: 0,
+    openErrors: 0,
+    openComments: 0,
+    authSuspect: false,
+    daemons: [] as unknown[],
+  },
+}));
 
 vi.mock("../../api/sse", () => ({
   sse: {
+    start: () => {},
+    subscribe: (fn: (s: unknown) => void) => {
+      fn(fleet.status);
+      return () => {};
+    },
+    // DaemonStatus subscribes first; the popover's metrics hook must not
+    // replace the captured callback.
     subscribeEvent: (type: string, fn: Tick) => {
-      if (type === "metrics.tick") h.tick = fn;
+      if (type === "metrics.tick" && !h.tick) h.tick = fn;
       return h.unsub;
     },
   },
@@ -26,6 +43,8 @@ vi.mock("../../hooks/useArtifactHost", () => ({ useIdentity: () => null }));
 afterEach(() => {
   cleanup();
   h.tick = null;
+  fleet.status.openErrors = 0;
+  fleet.status.daemons = [];
 });
 
 describe("DaemonStatus (the footer bar folded into the Spine)", () => {
@@ -46,6 +65,29 @@ describe("DaemonStatus (the footer bar folded into the Spine)", () => {
     expect(pop.textContent).toContain("build stamp drift");
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "daemon status" })).toBeNull();
+  });
+
+  it("is the one desktop status home: the popover carries per-daemon rows and fleet metrics", async () => {
+    fleet.status.daemons = [
+      { url: "http://127.0.0.1:4001", phase: "idle", inFlight: 0, openErrors: 2, openComments: 0 },
+      { url: "http://127.0.0.1:4002", phase: "indexing", inFlight: 1, openErrors: 0, openComments: 3 },
+    ];
+    render(<DaemonStatus warnings={[]} />);
+    fireEvent.click(await screen.findByRole("button", { name: /daemon status/ }));
+    const pop = screen.getByRole("dialog", { name: "daemon status" });
+    expect(pop.textContent).toContain("127.0.0.1:4001");
+    expect(pop.textContent).toContain("127.0.0.1:4002");
+    expect(pop.textContent).toContain("2e");
+    expect(pop.textContent).toContain("3✎");
+    expect(pop.textContent).toContain("fleet metrics");
+    expect(pop.textContent).toContain("req/s");
+  });
+
+  it("open errors flip the label off idle, and the button names the environment warnings", async () => {
+    fleet.status.openErrors = 1;
+    render(<DaemonStatus warnings={["a", "b"]} />);
+    const btn = await screen.findByRole("button", { name: /2 environment warnings/ });
+    expect(btn.textContent).toContain("warn");
   });
 
   it("still follows metrics.tick: request rate -> active, embedder degraded -> warn", async () => {

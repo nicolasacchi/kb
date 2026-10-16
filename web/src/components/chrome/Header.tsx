@@ -16,6 +16,12 @@ import DeskPill from "./DeskPill";
 import DaemonStatus from "./DaemonStatus";
 import { Spine } from "@kb/ui/Spine";
 
+/// The Spine's "Search artifacts…" launcher is absent on /search, which has its
+/// own big field (⌘K still opens the palette).
+export function spineHasSearch(pathname: string): boolean {
+  return !matchPath({ path: "/search", end: true }, pathname);
+}
+
 // kb2 redesign — Band-1 command bar, recomposed on the shared Spine (OL-L1).
 //
 // switcher = workspace pill + the five doors (OL-L2) · scope = empty (L7) ·
@@ -42,6 +48,7 @@ export default function Header({
   warnings?: string[];
 }) {
   const loc = useLocation();
+  const onSearchPage = !spineHasSearch(loc.pathname);
   const { set, navigate } = useUrl();
 
   const { data: kbs = [] } = useKbs();
@@ -98,6 +105,8 @@ export default function Header({
           </>
         }
         search={
+          // The Search page carries its own big field; ⌘K still opens the palette.
+          onSearchPage ? undefined : (
           <button
             className="kb-search-mini"
             onClick={onOpenCmdk}
@@ -108,6 +117,7 @@ export default function Header({
             <span className="kb-search-mini__placeholder">Search artifacts…</span>
             <kbd className="kbd">⌘K</kbd>
           </button>
+          )
         }
         right={
           <>

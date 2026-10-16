@@ -47,7 +47,7 @@ test.describe("spa load", () => {
     ).toBeVisible();
   });
 
-  test("status pill renders with at least one daemon", async ({ page }) => {
+  test("daemon status indicator renders with at least one daemon", async ({ page }) => {
     await page.goto(`http://127.0.0.1:${port()}/`);
     await expect(
       page.getByRole("button", { name: /daemon status/i }),

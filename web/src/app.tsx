@@ -426,7 +426,10 @@ export default function App() {
       </Routes>
       </Suspense>
       </ErrorBoundary>
-      <StatusPill warnings={identityWarnings} />
+      {/* Desktop: the Spine's DaemonStatus popover is the one status home
+          (it carries the per-daemon rows + fleet metrics). Phones keep the
+          floating pill. */}
+      {isMobile && <StatusPill warnings={identityWarnings} />}
       {isMobile && !isDetail && (
         <BottomTabBar
           cmdkOpen={cmdkOpen}
