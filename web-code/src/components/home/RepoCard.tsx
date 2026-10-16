@@ -167,6 +167,7 @@ export default function RepoCard({ repo }: RepoCardProps) {
           wrapper silently deleted that landmark from the page. */}
       <footer className="kbc-home-card__footer">
         <MetaLine
+          className="kbc-home-card__links"
           items={[
             <Link to={branchesUrl(repo.name)}>Branches</Link>,
             <Link to={`${codeBasePath(repo.name, "")}/~compare`}>Compare</Link>,

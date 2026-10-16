@@ -4933,7 +4933,11 @@ export default function Reader() {
         header={readerHeader}
         rail={railSlot}
         railAvailable={hasInspector}
-        railBadges={{ notes: unresolvedAnnotationsCount + bookmarkCount }}
+        hasReviewContext={!!currentReview}
+        railBadges={{
+          notes: unresolvedAnnotationsCount + bookmarkCount,
+          facts: commentsBadgeCount,
+        }}
         paneCount={pane2Loc ? 2 : 1}
         onOpenDrawerRow={handleOpenDrawerRow}
         onRampDrawerRow={(rung, row) =>

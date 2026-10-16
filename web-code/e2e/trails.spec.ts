@@ -72,7 +72,7 @@ test.describe("kbc-trail/1", () => {
     const ind = page.locator("[data-kbc-trail-indicator]");
     await expect(ind).toBeVisible({ timeout: 15_000 });
     await expect(ind).toHaveAttribute("data-kbc-trail-indicator", "off");
-    await expect(page.locator("[data-kbc-trail-toggle]")).toContainText("trail off");
+    await expect(page.locator("[data-kbc-trail-toggle]")).toContainText(/trail off/i);
   });
 
   test("recording ingests quantised steps; the rail shows them, then pause and purge", async ({

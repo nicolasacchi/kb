@@ -7,14 +7,16 @@ import { Icon } from "./iconSet";
 import TrailIndicator from "./trail/TrailIndicator";
 import { SpaceHint } from "../commands/learn";
 import { useExplicitRepo } from "../hooks/useActiveRepo";
+import { useRepos } from "../hooks/useRepos";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { loadTheme, loadThemeFamily } from "../lib/prefs";
+import { loadLastRepo, loadTheme, loadThemeFamily } from "../lib/prefs";
 import { Spine } from "@kb/ui/Spine";
 import {
   NAV_ITEMS,
   inboxUrl,
   matchActiveNavItem,
   navTestAttr,
+  resolveDoorRepo,
 } from "../lib/navItems";
 import { settingsUrl } from "../lib/codeUrl";
 import RefChip from "./RefChip";
@@ -40,13 +42,44 @@ export default function TopBar() {
   const { pathname } = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  const active = explicitRepo ? matchActiveNavItem(pathname, explicitRepo) : null;
+  // OL-P5 — the doors exist on EVERY page: they link to the explicit repo,
+  // else the last repo the user was in, else the first configured one. The
+  // repo pill's own dimming on unscoped views is unchanged (it reads
+  // `useExplicitRepo`, not this).
+  const { data: reposData } = useRepos();
+  const doorRepo = resolveDoorRepo({
+    explicit: explicitRepo,
+    last: loadLastRepo(),
+    repos: (reposData?.repos ?? []).map((r) => r.name),
+  });
+  const active = doorRepo ? matchActiveNavItem(pathname, doorRepo) : null;
   const inboxOn = pathname === "/~inbox";
   const settingsOn = pathname === settingsUrl();
 
   useEffect(() => {
     setSheetOpen(false);
   }, [pathname]);
+
+  // OL-P5 — the Search page owns its own query field, so the Spine carries no
+  // second one there (⌘K still opens the omnibox).
+  const searchButton =
+    pathname === "/search" ? undefined : (
+      <button
+        type="button"
+        className="kbc-search-mini kbc-topbar__search"
+        onClick={() => window.dispatchEvent(new CustomEvent("kbc:omnibox.open"))}
+        aria-label="open search (cmd-k)"
+        title="search (⌘K)"
+      >
+        {/* F5 — mobile (≤860px) hides the label + `⌘K` hint (a shortcut that's
+            meaningless without a physical keyboard) and keeps just this icon,
+            so the button stays a recognizable, ≥40px tap target instead of
+            collapsing to a bare, unlabeled kbd. */}
+        <Icon.Search />
+        <span className="kbc-search-mini__label">Search…</span>
+        <kbd>⌘K</kbd>
+      </button>
+    );
 
   // OL-C1 — `<Spine>` is the one 44px bar. The `data-region="topbar"` wrapper
   // is what regions.spec / visual.spec settle on; the sheet is mounted OUTSIDE
@@ -60,7 +93,7 @@ export default function TopBar() {
             <>
               <RepoPill />
               <RefChip />
-              {explicitRepo && !isMobile && (
+              {doorRepo && !isMobile && (
                 <nav className="kbc-topbar__doors" aria-label="Sections">
                   {NAV_ITEMS.map((item) => {
                     const on = active?.key === item.key;
@@ -68,7 +101,7 @@ export default function TopBar() {
                     return (
                       <Link
                         key={item.key}
-                        to={item.url(explicitRepo)}
+                        to={item.url(doorRepo)}
                         className={
                           "kbc-topbar__chip kbc-topbar__door kbc-topbar__" +
                           item.key +
@@ -86,23 +119,7 @@ export default function TopBar() {
               )}
             </>
           }
-          search={
-            <button
-              type="button"
-              className="kbc-search-mini kbc-topbar__search"
-              onClick={() => window.dispatchEvent(new CustomEvent("kbc:omnibox.open"))}
-              aria-label="open search (cmd-k)"
-              title="search (⌘K)"
-            >
-              {/* F5 — mobile (≤860px) hides the label + `⌘K` hint (a shortcut
-                  that's meaningless without a physical keyboard) and keeps just
-                  this icon, so the button stays a recognizable, ≥40px tap target
-                  instead of collapsing to a bare, unlabeled kbd. */}
-              <Icon.Search />
-              <span className="kbc-search-mini__label">Search…</span>
-              <kbd>⌘K</kbd>
-            </button>
-          }
+          search={searchButton}
           right={
             !isMobile && (
               <>
@@ -149,7 +166,7 @@ export default function TopBar() {
         />
       </div>
       {isMobile && (
-        <NavSheet repo={explicitRepo} open={sheetOpen} onClose={() => setSheetOpen(false)} />
+        <NavSheet repo={doorRepo} open={sheetOpen} onClose={() => setSheetOpen(false)} />
       )}
     </>
   );

@@ -98,13 +98,15 @@ export default function DiagnosticsCard({
                     {row.line}
                     {row.col ? `:${row.col}` : ""}
                   </span>
-                  <span className="kbc-diagnostics__message">{row.message}</span>
-                  {(row.source || row.code != null) && (
-                    <span className="kbc-diagnostics__meta">
-                      {row.source}
-                      {row.code != null ? ` ${String(row.code)}` : ""}
-                    </span>
-                  )}
+                  <span className="kbc-diagnostics__body">
+                    <span className="kbc-diagnostics__message">{row.message}</span>
+                    {(row.source || row.code != null) && (
+                      <span className="kbc-diagnostics__meta">
+                        {row.source}
+                        {row.code != null ? ` ${String(row.code)}` : ""}
+                      </span>
+                    )}
+                  </span>
                 </button>
                 <QuickFixes
                   repo={repo}
@@ -137,8 +139,10 @@ export default function DiagnosticsCard({
                 >
                   <span className={`kbc-diagnostics__dot kbc-diagnostics__dot--${sev}`} aria-hidden="true" />
                   <span className="kbc-diagnostics__loc">{line}</span>
-                  <span className="kbc-diagnostics__message">{formatFactValue(row)}</span>
-                  <span className="kbc-diagnostics__meta">lane:{row.lane}</span>
+                  <span className="kbc-diagnostics__body">
+                    <span className="kbc-diagnostics__message">{formatFactValue(row)}</span>
+                    <span className="kbc-diagnostics__meta">lane:{row.lane}</span>
+                  </span>
                 </button>
               </li>
             );

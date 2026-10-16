@@ -132,6 +132,8 @@ export interface DeskProps {
   /// rendering an empty column.
   railAvailable: boolean;
   railBadges?: Partial<Record<RailTab, number>>;
+  /// Whether a current review exists (gates the Stripe's Review button).
+  hasReviewContext?: boolean;
 
   /// Which pane the URL is actually rendering — see
   /// `DeskPanesState.count`'s doc for why this is not read off the desk.
@@ -159,11 +161,24 @@ export interface DeskProps {
   onSaveWorkspace?: () => void;
 }
 
-const RAIL_STRIPE_META: { tab: RailTab; label: string; icon: ReactNode }[] = [
+/// OL-P5 — the Stripe is the desktop switcher, so it gates Review exactly as the
+/// panel's own strip did: offered only with a review context, or while Review is
+/// the selected home (a persisted choice never silently becomes another tab).
+export function railStripeMeta(
+  hasReviewContext: boolean,
+  selected: RailTab,
+): typeof RAIL_STRIPE_META {
+  return RAIL_STRIPE_META.filter(
+    (m) => m.tab !== "review" || hasReviewContext || selected === "review",
+  );
+}
+
+export const RAIL_STRIPE_META: { tab: RailTab; label: string; icon: ReactNode }[] = [
   { tab: "all", label: "All", icon: <Icon.Layers /> },
   { tab: "understand", label: "Understand", icon: <Icon.Entity /> },
   { tab: "history", label: "History", icon: <Icon.History /> },
   { tab: "notes", label: "Notes", icon: <Icon.Note /> },
+  { tab: "facts", label: "Facts", icon: <Icon.Facts /> },
   { tab: "review", label: "Review", icon: <Icon.ClipboardCheck /> },
 ];
 
@@ -194,6 +209,7 @@ export default function Desk(props: DeskProps) {
     rail,
     railAvailable,
     railBadges = {},
+    hasReviewContext = false,
     paneCount,
     onOpenDrawerRow,
     onRampDrawerRow,
@@ -404,7 +420,7 @@ export default function Desk(props: DeskProps) {
       onClick: () => desk.setResizeMode(!desk.resizeMode),
     },
   ];
-  const rightButtons: StripeButton[] = RAIL_STRIPE_META.map((m) => ({
+  const rightButtons: StripeButton[] = railStripeMeta(hasReviewContext, state.railTab).map((m) => ({
     id: m.tab,
     label: m.label,
     icon: m.icon,

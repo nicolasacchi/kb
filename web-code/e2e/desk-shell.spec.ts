@@ -245,13 +245,13 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
       await expect(page.locator(`[data-kbc-rail-section="${s}"]`)).toHaveCount(1);
     }
 
-    await page.locator('[data-kbc-itab="notes"]').click();
+    await page.locator('[data-desk-stripe-btn="notes"]').click();
     await expect(body).toHaveAttribute("data-kbc-rail-body", "notes");
     await expect(page.locator('[data-kbc-rail-section="annotations"]')).toHaveCount(1);
     await expect(page.locator('[data-kbc-rail-section="outline"]')).toHaveCount(0);
     // The trail moved INTO Notes; the source comments moved INTO Facts.
     await expect(page.locator('[data-kbc-rail-section="trail"]')).toHaveCount(1);
-    await page.locator('[data-kbc-itab="facts"]').click();
+    await page.locator('[data-desk-stripe-btn="facts"]').click();
     await expect(body).toHaveAttribute("data-kbc-rail-body", "facts");
     await expect(page.locator('[data-kbc-rail-section="comments"]')).toHaveCount(1);
   });
@@ -261,7 +261,7 @@ test.describe("Desk — the re-cut rail (V70-A4)", () => {
   }) => {
     await openReader(page, "?desk=read");
     for (const tab of ["all", "understand", "history", "notes"]) {
-      await page.locator(`[data-kbc-itab="${tab}"]`).click();
+      await page.locator(`[data-desk-stripe-btn="${tab}"]`).click();
       // Never blank: the rail always says WHAT it is about.
       await expect(page.locator("[data-kbc-rail-subject]")).toHaveCount(1);
       await expect(page.locator("[data-kbc-rail-subject-name]")).not.toBeEmpty();

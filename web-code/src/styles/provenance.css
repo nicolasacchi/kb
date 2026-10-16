@@ -262,6 +262,14 @@
   padding: 6px 8px;
   border-bottom: 1px solid var(--rule);
 }
+/* OL-P5 — on desktop the Desk's right Stripe is the ONE rail switcher (it
+ * carries the same homes + badges); the panel's own strip stays mounted —
+ * `data-kbc-itab` + `aria-selected` keep reporting the active home — but is
+ * not shown, so there are not two icon columns offering the same thing. The
+ * mobile sheet (`data-desk-mobile`, no stripes) keeps its strip. */
+.kbc-desk:not([data-desk-mobile]) .kbc-inspector__icons {
+  display: none;
+}
 .kbc-inspector__itab {
   flex: 1;
   position: relative;
@@ -529,16 +537,25 @@ a.kbc-inspector__citedby-title:hover {
   font-size: var(--fs-sm);
   color: var(--ink-dim);
 }
-.kbc-diagnostics__message {
+/* OL-P5 — the message gets the full row width on its own line; the source /
+ * lane chip rides a meta line underneath (it used to share the row and squeeze
+ * the message to a word per line). */
+.kbc-diagnostics__body {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kbc-diagnostics__message {
   font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 .kbc-diagnostics__meta {
-  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--ink-mute);
+  overflow-wrap: anywhere;
 }
 
 /* --- Quick fixes (S2-C, design-s2.md §S2-C, QuickFixes.tsx) — the "Fixes"

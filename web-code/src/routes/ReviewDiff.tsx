@@ -1579,7 +1579,11 @@ export default function ReviewDiff() {
   return (
     <div
       ref={rootRef}
-      className={"kbc-rdiff" + (single ? " kbc-rdiff--single" : " kbc-rdiff--all")}
+      className={
+        "kbc-rdiff" +
+        (single ? " kbc-rdiff--single" : " kbc-rdiff--all") +
+        (draftsOpen ? " kbc-rdiff--drafts-open" : "")
+      }
       id="main"
       data-kbc-rdiff={id}
       data-kbc-rdiff-mode={single ? "single" : "all"}

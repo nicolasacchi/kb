@@ -862,10 +862,11 @@
    * boundingBox math, review-file-tree.spec.ts) lands under the still-
    * sticky, now-taller toolbar instead of on the content below it. This
    * variable is its own budget — twice the single-line height plus a
-   * little breathing room — sized for "the toolbar wraps to at most two
-   * lines", not tied to the unrelated global constant.
+   * little breathing room — sized for "the toolbar is at most three
+   * lines (OL-P5: the title row + the two cluster rows)", not tied to the
+   * unrelated global constant.
    */
-  --rdiff-toolbar-h: calc(2 * var(--topbar-h) + var(--pad-2));
+  --rdiff-toolbar-h: calc(3 * var(--topbar-h) + var(--pad-2));
 }
 .kbc-rdiff__toolbar {
   position: sticky;
@@ -965,6 +966,29 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* OL-P5 — on desktop the title owns its OWN line: back link · full title ·
+ * help on row one, the ViewBar (its clusters already wrap to two rows) on row
+ * two. The title used to share the row with the clusters and was capped at
+ * 130px ("regions e2…"); the cap is lifted here (mobile keeps the capped,
+ * horizontally scrolling single strip). `?` is moved before the ViewBar
+ * VISUALLY only (`order`); DOM and tab order are unchanged. */
+@media (min-width: 861px) {
+  .kbc-rdiff__toolbar {
+    flex-wrap: wrap;
+    row-gap: var(--pad-1);
+  }
+  .kbc-rdiff__toolbar .kbc-rdiff__title {
+    max-width: none;
+    flex: 1 1 0;
+  }
+  .kbc-rdiff__toolbar .kbc-rdiff__help {
+    order: 1;
+  }
+  .kbc-rdiff__toolbar .kb-viewbar {
+    order: 2;
+    flex: 1 0 100%;
+  }
 }
 .kbc-rdiff__nav {
   display: inline-flex;
@@ -1166,6 +1190,12 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+}
+/* OL-P5 — the drafts tray is fixed bottom-right (up to 60vh) and auto-opens on
+ * every draft. While it is open the diff reserves the tray's own max height
+ * below the last line, so any composer can scroll clear of it. */
+.kbc-rdiff--drafts-open .kbc-rdiff__body {
+  padding-bottom: min(60vh, 620px);
 }
 .kbc-rdiff__section {
   border-bottom: 1px solid var(--rule);

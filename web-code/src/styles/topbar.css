@@ -340,3 +340,30 @@
 .kbc-navsheet__theme:hover {
   color: var(--ink);
 }
+
+/* --- trail indicator chip (OL-P5) --------------------------------------
+ * Lives here, not in tours.css: that file is a lazy route chunk, so on Home
+ * and Search the chip rendered completely unstyled. A hairline box like the
+ * Space / ? hint beside it, in every state; "off" is muted, never a bare dot. */
+.kbc-iconbtn.kbc-trailind__btn {
+  display: inline-flex;
+  gap: var(--pad-2);
+  align-items: center;
+  min-height: 0;
+  padding: 0 var(--pad-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.kbc-trailind__label {
+  font-size: var(--fs-xs);
+}
+.kbc-trailind__btn--recording {
+  color: var(--red);
+}
+.kbc-trailind__btn--paused {
+  color: var(--warn);
+}
+.kbc-trailind__btn--off {
+  color: var(--ink-mute);
+}

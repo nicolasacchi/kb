@@ -290,39 +290,6 @@
   position: relative;
 }
 
-.kbc-trailind__btn {
-  display: inline-flex;
-  gap: var(--pad-1);
-  align-items: center;
-}
-
-.kbc-trailind__label {
-  font-size: var(--fs-xs);
-}
-
-.kbc-trailind__btn--recording {
-  color: var(--red);
-}
-
-.kbc-trailind__btn--paused {
-  color: var(--warn);
-}
-
-.kbc-trailind__btn--off {
-  color: var(--ink-mute);
-}
-
-/* OL-C11 — an "off" trail is a quiet dot with a tooltip, not a caption in the
- * top bar; the words stay in the DOM for assistive tech and tests. */
-.kbc-trailind__btn--off .kbc-trailind__label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
 .kbc-trailind__pop {
   position: absolute;
   right: 0;

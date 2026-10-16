@@ -276,6 +276,20 @@ export function matchActiveNavItem(pathname: string, repo: string): NavItem | nu
   return key ? (NAV_ITEMS.find((i) => i.key === key) ?? null) : null;
 }
 
+/// OL-P5 — which repo the doors link to when the current view is not scoped
+/// to one (Home, `/~inbox`, `/~settings`, an unscoped `/search`): the explicit
+/// repo, else the last repo the user was in (only if the daemon still lists
+/// it), else the first configured repo, else `null` (no repos known yet).
+export function resolveDoorRepo(args: {
+  explicit: string | null;
+  last: string | null;
+  repos: readonly string[];
+}): string | null {
+  if (args.explicit) return args.explicit;
+  if (args.last && args.repos.includes(args.last)) return args.last;
+  return args.repos[0] ?? null;
+}
+
 export function navTestAttr(key: DoorKey | "inbox"): string {
   return `data-kbc-topbar-${key}`;
 }

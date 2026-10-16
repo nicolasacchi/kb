@@ -37,7 +37,7 @@ test.describe("story mode", () => {
     await expect(page.locator(".kbc-codeview")).toContainText("tell_story", { timeout: 10_000 });
     await historyPromise;
 
-    await page.locator('[data-kbc-itab="history"]').click();
+    await page.locator('[data-desk-stripe-btn="history"]').click();
     await page.locator("[data-kbc-history-story]").click();
     await expect(page).toHaveURL(/~story/);
 
