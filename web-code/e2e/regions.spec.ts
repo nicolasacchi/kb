@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test } from "@playwright/test";
-import { buildRegionRoutes } from "./regions-routes";
+import { expect, test, type APIRequestContext } from "@playwright/test";
+import { buildRegionRoutes, type RegionRoutesResult } from "./regions-routes";
 import { REPO_DIR } from "./helpers";
 
 /// V70-A0 — the landmark/aria snapshot GATE for kb-code v7's Track A (the
@@ -59,42 +59,57 @@ function loadTemplate(name: string): string {
   return readFileSync(path, "utf-8");
 }
 
-test.describe("region landmarks (V70-A0 — the pre-Desk-refactor safety net)", () => {
-  test("every reachable client route keeps its landmark shell", async ({ page, request }) => {
-    test.skip(!REPO_DIR, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
+/// OL-P1 — the fixtures (a reading set, a review, a board) are created in
+/// `beforeAll` on a DEDICATED request context and removed in `afterAll` on
+/// that same context. When the route walk hit its timeout, the old in-test
+/// `finally` ran against the test's own (already torn-down) `request`, the
+/// deletes failed, and the leaked "regions e2e set" made `sets.spec.ts`'s
+/// strict-mode row locator ambiguous.
+let api: APIRequestContext | undefined;
+let fixture: RegionRoutesResult | undefined;
 
-    const { routes, cleanup } = await buildRegionRoutes(request);
+test.beforeAll(async ({ playwright }) => {
+  if (!REPO_DIR) return;
+  api = await playwright.request.newContext();
+  fixture = await buildRegionRoutes(api);
+});
+
+test.afterAll(async () => {
+  // MUST run before the next spec file starts (workers:1, shared daemon) —
+  // see `regions-routes.ts`'s header doc. `cleanup` swallows per-fixture
+  // failures; the context is disposed last so a closed page cannot matter.
+  await fixture?.cleanup();
+  await api?.dispose();
+});
+
+test.describe("region landmarks (V70-A0 — the pre-Desk-refactor safety net)", () => {
+  test("every reachable client route keeps its landmark shell", async ({ page }) => {
+    test.setTimeout(180_000);
+    test.skip(!REPO_DIR || !fixture, "KB_CODE_E2E_REPO_DIR not set — global-setup didn't run");
+
+    const { routes } = fixture!;
     const skipped: string[] = [];
     let snapshotted = 0;
 
-    try {
-      for (const route of routes) {
-        if (route.skip) {
-          skipped.push(`${route.name}: ${route.skip}`);
-          continue;
-        }
-        await test.step(route.name, async () => {
-          await page.goto(route.url);
-          // The one element every route renders — waiting on it means a
-          // route that's still fetching its own data doesn't get snapshotted
-          // mid-skeleton (the topbar itself never depends on route data).
-          // `toMatchAriaSnapshot` itself polls/retries below, so a route
-          // whose OWN content is still loading (e.g. a "Loading…" flash)
-          // self-corrects within the assertion's own timeout — no extra
-          // fixed wait needed.
-          await expect(page.locator('[data-region="topbar"]')).toBeVisible();
-          const template = loadTemplate(route.name);
-          await expect(page.locator("body")).toMatchAriaSnapshot(template);
-          snapshotted++;
-        });
+    for (const route of routes) {
+      if (route.skip) {
+        skipped.push(`${route.name}: ${route.skip}`);
+        continue;
       }
-    } finally {
-      // MUST run before the next spec file starts (this daemon/worker is
-      // shared across the whole suite, workers:1/fullyParallel:false) — see
-      // `regions-routes.ts`'s header doc for the `sets.spec.ts` collision
-      // this prevents. `finally` so a mid-loop assertion failure still
-      // cleans up rather than leaking the fixture into every later spec.
-      await cleanup();
+      await test.step(route.name, async () => {
+        await page.goto(route.url);
+        // The one element every route renders — waiting on it means a
+        // route that's still fetching its own data doesn't get snapshotted
+        // mid-skeleton (the topbar itself never depends on route data).
+        // `toMatchAriaSnapshot` itself polls/retries below, so a route
+        // whose OWN content is still loading (e.g. a "Loading…" flash)
+        // self-corrects within the assertion's own timeout — no extra
+        // fixed wait needed.
+        await expect(page.locator('[data-region="topbar"]')).toBeVisible();
+        const template = loadTemplate(route.name);
+        await expect(page.locator("body")).toMatchAriaSnapshot(template);
+        snapshotted++;
+      });
     }
 
     expect(snapshotted, "at least the always-reachable routes must have snapshotted").toBeGreaterThan(0);

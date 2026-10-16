@@ -39,7 +39,7 @@ export default function Home() {
           // S2-A — the unified inbox's second documented entry point
           // besides the TopBar inbox icon link.
           <Link to="/~inbox" className="kbc-home__inbox-link" data-kbc-home-inbox>
-            <Icon.List width={13} height={13} aria-hidden />
+            <Icon.Inbox width={13} height={13} aria-hidden />
             Inbox
           </Link>
         }

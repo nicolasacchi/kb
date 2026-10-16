@@ -30,6 +30,11 @@ test.describe("Quiet reader (OL-C11)", () => {
     const head = page.locator('[data-kbc-panechrome="1"]');
     await expect(head.locator("[data-kbc-panehist]")).toBeVisible();
     await expect(head.locator("[data-kbc-panechrome-file]")).toHaveText(KNOWN_FILE.split("/").pop()!);
+    // OL-P1 — the name is not merely in the DOM, it is not ellipsised.
+    const clipped = await head
+      .locator("[data-kbc-panechrome-file]")
+      .evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(clipped, "the pane-header filename is truncated").toBeLessThanOrEqual(0);
     const bar = head.locator("[data-kb-viewbar]");
     await expect(bar).toBeVisible();
     await expect(bar).toHaveAttribute("aria-label", "Reader view");

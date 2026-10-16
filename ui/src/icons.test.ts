@@ -40,6 +40,7 @@ const EXPECTED_NAMES = [
   "Grid",
   "History",
   "ImageFrame",
+  "Inbox",
   "Layers",
   "Link",
   "List",
@@ -99,6 +100,12 @@ describe("ui/icons", () => {
     );
     expect(html).toContain('class="x"');
     expect(html).toContain('aria-label="find"');
+  });
+
+  it("Inbox is its own tray glyph, not the hamburger List", () => {
+    const html = (G: ComponentType) => renderToString(createElement(G));
+    expect(html(Icon.Inbox)).not.toBe(html(Icon.List));
+    expect(html(Icon.Inbox)).toContain('viewBox="0 0 16 16"');
   });
 
   it("every size-table name is a real icon", () => {
