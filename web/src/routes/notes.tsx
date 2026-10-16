@@ -83,7 +83,7 @@ export default function NotesRoute() {
   const [focusKb, focusId] = focus ? focus.split(/:(.+)/) : [null, null];
 
   return (
-    <div className="kb-notes" data-testid="notes-view">
+    <div className="kb-page kb-notes" data-testid="notes-view">
       <ListsTabs />
       <header className="kb-notes__head">
         <h1 className="kb-notes__title">Notes</h1>

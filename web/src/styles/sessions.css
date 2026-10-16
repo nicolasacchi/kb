@@ -1343,7 +1343,7 @@
 /* OL P4 — the presence strip sat flush against the viewport edge (no rule at
    all); it takes the list's inline padding like the head row above it. */
 .kb-ses__presence-strip {
-  padding: 6px 16px;
-  color: var(--ink-mute, #999);
+  padding: var(--pad-2) var(--pad-3);
+  color: var(--ink-mute);
   font-size: var(--fs-sm);
 }

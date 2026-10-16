@@ -205,15 +205,15 @@ describe("LiveSessionsNowBand — resume action", () => {
 });
 
 describe("LiveSessionsNowBand — waiting lane scope", () => {
-  it("captions what the waiting count covers (every project, not the list)", () => {
+  it("captions what the waiting count covers (all projects, not the list)", () => {
     render(
       <LiveSessionsNowBand
         rows={[row({ session_id: "w1", state: "waiting", holder: "human" })]}
         now={NOW_MS}
       />,
     );
-    expect(screen.getByTestId("now-lane-waiting-caption").textContent).toMatch(
-      /every project/,
+    expect(screen.getByTestId("now-lane-waiting-caption").textContent).toBe(
+      "Across all projects, not just this list",
     );
   });
 });

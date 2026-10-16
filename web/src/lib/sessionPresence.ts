@@ -137,15 +137,18 @@ export function formatPresenceSummary(summary: PresenceSummary): string {
   return parts.join(" · ") || "idle";
 }
 
-/// The /sessions presence strip's line. "active" here is capture recency
-/// (ACTIVE_WINDOW_SECS), a property of the rows in the LIST below it — not
-/// the fleet-wide "waiting on you" count the Now band shows, which comes from
-/// the live registry. Say which it counts, so the two numbers read as two
-/// different questions instead of disagreeing.
+/// The /sessions presence strip. The count is of rows in the LIST below it
+/// (not the fleet-wide "waiting on you" count the Now band shows, which comes
+/// from the live registry), so the label says "in this list"; the two terms
+/// are defined once in `PRESENCE_STRIP_TITLE`.
 export function presenceStripLabel(summary: PresenceSummary): string {
   const base = formatPresenceSummary(summary);
-  if (summary.active === 0) return base;
-  return `${base} in this list · active = captured in the last ${Math.round(
-    ACTIVE_WINDOW_SECS / 60,
-  )} min`;
+  return base === "idle" ? base : `${base} in this list`;
 }
+
+/// Tooltip defining both terms. "live" = the Tier-1 presence probe saw a
+/// writer touch the session's transcript file within the daemon's live
+/// window; "active" = the newest capture landed within ACTIVE_WINDOW_SECS.
+export const PRESENCE_STRIP_TITLE = `live = a transcript file was written to recently (daemon presence probe) · active = captured in the last ${Math.round(
+  ACTIVE_WINDOW_SECS / 60,
+)} min`;

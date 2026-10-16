@@ -117,7 +117,7 @@ export default function MemoryLinkChips({
         {chipCount === 0 ? (
           <span
             className="kb-mem__chip kb-mem__chip--empty"
-            title="not linked to any kb and not global: recalled only within this memory scope"
+            title="Not linked to any kb and not global"
           >
             no kb links
           </span>

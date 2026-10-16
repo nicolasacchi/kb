@@ -23,17 +23,20 @@ function rect(left: number, top: number, right: number, bottom: number) {
   } as DOMRect;
 }
 
-function mount(wrapperBottom: number) {
+function mount(
+  wrapperBottom: number,
+  opts: { wrapperTop?: number; tablePosition?: string; wrapperPosition?: string } = {},
+) {
   document.body.innerHTML = `
     <div id="wrap" style="overflow-y:auto;max-height:240px">
-      <table id="bench"><tbody><tr><td>x</td></tr></tbody></table>
+      <table id="bench" style="position:${opts.tablePosition ?? "static"}"><tbody><tr><td>x</td></tr></tbody></table>
     </div>
     <h2 id="next">Next heading</h2>`;
   // Table box is 320px tall; the wrapper only shows `wrapperBottom - 100`.
   const wrap = document.getElementById("wrap")!;
   const table = document.getElementById("bench")!;
   vi.spyOn(wrap, "getBoundingClientRect").mockReturnValue(
-    rect(0, 100, 600, wrapperBottom),
+    rect(0, opts.wrapperTop ?? 100, 600, wrapperBottom),
   );
   vi.spyOn(table, "getBoundingClientRect").mockReturnValue(
     rect(0, 100, 600, 420),
@@ -42,7 +45,11 @@ function mount(wrapperBottom: number) {
   vi.spyOn(window, "getComputedStyle").mockImplementation((el: Element) => {
     const cs = orig(el);
     if (el === wrap) {
-      return { overflowX: "visible", overflowY: "auto" } as CSSStyleDeclaration;
+      return {
+        overflowX: "visible",
+        overflowY: "auto",
+        position: opts.wrapperPosition ?? "static",
+      } as CSSStyleDeclaration;
     }
     return cs;
   });
@@ -93,5 +100,31 @@ describe("annotator highlight bands", () => {
     await import("./annotate");
     const hl = document.querySelector<HTMLElement>(".kb-annot-hl")!;
     expect(hl.style.height).toBe("320px");
+  });
+
+  it("paint no band when the block is scrolled entirely out of its wrapper", async () => {
+    mount(700, { wrapperTop: 500 }); // wrapper spans 500..700, table 100..420
+    await import("./annotate");
+    expect(document.querySelector(".kb-annot-hl")).toBeNull();
+  });
+
+  it("do not clip a position:fixed block by its ancestors", async () => {
+    mount(340, { tablePosition: "fixed" });
+    await import("./annotate");
+    const hl = document.querySelector<HTMLElement>(".kb-annot-hl")!;
+    expect(hl.style.height).toBe("320px");
+  });
+
+  it("skip ancestors above an absolute block's containing block", async () => {
+    // wrapper is static, so it is not the containing block: no clipping.
+    mount(340, { tablePosition: "absolute", wrapperPosition: "static" });
+    await import("./annotate");
+    expect(document.querySelector<HTMLElement>(".kb-annot-hl")!.style.height).toBe("320px");
+  });
+
+  it("clip an absolute block by a positioned wrapper (its containing block)", async () => {
+    mount(340, { tablePosition: "absolute", wrapperPosition: "relative" });
+    await import("./annotate");
+    expect(document.querySelector<HTMLElement>(".kb-annot-hl")!.style.height).toBe("240px");
   });
 });

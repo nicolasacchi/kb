@@ -65,6 +65,7 @@ import {
   presenceSummary,
   formatPresenceSummary,
   presenceStripLabel,
+  PRESENCE_STRIP_TITLE,
 } from "../lib/sessionPresence";
 import {
   coldSeedSessionsView,
@@ -538,7 +539,11 @@ export default function SessionsRoute() {
             rows. Derived from the rows + presenceSet, shown only in list view
             when there's visibility into the presence data. */}
         {view === "list" && rows.length > 0 && (
-          <div className="kb-ses__presence-strip" data-testid="sessions-presence-strip">
+          <div
+            className="kb-ses__presence-strip"
+            data-testid="sessions-presence-strip"
+            title={PRESENCE_STRIP_TITLE}
+          >
             {presenceStripLabel(listPresenceSummary)}
           </div>
         )}

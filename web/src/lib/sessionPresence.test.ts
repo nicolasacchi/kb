@@ -7,6 +7,7 @@ import {
   presenceSummary,
   formatPresenceSummary,
   presenceStripLabel,
+  PRESENCE_STRIP_TITLE,
 } from "./sessionPresence";
 
 const NOW_MS = 1_800_000_000_000; // fixed instant
@@ -189,13 +190,16 @@ describe("formatPresenceSummary", () => {
 });
 
 describe("presenceStripLabel", () => {
-  it("says what 'active' counts, so it cannot be misread as the waiting count", () => {
-    expect(presenceStripLabel({ live: 0, active: 3 })).toBe(
-      "3 active in this list · active = captured in the last 10 min",
+  it("says the count is of this list, with no inline definition", () => {
+    expect(presenceStripLabel({ live: 0, active: 3 })).toBe("3 active in this list");
+    expect(presenceStripLabel({ live: 2, active: 3 })).toBe(
+      "2 live · 3 active in this list",
     );
   });
-  it("adds nothing when no row is merely active", () => {
-    expect(presenceStripLabel({ live: 2, active: 0 })).toBe("2 live");
+  it("keeps the existing idle word", () => {
     expect(presenceStripLabel({ live: 0, active: 0 })).toBe("idle");
+  });
+  it("defines both terms in the title", () => {
+    expect(PRESENCE_STRIP_TITLE).toMatch(/live = .*active = captured in the last 10 min/);
   });
 });

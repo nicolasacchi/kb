@@ -410,8 +410,18 @@ function clipToAncestors(
 }
 function clipBoxesOf(el: Element): ClipBox[] {
   const out: ClipBox[] = [];
+  // A fixed target is laid out against the viewport: no ancestor clips it.
+  // An absolute one is clipped only by its containing block and what lies
+  // beyond it, so ancestors between it and that block are skipped.
+  const pos = getComputedStyle(el).position;
+  if (pos === "fixed") return out;
+  let seekingBlock = pos === "absolute";
   for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
     const cs = getComputedStyle(p);
+    if (seekingBlock) {
+      if (cs.position === "static") continue;
+      seekingBlock = false;
+    }
     const x = cs.overflowX !== "visible";
     const y = cs.overflowY !== "visible";
     if (!x && !y) continue;
