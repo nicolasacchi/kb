@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { dedupeDocRows } from "../lib/dedupeDocs";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchDocsPage,
@@ -90,8 +91,8 @@ export function useDocs(
   });
 
   const rows = useMemo(
-    () => q.data?.pages.flatMap((p) => p.docs) ?? [],
-    [q.data],
+    () => dedupeDocRows(kb, q.data?.pages.flatMap((p) => p.docs) ?? []),
+    [q.data, kb],
   );
   const first = q.data?.pages[0];
   const lastPage = q.data?.pages[q.data.pages.length - 1];

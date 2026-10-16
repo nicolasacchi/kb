@@ -53,7 +53,7 @@ function GallerySection({ folder, docs, kb, view, progress, sessions }: Props) {
         <div className="grid grid--in-section">
           {docs.map((d) => (
             <Card
-              key={d.id}
+              key={`${kb}:${d.id}`}
               doc={d}
               kb={kb}
               progress={progress?.get(d.id)}
@@ -64,7 +64,7 @@ function GallerySection({ folder, docs, kb, view, progress, sessions }: Props) {
       ) : (
         <div className="list list--in-section">
           {docs.map((d) => (
-            <ListRow key={d.id} doc={d} kb={kb} />
+            <ListRow key={`${kb}:${d.id}`} doc={d} kb={kb} />
           ))}
         </div>
       )}
