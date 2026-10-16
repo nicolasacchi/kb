@@ -1603,7 +1603,7 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
 | kb-code | C1 Spine, four doors, Collections (#86), C3 reader ViewBar (#87), C4 five rail homes (#91), C5 review-diff toolbar (#88), C6 search page (#89), C7 Home (#90), C8 Settings page (#103), C9 ReaderLegacy deleted (#85), C10 StateCard everywhere (#94), C11 the quiet reader (#96) |
 | kb | L1 Spine + DaemonStatus (#100), L2 five doors (#107), L3 Front Page band (#117), L4 calmer cards + excerpt parser (#98), L5 Index view (#111), L7 per-view ViewBars (#113), R1 context bar + More (#106), R2 rail About stack (#115), R3 memory rows (#99), R4 worklog rows (#112), R5 search controls (#97), R6 settings groups (#102), S3 which-key in kb (#108) |
 | Both | S1 federated Cmd+K lanes + theme family follows kb (#110), V0/V1 golden dispatch renders and re-renders everything (#92, #95), P1/P2 polish (#109, #116), SC dependency security bumps (#77) |
-| Close-out | L6 kb mobile pass for the Spine, Front Page band and ViewBars (#119), SC2 `zip` 2.4.2 to 9.0.3 (#118), P3 kb Library/Search/status polish (#122), P4 reader badges, highlights, Worklog, Memory and page frame polish (#123), P5 kb-code polish: doors, one rail switcher, review title (#121), D docs (#120), D2 docs catch-up (this PR) |
+| Close-out | L6 kb mobile pass for the Spine, Front Page band and ViewBars (#119), SC2 `zip` 2.4.2 to 9.0.3 (#118), P3 kb Library/Search/status polish (#122), P4 reader badges, highlights, Worklog, Memory and page frame polish (#123), P5 kb-code polish: doors, one rail switcher, review title (#121), P6 solid accent fills render again, sort-test diagnostics (#125), D docs (#120), D2 docs catch-up (this PR) |
 
 **Measured, before to after.**
 
@@ -1656,7 +1656,11 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
 8. *The `spa-views` sort test's "flake" was a locator, not a race.* After L3 the
    locator also matched Front Page band cards, which are in recency order, so
    the assertion failed depending on which cards it saw. P2's hardening targeted
-   the wrong race; P3 scoped the test to shelf cards.
+   the wrong race; P3 scoped the test to shelf cards. It still failed once on
+   main afterwards, with captured docs ("Capture Warmup") out of title order;
+   P6 could not reproduce it in ten isolated runs or five full runs, and the
+   server sorts by the same `title` the card shows. The cause is open: on
+   failure the test now prints the server's order and each card's DOM ancestry.
 9. *`css-undefined-vars` accepts `var(--undefined, <literal>)` by design* (the
    F10 ruling: a fallback literal is a deliberate choice). It means a made-up
    token with a fallback passes the lint: `var(--space-1, 4px)` reached P5 and
@@ -1672,6 +1676,15 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
     while the workspace still declares `rust-version = "1.86"`; the pinned
     toolchain (1.96) hides the gap, so the declared MSRV is no longer what
     actually builds.
+12. *Every `light-dark()` token was invalid in the CI Chromium.* Inside a custom
+    property, `light-dark(a, b)` computed to its two arguments run together, so
+    `--accent-fill`, `--paper`, `--paper-ink`, `--paper-rule`, `--card-bg-end`,
+    `--card-ring` and `--term-bg` were all invalid and every rule reading them
+    fell back (the rail badges painted white numerals with no fill). P6 proved it
+    with a failing computed-style assertion before changing any CSS, then moved
+    each role to a dark value on `:root` and a light value on
+    `:root[data-theme="light"]` (and on `data-theme="system"` under a light OS).
+    The visual goldens never caught it (finding 7).
 
 **Not built.** S5 (semantic zoom). The close-out units have since merged: the
 kb mobile pass (L6, #119), the `zip` 2.4.2 to 9.0.3 bump that cleared the yanked
@@ -1681,6 +1694,6 @@ without a captured failure log (P2: the `spa-views` sort race and the
 `spa-comments` selection retry address the plausible races, unproven; finding 8
 later showed the sort one was a locator matching Front Page cards). Known
 leftover: the Desk's `MAIN_MIN_HEIGHT_PX` was lowered 580 to 550 by derivation,
-not measurement. The rail badge fill (P4's accent-fill and white pair) did not
-render in the CI screenshots at P3 time; a follow-up unit (P6) was still in
-flight when this was written.
+not measurement. The rail badge fill that did not render through P3 was fixed by
+P6 (#125, finding 12). The sort test's intermittent order mismatch remains
+unexplained (finding 8).
