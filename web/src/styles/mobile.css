@@ -1244,6 +1244,11 @@ body.kb-immersive .kb-tabbar {
     height: 44px;
     min-width: 44px;
     min-height: 44px;
+    /* the desktop chip is a dark translucent wash with a muted glyph, which
+     * vanishes on the light theme; on touch it is always visible, so skin it
+     * from the panel tokens */
+    background: var(--bg-panel);
+    color: var(--ink);
   }
   .kb-card__peek {
     right: 6px;
@@ -1299,6 +1304,13 @@ body.kb-immersive .kb-tabbar {
   .kb-ctxbar__pos {
     white-space: nowrap;
     flex: none;
+  }
+  /* the position label is the first thing to give way on a narrow phone, so
+   * the verbs and More fit without scrolling */
+  @media (max-width: 430px) {
+    .kb-ctxbar__pos {
+      display: none;
+    }
   }
   .kb-ctxbar__nav,
   .kb-ctxbar__actions {

@@ -392,7 +392,7 @@ test.describe("mobile library landing (OL L6)", () => {
     const b = (await more.boundingBox())!;
     expect(b.x + b.width).toBeLessThanOrEqual(390.5);
     const pos = page.locator(".kb-ctxbar__pos");
-    if (await pos.count()) {
+    if (await pos.isVisible()) {
       const lh = await pos.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 14);
       expect((await pos.boundingBox())!.height).toBeLessThan(lh * 1.6);
     }
