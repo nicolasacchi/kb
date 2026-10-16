@@ -81,7 +81,7 @@ test.describe("per-file exclusion (X4)", () => {
 
     await page.goto(`http://127.0.0.1:${PORT}/`);
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
     await expect(card).toHaveCount(0);
     // Let the SSE stream settle before mutating the corpus (zz-live-fs
@@ -154,7 +154,7 @@ test.describe("per-file exclusion (X4)", () => {
 
     await page.goto(`http://127.0.0.1:${PORT}/`);
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
     await page.waitForTimeout(1500);
     writeFileSync(probePath(), PROBE_HTML, "utf-8");
@@ -172,7 +172,7 @@ test.describe("per-file exclusion (X4)", () => {
     // …where the probe card is gone but the canon baseline is intact.
     await expect(card).toHaveCount(0, { timeout: 20_000 });
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
 
     // Re-include over the API (the CLI/agent path) — the doc comes back

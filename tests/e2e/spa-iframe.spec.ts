@@ -15,9 +15,7 @@ test.describe("spa detail view", () => {
     page,
   }) => {
     await page.goto(`http://127.0.0.1:${port()}/`);
-    const card = page.getByRole("link", {
-      name: /Visualizing the Borrow Checker/,
-    });
+    const card = page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ });
     await expect(card).toBeVisible();
     await card.click();
 
@@ -82,7 +80,7 @@ test.describe("spa detail view", () => {
     await page.goto(`http://127.0.0.1:${port()}/`);
     // Gallery rendered → identity has resolved and been checked.
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
     // ...and no *suffix*-mismatch banner despite the wrong suffix. Match
     // the specific suffix-mismatch text (not a bare /mismatch/), so an

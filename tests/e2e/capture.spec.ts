@@ -115,7 +115,7 @@ test.describe("quick capture (U6)", () => {
     // otherwise the artifact.indexed frame can fire before the browser is
     // listening (zz-live-fs precedent).
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
     await page.waitForTimeout(1500);
 
@@ -177,7 +177,7 @@ test.describe("quick capture (U6)", () => {
 
     await page.goto(`${BASE}/`);
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
 
     await openCaptureSheet(page);
@@ -242,7 +242,7 @@ test.describe("capture ergonomics — paste text + chrome entry points (C3)", ()
 
     await page.goto(`${BASE}/`);
     await expect(
-      page.getByRole("link", { name: /Visualizing the Borrow Checker/ }),
+      page.locator(".kb-card").getByRole("link", { name: /Visualizing the Borrow Checker/ }),
     ).toBeVisible();
 
     await openCaptureSheet(page);
