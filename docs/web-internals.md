@@ -29,10 +29,10 @@ else comes from the daemon over HTTP + SSE.
 
 | Component | Renders | Key props |
 |---|---|---|
-| `TopBar` | Sticky header: kb selector, search pill, view toggle, settings link, stale-anchors badge. | `onOpenCmdk` |
+| `chrome/Header` | The one 44px `@kb/ui/Spine`: kb selector, five doors (`lib/navItems.ts`), search button, chips, theme, Settings and `chrome/DaemonStatus` (the status dot + popover that replaced the footer status bar). Mobile: `chrome/NavSheet` on `@kb/ui/Sheet`. | `onOpenCmdk` |
 | `LeftRail` | Gallery sidebar filters: tags, folders, capabilities, date range, index-only. Reads URL params. | (reads URL/daemon) |
 | `Cmdk` | ⌘K search modal; hybrid/keyword/semantic; navigates to detail on Enter. | `kb?`, `onClose` |
-| `Card` | Grid card: title, accent block, glyphs, tags, summary, age, reading chip. | `doc`, `kb`, `progress?` |
+| `Card` | Shelf card: serif title, two-line excerpt, at most two tags, one meta line, 2px progress bar. | `doc`, `kb`, `progress?` |
 | `ListRow` | Compact list row (id-chip, title, folder, category). | `doc`, `kb` |
 | `VirtualGrid` | Window-virtualized card grid; computes columns from width; `onEnd` paginates. | `docs`, `kb`, `progress`, `onEnd?`, `hasMore?` |
 | `VirtualList` | Window-virtualized list of `ListRow`. | `docs`, `kb`, `onEnd?`, `hasMore?` |
@@ -47,7 +47,7 @@ else comes from the daemon over HTTP + SSE.
 | `CapabilityGlyphs` | Up to 4 capability glyphs (code/table/svg/interactive/longread). Also exports `glyphsFor(doc)`. | `doc` |
 | `TagPill` | Monospace tag pill; `accent` uses the tag color. | `tag`, `accent?` |
 | `ReadingChip` | Progress bar + % (or green ✓ when done). | `pct`, `isDone`, `compact?` |
-| `chrome/ContextBar` | Detail-view chrome row: back chip · breadcrumb · annotate / comments / anchor / copy-link / share / open-in-tab. Retired the v0.6 `FloatingPill` at v0.12 X1 finish. | `kb`, `id`, `title`, `folder`, `filename`, `isIndex`, `artifactUrl`, `sourceRelative`, `reviewActive`, `annotateMode`, `onToggleAnnotate`, `panelOpen`, `onTogglePanel`, `commentCount` |
+| `chrome/ContextBar` | Detail-view chrome row: back chip · breadcrumb · four visible actions (annotate while reviewing, add to list, share, More); the More menu (`data-kb-act="more"`) holds anchor, copy-link, split, folio, fullscreen, bare and exclude. Retired the v0.6 `FloatingPill` at v0.12 X1 finish. | `kb`, `id`, `title`, `folder`, `filename`, `isIndex`, `artifactUrl`, `sourceRelative`, `reviewActive`, `annotateMode`, `onToggleAnnotate`, `panelOpen`, `onTogglePanel`, `commentCount` |
 | `PreviewInspector` | 320px right-rail on Detail: reading-progress card · identifier kv · metrics · tags · capabilities · neighbors · backlinks. Mutually exclusive with `CommentsPanel` (panel wins when annotate mode is open). | `kb`, `doc`, `progress?` |
 | `TocSpy` | Right-edge TOC mini-spy over the iframe; subscribes to `kb:toc` + `kb:section` postMessages from the runtime and posts `kb:scroll-to-id` back on click. Active row gets the 2px accent border-left. | `iframeRef`, `hostSuffix` |
 | `AtlasInspector` | 320px right-rail on Atlas (view=atlas): selected-node card · stat list · tag chips · preview / open / ⚓ action row. | `kb`, `doc?`, `onClear` |
