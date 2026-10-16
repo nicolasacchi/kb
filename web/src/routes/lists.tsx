@@ -124,7 +124,7 @@ export default function ListsRoute() {
   const onArchive = (l: ListSummary, v: boolean) => void setArchived(l, v);
 
   return (
-    <div className="kb-lists" data-testid="lists-view">
+    <div className="kb-page kb-lists" data-testid="lists-view">
       <ListsTabs />
       <header className="kb-lists__head">
         <h1 className="kb-lists__title">Reading lists</h1>

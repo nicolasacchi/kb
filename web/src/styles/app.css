@@ -2316,15 +2316,21 @@ select:focus-visible,
  * column. Panels are unconstrained width so tables/event logs can
  * breathe; .settings__section inside Preferences keeps the form-style
  * 640px constraint via its own max-width below. */
+/* OL P4 — the one page frame for capped-width pages (Settings, Lists): the
+ * same max-width, centring and top padding, so their titles line up with
+ * their sub-navs and sit clear of the Spine. */
+.kb-page {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-top: var(--pad-3);
+}
 .settings {
   display: flex;
   flex-direction: column;
   gap: var(--pad-3);
-  max-width: 1100px;
-  /* D2 — the capped column was flush-left inside `.view`, leaving a dead
-   * gutter on wide viewports; center it like every other capped-width view. */
-  margin-left: auto;
-  margin-right: auto;
+  /* Width, centring and top padding come from `.kb-page` (D2: the capped
+   * column used to be flush-left inside `.view`). */
 }
 .settings__header {
   display: flex;
