@@ -66,10 +66,13 @@ test.describe("desktop layout", () => {
     page,
   }) => {
     await page.goto(`${base()}${ARTIFACT}`);
-    const copyBtn = page.locator('[data-kb-act="copy-link"]');
-    await expect(copyBtn).toBeVisible();
+    const shareBtn = page.locator('[data-kb-act="share"]');
+    await expect(shareBtn).toBeVisible();
     // Desktop keeps the word label beside the icon.
-    await expect(copyBtn.locator(".kb-ctxbar__lbl")).toBeVisible();
+    await expect(shareBtn.locator(".kb-ctxbar__lbl")).toBeVisible();
+    // The secondary verbs live in More, labelled and keyed.
+    await page.locator('[data-kb-act="more"]').click();
+    await expect(page.locator('[data-kb-act="copy-link"]')).toBeVisible();
     await expect(page.locator(".kb-immersive-toggle")).toBeHidden();
   });
 });
@@ -185,7 +188,7 @@ test.describe("mobile layout", () => {
 
     // Action labels collapse to icons on a phone (tooltip carries meaning).
     await expect(
-      page.locator('[data-kb-act="copy-link"] .kb-ctxbar__lbl'),
+      page.locator('[data-kb-act="share"] .kb-ctxbar__lbl'),
     ).toBeHidden();
 
     // Immersive mode hides all chrome; Esc restores it.

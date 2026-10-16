@@ -52,7 +52,8 @@ test.describe("spa contextbar path + copy-link", () => {
     // No folder separator for a root-level artifact.
     await expect(crumb.locator(".kb-ctxbar__sep")).toHaveCount(0);
 
-    await ctxbar.locator('[data-kb-act="copy-link"]').click();
+    await ctxbar.locator('[data-kb-act="more"]').click();
+    await ctxbar.page().locator('[data-kb-act="copy-link"]').click();
     const clip = await page.evaluate(() => navigator.clipboard.readText());
     expect(clip).toBe(
       `http://127.0.0.1:${PORT}/a/canon/${doc.source_relative}`,

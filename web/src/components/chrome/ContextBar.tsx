@@ -1,4 +1,10 @@
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon } from "@kb/ui/icons";
 import { useAnchors } from "../../hooks/useAnchors";
@@ -278,38 +284,7 @@ export default function ContextBar({
             now live inside the reader-tools sheet's rail (reached via the single
             "inspect" button above). On desktop these panels were always driven
             by the docked rail icons (dock-comments / dock-versions). */}
-        <button
-          type="button"
-          data-kb-act="anchor"
-          className={`kb-ctxbar__act ${anchored ? "is-on" : ""}`}
-          onClick={() => toggle(kb, id)}
-          title={anchored ? "unanchor (a)" : "anchor (a)"}
-          aria-pressed={anchored}
-        >
-          <Icon.Anchor />
-          <span className="kb-ctxbar__lbl">
-            {anchored ? " anchored" : " anchor"}
-          </span>
-        </button>
         <AddToListButton kb={kb} artifactId={id} />
-        <button
-          type="button"
-          data-kb-act="copy-link"
-          className={`kb-ctxbar__act${copyState === "ok" ? " is-ok" : ""}${
-            copyState === "fail" ? " is-fail" : ""
-          }`}
-          onClick={copyLink}
-          title="copy permalink"
-        >
-          {copyState === "ok" ? <Icon.Check /> : <Icon.Copy />}{" "}
-          <span className="kb-ctxbar__lbl" aria-live="polite">
-            {copyState === "ok"
-              ? "copied"
-              : copyState === "fail"
-                ? "copy failed"
-                : "copy link"}
-          </span>
-        </button>
         <button
           type="button"
           data-kb-act="share"
@@ -319,62 +294,94 @@ export default function ContextBar({
         >
           <Icon.Share /> <span className="kb-ctxbar__lbl">share</span>
         </button>
-        {onSplit && (
-          <button
-            type="button"
-            data-kb-act="split"
-            className={`kb-ctxbar__act kb-ctxbar__act--icon${
-              splitMode === "close" ? " kb-ctxbar__act--split-close" : ""
-            }`}
-            onClick={onSplit}
-            title={
-              splitMode === "close"
-                ? "close this pane (w q)"
-                : "open beside — two-pane compare (w v)"
-            }
-            aria-label={
-              splitMode === "close" ? "close this pane" : "open beside"
-            }
-          >
-            {splitMode === "close" ? <Icon.X /> : <Icon.Table />}
-          </button>
-        )}
-        {onToggleFolio && (
-          <button
-            type="button"
-            data-kb-act="folio"
-            className={`kb-ctxbar__act kb-ctxbar__act--icon ${folio ? "is-on" : ""}`}
-            onClick={onToggleFolio}
-            title="folio · published reading"
-            aria-label="folio reading mode"
-            aria-pressed={folio}
-          >
-            <Icon.BookOpen />
-          </button>
-        )}
-        <button
-          type="button"
-          data-kb-act="fullscreen"
-          className="kb-ctxbar__act kb-ctxbar__act--primary kb-ctxbar__act--icon"
-          onClick={onFullscreen}
-          title="read full screen (o)"
-          aria-label="read full screen"
-        >
-          <Icon.Expand />
-        </button>
-        {bareUrl && (
-          <a
-            data-kb-act="bare"
-            className="kb-ctxbar__act kb-ctxbar__act--icon"
-            href={bareUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="open the bare artifact in a new tab (b)"
-            aria-label="open the bare artifact in a new tab"
-          >
-            <Icon.External />
-          </a>
-        )}
+        <MoreMenu>
+          {(close) => (
+            <>
+              <MenuRow
+                act="anchor"
+                on={anchored}
+                icon={<Icon.Anchor />}
+                label={anchored ? "Anchored" : "Anchor"}
+                keyHint="a"
+                title={anchored ? "unanchor (a)" : "anchor (a)"}
+                pressed={anchored}
+                onClick={() => {
+                  toggle(kb, id);
+                  close();
+                }}
+              />
+              <MenuRow
+                act="copy-link"
+                ok={copyState === "ok"}
+                fail={copyState === "fail"}
+                icon={copyState === "ok" ? <Icon.Check /> : <Icon.Copy />}
+                label={
+                  copyState === "ok"
+                    ? "Copied"
+                    : copyState === "fail"
+                      ? "Copy failed"
+                      : "Copy link"
+                }
+                title="copy permalink"
+                live
+                onClick={copyLink}
+              />
+              {onSplit && (
+                <MenuRow
+                  act="split"
+                  icon={splitMode === "close" ? <Icon.X /> : <Icon.Table />}
+                  label={splitMode === "close" ? "Close this pane" : "Open beside"}
+                  keyHint={splitMode === "close" ? "w q" : "w v"}
+                  title={
+                    splitMode === "close"
+                      ? "close this pane (w q)"
+                      : "open beside \u2014 two-pane compare (w v)"
+                  }
+                  onClick={() => {
+                    onSplit();
+                    close();
+                  }}
+                />
+              )}
+              {onToggleFolio && (
+                <MenuRow
+                  act="folio"
+                  on={folio}
+                  icon={<Icon.BookOpen />}
+                  label="Folio reading"
+                  title="folio \u00b7 published reading"
+                  pressed={folio}
+                  onClick={() => {
+                    onToggleFolio();
+                    close();
+                  }}
+                />
+              )}
+              <MenuRow
+                act="fullscreen"
+                icon={<Icon.Expand />}
+                label="Full screen"
+                keyHint="o"
+                title="read full screen (o)"
+                onClick={() => {
+                  onFullscreen?.();
+                  close();
+                }}
+              />
+              {bareUrl && (
+                <MenuRow
+                  act="bare"
+                  href={bareUrl}
+                  icon={<Icon.External />}
+                  label="Open bare"
+                  keyHint="b"
+                  title="open the bare artifact in a new tab (b)"
+                  onClick={close}
+                />
+              )}
+            </>
+          )}
+        </MoreMenu>
       </span>
       {shareOpen && (
         <ShareModal
@@ -386,6 +393,159 @@ export default function ContextBar({
         />
       )}
     </div>
+  );
+}
+
+// OL R1 — the reader's secondary verbs. The bar keeps four actions visible
+// (annotate, add to list, share, More); everything else lives here, each row
+// keeping its `data-kb-act` and showing its key. The panel is `position: fixed`
+// (placed from the trigger's rect) because the phone bar is an overflow-x
+// scroller that would clip an absolutely-positioned child. Rows only exist
+// while open.
+function MoreMenu({
+  children,
+}: {
+  children: (close: () => void) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r)
+        setPos({
+          top: r.bottom + 6,
+          right: Math.max(8, window.innerWidth - r.right),
+        });
+    };
+    place();
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      const t = e.target as Node;
+      if (panelRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Swallow the Esc so it closes the menu instead of also leaving the reader.
+      e.stopPropagation();
+      e.preventDefault();
+      setOpen(false);
+      btnRef.current?.focus();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", place);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        data-kb-act="more"
+        className={`kb-ctxbar__act kb-ctxbar__act--icon ${open ? "is-on" : ""}`}
+        onClick={() => setOpen((o) => !o)}
+        title="more actions"
+        aria-label="more actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Icon.More aria-hidden="true" />
+      </button>
+      {open && pos && (
+        <div
+          ref={panelRef}
+          className="kb-ctxbar__more"
+          role="menu"
+          aria-label="more actions"
+          style={{ top: pos.top, right: pos.right }}
+        >
+          {children(close)}
+        </div>
+      )}
+    </>
+  );
+}
+
+function MenuRow({
+  act,
+  icon,
+  label,
+  keyHint,
+  title,
+  onClick,
+  href,
+  on,
+  ok,
+  fail,
+  pressed,
+  live,
+}: {
+  act: string;
+  icon: ReactNode;
+  label: string;
+  keyHint?: string;
+  title: string;
+  onClick: () => void;
+  href?: string;
+  on?: boolean;
+  ok?: boolean;
+  fail?: boolean;
+  pressed?: boolean;
+  live?: boolean;
+}) {
+  const cls = `kb-ctxbar__mi${on ? " is-on" : ""}${ok ? " is-ok" : ""}${
+    fail ? " is-fail" : ""
+  }`;
+  const body = (
+    <>
+      {icon}
+      <span className="kb-ctxbar__mi-lbl" aria-live={live ? "polite" : undefined}>
+        {label}
+      </span>
+      {keyHint && <kbd className="kb-ctxbar__mi-key">{keyHint}</kbd>}
+    </>
+  );
+  if (href) {
+    return (
+      <a
+        role="menuitem"
+        data-kb-act={act}
+        className={cls}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={title}
+        onClick={onClick}
+      >
+        {body}
+      </a>
+    );
+  }
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      data-kb-act={act}
+      className={cls}
+      title={title}
+      aria-pressed={pressed}
+      onClick={onClick}
+    >
+      {body}
+    </button>
   );
 }
 
