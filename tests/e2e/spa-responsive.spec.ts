@@ -43,10 +43,15 @@ async function kitchenSinkId(
 }
 
 async function expectNoHorizontalScroll(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - window.innerWidth,
-  );
-  expect(overflow, "page must not scroll horizontally").toBeLessThanOrEqual(1);
+  const { overflow, wide } = await page.evaluate(() => {
+    const vw = window.innerWidth;
+    const wide = Array.from(document.body.querySelectorAll<HTMLElement>("*"))
+      .filter((el) => el.getBoundingClientRect().right > vw + 1)
+      .slice(0, 6)
+      .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)}`);
+    return { overflow: document.documentElement.scrollWidth - vw, wide };
+  });
+  expect(overflow, `page must not scroll horizontally (wide: ${wide.join(", ")})`).toBeLessThanOrEqual(1);
 }
 
 // ───────────────────────────── desktop (>860px) ─────────────────────────

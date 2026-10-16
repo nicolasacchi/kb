@@ -1274,6 +1274,8 @@ body.kb-immersive .kb-tabbar {
     text-overflow: ellipsis;
   }
   .kb-search-mini {
+    max-width: 100%;
+    overflow: hidden;
     white-space: nowrap;
   }
   /* Centre the glyph in the enlarged menu button. */
