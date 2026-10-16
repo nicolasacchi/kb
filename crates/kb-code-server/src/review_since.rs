@@ -92,7 +92,7 @@ pub fn split_file_diffs(text: &str) -> Vec<(String, String)> {
         if let Some(rest) = line.strip_prefix("diff --git ") {
             let n = rest.len();
             let path = match rest.strip_prefix("a/") {
-                Some(_) if n >= 5 && (n - 5) % 2 == 0 => {
+                Some(_) if n >= 5 && (n - 5).is_multiple_of(2) => {
                     let l = (n - 5) / 2;
                     rest.get(2..2 + l).unwrap_or(rest).to_string()
                 }

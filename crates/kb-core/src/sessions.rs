@@ -6330,7 +6330,7 @@ mod tests {
         for i in 0..rows {
             // Every 10th row is huge (models a long agentic session); the
             // rest are small — either way each is passed through the cap.
-            let raw = if i % 10 == 0 {
+            let raw = if i.is_multiple_of(10) {
                 "v".repeat(5 * 1024 * 1024)
             } else {
                 "v".repeat(2048)
