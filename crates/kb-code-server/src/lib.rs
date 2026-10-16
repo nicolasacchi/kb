@@ -492,6 +492,8 @@ pub mod transcripts;
 pub mod tree;
 // S2-A ("One Inbox," kb-code v6.0) — `GET /api/inbox`; see that module's
 // own doc for the three-lane composition.
+/// OL S1 — `GET /api/kb/search` + `GET /api/kb/ui`: read-only kb relays.
+pub mod kb_relay;
 /// V76-R4a — ts-rs export gate + the `skip_serializing_if` → `field?: T`
 /// pin. Empty in the shipping binary; tests live under `#[cfg(test)]`.
 #[cfg(test)]

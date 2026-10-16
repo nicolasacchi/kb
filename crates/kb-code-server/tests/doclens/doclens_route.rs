@@ -2277,6 +2277,24 @@ async fn cors_layer_route_set_is_pinned() {
             true,
             "W3.C — loopback-only, never CORS'd",
         ),
+        // OL S1 — the kb relays. `/api/kb/search` hands back kb DOCUMENT
+        // titles/snippets and `/api/kb/ui` kb's prefs; an ACAO (which any
+        // loopback page would also win) would turn this daemon into an open
+        // proxy to kb for every page in the operator's browser. Mounted on the
+        // plain `api` router, same-origin only — adding them to the ACAO set
+        // is a reviewed decision, not a side effect.
+        (
+            "/api/kb/search?q=ab",
+            false,
+            true,
+            "OL S1 — same-origin only, never CORS'd",
+        ),
+        (
+            "/api/kb/ui",
+            false,
+            true,
+            "OL S1 — same-origin only, never CORS'd",
+        ),
         // RS-U3/RS-U7/RS-U9 — the review-store family, every route of it
         // mounted on the `loopback_only` `transcripts_api` router on purpose.
         // The card read is asserted-absent here for the same reason

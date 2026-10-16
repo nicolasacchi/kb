@@ -11,6 +11,9 @@ import { Link, useMatch, useNavigate } from "react-router-dom";
 import { Icon } from "@kb/ui/icons";
 import { useSearch } from "../hooks/useSearch";
 import { useExplicitKb } from "../hooks/useActiveKb";
+import { useCodeUrlForKb } from "../hooks/useCodeUrlForKb";
+import { codeSearchHref } from "../lib/codeSearchHref";
+import CmdkCodeRow from "./CmdkCodeRow";
 import {
   fetchKbs,
   fetchRecall,
@@ -327,6 +330,11 @@ export default function Cmdk({
   // stays kb-less. `kb` above (resolved) still scopes search + result links.
   const explicitKb = useExplicitKb();
   const result = useSearch(q, mode, kb);
+  // OL S1 — ONE "Search code" row when the active kb links a kb-code
+  // (`[kb.*] code_url`). A link, not a fetch: kb-code's CORS stays pinned to
+  // its doc-lens routes, so kb never queries it from the browser.
+  const codeUrl = useCodeUrlForKb(kb);
+  const codeHref = useMemo(() => codeSearchHref(codeUrl, q), [codeUrl, q]);
   // Detect the detail route so we can exclude the currently-open
   // artifact from Recent. `useMatch` returns null off-route.
   const detailMatch = useMatch("/a/:kb/*");
@@ -533,8 +541,10 @@ export default function Cmdk({
       notes: visibleNotes.length,
       memories: memories.length,
       sessions: visibleSessions.length,
+      code: codeHref ? 1 : 0,
     }),
     [
+      codeHref,
       visibleRecents.length,
       visibleCommands.length,
       result.hits.length,
@@ -630,10 +640,18 @@ export default function Cmdk({
             }
             return;
           }
+          case "code": {
+            if (codeHref) {
+              onClose();
+              window.open(codeHref, "_blank", "noopener,noreferrer");
+            }
+            return;
+          }
         }
       }
     },
     [
+      codeHref,
       counts,
       cursor,
       cycleMode,
@@ -961,6 +979,18 @@ export default function Cmdk({
                   </Link>
                 );
               })}
+            </>
+          )}
+          {codeHref && (
+            <>
+              <div className="cmdk__section">Code</div>
+              <CmdkCodeRow
+                href={codeHref}
+                query={q}
+                active={cmdkRowBase("code", counts) === cursor}
+                onHover={() => setCursor(cmdkRowBase("code", counts))}
+                onOpen={onClose}
+              />
             </>
           )}
         </div>

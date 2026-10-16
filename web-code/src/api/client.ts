@@ -91,6 +91,8 @@ import type {
   TreeResponse,
   TreeV2Response,
   UnifiedSearchResponse,
+  KbSearchOut,
+  KbUiOut,
   AgeOut,
   CouplingOut,
   HotspotsOut,
@@ -368,6 +370,22 @@ export function fetchSearch({ q, repo, limit, signal }: SearchParams): Promise<U
     { q, repo, limit: limit !== undefined ? String(limit) : undefined },
     signal,
   );
+}
+
+/// `GET /api/kb/search?q=&limit=` - kb's own search, relayed by kb-code-server
+/// (OL S1). Always resolves with a body: a missing kb is `unavailable`, not a
+/// rejection. `hooks/useKbDocs.ts` is the sole caller.
+export function fetchKbSearch(
+  q: string,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<KbSearchOut> {
+  return getJson<KbSearchOut>("/api/kb/search", { q, limit: String(limit) }, signal);
+}
+
+/// `GET /api/kb/ui` - kb's theme family, relayed (OL S1). `lib/kbTheme.ts`.
+export function fetchKbUi(signal?: AbortSignal): Promise<KbUiOut> {
+  return getJson<KbUiOut>("/api/kb/ui", {}, signal);
 }
 
 /// `GET /api/search/files?repo=&q=&limit=` — the files lane's OWN standalone

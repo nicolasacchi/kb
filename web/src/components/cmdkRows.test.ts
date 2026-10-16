@@ -48,3 +48,27 @@ describe("cmdkRows geometry", () => {
     }
   });
 });
+
+describe("cmdkRows geometry: the OL S1 code row", () => {
+  const base = { recents: 0, commands: 2, hits: 1, notes: 0, memories: 0, sessions: 1 };
+
+  it("is absent (count 0) unless the caller supplies it", () => {
+    expect(cmdkTotalRows(base)).toBe(4);
+    expect(cmdkRowAt(4, base)).toBeNull();
+  });
+
+  it("is ONE row after every other group", () => {
+    const c = { ...base, code: 1 };
+    expect(cmdkTotalRows(c)).toBe(5);
+    expect(cmdkRowBase("code", c)).toBe(4);
+    expect(cmdkRowAt(3, c)).toEqual({ kind: "session", idx: 0 });
+    expect(cmdkRowAt(4, c)).toEqual({ kind: "code", idx: 0 });
+    expect(cmdkRowAt(5, c)).toBeNull();
+  });
+
+  it("is the only row when everything else is empty", () => {
+    const c = { recents: 0, commands: 0, hits: 0, notes: 0, memories: 0, sessions: 0, code: 1 };
+    expect(cmdkRowAt(0, c)).toEqual({ kind: "code", idx: 0 });
+  });
+});
+

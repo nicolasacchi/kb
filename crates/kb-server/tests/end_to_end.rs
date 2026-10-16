@@ -795,6 +795,53 @@ async fn settings_get_returns_defaults_then_patch_persists_in_memory() {
 }
 
 #[tokio::test]
+async fn settings_patch_carries_theme_family_and_ignores_a_malformed_one() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+
+    let s: serde_json::Value = client
+        .get(url(addr, "/api/settings"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(s["theme_family"].is_null());
+
+    // The SPA sends its prefs key (`themeFamily`); the wire answers snake_case.
+    let resp = client
+        .patch(url(addr, "/api/settings"))
+        .header("Origin", "http://localhost:4000")
+        .json(&serde_json::json!({"theme": "dark", "themeFamily": "catppuccin"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let after: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(after["theme_family"].as_str().unwrap(), "catppuccin");
+
+    // A malformed id is ignored, not rejected, and does not clobber.
+    let resp = client
+        .patch(url(addr, "/api/settings"))
+        .header("Origin", "http://localhost:4000")
+        .json(&serde_json::json!({"theme_family": "<script>"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let s2: serde_json::Value = client
+        .get(url(addr, "/api/settings"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(s2["theme_family"].as_str().unwrap(), "catppuccin");
+}
+
+#[tokio::test]
 async fn cross_stats_returns_daemon_and_kb_summaries() {
     let (_tmp, addr) = boot().await;
     let client = reqwest::Client::new();

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import SharedThemePicker, { type ThemePickerController } from "@kb/ui/ThemePicker";
 import {
   applyTheme,
@@ -11,8 +11,10 @@ import {
   loadThemeFamily,
   previewTheme,
   setThemePrefs,
+  themeFamilySource,
   type Density,
 } from "../lib/prefs";
+import ThemeSourceCaption from "./ThemeSourceCaption";
 import "../styles/themesample.css";
 
 // V70-A7 — kb-code's theme picker. The picker itself (family list, appearance
@@ -59,9 +61,28 @@ export default function ThemePicker({ onClose, asSheet = false, inline = false }
         </>
       }
       sample={<ThemeSample />}
-      extras={({ staged, appearance }) => <Controls staged={staged} appearance={appearance} />}
+      extras={({ staged, appearance }) => (
+        <>
+          <SourceCaption />
+          <Controls staged={staged} appearance={appearance} />
+        </>
+      )}
     />
   );
+}
+
+/// OL S1 - "Following kb" / "Chosen here". Re-reads on `kbc:theme.changed`
+/// (fired by the writer and by the boot-time follow), so the caption flips
+/// the moment a family is committed or kb's arrives.
+function SourceCaption() {
+  const [source, setSource] = useState(themeFamilySource);
+  useEffect(() => {
+    const refresh = () => setSource(themeFamilySource());
+    refresh();
+    window.addEventListener("kbc:theme.changed", refresh);
+    return () => window.removeEventListener("kbc:theme.changed", refresh);
+  }, []);
+  return <ThemeSourceCaption source={source} />;
 }
 
 function Controls({

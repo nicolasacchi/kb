@@ -342,8 +342,41 @@ GET  /api/metrics                           request + pipeline timing snapshot.
                                             when [server] metrics = true.
                                             curl-able companion to the
                                             metrics.tick SSE.
-GET  /api/settings                          ui prefs (theme/accent/density)
-PATCH /api/settings                         update ui prefs
+GET  /api/settings                          ui prefs (theme/accent/density/
+                                            theme_family)
+PATCH /api/settings                         update ui prefs. OL S1: body may
+                                            carry `theme_family` (alias
+                                            `themeFamily`), the kbc-theme/1
+                                            palette family id, validated as
+                                            `[a-z0-9-]{1,40}` — a malformed id
+                                            is ignored, never a 400. The
+                                            sibling kb-code daemon reads it
+                                            back via its `GET /api/kb/ui`
+                                            relay (below).
+
+kb-code daemon routes that relay FROM kb (served by `kb-code-server`, not by
+this daemon; ordinary bearer reads, never CORS'd; docs/kb-code.md "Sibling
+lanes"):
+
+GET  /api/kb/search?q=&limit=              OL S1: kb's `GET /api/search`
+                                            (scope=all, keyword) reshaped to
+                                            `{hits:[{kb,id,title,url,snippet}],
+                                            kb_public_url}`; `url` is the
+                                            artifact permalink on kb's PUBLIC
+                                            url. q shorter than 2 chars never
+                                            reaches kb; limit clamps to 20.
+                                            Always 200: an unreachable /
+                                            disabled kb answers `{hits:[],
+                                            unavailable:"kb unreachable" |
+                                            "kb disabled"}`, a kb-sibling/1
+                                            mismatch `unavailable:
+                                            "kb_sibling_mismatch"`.
+GET  /api/kb/ui                            OL S1: kb's `theme_family` +
+                                            `theme` from `GET /api/settings`
+                                            (malformed values -> null), same
+                                            always-200 `unavailable` caption.
+                                            Read-only: kb-code never writes a
+                                            preference back to kb.
 GET  /api/config                            running kb.toml as JSON + its
                                             source path + share-token env
                                             presence (names only) + the

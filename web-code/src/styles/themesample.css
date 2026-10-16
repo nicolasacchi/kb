@@ -90,3 +90,11 @@
   color: var(--ink-mute);
   border: 1px var(--kbc-trust-style, solid) var(--kbc-trust-color, var(--rule-hi));
 }
+
+/* OL S1 - which side the family in force came from ("Following kb" / "Chosen
+   here"): a quiet one-liner under the receipt, never a control. */
+.kbc-themepicker__source {
+  margin: 4px 0 0;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+}

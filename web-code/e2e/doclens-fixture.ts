@@ -637,6 +637,10 @@ function json(res: http.ServerResponse, status: number, body: unknown) {
 // override leaking onto it.
 const hashOverrides = new Map<string, string>();
 
+// OL S1 — the palette family this mock "kb" reports on `/api/settings`.
+// null (the default) means kb has chosen none, so kb-code stays on its own.
+let themeFamily: string | null = null;
+
 /// Applies [`hashOverrides`] to one canned body, if present — used by BOTH
 /// the single-doc route and the feed walk below so a sync pass run AFTER a
 /// bump also observes it.
@@ -734,6 +738,53 @@ export function startDoclensFixture(repoDir: string): Promise<http.Server> {
       } else {
         json(res, 404, { error: `no doc at path ${decoded}` });
       }
+      return;
+    }
+
+    // OL S1 — kb's `GET /api/search`, for the omnibox "Documents" lane. Answers
+    // ONE query (anything containing `fixture-doc`); every other query 404s,
+    // which kb-code's relay turns into the honest "kb unreachable" caption —
+    // so the same fixture proves both the hit row and the unavailable line.
+    if (path === "/api/search") {
+      const q = (url.searchParams.get("q") ?? "").toLowerCase();
+      if (q.includes("fixture-doc")) {
+        json(res, 200, {
+          hits: [
+            {
+              kb: DOCLENS_KB,
+              id: DOCLENS_DOC_ID,
+              title: DOCLENS_DOC_TITLE,
+              source_relative: DOCLENS_DOC_PATH,
+              snippet: "the fixture doc cites a few code references",
+            },
+          ],
+          ms: 1,
+        });
+      } else {
+        json(res, 404, { error: "no such query" });
+      }
+      return;
+    }
+
+    // OL S1 — kb's `GET /api/settings`. `theme_family` is null until a spec
+    // flips it through the dev-only hook below, so every OTHER spec keeps
+    // kb-code's built-in palette.
+    if (path === "/api/settings") {
+      json(res, 200, { theme: "dark", accent: null, density: "comfy", theme_family: themeFamily });
+      return;
+    }
+    if (path === "/__test__/theme-family" && req.method === "POST") {
+      let raw = "";
+      req.on("data", (chunk: Buffer) => (raw += chunk.toString("utf-8")));
+      req.on("end", () => {
+        try {
+          const { family } = JSON.parse(raw || "{}") as { family?: unknown };
+          themeFamily = typeof family === "string" && family ? family : null;
+          json(res, 200, { ok: true, theme_family: themeFamily });
+        } catch {
+          json(res, 400, { error: "bad json" });
+        }
+      });
       return;
     }
 

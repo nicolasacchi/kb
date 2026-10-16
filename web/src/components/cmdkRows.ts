@@ -10,7 +10,9 @@ export type CmdkRowKind =
   | "hit"
   | "note"
   | "memory"
-  | "session";
+  | "session"
+  // OL S1 — the single "Search code for …" row (0 or 1), always last.
+  | "code";
 
 export type CmdkCounts = {
   recents: number;
@@ -19,6 +21,9 @@ export type CmdkCounts = {
   notes: number;
   memories: number;
   sessions: number;
+  // OL S1 — 1 when the active kb has a `code_url` and a query is typed.
+  // Optional so existing callers/tests that predate the row stay valid.
+  code?: number;
 };
 
 // The fixed top-to-bottom order the palette renders groups in.
@@ -29,6 +34,7 @@ const ORDER: CmdkRowKind[] = [
   "note",
   "memory",
   "session",
+  "code",
 ];
 
 function countOf(kind: CmdkRowKind, c: CmdkCounts): number {
@@ -45,11 +51,15 @@ function countOf(kind: CmdkRowKind, c: CmdkCounts): number {
       return c.memories;
     case "session":
       return c.sessions;
+    case "code":
+      return c.code ?? 0;
   }
 }
 
 export function cmdkTotalRows(c: CmdkCounts): number {
-  return c.recents + c.commands + c.hits + c.notes + c.memories + c.sessions;
+  return (
+    c.recents + c.commands + c.hits + c.notes + c.memories + c.sessions + (c.code ?? 0)
+  );
 }
 
 // The flat index of the FIRST row of `kind` — the base offset a render adds its

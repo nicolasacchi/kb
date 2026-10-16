@@ -1138,6 +1138,13 @@ pub struct UiSection {
     pub accent: Option<String>,
     /// Density: `compact`, `normal`, `spacious`.
     pub density: Option<String>,
+    /// kbc-theme/1 palette family id (`[a-z0-9-]{1,40}`), e.g. `kb-classic`.
+    /// Set by the SPA's theme picker via `PATCH /api/settings`; read by the
+    /// sibling kb-code daemon (`GET /api/kb/ui` relay) so its SPA can follow
+    /// kb's family until the user picks one there. Unknown ids are ignored
+    /// by the client, never rejected here.
+    #[serde(default)]
+    pub theme_family: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

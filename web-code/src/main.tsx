@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./app";
 import { UI_PROBE } from "@kb/ui/probe";
 import { applyTheme, loadTheme } from "./lib/prefs";
+import { followKbTheme } from "./lib/kbTheme";
 import { queryClient, startSseInvalidationBridge } from "./api/queryClient";
 import "./styles/tokens.css";
 // V70-A7 — the generated `[data-kbc-theme]` blocks. Imported here, right
@@ -58,6 +59,9 @@ document.documentElement.dataset.kbUi = UI_PROBE;
 // <script> in index.html, because a sibling unit lands a strict CSP with
 // `script-src 'self'` and an inline theme shim would have to be nonced.
 applyTheme(loadTheme());
+// OL S1 - follow kb's palette family unless the user has chosen one here.
+// Fire-and-forget: it never blocks the first render and never throws.
+void followKbTheme();
 
 // V70-A6 — root CLAUDE.md #31's floor. The browser's own scroll restoration
 // lands "unpredictably and often at the wrong times" for an async-rendered

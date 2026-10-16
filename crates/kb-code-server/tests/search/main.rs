@@ -6,5 +6,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod kb_relay_routes;
 mod search_routes;
 mod search_unified;

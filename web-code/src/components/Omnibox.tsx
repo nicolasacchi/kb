@@ -10,10 +10,13 @@ import { applyPrefixChip } from "../lib/prefixChips";
 import { fullSearchUrl, orderSections } from "../lib/searchLanes";
 import { resolveSearchTarget } from "../lib/searchTargets";
 import { useOmniSearch } from "../hooks/useOmniSearch";
+import { useKbDocs } from "../hooks/useKbDocs";
+import { kbDocsRowCount, kbDocsRowHref } from "../lib/kbDocs";
 import { useReviewFiles } from "../hooks/useReviews";
 import { useValidatedCurrentReview } from "../hooks/useValidatedCurrentReview";
 import PrefixChips from "./search/PrefixChips";
 import SearchSection from "./search/SearchSection";
+import KbDocsSection from "./search/KbDocsSection";
 import { useCommands } from "../commands/CommandRoot";
 import {
   commandRows,
@@ -95,6 +98,11 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
   const { sections, loading, error } = useOmniSearch(commandMode ? "" : q, repo, LIMIT);
   const [state, dispatch] = useReducer(paletteReducer, initialPaletteState());
   const ordered = useMemo(() => orderSections(sections), [sections]);
+  // OL S1 — the "Documents" lane (kb's own search). One more palette section
+  // after the code lanes, so Tab / arrows / Enter reach it with no special
+  // keys; absent in command mode and for prefix-scoped queries.
+  const docs = useKbDocs(commandMode ? "" : q);
+  const docsLaneIndex = ordered.length;
 
   // V80-M3 — "in review diff" chip, same ONE-fetch shape `routes/Search.tsx`
   // uses: only possible while the omnibox is scoped to a repo (opened from
@@ -149,8 +157,14 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
   }, []);
 
   useEffect(() => {
-    dispatch({ type: "SET_SECTIONS", sections: sectionsToRowCounts(sections) });
-  }, [sections]);
+    const codeLanes = sectionsToRowCounts(sections);
+    dispatch({
+      type: "SET_SECTIONS",
+      sections: docs.active
+        ? [...codeLanes, { lane: "documents", rowCount: kbDocsRowCount(docs.response) }]
+        : codeLanes,
+    });
+  }, [sections, docs.active, docs.response]);
 
   function activate(target: ReturnType<typeof resolveSearchTarget>) {
     if (!target) return;
@@ -264,6 +278,13 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
     if (e.key === "Enter") {
       // kbc-owns: "palette.activate":
       e.preventDefault();
+      if (docs.active && state.cursor.section === docsLaneIndex) {
+        // The Documents header has no destination (the full /search page is
+        // a code page); a row opens its kb permalink in a new tab.
+        const href = kbDocsRowHref(docs.response, state.cursor.row);
+        if (href) activate({ kind: "external", href });
+        return;
+      }
       activate(resolveSearchTarget(sections, state.cursor, repo, q));
       return;
     }
@@ -363,7 +384,7 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
                 {error}
               </div>
             )}
-            {!error && !loading && ordered.length === 0 && (
+            {!error && !loading && ordered.length === 0 && !docs.active && (
               <div className="kbc-omnibox__hint">
                 Type to search files, symbols, text, semantic, sessions, transcripts.
                 <br />
@@ -394,6 +415,17 @@ export default function Omnibox({ onClose, initialQuery = "" }: OmniboxProps) {
                   reviewFileRepo={repo}
                 />
               ))}
+            {!error && docs.active && (
+              <KbDocsSection
+                response={docs.response}
+                loading={docs.loading}
+                laneIndex={docsLaneIndex}
+                cursor={state.cursor}
+                onHover={(row) =>
+                  dispatch({ type: "SET_CURSOR", cursor: { section: docsLaneIndex, row } })
+                }
+              />
+            )}
           </div>
         )}
         <div className="kbc-omnibox__foot">
