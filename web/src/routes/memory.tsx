@@ -34,7 +34,6 @@ import {
 } from "../lib/decayProjection";
 import { isAgentHotHumanCold, orderUnverifiedFirst, tensionLabel } from "../lib/attention";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { useReportQueryStats } from "../components/chrome/queryStats";
 import { Icon } from "@kb/ui/icons";
 import EmptyState from "../components/EmptyState";
 import CitationText from "../components/CitationText";
@@ -124,16 +123,6 @@ export default function Memory() {
     [hits, unverifiedSort],
   );
   useDocumentTitle("Memory");
-  // Memoise the stats object so QueryRibbon's reporter doesn't see a new
-  // reference (and re-run) on every unrelated re-render.
-  const queryStats = useMemo(
-    () =>
-      !loading && !error
-        ? { total: hits.length, ms: 0, warnings: [] as string[] }
-        : undefined,
-    [loading, error, hits.length],
-  );
-  useReportQueryStats(queryStats);
 
   // Local pin overlay so the toggle reflects immediately while the
   // SSE/refetch reconciles.

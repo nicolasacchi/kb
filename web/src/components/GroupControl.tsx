@@ -13,7 +13,6 @@ type Props = {
 export default function GroupControl({ group, onGroup }: Props) {
   return (
     <div className="group-control" role="group" aria-label="group by">
-      <label className="group-control__label">group</label>
       <div className="group-control__opts">
         <button
           className={`group-control__opt ${group === "none" ? "is-on" : ""}`}
