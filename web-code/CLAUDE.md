@@ -2148,8 +2148,10 @@ described the pre-OL shape.
   comes from `resolveDoorRepo` (explicit repo, else the stored `lastRepo` if the
   daemon still lists it, else the first repo; pinned by `navItems.test.ts`), and
   `lastRepo` is written only from an explicit repo. `/search` mounts no search
-  slot in the Spine. The trail indicator is always a visible chip ("Trail off" /
-  "Recording" / "Trail paused"); its styles live in `topbar.css`, not the lazy
+  slot in the Spine. The trail indicator is a visible chip ("Trail off" /
+  "Recording" / "Trail paused") on desktop when `[trails] enabled` (it returns
+  null while the read is pending or trails are disabled, and TopBar mounts it
+  only when `!isMobile`); its styles live in `topbar.css`, not the lazy
   `tours.css` chunk.
 - **Breadcrumbs portal into the Spine's scope slot** (`components/ScopeSlot.tsx`,
   `ScopePortal`); the `nav.kbc-breadcrumbs[aria-label=Breadcrumb]` markup, the

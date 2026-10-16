@@ -2010,8 +2010,9 @@ and range-diff are Review). The five review-family pages share a Review sub-nav
 row (Reviews · PRs · Branches · Compare). On a phone the Spine's menu button
 opens a sheet with the doors, Inbox, current-review chip and theme.
 
-**Doors on every page.** The four doors render on Home, Inbox and Settings as
-well as repo pages. Their target repo is the explicit one when the page has it,
+**Doors on every page.** On desktop the four doors render on Home, Inbox and
+Settings as well as repo pages (phones use the NavSheet, which lists the same
+doors), once at least one repo is configured. Their target repo is the explicit one when the page has it,
 else the last repo you were in if the daemon still lists it, else the first
 configured repo. `lastRepo` is written only from an explicit repo, so Home's
 first-repo fallback never overwrites it. The `/search` page has no search field
@@ -2070,8 +2071,10 @@ count line reads `N results · lanes: ...`, and a zero-hit result is a state car
 with next steps (search symbols, try the text lane, search every repo, clear the
 refinement). Copy CLI and Keep as set sit in More.
 
-**The trail chip.** The top bar always shows a small chip for the reading trail:
-"Trail off", "Recording" or "Trail paused", with a tooltip explaining it.
+**The trail chip.** On desktop, when the daemon has trails enabled, the top bar shows a small chip
+that names the reading-trail state: "Trail off", "Recording" or "Trail paused",
+with a tooltip explaining it. It is absent on phones and while the trail read is
+pending.
 
 **One surface for loading and failure.** Every route and panel says loading,
 empty, refused, degraded or mismatch through the shared state card instead of

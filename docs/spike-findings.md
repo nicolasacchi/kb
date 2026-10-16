@@ -1648,8 +1648,8 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
    lint that also reads `ui/`, and the chrome and nav budgets caught a dozen
    regressions inside the milestone; F10 found three undefined variables in kb.
 7. *The visual-golden tolerance masks badge-sized changes.* The `spa-visual`
-   per-test limit (`MAX_DIFF` 0.01) and the config default (0.02, about 13k
-   pixels at 1440x900) are larger than a rail badge. P4 restyled the rail
+   per-test `MAX_DIFF` 0.01 (about 13k pixels at 1440x900; the config default 0.02
+   is about 26k) is larger than a rail badge. P4 restyled the rail
    badges and no golden failed; P3's goldens were rendered before P4 and still
    passed. A golden pass is not proof that a small change is, or is not, on
    screen.
