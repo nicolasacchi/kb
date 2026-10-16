@@ -392,6 +392,12 @@ async fn kbs_route_lists_configured_kbs() {
         "expected ≥{} docs, got {doc_count}",
         CANON_REL.len()
     );
+    // OL-P2 — the fixture kb has no embedding model: the key is present and null.
+    assert!(
+        body[0].get("embedding_model").is_some_and(|v| v.is_null()),
+        "embedding_model must be present and null: {}",
+        body[0]
+    );
 }
 
 /// v044-X3 (A4.f6) — the project-key backfill is a daemon route (the storage
@@ -566,6 +572,7 @@ async fn kbs_route_counts_false_returns_config_fields_only() {
         "memory_scope",
         "default_search_category",
         "code_url",
+        "embedding_model",
     ] {
         assert!(kb.contains_key(k), "config field {k} missing: {kb:?}");
     }

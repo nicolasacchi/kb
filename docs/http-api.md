@@ -43,7 +43,7 @@ GET  /api/kbs[?counts=false]                list configured kbs. Default: with
                                             counts=false: config fields only
                                             (name, path, memory_scope,
                                             default_search_category,
-                                            code_url) — never touches the
+                                            code_url, embedding_model) — never touches the
                                             storage actor; the per-prompt
                                             pre-flight (remember / recall
                                             auto scope / context / doctor).

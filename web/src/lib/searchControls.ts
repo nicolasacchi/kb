@@ -4,11 +4,26 @@ import { SEARCH_SORTS, type SearchSort } from "./searchSort";
 
 export const SEARCH_LIMITS = [20, 50, 100, 200] as const;
 
-// The daemon refuses hybrid/semantic on a kb with no embedding model with a
-// 400 whose message names `embedding_model`. That message is the only signal
-// the SPA has (KbSummary carries no model field), so the page reads it here.
+// `GET /api/kbs` carries each kb's `embedding_model` (null = none), so a
+// single-kb search knows up front (`kbHasNoEmbeddingModel`). The daemon also
+// refuses hybrid/semantic on a kb with no model with a 400 whose message names
+// `embedding_model`; that refusal stays the fallback for the federated scope
+// and for a kbs list that has not loaded yet.
 export function isNoEmbeddingModelError(error: string | null | undefined): boolean {
   return !!error && /embedding_model/.test(error);
+}
+
+/// True only when the listing PROVES there is no model: the active kb for a
+/// single-kb search, or every kb for the federated scope. An unknown kb or an
+/// empty listing is "don't know" (false), leaving the reactive detection.
+export function kbHasNoEmbeddingModel(
+  kbs: ReadonlyArray<{ name: string; embedding_model?: string | null }>,
+  scope: SearchScope,
+  activeKb: string | undefined,
+): boolean {
+  if (scope === "all") return kbs.length > 0 && kbs.every((k) => k.embedding_model === null);
+  const kb = kbs.find((k) => k.name === activeKb);
+  return !!kb && kb.embedding_model === null;
 }
 
 export const NO_MODEL_REASON = "needs an embedding model; this kb has none configured";

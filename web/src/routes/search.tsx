@@ -13,7 +13,7 @@ import { useKbs } from "../hooks/useKbs";
 import SearchResultCard from "../components/search/SearchResultCard";
 import SearchRail from "../components/search/SearchRail";
 import SearchSortControl from "../components/search/SearchSortControl";
-import { buildSearchClusters, isNoEmbeddingModelError } from "../lib/searchControls";
+import { buildSearchClusters, isNoEmbeddingModelError, kbHasNoEmbeddingModel } from "../lib/searchControls";
 import { StateCard } from "@kb/ui/StateCard";
 import { ViewBar } from "@kb/ui/ViewBar";
 import SearchChipBar, { type Chip } from "../components/search/SearchChipBar";
@@ -365,17 +365,19 @@ export default function SearchRoute() {
       />
   );
 
-  // OL R5 — mode/scope/results/sort as one ViewBar. KbSummary carries no
-  // embedding-model field, so the daemon's own refusal is the signal: once a
-  // model-backed mode fails with it, that kb (or the federated scope) keeps
-  // hybrid/semantic disabled with the reason instead of failing again.
+  // OL R5 — mode/scope/results/sort as one ViewBar. KbSummary.embedding_model
+  // says up front whether the kb(s) can run a model-backed mode; the daemon's
+  // own refusal stays the fallback (federated scope with mixed kbs, or a
+  // listing that has not loaded): once a model-backed mode fails with it, that
+  // kb (or the federated scope) keeps hybrid/semantic disabled with the reason.
   const noModelKey = scope === "all" ? "*" : (activeKb ?? "");
   const [noModelKeys, setNoModelKeys] = useState<ReadonlySet<string>>(new Set());
   const refusedNow = mode !== "keyword" && isNoEmbeddingModelError(res.error);
   useEffect(() => {
     if (refusedNow) setNoModelKeys((prev) => new Set(prev).add(noModelKey));
   }, [refusedNow, noModelKey]);
-  const noModel = refusedNow || noModelKeys.has(noModelKey);
+  const noModel =
+    refusedNow || noModelKeys.has(noModelKey) || kbHasNoEmbeddingModel(kbs, scope, activeKb);
   const clusters = buildSearchClusters({
     mode,
     scope,
