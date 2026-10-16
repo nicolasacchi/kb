@@ -3719,37 +3719,18 @@ a.kb-idschip:hover {
   border-color: var(--accent-bor);
 }
 
-.kb-mem__histo {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 32px;
-  margin-bottom: 18px;
-}
-.kb-mem__bin {
-  width: 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--rule);
-  border-radius: 2px 2px 0 0;
-}
-.kb-mem__bin.on {
-  background: var(--accent-bg);
-  border-color: var(--accent-bor);
-}
-.kb-mem__axis {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--ink-dim);
-  margin-left: 14px;
-  align-self: flex-end;
-}
-
 .kb-mem__thead,
 .kb-mem__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 96px 140px 44px;
   align-items: center;
   gap: 14px;
+}
+/* OL P4 — no row has health data: the table drops the column. Placed before
+ * the phone block so its own grid-template-columns still wins there. */
+.kb-mem__thead--nohealth,
+.kb-mem__row--nohealth {
+  grid-template-columns: minmax(0, 1fr) 96px 44px;
 }
 /* MI-W4.1/W4.2a — the health column: decay projection + injection
  * histogram, stacked. */
@@ -6017,6 +5998,9 @@ a.proposal-row__chip:hover {
   white-space: nowrap;
 }
 .kb-mem__chip--global {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border-color: color-mix(in oklab, var(--accent) 50%, var(--rule));
   background: color-mix(in oklab, var(--accent) 14%, var(--bg-panel));
   color: var(--accent);
