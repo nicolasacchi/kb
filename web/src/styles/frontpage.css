@@ -1,0 +1,335 @@
+/* ═══════════════════════ FRONT PAGE (OL L3) ═════════════════════════════
+ * components/FrontPage.tsx — the one band that opens the unfiltered Library.
+ * Newspaper register over kb tokens: serif nameplate + double rule, a lead
+ * set at --fs-hero, features at --fs-xl, a quiet continuing-coverage column.
+ * Generous and calm: no boxes, no badges, rules instead of cards. Collapses
+ * to the masthead line; one column at <=860px (the same literal breakpoint
+ * the other per-surface stylesheets use). */
+.kb-fp {
+  margin: 0 0 28px;
+}
+
+.kb-fp__mast {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 6px 0 14px;
+  border-bottom: 4px double var(--rule-hi);
+}
+.kb-fp__nameplate {
+  min-width: 0;
+}
+.kb-fp__title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--fs-hero);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: var(--ink-strong);
+}
+.kb-fp__dateline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin-top: 8px;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}
+.kb-fp__date {
+  font-family: var(--font-serif);
+  font-style: italic;
+}
+.kb-fp__vol {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.03em;
+  color: var(--ink-dim);
+}
+.kb-fp__edition {
+  color: var(--ink-dim);
+}
+.kb-fp__tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.kb-fp__tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-mute);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  cursor: pointer;
+}
+.kb-fp__tool:hover {
+  color: var(--ink-strong);
+  border-color: var(--rule);
+}
+.kb-fp__chev {
+  width: 12px;
+  height: 12px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.kb-fp__chev--open {
+  transform: rotate(90deg);
+}
+
+.kb-fp__page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 40px;
+  align-items: start;
+  padding-top: 24px;
+}
+.kb-fp__main {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+
+.kb-fp__lead {
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--rule);
+}
+.kb-fp__lead-link {
+  display: block;
+  color: var(--ink);
+  text-decoration: none;
+}
+.kb-fp__kicker {
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.kb-fp__lead-title {
+  margin: 0 0 10px;
+  font-family: var(--font-serif);
+  font-size: var(--fs-hero);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  color: var(--ink-strong);
+}
+.kb-fp__lead-link:hover .kb-fp__lead-title {
+  color: var(--accent);
+}
+.kb-fp__lead-dek {
+  margin: 0;
+  max-width: 68ch;
+  font-family: var(--font-serif);
+  font-size: var(--fs-lg);
+  line-height: 1.55;
+  color: var(--ink-mute);
+}
+.kb-fp__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 12px;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+
+.kb-fp__section-h {
+  margin: 0 0 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.kb-fp__feature-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px 32px;
+}
+.kb-fp__feature {
+  display: block;
+  color: var(--ink);
+  text-decoration: none;
+}
+.kb-fp__feature-kicker {
+  margin-bottom: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.kb-fp__feature-title {
+  margin: 0 0 6px;
+  font-family: var(--font-serif);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-strong);
+}
+.kb-fp__feature:hover .kb-fp__feature-title {
+  color: var(--accent);
+}
+.kb-fp__feature-dek {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--ink-mute);
+}
+.kb-fp__feature .kb-fp__meta {
+  margin-top: 6px;
+}
+
+.kb-fp__briefs {
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+.kb-fp__brief-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-fp__brief-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-md);
+}
+.kb-fp__brief-list li:last-child {
+  border-bottom: 0;
+}
+.kb-fp__brief-list a {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-fp__brief-list a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.kb-fp__brief-age {
+  flex: none;
+  min-width: 2.5em;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+
+.kb-fp__coverage {
+  padding-left: 22px;
+  border-left: 1px solid var(--rule);
+}
+.kb-fp__cov-block {
+  margin-bottom: 20px;
+}
+.kb-fp__cov-h {
+  margin-bottom: 8px;
+  font-family: var(--font-serif);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+.kb-fp__cov-h a {
+  color: inherit;
+  text-decoration: none;
+}
+.kb-fp__cov-h a:hover {
+  color: var(--accent);
+}
+.kb-fp__cov-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+.kb-fp__cov-list a {
+  color: var(--ink);
+  text-decoration: none;
+}
+.kb-fp__cov-list a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.kb-fp__cov-meta {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
+.kb-fp__cov-list--links {
+  padding-top: 4px;
+}
+.kb-fp__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kb-fp__link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kb-fp--collapsed .kb-fp__mast {
+  padding-bottom: 10px;
+}
+.kb-fp--collapsed .kb-fp__title {
+  font-size: var(--fs-title);
+}
+
+@media (max-width: 860px) {
+  .kb-fp__mast {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .kb-fp__page {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .kb-fp__feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kb-fp__coverage {
+    padding-left: 0;
+    border-left: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kb-fp__chev {
+    transition: none;
+  }
+}
