@@ -232,6 +232,7 @@ fn kb_error_reason(err: &KbClientError) -> &'static str {
         KbClientError::Disabled => "disabled",
         KbClientError::SiblingMismatch(_) => "sibling_mismatch",
         KbClientError::Unreachable(_, _)
+        | KbClientError::Timeout(_)
         | KbClientError::BadStatus(_)
         | KbClientError::Parse(_)
         | KbClientError::ClientBuild(_)

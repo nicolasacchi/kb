@@ -61,6 +61,7 @@ describe("kbDocsCaption", () => {
   it("words the three relay captions and passes an unknown one through", () => {
     expect(kbDocsCaption("kb disabled")).toMatch(/not configured/);
     expect(kbDocsCaption("kb unreachable")).toMatch(/unreachable/);
+    expect(kbDocsCaption("kb search timed out")).toMatch(/timed out/);
     expect(kbDocsCaption("kb_sibling_mismatch")).toMatch(/sibling contract/);
     expect(kbDocsCaption("something new")).toBe("something new");
   });

@@ -6261,8 +6261,8 @@ export interface SyntaxOut {
 // --- OL S1: the kb relays ----------------------------------------------------
 // `GET /api/kb/search` / `GET /api/kb/ui` (`crates/kb-code-server/src/
 // kb_relay.rs`) are ts-rs generated. Both always answer 200; `unavailable` is
-// a caption ("kb unreachable" | "kb disabled" | "kb_sibling_mismatch"), never
-// an error.
+// a caption ("kb unreachable" | "kb search timed out" | "kb disabled" |
+// "kb_sibling_mismatch"), never an error.
 export type { KbDocHitOut } from "./generated/KbDocHitOut";
 export type { KbSearchOut } from "./generated/KbSearchOut";
 export type { KbUiOut } from "./generated/KbUiOut";

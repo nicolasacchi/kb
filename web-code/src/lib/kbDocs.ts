@@ -38,6 +38,8 @@ export function kbDocsCaption(unavailable: string): string {
   switch (unavailable) {
     case "kb disabled":
       return "kb is not configured for this daemon";
+    case "kb search timed out":
+      return "kb search timed out - kb is up but slow to answer";
     case "kb unreachable":
       return "kb is unreachable right now";
     case "kb_sibling_mismatch":

@@ -45,12 +45,16 @@ pub struct SearchParams {
     pub limit: Option<String>,
 }
 
+/// Caption for a search that outlived `SEARCH_TIMEOUT` (kb reached, but slow).
+pub const KB_SEARCH_TIMED_OUT: &str = "kb search timed out";
+
 /// The closed `unavailable` vocabulary. `kb_sibling_mismatch` is the one
 /// machine-readable token (the brief names it); the other two are prose.
 fn unavailable_caption(err: &KbClientError) -> &'static str {
     match err {
         KbClientError::SiblingMismatch(_) => "kb_sibling_mismatch",
         KbClientError::Disabled => "kb disabled",
+        KbClientError::Timeout(_) => KB_SEARCH_TIMED_OUT,
         KbClientError::Unreachable(_, _)
         | KbClientError::BadStatus(_)
         | KbClientError::Parse(_)
@@ -372,6 +376,12 @@ mod tests {
             "",
         );
         assert_eq!(bad.unavailable.as_deref(), Some("kb unreachable"));
+        let timed_out = search_body(Err(KbClientError::Timeout("u".into())), "");
+        assert!(timed_out.hits.is_empty());
+        assert_eq!(
+            timed_out.unavailable.as_deref(),
+            Some("kb search timed out")
+        );
         let parse = search_body(Err(KbClientError::Parse("x".into())), "");
         assert_eq!(parse.unavailable.as_deref(), Some("kb unreachable"));
         assert_eq!(
