@@ -288,6 +288,9 @@ function init(envelope: Envelope) {
     pointerDown = false;
   });
   window.addEventListener("resize", onResize);
+  // Late layout (images, web fonts) moves blocks after the first paint:
+  // re-measure once everything has loaded.
+  window.addEventListener("load", onResize);
   // Tell the parent we're alive.
   post({ type: "cm:probe", origin: location.origin });
 }
@@ -363,7 +366,59 @@ function rectsFor(c: Comment, target: Element | null): DOMRect[] {
       if (rects.length) return rects;
     }
   }
-  return [target.getBoundingClientRect()];
+  // Block bands end where the block's VISIBLE part ends: a table taller
+  // than its scrolling wrapper must not paint over what follows it.
+  const clipped = clipToAncestors(
+    target.getBoundingClientRect(),
+    clipBoxesOf(target),
+  );
+  return clipped ? [clipped as DOMRect] : [];
+}
+
+// Geometry for block bands (OL P4). A band used to be the target's own
+// bounding box; when that overflows a clipping ancestor (a table taller
+// than its `max-height; overflow:auto` wrapper) the box runs past what the
+// reader can see and the band painted over whatever follows the wrapper —
+// the next heading. Intersect the box with every clipping ancestor, on the
+// axes each one clips. Lives inside the IIFE on purpose: a module import
+// would hoist top-level names into the host page (see the note above).
+type ClipBox = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  x: boolean;
+  y: boolean;
+};
+function clipToAncestors(
+  r: { left: number; top: number; right: number; bottom: number },
+  clips: ClipBox[],
+): { left: number; top: number; right: number; bottom: number; width: number; height: number } | null {
+  let { left, top, right, bottom } = r;
+  for (const c of clips) {
+    if (c.x) {
+      left = Math.max(left, c.left);
+      right = Math.min(right, c.right);
+    }
+    if (c.y) {
+      top = Math.max(top, c.top);
+      bottom = Math.min(bottom, c.bottom);
+    }
+  }
+  if (right - left <= 0 || bottom - top <= 0) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+function clipBoxesOf(el: Element): ClipBox[] {
+  const out: ClipBox[] = [];
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    const x = cs.overflowX !== "visible";
+    const y = cs.overflowY !== "visible";
+    if (!x && !y) continue;
+    const r = p.getBoundingClientRect();
+    out.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, x, y });
+  }
+  return out;
 }
 
 function addHighlight(rect: DOMRect, comment: Comment) {
