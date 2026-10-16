@@ -414,6 +414,14 @@ body,
   color: var(--ink-strong);
   margin: 0;
 }
+/* "in" / "tagged" lead-in: the breadcrumb's own face, not the title's. */
+.gallery-h1-in {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xl);
+  color: var(--ink-mute);
+  font-weight: 400;
+  letter-spacing: 0;
+}
 .gallery-h1-accent {
   color: var(--accent);
   font-family: var(--font-mono);
@@ -1051,8 +1059,11 @@ body,
   background: var(--bg-card);
 }
 .rail-folder.is-on {
-  background: var(--accent-soft);
-  color: var(--accent);
+  /* tinted background + accent-soft TEXT, same as `.kb-side__row.on`.
+   * (--accent-soft is a text colour; used as the background AND the label
+   * colour it painted an unreadable solid bar.) */
+  background: var(--accent-bg);
+  color: var(--accent-soft);
 }
 .rail-folder-chev {
   width: 16px;
