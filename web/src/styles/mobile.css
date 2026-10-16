@@ -1157,17 +1157,17 @@ body.kb-immersive .kb-tabbar {
 /* ───────────── OL L6: the phone pass (Spine, Front Page, ViewBars) ───────────
  * One bar (menu + workspace + search), one sheet (the NavSheet), the Front
  * Page as a single readable column and toolbars that wrap at most once or fold
- * behind More. Every control on these surfaces is >=44px tall. The literal
+ * behind More. Every control on these surfaces is >=44px (--touch-min) tall. The literal
  * 860px matches useIsMobile (hooks/useIsMobile.ts) and the rest of this file. */
 @media (max-width: 860px) {
   /* Spine: the three controls the compact bar keeps. */
   .kb-head .kb-ws,
   .kb-head .kb-search-mini,
   .kb-head [data-kb-spine-menu] {
-    min-height: 44px;
+    min-height: var(--touch-min);
   }
   .kb-head [data-kb-spine-menu] {
-    min-width: 44px;
+    min-width: var(--touch-min);
   }
 
   /* Front Page: lead set at the title step (the hero step is too tall for a
@@ -1180,11 +1180,11 @@ body.kb-immersive .kb-tabbar {
     width: 100%;
   }
   .kb-fp__tool {
-    min-height: 44px;
+    min-height: var(--touch-min);
     padding-inline: 14px;
   }
   .kb-fp__brief-list li {
-    min-height: 44px;
+    min-height: var(--touch-min);
     align-items: center;
   }
   .kb-fp__brief-list a,
@@ -1193,7 +1193,7 @@ body.kb-immersive .kb-tabbar {
   .kb-fp__cov-h a {
     display: inline-flex;
     align-items: center;
-    min-height: 44px;
+    min-height: var(--touch-min);
   }
   .kb-fp__cov-list a {
     flex-wrap: wrap;
@@ -1220,10 +1220,10 @@ body.kb-immersive .kb-tabbar {
   [data-kb-viewbar] .kb-viewbar__btn,
   [data-kb-viewbar] .kb-viewbar__select,
   [data-kb-viewbar] .kb-viewbar__menu-row {
-    min-height: 44px;
+    min-height: var(--touch-min);
   }
   [data-kb-viewbar] .kb-viewbar__btn {
-    min-width: 44px;
+    min-width: var(--touch-min);
     justify-content: center;
   }
   [data-kb-viewbar] .kb-viewbar__menu {
@@ -1239,29 +1239,32 @@ body.kb-immersive .kb-tabbar {
 @media (pointer: coarse) {
   .kb-card__action {
     top: auto;
-    bottom: 4px;
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
+    bottom: var(--card-act-gap);
+    width: var(--touch-min);
+    height: var(--touch-min);
+    min-width: var(--touch-min);
+    min-height: var(--touch-min);
     /* the desktop chip is a dark translucent wash with a muted glyph, which
      * vanishes on the light theme; on touch it is always visible, so skin it
      * from the panel tokens */
     background: var(--bg-panel);
     color: var(--ink);
   }
+  /* Slots from the right edge: inset 6px, then one (size + gap) per button.
+   * Applies to any coarse-pointer device, whatever its width. */
   .kb-card__peek {
     right: 6px;
   }
   .kb-card__download {
-    right: 54px;
+    right: calc(6px + var(--touch-min) + var(--card-act-gap));
   }
   .kb-card__exclude {
-    right: 102px;
+    right: calc(6px + 2 * (var(--touch-min) + var(--card-act-gap)));
   }
   .kb-card__meta {
-    padding-right: 150px;
-    min-height: 44px;
+    /* three buttons + their gaps + the edge inset */
+    padding-right: calc(6px + 3 * (var(--touch-min) + var(--card-act-gap)));
+    min-height: var(--touch-min);
     align-items: center;
   }
 }
@@ -1284,7 +1287,6 @@ body.kb-immersive .kb-tabbar {
   }
   .kb-search-mini {
     max-width: 100%;
-    overflow: hidden;
     white-space: nowrap;
   }
   /* Centre the glyph in the enlarged menu button. */
@@ -1295,19 +1297,29 @@ body.kb-immersive .kb-tabbar {
     line-height: 1;
   }
 
-  /* Reader strip: the position label stays on one line, and More is pinned
-   * to the right edge instead of fading under the scroll mask. */
+  /* Reader strip: More is pinned to the right edge instead of fading under
+   * the scroll mask, and the strip's flexible part is the crumb, which
+   * ellipsizes. */
   .kb-ctxbar {
     -webkit-mask-image: none;
     mask-image: none;
+  }
+  .kb-ctxbar__crumb {
+    min-width: 48px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
   .kb-ctxbar__pos {
     white-space: nowrap;
     flex: none;
   }
-  /* the position label is the first thing to give way on a narrow phone, so
-   * the verbs and More fit without scrolling */
+  /* 430px = the widest current phone viewport (large-phone class). Up to
+   * there the verbs + More leave no room for the crumb or the position label,
+   * so both give way (the title lives in the sheet / inspector); from 431px
+   * the crumb returns, ellipsized. */
   @media (max-width: 430px) {
+    .kb-ctxbar__crumb,
     .kb-ctxbar__pos {
       display: none;
     }

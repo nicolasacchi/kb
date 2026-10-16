@@ -303,13 +303,12 @@ test.describe("mobile library landing (OL L6)", () => {
     expect(cols).toBe(1);
 
     const lead = page.locator(".kb-fp__lead-title");
-    if (await lead.count()) {
-      const [leadPx, titlePx] = await lead.evaluate((el) => [
-        parseFloat(getComputedStyle(el).fontSize),
-        parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fs-title")),
-      ]);
-      expect(leadPx).toBe(titlePx);
-    }
+    await expect(lead).toHaveCount(1);
+    const [leadPx, titlePx] = await lead.evaluate((el) => [
+      parseFloat(getComputedStyle(el).fontSize),
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fs-title")),
+    ]);
+    expect(leadPx).toBe(titlePx);
 
     const main = await page.locator(".kb-fp__main").boundingBox();
     const cov = await page.locator(".kb-fp__coverage").boundingBox();
@@ -324,6 +323,8 @@ test.describe("mobile library landing (OL L6)", () => {
       page.locator("[data-kb-viewbar] .kb-viewbar__select"),
       page.locator(".kb-fp__tool"),
       page.locator("[data-kb-spine-menu]"),
+      page.locator(".kb-head .kb-ws"),
+      page.locator(".kb-head .kb-search-mini"),
     ];
     let seen = 0;
     for (const loc of targets) {
@@ -385,17 +386,31 @@ test.describe("mobile library landing (OL L6)", () => {
     await expect(page.locator(".kb-tabbar .kb-tabbar__tab").first()).toHaveText("Library");
   });
 
-  test("reader strip: position label on one line, More fully inside the viewport", async ({ page }) => {
+  test("reader strip at 390: crumb and position label give way, More inside the viewport", async ({ page }) => {
     await page.goto(`${base()}${ARTIFACT}`);
     const more = page.locator('[data-kb-act="more"]');
     await expect(more).toBeVisible();
     const b = (await more.boundingBox())!;
     expect(b.x + b.width).toBeLessThanOrEqual(390.5);
-    const pos = page.locator(".kb-ctxbar__pos");
-    if (await pos.isVisible()) {
-      const lh = await pos.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 14);
-      expect((await pos.boundingBox())!.height).toBeLessThan(lh * 1.6);
-    }
+    await expect(page.locator(".kb-ctxbar__crumb")).toBeHidden();
+    await expect(page.locator(".kb-ctxbar__pos")).toBeHidden();
     await expect(page.locator('[data-kb-act="inspect"]')).toBeAttached();
+  });
+
+  test("reader strip at 600: crumb visible, >=48px, ellipsized; position label on one line", async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 844 });
+    await page.goto(`${base()}${ARTIFACT}`);
+    const crumb = page.locator(".kb-ctxbar__crumb");
+    await expect(crumb).toBeVisible();
+    expect((await crumb.boundingBox())!.width).toBeGreaterThanOrEqual(47.5);
+    const css = await crumb.evaluate((el) => {
+      const c = getComputedStyle(el);
+      return [c.overflow, c.textOverflow, c.whiteSpace];
+    });
+    expect(css).toEqual(["hidden", "ellipsis", "nowrap"]);
+    const pos = page.locator(".kb-ctxbar__pos");
+    await expect(pos).toBeVisible();
+    const lh = await pos.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 14);
+    expect((await pos.boundingBox())!.height).toBeLessThan(lh * 1.6);
   });
 });
