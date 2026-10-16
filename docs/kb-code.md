@@ -2097,12 +2097,12 @@ artifact permalink on kb's public base (`[kb_daemon] public_url`, else `url`).
 The omnibox renders the hits under a "Documents" lane after the code lanes
 for a query of 2+ characters; Enter or a click opens the permalink in a new
 tab. The route always answers 200: an unreachable or disabled kb returns
-`{hits: [], unavailable: "kb unreachable" | "kb search timed out" | "kb disabled"}`
-(the search relay waits up to 6 s, `SEARCH_TIMEOUT`, because a federated
-search fans out over every corpus; the join ladder's shared 1.5 s is
-unchanged) and a
-kb-sibling/1 mismatch `unavailable: "kb_sibling_mismatch"`, which the lane
-shows as a muted line, never an error. Nothing is cached or persisted.
+`{hits: [], unavailable: "kb unreachable" | "kb search timed out" |
+"kb disabled"}` (the search relay waits up to 6 s, `SEARCH_TIMEOUT`, because
+a federated search fans out over every corpus; the join ladder's shared 1.5 s
+is unchanged), and a kb-sibling/1 mismatch returns
+`unavailable: "kb_sibling_mismatch"`. The lane shows each as a muted line,
+never an error. Nothing is cached or persisted.
 
 **Theme family follows kb.** kb stores `theme_family` in its `ui` settings
 (`PATCH /api/settings`). `GET /api/kb/ui` relays `{theme, theme_family}` with
