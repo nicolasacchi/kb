@@ -3,7 +3,7 @@ import { PORT } from "./helpers";
 
 // OL FX4 — semantic zoom: ctrl-wheel (trackpad pinch) and the `-` / `=` keys
 // step the Library atlas <-> index <-> shelf through ?view=.
-const URL = (view: string) => `http://127.0.0.1:${PORT}/?kb=canon${view === "grid" ? "" : `&view=${view}`}`;
+const libUrl = (view: string) => `http://127.0.0.1:${PORT}/?kb=canon${view === "grid" ? "" : `&view=${view}`}`;
 
 async function pinch(page: Page, selector: string, deltaY: number) {
   await page.locator(selector).first().evaluate((el, dy) => {
@@ -19,7 +19,7 @@ test.describe("Semantic zoom", () => {
   });
 
   test("pinch steps shelf -> index -> atlas and back, one level per gesture", async ({ page }) => {
-    await page.goto(URL("grid"));
+    await page.goto(libUrl("grid"));
     await expect(page.getByTestId("zoom-indicator")).toBeVisible();
     await pinch(page, ".gallery", 120); // pinch in = zoom out
     await expect.poll(() => view(page)).toBe("list");
@@ -40,14 +40,14 @@ test.describe("Semantic zoom", () => {
   });
 
   test("no step at the ends of the ladder", async ({ page }) => {
-    await page.goto(URL("grid"));
+    await page.goto(libUrl("grid"));
     await pinch(page, ".gallery", -120);
     await page.waitForTimeout(500);
     expect(view(page)).toBe("grid");
   });
 
   test("no step over the Spine or the ViewBar", async ({ page }) => {
-    await page.goto(URL("list"));
+    await page.goto(libUrl("list"));
     await expect(page.getByTestId("zoom-indicator")).toBeVisible();
     await pinch(page, "[data-kb-spine]", -120);
     await pinch(page, ".kb-gallery-viewbar", -120);
@@ -56,7 +56,7 @@ test.describe("Semantic zoom", () => {
   });
 
   test("no step with the preference off", async ({ page }) => {
-    await page.goto(URL("list"));
+    await page.goto(libUrl("list"));
     await page.evaluate(() => {
       const p = JSON.parse(localStorage.getItem("kb:prefs") || "{}");
       localStorage.setItem("kb:prefs", JSON.stringify({ ...p, pinchZoom: false }));
@@ -67,7 +67,7 @@ test.describe("Semantic zoom", () => {
   });
 
   test("the indicator is hidden off the ladder", async ({ page }) => {
-    await page.goto(URL("history"));
+    await page.goto(libUrl("history"));
     await expect(page.locator(".kb-gallery-viewbar")).toBeVisible();
     await expect(page.getByTestId("zoom-indicator")).toHaveCount(0);
     await pinch(page, ".gallery", -120);
@@ -76,7 +76,7 @@ test.describe("Semantic zoom", () => {
   });
 
   test("- and = step the ladder from the keyboard", async ({ page }) => {
-    await page.goto(URL("list"));
+    await page.goto(libUrl("list"));
     await expect(page.getByTestId("zoom-indicator")).toBeVisible();
     await page.keyboard.press("=");
     await expect.poll(() => view(page)).toBe("grid");
