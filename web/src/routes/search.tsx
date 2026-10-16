@@ -15,7 +15,7 @@ import SearchRail from "../components/search/SearchRail";
 import SearchSortControl from "../components/search/SearchSortControl";
 import { buildSearchClusters, isNoEmbeddingModelError, kbHasNoEmbeddingModel } from "../lib/searchControls";
 import { StateCard } from "@kb/ui/StateCard";
-import { ViewBar } from "@kb/ui/ViewBar";
+import SearchViewBar from "../components/search/SearchViewBar";
 import SearchChipBar, { type Chip } from "../components/search/SearchChipBar";
 import SearchSavedBar from "../components/search/SearchSavedBar";
 import ZeroHitRecovery from "../components/search/ZeroHitRecovery";
@@ -432,28 +432,22 @@ export default function SearchRoute() {
             }
           />
         </div>
-        <div className="kb-search__viewbar">
-          <ViewBar
-            title="Search view"
-            clusters={clusters}
-            renderControl={(c, node) =>
-              c.id === "sort" ? (
-                <SearchSortControl
-                  sort={sort}
-                  dir={dir}
-                  onSort={(sk, d) =>
-                    setMany({
-                      sort: sk === "relevance" ? null : sk,
-                      dir: sk !== "relevance" && d !== defaultSearchDir(sk) ? d : null,
-                    })
-                  }
-                />
-              ) : (
-                node
-              )
-            }
-          />
-        </div>
+        <SearchViewBar
+          clusters={clusters}
+          noModel={noModel}
+          renderSort={() => (
+            <SearchSortControl
+              sort={sort}
+              dir={dir}
+              onSort={(sk, d) =>
+                setMany({
+                  sort: sk === "relevance" ? null : sk,
+                  dir: sk !== "relevance" && d !== defaultSearchDir(sk) ? d : null,
+                })
+              }
+            />
+          )}
+        />
         <SearchChipBar chips={chips} onClearAll={clearAll} />
 
         {!showResults ? (

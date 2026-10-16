@@ -47,6 +47,16 @@
   height: 18px;
   flex: none;
 }
+/* The global `input:focus-visible` ring (app.css) out-specifies the plain
+ * class and drew a rectangle INSIDE the rounded box; the container owns the
+ * focus indicator instead (:focus-within, token colours, both themes). */
+.kb-search__box:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.kb-search__box .kb-search__input:focus-visible {
+  outline: none;
+}
 .kb-search__input {
   flex: 1;
   min-width: 0;
@@ -939,4 +949,37 @@
 /* OL R5 — the ViewBar under the query input (mode, scope, results, sort). */
 .kb-search__viewbar {
   padding: 0 var(--pad-1);
+}
+/* Nothing inside a control wraps; when the bar runs out of room whole
+ * clusters wrap onto a second line instead of clipping (1280 and 1440). */
+.kb-search__viewbar .kb-viewbar {
+  flex-wrap: wrap;
+  row-gap: var(--pad-1);
+}
+.kb-search__viewbar .kb-viewbar__lead:empty {
+  display: none;
+}
+.kb-search__viewbar .kb-viewbar__clusters {
+  flex-wrap: wrap;
+  margin-left: 0;
+  row-gap: var(--pad-1);
+}
+.kb-search__viewbar .kb-viewbar__cluster {
+  flex: none;
+}
+.kb-search__viewbar .kb-viewbar__legend,
+.kb-search__viewbar .kb-viewbar__btn,
+.kb-search__viewbar .kb-viewbar__select,
+.kb-search__viewbar .sort-control__select {
+  white-space: nowrap;
+}
+/* The disabled model buttons keep the reason as title/aria-describedby; the
+ * one visible caption is `.kb-search__viewbar-note` under the bar. */
+.kb-search__viewbar .kb-viewbar__reason {
+  display: none;
+}
+.kb-search__viewbar-note {
+  margin: var(--pad-1) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
 }
