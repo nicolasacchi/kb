@@ -19,7 +19,6 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { useNowTick } from "../hooks/useNowTick";
-import { useReportQueryStats } from "../components/chrome/queryStats";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "@kb/ui/icons";
 import { ViewBar, type Cluster, type Control } from "@kb/ui/ViewBar";
@@ -267,11 +266,6 @@ export default function SessionsRoute() {
     view === "list",
   );
   useDocumentTitle("Sessions");
-  useReportQueryStats(
-    !loading && !error
-      ? { total: rows.length, ms: 0, warnings: [] }
-      : undefined,
-  );
 
   const focused = params.get("focus");
   const selected = rows.find((r) => r.session_id === focused) ?? null;

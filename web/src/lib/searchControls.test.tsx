@@ -4,6 +4,7 @@ import { ViewBar } from "@kb/ui/ViewBar";
 import {
   buildSearchClusters,
   isNoEmbeddingModelError,
+  kbHasNoEmbeddingModel,
   NO_MODEL_REASON,
   type SearchControlsArgs,
 } from "./searchControls";
@@ -61,5 +62,25 @@ describe("buildSearchClusters", () => {
     c[2].controls[0].onSelect?.("100");
     c[3].controls[0].onSelect?.("title");
     expect(seen).toEqual(["keyword", "all", 100, "title"]);
+  });
+});
+
+describe("kbHasNoEmbeddingModel", () => {
+  const kbs = [
+    { name: "a", embedding_model: null },
+    { name: "b", embedding_model: "bge-small" },
+  ];
+  it("single-kb scope reads the active kb's model up front", () => {
+    expect(kbHasNoEmbeddingModel(kbs, "one", "a")).toBe(true);
+    expect(kbHasNoEmbeddingModel(kbs, "one", "b")).toBe(false);
+  });
+  it("unknown kb or empty listing is not proof of no model", () => {
+    expect(kbHasNoEmbeddingModel(kbs, "one", "zzz")).toBe(false);
+    expect(kbHasNoEmbeddingModel([], "one", "a")).toBe(false);
+    expect(kbHasNoEmbeddingModel([], "all", undefined)).toBe(false);
+  });
+  it("federated scope disables only when no kb has a model", () => {
+    expect(kbHasNoEmbeddingModel(kbs, "all", undefined)).toBe(false);
+    expect(kbHasNoEmbeddingModel([kbs[0]], "all", undefined)).toBe(true);
   });
 });

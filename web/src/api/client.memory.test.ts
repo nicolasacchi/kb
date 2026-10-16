@@ -23,6 +23,7 @@ function kb(name: string, memory_scope: string | null): KbSummary {
     memory_scope,
     default_search_category: null,
     code_url: null,
+    embedding_model: null,
   };
 }
 

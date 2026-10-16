@@ -22,9 +22,9 @@ const OPTIONS: { key: SortKey; label: string }[] = [
 export default function SortControl({ sort, dir, onSort }: Props) {
   return (
     <div className="sort-control" role="group" aria-label="sort">
-      <label className="sort-control__label">sort</label>
       <select
         className="sort-control__select"
+        aria-label="sort"
         value={sort}
         onChange={(e) => {
           // Changing the key resets direction to that key's default

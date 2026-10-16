@@ -34,6 +34,11 @@ pub struct KbSummary {
     /// resolving them. kb itself never opens an HTTP client to this URL
     /// (invariant #2/#4 — one live call direction, kb-code→kb).
     pub code_url: Option<String>,
+    /// OL-P2 — the embedding model this kb's embedder runs (`None` when the kb
+    /// has no embedder, i.e. no `embedding_model` resolved). Lets the search
+    /// page disable hybrid/semantic up front instead of learning it from a
+    /// refused request.
+    pub embedding_model: Option<String>,
 }
 
 /// `GET /api/kbs?counts=false` — config fields only. Same field names as
@@ -46,6 +51,11 @@ pub struct KbConfigSummary {
     pub memory_scope: Option<String>,
     pub default_search_category: Option<String>,
     pub code_url: Option<String>,
+    /// OL-P2 — the embedding model this kb's embedder runs (`None` when the kb
+    /// has no embedder, i.e. no `embedding_model` resolved). Lets the search
+    /// page disable hybrid/semantic up front instead of learning it from a
+    /// refused request.
+    pub embedding_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -70,6 +80,10 @@ pub(crate) fn config_summaries(state: &KbHandles) -> Vec<KbConfigSummary> {
             memory_scope: ctx.memory_scope.clone(),
             default_search_category: ctx.default_search_category.clone(),
             code_url: ctx.code_url.clone(),
+            embedding_model: ctx
+                .embedder
+                .as_ref()
+                .map(|e| crate::embed_cache::embedder_model_name(e).to_string()),
         })
         .collect()
 }
@@ -106,6 +120,10 @@ async fn list_with_counts(state: &Arc<KbHandles>) -> Vec<KbSummary> {
                 memory_scope: ctx.memory_scope.clone(),
                 default_search_category: ctx.default_search_category.clone(),
                 code_url: ctx.code_url.clone(),
+                embedding_model: ctx
+                    .embedder
+                    .as_ref()
+                    .map(|e| crate::embed_cache::embedder_model_name(e).to_string()),
             }
         }));
     }

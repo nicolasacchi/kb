@@ -1038,19 +1038,24 @@ test.describe("desktop: selectionchange relay + selection→comment @selection",
     const pen = page.locator('[data-kb-act="annotate"]');
     await expect(pen).toHaveAttribute("aria-pressed", "false");
 
-    await selectSubstring(frame, SELECTION_NEEDLE);
-
     // Old mouseup-only code would never post this — no mouse event was
     // dispatched, only Chromium's native selectionchange from addRange.
     const floater = page.locator(".kb-selact");
     const commentBtn = page.locator('[data-kb-act="selection-comment"]');
-    await expect(floater).toBeVisible({ timeout: 5_000 });
-    await expect(commentBtn).toBeVisible();
-
-    await commentBtn.click();
-
     const panel = page.getByRole("complementary", { name: "comments" });
-    await expect(panel).toBeVisible();
+    // The floater is parent-side state driven by a cross-frame message, and
+    // a late layout beacon from the (slower, on Firefox) iframe can dismiss
+    // it between "visible" and the click, leaving the click waiting on an
+    // element that no longer exists until the test timeout. Select-and-click
+    // is therefore one retried unit: each attempt re-makes the selection,
+    // waits for the floater, clicks, and only succeeds once the panel is up.
+    await expect(async () => {
+      await selectSubstring(frame, SELECTION_NEEDLE);
+      await expect(floater).toBeVisible({ timeout: 3_000 });
+      await expect(commentBtn).toBeVisible({ timeout: 3_000 });
+      await commentBtn.click({ timeout: 3_000 });
+      await expect(panel).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 20_000 });
     const compose = panel.locator(".cp__compose");
     await expect(compose).toBeVisible();
     // The anchor label reflects the quoted selection snippet, not a

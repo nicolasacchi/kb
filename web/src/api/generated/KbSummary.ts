@@ -24,4 +24,11 @@ default_search_category: string | null,
  * resolving them. kb itself never opens an HTTP client to this URL
  * (invariant #2/#4 — one live call direction, kb-code→kb).
  */
-code_url: string | null, };
+code_url: string | null, 
+/**
+ * OL-P2 — the embedding model this kb's embedder runs (`None` when the kb
+ * has no embedder, i.e. no `embedding_model` resolved). Lets the search
+ * page disable hybrid/semantic up front instead of learning it from a
+ * refused request.
+ */
+embedding_model: string | null, };
