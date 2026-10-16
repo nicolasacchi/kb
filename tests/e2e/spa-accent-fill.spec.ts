@@ -59,3 +59,63 @@ for (const theme of ["dark", "light"] as const) {
     }
   });
 }
+
+// The converted roles, probed through throwaway elements.
+async function probeRoles(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const out: Record<string, string> = {};
+    for (const t of ["accent-fill", "paper", "paper-ink", "paper-rule", "card-bg-end", "card-ring", "term-bg"]) {
+      const el = document.createElement("div");
+      el.style.backgroundColor = `var(--${t})`;
+      document.body.appendChild(el);
+      out[`--${t}`] = getComputedStyle(el).backgroundColor;
+      el.remove();
+    }
+    const b = document.querySelector(".kb-pinsp__itab-badge");
+    out.badge = b ? getComputedStyle(b).backgroundColor : "missing";
+    out.dataTheme = document.documentElement.getAttribute("data-theme") ?? "";
+    out.kbcTheme = document.documentElement.getAttribute("data-kbc-theme") ?? "";
+    return out;
+  });
+}
+
+async function openReader(
+  page: import("@playwright/test").Page,
+  prefs: Record<string, string>,
+  scheme: "light" | "dark",
+) {
+  await page.emulateMedia({ colorScheme: scheme });
+  await page.addInitScript((p) => {
+    localStorage.setItem("kb:prefs", JSON.stringify(p));
+  }, prefs);
+  await page.goto(`${BASE}/a/canon/kitchen-sink.html`);
+  await expect(page.locator(".kb-pinsp__itab-badge").first()).toBeVisible();
+  return probeRoles(page);
+}
+
+test("theme system on a light OS resolves the LIGHT roles", async ({ page, browser }) => {
+  const sys = await openReader(page, { theme: "system" }, "light");
+  const ctx = await browser.newContext();
+  const lightPage = await ctx.newPage();
+  const light = await openReader(lightPage, { theme: "light" }, "light");
+  await ctx.close();
+  console.log(`system+light OS: ${JSON.stringify(sys)}`);
+  console.log(`explicit light: ${JSON.stringify(light)}`);
+  expect(sys.dataTheme).toBe("system");
+  expect(sys.kbcTheme).toBe("kb-classic-light");
+  for (const k of Object.keys(light)) {
+    if (k === "dataTheme") continue;
+    expect(sys[k], `${k}: ${JSON.stringify(sys)}`).toBe(light[k]);
+  }
+});
+
+test("a non-kb-classic light family still paints the fills", async ({ page }) => {
+  const seen = await openReader(page, { theme: "light", themeFamily: "flexoki" }, "light");
+  console.log(`flexoki-light: ${JSON.stringify(seen)}`);
+  expect(seen.kbcTheme).toBe("flexoki-light");
+  for (const [k, v] of Object.entries(seen)) {
+    if (k === "dataTheme" || k === "kbcTheme") continue;
+    expect(v, `${k}: ${JSON.stringify(seen)}`).not.toBe("rgba(0, 0, 0, 0)");
+    expect(v, `${k}: ${JSON.stringify(seen)}`).not.toBe("missing");
+  }
+});

@@ -29,7 +29,7 @@ describe("applyPrefs", () => {
     expect(root().getAttribute("data-kbc-theme")).toBe("nord");
   });
 
-  it("system keeps color-scheme open so light-dark() follows the OS", () => {
+  it("system sets data-theme=system and an open color-scheme", () => {
     applyPrefs(prefs({ theme: "system" }));
     expect(root().getAttribute("data-theme")).toBe("system");
     expect(root().style.colorScheme).toBe("light dark");
