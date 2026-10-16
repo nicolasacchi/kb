@@ -1647,11 +1647,11 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
    lint that also reads `ui/`, and the chrome and nav budgets caught a dozen
    regressions inside the milestone; F10 found three undefined variables in kb.
 
-**Not built.** S5 (semantic zoom). L6, the kb mobile pass for the Spine, Front
-Page band and ViewBars, was still open at the time of writing (#119), as was the
-`zip` 2.4.2 to 9.0.3 bump for a yanked crate (#118), which keeps `supply-chain`
-and `ci-gate` red on main until it lands. Several e2e flakes were hardened
+**Not built.** S5 (semantic zoom). As of 2026-10-16 two units were still open: L6,
+the kb mobile pass for the Spine, Front Page band and ViewBars (#119), and the
+`zip` 2.4.2 to 9.0.3 bump for a yanked crate (#118), whose absence turned
+`supply-chain` and `ci-gate` red on main. Several e2e flakes were hardened
 without a captured failure log (P2: the `spa-views` sort race and the
 `spa-comments` selection retry address the plausible races, unproven). Known
-leftovers: `useReportQueryStats` is still read by `ContextLine`; the Desk's
-`MAIN_MIN_HEIGHT_PX` was lowered 580 to 550 by derivation, not measurement.
+leftover: the Desk's `MAIN_MIN_HEIGHT_PX` was lowered 580 to 550 by derivation,
+not measurement.
