@@ -641,6 +641,10 @@ jobs:
           if [ "$UPDATE_SNAPSHOTS" = true ]; then args+=(--update-snapshots=all); fi
           set -o pipefail; npx playwright test "${args[@]}" 2>&1 | tee playwright-output.log
 
+      - name: TEMP FX1 repeat sort test
+        working-directory: tests/e2e
+        run: npx playwright test spa-views.spec.ts -g "changing the sort dropdown" --repeat-each=10 --project=chromium 2>&1 | tail -30
+
       - name: Upload Playwright goldens
         if: ${{ always() && inputs.update_snapshots }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
