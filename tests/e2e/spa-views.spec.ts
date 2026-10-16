@@ -146,11 +146,11 @@ test.describe("gallery views", () => {
 
     // Don't touch the dropdown until the app has finished its cold-start
     // URL/state settling: the kb selector resolves from the shared ["kbs"]
-    // query and the first doc page is still loading, and a navigation
+    // query (the SSE stream means the page is never network-idle, so wait on
+    // that resolved state instead), and a navigation
     // landing after selectOption would overwrite the ?sort= it just wrote
     // (the select then snaps back to its default).
     await expect(page.locator(".kb-ws-name")).toHaveText("canon");
-    await page.waitForLoadState("networkidle");
 
     await page.locator(".sort-control__select").selectOption("title");
     // The sort key must reach the URL — this is what was clobbered.
