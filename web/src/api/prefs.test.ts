@@ -6,6 +6,7 @@ import {
   loadHome,
   loadLastKb,
   loadLastSessionsView,
+  loadPinchZoom,
   loadPrefs,
   saveHome,
   savePrefs,
@@ -262,5 +263,18 @@ describe("settingsPatchBody (OL S1: the family travels to the daemon)", () => {
   it("stays out of the browser-local nav prefs", () => {
     const body = settingsPatchBody({ ...DEFAULT_PREFS, lastKb: "beta", home: "map" });
     expect(Object.keys(body).sort()).toEqual(["density", "themeFamily", "theme"].sort());
+  });
+});
+
+describe("loadPinchZoom (OL FX4)", () => {
+  it("defaults on, and only an explicit false turns it off", () => {
+    stubLocalStorage();
+    expect(loadPinchZoom()).toBe(true);
+    savePrefs({ ...DEFAULT_PREFS, pinchZoom: false });
+    expect(loadPinchZoom()).toBe(false);
+    savePrefs({ ...DEFAULT_PREFS, pinchZoom: true });
+    expect(loadPinchZoom()).toBe(true);
+    localStorage.setItem("kb:prefs", JSON.stringify({ theme: "dark" }));
+    expect(loadPinchZoom()).toBe(true);
   });
 });

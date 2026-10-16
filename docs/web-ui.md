@@ -69,6 +69,15 @@ with kb-code), plus a per-view control row. It replaced the old 52px header,
   (the Front Page masthead is its title); folder and tag views keep a header with
   the breadcrumb and folder actions. On a phone the bar shows View and moves the
   rest behind More.
+- **Semantic zoom.** Atlas, Index and Shelf form a density ladder, most overview
+  first. A trackpad pinch (or Ctrl-wheel) over the Library content steps one
+  rung per gesture (pinch out moves toward the Shelf), and `-` / `=` do the same
+  from the keyboard. Three ticks beside the View control show the position and
+  are hidden on Timeline and Canvas, where zoom does nothing; the Front Page
+  band is not a view, so it does not change them. The browser's own zoom is left
+  alone at either end of the ladder, on a phone, and when Settings, Preferences,
+  "Pinch to change Library view" is off. In the Atlas, a pinch out leaves the
+  map for the Index; use the mouse wheel to zoom the map.
 - **Front Page band.** The unfiltered Library (Shelf or Index view, no filter or
   query, `sort=recent`) opens with one serif band: a masthead (the kb name or
   "All corpora", the date, an edition line), a lead story whose dateline says

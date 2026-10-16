@@ -69,6 +69,10 @@ export type Prefs = {
   // (`?substance=routine,substantive`), but the preference also tracks the
   // toggle state to restore it on return to /sessions.
   hideSessionsTrivial?: boolean;
+  // OL FX4 — "Pinch to change Library view": ctrl-wheel / trackpad pinch over
+  // the Library steps atlas, index, shelf. Default on (absent = on); browser-local
+  // like the other display prefs, OUT of the patchSettings allow-list.
+  pinchZoom?: boolean;
 };
 
 const PREFS_KEY = "kb:prefs";
@@ -95,6 +99,7 @@ export const DEFAULT_PREFS: Prefs = {
   lastSessionsView: "list",
   // F2: hide-trivial defaults to false (show all sessions)
   hideSessionsTrivial: false,
+  pinchZoom: true,
 };
 
 export function loadPrefs(): Prefs {
@@ -225,6 +230,10 @@ export function coldSeedSessionsView(opts: {
 // shows all sessions; true hides substance=trivial rows.
 export function loadHideSessionsTrivial(): boolean {
   return loadPrefs().hideSessionsTrivial ?? false;
+}
+
+export function loadPinchZoom(): boolean {
+  return loadPrefs().pinchZoom !== false;
 }
 
 export function saveHideSessionsTrivial(hide: boolean) {

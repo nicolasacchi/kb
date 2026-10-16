@@ -43,6 +43,9 @@ import { useSessions, useSessionFolders } from "../hooks/useSessions";
 import type { SessionRow } from "../api/sessions";
 import { useUrl } from "../hooks/useUrl";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { useSemanticZoom } from "../hooks/useSemanticZoom";
+import { viewToParam } from "../lib/galleryControls";
+import { ZOOM_LABEL, type ZoomView } from "../lib/semanticZoom";
 import { useScrollRestoration } from "../hooks/useScrollRestoration";
 import { setLastGalleryUrl } from "../lib/lastGalleryUrl";
 import { useReadingProgress } from "../hooks/useReadingProgress";
@@ -115,6 +118,26 @@ export default function Gallery() {
   // reader contract, so the flag degrades to the ordinary gallery.
   const isMobile = useIsMobile();
   const shellMap = params.get("shell") === "map" && !isMobile;
+  // OL FX4 — semantic zoom: ctrl-wheel / `-` `=` step atlas, index, shelf
+  // through the same `?view=` write the View control makes.
+  const [zoomNode, setZoomNode] = useState<HTMLElement | null>(null);
+  const [zoomNote, setZoomNote] = useState("");
+  useSemanticZoom({
+    node: zoomNode,
+    view,
+    gesture: !isMobile,
+    onStep: (v: ZoomView) => {
+      set("view", viewToParam(v));
+      // Clear first so announcing the same text twice still re-announces.
+      setZoomNote("");
+      window.setTimeout(() => setZoomNote(`Library view: ${ZOOM_LABEL[v]}`), 50);
+    },
+  });
+  useEffect(() => {
+    if (!zoomNote) return;
+    const t = window.setTimeout(() => setZoomNote(""), 1500);
+    return () => window.clearTimeout(t);
+  }, [zoomNote]);
   // Views that own their whole body and are NOT a projection of the docs
   // row-set: the count/notes controls, the empty states and every result
   // strip are suppressed for them (W3.C-b added `canvas` beside `history` —
@@ -630,7 +653,10 @@ export default function Gallery() {
 
   return (
     <div className={notesOpen ? "gallery-shell gallery-shell--notes" : "gallery-shell"}>
-    <div className="gallery">
+    <div className="gallery" ref={setZoomNode}>
+      <span className="kb-zoom-live" role="status" aria-live="polite" data-testid="zoom-live">
+        {zoomNote}
+      </span>
       <GalleryViewBar
         scope={activeKb ?? docsKb}
         chromeless={chromelessView}

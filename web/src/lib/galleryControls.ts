@@ -21,6 +21,12 @@ export function parseGalleryView(raw: string | null): GalleryView {
   return GALLERY_VIEWS.some((v) => v.value === raw) ? (raw as GalleryView) : "grid";
 }
 
+/// The `?view=` param for a view: the Shelf is the default and stays out of the URL.
+/// The View control and semantic zoom both write through this.
+export function viewToParam(v: string): string | null {
+  return v === "grid" ? null : v;
+}
+
 /// Sort / Group / Density only mean something on the two row-set views.
 export function hasArrange(view: GalleryView): boolean {
   return view === "grid" || view === "list";

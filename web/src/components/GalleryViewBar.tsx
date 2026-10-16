@@ -5,10 +5,11 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { useQueryStats } from "./chrome/queryStats";
 import SortControl from "./SortControl";
 import GroupControl from "./GroupControl";
+import ZoomIndicator from "./ZoomIndicator";
 import FilterChips, { type FilterToken } from "./FilterChips";
 import { Icon } from "@kb/ui/icons";
 import { cycleDensity, loadPrefs } from "../api/prefs";
-import { buildGalleryClusters, parseGalleryView } from "../lib/galleryControls";
+import { buildGalleryClusters, parseGalleryView, viewToParam } from "../lib/galleryControls";
 import { defaultDir, parseSortParams, type GroupKey, type SortDir, type SortKey } from "../lib/sort";
 
 const csv = (v: string | null) => (v || "").split(",").filter(Boolean);
@@ -77,7 +78,7 @@ export default function GalleryViewBar({
     group,
     density,
     // `grid` is the default and stays out of the URL, as before.
-    onView: (v) => set("view", v === "grid" ? null : v),
+    onView: (v) => set("view", viewToParam(v)),
     onSort,
     onGroup,
     onDensity: () => setDensity(cycleDensity()),
@@ -118,6 +119,13 @@ export default function GalleryViewBar({
               </button>
             );
           if (c.id === "group") return <GroupControl group={group} onGroup={onGroup} />;
+          if (c.id === "view")
+            return (
+              <>
+                {node}
+                {!isMobile && <ZoomIndicator view={view} />}
+              </>
+            );
           return node;
         }}
       />
