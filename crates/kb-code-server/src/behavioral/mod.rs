@@ -215,7 +215,7 @@ pub fn age_buckets(line_ages_days: &[f64], now_unix: i64, timestamps: &[i64]) ->
         let mut sorted = line_ages_days.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mid = sorted.len() / 2;
-        if sorted.len() % 2 == 0 && sorted.len() >= 2 {
+        if sorted.len().is_multiple_of(2) && sorted.len() >= 2 {
             (sorted[mid - 1] + sorted[mid]) / 2.0
         } else {
             sorted[mid]
