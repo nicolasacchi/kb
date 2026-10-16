@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import GalleryViewBar from "./GalleryViewBar";
@@ -67,12 +67,32 @@ describe("GalleryViewBar", () => {
 
   it("renders active filters as removable chips and shows query warnings", () => {
     const c = mount("/?tags=a,b&folder=x/y&view=list", { warn: true });
-    expect(c.container.querySelectorAll(".kb-fchip").length).toBe(3);
+    // two tag chips; the folder is named by the header breadcrumb, not a chip
+    expect(c.container.querySelectorAll(".kb-fchip").length).toBe(2);
+    expect(c.container.textContent).not.toContain("x/y");
     expect(c.container.querySelector(".kb-gallery-viewbar__warn")?.getAttribute("title")).toBe("bad token");
     fireEvent.click(c.getByLabelText("remove a"));
     expect(search(c)).toContain("tags=b");
-    fireEvent.click(c.getByLabelText("remove x/y"));
-    expect(search(c)).not.toContain("folder=");
+    fireEvent.click(c.getByLabelText("remove b"));
+    expect(search(c)).not.toContain("tags=");
+  });
+
+  it("carries the Notes toggle as its right-end control and shows N of M when the list is narrower than the query", () => {
+    const onToggle = vi.fn();
+    const c = render(
+      <MemoryRouter initialEntries={["/"]}>
+        <QueryStatsProvider>
+          <Report />
+          <GalleryViewBar scope="canon" chromeless={false} notesOpen onToggleNotes={onToggle} shown={16} />
+        </QueryStatsProvider>
+      </MemoryRouter>,
+    );
+    const btn = c.container.querySelector<HTMLButtonElement>(".gallery-notes-toggle")!;
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(btn.textContent).toContain("Notes");
+    fireEvent.click(btn);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(c.container.querySelector(".kb-viewbar__count")?.textContent).toBe("16 of 1,234 matches · 7 ms");
   });
 
   it("has no filter line when nothing is filtered, and hides stats on chromeless views", () => {

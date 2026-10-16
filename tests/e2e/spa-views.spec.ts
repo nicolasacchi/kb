@@ -175,11 +175,27 @@ test.describe("gallery views", () => {
       .toBe(true);
   });
 
+  test("the unfiltered Library has no header of its own (OL P3)", async ({
+    page,
+  }) => {
+    await page.goto(`http://127.0.0.1:${port()}/`);
+    await expect(page.locator(".kb-gallery-viewbar")).toBeVisible();
+    await expect(page.locator(".gallery__header")).toHaveCount(0);
+  });
+
   test("folder filter narrows the gallery to the pm/ artifact set", async ({
     page,
   }) => {
     await page.goto(`http://127.0.0.1:${port()}/?folder=pm`);
     await expect(page.locator(".gallery-h1-accent")).toHaveText("pm");
+    // OL P3 — one header: the breadcrumb names the folder, so the ViewBar
+    // shows no `folder` chip, and the Notes toggle lives in the ViewBar.
+    await expect(page.locator(".kb-gallery-viewbar .kb-fchip")).toHaveCount(0);
+    await expect(
+      page.locator(".kb-gallery-viewbar .gallery-notes-toggle"),
+    ).toBeVisible();
+    // The selected folder row keeps a readable label (tinted, not solid).
+    await expect(page.locator(".rail-folder.is-on .rail-folder-name")).toContainText("pm");
     // All four direct pm/ artifacts share the "INC-0315 ·" title prefix.
     await expect(
       page.getByRole("link", { name: /Open INC-0315 · Summary/ }),
