@@ -5,7 +5,6 @@ import {
   buildSearchClusters,
   isNoEmbeddingModelError,
   kbHasNoEmbeddingModel,
-  NO_MODEL_REASON,
   type SearchControlsArgs,
 } from "./searchControls";
 
@@ -38,14 +37,14 @@ describe("buildSearchClusters", () => {
     expect(html).not.toContain("kb-viewbar__reason");
   });
 
-  it("disables model-backed modes with a visible reason when the kb has no model", () => {
+  it("disables model-backed modes when the kb has no model (the reason is SearchViewBar's caption)", () => {
     const clusters = buildSearchClusters({ ...base, noModel: true });
     const mode = clusters[0].controls;
     expect(mode.find((c) => c.id === "mode-keyword")?.disabled).toBeUndefined();
     const model = mode.find((c) => c.id === "mode-model");
     expect(model?.disabled).toBe(true);
-    expect(model?.reason).toBe(NO_MODEL_REASON);
-    expect(renderToString(<ViewBar clusters={clusters} />)).toContain(NO_MODEL_REASON);
+    expect(model?.reason).toBeUndefined();
+    expect(renderToString(<ViewBar clusters={clusters} />)).not.toContain("kb-viewbar__reason");
   });
 
   it("routes selections to the callbacks", () => {

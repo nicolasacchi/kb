@@ -973,11 +973,6 @@
 .kb-search__viewbar .sort-control__select {
   white-space: nowrap;
 }
-/* The disabled model buttons keep the reason as title/aria-describedby; the
- * one visible caption is `.kb-search__viewbar-note` under the bar. */
-.kb-search__viewbar .kb-viewbar__reason {
-  display: none;
-}
 .kb-search__viewbar-note {
   margin: var(--pad-1) 0 0;
   font-size: var(--fs-xs);

@@ -170,7 +170,9 @@ export default function DaemonStatus({ warnings }: { warnings: string[] }) {
           {/* What the bottom-right StatusPill showed on desktop: per-daemon
               rows (phase, open errors, in-flight, open comments) and the
               fleet metrics (req/s, storage queue depth, per-route p50/p95).
-              Mounted only while open, so the 1Hz metrics stream is too. */}
+              Mounted only while open: opening it adds one more metrics.tick
+              subscriber (the stream itself is already running for this
+              component's own subscription). */}
           <div className="kb-statusind__detail">
             <DaemonDetail />
           </div>

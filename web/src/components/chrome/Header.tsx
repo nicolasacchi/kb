@@ -48,7 +48,7 @@ export default function Header({
   warnings?: string[];
 }) {
   const loc = useLocation();
-  const onSearchPage = !spineHasSearch(loc.pathname);
+  const showSpineSearch = spineHasSearch(loc.pathname);
   const { set, navigate } = useUrl();
 
   const { data: kbs = [] } = useKbs();
@@ -106,7 +106,7 @@ export default function Header({
         }
         search={
           // The Search page carries its own big field; ⌘K still opens the palette.
-          onSearchPage ? undefined : (
+          showSpineSearch ? (
           <button
             className="kb-search-mini"
             onClick={onOpenCmdk}
@@ -117,7 +117,7 @@ export default function Header({
             <span className="kb-search-mini__placeholder">Search artifacts…</span>
             <kbd className="kbd">⌘K</kbd>
           </button>
-          )
+          ) : undefined
         }
         right={
           <>

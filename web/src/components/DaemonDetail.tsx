@@ -12,8 +12,10 @@ export const PHASE_LABEL: Record<Phase, string> = {
 // The per-daemon rows + fleet-aggregate metrics (req/s, storage queue depth,
 // per-route p50/p95) shown in a status popover: the Spine's DaemonStatus on
 // desktop, the bottom-right StatusPill on phones. Mount it only while the
-// popover is open: the live metrics ride a separate on-demand SSE stream
-// that opens with this component, so a closed popover pulls no 1Hz traffic.
+// popover is open. It adds its own `metrics.tick` subscriber (useMetrics) for
+// the aggregation. On desktop DaemonStatus already holds a metrics.tick
+// subscription for its whole lifetime, so opening the popover does not start
+// the stream there; on phones the pill's popover is the only subscriber.
 export default function DaemonDetail() {
   const status = useDaemonStatus();
   const metrics = useMetrics(true);

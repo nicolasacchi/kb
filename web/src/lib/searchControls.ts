@@ -42,8 +42,8 @@ export type SearchControlsArgs = {
 };
 
 // The search page's controls as ONE ViewBar: Mode, Scope, Results, Sort.
-// When the kb has no embedding model, hybrid and semantic are disabled with a
-// visible reason (keyword stays available).
+// When the kb has no embedding model, hybrid and semantic are disabled (keyword
+// stays available); SearchViewBar names why once, under the bar and as a title.
 export function buildSearchClusters(a: SearchControlsArgs): Cluster[] {
   return [
     {
@@ -64,7 +64,6 @@ export function buildSearchClusters(a: SearchControlsArgs): Cluster[] {
               kind: "segment",
               value: a.mode,
               disabled: true,
-              reason: NO_MODEL_REASON,
               options: [
                 { value: "hybrid", label: "hybrid" },
                 { value: "semantic", label: "semantic" },

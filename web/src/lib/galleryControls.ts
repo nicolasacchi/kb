@@ -42,6 +42,8 @@ export type GalleryControlsArgs = {
   onSort: (s: SortKey, d: SortDir) => void;
   onGroup: (g: GroupKey) => void;
   onDensity: () => void;
+  /** Present on chrome-ful views: adds the final Panel cluster with the Notes toggle. */
+  notes?: { open: boolean; onToggle: () => void };
 };
 
 export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
@@ -111,6 +113,21 @@ export function buildGalleryClusters(a: GalleryControlsArgs): Cluster[] {
         ],
       },
     );
+  }
+  if (a.notes) {
+    const n = a.notes;
+    clusters.push({
+      label: "Panel",
+      controls: [
+        {
+          id: "notes",
+          label: "Notes",
+          kind: "toggle",
+          active: n.open,
+          onSelect: () => n.onToggle(),
+        },
+      ],
+    });
   }
   return clusters;
 }

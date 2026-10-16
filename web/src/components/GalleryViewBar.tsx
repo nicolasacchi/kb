@@ -81,21 +81,21 @@ export default function GalleryViewBar({
     onSort,
     onGroup,
     onDensity: () => setDensity(cycleDensity()),
+    notes: onToggleNotes && !chromeless ? { open: notesOpen, onToggle: onToggleNotes } : undefined,
   });
 
   const showStats = !chromeless && stats !== undefined;
   const count = showStats
     ? `${
         shown !== undefined && shown !== stats.total
-          ? `${shown.toLocaleString()} of ${stats.total.toLocaleString()}`
-          : stats.total.toLocaleString()
-      } match${stats.total === 1 ? "" : "es"} · ${stats.ms} ms`
+          ? `showing ${shown.toLocaleString()} of ${stats.total.toLocaleString()}`
+          : `${stats.total.toLocaleString()} match${stats.total === 1 ? "" : "es"}`
+      } · ${stats.ms} ms`
     : undefined;
   const warnings = showStats ? stats.warnings : [];
 
   return (
     <div className="kb-gallery-viewbar" role="search">
-      <div className="kb-gallery-viewbar__row">
       <ViewBar
         title={scope || "all corpora"}
         ariaLabel="Library view"
@@ -105,22 +105,22 @@ export default function GalleryViewBar({
         maxVisible={isMobile ? 1 : 9}
         renderControl={(c, node) => {
           if (c.id === "sort") return <SortControl sort={sort} dir={dir} onSort={onSort} />;
+          if (c.id === "notes")
+            return (
+              <button
+                type="button"
+                className={`gallery-notes-toggle ${notesOpen ? "is-on" : ""}`}
+                onClick={onToggleNotes}
+                aria-pressed={notesOpen}
+                title="notes for the current folder / kb"
+              >
+                <Icon.Note /> Notes
+              </button>
+            );
           if (c.id === "group") return <GroupControl group={group} onGroup={onGroup} />;
           return node;
         }}
       />
-      {onToggleNotes && !chromeless && (
-        <button
-          type="button"
-          className={`gallery-notes-toggle ${notesOpen ? "is-on" : ""}`}
-          onClick={onToggleNotes}
-          aria-pressed={notesOpen}
-          title="notes for the current folder / kb"
-        >
-          <Icon.Note /> Notes
-        </button>
-      )}
-      </div>
       {(tokens.length > 0 || warnings.length > 0) && !chromeless && (
         <div className="kb-gallery-viewbar__filters">
           <FilterChips tokens={tokens} />

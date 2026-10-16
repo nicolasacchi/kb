@@ -163,10 +163,15 @@ test.describe("gallery views", () => {
     // synchronously with the URL change.
     await expect
       .poll(async () => {
+        // Shelf cards only: the Front Page band (`.kb-fp`) also holds
+        // "Open …" links, in recency order, and shows until the sort leaves
+        // "recent".
         const labels = await page
           .getByRole("link", { name: /^Open / })
           .evaluateAll((els) =>
-            els.map((e) => e.getAttribute("aria-label") || ""),
+            els
+              .filter((e) => !e.closest(".kb-fp"))
+              .map((e) => e.getAttribute("aria-label") || ""),
           );
         if (labels.length < 4) return false;
         const sorted = [...labels].sort((a, b) => a.localeCompare(b));
@@ -195,7 +200,14 @@ test.describe("gallery views", () => {
       page.locator(".kb-gallery-viewbar .gallery-notes-toggle"),
     ).toBeVisible();
     // The selected folder row keeps a readable label (tinted, not solid).
-    await expect(page.locator(".rail-folder.is-on .rail-folder-name")).toContainText("pm");
+    const onRow = page.locator(".rail-folder.is-on");
+    await expect(onRow.locator(".rail-folder-name")).toContainText("pm");
+    // The old bug painted --accent-soft as both background and label colour.
+    const [fg, bg] = await onRow.evaluate((row) => [
+      getComputedStyle(row.querySelector(".rail-folder-name")!).color,
+      getComputedStyle(row).backgroundColor,
+    ]);
+    expect(fg).not.toBe(bg);
     // All four direct pm/ artifacts share the "INC-0315 ·" title prefix.
     await expect(
       page.getByRole("link", { name: /Open INC-0315 · Summary/ }),

@@ -592,7 +592,7 @@
 }
 .kb-statusind__detail {
   border-top: 1px solid var(--rule);
-  padding-top: 8px;
+  padding-top: var(--pad-2);
   font-size: var(--fs-xs);
   max-height: 50vh;
   overflow-y: auto;
@@ -688,19 +688,6 @@
  * there are any. The filter chips below are the old context line's tokens. */
 .kb-gallery-viewbar {
   min-width: 0;
-}
-.kb-gallery-viewbar__row {
-  display: flex;
-  align-items: center;
-  gap: var(--pad-2);
-}
-.kb-gallery-viewbar__row > .kb-viewbar {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.kb-gallery-viewbar__row > .gallery-notes-toggle {
-  flex: none;
-  white-space: nowrap;
 }
 .kb-gallery-viewbar .kb-viewbar {
   border: 1px solid var(--rule);

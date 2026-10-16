@@ -13,8 +13,8 @@ type Props = {
 // The Search page's one control bar. Each cluster is named by its legend, so
 // the bar carries no title of its own and no control repeats its legend as an
 // inner label (the accessible name rides `aria-label`). The "no embedding
-// model" explanation is ONE muted line under the bar, and stays on the
-// disabled buttons as their `title`, never between the segment buttons.
+// model" explanation is ONE muted line under the bar and the disabled
+// buttons' `title`; no `reason` is passed, so nothing sits between the buttons.
 export default function SearchViewBar({ clusters, noModel, renderSort }: Props) {
   const renderControl = (c: Control, node: ReactNode): ReactNode => {
     if (c.id === "sort") return renderSort();
@@ -36,6 +36,7 @@ export default function SearchViewBar({ clusters, noModel, renderSort }: Props) 
         </select>
       );
     }
+    if (c.id === "mode-model") return <span title={NO_MODEL_REASON}>{node}</span>;
     return node;
   };
   return (
