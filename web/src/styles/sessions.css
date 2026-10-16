@@ -22,7 +22,7 @@
 .kb-ses__head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  gap: 10px;
   padding: 12px 16px 4px;
 }
 .kb-ses__head h1 {
@@ -302,25 +302,30 @@
 }
 .kb-ses__row-time {
   color: var(--ink-mute, #999);
-  font: 500 12px/1.2 var(--font-mono, ui-monospace);
+  font: 400 var(--fs-xs)/1.2 var(--font-sans, system-ui);
   white-space: nowrap;
   flex: none;
 }
+/* OL R4 — the title is the row: sans, --fs-lg. A title that is only the
+   opening prompt (no real name) reads regular weight. */
 .kb-ses__row-name {
-  font: 600 13.5px/1.3 var(--font-sans, system-ui);
+  font: 600 var(--fs-lg)/1.3 var(--font-sans, system-ui);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  flex: 1 1 auto;
+}
+.kb-ses__row-name--prompt {
+  font-weight: 400;
 }
 
 .kb-ses__row-preview {
-  font: 400 12.5px/1.35 var(--font-sans, system-ui);
+  font: 400 var(--fs-sm)/1.35 var(--font-sans, system-ui);
   color: var(--ink-mute, #999);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-left: calc(120px - 96px); /* light indent under the time column */
 }
 .kb-ses__row-preview em {
   color: var(--ink-mute, #999);
@@ -328,30 +333,11 @@
 }
 
 .kb-ses__row-stats {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  font: 500 11px/1 var(--font-mono, ui-monospace);
+  font: 400 var(--fs-xs)/1.3 var(--font-sans, system-ui);
   color: var(--ink-mute, #999);
-}
-.kb-ses__row-mem {
-  color: var(--accent, #b9a6ff);
-}
-.kb-ses__row-folder {
-  padding: 2px 6px;
-  border: 1px solid var(--rule, #2a2a2a);
-  border-radius: 3px;
-  color: var(--ink, #ccc);
-  max-width: 14ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.kb-ses__row-kb {
-  padding: 2px 6px;
-  border: 1px solid var(--rule, #2a2a2a);
-  border-radius: 3px;
 }
 
 /* S9 — decisions log in the inspector. */
@@ -622,26 +608,6 @@
 }
 
 /* P7 — view toggle (list ↔ threads) + the threads view. */
-.kb-ses__viewtoggle {
-  display: inline-flex;
-  border: 1px solid var(--rule, #2a2a2a);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.kb-ses__viewtoggle button {
-  font: 500 11px/1 var(--font-mono, ui-monospace);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-mute, #999);
-  background: transparent;
-  border: 0;
-  padding: 4px 9px;
-  cursor: pointer;
-}
-.kb-ses__viewtoggle button.is-active {
-  background: var(--accent, #b9a6ff);
-  color: var(--bg, #111);
-}
 .kb-ses__threads {
   display: flex;
   flex-direction: column;
@@ -705,9 +671,8 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--rule, #2a2a2a);
-  font: 500 11.5px/1.3 var(--font-mono, ui-monospace);
+  padding: 4px 16px 8px;
+  font: 400 var(--fs-xs)/1.3 var(--font-sans, system-ui);
   color: var(--ink-mute, #999);
 }
 .kb-ses__funnel-stage b {
@@ -1374,3 +1339,8 @@
    The old rail-below-the-list layout is GONE — mobile now raises the rail as
    the ONE bottom sheet (`.kb-ses__inspector--sheet`, mirrors the v0.23
    `.kb-pinsp` reader-tools sheet); see mobile.css. */
+
+/* OL R4 — the single control row under the page head. */
+.kb-ses__viewbar {
+  padding: 0 16px;
+}
