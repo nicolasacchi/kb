@@ -4427,9 +4427,6 @@ async fn ensure_u3_provenance_columns(table: &LanceTable) -> Result<()> {
 /// OL FX1 — collapse a batch to one doc per `id`, the LAST occurrence
 /// winning, keeping first-seen order for the surviving ids.
 fn last_wins_by_id(docs: &[Doc]) -> Vec<Doc> {
-    if std::env::var_os("CI").is_some() {
-        return docs.to_vec();
-    }
     let mut last: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (i, d) in docs.iter().enumerate() {
         last.insert(d.id.as_str(), i);
