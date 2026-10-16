@@ -159,11 +159,12 @@ export interface DeskProps {
   onSaveWorkspace?: () => void;
 }
 
-const RAIL_STRIPE_META: { tab: RailTab; label: string; icon: ReactNode }[] = [
+export const RAIL_STRIPE_META: { tab: RailTab; label: string; icon: ReactNode }[] = [
   { tab: "all", label: "All", icon: <Icon.Layers /> },
   { tab: "understand", label: "Understand", icon: <Icon.Entity /> },
   { tab: "history", label: "History", icon: <Icon.History /> },
   { tab: "notes", label: "Notes", icon: <Icon.Note /> },
+  { tab: "facts", label: "Facts", icon: <Icon.Facts /> },
   { tab: "review", label: "Review", icon: <Icon.ClipboardCheck /> },
 ];
 

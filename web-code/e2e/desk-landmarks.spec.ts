@@ -138,7 +138,8 @@ test.describe("Desk landmarks (V70-A4)", () => {
     await expect(page.locator(".kbc-codeview")).toBeVisible({ timeout: 15_000 });
     await expect(page.locator("[data-desk-preset]")).toHaveAttribute("data-desk-preset", "review");
     // Review lands the rail on its own tab and opens the drawer.
-    await expect(page.locator('[data-kbc-itab="review"][aria-selected="true"]')).toBeVisible();
+    await expect(page.locator('[data-kbc-itab="review"][aria-selected="true"]')).toHaveCount(1);
+    await expect(page.locator('[data-desk-stripe-btn="review"][aria-pressed="true"]')).toBeVisible();
     await expect(page.locator('[data-region="drawer"]')).toHaveAttribute(
       "data-desk-drawer-collapsed",
       "0",

@@ -56,9 +56,10 @@ test.describe("the current review travels with the reader (V80-M3)", () => {
     // sync effect re-appends `?review=` via one replace even though this
     // landing URL didn't carry it.
     await expect(page).toHaveURL(new RegExp(`review=${reviewId}(&|$)`), { timeout: 10_000 });
-    const reviewTab = page.locator('[data-kbc-itab="review"]');
-    await expect(reviewTab).toBeVisible({ timeout: 10_000 });
-    await reviewTab.click();
+    // OL-P5 — on desktop the Desk's right Stripe is the ONE rail switcher; the
+    // panel's own tab strip stays in the DOM (hidden) and still reports state.
+    await expect(page.locator('[data-kbc-itab="review"]')).toHaveCount(1, { timeout: 10_000 });
+    await page.locator('[data-desk-stripe-btn="review"]').click();
     const reviewPanel = page.locator("[data-kbc-current-review-panel]");
     await expect(reviewPanel).toBeVisible();
     // V80-M2 — the real panel (`ReviewFileThreadsPanel.tsx`) replaced this
@@ -78,7 +79,7 @@ test.describe("the current review travels with the reader (V80-M3)", () => {
     // observable as the tab disappearing from the strip (rather than
     // staying selected and merely showing its empty body — InspectorRail's
     // own documented carve-out for a PERSISTED selection).
-    await page.locator('[data-kbc-itab="understand"]').click();
+    await page.locator('[data-desk-stripe-btn="understand"]').click();
 
     // --- A3: clearing via the chip's × strips the URL param and re-gates
     // the tab --------------------------------------------------------------
@@ -95,7 +96,7 @@ test.describe("the current review travels with the reader (V80-M3)", () => {
     await expect(freshPage.locator('[data-kbc-current-review-chip="bar"]')).toBeVisible({
       timeout: 10_000,
     });
-    await expect(freshPage.locator('[data-kbc-itab="review"]')).toBeVisible();
+    await expect(freshPage.locator('[data-kbc-itab="review"]')).toHaveCount(1);
     await fresh.close();
   });
 });

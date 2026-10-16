@@ -107,7 +107,7 @@ test.describe("the reader binds a comment to a review (V80-M2)", () => {
     expect(group!.comments.some((c) => c.body === commentBody)).toBe(true);
 
     // --- the rail's Review tab lists the same thread -----------------------
-    await page.locator('[data-kbc-itab="review"]').click();
+    await page.locator('[data-desk-stripe-btn="review"]').click();
     await expect(page.locator("[data-kbc-review-rail-caption]")).toContainText("Not in the diff", {
       timeout: 10_000,
     });
@@ -116,7 +116,7 @@ test.describe("the reader binds a comment to a review (V80-M2)", () => {
     ).toBeVisible({ timeout: 10_000 });
 
     // --- back to Notes: unbind — still a working-tree note -----------------
-    await page.locator('[data-kbc-itab="notes"]').click();
+    await page.locator('[data-desk-stripe-btn="notes"]').click();
     await expect(thread).toBeVisible();
     await thread.locator("[data-kbc-annot-review-unbind]").click();
     await expect(thread.locator("[data-kbc-annot-review-chip]")).toHaveCount(0, { timeout: 10_000 });

@@ -24,7 +24,7 @@ test.describe("bookmarks", () => {
     // Open the rail's Notes tab — V70-A4 folded the old `bookmarks` and
     // `annotations` SOURCE tabs into one TASK tab ("what did I mark?",
     // docs/research/kb-code-v7-continuum-2026-09.html §P1).
-    await page.locator('[data-kbc-itab="notes"]').click();
+    await page.locator('[data-desk-stripe-btn="notes"]').click();
     const rows = page.locator("[data-kbc-bookmark-row]");
     await expect(rows.first()).toBeVisible({ timeout: 5_000 });
     await expect(rows.first()).toContainText(KNOWN_FILE);

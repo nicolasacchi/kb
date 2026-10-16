@@ -69,7 +69,7 @@ test.describe("workspaces", () => {
     await expect(fresh).toHaveURL(new RegExp(`${CALLER_FILE.replace(".", "\\.")}.*line=5`));
 
     // --- notes: a general note + a code-anchored one --------------------------
-    await fresh.locator('[data-kbc-itab="notes"]').click();
+    await fresh.locator('[data-desk-stripe-btn="notes"]').click();
     await expect(fresh.locator("[data-kbc-ws-notes]")).toBeVisible();
 
     await fresh.locator("[data-kbc-ws-note-body]").fill("why this workspace exists");
@@ -86,7 +86,7 @@ test.describe("workspaces", () => {
     // --- persists across reload -----------------------------------------------
     await fresh.reload();
     await expect(fresh.locator(".kbc-codeview")).toBeVisible({ timeout: 10_000 });
-    await fresh.locator('[data-kbc-itab="notes"]').click();
+    await fresh.locator('[data-desk-stripe-btn="notes"]').click();
     await expect(fresh.locator("[data-kbc-ws-notes-general] [data-kbc-ws-note-id]")).toHaveCount(1);
     await expect(
       fresh.locator(`[data-kbc-ws-notes-file="${CALLER_FILE}"] [data-kbc-ws-note-id]`),

@@ -118,7 +118,7 @@ test.describe("History inspector tab", () => {
     await expect(page.locator(".kbc-codeview")).toContainText(KNOWN_SYMBOL, { timeout: 10_000 });
     await historyPromise;
 
-    await page.locator('[data-kbc-itab="history"]').click();
+    await page.locator('[data-desk-stripe-btn="history"]').click();
     const entry = page.locator(`[data-kbc-history-entry="${sha}"]`);
     await expect(entry).toBeVisible();
     // The virtual "working tree" row is the current position on first open
