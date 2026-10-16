@@ -121,7 +121,7 @@ fn download_ok(url: &str, args: &[&str]) -> Vec<u8> {
 fn zip_entry_names(bytes: &[u8]) -> Vec<String> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("valid zip");
     let mut names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
         .collect();
     names.sort();
     names
