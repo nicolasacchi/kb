@@ -52,7 +52,7 @@ export interface RovingCursor {
 /// overlay: every overlay in this codebase already renders one of these
 /// two markers (`role="dialog" aria-modal="true"`, or a native `<dialog>`
 /// via `showModal()`).
-function isOverlayOpen(): boolean {
+export function isOverlayOpen(): boolean {
   return !!document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]');
 }
 

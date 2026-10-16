@@ -164,6 +164,7 @@ export const REGISTRY: readonly Binding[] = [
   { keys: "h / l / ← / →", scope: "gallery", group: "Gallery", label: "Move across columns (grid view)", actionId: "gallery.cursorMoveCol", when: "useRovingCursor (routes/gallery.tsx) — grid view only" },
   { keys: "Enter", scope: "gallery", group: "Gallery", label: "Open the focused card", actionId: "gallery.activate", when: "useRovingCursor (routes/gallery.tsx)" },
   { keys: "Escape", scope: "gallery", group: "Gallery", label: "Clear the cursor", actionId: "gallery.clearCursor", when: "useRovingCursor (routes/gallery.tsx)" },
+  { keys: "- / =", scope: "gallery", group: "Gallery", label: "Zoom the Library out / in: Atlas, Index, Shelf", actionId: "gallery.semanticZoom", when: "useSemanticZoom (routes/gallery.tsx) — atlas, index and shelf views only" },
 
   // Search results — doc-only; same `useRovingCursor` hook, mounted from
   // `routes/search.tsx` over the flat (non-grouped) results list.

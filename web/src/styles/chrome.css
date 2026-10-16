@@ -7104,3 +7104,30 @@ a.proposal-row__chip:hover {
   border-radius: var(--radius-sm);
   padding: 0 4px;
 }
+
+/* Semantic-zoom position (OL FX4): three ticks beside the View choice. */
+.kb-zoomind {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: var(--pad-2);
+}
+.kb-zoomind__tick {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--rule);
+  background: transparent;
+}
+.kb-zoomind__tick.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+}
+.kb-zoom-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

@@ -130,6 +130,22 @@ export default function Preferences() {
             ))}
           </div>
         </div>
+        <div className="settings__field">
+          <label className="settings__label" htmlFor="pinch-zoom">
+            pinch to change Library view
+          </label>
+          <input
+            id="pinch-zoom"
+            type="checkbox"
+            checked={prefs.pinchZoom !== false}
+            onChange={(e) => setPrefs({ ...prefs, pinchZoom: e.target.checked })}
+          />
+        </div>
+        <p className="settings__hint">
+          Ctrl-wheel or a trackpad pinch over the Library steps Atlas, Index and
+          Shelf. Off leaves pinch to the browser; <code>-</code> and <code>=</code> still work.
+        </p>
+
         <p className="settings__hint">
           Which view a bare <code>/</code> opens. The map home is opt-in — it
           is also reachable any time as <code>/?shell=map</code>, and the
