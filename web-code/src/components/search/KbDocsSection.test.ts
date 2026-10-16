@@ -52,6 +52,7 @@ describe("KbDocsSection", () => {
 
   it.each([
     ["kb unreachable", "unreachable"],
+    ["kb search timed out", "timed out"],
     ["kb disabled", "not configured"],
     ["kb_sibling_mismatch", "sibling contract"],
   ])("an unavailable '%s' response is one muted line, no rows, no alert", (unavailable, words) => {

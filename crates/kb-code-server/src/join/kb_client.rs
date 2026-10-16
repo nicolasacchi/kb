@@ -35,6 +35,13 @@ use tokio::sync::RwLock;
 /// a `kb-code join` resolution (or a bulk resolve) hangs.
 pub const TIMEOUT: Duration = Duration::from_millis(1_500);
 
+/// The OL S1 Documents-lane search relay's own deadline. A keyword search
+/// with `scope=all` fans out over EVERY kb corpus (CLAUDE.md #28), so on a
+/// loaded host with dozens of corpora it routinely takes longer than
+/// [`TIMEOUT`], which is sized for the join ladder's small enrichment calls
+/// and must stay short. Applied per request in [`KbClient::search`] only.
+pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(6);
+
 /// How long a fetched commit-map snapshot is trusted before the next
 /// `commit_map_snapshot(false)` call re-fetches — see the module doc.
 pub const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
@@ -217,6 +224,11 @@ pub enum KbClientError {
     ClientBuild(String),
     #[error("kb daemon unreachable at {0}: {1}")]
     Unreachable(String, String),
+    /// The peer was reached but did not answer within its deadline (the
+    /// search relay's [`SEARCH_TIMEOUT`]). Distinct from `Unreachable` so
+    /// the caption can tell "slow" from "down".
+    #[error("kb daemon at {0} did not answer in time")]
+    Timeout(String),
     #[error("kb daemon returned {0}")]
     BadStatus(reqwest::StatusCode),
     #[error("parse kb daemon response: {0}")]
@@ -465,6 +477,9 @@ pub struct KbClient {
     /// not a TTL: the answer is a property of the two BINARIES, and either
     /// one changing means a redeploy.
     sibling: tokio::sync::OnceCell<Handshake>,
+    /// Per-request deadline for [`KbClient::search`] (overrides the client's
+    /// shared [`TIMEOUT`]); a field so tests can shrink it.
+    search_timeout: Duration,
 }
 
 impl KbClient {
@@ -481,7 +496,15 @@ impl KbClient {
             client,
             token,
             sibling: tokio::sync::OnceCell::new(),
+            search_timeout: SEARCH_TIMEOUT,
         }
+    }
+
+    /// Test-only: shrink the search deadline.
+    #[cfg(test)]
+    fn with_search_timeout(mut self, d: Duration) -> Self {
+        self.search_timeout = d;
+        self
     }
 
     /// The shared pooled client — see the field doc.
@@ -1163,15 +1186,26 @@ impl KbClient {
                 ("mode", "keyword".to_string()),
                 ("limit", limit.to_string()),
             ])
+            .timeout(self.search_timeout)
             .send()
             .await
-            .map_err(|e| KbClientError::Unreachable(url.clone(), e.to_string()))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    KbClientError::Timeout(url.clone())
+                } else {
+                    KbClientError::Unreachable(url.clone(), e.to_string())
+                }
+            })?;
         if !resp.status().is_success() {
             return Err(KbClientError::BadStatus(resp.status()));
         }
-        resp.json()
-            .await
-            .map_err(|e| KbClientError::Parse(e.to_string()))
+        resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                KbClientError::Timeout(url.clone())
+            } else {
+                KbClientError::Parse(e.to_string())
+            }
+        })
     }
 
     /// `GET {url}/api/settings` — kb's daemon-level UI prefs, for the
@@ -2752,6 +2786,43 @@ mod tests {
             relay.hits[0].title,
             "limit=20|mode=keyword|q=a&b c|scope=all"
         );
+    }
+
+    fn slow_search_router(delay: Duration) -> Router {
+        Router::new().route(
+            "/api/search",
+            get(move || async move {
+                tokio::time::sleep(delay).await;
+                Json(serde_json::json!({"hits": [{
+                    "kb": "platform", "id": "abc", "title": "T",
+                    "source_relative": "a.html", "snippet": "s"
+                }]}))
+            }),
+        )
+    }
+
+    /// FX5: a search slower than the shared TIMEOUT but inside the search
+    /// deadline still returns its hits.
+    #[tokio::test]
+    async fn search_waits_past_the_shared_timeout() {
+        let delay = TIMEOUT + Duration::from_millis(400);
+        assert!(delay < SEARCH_TIMEOUT);
+        let (addr, _server) = mock_kb_server(slow_search_router(delay)).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")));
+        assert_eq!(client.search("x", 5).await.unwrap().hits.len(), 1);
+    }
+
+    /// FX5: past the search deadline the error is `Timeout`, not `Unreachable`.
+    #[tokio::test]
+    async fn search_past_its_deadline_is_a_timeout_not_unreachable() {
+        let (addr, _server) =
+            mock_kb_server(slow_search_router(Duration::from_millis(1_500))).await;
+        let client = KbClient::new(cfg(format!("http://{addr}")))
+            .with_search_timeout(Duration::from_millis(300));
+        assert!(matches!(
+            client.search("x", 5).await.unwrap_err(),
+            KbClientError::Timeout(_)
+        ));
     }
 
     #[tokio::test]

@@ -994,6 +994,11 @@ pub(crate) fn kb_client_error(e: KbClientError) -> ApiError {
             format!("kb daemon unreachable at {url}: {msg}"),
         )
         .with_reason("kb_unreachable"),
+        KbClientError::Timeout(url) => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("kb daemon at {url} did not answer in time"),
+        )
+        .with_reason("kb_unreachable"),
         KbClientError::ClientBuild(msg) => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             format!("kb daemon client unavailable: {msg}"),

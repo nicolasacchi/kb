@@ -368,6 +368,7 @@ GET  /api/kb/search?q=&limit=              OL S1: kb's `GET /api/search`
                                             Always 200: an unreachable /
                                             disabled kb answers `{hits:[],
                                             unavailable:"kb unreachable" |
+                                            "kb search timed out" |
                                             "kb disabled"}`, a kb-sibling/1
                                             mismatch `unavailable:
                                             "kb_sibling_mismatch"`.
