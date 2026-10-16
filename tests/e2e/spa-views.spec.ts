@@ -161,6 +161,32 @@ test.describe("gallery views", () => {
     // the order matches the `?sort=title` deep link: A→Z by localeCompare.
     // Poll — the reorder lands after the debounced server refetch, not
     // synchronously with the URL change.
+    // OL P6 diagnostics: when the order is wrong, name what the server sent
+    // for the same query and where each displayed card sits in the DOM.
+    const diagnose = async () => {
+      const api = await page.request.get(
+        `http://127.0.0.1:${port()}/api/kb/canon/docs?sort=title&dir=asc&limit=200`,
+      );
+      const body = await api.json();
+      const docs = (Array.isArray(body) ? body : body.docs) as {
+        id: string;
+        title: string;
+        source_relative: string;
+      }[];
+      const dom = await page.getByRole("link", { name: /^Open / }).evaluateAll((els) =>
+        els.map((e) => {
+          const chain: string[] = [];
+          for (let n: Element | null = e; n && chain.length < 6; n = n.parentElement) {
+            chain.push(n.tagName.toLowerCase() + (n.className ? "." + String(n.className).split(" ")[0] : ""));
+          }
+          return `${e.getAttribute("aria-label")} @ ${e.getAttribute("href")} <- ${chain.slice(1).join(" < ")}`;
+        }),
+      );
+      return (
+        `server: ${JSON.stringify(docs.map((d) => [d.title, d.source_relative]))}\n` +
+        `dom:\n${dom.join("\n")}`
+      );
+    };
     await expect
       .poll(async () => {
         // Shelf cards only: the Front Page band (`.kb-fp`) also holds
@@ -178,7 +204,7 @@ test.describe("gallery views", () => {
         // On failure the received value names the order the page showed.
         return JSON.stringify(labels) === JSON.stringify(sorted)
           ? "sorted"
-          : labels.join(" | ");
+          : labels.join(" | ") + "\n" + (await diagnose());
       })
       .toBe("sorted");
   });

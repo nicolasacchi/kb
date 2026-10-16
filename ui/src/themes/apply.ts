@@ -9,8 +9,9 @@
 //                                           CSS key on)
 //   <html data-kbc-theme="<theme id>">      the resolved registry theme the
 //                                           generated CSS selects on
-//   <html style="color-scheme: …">          so native widgets and
-//                                           `light-dark()` follow the choice
+//   <html style="color-scheme: …">          native widgets follow the choice
+//                                           (the CSS roles follow the
+//                                           data-theme selectors instead)
 //
 // Storage is NOT here: each app owns where its preference lives (kb-code's
 // `lib/prefs.ts`, kb's `api/prefs.ts`, different keys, different blobs) and
