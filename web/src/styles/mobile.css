@@ -211,55 +211,6 @@
   .body--with-rail > .kb-side {
     display: none;
   }
-
-  /* The query ribbon can carry a wide token chain; let it scroll rather
-   * than blow out the page width. */
-  .kb-qribbon {
-    overflow-x: auto;
-  }
-
-  /* D4 — the gallery's Sort/Group/Density trio no longer fits the ribbon
-   * at phone widths; hidden here (desktop DOM is untouched — ContextLine
-   * only MOUNTS the replacement button + sheet when `useIsMobile()`, so
-   * this is belt-and-suspenders CSS, not the only gate) in favour of the
-   * single "view options" button below. Scoped to the gallery ribbon so
-   * `.sort-control`/`.group-control` elsewhere (e.g. the search page) are
-   * unaffected. */
-  .kb-qribbon--gallery .sort-control,
-  .kb-qribbon--gallery .group-control,
-  .kb-qribbon--gallery .kb-qribbon__density {
-    display: none;
-  }
-  .kb-qribbon__viewopts {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 26px;
-    padding: 0 10px;
-    border: 1px solid var(--rule);
-    border-radius: 5px;
-    background: var(--bg-panel);
-    color: var(--ink-mute);
-    font-family: var(--font-mono);
-    font-size: var(--fs-xs);
-    cursor: pointer;
-  }
-  .kb-qribbon__viewopts:hover,
-  .kb-qribbon__viewopts[aria-expanded="true"] {
-    border-color: var(--rule-hi);
-    color: var(--ink);
-  }
-}
-
-/* The sheet body stacks the reused Sort/Group/Density controls as full-width
- * rows instead of the ribbon's inline row (D4). Base rule (not inside the
- * 860px query) because `ViewOptionsSheet` only ever mounts on mobile. */
-.kb-viewopts-sheet {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 4px 16px 12px;
 }
 
 /* ──────────────────────── MB3: immersive reading ────────────────────── */
@@ -275,7 +226,7 @@
  * artifact iframe owns the whole viewport. Driven by `body.kb-immersive`
  * (set from detail.tsx). Only the mobile-only toggle triggers it. */
 body.kb-immersive .app {
-  grid-template-rows: 0 0 minmax(0, 1fr) 0;
+  grid-template-rows: 0 minmax(0, 1fr);
 }
 /* The chrome rows above are `display: none` in immersive, which removes them
  * from the grid flow — so the routed `<main class="body">` auto-places into
@@ -283,11 +234,9 @@ body.kb-immersive .app {
  * the dark --bg showing through). Pin main to the 1fr track (row 3) so the
  * artifact owns the viewport regardless of how many bars were hidden. */
 body.kb-immersive .body {
-  grid-row: 3;
+  grid-row: 2;
 }
 body.kb-immersive .kb-head,
-body.kb-immersive .kb-qribbon,
-body.kb-immersive .kb-qribbon-placeholder,
 body.kb-immersive .kb-ctxbar,
 body.kb-immersive .pages,
 body.kb-immersive .pill-container {

@@ -21,6 +21,26 @@ test.describe("gallery views", () => {
     ).toBeVisible();
   });
 
+  test("the labelled View control reaches every Library view", async ({ page }) => {
+    await page.goto(`http://127.0.0.1:${port()}/`);
+    const view = page.locator('[data-kb-viewbar-control="view"]');
+    await expect(view).toBeVisible();
+    await expect(view).toHaveValue("grid");
+    for (const [label, value] of [
+      ["Index", "list"],
+      ["Atlas", "atlas"],
+      ["Timeline", "history"],
+      ["Canvas", "canvas"],
+      ["Front page", "press"],
+    ] as const) {
+      await view.selectOption({ label });
+      await expect(page).toHaveURL(new RegExp(`[?&]view=${value}`));
+      await expect(view).toHaveValue(value);
+    }
+    await view.selectOption({ label: "Shelf" });
+    await expect(page).not.toHaveURL(/view=/);
+  });
+
   test("List view renders rows", async ({ page }) => {
     await page.goto(`http://127.0.0.1:${port()}/?view=list`);
     await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Library" })).toHaveAttribute("aria-current", "page");
