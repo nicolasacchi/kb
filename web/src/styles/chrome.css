@@ -2459,24 +2459,57 @@ a.kb-idschip:hover {
   font-size: var(--fs-xs);
   font-style: italic;
 }
-/* v0.24 X4 — the About tab's "exclude from index" row. */
-.kb-pinsp__exclude {
-  display: inline-flex;
+/* OL R2 — Passport (two lines + Details disclosure), the single reading
+ * line, and the collapsible Topics header. */
+.kb-pinsp__passport-line {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--rule);
-  background: transparent;
+  padding: 3px 0;
   color: var(--ink-mute);
-  cursor: pointer;
-  transition: color 120ms var(--ease), border-color 120ms var(--ease);
 }
-.kb-pinsp__exclude:hover {
-  color: var(--warn);
-  border-color: var(--warn);
+.kb-pinsp__passport-lbl {
+  color: var(--ink-dim);
+}
+.kb-pinsp__details {
+  margin-top: 6px;
+}
+.kb-pinsp__details > summary {
+  cursor: pointer;
+  color: var(--ink-dim);
+  font-size: var(--fs-xs);
+  padding: 4px 0;
+}
+.kb-pinsp__details[open] > summary {
+  color: var(--ink-mute);
+}
+.kb-pinsp__reading.kb-pinsp__readby {
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 0;
+  font-size: inherit;
+  color: var(--ink-mute);
+}
+.kb-pinsp__reading-part {
+  display: inline-flex;
+  white-space: pre;
+}
+.kb-pinsp__topics-h {
+  padding: 0;
+}
+.kb-pinsp__topics-toggle {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  width: 100%;
+}
+.kb-pinsp__topics-toggle:hover,
+.kb-pinsp__topics-toggle:focus-visible {
+  color: var(--ink);
+}
+.kb-pinsp__topics-toggle:focus-visible {
+  outline: var(--focus-ring, 2px solid var(--accent));
 }
 .kb-pinsp__folder-pos {
   color: var(--ink-mute);

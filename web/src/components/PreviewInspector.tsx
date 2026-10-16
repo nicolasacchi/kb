@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  excludeArtifact,
   fetchDoc,
   fetchTags,
   isAbortError,
@@ -15,7 +14,6 @@ import {
   useSetDocLensPin,
 } from "../hooks/useDocLens";
 import CodeRefsSection from "./CodeRefsSection";
-import { useConfirm } from "./ConfirmProvider";
 import { useInspectorCollapsed } from "../hooks/useInspectorCollapsed";
 import {
   INSPECTOR_TABS,
@@ -29,12 +27,13 @@ import type { ReadingSummary } from "../api/reading";
 import RelatedMemoriesPanel from "./RelatedMemoriesPanel";
 import LiftedFromPanel from "./LiftedFromPanel";
 import TagPill from "./TagPill";
-import FolderCrumbLinks from "./FolderCrumbLinks";
+import Passport from "./inspector/Passport";
+import ReadingLine from "./inspector/ReadingLine";
+import TopicsSection from "./inspector/TopicsSection";
 import MoveArtifactModal from "./MoveArtifactModal";
 import { artifactHref } from "../lib/artifactHref";
 import { folderIndexNote } from "../lib/folderIndexNote";
 import { galleryUrl } from "../lib/galleryUrl";
-import { toast } from "../lib/toast";
 import { slugifyTag, tagColor, tagsFor } from "../lib/derive";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -84,10 +83,6 @@ export type FolderEntry = {
   firstIndexed?: number;
   progress?: { pct: number; isDone: boolean };
 };
-
-// v0.22 — half-width of the "files modified around this time" window the mtime
-// passport link opens (±7 days, in seconds), centred on this doc's mtime.
-const MTIME_WINDOW_SECS = 7 * 24 * 60 * 60;
 
 type SiblingsPrefs = { sort: SiblingSortKey; includeSubfolders: boolean };
 const SIBLINGS_KEY = "kb:siblings";
@@ -165,17 +160,6 @@ function writeSiblingsPrefs(prefs: SiblingsPrefs): void {
 // gallery card already shows; rendering the actual referrer paths
 // requires reverse-lookup support the route doesn't yet expose
 // (deferred — backlinks stays count-only here).
-/// RP-track — `372000` → `6m 12s` for the "Read by you" block.
-function fmtReadDur(ms: number): string {
-  const secs = Math.max(0, Math.round(ms / 1000));
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
 export default function PreviewInspector({
   kb,
   doc,
@@ -242,11 +226,6 @@ export default function PreviewInspector({
   // the hook list. The collapsed-state branch is below at the render
   // step.
   const { collapsed, toggle: toggleCollapsed } = useInspectorCollapsed("detail");
-  // v0.24 X4 — the About tab's "exclude from index" action. Confirm-guarded
-  // (invariant #32); on success we leave the reader for the kb gallery, since
-  // the KeepUserData cascade is about to pull this doc from the index (the
-  // detail queries would 404 on the SSE invalidation).
-  const confirm = useConfirm();
   const navigate = useNavigate();
   // DCB W1.D — upgraded from the read-only `[searchParams]` destructure so
   // the Code section's repo picker (`pickRepo`, below) can write `?repo=`.
@@ -262,29 +241,8 @@ export default function PreviewInspector({
   // internal selection was rejected as strictly worse (13-w1d-kb-spa.md
   // §4.3).
   const [searchParams, setSearchParams] = useSearchParams();
-  const [excluding, setExcluding] = useState(false);
   // F4 — move dialog for the open artifact (Folder tab header action).
   const [moveOpen, setMoveOpen] = useState(false);
-  const onExclude = async () => {
-    const ok = await confirm({
-      title: "Exclude from index?",
-      body: `Exclude “${doc.title || doc.source_relative}” from search and the gallery? The file stays on disk and its comments + reading history survive — re-include it any time from Settings → Excluded.`,
-      confirmLabel: "Exclude",
-    });
-    if (!ok) return;
-    setExcluding(true);
-    excludeArtifact(kb, doc.source_relative)
-      .then(() => {
-        toast.ok("excluded from index");
-        navigate(galleryUrl(kb));
-      })
-      .catch((err) =>
-        toast.err(
-          `exclude failed: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      )
-      .finally(() => setExcluding(false));
-  };
   // I1 — which sub-panel is showing; persisted so re-opening an artifact
   // restores the last tab. `show(t)` (below) also matches the "All" overview.
   const { tab, setTab } = useInspectorTab("detail");
@@ -928,157 +886,18 @@ export default function PreviewInspector({
             </div>
           </>
         )}
-        {/* SH.B3 — heading/TOC jump list. Empty state renders nothing (no
-            bare "Topics" header) — the artifact simply has no headings, or
-            the runtime hasn't posted `kb:toc` yet. This is the reader
-            sheet's only section-nav affordance on mobile now that TocSpy's
-            floating rail is hidden at ≤860px (SH.B2). */}
-        {tocItems.length > 0 && (
-          <>
-            <h4>Topics</h4>
-            <div className="kb-pinsp__toc">
-              {tocItems.map((h) => (
-                <button
-                  key={h.id}
-                  type="button"
-                  className={`kb-pinsp__toc-row kb-pinsp__toc-row--l${h.level}${
-                    h.id === activeSection ? " is-on" : ""
-                  }`}
-                  onClick={() => jumpToSection(h.id)}
-                  title={h.text}
-                >
-                  {h.text}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-        <h4>Reading</h4>
-        <div className="kb-pinsp__reading">
-          {readMin !== null && (
-            <span>
-              est. <b>{readMin} min</b>
-            </span>
-          )}
-          {progress && (
-            <>
-              <span className="kb-pinsp__sep">·</span>
-              <span>
-                <b className="kb-pinsp__pct">{progress.pct}%</b> read
-              </span>
-            </>
-          )}
-        </div>
-        {progress && (
-          <div className="kb-pinsp__progress" aria-hidden>
-            <i style={{ width: `${progress.pct}%` }} />
-          </div>
-        )}
-
-        {summary && summary.visit_count > 0 && (
-          <>
-            <h4>Read by you</h4>
-            <div className="kb-pinsp__reading">
-              <span>
-                <b className="kb-pinsp__pct">{summary.completion_pct}%</b> scrolled
-              </span>
-              <span className="kb-pinsp__sep">·</span>
-              <span>
-                <b>{summary.read_pct}%</b> read
-              </span>
-            </div>
-            <div className="kb-pinsp__readby">
-              active {fmtReadDur(summary.active_ms_total)} · {summary.visit_count}{" "}
-              visit{summary.visit_count === 1 ? "" : "s"}
-            </div>
-            {summary.stopped_at && (
-              <div className="kb-pinsp__readby kb-pinsp__readby--stop">
-                stopped at “{summary.stopped_at.text}” (~{summary.stopped_at.pct}%)
-              </div>
-            )}
-          </>
-        )}
-
-        <h4>Identifier</h4>
-        <KV label="file">{shortFilename(doc)}</KV>
-        {/* v0.22 passport — folder/category/mtime are now gallery deep-links;
-            the id copies to clipboard. Each pivots into a pre-filtered,
-            refinable gallery (folder is descendant-inclusive). */}
-        <KV label="folder">
-          <FolderCrumbLinks
-            kb={kb}
-            folder={doc.folder}
-            linkClass="kb-pinsp__kv-link"
-          />
-        </KV>
-        {doc.kb_category && (
-          <KV label="category">
-            <Link
-              className="kb-pinsp__kv-link"
-              to={galleryUrl(kb, { category: doc.kb_category })}
-              title={`all ${doc.kb_category} artifacts`}
-            >
-              {doc.kb_category}
-            </Link>
-          </KV>
-        )}
-        <KV label="id">
-          <IdCopy id={doc.id} />
-        </KV>
-        {doc.mtime_unix && (
-          <KV label="mtime">
-            <Link
-              className="kb-pinsp__kv-link"
-              to={galleryUrl(kb, {
-                from: doc.mtime_unix - MTIME_WINDOW_SECS,
-                to: doc.mtime_unix + MTIME_WINDOW_SECS,
-                sort: "recent",
-                dir: "desc",
-              })}
-              title="files modified around this time (±7d)"
-            >
-              {formatUnix(doc.mtime_unix)}
-            </Link>
-          </KV>
-        )}
-        {doc.created_unix && (
-          <KV label="created">{formatUnix(doc.created_unix)}</KV>
-        )}
-        {doc.indexed_at_unix && (
-          <KV label="indexed">{formatUnix(doc.indexed_at_unix)}</KV>
-        )}
-
-        <h4>Metrics</h4>
-        {doc.word_count !== null && doc.word_count !== undefined && (
-          <KV label="words">{doc.word_count.toLocaleString()}</KV>
-        )}
-        {/* v0.22 D2 — backlinks/outlinks are null on the single-doc GET, so the
-            old KV rows here never rendered; the Links sub-tab now shows the real
-            (edge-derived) directed counts instead. */}
-        {doc.svg_count !== null && doc.svg_count !== undefined && doc.svg_count > 0 && (
-          <KV label="svgs">{doc.svg_count}</KV>
-        )}
-        {doc.table_count !== null && doc.table_count !== undefined && doc.table_count > 0 && (
-          <KV label="tables">{doc.table_count}</KV>
-        )}
-        {doc.code_block_count !== null && doc.code_block_count !== undefined && doc.code_block_count > 0 && (
-          <KV label="code blocks">{doc.code_block_count}</KV>
-        )}
-
-        <h4>Index</h4>
-        <button
-          type="button"
-          className="kb-pinsp__exclude"
-          data-kb-act="exclude"
-          disabled={excluding}
-          onClick={() => void onExclude()}
-          title="exclude this artifact from search + gallery (comments and reading history survive)"
-        >
-          ⊘ {excluding ? "excluding…" : "Exclude from index"}
-        </button>
-        <div className="kb-pinsp__hint">
-          Reversible — re-include from Settings → Excluded.
-        </div>
+        {/* OL R2 — the rail reads top-down: where next (Explore), what is
+            this (Passport), how far along (Reading), then Topics collapsed.
+            Topics is the reader sheet's only section-nav affordance on mobile
+            (TocSpy's floating rail is hidden at <=860px, SH.B2). */}
+        <h4>Passport</h4>
+        <Passport kb={kb} doc={doc} />
+        <ReadingLine readMin={readMin} progress={progress} summary={summary} />
+        <TopicsSection
+          items={tocItems}
+          activeId={activeSection}
+          onJump={jumpToSection}
+        />
           </>
         )}
 
@@ -1498,15 +1317,6 @@ export default function PreviewInspector({
   );
 }
 
-function KV({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="kb-pinsp__kv">
-      <span>{label}</span>
-      <b>{children}</b>
-    </div>
-  );
-}
-
 // F2 — compact panel-local breadcrumb for the Folder browser. Each segment
 // sets cwd (drill-up); root = "". Gallery pivot is a separate affordance
 // via galleryUrl (#35) — deliberately not reusing FolderCrumbLinks, which
@@ -1616,39 +1426,6 @@ function FolderBrowserNav({
       </div>
     </div>
   );
-}
-
-// v0.22 — the artifact id row: shows the 12-char prefix and copies the FULL id
-// to the clipboard on click (toast feedback per invariant #32). A button, not a
-// bare truncation, so the (otherwise un-selectable) id is one click to grab.
-function IdCopy({ id }: { id: string }) {
-  return (
-    <button
-      type="button"
-      className="kb-pinsp__id-copy"
-      title="copy full artifact id"
-      aria-label="copy full artifact id"
-      onClick={() => {
-        navigator.clipboard
-          ?.writeText(id)
-          .then(() => toast.ok("id copied"))
-          .catch(() => toast.err("couldn't copy id"));
-      }}
-    >
-      {id.slice(0, 12)}
-    </button>
-  );
-}
-
-function shortFilename(doc: DocSummary): string {
-  const fn = doc.source_relative.split("/").pop() ?? doc.source_relative;
-  if (fn.length <= 28) return fn;
-  return fn.slice(0, 25) + "…";
-}
-
-function formatUnix(unix: number): string {
-  const d = new Date(unix * 1000);
-  return d.toISOString().slice(0, 16).replace("T", " ");
 }
 
 type NeighborRow = {

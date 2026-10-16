@@ -144,7 +144,7 @@ test.describe("per-file exclusion (X4)", () => {
     ).toHaveLength(1);
   });
 
-  test("reader About-tab exclude leaves the reader and pulls the doc from the gallery", async ({
+  test("reader More-menu exclude leaves the reader and pulls the doc from the gallery", async ({
     page,
     request,
   }) => {
@@ -160,11 +160,10 @@ test.describe("per-file exclusion (X4)", () => {
     writeFileSync(probePath(), PROBE_HTML, "utf-8");
     await expect(card).toBeVisible({ timeout: 20_000 });
 
-    // Open the reader; the desktop inspector rail is always docked at the
-    // default 1280×720 viewport. Force the About sub-tab (fresh contexts
-    // default to it, but the choice persists — don't depend on that).
+    // Open the reader; "Exclude from index" lives in the ContextBar's More
+    // menu (OL R2), not the inspector rail.
     await page.goto(`http://127.0.0.1:${PORT}/a/canon/${PROBE_NAME}`);
-    await page.locator('[data-kb-itab="all"]').click();
+    await page.locator('[data-kb-act="more"]').click();
     await page.locator('[data-kb-act="exclude"]').click();
     await page.locator(".confirm__go").click();
 

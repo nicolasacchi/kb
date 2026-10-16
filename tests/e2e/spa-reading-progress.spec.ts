@@ -169,10 +169,10 @@ test.describe("spa reading-progress chip", () => {
     await expect(card.first()).toBeVisible();
   });
 
-  // RP-track — the inspector's "Read by you" block renders from the
+  // RP-track — the inspector's single Reading line renders from the
   // per-artifact reading summary after a reading beacon (open + scroll +
   // section dwell). Distinct from the legacy chip above (FLAG-4: both coexist).
-  test("inspector 'Read by you' block reflects a reading beacon", async ({
+  test("inspector Reading line reflects a reading beacon", async ({
     page,
     request,
   }) => {
@@ -209,7 +209,7 @@ test.describe("spa reading-progress chip", () => {
 
     await page.goto(`${BASE}/a/canon/${target.source_relative}`);
     const body = page.locator(".kb-pinsp__body");
-    await expect(body).toContainText("Read by you");
+    await expect(body).toContainText("Reading");
     await expect(page.locator(".kb-pinsp__readby").first()).toBeVisible();
     await expect(body).toContainText("80% scrolled");
   });
