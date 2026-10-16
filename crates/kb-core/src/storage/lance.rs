@@ -947,12 +947,10 @@ impl Storage {
     /// `upsert_docs`, to plant the duplicates older binaries left behind.
     #[cfg(test)]
     pub(crate) async fn plant_raw_rows_for_test(&self, docs: &[Doc]) {
-        let batches = docs_to_batches(docs, self.dim).unwrap();
-        let reader = arrow::record_batch::RecordBatchIterator::new(
-            batches.into_iter().map(Ok),
-            Arc::new(schema(self.dim)),
-        );
-        self.table.add(Box::new(reader)).execute().await.unwrap();
+        for d in docs {
+            let batches = docs_to_batches(std::slice::from_ref(d), self.dim).unwrap();
+            self.table.add(batches).execute().await.unwrap();
+        }
     }
 
     /// Delete a single artifact by id.
