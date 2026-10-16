@@ -869,10 +869,9 @@ jobs:
     #   plugins/kb-code/ — code-test/code-lint EXECUTE
     #     plugins/kb-code/hooks/kb-code-annotations.sh (and the codex twin)
     #     as real subprocesses; see annotations_hook.rs's hook_script_path.
-    #   web/ — web-code/src/lib/iconParity.test.ts readFileSync's
-    #     web/src/components/icons.tsx and asserts the shared glyph SVG
-    #     bodies are byte-identical, so a web/-only PR would otherwise skip
-    #     the only job that catches icon divergence.
+    #   web/ — web/ and web-code/ both import the shared ui/ sources
+    #     (icons, tokens, themes), so a web/-only change can break the
+    #     kb-code build or its tests and must not skip the jobs that catch it.
     #   scripts/review-store/ — code-test executes
     #     scripts/review-store/review_snapshot.py and asserts it against
     #     scripts/review-store/fixtures/golden-review-snapshot.json
@@ -980,10 +979,9 @@ jobs:
     #   plugins/kb-code/ — code-test/code-lint EXECUTE
     #     plugins/kb-code/hooks/kb-code-annotations.sh (and the codex twin)
     #     as real subprocesses; see annotations_hook.rs's hook_script_path.
-    #   web/ — web-code/src/lib/iconParity.test.ts readFileSync's
-    #     web/src/components/icons.tsx and asserts the shared glyph SVG
-    #     bodies are byte-identical, so a web/-only PR would otherwise skip
-    #     the only job that catches icon divergence.
+    #   web/ — web/ and web-code/ both import the shared ui/ sources
+    #     (icons, tokens, themes), so a web/-only change can break the
+    #     kb-code build or its tests and must not skip the jobs that catch it.
     #   scripts/review-store/ — code-test executes
     #     scripts/review-store/review_snapshot.py and asserts it against
     #     scripts/review-store/fixtures/golden-review-snapshot.json
@@ -1119,10 +1117,9 @@ jobs:
     #   plugins/kb-code/ — code-test/code-lint EXECUTE
     #     plugins/kb-code/hooks/kb-code-annotations.sh (and the codex twin)
     #     as real subprocesses; see annotations_hook.rs's hook_script_path.
-    #   web/ — web-code/src/lib/iconParity.test.ts readFileSync's
-    #     web/src/components/icons.tsx and asserts the shared glyph SVG
-    #     bodies are byte-identical, so a web/-only PR would otherwise skip
-    #     the only job that catches icon divergence.
+    #   web/ — web/ and web-code/ both import the shared ui/ sources
+    #     (icons, tokens, themes), so a web/-only change can break the
+    #     kb-code build or its tests and must not skip the jobs that catch it.
     #   scripts/review-store/ — code-test executes
     #     scripts/review-store/review_snapshot.py and asserts it against
     #     scripts/review-store/fixtures/golden-review-snapshot.json
@@ -1402,6 +1399,15 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+
+      - name: CSS custom-property lint + literal ratchet (OL F10)
+        # Node-only, no install needed. Same two commands as `just test-spa`.
+        # css-vars: every var(--x) in web/src + ui/src must resolve. ratchet:
+        # font-size / hex / z-index / legacy-alias literal counts vs
+        # web/ratchet.json, two-way (docs/web-internals.md "Frontend gates").
+        run: |
+          node ui/scripts/css-undefined-vars.mjs web
+          node ui/scripts/ratchet.mjs web
 
       - name: Install web deps
         working-directory: web

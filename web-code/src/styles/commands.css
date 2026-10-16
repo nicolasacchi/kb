@@ -26,7 +26,7 @@
  * `--space-*`/`--radius-*`/`--shadow-*` keep their literal inline
  * fallbacks (`var(--space-2, 8px)`) — always resolve to a real value in
  * every theme, so left as a separate normalization onto `--pad-N` etc.
- * `npm run lint:css-vars` (web-code/scripts/css-undefined-vars.mjs) is the
+ * `npm run lint:css-vars` (ui/scripts/css-undefined-vars.mjs) is the
  * permanent gate against this bug class returning.
  */
 

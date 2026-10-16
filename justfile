@@ -304,7 +304,9 @@ ci-code-spa:
     # .ts/.tsx), no build needed, so it runs first.
     # v0.44 I3 — compile-free wire-type gates, before anything installs.
     scripts/check-ts-shadows.sh && scripts/check-wire-ratchet.sh
-    cd web-code && npm ci && npm run lint:css-vars && npm run build && npm run lint:themes && npm test
+    # OL F10 — `lint:ratchet` is the two-way literal ratchet (web-code/ratchet.json;
+    # see docs/web-internals.md "Frontend gates"). Pure node, runs with the lints.
+    cd web-code && npm ci && npm run lint:css-vars && npm run lint:ratchet && npm run build && npm run lint:themes && npm test
 
 # W4.3 — the Search-Everywhere box's Playwright smoke: a real
 # kb-code-server fast-profile binary against a fresh git fixture repo
@@ -397,6 +399,10 @@ ci-spa:
 # Covers the pure logic: config deep-merge, lib/ derivations, sort/group.
 test-spa:
     scripts/check-ts-shadows.sh
+    # OL F10 — the css-vars lint and the literal ratchet (web/ratchet.json) for
+    # kb; node-only, so they run before the install (docs/web-internals.md).
+    node ui/scripts/css-undefined-vars.mjs web
+    node ui/scripts/ratchet.mjs web
     cd web && npm ci && npm run typecheck && npm test
 
 # Run the Playwright iframe + SPA smoke against a fast-profile build of
