@@ -658,6 +658,19 @@ pub async fn reconcile(
         .await
         .unwrap_or_else(|_| source_root.clone());
 
+    // OL FX1 — heal duplicate rows (one artifact id stored twice by an
+    // older binary) before the rows drive the walk; a clean table costs one
+    // narrow `id` scan. Best-effort: a failure leaves the table as it was.
+    match storage.dedupe_docs().await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            kb = %kb_name,
+            removed = n,
+            "reconcile: removed duplicate document rows (kept the newest per id)",
+        ),
+        Err(e) => tracing::warn!(kb = %kb_name, error = %e, "reconcile: dedupe_docs failed"),
+    }
+
     // Fetch known rows UP FRONT: their mtimes drive the G5 producer-side
     // dedup in the walk, and the SAME list drives the delete pass below. On
     // a storage error we can neither dedup nor delete — fall back to a full

@@ -116,13 +116,28 @@ async fn spawn_walk(ctx: &crate::state::KbContext, re_embed: bool) -> Response<B
     let ingest = ctx.ingest.clone();
     let path = ctx.source_path.clone();
     let skips = ctx.skip_patterns.clone();
-    tokio::task::spawn_blocking(move || {
-        // `force = true`: explicit operator reindex bypasses the indexer's
-        // byte-identical early return so parse, edges, anchors, and
-        // coderefs re-run. It does not re-embed when the content hash,
-        // model, and dim match — `re_embed` is that hatch (perf-04).
-        // No mtime map: the operator wants the parse pipeline for every file.
-        kb_core::indexer::walk_send_reindex(&ingest, &path, &skips, re_embed);
+    let storage = ctx.storage.clone();
+    let kb = ctx.kb_name.clone();
+    tokio::spawn(async move {
+        // OL FX1 — an operator reindex also repairs a corpus that already
+        // holds duplicate rows for one artifact id (keeps the newest). Runs
+        // ahead of the walk on the single writer; failure only logs.
+        match storage.dedupe_docs().await {
+            Ok(0) => {}
+            Ok(n) => {
+                tracing::warn!(kb = %kb, removed = n, "reindex: removed duplicate document rows")
+            }
+            Err(e) => tracing::warn!(kb = %kb, error = %e, "reindex: dedupe_docs failed"),
+        }
+        let _ = tokio::task::spawn_blocking(move || {
+            // `force = true`: explicit operator reindex bypasses the indexer's
+            // byte-identical early return so parse, edges, anchors, and
+            // coderefs re-run. It does not re-embed when the content hash,
+            // model, and dim match — `re_embed` is that hatch (perf-04).
+            // No mtime map: the operator wants the parse pipeline for every file.
+            kb_core::indexer::walk_send_reindex(&ingest, &path, &skips, re_embed);
+        })
+        .await;
     });
 
     let mut resp = (

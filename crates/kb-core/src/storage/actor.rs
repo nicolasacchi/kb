@@ -505,6 +505,11 @@ pub enum StorageMsg {
         mtime_unix: i64,
         reply: oneshot::Sender<Result<()>>,
     },
+    /// OL FX1 — delete duplicate rows for one artifact id (keep the newest).
+    /// WRITE-class: runs on the single writer, parked during a compaction.
+    DedupeDocs {
+        reply: oneshot::Sender<Result<u64>>,
+    },
     /// v0.3: read all (id, embedding) pairs for atlas recompute.
     ListEmbeddings {
         reply: oneshot::Sender<Result<Vec<EmbeddingPair>>>,
@@ -2093,6 +2098,7 @@ impl StorageActor {
                 | StorageMsg::UpsertChunks { .. }
                 | StorageMsg::UpdateAtlas { .. }
                 | StorageMsg::TouchMtime { .. }
+                | StorageMsg::DedupeDocs { .. }
                 | StorageMsg::ClearEmbeddings { .. }
                 | StorageMsg::DropKbData { .. }
                 | StorageMsg::CompactAll { .. }
@@ -2817,6 +2823,13 @@ impl StorageActor {
                 reply,
             } => {
                 let _ = reply.send(self.storage.touch_mtime(&id, mtime_unix).await);
+            }
+            StorageMsg::DedupeDocs { reply } => {
+                let res = self.storage.dedupe_docs().await;
+                if matches!(res, Ok(n) if n > 0) {
+                    self.bump_generation();
+                }
+                let _ = reply.send(res);
             }
             StorageMsg::ListEmbeddings { reply } => {
                 let _ = reply.send(self.storage.list_embeddings().await);
@@ -4372,6 +4385,14 @@ impl StorageHandle {
             reply,
         })
         .await
+    }
+
+    /// OL FX1 — remove duplicate rows for one artifact id, keeping the
+    /// newest; returns the surplus rows removed. See
+    /// [`crate::storage::lance::Storage::dedupe_docs`].
+    pub async fn dedupe_docs(&self) -> Result<u64> {
+        self.send_and_await(|reply| StorageMsg::DedupeDocs { reply })
+            .await
     }
 
     pub async fn list_embeddings(&self) -> Result<Vec<EmbeddingPair>> {
@@ -7105,6 +7126,7 @@ mod tests {
             with_refs: false,
             reply
         }));
+        assert!(!lane(|reply| StorageMsg::DedupeDocs { reply }));
         assert!(!lane(|reply| StorageMsg::TouchMtime {
             id: "a".into(),
             mtime_unix: 0,
