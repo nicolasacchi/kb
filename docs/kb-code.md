@@ -2010,6 +2010,13 @@ and range-diff are Review). The five review-family pages share a Review sub-nav
 row (Reviews · PRs · Branches · Compare). On a phone the Spine's menu button
 opens a sheet with the doors, Inbox, current-review chip and theme.
 
+**Doors on every page.** The four doors render on Home, Inbox and Settings as
+well as repo pages. Their target repo is the explicit one when the page has it,
+else the last repo you were in if the daemon still lists it, else the first
+configured repo. `lastRepo` is written only from an explicit repo, so Home's
+first-repo fallback never overwrites it. The `/search` page has no search field
+in the top bar (it has its own box; the omnibox key still works).
+
 **Collections** (`/r/<repo>/~collections`). The former Explore destinations in
 three groups, Sets, Boards and Instruments, as cards linking to the existing
 routes. Counts come from `GET /api/seq` for sets, workspaces, tours, boards and
@@ -2044,12 +2051,17 @@ lanes and the source say: comments live here) and **Review** (what is contested;
 shown only with a current review). The retired ids `dossier`, `comments` and
 `trail` are still accepted: persisted desk state and `openTab(...)` map them to
 the home that now holds them and scroll to the section. The `Space R` keys keep
-their ids.
+their ids. On desktop the Desk's right Stripe is the one rail switcher: the
+panel's own icon strip shows on the mobile sheet only. The Stripe carries a Facts
+button (with the comments badge), and Review appears there only with a current
+review or while Review is selected.
 
 **Review diff toolbar.** One ViewBar of three labelled clusters plus the unsent
 cluster, with nine visible controls (it was eighteen): Patchset, Navigate, View
 and Unsent (drafts), with **Lanes** and **Show map** in More. Overlay counts
-moved to the Room chips and header.
+moved to the Room chips and header. Above 860px the review title has its own row
+above the toolbar, and while the drafts tray is open the diff reserves space
+under it (up to 60vh, at most 620px) so the last lines stay reachable.
 
 **Search page.** One input, one labelled row, a count line, results. The query
 grammar is offered on request: the placeholder shows the shape and a **Syntax**
@@ -2057,6 +2069,9 @@ button opens the prefix list (the old always-visible prefix row is gone). The
 count line reads `N results · lanes: ...`, and a zero-hit result is a state card
 with next steps (search symbols, try the text lane, search every repo, clear the
 refinement). Copy CLI and Keep as set sit in More.
+
+**The trail chip.** The top bar always shows a small chip for the reading trail:
+"Trail off", "Recording" or "Trail paused", with a tooltip explaining it.
 
 **One surface for loading and failure.** Every route and panel says loading,
 empty, refused, degraded or mismatch through the shared state card instead of

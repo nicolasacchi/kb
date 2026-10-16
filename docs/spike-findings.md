@@ -1603,6 +1603,7 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
 | kb-code | C1 Spine, four doors, Collections (#86), C3 reader ViewBar (#87), C4 five rail homes (#91), C5 review-diff toolbar (#88), C6 search page (#89), C7 Home (#90), C8 Settings page (#103), C9 ReaderLegacy deleted (#85), C10 StateCard everywhere (#94), C11 the quiet reader (#96) |
 | kb | L1 Spine + DaemonStatus (#100), L2 five doors (#107), L3 Front Page band (#117), L4 calmer cards + excerpt parser (#98), L5 Index view (#111), L7 per-view ViewBars (#113), R1 context bar + More (#106), R2 rail About stack (#115), R3 memory rows (#99), R4 worklog rows (#112), R5 search controls (#97), R6 settings groups (#102), S3 which-key in kb (#108) |
 | Both | S1 federated Cmd+K lanes + theme family follows kb (#110), V0/V1 golden dispatch renders and re-renders everything (#92, #95), P1/P2 polish (#109, #116), SC dependency security bumps (#77) |
+| Close-out | L6 kb mobile pass for the Spine, Front Page band and ViewBars (#119), SC2 `zip` 2.4.2 to 9.0.3 (#118), P3 kb Library/Search/status polish (#122), P4 reader badges, highlights, Worklog, Memory and page frame polish (#123), P5 kb-code polish: doors, one rail switcher, review title (#121), D docs (#120), D2 docs catch-up (this PR) |
 
 **Measured, before to after.**
 
@@ -1646,12 +1647,40 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
 6. *Gates make the next unit cheap.* The two-way literal ratchet, the css-vars
    lint that also reads `ui/`, and the chrome and nav budgets caught a dozen
    regressions inside the milestone; F10 found three undefined variables in kb.
+7. *The visual-golden tolerance masks badge-sized changes.* The `spa-visual`
+   per-test limit (`MAX_DIFF` 0.01) and the config default (0.02, about 13k
+   pixels at 1440x900) are larger than a rail badge. P4 restyled the rail
+   badges and no golden failed; P3's goldens were rendered before P4 and still
+   passed. A golden pass is not proof that a small change is, or is not, on
+   screen.
+8. *The `spa-views` sort test's "flake" was a locator, not a race.* After L3 the
+   locator also matched Front Page band cards, which are in recency order, so
+   the assertion failed depending on which cards it saw. P2's hardening targeted
+   the wrong race; P3 scoped the test to shelf cards.
+9. *`css-undefined-vars` accepts `var(--undefined, <literal>)` by design* (the
+   F10 ruling: a fallback literal is a deliberate choice). It means a made-up
+   token with a fallback passes the lint: `var(--space-1, 4px)` reached P5 and
+   was caught only in review.
+10. *Phone card actions overlapped titles on every touch device from before OL.*
+    `pointer: coarse` made the actions always visible but kept the desktop
+    offsets. No existing e2e used a touch context, so nothing failed; only a
+    `hasTouch` e2e context exposed it (L6 lays them out as chips along the card's
+    bottom edge).
+11. *`zip` 2.x is yanked upstream, and 9.0.3 raised the effective MSRV.* Every
+    2.x release is yanked, which turned `cargo deny`'s yanked check (and
+    `ci-gate`) red on main until SC2. zip 9.0.3 declares `rust-version` 1.88,
+    while the workspace still declares `rust-version = "1.86"`; the pinned
+    toolchain (1.96) hides the gap, so the declared MSRV is no longer what
+    actually builds.
 
-**Not built.** S5 (semantic zoom). As of 2026-10-16 two units were still open: L6,
-the kb mobile pass for the Spine, Front Page band and ViewBars (#119), and the
-`zip` 2.4.2 to 9.0.3 bump for a yanked crate (#118), whose absence turned
-`supply-chain` and `ci-gate` red on main. Several e2e flakes were hardened
+**Not built.** S5 (semantic zoom). The close-out units have since merged: the
+kb mobile pass (L6, #119), the `zip` 2.4.2 to 9.0.3 bump that cleared the yanked
+crate failure in `supply-chain` and `ci-gate` (SC2, #118), and the P3 to P5
+polish round (#122, #123, #121). Several e2e flakes were hardened
 without a captured failure log (P2: the `spa-views` sort race and the
-`spa-comments` selection retry address the plausible races, unproven). Known
+`spa-comments` selection retry address the plausible races, unproven; finding 8
+later showed the sort one was a locator matching Front Page cards). Known
 leftover: the Desk's `MAIN_MIN_HEIGHT_PX` was lowered 580 to 550 by derivation,
-not measurement.
+not measurement. The rail badge fill (P4's accent-fill and white pair) did not
+render in the CI screenshots at P3 time; a follow-up unit (P6) was still in
+flight when this was written.
