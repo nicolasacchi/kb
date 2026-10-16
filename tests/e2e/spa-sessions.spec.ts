@@ -623,17 +623,18 @@ test.describe("W3.C — projects home + husk triage", () => {
     // session shown by default, including trivial husks — never hidden by
     // omission; see the W3 build report for the deviation from the design
     // doc's "hide by default" recommendation).
-    await expect(toggle).not.toBeChecked();
+    // OL R4 — the toggle is a ViewBar button, so the state is aria-pressed.
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
     // DEP-RR7 — plain `.click()` + a polling `toBeChecked()` assertion, not
     // `.check()`: `.check()` verifies the post-click state with a single
     // immediate read (no retry), and under `v7_startTransition` (main.tsx)
     // the `checked` prop — driven by this route's `setParams`-backed
     // `hideTrivial`, not local state — now commits through a deferred React
     // transition rather than synchronously inside the click. The click
-    // itself and the resulting navigation are correct (verified checked
+    // itself and the resulting navigation are correct (verified pressed
     // AND the URL both land); only `.check()`'s one-shot verify races it.
     await toggle.click();
-    await expect(toggle).toBeChecked();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await expect(page).toHaveURL(/substance=routine%2Csubstantive|substance=routine,substantive/);
   });
 });

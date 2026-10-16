@@ -22,6 +22,7 @@ import { useNowTick } from "../hooks/useNowTick";
 import { useReportQueryStats } from "../components/chrome/queryStats";
 import EmptyState from "../components/EmptyState";
 import { Icon } from "@kb/ui/icons";
+import { ViewBar, type Cluster, type Control } from "@kb/ui/ViewBar";
 import {
   fetchResearchRollup,
   fetchSession,
@@ -42,8 +43,9 @@ import {
 } from "../api/sessions";
 import { useState } from "react";
 import { sessionDisplayName } from "../lib/sessionDisplayName";
+import { sessionRowTitle, sessionMetaParts } from "../lib/sessionRowParts";
 import { triggerDownload, sessionExportUrl } from "../lib/download";
-import { dayBucket, dayHeading, humanizeDuration } from "../lib/time";
+import { dayBucket, dayHeading } from "../lib/time";
 import {
   replayUrl,
   sessionsProjectsHomeUrl,
@@ -55,9 +57,7 @@ import {
   decisionBadge,
   errorBadge,
   harnessGlyph,
-  memoryBadge,
   outcomeLine,
-  subagentBadge,
   substanceBadge,
 } from "../lib/sessionChips";
 import { sessionPresence, presenceSummary, formatPresenceSummary } from "../lib/sessionPresence";
@@ -391,6 +391,78 @@ export default function SessionsRoute() {
     ? projects.find((p) => p.project === project)
     : null;
 
+  const countLabel = searching
+    ? "searching…"
+    : view === "threads"
+      ? `${threads.length} ${threads.length === 1 ? "thread" : "threads"}`
+      : view === "projects"
+        ? `${projects.length} ${projects.length === 1 ? "project" : "projects"}`
+        : `${rows.length} ${rows.length === 1 ? "session" : "sessions"}`;
+  const viewControl = (v: "list" | "threads" | "projects"): Control => ({
+    id: `view-${v}`,
+    label: v,
+    kind: "toggle",
+    active: view === v,
+    onSelect: () => setView(v),
+    attrs: { "data-testid": `sessions-view-${v}` },
+  });
+  const clusters: Cluster[] = [
+    { label: "View", controls: [viewControl("list"), viewControl("threads"), viewControl("projects")] },
+    {
+      label: "Filters",
+      controls: [
+        ...(folders.length > 0 && !project
+          ? [
+              {
+                id: "folder",
+                label: "folder",
+                kind: "select" as const,
+                value: folder,
+                onSelect: (v?: string) => selectFolder(v ?? ""),
+                options: [
+                  { value: "", label: "all folders" },
+                  ...folders.map((f) => ({ value: f.folder, label: `${f.label} (${f.count})` })),
+                ],
+                attrs: { "data-testid": "sessions-folder-filter" },
+              },
+            ]
+          : []),
+        // W5/I — harness facet: only worth a control when the corpus actually
+        // mixes harnesses.
+        ...(harnessSet.size > 1
+          ? [
+              {
+                id: "harness",
+                label: "harness",
+                kind: "select" as const,
+                value: harness,
+                onSelect: (v?: string) => selectHarness(v ?? ""),
+                options: [
+                  { value: "", label: "all harnesses" },
+                  ...[...harnessSet].sort().map((h) => ({ value: h, label: `${harnessGlyph(h)} ${h}` })),
+                ],
+                attrs: { "data-testid": "sessions-harness-filter" },
+              },
+            ]
+          : []),
+        // W3.A/S1 — husk triage: hidden (never applied) by default; ON narrows
+        // to routine+substantive. NULL substance always counts as substantive
+        // server-side, so this can never hide un-backfilled history.
+        {
+          id: "hide-trivial",
+          label: "hide trivial",
+          kind: "toggle",
+          active: hideTrivial,
+          onSelect: () => setHideTrivial(!hideTrivial),
+          attrs: { "data-testid": "sessions-hide-trivial" },
+        },
+      ],
+    },
+    // P6 — sessions-scoped keyword search (lane A, metadata); drawn by
+    // renderControl as an <input>.
+    { label: "Find", controls: [{ id: "search", label: "search", kind: "button" }] },
+  ];
+
   return (
     <div className="kb-ses" data-testid="sessions-view">
       <main className="kb-ses__main">
@@ -424,113 +496,43 @@ export default function SessionsRoute() {
               <Icon.X />
             </button>
           )}
-          <div className="kb-ses__head-meta">
-            {folders.length > 0 && !project && (
-              <label className="kb-ses__folder-facet">
-                <span className="kb-ses__folder-facet-label">folder</span>
-                <select
-                  className="kb-ses__folder-select"
-                  data-testid="sessions-folder-filter"
-                  value={folder}
-                  onChange={(e) => selectFolder(e.target.value)}
-                >
-                  <option value="">all folders</option>
-                  {folders.map((f) => (
-                    <option key={f.folder} value={f.folder}>
-                      {f.label} ({f.count})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {/* W5/I — harness facet: only worth a control when the corpus
-                actually mixes harnesses (quiet in the common all-claude
-                case, same rule as the CLI/folders-rollup per-harness
-                suffix). */}
-            {harnessSet.size > 1 && (
-              <label className="kb-ses__harness-facet">
-                <span className="kb-ses__harness-facet-label">harness</span>
-                <select
-                  className="kb-ses__harness-select"
-                  data-testid="sessions-harness-filter"
-                  value={harness}
-                  onChange={(e) => selectHarness(e.target.value)}
-                >
-                  <option value="">all harnesses</option>
-                  {[...harnessSet].sort().map((h) => (
-                    <option key={h} value={h}>
-                      {harnessGlyph(h)} {h}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {/* P6 — sessions-scoped keyword search (lane A, metadata). */}
-            <input
-              type="search"
-              className="kb-ses__search"
-              data-testid="sessions-search"
-              placeholder="search sessions…"
-              value={draft}
-              onChange={(e) => onSearchChange(e.target.value)}
-            />
-            {/* W3.A/S1 — husk triage: hidden (never applied) by default;
-                toggling ON narrows to routine+substantive. NULL substance
-                (un-backfilled rows) always counts as substantive server-side,
-                so this control can never hide un-backfilled history. */}
-            <label className="kb-ses__hide-trivial" title="hide trivial (empty) captures">
-              <input
-                type="checkbox"
-                checked={hideTrivial}
-                onChange={(e) => setHideTrivial(e.target.checked)}
-                data-testid="sessions-hide-trivial"
-              />
-              hide trivial
-            </label>
-            {/* P7/W3.C — view toggle: chronological list ↔ narrative threads
-                ↔ projects home. */}
-            <div className="kb-ses__viewtoggle" role="group" aria-label="view">
-              <button
-                type="button"
-                className={view === "list" ? "is-active" : ""}
-                onClick={() => setView("list")}
-                data-testid="sessions-view-list"
-              >
-                list
-              </button>
-              <button
-                type="button"
-                className={view === "threads" ? "is-active" : ""}
-                onClick={() => setView("threads")}
-                data-testid="sessions-view-threads"
-              >
-                threads
-              </button>
-              <button
-                type="button"
-                className={view === "projects" ? "is-active" : ""}
-                onClick={() => setView("projects")}
-                data-testid="sessions-view-projects"
-              >
-                projects
-              </button>
-            </div>
-            <span>
-              {searching
-                ? "searching…"
-                : view === "threads"
-                  ? `${threads.length} ${threads.length === 1 ? "thread" : "threads"}`
-                  : view === "projects"
-                    ? `${projects.length} ${projects.length === 1 ? "project" : "projects"}`
-                    : `${rows.length} ${rows.length === 1 ? "session" : "sessions"}`}
-            </span>
-          </div>
+        </div>
+        {/* OL R4 — ONE control row: View · Filters · Find, then the funnel as
+            a single muted line. The View buttons are toggles (not a segment)
+            so each keeps its own data-testid. */}
+        <div className="kb-ses__viewbar">
+          <ViewBar
+            ariaLabel="Sessions view"
+            count={countLabel}
+            clusters={clusters}
+            renderControl={(c, node) =>
+              c.id === "search" ? (
+                <input
+                  type="search"
+                  className="kb-ses__search"
+                  data-testid="sessions-search"
+                  aria-label="search sessions"
+                  placeholder="search sessions…"
+                  value={draft}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                />
+              ) : (
+                node
+              )
+            }
+          />
         </div>
 
         {/* A-w2 — the shipped-but-uncalled activity-funnel + research-rollup
             endpoints (R9), surfaced as one quiet header line. Scoped by the
             folder filter (legacy) AND/OR the project filter (W3.A). */}
-
+        {view !== "projects" && (
+          <SessionsActivityStrip
+            folder={folder}
+            project={project}
+            onSelectFolder={selectFolder}
+          />
+        )}
 
         {/* LF-1/S2 — presence strip: "N live · M active" counts from visible
             rows. Derived from the rows + presenceSet, shown only in list view
@@ -539,12 +541,6 @@ export default function SessionsRoute() {
           <div className="kb-ses__presence-strip" data-testid="sessions-presence-strip">
             {formatPresenceSummary(listPresenceSummary)}
           </div>
-        )}        {view !== "projects" && (
-          <SessionsActivityStrip
-            folder={folder}
-            project={project}
-            onSelectFolder={selectFolder}
-          />
         )}
 
         {/* P6 — per-project timeline header: the selected folder's rollups. */}
@@ -1176,7 +1172,7 @@ function ThreadsView({
   );
 }
 
-function SessionListRow({
+export function SessionListRow({
   row,
   isSelected,
   onSelect,
@@ -1202,6 +1198,8 @@ function SessionListRow({
   // rail (S4).
   const preview = outcomeLine(row.outcome, row.first_user_prompt);
   const husk = substanceBadge(row.substance);
+  const title = sessionRowTitle(row);
+  const meta = sessionMetaParts(row);
   // W5/R9b/LF-1 — derived staleness/presence dot: Tier 0 is a static,
   // honestly-labelled chip; W7 upgrades to Tier 1 (writer-activity
   // EVIDENCE, `presenceSet` from `GET /api/sessions/presence`) when the
@@ -1222,40 +1220,17 @@ function SessionListRow({
         onClick={onSelect}
         aria-pressed={isSelected}
       >
-        {/* A2/A3 — two lines: bold readable name, dimmed outcome/prompt. */}
+        {/* OL R4 — a worklog row: title + time, the closure (muted), then ONE
+            quiet facts line. The chip vocabulary (sessionChips.ts) lives on
+            in the inspector and the gallery card; the row spells its facts. */}
         <span className="kb-ses__row-line1">
-          <span className="kb-ses__row-time">
-            {formatStarted(row.started_at)}
-          </span>
           <span
-            className="kb-ses__row-harness"
-            title={row.harness}
-            aria-hidden
+            className={`kb-ses__row-name${title.isPromptFallback ? " kb-ses__row-name--prompt" : ""}`}
+            title={row.first_user_prompt}
           >
-            {harnessGlyph(row.harness)}
-          </span>
-          <span className="kb-ses__row-name" title={row.first_user_prompt}>
-            {sessionDisplayName(row)}
+            {title.text}
           </span>
           <span className="kb-ses__row-chips">
-            {commitBadge(row.commit_count) && (
-              <span title={`${row.commit_count} commits`}>
-                {commitBadge(row.commit_count)}
-              </span>
-            )}
-            {errorBadge(row.error_count) && (
-              <span title={`${row.error_count} errors`}>
-                {errorBadge(row.error_count)}
-              </span>
-            )}
-            {memoryBadge(row.memory_count) && (
-              <span title={`${row.memory_count} memories`}>
-                {memoryBadge(row.memory_count)}
-              </span>
-            )}
-            {subagentBadge(row.subagent_count) && (
-              <span title="subagent work">{subagentBadge(row.subagent_count)}</span>
-            )}
             {husk && (
               <span title="trivial capture — no real content" className="kb-ses__row-husk-badge">
                 {husk}
@@ -1286,33 +1261,21 @@ function SessionListRow({
               </>
             )}
           </span>
+          <span className="kb-ses__row-time">{formatStarted(row.started_at)}</span>
         </span>
-        {preview && (
+        {/* When the title already IS the opening prompt, repeating it as the
+            second line says nothing; only a real closure earns line 2. */}
+        {preview && (preview.isOutcome || !title.isPromptFallback) && (
           <span className="kb-ses__row-preview">
             {preview.isOutcome && <span className="kb-ses__row-outcome-mark">» </span>}
             {preview.text}
           </span>
         )}
-        <span className="kb-ses__row-stats">
-          {row.folder && (
-            <span className="kb-ses__row-folder" title={row.cwd ?? row.folder}>
-              {row.folder}
-            </span>
-          )}
-          <span title="messages in transcript">{row.message_count} msg</span>
-          {row.files_edited_count > 0 && (
-            <span title="files edited">{row.files_edited_count} edited</span>
-          )}
-          {row.memory_count > 0 && (
-            <span className="kb-ses__row-mem" title="memories produced">
-              {row.memory_count} mem
-            </span>
-          )}
-          {row.duration_ms > 0 && (
-            <span title="duration">{humanizeDuration(row.duration_ms)}</span>
-          )}
-          <span className="kb-ses__row-kb">{row.kb}</span>
-        </span>
+        {meta.length > 0 && (
+          <span className="kb-ses__row-stats" title={row.cwd ?? row.kb}>
+            {meta.join(" · ")}
+          </span>
+        )}
       </button>
     </li>
   );
