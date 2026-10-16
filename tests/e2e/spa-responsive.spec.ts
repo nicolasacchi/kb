@@ -43,10 +43,15 @@ async function kitchenSinkId(
 }
 
 async function expectNoHorizontalScroll(page: Page) {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - window.innerWidth,
-  );
-  expect(overflow, "page must not scroll horizontally").toBeLessThanOrEqual(1);
+  const { overflow, wide } = await page.evaluate(() => {
+    const vw = window.innerWidth;
+    const wide = Array.from(document.body.querySelectorAll<HTMLElement>("*"))
+      .filter((el) => el.getBoundingClientRect().right > vw + 1)
+      .slice(0, 6)
+      .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)}`);
+    return { overflow: document.documentElement.scrollWidth - vw, wide };
+  });
+  expect(overflow, `page must not scroll horizontally (wide: ${wide.join(", ")})`).toBeLessThanOrEqual(1);
 }
 
 // ───────────────────────────── desktop (>860px) ─────────────────────────
@@ -278,5 +283,134 @@ test.describe("mobile layout", () => {
       (el) => getComputedStyle(el).touchAction,
     );
     expect(touchAction).toBe("none");
+  });
+});
+
+// ───────────── OL L6: the phone pass on the Library landing ─────────────
+test.describe("mobile library landing (OL L6)", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test("Front Page is one column; lead at the title step; coverage below", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon`);
+    const band = page.locator('[data-testid="frontpage"]');
+    await expect(band).toBeVisible();
+    await expect(page.locator(".kb-card").first()).toBeVisible();
+    await expectNoHorizontalScroll(page);
+
+    const cols = await page.locator(".kb-fp__page").evaluate(
+      (el) => getComputedStyle(el).gridTemplateColumns.trim().split(/\s+/).length,
+    );
+    expect(cols).toBe(1);
+
+    const lead = page.locator(".kb-fp__lead-title");
+    await expect(lead).toHaveCount(1);
+    const [leadPx, titlePx] = await lead.evaluate((el) => [
+      parseFloat(getComputedStyle(el).fontSize),
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fs-title")),
+    ]);
+    expect(leadPx).toBe(titlePx);
+
+    const main = await page.locator(".kb-fp__main").boundingBox();
+    const cov = await page.locator(".kb-fp__coverage").boundingBox();
+    if (main && cov) expect(cov.y).toBeGreaterThanOrEqual(main.y + main.height - 1);
+  });
+
+  test("ViewBar controls and Front Page tools are >=44px; the bar wraps at most two rows", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon`);
+    await expect(page.locator("[data-kb-viewbar]").first()).toBeVisible();
+    const targets = [
+      page.locator("[data-kb-viewbar] .kb-viewbar__btn"),
+      page.locator("[data-kb-viewbar] .kb-viewbar__select"),
+      page.locator(".kb-fp__tool"),
+      page.locator("[data-kb-spine-menu]"),
+      page.locator(".kb-head .kb-ws"),
+      page.locator(".kb-head .kb-search-mini"),
+    ];
+    let seen = 0;
+    for (const loc of targets) {
+      for (const el of await loc.all()) {
+        if (!(await el.isVisible())) continue;
+        const box = await el.boundingBox();
+        expect(box?.height ?? 0).toBeGreaterThanOrEqual(43.5);
+        seen++;
+      }
+    }
+    expect(seen).toBeGreaterThan(2);
+
+    const rows = await page.locator("[data-kb-viewbar]").first().evaluate((bar) => {
+      const tops = new Set<number>();
+      for (const c of Array.from(bar.querySelectorAll<HTMLElement>(".kb-viewbar__lead, .kb-viewbar__clusters"))) {
+        tops.add(Math.round(c.getBoundingClientRect().top));
+      }
+      return tops.size;
+    });
+    expect(rows).toBeLessThanOrEqual(2);
+  });
+
+  test("card quick actions never cover the card title", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
+    const card = page.locator(".kb-card").first();
+    await expect(card).toBeVisible();
+    const title = await card.locator(".kb-card__title").boundingBox();
+    expect(title).not.toBeNull();
+    let n = 0;
+    for (const a of await card.locator(".kb-card__action").all()) {
+      const b = await a.boundingBox();
+      if (!b || !title) continue;
+      n++;
+      const overlap =
+        b.x < title.x + title.width && b.x + b.width > title.x &&
+        b.y < title.y + title.height && b.y + b.height > title.y;
+      expect(overlap).toBe(false);
+      expect(b.height).toBeGreaterThanOrEqual(43.5);
+    }
+    expect(n).toBeGreaterThan(0);
+  });
+
+  test("Spine search stays on one line; menu glyph is centred; bottom bar names the Library", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon`);
+    const ph = page.locator(".kb-head .kb-search-mini__placeholder");
+    await expect(ph).toBeVisible();
+    const lh = await ph.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 16);
+    expect((await ph.boundingBox())!.height).toBeLessThan(lh * 1.6);
+    const menu = page.locator("[data-kb-spine-menu]");
+    const mb = (await menu.boundingBox())!;
+    const glyph = await menu.evaluate((el) => {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      const g = r.getBoundingClientRect();
+      return { top: g.top, bottom: g.bottom };
+    });
+    const mid = (glyph.top + glyph.bottom) / 2;
+    expect(Math.abs(mid - (mb.y + mb.height / 2))).toBeLessThan(4);
+    await expect(page.locator(".kb-tabbar .kb-tabbar__tab").first()).toHaveText("Library");
+  });
+
+  test("reader strip at 390: crumb and position label give way, More inside the viewport", async ({ page }) => {
+    await page.goto(`${base()}${ARTIFACT}`);
+    const more = page.locator('[data-kb-act="more"]');
+    await expect(more).toBeVisible();
+    const b = (await more.boundingBox())!;
+    expect(b.x + b.width).toBeLessThanOrEqual(390.5);
+    await expect(page.locator(".kb-ctxbar__crumb")).toBeHidden();
+    await expect(page.locator(".kb-ctxbar__pos")).toBeHidden();
+    await expect(page.locator('[data-kb-act="inspect"]')).toBeAttached();
+  });
+
+  test("reader strip at 600: crumb visible, >=48px, ellipsized; position label on one line", async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 844 });
+    await page.goto(`${base()}${ARTIFACT}`);
+    const crumb = page.locator(".kb-ctxbar__crumb");
+    await expect(crumb).toBeVisible();
+    expect((await crumb.boundingBox())!.width).toBeGreaterThanOrEqual(47.5);
+    const css = await crumb.evaluate((el) => {
+      const c = getComputedStyle(el);
+      return [c.overflow, c.textOverflow, c.whiteSpace];
+    });
+    expect(css).toEqual(["hidden", "ellipsis", "nowrap"]);
+    const pos = page.locator(".kb-ctxbar__pos");
+    await expect(pos).toBeVisible();
+    const lh = await pos.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 14);
+    expect((await pos.boundingBox())!.height).toBeLessThan(lh * 1.6);
   });
 });

@@ -13,7 +13,7 @@ import { cycleTheme } from "../../api/prefs";
 // + theme toggle, plus — W3 — the Inbox/Anchors pills the ≤860px header
 // hides: at 390px the two pills overflow the fixed-height no-wrap command
 // bar, so THESE rows are mobile's one home for /inbox + /anchors; the
-// bottom bar homes Recent/Search/Memory/Lists/Capture (C2) instead). Badge
+// bottom bar homes Library/Search/Memory/Lists/Capture (C2) instead). Badge
 // counts read the same TanStack cache entries the header pills do
 // (["inbox"]/["anchors"], invariant #23 — no new fetch plumbing). Calls
 // onNavigate after any pick so the drawer closes.

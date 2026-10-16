@@ -652,7 +652,7 @@ body.kb-immersive .kb-folio-colophon {
 
 /* ───────────────────── kb2: bottom tab bar + palette ────────────────── */
 
-/* Mobile bottom tab bar (Recent / Search / Memory / Lists). Only mounted
+/* Mobile bottom tab bar (Library / Search / Memory / Lists). Only mounted
  * on mobile + off the detail route (app.tsx), so the base styles can live
  * outside the media query. Replaces the statusbar's role at the viewport
  * bottom; padded for the home-indicator safe area. */
@@ -1151,5 +1151,186 @@ body.kb-immersive .kb-tabbar {
   }
   .slate-composer__lbl {
     flex-basis: 52px;
+  }
+}
+
+/* ───────────── OL L6: the phone pass (Spine, Front Page, ViewBars) ───────────
+ * One bar (menu + workspace + search), one sheet (the NavSheet), the Front
+ * Page as a single readable column and toolbars that wrap at most once or fold
+ * behind More. Every control on these surfaces is >=44px (--touch-min) tall. The literal
+ * 860px matches useIsMobile (hooks/useIsMobile.ts) and the rest of this file. */
+@media (max-width: 860px) {
+  /* Spine: the three controls the compact bar keeps. */
+  .kb-head .kb-ws,
+  .kb-head .kb-search-mini,
+  .kb-head [data-kb-spine-menu] {
+    min-height: var(--touch-min);
+  }
+  .kb-head [data-kb-spine-menu] {
+    min-width: var(--touch-min);
+  }
+
+  /* Front Page: lead set at the title step (the hero step is too tall for a
+   * phone column), tools at touch size, brief and coverage rows tappable. */
+  .kb-fp__lead-title {
+    font-size: var(--fs-title);
+    line-height: 1.2;
+  }
+  .kb-fp__tools {
+    width: 100%;
+  }
+  .kb-fp__tool {
+    min-height: var(--touch-min);
+    padding-inline: 14px;
+  }
+  .kb-fp__brief-list li {
+    min-height: var(--touch-min);
+    align-items: center;
+  }
+  .kb-fp__brief-list a,
+  .kb-fp__cov-list a,
+  .kb-fp__link,
+  .kb-fp__cov-h a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch-min);
+  }
+  .kb-fp__cov-list a {
+    flex-wrap: wrap;
+    align-content: center;
+  }
+  .kb-fp__feature {
+    padding-block: 4px;
+  }
+
+  /* ViewBars: scope + count on the first row, the (at most one visible)
+   * cluster plus More on the second; controls at touch size. The attribute
+   * selector outranks viewbar.css's single-class rules without !important. */
+  [data-kb-viewbar] {
+    row-gap: var(--pad-1);
+  }
+  [data-kb-viewbar] .kb-viewbar__lead {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+  [data-kb-viewbar] .kb-viewbar__clusters {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  [data-kb-viewbar] .kb-viewbar__btn,
+  [data-kb-viewbar] .kb-viewbar__select,
+  [data-kb-viewbar] .kb-viewbar__menu-row {
+    min-height: var(--touch-min);
+  }
+  [data-kb-viewbar] .kb-viewbar__btn {
+    min-width: var(--touch-min);
+    justify-content: center;
+  }
+  [data-kb-viewbar] .kb-viewbar__menu {
+    min-width: min(240px, calc(100vw - 2 * var(--pad-3)));
+  }
+}
+
+/* OL L6 round 2: card actions, Spine search/menu, reader strip. */
+/* A touch pointer has no hover, so the quick actions are always visible
+ * (chrome.css). At 44px they no longer fit in the top-right corner beside the
+ * title: lay them out along the card's bottom edge instead, on 48px centres,
+ * and keep the meta line out from under them. */
+@media (pointer: coarse) {
+  .kb-card__action {
+    top: auto;
+    bottom: var(--card-act-gap);
+    width: var(--touch-min);
+    height: var(--touch-min);
+    min-width: var(--touch-min);
+    min-height: var(--touch-min);
+    /* the desktop chip is a dark translucent wash with a muted glyph, which
+     * vanishes on the light theme; on touch it is always visible, so skin it
+     * from the panel tokens */
+    background: var(--bg-panel);
+    color: var(--ink);
+  }
+  /* Slots from the right edge: inset 6px, then one (size + gap) per button.
+   * Applies to any coarse-pointer device, whatever its width. */
+  .kb-card__peek {
+    right: 6px;
+  }
+  .kb-card__download {
+    right: calc(6px + var(--touch-min) + var(--card-act-gap));
+  }
+  .kb-card__exclude {
+    right: calc(6px + 2 * (var(--touch-min) + var(--card-act-gap)));
+  }
+  .kb-card__meta {
+    /* three buttons + their gaps + the edge inset */
+    padding-right: calc(6px + 3 * (var(--touch-min) + var(--card-act-gap)));
+    min-height: var(--touch-min);
+    align-items: center;
+  }
+}
+
+@media (max-width: 860px) {
+  /* One line, ellipsized: the compact search launcher never wraps. The slot
+   * itself must be allowed to shrink below its text's min-content width. */
+  .kb-head,
+  .kb-spine__search {
+    min-width: 0;
+  }
+  .kb-search-mini__placeholder {
+    min-width: 0;
+    /* zero intrinsic width, so the unwrapped text cannot widen the header's
+     * grid track; the flex slot hands it whatever room is left */
+    contain: inline-size;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .kb-search-mini {
+    max-width: 100%;
+    white-space: nowrap;
+  }
+  /* Centre the glyph in the enlarged menu button. */
+  .kb-head [data-kb-spine-menu] {
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
+  }
+
+  /* Reader strip: More is pinned to the right edge instead of fading under
+   * the scroll mask, and the strip's flexible part is the crumb, which
+   * ellipsizes. */
+  .kb-ctxbar {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .kb-ctxbar__crumb {
+    min-width: 48px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .kb-ctxbar__pos {
+    white-space: nowrap;
+    flex: none;
+  }
+  /* 430px = the widest current phone viewport (large-phone class). Up to
+   * there the verbs + More leave no room for the crumb or the position label,
+   * so both give way (the title lives in the sheet / inspector); from 431px
+   * the crumb returns, ellipsized. */
+  @media (max-width: 430px) {
+    .kb-ctxbar__crumb,
+    .kb-ctxbar__pos {
+      display: none;
+    }
+  }
+  .kb-ctxbar__nav,
+  .kb-ctxbar__actions {
+    flex: none;
+  }
+  .kb-ctxbar [data-kb-act="more"] {
+    position: sticky;
+    right: 0;
+    background: var(--bg-panel-2);
   }
 }

@@ -33,7 +33,7 @@ export default function BottomTabBar({
         aria-current={onGallery ? "page" : undefined}
       >
         <Icon.Grid />
-        <span>Recent</span>
+        <span>Library</span>
       </Link>
       <button
         type="button"

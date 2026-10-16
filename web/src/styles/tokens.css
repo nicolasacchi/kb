@@ -284,6 +284,10 @@
   --rail-w: 240px; /* v0.10 D4 — was 220px in v0.6 */
   /* Mobile bottom tab bar (kb2 redesign — Recent/Search/Memory/Lists). */
   --tabbar-h: 56px;
+  /* Minimum touch target (OL L6): every control on the phone surfaces.
+   * The card quick actions' geometry derives from this + a gap. */
+  --touch-min: 44px;
+  --card-act-gap: 4px;
   /* Mobile hamburger-drawer width (MB-track). The 860px breakpoint that
    * gates the mobile shell is a literal in styles/mobile.css —
    * MOBILE_MAX_WIDTH in hooks/useIsMobile.ts mirrors it. */

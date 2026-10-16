@@ -115,3 +115,54 @@ for (const theme of ["dark", "light"] as const) {
     });
   });
 }
+
+// OL L6 -- the same three surfaces on a phone (390x844, touch): the Library
+// landing with the Front Page band, the Shelf, and the reader. Same masks as
+// the desktop shots; the reader keeps its one-strip chrome and bottom sheet.
+test.describe("spa visual (mobile)", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  for (const theme of ["dark", "light"] as const) {
+    test(`library landing ${theme}`, async ({ page }) => {
+      await setTheme(page, theme);
+      await page.goto(`${BASE}/?kb=canon`);
+      await expect(page.locator('[data-testid="frontpage"]')).toBeVisible();
+      await expect(page.locator(".kb-card").first()).toBeVisible();
+      await settle(page);
+      await expect(page).toHaveScreenshot(`m-frontpage-${theme}.png`, {
+        maxDiffPixelRatio: MAX_DIFF,
+        mask: [
+          ...MASKS.map((s) => page.locator(s)),
+          ...textMasks(page),
+          page.locator(".kb-fp__dateline"),
+          page.locator(".kb-fp__main"),
+          page.locator(".kb-fp__coverage"),
+          page.locator(".kb-card"),
+        ],
+      });
+    });
+
+    test(`shelf ${theme}`, async ({ page }) => {
+      await setTheme(page, theme);
+      await page.goto(`${BASE}/?kb=canon&folder=pm&sort=title&dir=asc`);
+      await expect(page.locator(".kb-card").first()).toBeVisible();
+      await settle(page);
+      await expect(page).toHaveScreenshot(`m-gallery-${theme}.png`, {
+        maxDiffPixelRatio: MAX_DIFF,
+        mask: [...MASKS.map((s) => page.locator(s)), ...textMasks(page)],
+      });
+    });
+
+    test(`reader ${theme}`, async ({ page }) => {
+      await setTheme(page, theme);
+      await page.goto(`${BASE}/a/canon/kitchen-sink.html`);
+      await expect(page.locator("iframe").first()).toBeVisible();
+      await page.addStyleTag({ content: HIDE_READING_STATE });
+      await settle(page);
+      await expect(page).toHaveScreenshot(`m-reader-${theme}.png`, {
+        maxDiffPixelRatio: MAX_DIFF,
+        mask: [...MASKS.map((s) => page.locator(s)), ...textMasks(page), page.locator("iframe")],
+      });
+    });
+  }
+});
