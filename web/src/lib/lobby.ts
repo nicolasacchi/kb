@@ -114,7 +114,7 @@ export function readLobbyCollapseState(): LobbyCollapseState {
 
 /// Records one more "seen expanded" impression. Called once per mount, only
 /// when the lobby actually rendered expanded on that mount (see
-/// GalleryLobby.tsx) — repeated manual toggles within a single session don't
+/// the retired GalleryLobby) — repeated manual toggles within a single session don't
 /// inflate the count, only genuine fresh-load impressions do.
 export function bumpLobbySeenExpanded(): void {
   try {
