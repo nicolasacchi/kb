@@ -19,13 +19,15 @@ kb-code-server's CLAUDE.md #6), `dispatch.ts` (the pure resolver + chord
 machine), `CommandRoot.tsx` (the one window-level keydown host). `src/nav/` —
 the Location Contract: `location.ts` (the total `Location` type + pure
 `transition()`), `history.ts` (the two router adapters), `ramp.ts` (the
-commitment gradient on every result row). `src/themes/` — kbc-theme/1's SPA
-half: `derive.ts` (pure anchors→roles derivation), `registry.gen.ts` +
-`themes.gen.css` (generated). `src/editor/vimKeys.ts` + `vimReader.ts` — the
+commitment gradient on every result row). kbc-theme/1's SPA half lives in
+`ui/src/themes/` (shared with kb): `derive.ts` (pure anchors→roles derivation),
+`registry.gen.ts` + `themes.gen.css` (generated). `src/editor/vimKeys.ts` + `vimReader.ts` — the
 CM6 buffer's own modal layer, installed at `Prec.highest` inside every
 `CodeView`; it is a SEPARATE executor from `CommandRoot`; see § Keyboard
 below for exactly how the two interact. `src/routes/Reader.tsx` hosts the Desk
-and wires the vim layer's callbacks to the command bus.
+and wires the vim layer's callbacks to the command bus. The shared `ui/` source
+directory supplies the Spine, ViewBar, StateCard, Sheet, icons and theme
+runtime (§ The One Language chrome below).
 
 ## Keyboard and command dispatch (read this before touching ANY binding)
 
@@ -771,8 +773,8 @@ buffer. A future third mode adds one line to `SHIPPED_CENTER_MODES`, one to
 that `MODES` table, and no new region.
 
 **One read, two renderers.** `hooks/useDossier.ts` owns the single
-`GET /api/entity/dossier` query; the center and the rail's Dossier tab
-(`components/entity/DossierRail.tsx`) both render the `DossierOut` it
+`GET /api/entity/dossier` query; the center and the rail's Members
+section, inside the Understand home (`components/entity/DossierRail.tsx`), both render the `DossierOut` it
 returns. Neither fetches. This is kbc-tree/1's "one projection, two
 renderers" rule (see `kb-code-server/CLAUDE.md` invariant 17a, whose own
 stated top risk is exactly this pair drifting) applied to a second wire —
@@ -862,11 +864,12 @@ hides a comment class silently — the toolbar's mode chip
 (`[data-kbc-comment-gutter-mode]`) always names which of the three is
 active.
 
-**The rail's Comments tab is UNCONDITIONAL.** Unlike Review/Dossier (gated
+**The rail's Comments section is UNCONDITIONAL.** Unlike Review/Dossier (gated
 on "does this file have one"), every file the scanner covers has an
-honest, possibly-empty, comments/1 list — so `comments` joins `RailTab`
-(`desk/deskState.ts`'s `RAIL_TABS`, now seven) as an always-offered tab,
-`Space R c`. `components/comments/CommentsPanel.tsx` renders the WHOLE
+honest, possibly-empty, comments/1 list — so Comments is always offered. It
+was a tab (`RAIL_TABS`, then seven) until v9.0, when the rail became five homes
+plus All (see "The One Language chrome" below); it is now a section of the
+Facts home, still reached by `Space R c`. `components/comments/CommentsPanel.tsx` renders the WHOLE
 file's comments/1 rows regardless of the gutter's own display mode (the
 gutter mode is a reading filter over the margin, never a second index).
 
@@ -958,7 +961,7 @@ row, never a fifth slot"; V72-J2 took slot four for comments/1, so Facts
 MUST NOT add a fifth `createLineGutter` call (`lib/lanes.test.ts` counts
 the four in `CodeView.tsx`).
 
-- **Rail tab** `facts` (`Space R f`) — UNCONDITIONAL like comments/trail.
+- **Rail home** `facts` (`Space R f`) — UNCONDITIONAL like comments/trail.
   `components/lanes/FactsPanel.tsx` groups `GET /api/lanes/facts` by lane
   (enabled / disabled-with-reason / empty-with-reason). Trust is LINE STYLE
   (`kbc-trust-*` / orphan dotted + glyph). `age_secs` folds into a
@@ -1968,8 +1971,8 @@ coactive rows at a modal depth, not leader PREFIXES) and that V72-I2 and
 V73-K2c both shipped. The five rows are therefore `Space g T` (`nav.tours` —
 capital because `Space g t` is `nav.todos`, following `Space g R`'s
 precedent), `Space k r`/`Space k s` (`tour.record`/`tour.record-stop`),
-`Space k p` (`trail.pause`) and `Space R t` (`rail.tab.trail`, the eighth
-rail tab). All five are `scope: global`, `dispatch: central`, so
+`Space k p` (`trail.pause`) and `Space R t` (`rail.tab.trail`, which since v9.0
+selects the Notes home, where the Trail section lives). All five are `scope: global`, `dispatch: central`, so
 `deadRows.test.ts` is their gate; `commands/tours.test.ts` is the
 per-surface gate that suite structurally cannot be, and its collision case
 runs the WHOLE-registry prefix scan by hand in all three presets. **Run that
@@ -2120,6 +2123,75 @@ presets — the check `commands doctor` structurally cannot make for leader
 chords.
 
 
+
+## The One Language chrome (v9.0, OL)
+
+kb-code v9.0 and kb v0.50 share `ui/` (Spine, ViewBar, StateCard, Sheet, icons,
+which-key, kbc-theme/1 generator and themes). The load-bearing sections above
+(keyboard dispatch, Location Contract, Lane Budget, Desk goldens) are untouched;
+this section records what the chrome now is, because several passages elsewhere
+described the pre-OL shape.
+
+- **Top bar = `@kb/ui/Spine`** (`components/TopBar.tsx`, 44px). Switcher slot:
+  repo pill, ref chip and four labelled doors (Code, Search, Review, Collections;
+  `lib/navItems.ts` `NAV_ITEMS`, `matchActiveNavItem` maps every route to a
+  door, pinned by a table test over every `app.tsx` route). Search slot: the
+  omnibox button. Right slot: current-review chip, `SpaceHint` (two key chips,
+  the sentence is the tooltip), trail indicator, Inbox icon link, Settings gear
+  (`[data-kbc-topbar-settings]`), theme. The Explore menu (`NavMenu`) no longer
+  exists; its destinations are the **Collections** page
+  (`/r/:repo/~collections`, `COLLECTION_ITEMS`) and the five review-family pages
+  share a `ReviewTabs` sub-nav. The mobile nav is `NavSheet` on `@kb/ui/Sheet`.
+  `data-region="topbar"` is on a wrapper div; the Spine is raised to
+  `--z-popover` inside `.kbc-topbar` so repo/ref/theme popovers are not painted
+  under sticky `--z-bar` headers.
+- **Breadcrumbs portal into the Spine's scope slot** (`components/ScopeSlot.tsx`,
+  `ScopePortal`); the `nav.kbc-breadcrumbs[aria-label=Breadcrumb]` markup, the
+  URL and the Location Contract are unchanged. The scope slot hides at <=860px.
+- **The reader toolbar is a `@kb/ui/ViewBar`** of verbs, not a bespoke strip.
+  Clusters Gutter / Text / Lines, `ariaLabel="Reader view"`, `maxVisible` 3
+  (Provenance, Comments, Text size); Wrap lines, Parameter hints, Code lenses
+  and Sticky scope are in More. It lives in pane 1's header row
+  (`[<- ->] filename ... toolbar`; the filename never truncates); diff, story and
+  sentinel views have no pane header, so the toolbar stays in the header there.
+  Every `data-kbc-*` hook is kept via `attrs`/`renderControl`. No registry rows
+  or handlers were added for the ViewBar; only Comments shows a key.
+- **Rail = five homes plus All.** `RailTab` is `all | understand | history | notes
+  | facts | review` (`desk/deskState.ts` `RAIL_TABS`; Review is conditional).
+  `dossier`, `comments` and `trail` stopped being tabs and render as sections:
+  Members in Understand, Comments in Facts (after the lanes), Trail in Notes.
+  `RETIRED_RAIL_TABS` and `normalizeInspectorTab` map the retired ids (persisted
+  desk state migrates on load; `openTab("comments")` lands on the home and scrolls
+  to the section). The `rail.tab.dossier/comments/trail` registry rows keep their
+  ids and now select Understand/Facts/Notes (handler change only). The desk's
+  collapsed stripe lost its Dossier button. "Cited by" stays in the
+  always-visible card slot above the tabs.
+- **ReaderLegacy is gone.** `ReaderRoute` always mounts the Desk reader;
+  `?shell=legacy` / `?desk=legacy` redirect (`<Navigate replace>`) to the same URL
+  minus the dead param, and `parseDeskParam` no longer returns `"legacy"`.
+- **`PageHeader` renders a `<div>`, not a banner.** The top bar is the page's one
+  `banner`; the hand-maintained regions `.aria.yml` goldens list one banner per
+  page (Home keeps its separate third). A second `<header>` per page re-breaks
+  every golden. Pinned by `PageHeader.test.ts`.
+- **New repo-less / repo routes:** `/r/:repo/~collections` and `/~settings`
+  (`settingsUrl()`, golden in `codeUrl.test.ts`, in the location round-trip
+  table). Both have hand-authored ARIA goldens (`regions-routes.ts`; these are not
+  managed by `--update-snapshots`).
+- **Review diff toolbar** is one ViewBar, `maxVisible` 9 (Patchset / Navigate /
+  View / Unsent; Lanes and Show map in More). **Search** is a ViewBar with
+  `maxVisible` 5. **Home** is Continue / Needs you / Repos.
+- **Loading and failure go through `StateCard`** (`kind` loading / empty / refused
+  / degraded / mismatch, `size="inline"` in panels); no ad-hoc strings.
+- **The visual spec is opt-in, but the golden dispatch renders it.**
+  `e2e/visual.spec.ts` is skipped unless `KBC_VISUAL=1` and is not part of the
+  normal CI run. `ci.yml`'s `update_snapshots` dispatch sets `KBC_VISUAL=1` and
+  `--update-snapshots=all`, and uploads `web-code/e2e/visual` as the
+  `code-e2e-snapshots` artifact. ARIA goldens (`__snapshots__`) are the ones that
+  gate every PR. Before the OL milestone the visual spec had never run on CI.
+- **Budgets are ratcheted.** `ui/scripts/ratchet.mjs web-code` (two-way literal
+  ratchet, `web-code/ratchet.json`), `lint:css-vars` (every `var()` must resolve,
+  `ui/` included), `ui/nav-budget.json` (kb-code: 4 doors) and
+  `ui/chrome-budget.json` (the Playwright `chrome-budget.spec.ts`).
 
 ## v0.44 notes
 
