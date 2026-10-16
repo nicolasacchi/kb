@@ -622,6 +622,29 @@ pub struct ReconcileSummary {
     pub duration_ms: u64,
 }
 
+/// OL FX1 — remove duplicate document rows (one artifact id stored twice by
+/// an older binary), keeping the newest per id. Shared by [`reconcile`] and
+/// the `POST …/reindex` route so both repair paths run the same call; a clean
+/// table costs one narrow `id` scan. Best-effort: a failure is logged and
+/// leaves the table as it was. Returns the number of rows removed.
+pub async fn heal_duplicate_rows(storage: &StorageHandle, kb: &str, from: &str) -> u64 {
+    match storage.dedupe_docs().await {
+        Ok(0) => 0,
+        Ok(n) => {
+            tracing::warn!(
+                kb = %kb,
+                removed = n,
+                "{from}: removed duplicate document rows (kept the newest per id)",
+            );
+            n
+        }
+        Err(e) => {
+            tracing::warn!(kb = %kb, error = %e, "{from}: dedupe_docs failed");
+            0
+        }
+    }
+}
+
 /// Full reconcile pass: walks the filesystem (emitting `watch.modify`
 /// for every non-skipped HTML file), then queries storage for known
 /// rows under `source_root` and emits a synthetic `watch.delete` for
@@ -659,17 +682,8 @@ pub async fn reconcile(
         .unwrap_or_else(|_| source_root.clone());
 
     // OL FX1 — heal duplicate rows (one artifact id stored twice by an
-    // older binary) before the rows drive the walk; a clean table costs one
-    // narrow `id` scan. Best-effort: a failure leaves the table as it was.
-    match storage.dedupe_docs().await {
-        Ok(0) => {}
-        Ok(n) => tracing::warn!(
-            kb = %kb_name,
-            removed = n,
-            "reconcile: removed duplicate document rows (kept the newest per id)",
-        ),
-        Err(e) => tracing::warn!(kb = %kb_name, error = %e, "reconcile: dedupe_docs failed"),
-    }
+    // older binary) before the rows drive the walk.
+    heal_duplicate_rows(&storage, kb_name.as_str(), "reconcile").await;
 
     // Fetch known rows UP FRONT: their mtimes drive the G5 producer-side
     // dedup in the walk, and the SAME list drives the delete pass below. On
@@ -9710,6 +9724,49 @@ done
         assert!(
             rows[0].words.is_some_and(|w| w > 0),
             "resolve refreshes words: {rows:?}"
+        );
+    }
+
+    // OL FX1 — the startup/periodic reconcile owns duplicate-row repair:
+    // rows planted twice for one id (as an older binary left them) are one
+    // row per id after a pass, and the actor bumps the index generation.
+    #[tokio::test]
+    async fn reconcile_heals_duplicate_document_rows() {
+        let tmp = tempdir().unwrap();
+        let lance = tmp.path().join("lance");
+        {
+            let raw = crate::storage::lance::Storage::open(&lance, None)
+                .await
+                .unwrap();
+            let mut old = crate::storage::schema::Doc::placeholder("dup", "/nowhere/dup.html");
+            old.indexed_at_unix = 100;
+            let mut new = crate::storage::schema::Doc::placeholder("dup", "/nowhere/dup.html");
+            new.indexed_at_unix = 200;
+            let solo = crate::storage::schema::Doc::placeholder("solo", "/nowhere/solo.html");
+            raw.plant_raw_rows_for_test(&[old, new, solo]).await;
+            assert_eq!(
+                raw.count_rows().await.unwrap(),
+                3,
+                "setup: duplicate planted"
+            );
+        }
+        let storage = StorageActor::spawn(lance, tmp.path().join("index.db"), None)
+            .await
+            .unwrap();
+        let g0 = storage.index_generation();
+        let src = tempdir().unwrap();
+        let bus = Arc::new(EventBus::default());
+        let (tx, _rx) = mpsc::channel(INGEST_QUEUE_CAPACITY);
+        let sink = IngestSink::new(tx, bus, KbName::new("smoke").unwrap());
+        reconcile(sink, storage.clone(), src.path().to_path_buf(), Vec::new()).await;
+        assert_eq!(
+            storage.count_rows().await.unwrap(),
+            2,
+            "reconcile must leave one row per id"
+        );
+        assert!(
+            storage.index_generation() > g0,
+            "a repair bumps the generation"
         );
     }
 }

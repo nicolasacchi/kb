@@ -943,15 +943,28 @@ impl Storage {
     }
 
     /// OL FX1 — remove duplicate rows for one artifact id, keeping the
-    /// newest (`indexed_at_unix`; a tie keeps the later-scanned row).
-    /// Returns the number of surplus rows removed.
+    /// newest (`indexed_at_unix`). Returns the number of surplus rows
+    /// removed.
     ///
     /// Older binaries could leave two physical rows for one id (see
     /// [`last_wins_by_id`]); `doc_count` is a physical row count, so the
     /// corpus then served the artifact twice. Passage chunks key on
     /// `doc_id` and are left untouched. A clean table costs one narrow
-    /// `id` scan. Delete-then-add is not one commit, so the originals are
-    /// held in memory and restored if the re-add fails.
+    /// `id` scan.
+    ///
+    /// The newest row is never absent: only rows OLDER than it are deleted
+    /// (`id = X AND indexed_at_unix < newest`), a single commit, so a reader
+    /// or a crash never sees the id vanish and the kept row keeps its atlas
+    /// coordinates and every other column in place. The one exception is an
+    /// exact `indexed_at_unix` tie among the surviving rows (no column can
+    /// then tell them apart): that residue is repaired by delete-then-add
+    /// of one row, which is two commits — a reader can miss the id between
+    /// them, a crash there loses the row until the next reconcile
+    /// re-indexes the file (a non-file-backed artifact would not come
+    /// back), and the re-add goes through [`Self::upsert_docs`], whose
+    /// `Doc` carries no atlas coordinates, so they are recomputed on the
+    /// next atlas pass. The originals are held in memory and restored if
+    /// the re-add fails.
     pub async fn dedupe_docs(&self) -> Result<u64> {
         let stream = self
             .table
@@ -986,23 +999,40 @@ impl Storage {
             if rows.len() < 2 {
                 continue;
             }
-            // `max_by_key` returns the LAST maximum, i.e. the later-scanned
-            // row on a tie.
-            let Some(keep) = rows.iter().max_by_key(|d| d.indexed_at_unix).cloned() else {
+            let Some(newest) = rows.iter().map(|d| d.indexed_at_unix).max() else {
                 continue;
             };
+            // Older rows go in ONE delete; the newest is never touched.
+            self.table
+                .delete(&format!(
+                    "{} AND indexed_at_unix < {newest}",
+                    filter_eq("id", &id)
+                ))
+                .await
+                .map_err(|e| crate::Error::Storage(format!("lance dedupe delete: {e}")))?;
+            let older = rows.iter().filter(|d| d.indexed_at_unix < newest).count() as u64;
+            removed += older;
+            let tied: Vec<&Doc> = rows
+                .iter()
+                .filter(|d| d.indexed_at_unix == newest)
+                .collect();
+            if tied.len() < 2 {
+                continue;
+            }
+            // Exact-tie residue: keep the later-scanned row.
+            let keep = (*tied[tied.len() - 1]).clone();
             self.table
                 .delete(&filter_eq("id", &id))
                 .await
                 .map_err(|e| crate::Error::Storage(format!("lance dedupe delete: {e}")))?;
             if let Err(e) = self.upsert_docs(std::slice::from_ref(&keep)).await {
-                // Put every original back so a failed repair loses nothing.
-                for original in &rows {
+                // Put the tied originals back so a failed repair loses nothing.
+                for original in &tied {
                     let _ = self.add_raw_row(original).await;
                 }
                 return Err(e);
             }
-            removed += rows.len() as u64 - 1;
+            removed += tied.len() as u64 - 1;
         }
         if removed > 0 {
             self.mark_search_indexes_dirty();
@@ -4401,6 +4431,13 @@ fn last_wins_by_id(docs: &[Doc]) -> Vec<Doc> {
     for (i, d) in docs.iter().enumerate() {
         last.insert(d.id.as_str(), i);
     }
+    if last.len() < docs.len() {
+        tracing::warn!(
+            batch = docs.len(),
+            distinct = last.len(),
+            "upsert_docs: batch repeated an artifact id; keeping the last occurrence per id",
+        );
+    }
     docs.iter()
         .enumerate()
         .filter(|(i, d)| last.get(d.id.as_str()) == Some(i))
@@ -4474,6 +4511,27 @@ mod tests {
         assert_eq!(kept.title, "Newer");
         // Idempotent on a clean table.
         assert_eq!(s.dedupe_docs().await.unwrap(), 0);
+    }
+
+    // OL FX1 — rows with an exactly tied `indexed_at_unix` can only be told
+    // apart by scan order; the repair still leaves one row, the later-scanned.
+    #[tokio::test]
+    async fn dedupe_docs_collapses_an_exact_timestamp_tie() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        let mut a = fixture_doc("tie", "First", "a");
+        a.indexed_at_unix = 50;
+        let mut b = fixture_doc("tie", "Second", "b");
+        b.indexed_at_unix = 50;
+        let mut old = fixture_doc("tie", "Oldest", "o");
+        old.indexed_at_unix = 10;
+        s.plant_raw_rows_for_test(&[old, a, b]).await;
+        assert_eq!(s.dedupe_docs().await.unwrap(), 2);
+        assert_eq!(s.count_rows().await.unwrap(), 1);
+        assert_eq!(
+            s.get_full_doc("tie").await.unwrap().unwrap().title,
+            "Second"
+        );
     }
 
     // Q-track (board B1) — `get_bodies_by_ids` projects the FULL `body`

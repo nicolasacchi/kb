@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import FrontPage from "./FrontPage";
 import {
+  fetchDocsPage,
   fetchEchoes,
   fetchResurface,
   type DocSummary,
@@ -153,5 +154,41 @@ describe("FrontPage", () => {
     const rail = await screen.findByLabelText("continuing coverage");
     await waitFor(() => expect(rail.textContent).toContain("1 open comment"));
     expect(rail.querySelector("a")?.getAttribute("href")).toContain("/a/docs/a.html");
+  });
+
+  it("fleet mode shows an artifact once even when a corpus returns it twice", async () => {
+    const fleetKbs = [
+      { name: "docs", doc_count: 3, memory_scope: null },
+    ] as unknown as KbSummary[];
+    const page = (docs: DocSummary[]) =>
+      ({ docs, offset: 0, total: docs.length, has_more: false }) as never;
+    const countLinks = async (rows: DocSummary[]) => {
+      vi.mocked(fetchDocsPage).mockResolvedValue(page(rows));
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const view = render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>
+            <FrontPage kb={null} kbs={fleetKbs} rows={[]} total={0} hasMore={false} loading={false} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(vi.mocked(fetchDocsPage)).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(view.container.textContent).toContain("Doc a"),
+      );
+      const n = Array.from(view.container.querySelectorAll("a")).filter((a) =>
+        (a.textContent ?? "").includes("Doc b"),
+      ).length;
+      view.unmount();
+      return n;
+    };
+    const clean = await countLinks([doc("a", { word_count: 2000 }), doc("b", { mtime_unix: NOW_S - 99999 })]);
+    const duplicated = await countLinks([
+      doc("a", { word_count: 2000 }),
+      doc("b", { mtime_unix: NOW_S - 99999 }),
+      doc("b", { mtime_unix: NOW_S - 99999 }),
+    ]);
+    expect(clean).toBeGreaterThan(0);
+    expect(duplicated).toBe(clean);
   });
 });

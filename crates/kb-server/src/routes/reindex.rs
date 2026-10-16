@@ -122,13 +122,7 @@ async fn spawn_walk(ctx: &crate::state::KbContext, re_embed: bool) -> Response<B
         // OL FX1 — an operator reindex also repairs a corpus that already
         // holds duplicate rows for one artifact id (keeps the newest). Runs
         // ahead of the walk on the single writer; failure only logs.
-        match storage.dedupe_docs().await {
-            Ok(0) => {}
-            Ok(n) => {
-                tracing::warn!(kb = %kb, removed = n, "reindex: removed duplicate document rows")
-            }
-            Err(e) => tracing::warn!(kb = %kb, error = %e, "reindex: dedupe_docs failed"),
-        }
+        kb_core::indexer::heal_duplicate_rows(&storage, kb.as_str(), "reindex").await;
         let _ = tokio::task::spawn_blocking(move || {
             // `force = true`: explicit operator reindex bypasses the indexer's
             // byte-identical early return so parse, edges, anchors, and

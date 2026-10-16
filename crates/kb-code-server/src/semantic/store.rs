@@ -227,7 +227,7 @@ impl ChunkStore {
     }
 
     /// Replace ALL chunks for `blob_hash`: delete-then-merge_insert (SQ5's
-    /// `upsert_chunks` (`crates/kb-core/src/storage/lance.rs:1678-1701`) idiom) rather than a bare
+    /// `upsert_chunks` (`crates/kb-core/src/storage/lance.rs:1708-1731`) idiom) rather than a bare
     /// merge_insert. A salt bump (a tree-sitter grammar/query version
     /// change) can change the chunk COUNT for unchanged content — a bare
     /// merge_insert would leave the OLD chunk count's trailing rows (e.g.

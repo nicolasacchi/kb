@@ -7433,4 +7433,31 @@ mod tests {
         );
         assert_eq!(after, k, "the remaining reads run after the write lands");
     }
+
+    // OL FX1 — `DedupeDocs` bumps the index generation only when it removed
+    // rows (a clean table must not invalidate the gallery cache).
+    #[tokio::test]
+    async fn dedupe_docs_bumps_generation_only_when_it_removed_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lance = tmp.path().join("lance");
+        {
+            let raw = crate::storage::lance::Storage::open(&lance, None)
+                .await
+                .unwrap();
+            let mut a = Doc::placeholder("dup", "/tmp/dup.html");
+            a.indexed_at_unix = 1;
+            let mut b = Doc::placeholder("dup", "/tmp/dup.html");
+            b.indexed_at_unix = 2;
+            raw.plant_raw_rows_for_test(&[a, b]).await;
+        }
+        let h = StorageActor::spawn(lance, tmp.path().join("index.db"), None)
+            .await
+            .unwrap();
+        let g0 = h.index_generation();
+        assert_eq!(h.dedupe_docs().await.unwrap(), 1);
+        let g1 = h.index_generation();
+        assert_eq!(g1, g0 + 1, "removing rows bumps");
+        assert_eq!(h.dedupe_docs().await.unwrap(), 0);
+        assert_eq!(h.index_generation(), g1, "a clean table must not bump");
+    }
 }

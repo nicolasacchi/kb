@@ -90,10 +90,11 @@ export function useDocs(
     placeholderData: (prev) => prev,
   });
 
-  const rows = useMemo(
-    () => dedupeDocRows(kb, q.data?.pages.flatMap((p) => p.docs) ?? []),
-    [q.data, kb],
-  );
+  const { rows, collapsed } = useMemo(() => {
+    const raw = q.data?.pages.flatMap((p) => p.docs) ?? [];
+    const deduped = dedupeDocRows(kb, raw);
+    return { rows: deduped, collapsed: raw.length - deduped.length };
+  }, [q.data, kb]);
   const first = q.data?.pages[0];
   const lastPage = q.data?.pages[q.data.pages.length - 1];
 
@@ -108,7 +109,9 @@ export function useDocs(
 
   return {
     rows,
-    total: lastPage?.total ?? 0,
+    // The server total counts a duplicated artifact once per physical row;
+    // subtract the copies this hook collapsed so the badge matches the cards.
+    total: Math.max(rows.length, (lastPage?.total ?? 0) - collapsed),
     isLoading: q.isFetching,
     hasMore: q.hasNextPage ?? false,
     error: q.error ? String(q.error) : null,

@@ -1,3 +1,4 @@
+import { docKey } from "../lib/dedupeDocs";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -85,14 +86,14 @@ export default function Broadsheet({
             {hasFeatures && (
               <section className="kb-broadsheet__features" aria-label="features">
                 {features.map((d) => (
-                  <FeatureBlock key={d.id} kb={kb} doc={d} />
+                  <FeatureBlock key={docKey(kb, d.id)} kb={kb} doc={d} />
                 ))}
               </section>
             )}
             {hasBriefs && (
               <ul className="kb-broadsheet__briefs" aria-label="briefs">
                 {briefs.map((d) => (
-                  <BriefRow key={d.id} kb={kb} doc={d} />
+                  <BriefRow key={docKey(kb, d.id)} kb={kb} doc={d} />
                 ))}
               </ul>
             )}
@@ -102,7 +103,7 @@ export default function Broadsheet({
               <h2 className="kb-broadsheet__rail-h">Continuing coverage</h2>
               <ul className="kb-broadsheet__coverage-list">
                 {coverage.map((d) => (
-                  <li key={d.id} className="kb-broadsheet__coverage-item">
+                  <li key={docKey(kb, d.id)} className="kb-broadsheet__coverage-item">
                     <Link to={artifactHref(kb, d.source_relative)}>
                       {d.title || "(untitled)"}
                     </Link>
