@@ -69,7 +69,7 @@ describe("GalleryViewBar", () => {
     const c = mount("/?tags=a,b&folder=x/y&view=list", { warn: true });
     // two tag chips; the folder is named by the header breadcrumb, not a chip
     expect(c.container.querySelectorAll(".kb-fchip").length).toBe(2);
-    expect(c.container.textContent).not.toContain("x/y");
+    expect(c.container.querySelector(".kb-gallery-viewbar__filters")?.textContent).not.toContain("x/y");
     expect(c.container.querySelector(".kb-gallery-viewbar__warn")?.getAttribute("title")).toBe("bad token");
     fireEvent.click(c.getByLabelText("remove a"));
     expect(search(c)).toContain("tags=b");
