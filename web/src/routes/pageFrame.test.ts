@@ -1,11 +1,17 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+
+// Node's fs via `process.getBuiltinModule` typed loosely (web/ has no Node
+// typings; same trick as lib/navItems.budget.test.ts).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fs = (globalThis as any).process.getBuiltinModule("node:fs") as {
+  readFileSync(url: URL, enc: "utf8"): string;
+};
 
 // OL P4 — Lists and Settings share ONE page frame (`.kb-page`): same
 // max-width, centring and top padding. Source-level pin: the frame rule
 // exists, and both pages' root elements use it.
 const read = (rel: string) =>
-  readFileSync(new URL(rel, import.meta.url), "utf8");
+  fs.readFileSync(new URL(rel, import.meta.url), "utf8");
 
 describe("page frame", () => {
   const css = read("../styles/app.css");
