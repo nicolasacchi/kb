@@ -7,6 +7,7 @@ import {
   matchActiveNavItem,
   navItemMatches,
   navTestAttr,
+  resolveDoorRepo,
   seqCounts,
 } from "./navItems";
 import { branchesUrl, collectionsUrl, reviewsUrl } from "./codeUrl";
@@ -184,5 +185,33 @@ describe("seqCounts", () => {
     expect(counts.sets).toBe(0);
     expect("stacks" in counts).toBe(false);
     expect("todos" in counts).toBe(false);
+  });
+});
+
+describe("resolveDoorRepo — OL-P5 doors on every page", () => {
+  const repos = ["alpha", "beta", "gamma"];
+  it("prefers the explicit repo over everything", () => {
+    expect(resolveDoorRepo({ explicit: "gamma", last: "beta", repos })).toBe("gamma");
+  });
+  it("falls back to the last repo the user was in", () => {
+    expect(resolveDoorRepo({ explicit: null, last: "beta", repos })).toBe("beta");
+  });
+  it("ignores a last repo the daemon no longer lists", () => {
+    expect(resolveDoorRepo({ explicit: null, last: "gone", repos })).toBe("alpha");
+  });
+  it("falls back to the first configured repo when there is no history", () => {
+    expect(resolveDoorRepo({ explicit: null, last: null, repos })).toBe("alpha");
+  });
+  it("is null while no repo is known", () => {
+    expect(resolveDoorRepo({ explicit: null, last: null, repos: [] })).toBeNull();
+    expect(resolveDoorRepo({ explicit: null, last: "beta", repos: [] })).toBeNull();
+  });
+  it("the Search door is active on an unscoped /search", () => {
+    expect(matchActiveNavItem("/search", "alpha")?.key).toBe("search");
+  });
+  it("no door is active on Home, Inbox or Settings", () => {
+    for (const p of ["/", "/~inbox", "/~settings"]) {
+      expect(matchActiveNavItem(p, "alpha")).toBeNull();
+    }
   });
 });

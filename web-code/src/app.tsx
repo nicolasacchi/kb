@@ -194,9 +194,12 @@ function AppShell() {
   const explicitRepo = useExplicitRepo();
   const activeRepo = useActiveRepo();
   const { data: reposData } = useRepos();
+  // OL-P5 — write the EXPLICIT repo only: `activeRepo` falls back to the first
+  // configured repo on Home, which would overwrite the repo the user was last
+  // in before the TopBar doors (or the cold seed below) could read it.
   useEffect(() => {
-    if (activeRepo) saveLastRepo(activeRepo);
-  }, [activeRepo]);
+    if (explicitRepo) saveLastRepo(explicitRepo);
+  }, [explicitRepo]);
   // …and read ONCE, on a truly cold entry (bare "/", no explicit repo), to
   // land the operator back in the repo they were last browsing instead of
   // always the first configured one. Ref-guarded one-shot for the app's
