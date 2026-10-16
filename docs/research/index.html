@@ -258,7 +258,7 @@
     <p>Smallest end-to-end implementation that proves the architecture. Single user, single kb, BM25 only, no rendering, no TUI, no SPA. Validates the storage layout + event firehose + iframe sandbox recipe.</p>
     <h4>Workspace + build</h4>
     <ul>
-      <li><code>kb-core</code> (lib) + <code>kb-server</code> (binary) + <code>kb-cli</code> (binary) + top-level <code>kb</code> dispatcher. Rust edition 2021, MSRV 1.86.</li>
+      <li><code>kb-core</code> (lib) + <code>kb-server</code> (binary) + <code>kb-cli</code> (binary) + top-level <code>kb</code> dispatcher. Rust edition 2021, MSRV 1.91.</li>
       <li>Dependencies: <code>axum</code> 0.8 + <code>tokio</code> + <code>lancedb</code> + <code>rusqlite</code> + <code>scraper</code> + <code>notify</code> + <code>notify-debouncer-full ≥ 0.7.0</code> + <code>tracing</code> + <code>tracing-appender</code> + <code>serde</code> + <code>tower-http</code> (gzip middleware).</li>
     </ul>
     <h4>Storage (topic 01)</h4>
