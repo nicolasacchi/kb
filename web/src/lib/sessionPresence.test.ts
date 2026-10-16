@@ -6,6 +6,8 @@ import {
   sessionPresenceStatus,
   presenceSummary,
   formatPresenceSummary,
+  presenceStripLabel,
+  PRESENCE_STRIP_TITLE,
 } from "./sessionPresence";
 
 const NOW_MS = 1_800_000_000_000; // fixed instant
@@ -184,5 +186,20 @@ describe("formatPresenceSummary", () => {
   it("returns 'idle' when both are zero", () => {
     const summary = { live: 0, active: 0 };
     expect(formatPresenceSummary(summary)).toBe("idle");
+  });
+});
+
+describe("presenceStripLabel", () => {
+  it("says the count is of this list, with no inline definition", () => {
+    expect(presenceStripLabel({ live: 0, active: 3 })).toBe("3 active in this list");
+    expect(presenceStripLabel({ live: 2, active: 3 })).toBe(
+      "2 live · 3 active in this list",
+    );
+  });
+  it("keeps the existing idle word", () => {
+    expect(presenceStripLabel({ live: 0, active: 0 })).toBe("idle");
+  });
+  it("defines both terms in the title", () => {
+    expect(PRESENCE_STRIP_TITLE).toMatch(/live = .*active = captured in the last 10 min/);
   });
 });

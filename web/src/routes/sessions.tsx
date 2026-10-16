@@ -13,6 +13,7 @@ import {
   useSessionThreads,
 } from "../hooks/useSessions";
 import { useLiveSessions } from "../hooks/useLiveSessions";
+import { StateCard } from "@kb/ui/StateCard";
 import LiveSessionsNowBand from "../components/LiveSessionsNowBand";
 import type { PresenceLiveSet } from "../lib/sessionPresence";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
@@ -59,7 +60,13 @@ import {
   outcomeLine,
   substanceBadge,
 } from "../lib/sessionChips";
-import { sessionPresence, presenceSummary, formatPresenceSummary } from "../lib/sessionPresence";
+import {
+  sessionPresence,
+  presenceSummary,
+  formatPresenceSummary,
+  presenceStripLabel,
+  PRESENCE_STRIP_TITLE,
+} from "../lib/sessionPresence";
 import {
   coldSeedSessionsView,
   loadLastSessionsView,
@@ -532,8 +539,12 @@ export default function SessionsRoute() {
             rows. Derived from the rows + presenceSet, shown only in list view
             when there's visibility into the presence data. */}
         {view === "list" && rows.length > 0 && (
-          <div className="kb-ses__presence-strip" data-testid="sessions-presence-strip">
-            {formatPresenceSummary(listPresenceSummary)}
+          <div
+            className="kb-ses__presence-strip"
+            data-testid="sessions-presence-strip"
+            title={PRESENCE_STRIP_TITLE}
+          >
+            {presenceStripLabel(listPresenceSummary)}
           </div>
         )}
 
@@ -688,9 +699,12 @@ export default function SessionsRoute() {
       {!isMobile && (
         <aside className="kb-ses__rail" aria-label="session details">
           {!selected && (
-            <div className="kb-ses__rail-empty">
-              select a session to see produced memories + touched artifacts.
-            </div>
+            <StateCard
+              kind="empty"
+              size="inline"
+              title="No session selected"
+              reason="Select a session to see its produced memories and touched artifacts."
+            />
           )}
           {selected && (
             <SessionInspector

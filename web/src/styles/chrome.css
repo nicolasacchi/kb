@@ -1545,19 +1545,29 @@
   border-color: var(--accent-bor);
   color: var(--accent-soft);
 }
+/* The icon wrapper is the badge's positioning context, so the count hangs on
+ * the icon's own top-right corner rather than the (stretched) button's. */
+.kb-pinsp__itab-ico {
+  position: relative;
+  display: inline-flex;
+}
 .kb-pinsp__itab-badge {
   position: absolute;
-  top: -4px;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
+  top: calc(var(--pad-2) * -1);
+  left: calc(100% - var(--pad-1) - 2px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--pad-1);
+  box-sizing: border-box;
   border-radius: var(--radius-pill);
   background: var(--accent-fill);
   color: var(--accent-fill-fg);
   font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
   display: grid;
   place-items: center;
+  pointer-events: none;
 }
 /* W5/R9b/LF-1 Tier 0 — the outcome section header's staleness/presence
    chip (SessionProducedSection). Static, honest, never a spinner. */
@@ -3709,37 +3719,18 @@ a.kb-idschip:hover {
   border-color: var(--accent-bor);
 }
 
-.kb-mem__histo {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 32px;
-  margin-bottom: 18px;
-}
-.kb-mem__bin {
-  width: 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--rule);
-  border-radius: 2px 2px 0 0;
-}
-.kb-mem__bin.on {
-  background: var(--accent-bg);
-  border-color: var(--accent-bor);
-}
-.kb-mem__axis {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--ink-dim);
-  margin-left: 14px;
-  align-self: flex-end;
-}
-
 .kb-mem__thead,
 .kb-mem__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 96px 140px 44px;
   align-items: center;
   gap: 14px;
+}
+/* OL P4 — no row has health data: the table drops the column. Placed before
+ * the phone block so its own grid-template-columns still wins there. */
+.kb-mem__thead--nohealth,
+.kb-mem__row--nohealth {
+  grid-template-columns: minmax(0, 1fr) 96px 44px;
 }
 /* MI-W4.1/W4.2a — the health column: decay projection + injection
  * histogram, stacked. */
@@ -6007,6 +5998,9 @@ a.proposal-row__chip:hover {
   white-space: nowrap;
 }
 .kb-mem__chip--global {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border-color: color-mix(in oklab, var(--accent) 50%, var(--rule));
   background: color-mix(in oklab, var(--accent) 14%, var(--bg-panel));
   color: var(--accent);

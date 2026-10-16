@@ -8,9 +8,9 @@
 
 /* ── /lists index ─────────────────────────────────────────────────── */
 
+/* Width, centring and top padding: the shared `.kb-page` frame (app.css). */
 .kb-lists {
-  padding: var(--pad-3);
-  max-width: 980px;
+  padding: 0;
 }
 .kb-lists__head {
   display: flex;

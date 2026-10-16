@@ -115,7 +115,12 @@ export default function MemoryLinkChips({
         title="edit kb links"
       >
         {chipCount === 0 ? (
-          <span className="kb-mem__chip kb-mem__chip--empty">none</span>
+          <span
+            className="kb-mem__chip kb-mem__chip--empty"
+            title="Not linked to any kb and not global"
+          >
+            no kb links
+          </span>
         ) : (
           <>
             {hit.global && (
@@ -124,6 +129,7 @@ export default function MemoryLinkChips({
                 title="visible to every kb"
               >
                 <Icon.Star aria-hidden="true" />
+                global
               </span>
             )}
             {(hit.linked_kbs ?? []).slice(0, 3).map((k) => (

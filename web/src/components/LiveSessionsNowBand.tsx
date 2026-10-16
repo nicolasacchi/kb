@@ -77,6 +77,9 @@ export default function LiveSessionsNowBand({
             Waiting on you
             <span className="kb-now__lane-count">{lanes.waiting.length}</span>
           </h3>
+          <div className="kb-now__lane-caption" data-testid="now-lane-waiting-caption">
+            Across all projects, not just this list
+          </div>
           <ol className="kb-now__rows">
             {lanes.waiting.map((r) => (
               <LiveRow key={r.session_id} row={r} now={now} kind="waiting" />

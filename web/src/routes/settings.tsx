@@ -309,7 +309,7 @@ export default function Settings() {
     });
 
   return (
-    <div className="settings">
+    <div className="kb-page settings">
       <header className="settings__header" aria-label="daemon identity">
         <h1 className="settings__title">{identity?.name ?? "daemon"}</h1>
         <p className="settings__meta">

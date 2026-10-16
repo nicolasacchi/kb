@@ -8,6 +8,7 @@ import MemoryActions from "../components/MemoryActions";
 import MemoryLinkChips from "../components/MemoryLinkChips";
 import MemoryPromoteModal from "../components/MemoryPromoteModal";
 import DecaySparkline from "../components/DecaySparkline";
+import { anyHealth } from "../lib/memoryHealth";
 import InjectionHistogram from "../components/InjectionHistogram";
 import LineageViewer from "../components/LineageViewer";
 import ProvenanceThread from "../components/ProvenanceThread";
@@ -195,6 +196,10 @@ export default function Memory() {
     return out;
   }, [hits]);
   const maxBin = Math.max(1, ...bins);
+  // The HEALTH column (decay projection + injection histogram) only has
+  // content for a memory that has been recalled at least once. When no row on
+  // the page qualifies, drop the column instead of showing an empty one.
+  const showHealth = anyHealth(hits);
 
   const corpusStats = useMemo(() => {
     const total = hits.length;
@@ -331,24 +336,10 @@ export default function Memory() {
 
         {hits.length > 0 && (
           <>
-            <div className="kb-mem__histo" title="salience distribution">
-              {bins.map((c, i) => (
-                <span
-                  key={i}
-                  className={`kb-mem__bin ${c > 0 ? "on" : ""}`}
-                  style={{ height: `${4 + (c / maxBin) * 28}px` }}
-                  title={`${(i / 10).toFixed(1)}–${((i + 1) / 10).toFixed(1)} · ${c} memories`}
-                />
-              ))}
-              <span className="kb-mem__axis">
-                salience ↑ · 0.00 ─── 1.00
-              </span>
-            </div>
-
-            <div className="kb-mem__thead">
+            <div className={`kb-mem__thead ${showHealth ? "" : "kb-mem__thead--nohealth"}`}>
               <span>memory</span>
               <span>salience</span>
-              <span>health</span>
+              {showHealth && <span>health</span>}
               <span />
             </div>
 
@@ -371,6 +362,7 @@ export default function Memory() {
                 onOpenLineage={() => setLineageTarget({ kb: h.kb, id: h.id })}
                 onOpenProvenance={() => setProvenanceTarget(h)}
                 commonDecayK={commonDecayK}
+                showHealth={showHealth}
               />
             ))}
           </>
@@ -477,6 +469,7 @@ function MemoryRow({
   onOpenLineage,
   onOpenProvenance,
   commonDecayK,
+  showHealth,
 }: {
   h: RecallHit;
   pinned: boolean;
@@ -493,6 +486,8 @@ function MemoryRow({
   onOpenProvenance: () => void;
   /** The page's most common decay rate; a row only names its own bucket when it differs. */
   commonDecayK: number | null;
+  /** False when no row on the page has health data: the column is dropped. */
+  showHealth: boolean;
 }) {
   const { dropThreshold } = useMemoryPolicy();
   // CT-B5 — a memory's summary is free-text prose that may cite a commit
@@ -507,7 +502,7 @@ function MemoryRow({
     typeof h.decay_k === "number" && commonDecayK != null && h.decay_k !== commonDecayK;
   return (
     <div
-      className={`kb-mem__row ${pinned ? "pinned" : ""}`}
+      className={`kb-mem__row ${pinned ? "pinned" : ""} ${showHealth ? "" : "kb-mem__row--nohealth"}`}
       data-testid="memory-item"
       data-id={h.id}
     >
@@ -569,6 +564,7 @@ function MemoryRow({
           <i style={{ width: `${(salience * 100).toFixed(0)}%` }} />
         </span>
       </span>
+      {showHealth && (
       <span className="kb-mem__healthcell">
         {h.recall_count >= 1 && (
           <>
@@ -585,6 +581,7 @@ function MemoryRow({
           </>
         )}
       </span>
+      )}
       <span
         className={`kb-mem__actions ${menuOpen ? "is-open" : ""}`}
         onKeyDown={(e) => {
