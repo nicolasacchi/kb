@@ -2793,10 +2793,11 @@ mod tests {
             "/api/search",
             get(move || async move {
                 tokio::time::sleep(delay).await;
-                Json(serde_json::json!({"hits": [{
+                let body = serde_json::json!({"hits": [{
                     "kb": "platform", "id": "abc", "title": "T",
                     "source_relative": "a.html", "snippet": "s"
-                }]}))
+                }]});
+                Json(body)
             }),
         )
     }
