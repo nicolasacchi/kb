@@ -312,14 +312,14 @@
   color: var(--ink-mute);
 }
 
-/* OL-C11 — an "off" trail is a quiet dot with a tooltip, not a caption in the
- * top bar; the words stay in the DOM for assistive tech and tests. */
-.kbc-trailind__btn--off .kbc-trailind__label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
+/* OL-P5 — the indicator is a quiet, self-explaining chip in every state
+ * (the same hairline-box grammar as the Space / ? hint beside it); "off" is
+ * muted, never hidden to a bare dot. */
+.kbc-iconbtn.kbc-trailind__btn {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-1, 4px);
+  min-height: 0;
+  padding: 0 var(--space-1, 4px);
   white-space: nowrap;
 }
 

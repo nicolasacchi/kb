@@ -582,3 +582,20 @@
   min-height: 0;
   overflow: auto;
 }
+
+/* OL-P5 — the generation is a quiet, explained fact on the meta line (its
+ * `title` says what it is), and the toolbar's clusters sit at the LEFT under
+ * the heading instead of floating right with an empty left half. */
+.kbc-searchpage__generation {
+  cursor: help;
+}
+.kbc-searchpage .kb-viewbar {
+  justify-content: flex-start;
+}
+.kbc-searchpage .kb-viewbar__clusters {
+  margin-left: 0;
+}
+.kbc-searchpage .kb-viewbar__cluster:first-child {
+  border-left: 0;
+  padding-left: 0;
+}

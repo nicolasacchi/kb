@@ -502,7 +502,10 @@ export default function Search() {
         items={[
           countLine && <span data-kbc-role="result-count">{countLine}</span>,
           response?.stale && (
-            <span title="the daemon's index generation this answer came from">
+            <span
+              className="kbc-searchpage__generation"
+              title="The daemon's index generation this answer was computed from. It rises each time the index changes; two answers with the same number saw the same files."
+            >
               index generation {response.stale.generation}
             </span>
           ),

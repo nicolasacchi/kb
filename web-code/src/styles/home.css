@@ -512,6 +512,15 @@ a.kbc-home-card__head:hover {
   border-top: 1px solid var(--rule);
   padding-top: 8px;
 }
+/* OL-P5 — a wrapped row of links with a gap and NO text separators: a "·"
+ * between items orphaned itself at the start of the second line when the row
+ * wrapped. The separators stay in the DOM (aria-hidden) but are not drawn. */
+.kbc-home-card__links {
+  gap: 4px 14px;
+}
+.kbc-home-card__links .kbc-metaline__sep {
+  display: none;
+}
 .kbc-home-card__footer a {
   color: var(--ink-mute);
   text-decoration: none;

@@ -28,9 +28,9 @@ import { toast } from "../../lib/toast";
 /// The three modes, as a human reads them. The wire vocabulary is snake-free
 /// already; this is the display twin and the ONLY place the two are related.
 export const TRAIL_MODE_LABEL: Readonly<Record<string, string>> = {
-  off: "trail off",
-  recording: "recording",
-  paused: "trail paused",
+  off: "Trail off",
+  recording: "Recording",
+  paused: "Trail paused",
 };
 
 export default function TrailIndicator() {
@@ -82,8 +82,8 @@ export default function TrailIndicator() {
         className={`kbc-iconbtn kbc-trailind__btn kbc-trailind__btn--${mode}`}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label={`trail: ${TRAIL_MODE_LABEL[mode]}`}
-        title={`kbc-trail/1: ${TRAIL_MODE_LABEL[mode]} — click for the controls (Space k p toggles)`}
+        aria-label={`Trail recording: ${mode} — your reading trail, kept only on this box (Space k p toggles)`}
+        title={`Your reading trail (kbc-trail/1) is ${mode}. Click for the controls; Space k p toggles.`}
         data-kbc-trail-toggle
       >
         {mode === "recording" ? <Icon.Record /> : mode === "paused" ? <Icon.Pause /> : <Icon.Dot />}
