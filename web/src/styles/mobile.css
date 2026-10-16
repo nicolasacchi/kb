@@ -1153,3 +1153,80 @@ body.kb-immersive .kb-tabbar {
     flex-basis: 52px;
   }
 }
+
+/* ───────────── OL L6: the phone pass (Spine, Front Page, ViewBars) ───────────
+ * One bar (menu + workspace + search), one sheet (the NavSheet), the Front
+ * Page as a single readable column and toolbars that wrap at most once or fold
+ * behind More. Every control on these surfaces is >=44px tall. The literal
+ * 860px matches useIsMobile (hooks/useIsMobile.ts) and the rest of this file. */
+@media (max-width: 860px) {
+  /* Spine: the three controls the compact bar keeps. */
+  .kb-head .kb-ws,
+  .kb-head .kb-search-mini,
+  .kb-head [data-kb-spine-menu] {
+    min-height: 44px;
+  }
+  .kb-head [data-kb-spine-menu] {
+    min-width: 44px;
+  }
+
+  /* Front Page: lead set at the title step (the hero step is too tall for a
+   * phone column), tools at touch size, brief and coverage rows tappable. */
+  .kb-fp__lead-title {
+    font-size: var(--fs-title);
+    line-height: 1.2;
+  }
+  .kb-fp__tools {
+    width: 100%;
+  }
+  .kb-fp__tool {
+    min-height: 44px;
+    padding-inline: 14px;
+  }
+  .kb-fp__brief-list li {
+    min-height: 44px;
+    align-items: center;
+  }
+  .kb-fp__brief-list a,
+  .kb-fp__cov-list a,
+  .kb-fp__link,
+  .kb-fp__cov-h a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .kb-fp__cov-list a {
+    flex-wrap: wrap;
+    align-content: center;
+  }
+  .kb-fp__feature {
+    padding-block: 4px;
+  }
+
+  /* ViewBars: scope + count on the first row, the (at most one visible)
+   * cluster plus More on the second; controls at touch size. The attribute
+   * selector outranks viewbar.css's single-class rules without !important. */
+  [data-kb-viewbar] {
+    row-gap: var(--pad-1);
+  }
+  [data-kb-viewbar] .kb-viewbar__lead {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+  [data-kb-viewbar] .kb-viewbar__clusters {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  [data-kb-viewbar] .kb-viewbar__btn,
+  [data-kb-viewbar] .kb-viewbar__select,
+  [data-kb-viewbar] .kb-viewbar__menu-row {
+    min-height: 44px;
+  }
+  [data-kb-viewbar] .kb-viewbar__btn {
+    min-width: 44px;
+    justify-content: center;
+  }
+  [data-kb-viewbar] .kb-viewbar__menu {
+    min-width: min(240px, calc(100vw - 2 * var(--pad-3)));
+  }
+}

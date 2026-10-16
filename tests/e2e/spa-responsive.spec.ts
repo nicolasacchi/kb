@@ -280,3 +280,64 @@ test.describe("mobile layout", () => {
     expect(touchAction).toBe("none");
   });
 });
+
+// ───────────── OL L6: the phone pass on the Library landing ─────────────
+test.describe("mobile library landing (OL L6)", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test("Front Page is one column; lead at the title step; coverage below", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon`);
+    const band = page.locator('[data-testid="frontpage"]');
+    await expect(band).toBeVisible();
+    await expect(page.locator(".kb-card").first()).toBeVisible();
+    await expectNoHorizontalScroll(page);
+
+    const cols = await page.locator(".kb-fp__page").evaluate(
+      (el) => getComputedStyle(el).gridTemplateColumns.trim().split(/\s+/).length,
+    );
+    expect(cols).toBe(1);
+
+    const lead = page.locator(".kb-fp__lead-title");
+    if (await lead.count()) {
+      const [leadPx, titlePx] = await lead.evaluate((el) => [
+        parseFloat(getComputedStyle(el).fontSize),
+        parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fs-title")),
+      ]);
+      expect(leadPx).toBe(titlePx);
+    }
+
+    const main = await page.locator(".kb-fp__main").boundingBox();
+    const cov = await page.locator(".kb-fp__coverage").boundingBox();
+    if (main && cov) expect(cov.y).toBeGreaterThanOrEqual(main.y + main.height - 1);
+  });
+
+  test("ViewBar controls and Front Page tools are >=44px; the bar wraps at most two rows", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon`);
+    await expect(page.locator("[data-kb-viewbar]").first()).toBeVisible();
+    const targets = [
+      page.locator("[data-kb-viewbar] .kb-viewbar__btn"),
+      page.locator("[data-kb-viewbar] .kb-viewbar__select"),
+      page.locator(".kb-fp__tool"),
+      page.locator("[data-kb-spine-menu]"),
+    ];
+    let seen = 0;
+    for (const loc of targets) {
+      for (const el of await loc.all()) {
+        if (!(await el.isVisible())) continue;
+        const box = await el.boundingBox();
+        expect(box?.height ?? 0).toBeGreaterThanOrEqual(43.5);
+        seen++;
+      }
+    }
+    expect(seen).toBeGreaterThan(2);
+
+    const rows = await page.locator("[data-kb-viewbar]").first().evaluate((bar) => {
+      const tops = new Set<number>();
+      for (const c of Array.from(bar.querySelectorAll<HTMLElement>(".kb-viewbar__lead, .kb-viewbar__clusters"))) {
+        tops.add(Math.round(c.getBoundingClientRect().top));
+      }
+      return tops.size;
+    });
+    expect(rows).toBeLessThanOrEqual(2);
+  });
+});
