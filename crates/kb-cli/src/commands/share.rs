@@ -412,7 +412,10 @@ fn extract_zip_bounded(
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let Some(rel) = entry.enclosed_name() else {
-            anyhow::bail!("zip entry {:?} has an unsafe path", entry.name());
+            anyhow::bail!(
+                "zip entry {:?} has an unsafe path",
+                String::from_utf8_lossy(entry.name_raw())
+            );
         };
         let outpath = dest.join(rel);
         if entry.is_dir() {
@@ -429,7 +432,7 @@ fn extract_zip_bounded(
             anyhow::bail!(
                 "zip entry {:?} declares {} bytes, exceeding the per-entry \
                  {max_entry_bytes}-byte cap (possible decompression bomb)",
-                entry.name(),
+                String::from_utf8_lossy(entry.name_raw()),
                 entry.size()
             );
         }
@@ -444,7 +447,7 @@ fn extract_zip_bounded(
             anyhow::bail!(
                 "zip entry {:?} exceeds the per-entry {max_entry_bytes}-byte cap \
                  (possible decompression bomb)",
-                entry.name()
+                String::from_utf8_lossy(entry.name_raw())
             );
         }
         total = total.saturating_add(n);

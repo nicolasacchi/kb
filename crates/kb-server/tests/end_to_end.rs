@@ -9502,7 +9502,7 @@ async fn boot_with_multifolder_fixture() -> (tempfile::TempDir, std::net::Socket
 fn zip_entry_names(bytes: &[u8]) -> Vec<String> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("valid zip");
     (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
         .collect()
 }
 
