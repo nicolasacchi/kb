@@ -269,12 +269,12 @@ mod tests {
                 "{{\"type\":\"assistant\",\"n\":{i},\"message\":{{\"role\":\"assistant\",\"usage\":{{\"input_tokens\":3,\"output_tokens\":4}},\"content\":[{{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{{\"file_path\":\"/w/f{}.rs\"}}}}]}},\"pad\":\"é&<> lorem ipsum dolor sit amet consectetur\"}}\n",
                 i % 40
             ));
-            if i % 997 == 0 {
+            if i.is_multiple_of(997) {
                 s.push_str(
                     "{\"note\":\"api_key: abcdEFGH12345678 and sk-ABCDEFGHIJKLMNOPQRSTUVWX\"}\n",
                 );
             }
-            if i % 1500 == 0 {
+            if i.is_multiple_of(1500) {
                 // A newline-spanning bearer match: must stay in ONE chunk.
                 s.push_str("Authorization: Bearer\n");
                 s.push_str("abcdefghijklmnopqrstuvwxyz0123456789\n");

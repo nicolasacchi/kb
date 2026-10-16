@@ -3149,7 +3149,7 @@ mod tests {
 
     /// Backdate a file's mtime by `age_secs` (std only — no `filetime`
     /// dependency needed: `File::set_modified` has been stable since
-    /// Rust 1.75, well under this workspace's 1.86 MSRV).
+    /// Rust 1.75, well under this workspace's 1.91 MSRV).
     fn touch_with_age(path: &Path, contents: &str, age_secs: u64) {
         std::fs::write(path, contents).unwrap();
         let ts = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);

@@ -333,7 +333,7 @@ fn age_phrase(months_ago: u8) -> String {
     match months_ago {
         6 => "6 months ago".to_string(),
         12 => "last year".to_string(),
-        n if n % 12 == 0 => format!("{} years ago", n / 12),
+        n if n.is_multiple_of(12) => format!("{} years ago", n / 12),
         n => format!("{n} months ago"),
     }
 }

@@ -27692,7 +27692,7 @@ mod tests {
         let root = Cli::command();
         let mut checked = 0usize;
         for (i, span) in skill.split('`').enumerate() {
-            if i % 2 == 0 {
+            if i.is_multiple_of(2) {
                 continue; // prose between code spans
             }
             for piece in span.split("kb-code ").skip(1) {

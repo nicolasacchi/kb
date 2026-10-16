@@ -139,8 +139,8 @@ fn write_artifact(path: &Path, rng: &mut SplitMix64, folder: &str, idx: u32) -> 
 
     // Mix in optional facets so kb-status / kb-severity hit ~30% of
     // rows each, matching a real kb's distribution.
-    let want_status = rng.next() % 3 == 0;
-    let want_severity = rng.next() % 4 == 0;
+    let want_status = rng.next().is_multiple_of(3);
+    let want_severity = rng.next().is_multiple_of(4);
 
     let body_paragraphs = 2 + (rng.next() % 12) as usize;
     let mut body = String::new();
@@ -152,7 +152,7 @@ fn write_artifact(path: &Path, rng: &mut SplitMix64, folder: &str, idx: u32) -> 
             body.push(' ');
         }
         body.push_str("</p>\n");
-        if p == body_paragraphs / 2 && rng.next() % 2 == 0 {
+        if p == body_paragraphs / 2 && rng.next().is_multiple_of(2) {
             body.push_str("<pre><code>fn main() { println!(\"hello\"); }</code></pre>\n");
         }
     }

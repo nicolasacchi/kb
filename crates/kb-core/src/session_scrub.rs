@@ -808,7 +808,7 @@ mod tests {
             text.push_str(&format!(
                 "{{\"i\":{i},\"pad\":\"lorem ipsum dolor sit amet\"}}\n"
             ));
-            if i % 400 == 0 {
+            if i.is_multiple_of(400) {
                 text.push_str("Authorization: Bearer\nabcdefghijklmnopqrstuvwxyz0123456789\n");
                 text.push_str("\"password\"\n:  hunter2hunter2\n");
                 text.push_str(
@@ -1338,7 +1338,7 @@ mod tests {
         for iter in 0..600 {
             let mut text = String::new();
             for _ in 0..(3 + rng.step() % 10) {
-                if rng.step() % 3 == 0 {
+                if rng.step().is_multiple_of(3) {
                     let (_, t, _) = &samples[rng.step() % samples.len()];
                     text.push_str(t);
                 } else {

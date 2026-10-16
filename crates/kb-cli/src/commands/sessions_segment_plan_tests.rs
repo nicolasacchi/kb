@@ -1066,7 +1066,7 @@ fn chain_matches_jq_on_synthetic_sessions_with_branches_and_resets() {
     let prog = chain_program();
     for seed in [1u64, 2, 3, 4] {
         let mut g = long_session(60, seed);
-        if seed % 2 == 0 {
+        if seed.is_multiple_of(2) {
             g.reset();
             g.main.clear();
             g.user(200);

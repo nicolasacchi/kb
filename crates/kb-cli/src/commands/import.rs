@@ -1749,7 +1749,7 @@ mod tests {
             s.push_str(&format!(
                 "{{\"agentId\":\"{agent}\",\"message\":{{\"role\":\"assistant\",\"usage\":{{\"input_tokens\":1,\"output_tokens\":2}}}},\"i\":{i},\"pad\":\"é&<> synthetic sidecar padding line\"}}\n"
             ));
-            if i % 211 == 0 {
+            if i.is_multiple_of(211) {
                 s.push_str(
                     "{\"leak\":\"api_key=abcdEFGH12345678 sk-ZYXWVUTSRQPONMLKJIHGFEDCBA\"}\n",
                 );
@@ -1774,7 +1774,11 @@ mod tests {
         for n in 0..22usize {
             // Sizes vary: most well under the 2 MiB per-agent cap, every
             // 7th (4 files) over it.
-            let lines = if n % 7 == 0 { 11_500 } else { 400 + n * 50 };
+            let lines = if n.is_multiple_of(7) {
+                11_500
+            } else {
+                400 + n * 50
+            };
             write(
                 &dir,
                 &format!("agent-a{n:02}.jsonl"),
