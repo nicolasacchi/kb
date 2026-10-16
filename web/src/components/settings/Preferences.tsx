@@ -130,9 +130,15 @@ export default function Preferences() {
             ))}
           </div>
         </div>
+        <p className="settings__hint">
+          Which view a bare <code>/</code> opens. The map home is opt-in — it
+          is also reachable any time as <code>/?shell=map</code>, and the
+          local-only feature census (the <code>census</code> tab) is what
+          decides whether it is ever promoted to the default.
+        </p>
         <div className="settings__field">
           <label className="settings__label" htmlFor="pinch-zoom">
-            pinch to change Library view
+            Pinch to change Library view
           </label>
           <input
             id="pinch-zoom"
@@ -144,13 +150,6 @@ export default function Preferences() {
         <p className="settings__hint">
           Ctrl-wheel or a trackpad pinch over the Library steps Atlas, Index and
           Shelf. Off leaves pinch to the browser; <code>-</code> and <code>=</code> still work.
-        </p>
-
-        <p className="settings__hint">
-          Which view a bare <code>/</code> opens. The map home is opt-in — it
-          is also reachable any time as <code>/?shell=map</code>, and the
-          local-only feature census (the <code>census</code> tab) is what
-          decides whether it is ever promoted to the default.
         </p>
       </section>
 

@@ -123,7 +123,7 @@ export default function GalleryViewBar({
             return (
               <>
                 {node}
-                <ZoomIndicator view={view} />
+                {!isMobile && <ZoomIndicator view={view} />}
               </>
             );
           return node;

@@ -128,9 +128,16 @@ export default function Gallery() {
     gesture: !isMobile,
     onStep: (v: ZoomView) => {
       set("view", viewToParam(v));
-      setZoomNote(`Library view: ${ZOOM_LABEL[v]}`);
+      // Clear first so announcing the same text twice still re-announces.
+      setZoomNote("");
+      window.setTimeout(() => setZoomNote(`Library view: ${ZOOM_LABEL[v]}`), 50);
     },
   });
+  useEffect(() => {
+    if (!zoomNote) return;
+    const t = window.setTimeout(() => setZoomNote(""), 1500);
+    return () => window.clearTimeout(t);
+  }, [zoomNote]);
   // Views that own their whole body and are NOT a projection of the docs
   // row-set: the count/notes controls, the empty states and every result
   // strip are suppressed for them (W3.C-b added `canvas` beside `history` —

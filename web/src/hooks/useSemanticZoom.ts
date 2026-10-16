@@ -52,7 +52,7 @@ export function useSemanticZoom({ node, view, gesture, onStep }: Options) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       if (e.key !== "-" && e.key !== "=") return;
       if (isEditableTarget(e.target) || isOverlayOpen()) return;
       const to = nextView(viewRef.current, e.key === "=" ? "in" : "out");

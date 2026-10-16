@@ -5,9 +5,12 @@ import { PORT } from "./helpers";
 // step the Library atlas <-> index <-> shelf through ?view=.
 const libUrl = (view: string) => `http://127.0.0.1:${PORT}/?kb=canon${view === "grid" ? "" : `&view=${view}`}`;
 
-async function pinch(page: Page, selector: string, deltaY: number) {
-  await page.locator(selector).first().evaluate((el, dy) => {
-    el.dispatchEvent(new WheelEvent("wheel", { deltaY: dy, ctrlKey: true, bubbles: true, cancelable: true }));
+/// Dispatches a ctrl-wheel and returns whether the page's default (browser zoom) was prevented.
+async function pinch(page: Page, selector: string, deltaY: number): Promise<boolean> {
+  return page.locator(selector).first().evaluate((el, dy) => {
+    const e = new WheelEvent("wheel", { deltaY: dy, ctrlKey: true, bubbles: true, cancelable: true });
+    el.dispatchEvent(e);
+    return e.defaultPrevented;
   }, deltaY);
 }
 const settle = (page: Page) => page.waitForTimeout(450);
@@ -39,18 +42,26 @@ test.describe("Semantic zoom", () => {
     await expect.poll(() => view(page)).toBe("grid");
   });
 
-  test("no step at the ends of the ladder", async ({ page }) => {
+  test("no step at the ends of the ladder, and the browser zoom is not prevented", async ({ page }) => {
     await page.goto(libUrl("grid"));
-    await pinch(page, ".gallery", -120);
+    expect(await pinch(page, ".gallery", -120)).toBe(false); // Shelf: nothing further in
     await page.waitForTimeout(500);
     expect(view(page)).toBe("grid");
+    await page.goto(libUrl("atlas"));
+    await expect(page.getByTestId("zoom-indicator")).toBeVisible();
+    expect(await pinch(page, ".gallery", 120)).toBe(false); // Atlas: nothing further out
+    await page.waitForTimeout(500);
+    expect(view(page)).toBe("atlas");
   });
 
-  test("no step over the Spine or the ViewBar", async ({ page }) => {
+  test("no step over the Spine, the sidebar or the ViewBar", async ({ page }) => {
     await page.goto(libUrl("list"));
     await expect(page.getByTestId("zoom-indicator")).toBeVisible();
-    await pinch(page, "[data-kb-spine]", -120);
-    await pinch(page, ".kb-gallery-viewbar", -120);
+    expect(await pinch(page, "[data-kb-spine]", -120)).toBe(false);
+    expect(await pinch(page, ".kb-gallery-viewbar", -120)).toBe(false);
+    if ((await page.locator("aside.kb-side").count()) > 0) {
+      expect(await pinch(page, "aside.kb-side", -120)).toBe(false);
+    }
     await page.waitForTimeout(500);
     expect(view(page)).toBe("list");
   });
@@ -84,5 +95,17 @@ test.describe("Semantic zoom", () => {
     await expect.poll(() => view(page)).toBe("list");
     await page.keyboard.press("-");
     await expect.poll(() => view(page)).toBe("atlas");
+  });
+
+  test.describe("phone", () => {
+    test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+    test("pinch is inert and the indicator is hidden", async ({ page }) => {
+      await page.goto(libUrl("list"));
+      await expect(page.locator(".kb-gallery-viewbar")).toBeVisible();
+      await expect(page.getByTestId("zoom-indicator")).toHaveCount(0);
+      expect(await pinch(page, ".gallery", -120)).toBe(false);
+      await page.waitForTimeout(500);
+      expect(view(page)).toBe("list");
+    });
   });
 });

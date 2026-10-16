@@ -82,4 +82,19 @@ describe("feedWheel", () => {
   it("ignores a zero delta", () => {
     expect(feedWheel(ZOOM_IDLE, 0, 1000, always).action).toBe("pass");
   });
+
+  it("a continuous stream keeps swallowing: the settle window slides with every event", () => {
+    let r = feedWheel(ZOOM_IDLE, -100, 0, always);
+    expect(r.action).toBe("step");
+    let steps = 0;
+    for (let t = 16; t <= 1000; t += 16) {
+      r = feedWheel(r.state, -100, t, always);
+      if (r.action === "step") steps++;
+      expect(r.action).toBe("swallow");
+    }
+    expect(steps).toBe(0);
+    // ...and a quiet gap ends it, so the next gesture steps again.
+    r = feedWheel(r.state, -100, 1000 + ZOOM_SETTLE_MS + 20, always);
+    expect(r.action).toBe("step");
+  });
 });

@@ -107,4 +107,12 @@ describe("useSemanticZoom", () => {
     input.remove();
     expect(steps).toEqual(["grid", "atlas"]);
   });
+
+  it("ignores key auto-repeat so holding a key takes one step", async () => {
+    const steps: ZoomView[] = [];
+    await mount("list", steps);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "=", bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "=", repeat: true, bubbles: true }));
+    expect(steps).toEqual(["grid"]);
+  });
 });

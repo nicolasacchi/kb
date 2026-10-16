@@ -73,9 +73,11 @@ with kb-code), plus a per-view control row. It replaced the old 52px header,
   first. A trackpad pinch (or Ctrl-wheel) over the Library content steps one
   rung per gesture (pinch out moves toward the Shelf), and `-` / `=` do the same
   from the keyboard. Three ticks beside the View control show the position and
-  are hidden on the Front page, Timeline and Canvas, where zoom does nothing.
-  The browser's own zoom is left alone at either end of the ladder, on a phone,
-  and when Settings, Preferences, "pinch to change Library view" is off.
+  are hidden on Timeline and Canvas, where zoom does nothing; the Front Page
+  band is not a view, so it does not change them. The browser's own zoom is left
+  alone at either end of the ladder, on a phone, and when Settings, Preferences,
+  "Pinch to change Library view" is off. In the Atlas, a pinch out leaves the
+  map for the Index; use the mouse wheel to zoom the map.
 - **Front Page band.** The unfiltered Library (Shelf or Index view, no filter or
   query, `sort=recent`) opens with one serif band: a masthead (the kb name or
   "All corpora", the date, an edition line), a lead story whose dateline says
