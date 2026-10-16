@@ -1262,7 +1262,11 @@ body.kb-immersive .kb-tabbar {
 }
 
 @media (max-width: 860px) {
-  /* One line, ellipsized: the compact search launcher never wraps. */
+  /* One line, ellipsized: the compact search launcher never wraps. The slot
+   * itself must be allowed to shrink below its text's min-content width. */
+  .kb-spine__search {
+    min-width: 0;
+  }
   .kb-search-mini__placeholder {
     min-width: 0;
     overflow: hidden;
