@@ -1,3 +1,4 @@
+import { docKey } from "../lib/dedupeDocs";
 import {
   forwardRef,
   useEffect,
@@ -163,7 +164,7 @@ const VirtualGrid = forwardRef<VirtualGridHandle, Props>(function VirtualGrid(
                 // rides a thin wrapper div instead of a prop threaded into
                 // Card itself (CSS-class focus, never DOM focus theft).
                 <div
-                  key={d.id}
+                  key={docKey(kb, d.id)}
                   className={isFocused ? "kb-card--focused" : undefined}
                   role="option"
                   aria-selected={isFocused}

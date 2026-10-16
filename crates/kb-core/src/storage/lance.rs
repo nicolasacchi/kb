@@ -918,7 +918,12 @@ impl Storage {
         if docs.is_empty() {
             return Ok(());
         }
-        let batches = docs_to_batches(docs, self.dim)?;
+        // OL FX1 — a merge_insert whose SOURCE repeats a key has no target
+        // match to fold the repeats into, so lance INSERTS every copy. Keep
+        // one row per id (the last occurrence wins, matching sequential
+        // upserts) before the batch reaches lance.
+        let deduped = last_wins_by_id(docs);
+        let batches = docs_to_batches(&deduped, self.dim)?;
         let reader = arrow::record_batch::RecordBatchIterator::new(
             batches.into_iter().map(Ok),
             Arc::new(schema(self.dim)),
@@ -935,6 +940,123 @@ impl Storage {
         // search rebuilds to pick them up.
         self.mark_search_indexes_dirty();
         Ok(())
+    }
+
+    /// OL FX1 — remove duplicate rows for one artifact id, keeping the
+    /// newest (`indexed_at_unix`). Returns the number of surplus rows
+    /// removed.
+    ///
+    /// Older binaries could leave two physical rows for one id (see
+    /// [`last_wins_by_id`]); `doc_count` is a physical row count, so the
+    /// corpus then served the artifact twice. Passage chunks key on
+    /// `doc_id` and are left untouched. A clean table costs one narrow
+    /// `id` scan.
+    ///
+    /// The newest row is never absent: only rows OLDER than it are deleted
+    /// (`id = X AND indexed_at_unix < newest`), a single commit, so a reader
+    /// or a crash never sees the id vanish and the kept row keeps its atlas
+    /// coordinates and every other column in place. The one exception is an
+    /// exact `indexed_at_unix` tie among the surviving rows (no column can
+    /// then tell them apart): that residue is repaired by delete-then-add
+    /// of one row, which is two commits — a reader can miss the id between
+    /// them, a crash there loses the row until the next reconcile
+    /// re-indexes the file (a non-file-backed artifact would not come
+    /// back), and the re-add goes through [`Self::upsert_docs`], whose
+    /// `Doc` carries no atlas coordinates, so they are recomputed on the
+    /// next atlas pass. The originals are held in memory and restored if
+    /// the re-add fails.
+    pub async fn dedupe_docs(&self) -> Result<u64> {
+        let stream = self
+            .table
+            .query()
+            .select(Select::columns(&["id"]))
+            .execute()
+            .await
+            .map_err(|e| crate::Error::Storage(format!("lance dedupe scan: {e}")))?;
+        let batches: Vec<arrow::record_batch::RecordBatch> = stream
+            .try_collect()
+            .await
+            .map_err(|e| crate::Error::Storage(format!("lance dedupe scan stream: {e}")))?;
+        let mut seen = std::collections::HashSet::new();
+        let mut dups = std::collections::BTreeSet::new();
+        for batch in &batches {
+            if let Some(col) = batch.column_by_name("id") {
+                let arr = col.as_string::<i32>();
+                for i in 0..batch.num_rows() {
+                    let id = arr.value(i);
+                    if !seen.insert(id.to_string()) {
+                        dups.insert(id.to_string());
+                    }
+                }
+            }
+        }
+        let mut removed = 0u64;
+        for id in dups {
+            if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                continue;
+            }
+            let rows = self.get_full_docs_all(&id).await?;
+            if rows.len() < 2 {
+                continue;
+            }
+            let Some(newest) = rows.iter().map(|d| d.indexed_at_unix).max() else {
+                continue;
+            };
+            // Older rows go in ONE delete; the newest is never touched.
+            self.table
+                .delete(&format!(
+                    "{} AND indexed_at_unix < {newest}",
+                    filter_eq("id", &id)
+                ))
+                .await
+                .map_err(|e| crate::Error::Storage(format!("lance dedupe delete: {e}")))?;
+            let older = rows.iter().filter(|d| d.indexed_at_unix < newest).count() as u64;
+            removed += older;
+            let tied: Vec<&Doc> = rows
+                .iter()
+                .filter(|d| d.indexed_at_unix == newest)
+                .collect();
+            if tied.len() < 2 {
+                continue;
+            }
+            // Exact-tie residue: keep the later-scanned row.
+            let keep = (*tied[tied.len() - 1]).clone();
+            self.table
+                .delete(&filter_eq("id", &id))
+                .await
+                .map_err(|e| crate::Error::Storage(format!("lance dedupe delete: {e}")))?;
+            if let Err(e) = self.upsert_docs(std::slice::from_ref(&keep)).await {
+                // Put the tied originals back so a failed repair loses nothing.
+                for original in &tied {
+                    let _ = self.add_raw_row(original).await;
+                }
+                return Err(e);
+            }
+            removed += tied.len() as u64 - 1;
+        }
+        if removed > 0 {
+            self.mark_search_indexes_dirty();
+        }
+        Ok(removed)
+    }
+
+    async fn add_raw_row(&self, doc: &Doc) -> Result<()> {
+        let batches = docs_to_batches(std::slice::from_ref(doc), self.dim)?;
+        self.table
+            .add(batches)
+            .execute()
+            .await
+            .map_err(|e| crate::Error::Storage(format!("lance add: {e}")))?;
+        Ok(())
+    }
+
+    /// Test-only: append rows verbatim with `table.add`, bypassing
+    /// `upsert_docs`, to plant the duplicates older binaries left behind.
+    #[cfg(test)]
+    pub(crate) async fn plant_raw_rows_for_test(&self, docs: &[Doc]) {
+        for d in docs {
+            self.add_raw_row(d).await.unwrap();
+        }
     }
 
     /// Delete a single artifact by id.
@@ -1888,6 +2010,56 @@ impl Storage {
             .next())
     }
 
+    const FULL_DOC_COLUMNS: &'static [&'static str] = &[
+        "id",
+        "path",
+        "title",
+        "body",
+        "headings",
+        "code",
+        "prompt",
+        "body_text_excerpt",
+        "embedding",
+        "kb_category",
+        "prompt_size_bytes",
+        "size_kb",
+        "js_loc",
+        "css_loc",
+        "svg_count",
+        "has_svg",
+        "has_form",
+        "has_canvas",
+        "has_animation",
+        "has_details",
+        "has_script",
+        "has_drag",
+        "has_math",
+        "mtime_unix",
+        "indexed_at_unix",
+        "table_count",
+        "code_block_count",
+        "word_count",
+        "longread",
+        "tags_csv",
+        "kb_status",
+        "kb_severity",
+        "kb_salience",
+        "kb_decay",
+        "kb_supersedes",
+        "kb_session",
+        "created_unix",
+        "content_hash",
+        "task_done",
+        "task_total",
+        "kb_summary",
+        "kb_memory_type",
+        "kb_source",
+        "kb_author",
+        "kb_source_kb",
+        "kb_source_artifact",
+        "kb_source_anchor",
+    ];
+
     /// F3a — load the full [`Doc`] row for relocate (id rekey): every column
     /// that `docs_to_batches` writes, including the embedding vector and
     /// body/code/prompt text. Returns `Ok(None)` when the id is absent.
@@ -1899,60 +2071,12 @@ impl Storage {
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return Ok(None);
         }
-        let cols = [
-            "id",
-            "path",
-            "title",
-            "body",
-            "headings",
-            "code",
-            "prompt",
-            "body_text_excerpt",
-            "embedding",
-            "kb_category",
-            "prompt_size_bytes",
-            "size_kb",
-            "js_loc",
-            "css_loc",
-            "svg_count",
-            "has_svg",
-            "has_form",
-            "has_canvas",
-            "has_animation",
-            "has_details",
-            "has_script",
-            "has_drag",
-            "has_math",
-            "mtime_unix",
-            "indexed_at_unix",
-            "table_count",
-            "code_block_count",
-            "word_count",
-            "longread",
-            "tags_csv",
-            "kb_status",
-            "kb_severity",
-            "kb_salience",
-            "kb_decay",
-            "kb_supersedes",
-            "kb_session",
-            "created_unix",
-            "content_hash",
-            "task_done",
-            "task_total",
-            "kb_summary",
-            "kb_memory_type",
-            "kb_source",
-            "kb_author",
-            "kb_source_kb",
-            "kb_source_artifact",
-            "kb_source_anchor",
-        ];
+        let cols = Self::FULL_DOC_COLUMNS;
         let stream = self
             .table
             .query()
             .only_if(format!("id = '{id}'"))
-            .select(Select::columns(&cols))
+            .select(Select::columns(cols))
             .limit(1)
             .execute()
             .await
@@ -1962,6 +2086,26 @@ impl Storage {
             .await
             .map_err(|e| crate::Error::Storage(format!("lance get_full_doc stream: {e}")))?;
         Ok(batch_to_full_docs(&batches).into_iter().next())
+    }
+
+    /// Every physical row for `id` (no limit), same projection as
+    /// [`get_full_doc`](Self::get_full_doc). Only [`dedupe_docs`](Self::dedupe_docs)
+    /// needs more than one.
+    async fn get_full_docs_all(&self, id: &str) -> Result<Vec<Doc>> {
+        let cols = Self::FULL_DOC_COLUMNS;
+        let stream = self
+            .table
+            .query()
+            .only_if(format!("id = '{id}'"))
+            .select(Select::columns(cols))
+            .execute()
+            .await
+            .map_err(|e| crate::Error::Storage(format!("lance get_full_docs_all: {e}")))?;
+        let batches: Vec<_> = stream
+            .try_collect()
+            .await
+            .map_err(|e| crate::Error::Storage(format!("lance get_full_docs_all stream: {e}")))?;
+        Ok(batch_to_full_docs(&batches))
     }
 
     /// F3a — every passage chunk for `doc_id`, including stored embeddings.
@@ -4280,6 +4424,27 @@ async fn ensure_u3_provenance_columns(table: &LanceTable) -> Result<()> {
     Ok(())
 }
 
+/// OL FX1 — collapse a batch to one doc per `id`, the LAST occurrence
+/// winning, keeping first-seen order for the surviving ids.
+fn last_wins_by_id(docs: &[Doc]) -> Vec<Doc> {
+    let mut last: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (i, d) in docs.iter().enumerate() {
+        last.insert(d.id.as_str(), i);
+    }
+    if last.len() < docs.len() {
+        tracing::warn!(
+            batch = docs.len(),
+            distinct = last.len(),
+            "upsert_docs: batch repeated an artifact id; keeping the last occurrence per id",
+        );
+    }
+    docs.iter()
+        .enumerate()
+        .filter(|(i, d)| last.get(d.id.as_str()) == Some(i))
+        .map(|(_, d)| d.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4290,6 +4455,83 @@ mod tests {
         d.title = title.into();
         d.body = body.into();
         d
+    }
+
+    // OL FX1 — one artifact, one row. A single `merge_insert` whose SOURCE
+    // carries the same key twice has no matched target row, so lance inserts
+    // both: two concurrent walks of one path landing in one prepared batch
+    // used to leave two physical rows for one id.
+    #[tokio::test]
+    async fn upsert_docs_with_a_repeated_id_in_one_batch_leaves_one_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        let mut older = fixture_doc("dup", "Older", "old body");
+        older.indexed_at_unix = 100;
+        let mut newer = fixture_doc("dup", "Newer", "new body");
+        newer.indexed_at_unix = 200;
+        s.upsert_docs(&[older, fixture_doc("other", "Other", "x"), newer])
+            .await
+            .unwrap();
+        assert_eq!(s.count_rows().await.unwrap(), 2, "one row per id");
+        let kept = s.get_full_doc("dup").await.unwrap().unwrap();
+        assert_eq!(kept.title, "Newer", "the last occurrence in the batch wins");
+    }
+
+    // OL FX1 — after ANY sequence of upserts there is one row per id.
+    #[tokio::test]
+    async fn sequential_upserts_of_one_id_keep_one_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        for i in 0..5 {
+            s.upsert_docs(&[fixture_doc("same", &format!("T{i}"), "b")])
+                .await
+                .unwrap();
+        }
+        assert_eq!(s.count_rows().await.unwrap(), 1);
+    }
+
+    // OL FX1 — repair: a table that ALREADY holds duplicate rows (written
+    // before the batch dedupe, planted here straight through `merge_insert`)
+    // is healed by `dedupe_docs`, keeping the newest `indexed_at_unix`.
+    #[tokio::test]
+    async fn dedupe_docs_removes_existing_duplicate_rows_keeping_the_newest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        let mut older = fixture_doc("dup", "Older", "old body");
+        older.indexed_at_unix = 100;
+        let mut newer = fixture_doc("dup", "Newer", "new body");
+        newer.indexed_at_unix = 200;
+        let solo = fixture_doc("solo", "Solo", "s");
+        s.plant_raw_rows_for_test(&[older, newer, solo]).await;
+        assert_eq!(s.count_rows().await.unwrap(), 3, "setup: duplicate planted");
+
+        assert_eq!(s.dedupe_docs().await.unwrap(), 1, "one surplus row removed");
+        assert_eq!(s.count_rows().await.unwrap(), 2);
+        let kept = s.get_full_doc("dup").await.unwrap().unwrap();
+        assert_eq!(kept.title, "Newer");
+        // Idempotent on a clean table.
+        assert_eq!(s.dedupe_docs().await.unwrap(), 0);
+    }
+
+    // OL FX1 — rows with an exactly tied `indexed_at_unix` can only be told
+    // apart by scan order; the repair still leaves one row, the later-scanned.
+    #[tokio::test]
+    async fn dedupe_docs_collapses_an_exact_timestamp_tie() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Storage::open(tmp.path(), None).await.unwrap();
+        let mut a = fixture_doc("tie", "First", "a");
+        a.indexed_at_unix = 50;
+        let mut b = fixture_doc("tie", "Second", "b");
+        b.indexed_at_unix = 50;
+        let mut old = fixture_doc("tie", "Oldest", "o");
+        old.indexed_at_unix = 10;
+        s.plant_raw_rows_for_test(&[old, a, b]).await;
+        assert_eq!(s.dedupe_docs().await.unwrap(), 2);
+        assert_eq!(s.count_rows().await.unwrap(), 1);
+        assert_eq!(
+            s.get_full_doc("tie").await.unwrap().unwrap().title,
+            "Second"
+        );
     }
 
     // Q-track (board B1) — `get_bodies_by_ids` projects the FULL `body`

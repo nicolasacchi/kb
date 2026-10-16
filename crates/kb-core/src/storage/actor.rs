@@ -505,6 +505,11 @@ pub enum StorageMsg {
         mtime_unix: i64,
         reply: oneshot::Sender<Result<()>>,
     },
+    /// OL FX1 — delete duplicate rows for one artifact id (keep the newest).
+    /// WRITE-class: runs on the single writer, parked during a compaction.
+    DedupeDocs {
+        reply: oneshot::Sender<Result<u64>>,
+    },
     /// v0.3: read all (id, embedding) pairs for atlas recompute.
     ListEmbeddings {
         reply: oneshot::Sender<Result<Vec<EmbeddingPair>>>,
@@ -2093,6 +2098,7 @@ impl StorageActor {
                 | StorageMsg::UpsertChunks { .. }
                 | StorageMsg::UpdateAtlas { .. }
                 | StorageMsg::TouchMtime { .. }
+                | StorageMsg::DedupeDocs { .. }
                 | StorageMsg::ClearEmbeddings { .. }
                 | StorageMsg::DropKbData { .. }
                 | StorageMsg::CompactAll { .. }
@@ -2817,6 +2823,13 @@ impl StorageActor {
                 reply,
             } => {
                 let _ = reply.send(self.storage.touch_mtime(&id, mtime_unix).await);
+            }
+            StorageMsg::DedupeDocs { reply } => {
+                let res = self.storage.dedupe_docs().await;
+                if matches!(res, Ok(n) if n > 0) {
+                    self.bump_generation();
+                }
+                let _ = reply.send(res);
             }
             StorageMsg::ListEmbeddings { reply } => {
                 let _ = reply.send(self.storage.list_embeddings().await);
@@ -4372,6 +4385,14 @@ impl StorageHandle {
             reply,
         })
         .await
+    }
+
+    /// OL FX1 — remove duplicate rows for one artifact id, keeping the
+    /// newest; returns the surplus rows removed. See
+    /// [`crate::storage::lance::Storage::dedupe_docs`].
+    pub async fn dedupe_docs(&self) -> Result<u64> {
+        self.send_and_await(|reply| StorageMsg::DedupeDocs { reply })
+            .await
     }
 
     pub async fn list_embeddings(&self) -> Result<Vec<EmbeddingPair>> {
@@ -7105,6 +7126,7 @@ mod tests {
             with_refs: false,
             reply
         }));
+        assert!(!lane(|reply| StorageMsg::DedupeDocs { reply }));
         assert!(!lane(|reply| StorageMsg::TouchMtime {
             id: "a".into(),
             mtime_unix: 0,
@@ -7410,5 +7432,32 @@ mod tests {
             "exactly READ_STARVATION_BOUND reads run before the starved write is forced"
         );
         assert_eq!(after, k, "the remaining reads run after the write lands");
+    }
+
+    // OL FX1 — `DedupeDocs` bumps the index generation only when it removed
+    // rows (a clean table must not invalidate the gallery cache).
+    #[tokio::test]
+    async fn dedupe_docs_bumps_generation_only_when_it_removed_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lance = tmp.path().join("lance");
+        {
+            let raw = crate::storage::lance::Storage::open(&lance, None)
+                .await
+                .unwrap();
+            let mut a = Doc::placeholder("dup", "/tmp/dup.html");
+            a.indexed_at_unix = 1;
+            let mut b = Doc::placeholder("dup", "/tmp/dup.html");
+            b.indexed_at_unix = 2;
+            raw.plant_raw_rows_for_test(&[a, b]).await;
+        }
+        let h = StorageActor::spawn(lance, tmp.path().join("index.db"), None)
+            .await
+            .unwrap();
+        let g0 = h.index_generation();
+        assert_eq!(h.dedupe_docs().await.unwrap(), 1);
+        let g1 = h.index_generation();
+        assert_eq!(g1, g0 + 1, "removing rows bumps");
+        assert_eq!(h.dedupe_docs().await.unwrap(), 0);
+        assert_eq!(h.index_generation(), g1, "a clean table must not bump");
     }
 }

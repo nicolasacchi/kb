@@ -13,6 +13,7 @@ import { fetchInbox, type InboxResponse } from "../api/inbox";
 import { useDesk } from "../hooks/useDesk";
 import { useSlateBoard, useSlates } from "../hooks/useSlates";
 import { artifactHref } from "../lib/artifactHref";
+import { dedupeDocRows } from "../lib/dedupeDocs";
 import { censusBump } from "../lib/census";
 import { relativeAge } from "../lib/time";
 import { composeDraftExclusion } from "../lib/draft";
@@ -170,7 +171,7 @@ export default function FrontPage({ kb, kbs, rows, total, hasMore, loading, sess
     ? [{ kb, rows, hasMore }]
     : scopeKbs.flatMap((k, i) => {
         const pg = fleetDocs[i]?.data;
-        return pg ? [{ kb: k, rows: pg.docs, hasMore: pg.has_more }] : [];
+        return pg ? [{ kb: k, rows: dedupeDocRows(k, pg.docs), hasMore: pg.has_more }] : [];
       });
   const frontRows: FrontRow[] = groups.flatMap((g) =>
     g.rows.map((doc) => ({ kb: g.kb, doc })),

@@ -1,3 +1,4 @@
+import { docKey } from "../lib/dedupeDocs";
 import {
   forwardRef,
   type CSSProperties,
@@ -220,7 +221,7 @@ const VirtualList = forwardRef<VirtualListHandle, Props>(function VirtualList(
           const isFocused = focusedIndex === row.index;
           return (
             <div
-              key={d.id}
+              key={docKey(kb, d.id)}
               className={isFocused ? "list-row--focused" : undefined}
               role="option"
               aria-selected={isFocused}
