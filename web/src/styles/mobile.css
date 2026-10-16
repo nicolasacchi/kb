@@ -652,7 +652,7 @@ body.kb-immersive .kb-folio-colophon {
 
 /* ───────────────────── kb2: bottom tab bar + palette ────────────────── */
 
-/* Mobile bottom tab bar (Recent / Search / Memory / Lists). Only mounted
+/* Mobile bottom tab bar (Library / Search / Memory / Lists). Only mounted
  * on mobile + off the detail route (app.tsx), so the base styles can live
  * outside the media query. Replaces the statusbar's role at the viewport
  * bottom; padded for the home-indicator safe area. */
@@ -1228,5 +1228,75 @@ body.kb-immersive .kb-tabbar {
   }
   [data-kb-viewbar] .kb-viewbar__menu {
     min-width: min(240px, calc(100vw - 2 * var(--pad-3)));
+  }
+}
+
+/* OL L6 round 2: card actions, Spine search/menu, reader strip. */
+/* A touch pointer has no hover, so the quick actions are always visible
+ * (chrome.css). At 44px they no longer fit in the top-right corner beside the
+ * title: lay them out along the card's bottom edge instead, on 48px centres,
+ * and keep the meta line out from under them. */
+@media (pointer: coarse) {
+  .kb-card__action {
+    top: auto;
+    bottom: 4px;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .kb-card__peek {
+    right: 6px;
+  }
+  .kb-card__download {
+    right: 54px;
+  }
+  .kb-card__exclude {
+    right: 102px;
+  }
+  .kb-card__meta {
+    padding-right: 150px;
+    min-height: 44px;
+    align-items: center;
+  }
+}
+
+@media (max-width: 860px) {
+  /* One line, ellipsized: the compact search launcher never wraps. */
+  .kb-search-mini__placeholder {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .kb-search-mini {
+    white-space: nowrap;
+  }
+  /* Centre the glyph in the enlarged menu button. */
+  .kb-head [data-kb-spine-menu] {
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
+  }
+
+  /* Reader strip: the position label stays on one line, and More is pinned
+   * to the right edge instead of fading under the scroll mask. */
+  .kb-ctxbar {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .kb-ctxbar__pos {
+    white-space: nowrap;
+    flex: none;
+  }
+  .kb-ctxbar__nav,
+  .kb-ctxbar__actions {
+    flex: none;
+  }
+  .kb-ctxbar [data-kb-act="more"] {
+    position: sticky;
+    right: 0;
+    background: var(--bg-panel-2);
   }
 }

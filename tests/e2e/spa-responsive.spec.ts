@@ -340,4 +340,57 @@ test.describe("mobile library landing (OL L6)", () => {
     });
     expect(rows).toBeLessThanOrEqual(2);
   });
+
+  test("card quick actions never cover the card title", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
+    const card = page.locator(".kb-card").first();
+    await expect(card).toBeVisible();
+    const title = await card.locator(".kb-card__title").boundingBox();
+    expect(title).not.toBeNull();
+    let n = 0;
+    for (const a of await card.locator(".kb-card__action").all()) {
+      const b = await a.boundingBox();
+      if (!b || !title) continue;
+      n++;
+      const overlap =
+        b.x < title.x + title.width && b.x + b.width > title.x &&
+        b.y < title.y + title.height && b.y + b.height > title.y;
+      expect(overlap).toBe(false);
+      expect(b.height).toBeGreaterThanOrEqual(43.5);
+    }
+    expect(n).toBeGreaterThan(0);
+  });
+
+  test("Spine search stays on one line; menu glyph is centred; bottom bar names the Library", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon`);
+    const ph = page.locator(".kb-head .kb-search-mini__placeholder");
+    await expect(ph).toBeVisible();
+    const lh = await ph.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 16);
+    expect((await ph.boundingBox())!.height).toBeLessThan(lh * 1.6);
+    const menu = page.locator("[data-kb-spine-menu]");
+    const mb = (await menu.boundingBox())!;
+    const glyph = await menu.evaluate((el) => {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      const g = r.getBoundingClientRect();
+      return { top: g.top, bottom: g.bottom };
+    });
+    const mid = (glyph.top + glyph.bottom) / 2;
+    expect(Math.abs(mid - (mb.y + mb.height / 2))).toBeLessThan(4);
+    await expect(page.locator(".kb-tabbar .kb-tabbar__tab").first()).toHaveText("Library");
+  });
+
+  test("reader strip: position label on one line, More fully inside the viewport", async ({ page }) => {
+    await page.goto(`${base()}${ARTIFACT}`);
+    const more = page.locator('[data-kb-act="more"]');
+    await expect(more).toBeVisible();
+    const b = (await more.boundingBox())!;
+    expect(b.x + b.width).toBeLessThanOrEqual(390.5);
+    const pos = page.locator(".kb-ctxbar__pos");
+    if (await pos.count()) {
+      const lh = await pos.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 14);
+      expect((await pos.boundingBox())!.height).toBeLessThan(lh * 1.6);
+    }
+    await expect(page.locator('[data-kb-act="inspect"]')).toBeAttached();
+  });
 });
