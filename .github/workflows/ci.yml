@@ -291,7 +291,7 @@ jobs:
         # a hung test is one failure, not a job wall.
         # Profile: .config/nextest.toml [profile.ci] (lance-heavy overrides
         # live there).
-        run: cargo nextest run --locked --profile ci --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
+        run: cargo nextest run --locked --profile ci --no-fail-fast --workspace --exclude kb-embedder --exclude kb-code-server --exclude kb-code-cli --exclude kb-lip
 
       - name: nextest overrides each match at least one test
         # v0.44 F1 (I3): PF-C1 renamed the binaries and the `lance-heavy`
