@@ -791,10 +791,12 @@ export default function PreviewInspector({
               title={TAB_META[t].label}
               aria-label={TAB_META[t].label}
             >
-              {TAB_META[t].icon}
-              {itabBadge(t) > 0 && (
-                <span className="kb-pinsp__itab-badge">{itabBadge(t)}</span>
-              )}
+              <span className="kb-pinsp__itab-ico">
+                {TAB_META[t].icon}
+                {itabBadge(t) > 0 && (
+                  <span className="kb-pinsp__itab-badge">{itabBadge(t)}</span>
+                )}
+              </span>
               {t === "meta" && metaErr && (
                 <span className="kb-pinsp__itab-dot" aria-hidden />
               )}
@@ -829,15 +831,17 @@ export default function PreviewInspector({
             title={panelMode === "comments" ? "hide comments" : "comments"}
             aria-label={`comments${commentCount > 0 ? ` (${commentCount})` : ""}`}
           >
-            <Icon.Note />
-            {commentCount > 0 && (
-              <span
-                className="kb-pinsp__itab-badge"
-                data-kb-act="comments-badge"
-              >
-                {commentCount}
-              </span>
-            )}
+            <span className="kb-pinsp__itab-ico">
+              <Icon.Note />
+              {commentCount > 0 && (
+                <span
+                  className="kb-pinsp__itab-badge"
+                  data-kb-act="comments-badge"
+                >
+                  {commentCount}
+                </span>
+              )}
+            </span>
           </button>
         )}
         {onVersions && (
@@ -851,12 +855,17 @@ export default function PreviewInspector({
             title={panelMode === "versions" ? "hide versions" : "versions"}
             aria-label={`versions${versionCount > 0 ? ` (${versionCount})` : ""}`}
           >
-            <Icon.History />
-            {versionCount > 0 && (
-              <span className="kb-pinsp__itab-badge" data-kb-act="versions-badge">
-                {versionCount}
-              </span>
-            )}
+            <span className="kb-pinsp__itab-ico">
+              <Icon.History />
+              {versionCount > 0 && (
+                <span
+                  className="kb-pinsp__itab-badge"
+                  data-kb-act="versions-badge"
+                >
+                  {versionCount}
+                </span>
+              )}
+            </span>
           </button>
         )}
       </nav>

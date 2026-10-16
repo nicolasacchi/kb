@@ -1545,19 +1545,29 @@
   border-color: var(--accent-bor);
   color: var(--accent-soft);
 }
+/* The icon wrapper is the badge's positioning context, so the count hangs on
+ * the icon's own top-right corner rather than the (stretched) button's. */
+.kb-pinsp__itab-ico {
+  position: relative;
+  display: inline-flex;
+}
 .kb-pinsp__itab-badge {
   position: absolute;
-  top: -4px;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
+  top: -8px;
+  left: calc(100% - 6px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
   border-radius: var(--radius-pill);
   background: var(--accent-fill);
   color: var(--accent-fill-fg);
   font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
   display: grid;
   place-items: center;
+  pointer-events: none;
 }
 /* W5/R9b/LF-1 Tier 0 — the outcome section header's staleness/presence
    chip (SessionProducedSection). Static, honest, never a spinner. */
