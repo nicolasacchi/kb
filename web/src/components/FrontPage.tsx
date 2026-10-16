@@ -450,7 +450,10 @@ function CoverageRail({ kb, comments, desk, slates, sessions, reviewCount, onRev
           )}
           {sessions && (
             <li>
-              <Link to={`/sessions${kb ? `?kb=${encodeURIComponent(kb)}` : ""}`}>
+              <Link
+                to={`/sessions${kb ? `?kb=${encodeURIComponent(kb)}` : ""}`}
+                data-testid="frontpage-worklog"
+              >
                 Session worklog · {sessions.sessions.toLocaleString()} session
                 {sessions.sessions === 1 ? "" : "s"}
               </Link>

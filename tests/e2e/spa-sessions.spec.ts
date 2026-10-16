@@ -265,10 +265,11 @@ test.describe("/sessions view", () => {
       "Session transcript",
     );
 
-    // The first-class sessions landing strip + its jump to the worklog.
-    const strip = page.locator(".gallery-sessions-strip");
+    // OL L3 -- the sessions landing strip became a row in the Front Page's
+    // continuing-coverage column; it still jumps to the worklog.
+    const strip = page.getByTestId("frontpage-worklog");
     await expect(strip).toBeVisible();
-    await expect(strip).toContainText("Sessions");
+    await expect(strip).toContainText("Session worklog");
     await strip.click();
     await expect(page).toHaveURL(/\/sessions\?kb=mem/, { timeout: 10_000 });
 
