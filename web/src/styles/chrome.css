@@ -1346,6 +1346,11 @@
   transition: opacity 120ms var(--ease), color 120ms var(--ease),
     border-color 120ms var(--ease);
 }
+/* Touch-only "More actions" button: hidden everywhere; mobile.css's
+ * `pointer: coarse` block reveals it (and hides the three hover buttons). */
+.kb-card__more {
+  display: none;
+}
 .kb-card__peek {
   right: 10px;
 }
@@ -7130,4 +7135,35 @@ a.proposal-row__chip:hover {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+/* Touch "More actions" sheet rows. The sheet is portaled to <body>, outside
+ * .kb-card, so these rules are self-contained. */
+.kb-card-sheet {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+}
+.kb-card-sheet__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: var(--touch-min);
+  padding: 0 var(--pad-3);
+  background: none;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.kb-card-sheet__row svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.kb-card-sheet__row--warn {
+  color: var(--warn);
 }

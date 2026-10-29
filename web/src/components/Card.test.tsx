@@ -70,6 +70,15 @@ describe("Card (OL L4)", () => {
     expect(h).toContain('aria-label="Exclude Home from the index"');
     expect(h).toContain("⌂ index");
   });
+  it("renders one closed More-actions button and no sheet markup", () => {
+    const h = html({ title: "Home", source_relative: "index.html" });
+    expect(h).toContain('data-kb-act="more"');
+    expect(h).toContain('aria-label="More actions for Home"');
+    expect(h).toContain('aria-haspopup="dialog"');
+    expect(h).toContain('aria-expanded="false"');
+    expect(h).not.toContain("data-kb-sheet");
+    expect(h).not.toContain('role="dialog"');
+  });
   it("renders reading progress as a bottom bar, only when there is any", () => {
     expect(html({}, { pct: 40, isDone: false })).toContain('aria-label="40% read"');
     expect(html({}, { pct: 40, isDone: false })).toContain("width:40%");

@@ -1250,20 +1250,20 @@ body.kb-immersive .kb-tabbar {
     background: var(--bg-panel);
     color: var(--ink);
   }
-  /* Slots from the right edge: inset 6px, then one (size + gap) per button.
-   * Applies to any coarse-pointer device, whatever its width. */
-  .kb-card__peek {
+  /* Touch shows ONE button: More, which opens the actions sheet. The three
+   * hover buttons stay in the DOM but are not displayed. */
+  .kb-card__action:not(.kb-card__more) {
+    display: none;
+  }
+  .kb-card__action.kb-card__more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     right: 6px;
   }
-  .kb-card__download {
-    right: calc(6px + var(--touch-min) + var(--card-act-gap));
-  }
-  .kb-card__exclude {
-    right: calc(6px + 2 * (var(--touch-min) + var(--card-act-gap)));
-  }
   .kb-card__meta {
-    /* three buttons + their gaps + the edge inset */
-    padding-right: calc(6px + 3 * (var(--touch-min) + var(--card-act-gap)));
+    /* the More button + its gap + the edge inset */
+    padding-right: calc(6px + var(--touch-min) + var(--card-act-gap));
     min-height: var(--touch-min);
     align-items: center;
   }
