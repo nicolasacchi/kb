@@ -26,7 +26,7 @@ version = 2
 #   yanked         -> warn   (overridden to DENY below — see `yanked =`)
 #   notice/unsound -> warn
 # `ignore` is an AUDITED EXCEPTION LIST, not an empty-means-clean signal: it
-# is currently empty (see the note inside), and any entry needs an owner, a
+# holds only the audited entries below, and any entry needs an owner, a
 # review-by date and a re-check trigger. Adding one needs the same three things. An advisory
 # that fires is never silenced without a written reason that names why kb's
 # code cannot reach it.
@@ -36,7 +36,22 @@ unmaintained = "workspace"
 # reports 0 yanked crates today (verified), so this only catches NEW yanks.
 yanked = "deny"
 ignore = [
-    # (empty) RUSTSEC-2026-0194/0195 (quick-xml 0.39 via object_store) and
+    # zstd 0.13.3 / zstd-safe 7.2.4 / zstd-sys 2.0.16 (via arrow-ipc 58.4 and lance-encoding 11.0).
+    # The patched lines (zstd >= 0.14.3, zstd-safe >= 8.2.0, zstd-sys >= 2.1.2) need arrow >= 60
+    # (arrow-ipc 60.0.0 is the first on zstd ^0.14), and arrow + lance move only as one set
+    # (invariant #1); no lance release supports arrow >= 60 yet (lance 14.0.2 and lancedb 0.41.0
+    # still require ^58.0.0, checked 2026-10-29). So the fix is the arrow/lance lockstep, not a lock edit.
+    # Reachability, checked in the arrow-ipc 58.4.0 and lance-encoding 11.0.0 sources on 2026-10-29:
+    # arrow-ipc calls only zstd::bulk::{Compressor,Decompressor}; lance-encoding calls zstd::bulk,
+    # zstd::stream::copy_decode and zstd_safe::compress_bound. kb's zip dependency is built with
+    # default-features off (no zstd codec). Owner: the operator (approved 2026-10-29). Review by
+    # 2027-01-31, or sooner when a lance release supports arrow >= 60 (re-check trigger: run
+    # `cargo deny check advisories` after the lockstep bump, then delete these four entries).
+    { id = "RUSTSEC-2026-0391", reason = "zstd with_context reuse leak: no code path calls Encoder/Decoder::with_context (bulk + copy_decode only)" },
+    { id = "RUSTSEC-2026-0398", reason = "zstd-safe Seekable::decompress: the seekable API is unused by arrow-ipc, lance and kb" },
+    { id = "RUSTSEC-2026-0403", reason = "zstd-safe legacy-frame streaming decode: reached only by lance decoding kb's own self-written modern-format data files; a crafted legacy frame needs write access to kb's state dir" },
+    { id = "RUSTSEC-2026-0410", reason = "zstd-sys WebAssembly allocator shim: kb builds only for x86_64/aarch64 Linux, never wasm" },
+    # (previously empty) RUSTSEC-2026-0194/0195 (quick-xml 0.39 via object_store) and
     # RUSTSEC-2023-0071 (rsa via opendal/reqsign) were ignored until v0.45 N7:
     # `lance` was declared with its default features, which compiled the cloud
     # object-store stack in. `lance` now has `default-features = false`, those
