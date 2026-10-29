@@ -1,8 +1,14 @@
 import { renderToString } from "react-dom/server";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Spine, SpineCrumbs } from "./Spine";
+
+// Node's fs via getBuiltinModule so `tsc -b` needs no Node typings (see tokens.test.ts).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fs = (globalThis as any).process.getBuiltinModule("node:fs") as {
+  readFileSync(url: URL, enc: "utf8"): string;
+};
+// React 18 and 19 serialise the boolean `data-kb-spine` differently.
+const norm = (html: string) => html.replace('data-kb-spine="true"', 'data-kb-spine=""');
 
 const slots = (
   <Spine switcher={<i>SW</i>} scope={<i>SC</i>} search={<i>SE</i>} right={<i>RI</i>} />
@@ -94,8 +100,8 @@ describe("Spine crossing slot", () => {
     "</header>";
 
   it("leaves the DOM identical to main when crossing is undefined", () => {
-    expect(renderToString(slots)).toBe(MAIN_SNAPSHOT);
-    expect(renderToString(<Spine {...{ crossing: undefined }} switcher={<i>SW</i>} scope={<i>SC</i>} search={<i>SE</i>} right={<i>RI</i>} />)).toBe(MAIN_SNAPSHOT);
+    expect(norm(renderToString(slots))).toBe(MAIN_SNAPSHOT);
+    expect(norm(renderToString(<Spine {...{ crossing: undefined }} switcher={<i>SW</i>} scope={<i>SC</i>} search={<i>SE</i>} right={<i>RI</i>} />))).toBe(MAIN_SNAPSHOT);
   });
 
   it("renders the slot between search and right when defined", () => {
@@ -111,7 +117,7 @@ describe("Spine crossing slot", () => {
   });
 
   it("never hides the crossing slot at the mobile breakpoint", () => {
-    const css = readFileSync(fileURLToPath(new URL("./spine.css", import.meta.url)), "utf8");
+    const css = fs.readFileSync(new URL("./spine.css", import.meta.url), "utf8");
     const start = css.indexOf("@media (max-width: 860px)");
     expect(start).toBeGreaterThan(-1);
     const block = css.slice(start, css.indexOf("\n}\n", start));

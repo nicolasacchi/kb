@@ -22,7 +22,8 @@ vi.mock("../commands/learn", () => ({ SpaceHint: () => null }));
 vi.mock("../hooks/useActiveRepo", () => ({ useExplicitRepo: () => "x" }));
 vi.mock("../hooks/useRepos", () => ({ useRepos: () => ({ data: { repos: [{ name: "x" }] } }) }));
 vi.mock("../hooks/useIsMobile", () => ({ useIsMobile: () => false }));
-vi.mock("../hooks/useDocRefs", () => ({ useDocRefs: () => h.refs ?? { data: undefined } }));
+vi.mock("../hooks/useDocRefs", () => ({ useDocRefs: (repo?: string, path?: string) =>
+    repo && path ? (h.refs ?? { data: undefined }) : { data: undefined } }));
 
 import TopBar from "./TopBar";
 import CitedBy from "./lens/CitedBy";
