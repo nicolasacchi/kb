@@ -11,7 +11,7 @@ html[data-kb-read] {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
-html[data-kb-read="dark"] {
+html[data-kb-read][data-kb-read="dark"] {
   --kb-read-bg: #16181c;
   --kb-read-fg: #ebe8e1;
   --kb-read-muted: #c4c0b6;

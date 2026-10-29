@@ -1954,7 +1954,10 @@ mod tests {
         // dark differs from light by variables only.
         let dark = READING_CSS
             .split('}')
-            .find(|r| r.trim().starts_with("html[data-kb-read=\"dark\"]"))
+            .find(|r| {
+                r.trim()
+                    .starts_with("html[data-kb-read][data-kb-read=\"dark\"]")
+            })
             .expect("dark block");
         for decl in dark.split('{').nth(1).unwrap().split(';') {
             let d = decl.trim();
