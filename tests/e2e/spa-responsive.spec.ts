@@ -406,6 +406,8 @@ test.describe("mobile library landing (OL L6)", () => {
   test("More -> Exclude closes the sheet and asks to confirm; cancelling keeps the card", async ({ page }) => {
     await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
     const cards = page.locator(".kb-card");
+    await expect(cards.first()).toBeVisible();
+    await expect.poll(async () => cards.count()).toBeGreaterThan(0);
     const n = await cards.count();
     const more = cards.first().locator('[data-kb-act="more"]');
     await more.tap();
@@ -414,7 +416,7 @@ test.describe("mobile library landing (OL L6)", () => {
     await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(page.locator(".confirm__go")).toBeHidden();
-    expect(await cards.count()).toBe(n);
+    await expect(cards).toHaveCount(n);
     await expect(more).toBeFocused();
   });
 
