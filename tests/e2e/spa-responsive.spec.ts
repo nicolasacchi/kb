@@ -356,7 +356,7 @@ test.describe("mobile library landing (OL L6)", () => {
       await expect(a).toBeHidden();
     }
     await page.goto(`${base()}/?kb=canon&view=list`);
-    await expect(page.locator(".list-row").first()).toBeVisible();
+    await expect(page.locator(".list-row:not(.list-row--head)").first()).toBeVisible();
     const dls = await page.locator(".list-row__download").all();
     expect(dls.length).toBeGreaterThan(0);
     for (const d of dls) {
