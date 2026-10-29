@@ -2244,11 +2244,11 @@ map, and `cmp_search`'s sort/tie-break key — is keyed the same way via
 `hit_key(kb, id) = "{kb}:{id}"` (`:` is safe: `KbName::new` forbids it in
 a kb name).
 
-Submission order itself — the OTHER half of bullet 1 — is UNCHANGED:
-`rrf_fuse_keyed` keeps `rrf_fuse`'s exact tie-break (score desc, then
-first-appearance-across-arms asc), arms are still submitted in
-`state.kbs` `BTreeMap` order, and `buffered` (never `buffer_unordered`)
-still drives the fan-out. Only the per-hit IDENTITY key changed, not the
+Submission order itself — the OTHER half of bullet 1 — still decides
+ties: arms are submitted in `state.kbs` `BTreeMap` order, `buffered`
+(never `buffer_unordered`) drives the fan-out, and first-appearance across
+arms is the FINAL tie-break of the merge (see the RANK amendment below for
+what now precedes it). Only the per-hit IDENTITY key changed here, not the
 ordering discipline. Golden coverage:
 `federated_search_scope_all_is_deterministic_and_attributes_kbs`
 (`crates/kb-server/tests/end_to_end.rs`) plus `fusion.rs`'s
@@ -2256,6 +2256,30 @@ ordering discipline. Golden coverage:
 `keyed_fuse_still_merges_same_key_arms`, and
 `keyed_fuse_matches_plain_fuse_when_every_arm_shares_one_key` tests, and
 `search.rs`'s `cmp_search_uses_explicit_keys_not_the_docs_shared_id` test.
+
+**RANK amendment (2026-10) — the cross-corpus merge is score-weighted RRF.**
+Rank-only RRF gave every corpus's rank-0 hit the same `1/K`, so all-corpora
+search ordered by corpus NAME, not relevance. `federated_search` now calls
+`kb_core::fusion::rrf_fuse_keyed_scored(arms, RRF_K, limit, w)` with
+`w = FED_SCORE_WEIGHT` (0.25) over the post-filter survivors only (R0/#11,
+category, read facets are applied inside each corpus's arm, so a filtered-out
+hit never contributes to the normaliser `m` = the largest finite positive raw
+score). Each contribution is `1/(K+rank) * ((1-w) + w*clamp(s/m, 0, 1))`; a
+missing, NaN or non-positive score counts as `rel = 0`. Within-arm order is
+inviolate: a contribution is clamped to at most the previous one in its arm.
+With fewer than two non-empty arms, no usable `m`, or `w = 0` the modulation
+is skipped entirely and the output is byte-identical to the rank-only fuse
+(`rrf_fuse_keyed` is that `w = 0` call). The merge falls back to rank-only
+(`w = 0`) when raw scores are not one kind: a vector-bearing mode where any
+corpus has no embedder or a failed/late embed, or corpora on more than one
+embedding model. Ordering is `total_cmp` on the fused score (NaN last), then
+first-appearance across arms, so `BTreeMap` order is the final tie-break only.
+Pins: `fusion.rs` `scored_fuse_*` tests and `end_to_end.rs`
+`federated_search_scope_all_orders_by_relevance_across_kbs`,
+`federated_search_mixed_score_kinds_fall_back_to_rank_only`,
+`federated_search_r0_filtered_transcript_does_not_affect_order`, with
+`federated_search_scope_all_is_deterministic_and_attributes_kbs` now a true
+score tie. The fused `Hit.score` is comparable only within one response.
 
 ### 29. Wikilinks/backlinks ride the existing edge graph; resolution is pure + corpus-local
 

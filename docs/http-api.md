@@ -307,6 +307,11 @@ GET  /api/search?q=…&mode=hybrid|keyword|semantic[&kb=NAME]
                                             match window from the body; null for
                                             pure-semantic hits) + bm25_rank/vec_rank
                                             (pre-RRF per-arm positions, additive).
+                                            RANK1: with scope=all, Hit.score is a
+                                            FUSED value (score-weighted RRF over the
+                                            corpora's post-filter hits) - meaningful
+                                            only within one response, not comparable
+                                            across requests or with a scope=one score.
 GET  /api/stats                             cross-kb summary
 GET  /api/kb/{kb}/stats                     per-kb stats
 GET  /api/kb/{kb}/slo                       CT-F5 corpus-health SLOs: five
