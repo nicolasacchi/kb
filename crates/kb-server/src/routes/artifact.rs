@@ -1943,7 +1943,22 @@ mod tests {
             }
             rules += 1;
             let selectors = rule.split('{').next().unwrap();
-            for sel in selectors.split(',') {
+            // Split on top-level commas only; `:is(a, b)` keeps its own.
+            let mut groups = vec![String::new()];
+            let mut depth = 0i32;
+            for ch in selectors.chars() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        groups.push(String::new());
+                        continue;
+                    }
+                    _ => {}
+                }
+                groups.last_mut().unwrap().push(ch);
+            }
+            for sel in &groups {
                 assert!(
                     sel.trim().starts_with("html[data-kb-read]"),
                     "unscoped selector {sel:?}"
