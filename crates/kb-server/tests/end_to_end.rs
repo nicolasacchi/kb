@@ -7693,8 +7693,11 @@ async fn federated_search_r0_filtered_transcript_does_not_affect_order() {
     );
     let q = "/api/search?q=zephyrine&mode=keyword&scope=all&limit=10";
 
-    let (_t1, addr1, _a, _b) =
-        boot_with_two_kbs_files(&[alpha_doc.clone()], &[beta_doc.clone()]).await;
+    let (_t1, addr1, _a, _b) = boot_with_two_kbs_files(
+        std::slice::from_ref(&alpha_doc),
+        std::slice::from_ref(&beta_doc),
+    )
+    .await;
     let baseline = fed_hits(addr1, q).await;
 
     let (_t2, addr2, _a, _b) = boot_with_two_kbs_files(
