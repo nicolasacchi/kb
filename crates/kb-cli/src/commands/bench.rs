@@ -236,8 +236,15 @@ fn search_url(daemon: &str, query: &str, mode: &str, limit: u32, kb: Option<&str
 /// `cell_kb` is the single-kb cell's kb (its hits carry no `kb`, so it
 /// stands in); `None` in the federated cell, where a `kb:id` label
 /// needs the hit's own `kb`.
+/// Does any query carry a bare-id label (no `kb:` prefix)? Drives the
+/// one-time federated-cell stderr note.
+fn any_bare_label(rows: &[QueryRow]) -> bool {
+    rows.iter()
+        .any(|r| r.relevant.iter().any(|l| !l.contains(':')))
+}
+
 fn label_matches(rel: &str, hit: &Hit, cell_kb: Option<&str>) -> bool {
-    match rel.split_once(':') {
+    match rel.rsplit_once(':') {
         None => hit.id == rel,
         Some((kb, id)) => hit.id == id && hit.kb.as_deref().or(cell_kb).is_some_and(|k| k == kb),
     }
@@ -450,10 +457,7 @@ pub async fn run(
         }
     }
     if federated {
-        if rows
-            .iter()
-            .any(|r| r.relevant.iter().any(|l| !l.contains(':')))
-        {
+        if any_bare_label(&rows) {
             eprintln!(
                 "note: the federated ({FEDERATED_KB}) cell matches bare ids on id alone, and ids \
                  can collide across corpora; label with `kb:id` for exact (kb,id) scoring"
@@ -1197,6 +1201,28 @@ mod metric_tests {
         // Single-kb cell: the cell's kb stands in for the hit's.
         assert!(label_matches(&rel[0], &hit("aaaaaaaaaaaa"), Some("alpha")));
         assert!(!label_matches(&rel[0], &hit("aaaaaaaaaaaa"), Some("beta")));
+    }
+
+    #[test]
+    fn any_bare_label_detects_unprefixed_ids() {
+        let q = |rel: &[&str]| QueryRow {
+            query: "q".into(),
+            relevant: rel.iter().map(|s| s.to_string()).collect(),
+            notes: None,
+        };
+        assert!(!any_bare_label(&[q(&["alpha:aaaaaaaaaaaa"])]));
+        assert!(any_bare_label(&[
+            q(&["alpha:aaaaaaaaaaaa"]),
+            q(&["bbbbbbbbbbbb"])
+        ]));
+        assert!(!any_bare_label(&[]));
+    }
+
+    #[test]
+    fn kb_name_with_colon_splits_on_the_last_colon() {
+        let h = khit("team:a", "aaaaaaaaaaaa");
+        assert!(label_matches("team:a:aaaaaaaaaaaa", &h, None));
+        assert!(!label_matches("team:b:aaaaaaaaaaaa", &h, None));
     }
 
     #[test]

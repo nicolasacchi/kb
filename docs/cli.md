@@ -588,7 +588,9 @@ kb bench run --federated            also score a federated cell per mode (report
                                     entries may be `kb:id` (exact (kb,id) match;
                                     ids collide across corpora) or a bare id (id
                                     alone, any kb; a stderr note flags this in
-                                    the federated cell). Old queries.jsonl and old
+                                    the federated cell). A `kb:id` label also
+                                    works in a single-kb cell (the cell's kb
+                                    stands in for the hit's). Old queries.jsonl and old
                                     `--baseline` reports load unchanged
                                     A/B recipe for a cross-corpus ranking change:
                                     run the pre-change binary with
