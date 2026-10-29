@@ -322,6 +322,34 @@ test.describe("slate board — pin, composer, refusals, drawings", () => {
     expect(h).toBeLessThanOrEqual(480);
   });
 
+  test("a mermaid diagram with a $$math$$ label renders without a console error", async ({
+    page,
+    request,
+  }) => {
+    const errors: string[] = [];
+    page.on("console", (m) => {
+      if (m.type() === "error") errors.push(m.text());
+    });
+    page.on("pageerror", (e) => errors.push(String(e)));
+
+    const slug = slugFor("sketchmath");
+    const seqNo = await seq(request, slug, {
+      kind: "found",
+      line: "a diagram with math",
+      body: '```mermaid\nflowchart LR\n  a["$$x^2 + y^2$$"] --> b["plain"]\n```',
+    });
+    await openBoard(page, slug);
+
+    const card = page.locator(`#slate-post-${seqNo}`);
+    await card.locator(".slate-card__bodytoggle").click();
+    const frame = page.frameLocator(`#slate-post-${seqNo} iframe.slate-sketch__frame`);
+    // The diagram SVG is adopted into #root; a parse/render failure shows
+    // `.sketch-err` instead.
+    await expect(frame.locator("#root svg")).toBeVisible({ timeout: 15_000 });
+    await expect(frame.locator(".sketch-err")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
   test("mobile: one column of accordions, and the composer is a sheet", async ({
     page,
     request,
