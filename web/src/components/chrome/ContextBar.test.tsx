@@ -66,6 +66,7 @@ describe("ContextBar More menu", () => {
       "folio",
       "fullscreen",
       "bare",
+      "download",
       "exclude",
     ]);
     const key = (a: string) =>
@@ -89,6 +90,16 @@ describe("ContextBar More menu", () => {
     expect(container.querySelector('[role="menu"]')).toBeNull();
   });
 
+  it("Download triggers the raw-source download and closes the menu", () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const { container } = bar();
+    fireEvent.click(container.querySelector('[data-kb-act="more"]')!);
+    fireEvent.click(container.querySelector('[data-kb-act="download"]')!);
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    click.mockRestore();
+  });
+
   it("omits rows whose handler is absent", () => {
     const { container } = bar({
       onSplit: undefined,
@@ -100,6 +111,7 @@ describe("ContextBar More menu", () => {
       "anchor",
       "copy-link",
       "fullscreen",
+      "download",
       "exclude",
     ]);
   });

@@ -9,6 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { excludeArtifact } from "../../api/client";
 import { galleryUrl } from "../../lib/galleryUrl";
 import { toast } from "../../lib/toast";
+import { artifactDownloadUrl, triggerDownload } from "../../lib/download";
 import { useConfirm } from "../ConfirmProvider";
 import { Icon } from "@kb/ui/icons";
 import { useAnchors } from "../../hooks/useAnchors";
@@ -410,6 +411,16 @@ export default function ContextBar({
                   onClick={close}
                 />
               )}
+              <MenuRow
+                act="download"
+                icon={<Icon.Download />}
+                label="Download"
+                title="download the raw source"
+                onClick={() => {
+                  triggerDownload(artifactDownloadUrl(kb, id));
+                  close();
+                }}
+              />
               <MenuRow
                 act="exclude"
                 icon={<Icon.X />}

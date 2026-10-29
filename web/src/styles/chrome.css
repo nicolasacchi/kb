@@ -1379,15 +1379,6 @@
 .kb-grid > .kb-card:first-child .kb-card__action {
   opacity: 1;
 }
-/* SH.B1 — a touch pointer has no hover, so hover-only reveal made these
- * quick actions undiscoverable on a phone/tablet (they're already sized
- * to the 40px MB5 floor by mobile.css's own `pointer: coarse` block —
- * this only fixes visibility, not size). */
-@media (pointer: coarse) {
-  .kb-card__action {
-    opacity: 1;
-  }
-}
 
 /* index / pages badge in top-left under the folder slug. */
 .kb-card__badge {
