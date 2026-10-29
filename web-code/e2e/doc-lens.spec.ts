@@ -398,11 +398,6 @@ test.describe("cited-by (DCB-W3.B)", () => {
     await expect(page.locator("[data-kbc-citedby]")).toHaveCount(0);
   });
 
-  // Deliberately LAST in this describe block — it deletes the one file the
-  // two tests above depend on, then restores it (`afterAll`) so every OTHER
-  // spec that shares this daemon+repo (this harness spawns exactly ONE,
-  // `global-setup.ts`) still sees a clean working tree; several later specs
-  // drive real checkouts, which 409 on a dirty tree.
   // OL-SIBL1 - the TopBar crossing chip. `lib.rs` and `resolver.rs` are cited
   // by exactly one PINNED doc (`doc1`), so the chip is a plain link; the
   // cited-by demo file is cited by two docs, so the chip is a button that
@@ -438,6 +433,43 @@ test.describe("cited-by (DCB-W3.B)", () => {
     await expect(page.locator("[data-kbc-citedby-list]")).toBeVisible();
   });
 
+  test("without a public base the chip falls back to expanding the strip", async ({ page }) => {
+    // The harness daemon always sets public_url, so strip both hrefs from the
+    // real response: this is the wire a daemon with public_base unset sends.
+    await page.route("**/api/doc-refs*", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      for (const c of body.claims) {
+        c.doc_public_href = null;
+        c.doc_section_href = null;
+      }
+      await route.fulfill({ response: res, json: body });
+    });
+    await page.goto(`${BASE}/r/${REPO_NAME}/lib.rs`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(chip).not.toHaveAttribute("href", /.*/);
+    await expect(page.locator("[data-kbc-citedby-list]")).toHaveCount(0);
+    await chip.click();
+    await expect(page.locator("[data-kbc-citedby-list]")).toBeVisible();
+  });
+
+  test("on a phone the chip opens the reader-tools sheet with the strip expanded", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${BASE}/r/${REPO_NAME}/${DOCLENS_CITEDBY_FILE}`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(0);
+    await chip.click();
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(1);
+    await expect(page.locator("[data-kbc-citedby-list]")).toBeVisible();
+  });
+
+  // Deliberately LAST in this describe block — it deletes the one file the
+  // two tests above depend on, then restores it (`afterAll`) so every OTHER
+  // spec that shares this daemon+repo (this harness spawns exactly ONE,
+  // `global-setup.ts`) still sees a clean working tree; several later specs
+  // drive real checkouts, which 409 on a dirty tree.
   test.describe("the rotted-claim case", () => {
     test.afterAll(() => {
       if (REPO_DIR) writeFileSync(join(REPO_DIR, DOCLENS_CITEDBY_FILE), DOCLENS_CITEDBY_FILE_CONTENT);

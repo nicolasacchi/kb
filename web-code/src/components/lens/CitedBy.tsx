@@ -22,11 +22,18 @@
 import { useEffect, useRef, useState } from "react";
 import { useDocRefs } from "../../hooks/useDocRefs";
 import { CITEDBY_OPEN_EVENT, citedByLabel, citedByRowLabel } from "../../lib/citedBy";
+import { safeHref } from "../../lib/safeHref";
 import { Icon } from "../iconSet";
 
 export interface CitedByProps {
   repo: string;
   path: string;
+}
+
+// A row link is only ever an http(s) URL (the wire value is vetted, as the
+// TopBar chip's is): anything else renders as inert text.
+function rowHref(c: { doc_section_href?: string | null; doc_public_href?: string | null }): string | null {
+  return safeHref(c.doc_section_href ?? c.doc_public_href);
 }
 
 export default function CitedBy({ repo, path }: CitedByProps) {
@@ -84,10 +91,10 @@ export default function CitedBy({ repo, path }: CitedByProps) {
             // `doc_refs_for_path`), so the array index is a stable, unique
             // key for this render.
             <li key={`${c.kb}:${c.doc_id}:${i}`} className="kbc-inspector__citedby-row" data-kbc-citedby-row>
-              {(c.doc_section_href ?? c.doc_public_href) ? (
+              {rowHref(c) ? (
                 <a
                   className="kbc-inspector__citedby-title"
-                  href={c.doc_section_href ?? c.doc_public_href ?? undefined}
+                  href={rowHref(c) ?? undefined}
                   target="_blank"
                   rel="noreferrer"
                   data-kbc-citedby-link

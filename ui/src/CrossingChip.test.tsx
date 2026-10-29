@@ -2,6 +2,12 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CrossingChip } from "./CrossingChip";
 
+// Node's fs via getBuiltinModule so `tsc -b` needs no Node typings (see Spine.test.tsx).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fs = (globalThis as any).process.getBuiltinModule("node:fs") as {
+  readFileSync(url: URL, enc: "utf8"): string;
+};
+
 describe("CrossingChip", () => {
   it("renders an anchor with rel=noreferrer for href", () => {
     const html = renderToString(
@@ -50,5 +56,15 @@ describe("CrossingChip", () => {
     expect(html).toContain('data-testid="x-chip"');
     expect(html).toContain('data-tone="warn"');
     expect(html).toContain("path no longer present");
+  });
+
+  it("keeps a 44px touch target and the icon+count collapse at the mobile breakpoint", () => {
+    const css = fs.readFileSync(new URL("./crossingchip.css", import.meta.url), "utf8");
+    const start = css.indexOf("@media (max-width: 860px)");
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start);
+    expect(block).toMatch(/\.kb-crossing\s*\{[^}]*min-width:\s*44px/);
+    expect(block).toMatch(/\.kb-crossing\s*\{[^}]*min-height:\s*44px/);
+    expect(block).toMatch(/\.kb-crossing__label\s*\{[^}]*display:\s*none/);
   });
 });
