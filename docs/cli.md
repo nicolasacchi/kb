@@ -261,6 +261,13 @@ kb versions <target> [--at DATE] [--kb NAME] [--json] [--daemon URL]
                                     Per-artifact only (not a corpus
                                     timeline, and not `recall --as-of`,
                                     which stays rejected).
+(no CLI verb) GET /api/kb/{kb}/docs/as-of?at=&ids=
+                                    OL TIME1: the Library time scrubber's
+                                    batched as-of overlay. Parity
+                                    exemption: a browser-only affordance
+                                    over a page of visible rows; the
+                                    per-artifact answer is already `kb
+                                    versions --at`, which it equals.
 kb diff <target> [--from REF] [--to REF] [--raw] [--kb NAME] [--json] [--daemon URL]
    | diff <target> --between <D1> <D2> [--raw] [--kb NAME] [--json] [--daemon URL]
                                     what changed between two versions.

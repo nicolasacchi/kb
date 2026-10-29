@@ -123,7 +123,7 @@ pub struct DiffResponse {
 /// lookups only ever receive the canonical artifact id (the 12-hex
 /// SHA-256 prefix of the source-relative path), so anything else is
 /// rejected outright before touching storage or git.
-fn is_hex_artifact_id(id: &str) -> bool {
+pub(crate) fn is_hex_artifact_id(id: &str) -> bool {
     id.len() == 12 && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -152,12 +152,18 @@ async fn resolve<'a>(
         Err(e) => return Err(error_to_problem_json(&e)),
     };
     let abs = PathBuf::from(&doc.path);
-    let rel_to_git = ctx.git_root.as_ref().and_then(|root| {
+    let rel_to_git = rel_to_git(ctx, &abs);
+    Ok((ctx, abs, rel_to_git))
+}
+
+/// The file's path relative to the git root (a possible ancestor of the
+/// corpus), or `None` when the kb has no git root / the file sits outside it.
+pub(crate) fn rel_to_git(ctx: &KbContext, abs: &FsPath) -> Option<String> {
+    ctx.git_root.as_ref().and_then(|root| {
         abs.strip_prefix(root)
             .ok()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
-    });
-    Ok((ctx, abs, rel_to_git))
+    })
 }
 
 fn version_ctx<'a>(
@@ -201,27 +207,17 @@ pub async fn list(
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    let vctx = version_ctx(ctx, &abs, rel, &id);
-    let versions = vctx.list().await;
     let Some(at_unix) = at_unix else {
+        let vctx = version_ctx(ctx, &abs, rel, &id);
         return Json(VersionsResponse {
             mode: ctx.versions_mode.as_str(),
-            versions,
+            versions: vctx.list().await,
         })
         .into_response();
     };
 
-    let m = kb_core::versions::resolve_memento(&versions, at_unix);
-    let memento = MementoOut {
-        at_unix: m.at_unix,
-        relation: NEAREST_PRIOR,
-        found: m.found(),
-        exact: m.exact,
-        version: m.version.cloned(),
-        oldest_ts_unix: m.oldest_ts_unix,
-        note: m.miss_note(),
-    };
-    let resolved_ts = m.version.map(|v| v.ts_unix);
+    let (versions, memento) = memento_for(ctx, &abs, rel, &id, at_unix).await;
+    let resolved_ts = memento.version.as_ref().map(|v| v.ts_unix);
     let mut resp = Json(VersionsAtResponse {
         mode: ctx.versions_mode.as_str(),
         versions,
@@ -248,10 +244,40 @@ const NEAREST_PRIOR: &str = "nearest-prior";
 /// (`kb versions --at 2026-07-30` / `kb diff --between`) and resolves them
 /// to seconds before calling, so the HTTP surface has exactly one
 /// unambiguous, timezone-free form.
-fn parse_at(raw: &str) -> Result<i64, String> {
+pub(crate) fn parse_at(raw: &str) -> Result<i64, String> {
     raw.trim().parse::<i64>().map_err(|_| {
         format!("invalid `at` {raw:?}: expected unix seconds (an integer), e.g. at=1700000000")
     })
+}
+
+/// The ONE place an instant becomes a per-artifact answer: build the
+/// [`VersionCtx`], list the timeline, run `resolve_memento` and shape the
+/// [`MementoOut`]. Shared by the timeline route's `?at=` flavour and the
+/// batch as-of overlay (`docs_asof`), so the two can never disagree. Returns
+/// the timeline too because the timeline route's body carries it.
+pub(crate) async fn memento_for(
+    ctx: &KbContext,
+    abs: &FsPath,
+    rel_to_git: Option<String>,
+    id: &str,
+    at_unix: i64,
+) -> (Vec<Version>, MementoOut) {
+    let versions = version_ctx(ctx, abs, rel_to_git, id).list().await;
+    let memento = memento_out(&versions, at_unix);
+    (versions, memento)
+}
+
+fn memento_out(versions: &[Version], at_unix: i64) -> MementoOut {
+    let m = kb_core::versions::resolve_memento(versions, at_unix);
+    MementoOut {
+        at_unix: m.at_unix,
+        relation: NEAREST_PRIOR,
+        found: m.found(),
+        exact: m.exact,
+        version: m.version.cloned(),
+        oldest_ts_unix: m.oldest_ts_unix,
+        note: m.miss_note(),
+    }
 }
 
 /// RFC 1123 / IMF-fixdate in GMT — the format RFC 7089 requires for

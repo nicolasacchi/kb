@@ -197,6 +197,7 @@ pub mod tags;
 pub mod timeline;
 pub mod turn;
 pub mod users;
+pub mod docs_asof;
 pub mod versions;
 
 #[cfg(test)]

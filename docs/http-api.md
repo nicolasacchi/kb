@@ -151,6 +151,34 @@ GET  /api/kb/{kb}/artifacts/{id}/versions[?at=<unix>]
                                             touches no ranking (`recall
                                             --as-of` stays rejected). Absent
                                             `at`, the response is unchanged.
+GET  /api/kb/{kb}/docs/as-of?at=<unix>&ids=<id>,<id>,...
+                                            OL TIME1 (Library time scrubber):
+                                            the per-artifact `versions?at=`
+                                            answer for a page of ids in ONE
+                                            call. {at, mode, items:[{id,
+                                            state, reason?, memento?}],
+                                            summary:{hit,miss,pending,
+                                            unavailable,unknown}}, items in
+                                            the order of `ids`. `memento` is
+                                            byte-for-byte the per-artifact
+                                            memento (nearest-prior; a miss
+                                            carries `oldest_ts_unix` + `note`
+                                            and never degrades to the oldest
+                                            version). States: hit | miss |
+                                            pending (not finished within the
+                                            5 s wall deadline) | unavailable
+                                            (`reason`: mode_off | transcript
+                                            | error — one failing item never
+                                            fails the request) | unknown (no
+                                            such id). 400 problem+json: `at`
+                                            missing/malformed or more than a
+                                            day in the future; `ids` empty or
+                                            more than 100 (refused, never
+                                            truncated). Ordinary bearer auth
+                                            (401 token-less non-loopback), no
+                                            loopback gate. An OVERLAY:
+                                            `GET .../docs` ignores `at`, and
+                                            ranking/search are never as-of.
 GET  /api/kb/{kb}/artifacts/{id}/diff[?from=&to=&mode=text|raw]
                                             diff between two version refs
                                             (defaults: most recent prior
