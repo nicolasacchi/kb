@@ -61,7 +61,11 @@ export default function CardActionsSheet({
             data-kb-act="exclude"
             onClick={() => {
               close();
-              void actions.exclude().then(restoreFocus);
+              // Let React commit the unmount before the confirm host opens, so
+              // the sheet is never on screen (or in the a11y tree) under it.
+              void Promise.resolve()
+                .then(() => actions.exclude())
+                .then(restoreFocus);
             }}
           >
             <EyeOffIcon />
