@@ -2026,8 +2026,25 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     } else {
         limit as usize
     };
+    // RANK1 — score-weighted only when the arms' raw scores are comparable:
+    // a vector-bearing mode where a corpus fell back to keyword (no embedder,
+    // failed/late embed) or where corpora embed with different models mixes
+    // score kinds, so those fall back to rank-only (weight 0).
+    let rel_ok = !wants_vector
+        || (embed_failures.is_empty()
+            && vec_by_model.len() <= 1
+            && state.kbs.values().all(|c| c.embedder.is_some()));
     let mut fused: Vec<(String, kb_core::storage::lance::DocSummary)> =
-        kb_core::fusion::rrf_fuse_keyed(arms, kb_core::fusion::RRF_K, fuse_to);
+        kb_core::fusion::rrf_fuse_keyed_scored(
+            arms,
+            kb_core::fusion::RRF_K,
+            fuse_to,
+            if rel_ok {
+                kb_core::fusion::FED_SCORE_WEIGHT
+            } else {
+                0.0
+            },
+        );
     // Q-track — whole-library read-state facet + sort over the merged list.
     if !read_filter.is_empty() {
         fused.retain(|(kb, r)| {
