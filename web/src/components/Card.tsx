@@ -75,6 +75,9 @@ function Card({ doc, kb, progress, session }: CardProps) {
     setMoreOpen(false);
     restoreFocus();
   };
+  // Exclude: close without scheduling a focus move; the confirm dialog owns
+  // focus while it is up and restoreFocus runs only after it resolves.
+  const dismissMore = () => setMoreOpen(false);
   const queryClient = useQueryClient();
   const isSession = doc.kb_category === "memory-session" && !!session;
   const tags = tagsFor(doc);
@@ -225,7 +228,7 @@ function Card({ doc, kb, progress, session }: CardProps) {
         <Icon.More />
       </button>
       {moreOpen && (
-        <CardActionsSheet doc={doc} actions={actions} close={closeMore} restoreFocus={restoreFocus} />
+        <CardActionsSheet doc={doc} actions={actions} close={closeMore} dismiss={dismissMore} restoreFocus={restoreFocus} />
       )}
 
       <Link

@@ -13,12 +13,15 @@ export default function CardActionsSheet({
   doc,
   actions,
   close,
+  dismiss,
   restoreFocus,
 }: {
   doc: DocSummary;
   actions: CardActions;
   /** Closes the sheet and returns focus to the More button. */
   close: () => void;
+  /** Closes the sheet only, leaving focus alone (the exclude confirm owns it). */
+  dismiss: () => void;
   /** Re-focus the More button (used once the exclude confirm is answered). */
   restoreFocus: () => void;
 }) {
@@ -30,50 +33,50 @@ export default function CardActionsSheet({
   // React bubbles synthetic events through portals to the card's React
   // ancestors; the wrapper keeps sheet clicks from reaching them.
   return createPortal(
-    <div style={{ display: "contents" }} onClick={(e) => e.stopPropagation()}>
-    <Sheet
-      open
-      detent={detent}
-      onDetentChange={setDetent}
-      onClose={close}
-      title={doc.title || doc.id}
-      peek="288px"
-      full="288px"
-      id="kb-card-actions"
-    >
-      <ul role="list" className="kb-card-sheet">
-        <li>
-          <button type="button" className="kb-card-sheet__row" data-kb-act="peek" onClick={run(actions.peek)}>
-            <EyeIcon />
-            <span>Preview</span>
-          </button>
-        </li>
-        <li>
-          <button type="button" className="kb-card-sheet__row" data-kb-act="download" onClick={run(actions.download)}>
-            <Icon.Download />
-            <span>Download</span>
-          </button>
-        </li>
-        <li>
-          <button
-            type="button"
-            className="kb-card-sheet__row kb-card-sheet__row--warn"
-            data-kb-act="exclude"
-            onClick={() => {
-              close();
-              // Let React commit the unmount before the confirm host opens, so
-              // the sheet is never on screen (or in the a11y tree) under it.
-              void Promise.resolve()
-                .then(() => actions.exclude())
-                .then(restoreFocus);
-            }}
-          >
-            <EyeOffIcon />
-            <span>Exclude from index</span>
-          </button>
-        </li>
-      </ul>
-    </Sheet>
+    <div className="kb-card-sheet-host" onClick={(e) => e.stopPropagation()}>
+      <Sheet
+        open
+        detent={detent}
+        onDetentChange={setDetent}
+        onClose={close}
+        title={doc.title || doc.id}
+        peek="288px"
+        full="288px"
+        id="kb-card-actions"
+      >
+        <ul role="list" className="kb-card-sheet">
+          <li>
+            <button type="button" className="kb-card-sheet__row" data-kb-act="peek" onClick={run(actions.peek)}>
+              <EyeIcon />
+              <span>Preview</span>
+            </button>
+          </li>
+          <li>
+            <button type="button" className="kb-card-sheet__row" data-kb-act="download" onClick={run(actions.download)}>
+              <Icon.Download />
+              <span>Download</span>
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              className="kb-card-sheet__row kb-card-sheet__row--warn"
+              data-kb-act="exclude"
+              onClick={() => {
+                dismiss();
+                // Let React commit the unmount before the confirm host opens, so
+                // the sheet is never on screen (or in the a11y tree) under it.
+                void Promise.resolve()
+                  .then(() => actions.exclude())
+                  .then(restoreFocus);
+              }}
+            >
+              <EyeOffIcon />
+              <span>Exclude from index</span>
+            </button>
+          </li>
+        </ul>
+      </Sheet>
     </div>,
     document.body,
   );

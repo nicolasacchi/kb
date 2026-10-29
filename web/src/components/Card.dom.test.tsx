@@ -173,6 +173,26 @@ describe("Card More-actions sheet (OL TOUCH1)", () => {
     expect(document.activeElement).toBe(more());
   });
 
+  it("Exclude: focus is not stolen from the confirm dialog by a deferred refocus", async () => {
+    let go: HTMLButtonElement | null = null;
+    m.confirm.mockImplementation(async () => {
+      go = document.createElement("button");
+      go.className = "confirm__go";
+      document.body.appendChild(go);
+      go.focus();
+      return new Promise<boolean>(() => {});
+    });
+    mount();
+    openSheet();
+    click(row("exclude"));
+    await frame();
+    await frame();
+    expect(go).not.toBeNull();
+    expect(document.activeElement).toBe(go);
+    expect(document.activeElement).not.toBe(more());
+    (go as HTMLButtonElement | null)?.remove();
+  });
+
   it("opening and acting never changes the URL and never bubbles", () => {
     mount();
     expect(loc).toBe("/?kb=k");

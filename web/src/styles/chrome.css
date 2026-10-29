@@ -7139,6 +7139,10 @@ a.proposal-row__chip:hover {
 
 /* Touch "More actions" sheet rows. The sheet is portaled to <body>, outside
  * .kb-card, so these rules are self-contained. */
+.kb-card-sheet-host {
+  display: contents;
+}
+
 .kb-card-sheet {
   list-style: none;
   margin: 0;
