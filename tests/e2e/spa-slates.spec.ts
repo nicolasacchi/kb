@@ -345,9 +345,12 @@ test.describe("slate board — pin, composer, refusals, drawings", () => {
     const frame = page.frameLocator(`#slate-post-${seqNo} iframe.slate-sketch__frame`);
     // The diagram SVG is adopted into #root; a parse/render failure shows
     // `.sketch-err` instead.
-    await expect(frame.locator("#root svg")).toBeVisible({ timeout: 15_000 });
-    await expect(frame.locator(".sketch-err")).toHaveCount(0);
-    expect(errors).toEqual([]);
+    await expect(frame.locator("#root svg, #root .sketch-err").first()).toBeVisible({
+      timeout: 15_000,
+    });
+    const errText = await frame.locator(".sketch-err").allTextContents();
+    expect({ sketchErr: errText, errors }).toEqual({ sketchErr: [], errors: [] });
+    await expect(frame.locator("#root svg")).toBeVisible();
   });
 
   test("mobile: one column of accordions, and the composer is a sheet", async ({
