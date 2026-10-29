@@ -2186,11 +2186,11 @@ span.kbc-diff__impact-chip {
   background: none;
   border: 0;
   border-left: 2px solid transparent;
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .kbc-rmap__row:hover {
-  background: var(--bg-hover, var(--bg-panel-2));
+  background: var(--bg-panel-2);
 }
 .kbc-rmap__row.is-current {
   border-left-color: var(--accent);
@@ -2216,7 +2216,7 @@ span.kbc-diff__impact-chip {
   padding: 0 4px;
   color: var(--fg-dim);
   background: var(--bg-panel-2);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
 }
 .kbc-rmap__chip--viewed {
   color: var(--fg);
@@ -2271,11 +2271,11 @@ span.kbc-diff__impact-chip {
   background: none;
   border: 0;
   border-left: 2px solid transparent;
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .kbc-ftree__row:hover {
-  background: var(--bg-hover, var(--bg-panel-2));
+  background: var(--bg-panel-2);
 }
 .kbc-ftree__row.is-current,
 .kbc-ftree__row.is-cursor {
@@ -2382,7 +2382,7 @@ span.kbc-diff__impact-chip {
   color: var(--fg-dim);
   background: none;
   border: 1px solid transparent;
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .kbc-hunkstrip__expand:hover,
@@ -2393,7 +2393,7 @@ span.kbc-diff__impact-chip {
   padding: 0 4px;
   color: var(--fg-dim);
   background: var(--bg-panel);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
 }
 /* A noise class reads as a LINE STYLE (the Lane Budget's channel for a
  * classification), never as its own hue — the diff lane owns colour here. */
@@ -2534,8 +2534,8 @@ span.kbc-diff__impact-chip {
   padding: var(--pad-3);
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-2, 8px);
-  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 35%));
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
 }
 .kbc-drafts__head {
   display: flex;
@@ -2595,7 +2595,7 @@ span.kbc-diff__impact-chip {
   color: var(--fg-dim);
   background: var(--bg-panel-2);
   border-left: 2px dotted var(--accent);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
 }
 .kbc-drafts__intent--question {
@@ -2636,7 +2636,7 @@ span.kbc-diff__impact-chip {
     bottom: 0;
     left: 0;
     width: auto;
-    border-radius: var(--radius-2, 8px) var(--radius-2, 8px) 0 0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
   }
 }
 

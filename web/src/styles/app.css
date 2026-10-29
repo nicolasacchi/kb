@@ -466,7 +466,7 @@ select:focus-visible,
   color: var(--ink);
 }
 .stale-anchors__kind {
-  color: var(--accent-dim, var(--ink-mute));
+  color: var(--ink-mute);
   text-transform: uppercase;
   font-size: var(--fs-xs);
   letter-spacing: 0.04em;
@@ -889,7 +889,7 @@ select:focus-visible,
 .kb-sesctx__superseded {
   font: 500 10px/1 var(--font-mono, ui-monospace);
   text-transform: uppercase;
-  color: var(--ink-warn, #c44);
+  color: var(--warn);
   border: 1px solid currentColor;
   border-radius: 3px;
   padding: 1px 4px;
@@ -965,7 +965,7 @@ select:focus-visible,
   border-radius: var(--radius-sm);
   margin: 0 12px 8px;
   max-height: 40vh;
-  background: var(--surface-1, #161616);
+  background: var(--bg-panel);
 }
 .kb-livetail__head {
   display: flex;
@@ -1033,7 +1033,7 @@ select:focus-visible,
 }
 .kb-livetail__turn-items p {
   margin: 2px 0;
-  font: 400 12px/1.4 var(--font-body, inherit);
+  font: 400 12px/1.4 var(--font-sans);
   color: var(--ink);
   word-break: break-word;
 }
@@ -1052,7 +1052,7 @@ select:focus-visible,
   align-self: center;
   margin-top: -28px;
   font: 700 11px/1 var(--font-mono, ui-monospace);
-  color: var(--surface-1, #161616);
+  color: var(--bg);
   background: var(--accent, #4caf50);
   border: 0;
   border-radius: var(--radius-pill);

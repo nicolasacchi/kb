@@ -140,7 +140,7 @@
   padding: 5px 8px;
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
-  background: var(--bg-input, var(--bg-card));
+  background: var(--bg-card);
   color: var(--ink);
   font-size: var(--fs-sm);
 }

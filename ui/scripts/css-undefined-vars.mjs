@@ -31,34 +31,23 @@
 // in any `*.css` file under `src` (tokens.css, themes.gen.css, or any
 // component sheet — a theme may legitimately be the ONLY place a role is
 // declared, so all of `src/**/*.css` is the search set, not just
-// tokens.css). This intentionally does NOT count an inline
-// `style={{ "--name": … }}` in a `.tsx` component (the `--kbc-*`
-// per-instance convention, e.g. `provHueStyle`/`RiskDial`/`ReportHero`) as
-// a definition — those are scoped to one element, set conditionally, and
-// exist precisely so a THEME can't reach them; a `var(--kbc-foo, …)` must
-// still carry a fallback that resolves through the static side, and this
-// script checks exactly that.
+// tokens.css). A name ASSIGNED from TS/TSX also counts (an inline
+// `style={{ "--card-accent": … }}`, `["--x" as string]: …` or
+// `el.style.setProperty("--x", …)`, the `--kbc-*` per-instance convention):
+// it is a real value on a real element; a reference to it keeps its fallback
+// for the elements that do not set it. See the TS pass below.
 //
-// ── The fallback ruling (brief asks us to decide and say so) ───────────
-// `var(--name, <fallback>)` is NOT a hit when `<fallback>` resolves to a
-// concrete value with no further dead end:
-//   - a LITERAL fallback (`8px`, `#fff`, `0 6px 24px rgb(0 0 0 / 0.35)`,
-//     `ui-monospace, monospace`, …) is always accepted — CSS guarantees a
-//     real rendered value regardless of theme. This is what most of
-//     `commands.css`/`nav.css`'s legacy `--space-N`/`--radius-N`/
-//     `--shadow-N` names lean on; they are a DUPLICATE, DISJOINT naming
-//     layer that predates `tokens.css`'s `--pad-N`/`--radius-*`/
-//     `--shadow*` ramp (confirmed unmodified since the initial public
-//     import) and normalizing them onto tokens.css is real but SEPARATE
-//     cleanup — out of scope here because they already render correctly in
-//     every theme (structural literals don't need to move with a palette).
-//   - a fallback that is ITSELF exactly one `var(--other)` call is resolved
-//     RECURSIVELY: `var(--kbc-prov-hue, var(--rule))` is safe because
-//     `--rule` is defined; `var(--surface-2, var(--surface))` was a hit
-//     before this unit's fix because NEITHER name is defined anywhere.
-// A bare `var(--name)` with no fallback is always a hit when `--name` is
-// undefined — this is the exact `--fg`/`--fg-dim` (R4) and
-// `--line`/`--bg-raised` (R5) shape.
+// ── The fallback ruling (LINT1 reversed the F10 ruling) ────────────────
+// A fallback does NOT rescue an undeclared name. `var(--name, <anything>)` is
+// a hit when `--name` is declared nowhere the app can see: a literal fallback
+// (`var(--space-1, 4px)`, `var(--ink-mute, #999)`) only HIDES a made-up token
+// behind a plausible render, which is exactly how `--space-N`/`--radius-N`
+// reached review. Map the reference to the real token instead. A name that IS
+// declared (in any src/**/*.css, or assigned from TS/TSX as a per-instance
+// custom property, see below) but may be unset on some element or theme keeps
+// its fallback — that is what a fallback is for. Fallback chains are checked
+// at every level: `var(--a, var(--b))` flags `--a` when undeclared and, on its
+// own, `--b` when undeclared. A bare `var(--undefined)` is a hit as before.
 //
 // Also scans `var(--…)` occurrences inside `.ts`/`.tsx` string literals
 // (inline SVG fill/stroke, CodeMirror theme objects, style objects) against
@@ -124,6 +113,22 @@ for (const f of cssFiles) {
   cssTextByFile.set(f, text);
   for (const found of text.matchAll(DEF_RE)) defined.add(found[1]);
 }
+// Names ASSIGNED from TS/TSX count as defined too (LINT1): the per-instance
+// convention is `style={{ "--card-accent": accent }}`,
+// `style={{ ["--x" as string]: v }}` or `el.style.setProperty("--x", v)`. They
+// are real values on a real element, not made-up tokens. A `var(--x)` of such
+// a name is still allowed to carry a fallback for the elements that do not set it.
+const TS_DEF_RES = [
+  /["'`](--[a-zA-Z0-9-]+)["'`](?:\s+as\s+string)?\s*\]?\s*:/g,
+  /setProperty\(\s*["'`](--[a-zA-Z0-9-]+)["'`]/g,
+];
+for (const f of tsFiles) {
+  const raw = readFileSync(f, "utf8");
+  if (!raw.includes("--")) continue;
+  const text = stripJsComments(raw);
+  for (const re of TS_DEF_RES) for (const found of text.matchAll(re)) defined.add(found[1]);
+}
+
 // ── Fallback-chain resolution --------------------------------------------
 // Given the text strictly INSIDE a var(...) call's parens (i.e. everything
 // after `var(`, up to its matching close paren, exclusive), split into the
@@ -158,31 +163,16 @@ function extractParen(text, openIdx) {
   return null; // unbalanced — caller treats as not-a-hit (can't parse)
 }
 
-const VAR_CALL_RE = /^var\(\s*(--[a-zA-Z0-9-]+)([\s\S]*)\)\s*$/;
-
-// Returns true iff `inner` (the text between a `var(` and its matching `)`)
-// resolves to a concrete value with no dead end. `seen` guards runaway
-// recursion on a cyclic fallback (shouldn't happen, but never hang).
-function resolves(inner, seen = new Set()) {
-  const { name, fallback } = splitVarArgs(inner);
+// A reference resolves iff the NAME it reads is declared somewhere the app can
+// see (LINT1: a fallback no longer rescues an undeclared name). A declared
+// name that is merely unset in some theme may still carry a fallback; that is
+// what a fallback is for. The fallback's own nested var() calls are visited
+// separately by the scan loop (every `var(` occurrence is checked), so
+// `var(--a, var(--b))` flags `--a` and, independently, `--b` when undeclared.
+function resolves(inner, definedNames = defined) {
+  const { name } = splitVarArgs(inner);
   if (!/^--[a-zA-Z0-9-]+$/.test(name)) return true; // malformed — don't flag
-  if (defined.has(name)) return true;
-  if (fallback === null) return false; // bare var(--undefined) — always a hit
-  if (seen.has(name)) return false; // cycle guard
-  seen.add(name);
-  const trimmed = fallback.trim();
-  const asVarCall = trimmed.match(VAR_CALL_RE);
-  if (asVarCall) {
-    // fallback is EXACTLY one var(...) call — resolve it recursively.
-    const nestedOpen = trimmed.indexOf("(");
-    const nested = extractParen(trimmed, nestedOpen);
-    if (!nested) return true; // unparseable, don't flag
-    return resolves(nested.inner, seen);
-  }
-  // Fallback contains literal content (px value, color, font stack, a
-  // color-mix()/calc() expression, or a var() call mixed with other
-  // tokens) — CSS always produces a value here, so treat as resolved.
-  return true;
+  return definedNames.has(name);
 }
 
 // ── Scan for var(--…) usages, report every unresolved one ---------------

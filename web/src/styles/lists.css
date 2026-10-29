@@ -637,7 +637,7 @@ span.kb-listd__title.is-dead {
 }
 .kb-atl__new input {
   flex: 1;
-  background: var(--bg-deep, transparent);
+  background: transparent;
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
   color: var(--ink);
