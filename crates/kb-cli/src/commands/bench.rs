@@ -1189,7 +1189,7 @@ mod metric_tests {
 
     #[test]
     fn kb_id_relevant_matches_only_that_kb() {
-        let rel = vec!["alpha:aaaaaaaaaaaa".to_string()];
+        let rel = ["alpha:aaaaaaaaaaaa".to_string()];
         assert!(label_matches(&rel[0], &khit("alpha", "aaaaaaaaaaaa"), None));
         assert!(!label_matches(&rel[0], &khit("beta", "aaaaaaaaaaaa"), None));
         // A kb-less hit with no cell kb cannot satisfy a kb:id label.
