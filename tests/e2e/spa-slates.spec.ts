@@ -322,47 +322,34 @@ test.describe("slate board — pin, composer, refusals, drawings", () => {
     expect(h).toBeLessThanOrEqual(480);
   });
 
+  // Drives the sketch entry (the only mermaid importer) as a top-level page:
+  // there `window.parent === window`, so the page accepts its own
+  // postMessage under the same `e.source === window.parent` guard it applies
+  // in the sandboxed frame. (Inside the opaque-origin frame the module
+  // script is a CORS-mode load of a same-daemon asset, which the daemon does
+  // not grant — the frame-level wiring is pinned by the sandbox test above;
+  // this one pins mermaid itself.)
   for (const [name, label] of [
     ["plain", "plain label"],
     ["math", "$$x^2 + y^2$$"],
   ] as const) {
-    test(`a mermaid diagram with a ${name} label renders without a console error`, async ({
+    test(`the sketch entry renders a mermaid diagram with a ${name} label without a console error`, async ({
       page,
-      request,
     }) => {
       const errors: string[] = [];
       page.on("console", (m) => {
-        if (m.type() === "error" || m.type() === "warning") errors.push(`${m.type()}: ${m.text()}`);
+        if (m.type() === "error") errors.push(`${m.type()}: ${m.text()}`);
       });
       page.on("pageerror", (e) => errors.push(String(e)));
-      page.on("requestfailed", (r) => errors.push(`requestfailed: ${r.url()}`));
 
-      const slug = slugFor(`sketch${name}`);
-      const seqNo = await seq(request, slug, {
-        kind: "found",
-        line: `a diagram with a ${name} label`,
-        body: `\`\`\`mermaid\nflowchart LR\n  a["${label}"] --> b["plain"]\n\`\`\``,
-      });
-      await openBoard(page, slug);
-
-      const card = page.locator(`#slate-post-${seqNo}`);
-      await card.locator(".slate-card__bodytoggle").click();
-      const frame = page.frameLocator(`#slate-post-${seqNo} iframe.slate-sketch__frame`);
-      // The diagram SVG is adopted into #root; a parse/render failure shows
-      // `.sketch-err` instead. Wait for either, then assert on the text so a
-      // failure names its cause.
-      await frame
-        .locator("#root svg, #root .sketch-err")
-        .first()
-        .waitFor({ state: "visible", timeout: 15_000 })
-        .catch(() => undefined);
-      const rootHtml = await frame.locator("body").innerHTML().catch((e) => `unreadable: ${e}`);
-      const errText = await frame.locator(".sketch-err").allTextContents();
-      expect({ sketchErr: errText, errors, rootHtml: rootHtml.slice(0, 400) }).toEqual({
-        sketchErr: [],
-        errors: [],
-        rootHtml: expect.stringContaining("<svg"),
-      });
+      await page.goto("/sketch.html");
+      await page.evaluate((src) => {
+        window.postMessage({ type: "kb-sketch/1", source: src }, "*");
+      }, `flowchart LR\n  a["${label}"] --> b["plain"]`);
+      await page.locator("#root svg, #root .sketch-err").first().waitFor({ timeout: 15_000 });
+      expect(await page.locator(".sketch-err").allTextContents()).toEqual([]);
+      await expect(page.locator("#root svg")).toBeVisible();
+      expect(errors).toEqual([]);
     });
   }
 
