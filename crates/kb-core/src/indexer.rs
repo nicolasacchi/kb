@@ -7616,7 +7616,10 @@ done
     }
 
     #[tokio::test]
-    async fn missing_file_emits_error_event() {
+    async fn non_enoent_read_failure_still_emits_error_event() {
+        // OL ERR1 — ENOENT is a delete (see
+        // `enoent_during_ingest_is_a_delete_not_an_error`); any OTHER io
+        // read failure (here EISDIR: the path is a directory) still records.
         let (bus, storage, kb, slug, tmp) = setup().await;
         let quarantine = tmp.path().join("quarantine");
 
@@ -7645,7 +7648,8 @@ done
         });
 
         let mut rx = bus.subscribe();
-        let missing = tmp.path().join("does-not-exist.html");
+        let missing = tmp.path().join("is-a-dir.html");
+        std::fs::create_dir(&missing).unwrap();
         bus.emit(
             "watch.create",
             json!({"kb": kb.as_str(), "path": missing.to_string_lossy()}),
