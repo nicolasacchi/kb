@@ -42,7 +42,11 @@ pub struct QueryRow {
     /// operator fills it in by hand.
     pub query: String,
     /// Artifact ids (12-hex per `kb_core::ids::ArtifactId`) considered
-    /// relevant for `query`. Order doesn't matter — Recall@k and MRR
+    /// relevant for `query`. An entry is either a bare id (matches that
+    /// id in any kb) or `kb:id` (matches only that kb's copy; ids are
+    /// 12-hex with no colon, so the form is unambiguous). Use `kb:id`
+    /// for the federated (`--federated`) cell, where ids can collide
+    /// across corpora. Order doesn't matter — Recall@k and MRR
     /// use set membership; nDCG uses position in the daemon's ranked
     /// response, not this list.
     pub relevant: Vec<String>,
@@ -206,6 +210,78 @@ struct Hit {
     id: String,
     title: String,
     path: String,
+    /// Owning kb. Present on federated (`scope=all`) responses only.
+    #[serde(default)]
+    kb: Option<String>,
+}
+
+/// Kb label of the federated cell in the report (`scope=all`).
+pub const FEDERATED_KB: &str = "*";
+
+/// Build the `/api/search` URL for one bench query. `Some(kb)` is a
+/// single-kb cell (`&kb=<kb>`); `None` is the federated cell
+/// (`&scope=all`, no `kb=`).
+fn search_url(daemon: &str, query: &str, mode: &str, limit: u32, kb: Option<&str>) -> String {
+    let base = format!(
+        "{daemon}/api/search?q={}&mode={mode}&limit={limit}",
+        http::encode_path_segment(query),
+    );
+    match kb {
+        Some(kb) => format!("{base}&kb={}", http::encode_path_segment(kb)),
+        None => format!("{base}&scope=all"),
+    }
+}
+
+/// Does the relevance label `rel` (bare `id` or `kb:id`) match `hit`?
+/// `cell_kb` is the single-kb cell's kb (its hits carry no `kb`, so it
+/// stands in); `None` in the federated cell, where a `kb:id` label
+/// needs the hit's own `kb`.
+fn label_matches(rel: &str, hit: &Hit, cell_kb: Option<&str>) -> bool {
+    match rel.split_once(':') {
+        None => hit.id == rel,
+        Some((kb, id)) => hit.id == id && hit.kb.as_deref().or(cell_kb).is_some_and(|k| k == kb),
+    }
+}
+
+/// Per-query metrics over one ranked response (pure; `score_cell` and
+/// the unit tests share it). Returns (recall hit per k, reciprocal
+/// rank, nDCG@k_max).
+fn score_ranking(
+    hits: &[Hit],
+    relevant: &[String],
+    cell_kb: Option<&str>,
+    k_values: &[u32],
+    k_max: u32,
+) -> (Vec<bool>, f64, f64) {
+    let is_rel: Vec<bool> = hits
+        .iter()
+        .map(|h| relevant.iter().any(|r| label_matches(r, h, cell_kb)))
+        .collect();
+    let recall = k_values
+        .iter()
+        .map(|&k| is_rel[..(k as usize).min(is_rel.len())].iter().any(|r| *r))
+        .collect();
+    // MRR: 1 / rank of the FIRST relevant hit (1-indexed); 0 if none.
+    let rr = is_rel
+        .iter()
+        .position(|r| *r)
+        .map(|pos| 1.0 / (pos as f64 + 1.0))
+        .unwrap_or(0.0);
+    // nDCG@k_max: binary relevance; IDCG places min(|labels|, k_max)
+    // relevant hits first. 0.0 when IDCG is 0 (no NaN).
+    let mut dcg = 0.0_f64;
+    for (i, r) in is_rel.iter().take(k_max as usize).enumerate() {
+        if *r {
+            dcg += 1.0 / ((i as f64 + 2.0).log2());
+        }
+    }
+    let uniq: std::collections::HashSet<&str> = relevant.iter().map(|s| s.as_str()).collect();
+    let mut idcg = 0.0_f64;
+    for i in 0..uniq.len().min(k_max as usize) {
+        idcg += 1.0 / ((i as f64 + 2.0).log2());
+    }
+    let ndcg = if idcg > 0.0 { dcg / idcg } else { 0.0 };
+    (recall, rr, ndcg)
 }
 
 /// One query's latency, two ways. `wall_ms` is the client-measured
@@ -325,6 +401,7 @@ pub async fn run(
     output_md: Option<&Path>,
     output_json: Option<&Path>,
     baseline: Option<&Path>,
+    federated: bool,
 ) -> Result<()> {
     if kbs.is_empty() {
         bail!("--kbs is empty; pass at least one kb name (e.g. --kbs research-small)");
@@ -368,8 +445,27 @@ pub async fn run(
                 "→ {kb} / {mode} ({} queries × limit {k_max}) ...",
                 rows.len()
             );
-            let row = score_cell(&client, &daemon, kb, mode, &rows, k_values, k_max).await?;
+            let row = score_cell(&client, &daemon, Some(kb), mode, &rows, k_values, k_max).await?;
             report_rows.push(row);
+        }
+    }
+    if federated {
+        if rows
+            .iter()
+            .any(|r| r.relevant.iter().any(|l| !l.contains(':')))
+        {
+            eprintln!(
+                "note: the federated ({FEDERATED_KB}) cell matches bare ids on id alone, and ids \
+                 can collide across corpora; label with `kb:id` for exact (kb,id) scoring"
+            );
+        }
+        for mode in modes {
+            eprintln!(
+                "→ {FEDERATED_KB} (scope=all) / {mode} ({} queries × limit {k_max}) ...",
+                rows.len()
+            );
+            report_rows
+                .push(score_cell(&client, &daemon, None, mode, &rows, k_values, k_max).await?);
         }
     }
 
@@ -430,7 +526,7 @@ fn load_query_rows(path: &Path) -> Result<Vec<QueryRow>> {
 async fn score_cell(
     client: &reqwest::Client,
     daemon: &str,
-    kb: &str,
+    kb: Option<&str>,
     mode: &str,
     queries: &[QueryRow],
     k_values: &[u32],
@@ -463,45 +559,11 @@ async fn score_cell(
         let (hits, timing) = run_one_query(client, daemon, kb, &q.query, mode, k_max).await?;
         wall_ms.push(timing.wall_ms);
         server_ms.push(timing.server_ms);
-        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
-        let relevant: std::collections::HashSet<&str> =
-            q.relevant.iter().map(|s| s.as_str()).collect();
-
-        // Recall@k: any relevant id appears in the top k?
-        for (i, &k) in k_values.iter().enumerate() {
-            let k = (k as usize).min(ids.len());
-            let hit = ids[..k].iter().any(|id| relevant.contains(id));
+        let (recalls, rr, ndcg) = score_ranking(&hits, &q.relevant, kb, k_values, k_max);
+        for (i, hit) in recalls.into_iter().enumerate() {
             per_query_recall[i].push(hit);
         }
-
-        // MRR: 1 / rank of the FIRST relevant id (1-indexed). 0 if no
-        // relevant id is in the top-k_max window.
-        let rr = ids
-            .iter()
-            .position(|id| relevant.contains(id))
-            .map(|pos| 1.0 / (pos as f64 + 1.0))
-            .unwrap_or(0.0);
         per_query_rr.push(rr);
-
-        // nDCG@k_max: binary relevance per id (1.0 if relevant, 0.0
-        // otherwise). DCG = Σ rel_i / log2(i + 2), 1-indexed positions.
-        // IDCG = ideal ordering with all relevant ids at the top of
-        // the window. nDCG = DCG / IDCG; 0.0 if no relevant id appears
-        // (IDCG would be 0 too — define as 0 to avoid NaN).
-        let mut dcg = 0.0_f64;
-        for (i, id) in ids.iter().take(k_max as usize).enumerate() {
-            if relevant.contains(id) {
-                dcg += 1.0 / ((i as f64 + 2.0).log2());
-            }
-        }
-        // IDCG: at best, min(relevant.len(), k_max) relevant ids land
-        // in positions 1..=min(relevant.len(), k_max).
-        let ideal_hits = relevant.len().min(k_max as usize);
-        let mut idcg = 0.0_f64;
-        for i in 0..ideal_hits {
-            idcg += 1.0 / ((i as f64 + 2.0).log2());
-        }
-        let ndcg = if idcg > 0.0 { dcg / idcg } else { 0.0 };
         per_query_ndcg.push(ndcg);
     }
 
@@ -514,7 +576,7 @@ async fn score_cell(
     let ndcg = mean_f64(&per_query_ndcg);
 
     Ok(ReportRow {
-        kb: kb.to_string(),
+        kb: kb.unwrap_or(FEDERATED_KB).to_string(),
         mode: mode.to_string(),
         recall_at_k,
         mrr,
@@ -530,16 +592,13 @@ async fn score_cell(
 async fn run_one_query(
     client: &reqwest::Client,
     daemon: &str,
-    kb: &str,
+    kb: Option<&str>,
     query: &str,
     mode: &str,
     limit: u32,
 ) -> Result<(Vec<Hit>, Timing)> {
-    let url = format!(
-        "{daemon}/api/search?q={}&mode={mode}&limit={limit}&kb={}",
-        http::encode_path_segment(query),
-        http::encode_path_segment(kb),
-    );
+    let url = search_url(daemon, query, mode, limit, kb);
+    let kb = kb.unwrap_or(FEDERATED_KB);
     // Time the whole round-trip: the request URL is already built, so
     // this captures send + server compute + response body + JSON
     // deserialise — the wall-clock a caller actually waits on.
@@ -788,6 +847,14 @@ mod metric_tests {
             id: id.to_string(),
             title: String::new(),
             path: String::new(),
+            kb: None,
+        }
+    }
+
+    fn khit(kb: &str, id: &str) -> Hit {
+        Hit {
+            kb: Some(kb.to_string()),
+            ..hit(id)
         }
     }
 
@@ -800,31 +867,12 @@ mod metric_tests {
         let mut rrs = Vec::new();
         let mut ndcgs = Vec::new();
         for (q, hs) in queries.iter().zip(hits.iter()) {
-            let ids: Vec<&str> = hs.iter().map(|h| h.id.as_str()).collect();
-            let rel: std::collections::HashSet<&str> =
-                q.relevant.iter().map(|s| s.as_str()).collect();
-            for (i, &k) in k_values.iter().enumerate() {
-                let k = (k as usize).min(ids.len());
-                per_recall[i].push(ids[..k].iter().any(|id| rel.contains(id)));
+            let (rec, rr, ndcg) = score_ranking(hs, &q.relevant, None, k_values, k_max);
+            for (i, r) in rec.into_iter().enumerate() {
+                per_recall[i].push(r);
             }
-            let rr = ids
-                .iter()
-                .position(|id| rel.contains(id))
-                .map(|pos| 1.0 / (pos as f64 + 1.0))
-                .unwrap_or(0.0);
             rrs.push(rr);
-            let mut dcg = 0.0;
-            for (i, id) in ids.iter().take(k_max as usize).enumerate() {
-                if rel.contains(id) {
-                    dcg += 1.0 / ((i as f64 + 2.0).log2());
-                }
-            }
-            let ideal = rel.len().min(k_max as usize);
-            let mut idcg = 0.0;
-            for i in 0..ideal {
-                idcg += 1.0 / ((i as f64 + 2.0).log2());
-            }
-            ndcgs.push(if idcg > 0.0 { dcg / idcg } else { 0.0 });
+            ndcgs.push(ndcg);
         }
         ReportRow {
             kb: "test".into(),
@@ -1124,26 +1172,136 @@ mod metric_tests {
     }
 
     #[test]
+    fn search_url_federated_has_scope_all_and_no_kb() {
+        let fed = search_url("http://d", "a b", "hybrid", 10, None);
+        assert_eq!(
+            fed,
+            "http://d/api/search?q=a%20b&mode=hybrid&limit=10&scope=all"
+        );
+        assert!(!fed.contains("kb="));
+        let one = search_url("http://d", "a b", "hybrid", 10, Some("docs"));
+        assert_eq!(
+            one,
+            "http://d/api/search?q=a%20b&mode=hybrid&limit=10&kb=docs"
+        );
+        assert!(!one.contains("scope="));
+    }
+
+    #[test]
+    fn kb_id_relevant_matches_only_that_kb() {
+        let rel = vec!["alpha:aaaaaaaaaaaa".to_string()];
+        assert!(label_matches(&rel[0], &khit("alpha", "aaaaaaaaaaaa"), None));
+        assert!(!label_matches(&rel[0], &khit("beta", "aaaaaaaaaaaa"), None));
+        // A kb-less hit with no cell kb cannot satisfy a kb:id label.
+        assert!(!label_matches(&rel[0], &hit("aaaaaaaaaaaa"), None));
+        // Single-kb cell: the cell's kb stands in for the hit's.
+        assert!(label_matches(&rel[0], &hit("aaaaaaaaaaaa"), Some("alpha")));
+        assert!(!label_matches(&rel[0], &hit("aaaaaaaaaaaa"), Some("beta")));
+    }
+
+    #[test]
+    fn bare_id_matches_any_kb() {
+        assert!(label_matches(
+            "aaaaaaaaaaaa",
+            &khit("alpha", "aaaaaaaaaaaa"),
+            None
+        ));
+        assert!(label_matches(
+            "aaaaaaaaaaaa",
+            &khit("beta", "aaaaaaaaaaaa"),
+            None
+        ));
+        assert!(label_matches(
+            "aaaaaaaaaaaa",
+            &hit("aaaaaaaaaaaa"),
+            Some("x")
+        ));
+        assert!(!label_matches(
+            "aaaaaaaaaaaa",
+            &khit("beta", "bbbbbbbbbbbb"),
+            None
+        ));
+    }
+
+    #[test]
+    fn old_queries_jsonl_still_parses() {
+        let line = r#"{"query":"rust","relevant":["abc123def456"],"notes":"n"}"#;
+        let row: QueryRow = serde_json::from_str(line).unwrap();
+        assert_eq!(row.relevant, vec!["abc123def456"]);
+        // Hits from a single-kb response carry no `kb` field.
+        let h: Hit = serde_json::from_str(r#"{"id":"a","title":"t","path":"p"}"#).unwrap();
+        assert!(h.kb.is_none());
+        let h: Hit = serde_json::from_str(r#"{"id":"a","title":"t","path":"p","kb":"x"}"#).unwrap();
+        assert_eq!(h.kb.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn federated_cell_scores_on_kb_id_pairs() {
+        // The same id lives in two kbs; only beta's copy is relevant.
+        let qs = rows(&[("q", &["beta:aaaaaaaaaaaa"])]);
+        let hs = vec![vec![
+            khit("alpha", "aaaaaaaaaaaa"),
+            khit("gamma", "cccccccccccc"),
+            khit("beta", "aaaaaaaaaaaa"),
+        ]];
+        let r = score(&qs, &hs, &[1, 2, 3]);
+        assert_eq!(r.recall_at_k, vec![(1, 0.0), (2, 0.0), (3, 1.0)]);
+        assert!((r.mrr - 1.0 / 3.0).abs() < 1e-12);
+        // Single relevant label at rank 3: DCG = 1/log2(4) = 0.5, IDCG = 1.
+        assert!((r.ndcg_at_k_max.1 - 0.5).abs() < 1e-12);
+        // Ranked first instead: perfect on all three metrics.
+        let hs = vec![vec![
+            khit("beta", "aaaaaaaaaaaa"),
+            khit("alpha", "aaaaaaaaaaaa"),
+        ]];
+        let r = score(&qs, &hs, &[1, 3]);
+        assert_eq!(r.recall_at_k, vec![(1, 1.0), (3, 1.0)]);
+        assert!((r.mrr - 1.0).abs() < 1e-12);
+        assert!((r.ndcg_at_k_max.1 - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
     fn baseline_round_trips_through_json() {
         let report = Report {
             queries_file: "q.jsonl".into(),
             queries_total: 1,
-            rows: vec![ReportRow {
-                kb: "large".into(),
-                mode: "hybrid".into(),
-                recall_at_k: vec![(1, 0.5), (5, 0.9)],
-                mrr: 0.6,
-                ndcg_at_k_max: (10, 0.7),
-                queries: 1,
-                lat_p50_ms: 118.5,
-                lat_p95_ms: 142.0,
-                lat_mean_ms: 121.3,
-                srv_p50_ms: 95.0,
-            }],
+            rows: vec![
+                ReportRow {
+                    kb: "large".into(),
+                    mode: "hybrid".into(),
+                    recall_at_k: vec![(1, 0.5), (5, 0.9)],
+                    mrr: 0.6,
+                    ndcg_at_k_max: (10, 0.7),
+                    queries: 1,
+                    lat_p50_ms: 118.5,
+                    lat_p95_ms: 142.0,
+                    lat_mean_ms: 121.3,
+                    srv_p50_ms: 95.0,
+                },
+                ReportRow {
+                    kb: FEDERATED_KB.into(),
+                    mode: "hybrid".into(),
+                    recall_at_k: vec![(1, 0.4), (5, 0.8)],
+                    mrr: 0.55,
+                    ndcg_at_k_max: (10, 0.65),
+                    queries: 1,
+                    lat_p50_ms: 150.0,
+                    lat_p95_ms: 190.0,
+                    lat_mean_ms: 160.0,
+                    srv_p50_ms: 120.0,
+                },
+            ],
         };
         let json = serde_json::to_string_pretty(&report).unwrap();
         let back: Report = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.rows.len(), 1);
+        assert_eq!(back.rows.len(), 2);
+        assert_eq!(back.rows[1].kb, "*");
+        // The `--baseline` lookup keys the federated row by its `*` label.
+        let lk = build_metric_lookup(&back);
+        assert_eq!(
+            lk[&("*".to_string(), "hybrid".to_string(), "mrr".to_string())],
+            0.55
+        );
         assert_eq!(back.rows[0].recall_at_k, vec![(1, 0.5), (5, 0.9)]);
         assert_eq!(back.rows[0].ndcg_at_k_max, (10, 0.7));
         // Latency fields round-trip too.

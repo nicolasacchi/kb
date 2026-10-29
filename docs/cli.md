@@ -583,6 +583,19 @@ kb synth --out DIR [--docs N] [--seed S]
 kb bench {init,discover,run}        retrieval-quality bake-off: scaffold a
                                     queries.jsonl, discover relevant ids, then
                                     compute Recall@k / MRR / nDCG per (kb × mode)
+kb bench run --federated            also score a federated cell per mode (report kb
+                                    label `*`): `scope=all`, no `kb=`. `relevant`
+                                    entries may be `kb:id` (exact (kb,id) match;
+                                    ids collide across corpora) or a bare id (id
+                                    alone, any kb; a stderr note flags this in
+                                    the federated cell). Old queries.jsonl and old
+                                    `--baseline` reports load unchanged
+                                    A/B recipe for a cross-corpus ranking change:
+                                    run the pre-change binary with
+                                    `--federated --json base.json`, then the new
+                                    binary with `--federated --baseline base.json`; the
+                                    `*` rows carry the signed Δ. Rule: ship if the
+                                    federated MRR Δ is >= 0 on a multi-corpus set
 kb sessions capture                    Build a session capture artifact from a transcript file — the Rust engine `kb-capture.sh` shells out to (W0.4). Resolves each detected git commit sha before writing. `--replay-spool` (v0.44 X6) lands the transcripts a failed hook capture parked in the private spool (`$KB_CAPTURE_SPOOL`, else `$XDG_CACHE_HOME/kb/capture-spool`) through this same scrubbed path and deletes them. `--stamp YYYYMMDDTHHMMSSZ` (v0.45) names a NEW capture with the session's true start time (ignored when an existing capture is reused). Every harness adapter (codex, opencode, kimi, omp, grok) now captures through this verb and spools on failure. Filesystem-only: never talks to the daemon
 kb sessions scrub                      v0.44 F7b — secrets-only scrub filter, JSONL stdin → stdout (the floor `capture` and `import claude-history` apply). (Until v0.45 the codex/opencode adapters piped their translated transcript through it; they now hand it to `kb sessions capture`, which applies the same floor.)
 kb sessions segment-plan --source <omp.jsonl> --state <file> [--target-bytes N] [--adapter-ver S] [--emit K] [--print-chain] [--no-write]

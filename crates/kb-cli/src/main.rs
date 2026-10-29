@@ -4209,6 +4209,12 @@ enum BenchAction {
         /// relevance change.
         #[arg(long)]
         baseline: Option<PathBuf>,
+        /// Also score one federated cell per mode (kb label `*`): the
+        /// query goes out with `scope=all` and no `kb=`. Label relevance
+        /// as `kb:id` for exact (kb,id) scoring; bare ids match on id
+        /// alone.
+        #[arg(long)]
+        federated: bool,
     },
 }
 
@@ -7797,6 +7803,7 @@ async fn main() -> Result<()> {
                 output,
                 json,
                 baseline,
+                federated,
             } => {
                 let bearer = read_bearer();
                 commands::bench::run(
@@ -7809,6 +7816,7 @@ async fn main() -> Result<()> {
                     output.as_deref(),
                     json.as_deref(),
                     baseline.as_deref(),
+                    federated,
                 )
                 .await
             }
