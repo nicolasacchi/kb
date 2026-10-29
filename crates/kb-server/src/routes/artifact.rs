@@ -446,9 +446,14 @@ fn runtime_js(target_origin: &str) -> String {
   // node or text is rewritten, so #6 anchors (body-rooted cssPath + text
   // snippets) stay valid. Inert until the parent posts kb:read.
   var READ_CSS = null;               // cached /_kb/reading.css text
+  var READ_SEQ = 0;                  // latest kb:read request; stale fetches drop out
+  var READ_OPTED_OUT = null;         // cached author opt-out (meta is static)
   var READ_STYLE_ID = 'kb-read-style';
   function readOptedOut() {{
-    return !!document.querySelector('meta[name="kb-reading"][content="off"]');
+    if (READ_OPTED_OUT === null) {{
+      READ_OPTED_OUT = !!document.querySelector('meta[name="kb-reading"][content="off"]');
+    }}
+    return READ_OPTED_OUT;
   }}
   function readAck(state, why) {{
     var m = {{ kind: 'kb:read-state', state: state }};
@@ -529,6 +534,7 @@ fn runtime_js(target_origin: &str) -> String {
     if (TARGET !== '*' && ev.origin !== TARGET) return;
     var data = ev.data;
     if (!data || data.kind !== 'kb:read') return;
+    var seq = ++READ_SEQ;
     var on = !!data.on;
     var scheme = data.scheme === 'dark' ? 'dark' : 'light';
     var pin = readTopBlock();
@@ -542,7 +548,7 @@ fn runtime_js(target_origin: &str) -> String {
     var why = readUnsuitable();
     if (why) {{ readAck('unsuitable', why); return; }}
     if (READ_CSS !== null) {{ readOn(scheme, pin); return; }}
-    var failed = function() {{ readAck('unsuitable', 'load'); }};
+    var failed = function() {{ if (seq === READ_SEQ) readAck('unsuitable', 'load'); }};
     try {{
       fetch('/_kb/reading.css', {{ credentials: 'omit' }}).then(function(r) {{
         if (!r.ok) throw new Error('status');
@@ -550,7 +556,8 @@ fn runtime_js(target_origin: &str) -> String {
       }}).then(function(css) {{
         if (!css) {{ failed(); return; }}
         READ_CSS = css;
-        readOn(scheme, pin);
+        if (seq !== READ_SEQ) return;   // a newer kb:read superseded this one
+        readOn(scheme, readTopBlock());
       }}).catch(failed);
     }} catch (e) {{ failed(); }}
   }}
@@ -1851,6 +1858,23 @@ mod tests {
             !js.contains("</"),
             "the runtime must stay inline-script-safe (no closing tag)"
         );
+    }
+
+    #[test]
+    fn runtime_read_fetch_continuation_drops_when_a_newer_request_arrived() {
+        let branch = runtime_between(
+            "function onReadMessage",
+            "window.addEventListener('message', onReadMessage)",
+        );
+        // Every message takes a token before any branch; the async
+        // continuation applies only while its token is still the latest and
+        // re-captures the scroll pin just before applying.
+        let token = branch.find("var seq = ++READ_SEQ;").expect("token");
+        let off = branch.find("readOff(pin)").expect("off branch");
+        assert!(token < off, "token must be taken before the off branch");
+        assert!(branch.contains("if (seq !== READ_SEQ) return;"));
+        assert!(branch.contains("readOn(scheme, readTopBlock())"));
+        assert!(branch.contains("if (seq === READ_SEQ) readAck('unsuitable', 'load')"));
     }
 
     #[test]

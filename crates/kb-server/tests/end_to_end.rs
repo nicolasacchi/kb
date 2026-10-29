@@ -1536,6 +1536,49 @@ async fn artifact_html_gains_no_reading_mode_tags() {
     assert!(body.contains(r#"<script src="/_kb/runtime.js" defer></script>"#));
 }
 
+/// Pins that the reading layer changed the served HTML not at all: with every
+/// injected `<script>` element removed (probe, runtime, annotator data block
+/// + script, bounce), a loopback serve of a promptful artifact equals the
+/// source file (compared with whitespace dropped, so the injectors' own
+/// newlines cannot mask or fake a difference), and the kb-prompt template
+/// survives the loopback serve.
+#[tokio::test]
+async fn artifact_html_matches_source_apart_from_injected_scripts() {
+    let (_tmp, addr, id) = boot_with_outbound_and_promptful_artifact(OutboundSection {
+        strip_kb_prompt: true,
+        redactions: Vec::new(),
+    })
+    .await;
+    let body = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}/", addr.port()))
+        .header("Host", format!("{id}.artifacts.localhost:4000"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(body.contains(r#"<script src="/_kb/runtime.js" defer></script>"#));
+    assert!(body.contains(r#"<template id="kb-prompt">SECRET PROMPT do not leak</template>"#));
+    let mut stripped = String::new();
+    let mut rest = body.as_str();
+    while let Some(i) = rest.find("<script") {
+        stripped.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let end = tail.find("</script>").expect("unterminated script") + "</script>".len();
+        rest = &tail[end..];
+    }
+    stripped.push_str(rest);
+    let source = r##"<!doctype html>
+<html><body>
+<h1>With prompt</h1>
+<template id="kb-prompt">SECRET PROMPT do not leak</template>
+<p>Visible body content.</p>
+</body></html>"##;
+    let squash = |s: &str| s.split_whitespace().collect::<String>();
+    assert_eq!(squash(&stripped), squash(source));
+}
+
 #[tokio::test]
 async fn artifact_subdomain_unknown_id_returns_404() {
     let (_tmp, addr) = boot().await;
