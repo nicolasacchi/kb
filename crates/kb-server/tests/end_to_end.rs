@@ -1447,6 +1447,95 @@ async fn artifact_html_injects_runtime_script_alongside_probe() {
     );
 }
 
+// --- OL READ1 — /_kb/reading.css -----------------------------------------
+
+#[tokio::test]
+async fn reading_css_served_with_etag_and_304() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let get = |inm: Option<String>| {
+        let mut rb = client
+            .get(format!("http://127.0.0.1:{}/_kb/reading.css", addr.port()))
+            .header("Host", "fullscreen-viz.artifacts.localhost:4000");
+        if let Some(v) = inm {
+            rb = rb.header("If-None-Match", v);
+        }
+        rb.send()
+    };
+    let resp = get(None).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let h = resp.headers().clone();
+    let hv = |n: &str| {
+        h.get(n)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(hv("content-type"), "text/css; charset=utf-8");
+    assert_eq!(hv("cache-control"), "public, max-age=3600");
+    assert_eq!(hv("x-content-type-options"), "nosniff");
+    assert!(hv("content-security-policy").starts_with("frame-ancestors "));
+    let etag = hv("etag");
+    assert!(etag.starts_with('"') && etag.ends_with('"'), "etag {etag}");
+    let body = resp.text().await.unwrap();
+    assert!(body.starts_with("html[data-kb-read]"), "{body}");
+
+    let again = get(Some(etag.clone())).await.unwrap();
+    assert_eq!(again.status(), 304);
+    assert_eq!(
+        again.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some(etag.as_str())
+    );
+    assert!(again.text().await.unwrap().is_empty());
+
+    let stale = get(Some("\"not-the-etag\"".into())).await.unwrap();
+    assert_eq!(stale.status(), 200);
+}
+
+#[tokio::test]
+async fn reading_css_is_not_served_on_the_spa_host() {
+    let (_tmp, addr) = boot().await;
+    let resp = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}/_kb/reading.css", addr.port()))
+        .send()
+        .await
+        .unwrap();
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = resp.text().await.unwrap();
+    assert!(
+        !ct.starts_with("text/css"),
+        "css leaked on the SPA host: {ct}"
+    );
+    assert!(!body.contains("data-kb-read"), "{body}");
+}
+
+/// The reading layer rides the existing runtime script: a served artifact
+/// gains no new tag, only probe + runtime + the bounce inline script.
+#[tokio::test]
+async fn artifact_html_gains_no_reading_mode_tags() {
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let body = client
+        .get(format!("http://127.0.0.1:{}/", addr.port()))
+        .header("Host", "fullscreen-viz.artifacts.localhost:4000")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!body.contains("reading.css"));
+    assert!(!body.contains("kb-read-style"));
+    assert!(!body.contains("data-kb-read"));
+    assert!(body.contains(r#"<script src="/_kb/probe.js" defer></script>"#));
+    assert!(body.contains(r#"<script src="/_kb/runtime.js" defer></script>"#));
+}
+
 #[tokio::test]
 async fn artifact_subdomain_unknown_id_returns_404() {
     let (_tmp, addr) = boot().await;
