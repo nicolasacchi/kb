@@ -151,6 +151,7 @@ pub mod daycard;
 pub mod desk;
 pub mod dispatch;
 pub mod docs;
+pub mod docs_asof;
 pub mod download;
 pub mod drop;
 pub mod echoes;
@@ -197,7 +198,6 @@ pub mod tags;
 pub mod timeline;
 pub mod turn;
 pub mod users;
-pub mod docs_asof;
 pub mod versions;
 
 #[cfg(test)]
