@@ -350,8 +350,17 @@ test.describe("mobile library landing (OL L6)", () => {
   test("touch cards carry no action buttons; Download lives in the reader More menu", async ({ page }) => {
     await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
     await expect(page.locator(".kb-card").first()).toBeVisible();
-    for (const a of await page.locator(".kb-card__action").all()) {
+    const actions = await page.locator(".kb-card__action").all();
+    expect(actions.length).toBeGreaterThan(0);
+    for (const a of actions) {
       await expect(a).toBeHidden();
+    }
+    await page.goto(`${base()}/?kb=canon&view=list`);
+    await expect(page.locator(".list-row").first()).toBeVisible();
+    const dls = await page.locator(".list-row__download").all();
+    expect(dls.length).toBeGreaterThan(0);
+    for (const d of dls) {
+      await expect(d).toBeHidden();
     }
     await page.goto(`${base()}${ARTIFACT}`);
     await page.locator('[data-kb-act="more"]').click();

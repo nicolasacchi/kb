@@ -1802,7 +1802,7 @@
  * read as plain text (folder/category/mtime links, the id-copy button,
  * the Explore chips) at their natural line-height, well under a
  * comfortable tap target. 44px floor, matching the MB5 convention
- * (`.kb-iconbtn`/`.kb-card__action`/… in mobile.css's own `pointer:
+ * (`.kb-iconbtn`/… in mobile.css's own `pointer:
  * coarse` block) — kept here since chrome.css owns these selectors. */
 @media (pointer: coarse) {
   .kb-pinsp__chip,

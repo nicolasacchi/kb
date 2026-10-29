@@ -877,10 +877,10 @@ body.kb-immersive .kb-tabbar {
    * itself hidden on mobile, so `?view=list` must stay usable on a phone.
    * Collapse to a 2-line row: title across the first line, folder + the
    * quiet age on the second; every other column and the sticky desktop
-   * header are dropped, and the download button is pinned right and always
-   * visible (no hover on touch). */
+   * header are dropped; the download button is hidden on coarse pointers
+   * (no hover on touch; the reader's More menu owns Download). */
   .list-row {
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto;
     grid-template-rows: auto auto;
     row-gap: 2px;
     height: auto;
@@ -977,7 +977,7 @@ body.kb-immersive .kb-tabbar {
    * holds every dense control row to; bumped to that same 40px (not the
    * 44px reserved for single primary/navigational controls like
    * `.kb-drawer__close` above), since these are dense paired/grouped
-   * actions like `.kb-card__action`/`.inbox-comment__act`. */
+   * actions like `.inbox-comment__act`. */
   .cme__tb-btn {
     min-width: 40px;
     min-height: 40px;
