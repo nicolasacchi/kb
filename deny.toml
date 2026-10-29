@@ -44,9 +44,9 @@ ignore = [
     # Reachability, checked in the arrow-ipc 58.4.0 and lance-encoding 11.0.0 sources on 2026-10-29:
     # arrow-ipc calls only zstd::bulk::{Compressor,Decompressor}; lance-encoding calls zstd::bulk,
     # zstd::stream::copy_decode and zstd_safe::compress_bound. kb's zip dependency is built with
-    # default-features off (no zstd codec). Owner: the operator (approved 2026-10-29). Review by
-    # 2027-01-31, or sooner when a lance release supports arrow >= 60 (re-check trigger: run
-    # `cargo deny check advisories` after the lockstep bump, then delete these four entries).
+    # default-features off (no zstd codec). Owner: the operator (approved 2026-10-29).
+    # Review by 2027-01-31, or sooner when a lance release supports arrow >= 60 (re-check trigger:
+    # run `cargo deny check advisories` after the lockstep bump, then delete these four entries).
     { id = "RUSTSEC-2026-0391", reason = "zstd with_context reuse leak: no code path calls Encoder/Decoder::with_context (bulk + copy_decode only)" },
     { id = "RUSTSEC-2026-0398", reason = "zstd-safe Seekable::decompress: the seekable API is unused by arrow-ipc, lance and kb" },
     { id = "RUSTSEC-2026-0403", reason = "zstd-safe legacy-frame streaming decode: reached only by lance decoding kb's own self-written modern-format data files; a crafted legacy frame needs write access to kb's state dir" },
