@@ -30,7 +30,7 @@ test.describe("gallery views", () => {
     await card.hover();
     for (const c of [".kb-card__peek", ".kb-card__download", ".kb-card__exclude"]) {
       await expect(card.locator(c)).toBeVisible();
-      expect(await card.locator(c).evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+      await expect(card.locator(c)).toHaveCSS("opacity", "1");
     }
   });
 
