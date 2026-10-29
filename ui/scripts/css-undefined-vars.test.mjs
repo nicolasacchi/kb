@@ -1,4 +1,4 @@
-// LINT1 — fixtures for css-undefined-vars.mjs (run: node --test ui/scripts).
+// LINT1 — fixtures for css-undefined-vars.mjs (run: node --test ui/scripts/css-undefined-vars.test.mjs).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -31,6 +31,7 @@ test("an undefined name is a hit with no fallback, a literal fallback, or a var(
     "--fx-nested-fallback-missing",
     "--fx-nested-missing",
     "--fx-outer-missing",
+    "--fx-ternary-not-declared",
     "--fx-ts-string-missing",
   ]);
 });

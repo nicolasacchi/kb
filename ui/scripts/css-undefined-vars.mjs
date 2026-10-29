@@ -119,7 +119,9 @@ for (const f of cssFiles) {
 // are real values on a real element, not made-up tokens. A `var(--x)` of such
 // a name is still allowed to carry a fallback for the elements that do not set it.
 const TS_DEF_RES = [
-  /["'`](--[a-zA-Z0-9-]+)["'`](?:\s+as\s+string)?\s*\]?\s*:/g,
+  // Object-key position only (after `{`, `,` or at line start) so a ternary
+  // branch like `c ? "--x" : y` does not count as a declaration.
+  /(?:^|[{,])\s*\[?\s*["'`](--[a-zA-Z0-9-]+)["'`](?:\s+as\s+string)?\s*\]?\s*:/gm,
   /setProperty\(\s*["'`](--[a-zA-Z0-9-]+)["'`]/g,
 ];
 for (const f of tsFiles) {
@@ -248,9 +250,9 @@ if (JSON_OUT) {
       console.log(`    ${h.text}`);
     }
     console.log(
-      "\nEach name above is never declared as `--name:` in any src/**/*.css file, and has no " +
-        "fallback (or only a fallback chain to another undefined name) — the declaration is " +
-        "invalid at computed-value time and silently falls back to inherited/initial. Map it to " +
+      "\nEach name above is never declared as `--name:` in any src/**/*.css file, and a fallback " +
+        "does not rescue it — the declaration is invalid at computed-value time and silently " +
+        "falls back to inherited/initial. Map it to " +
         "a real tokens.css name (see ui/src/tokens.css).",
     );
   }
