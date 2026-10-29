@@ -2121,6 +2121,25 @@ predicate, so adding the code search route would hand repository contents to
 every page open in the operator's browser), and `/api/kb/search` and
 `/api/kb/ui` are asserted absent from it in `cors_layer_route_set_is_pinned`.
 
+## Cited-by chip and section crossing (OL SIBL1)
+
+`GET /api/doc-refs?repo=&path=` (schema `doc-refs/1`, unchanged) returns one
+claim per citation of the file. Each claim now also carries `group_anchor` (the
+stored `doc_refs.group_key`: kb's `kb-h-<slug>` heading anchor, `null` for a ref
+before the first heading) and `doc_section_href` (`doc_public_href` plus
+`?sec=<percent-encoded anchor>`, built by `doclens::doc_href_at` from the same
+encoder as `doc_href`). `doc_section_href` is `null` when `[kb_daemon]` has no
+public base or the claim has no anchor; `doc_public_href` is unchanged. No
+migration: `group_key` was already stored.
+
+On a reader file route the TopBar's Spine `crossing` slot shows a "Cited by"
+chip (`data-testid="sibling-doc-chip"`). When exactly one distinct doc cites
+the file (narrowed to the doc whose cited lines overlap `?line=` when several
+do) and the claim has an http(s) href, it is a link that opens the doc at the
+section, falling back to the doc-level href. With several docs, or no usable
+href, it is a button that expands the "Cited by" strip in the inspector rail.
+It reads the same query as that strip and adds no key binding.
+
 ## Review diff v2 (v7.3, Track K)
 
 The full-page review reader (`/r/{repo}/~reviews/{id}/diff[/<path>]`) is

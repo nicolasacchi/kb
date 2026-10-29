@@ -805,6 +805,13 @@ pub struct DocRefClaim {
     /// `[kb_daemon]` has no usable public base; a claim row is still perfectly
     /// useful without a link back to kb.
     pub doc_public_href: Option<String>,
+    /// The section the claim sits under (the stored `group_key`, kb's
+    /// `kb-h-<slug>` heading anchor); `None` for a ref before the first heading.
+    pub group_anchor: Option<String>,
+    /// [`Self::doc_public_href`] plus `?sec=<group_anchor>` (built by
+    /// [`super::doc_href_at`]). `None` when the public base is unset or the
+    /// claim has no section; consumers then use the doc-level href.
+    pub doc_section_href: Option<String>,
     pub group_label: Option<String>,
     pub raw_hint: String,
     pub line_start: Option<i64>,
@@ -859,6 +866,13 @@ pub(crate) fn doc_refs_for(
         .into_iter()
         .map(|r| DocRefClaim {
             doc_public_href: super::doc_href(public_base, &r.kb, &r.doc_path),
+            doc_section_href: super::doc_href_at(
+                public_base,
+                &r.kb,
+                &r.doc_path,
+                r.group_key.as_deref(),
+            ),
+            group_anchor: r.group_key,
             kb: r.kb,
             doc_id: r.doc_id,
             doc_title: r.doc_title,
