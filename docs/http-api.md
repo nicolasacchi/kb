@@ -1047,6 +1047,26 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             status` (this IS the default
                                             mode; `--local` is the
                                             direct-disk, every-harness twin).
+GET  /api/sessions/live-touches            OL PRES1 — which files live agent
+     [?project=…&project=…                  sessions are touching: per touch
+      &max_age_secs=&harness=]              `{project, rel, session_id,
+                                            harness, state, age_secs, tool}`
+                                            (kb-live-touches/1), freshest
+                                            first, 500 cap + `truncated`.
+                                            `rel` is relative to a repo root
+                                            the daemon never kept, so no
+                                            absolute path can appear; the
+                                            caller supplies no roots.
+                                            `project` repeatable (max 32);
+                                            `max_age_secs` default 900,
+                                            clamped 60..3600. `auth_bearer`
+                                            like `/live-status`, identical
+                                            for loopback and bearer peers; a
+                                            tokenless non-loopback request
+                                            gets the ordinary 401.
+                                            `Cache-Control: no-store`.
+                                            Memory-only (a restart empties
+                                            it); see docs/live-sessions.md.
 GET  /api/sessions/by-artifact/{kb}/{aid}   W2/R11 — the canonical
                                             artifact→session join
                                             (`SessionsGetByArtifactIds`, #11):

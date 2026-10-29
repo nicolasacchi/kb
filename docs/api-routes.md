@@ -198,6 +198,7 @@ Everything below is served from the `/api` tree (bearer-auth with loopback bypas
 | GET | `/api/sessions/funnel` | `routes::sessions::funnel` |
 | GET | `/api/sessions/ledger` | `routes::sessions::ledger` |
 | GET | `/api/sessions/live-status` | `routes::sessions::live_status` |
+| GET | `/api/sessions/live-touches` | `routes::sessions::live_touches` |
 | GET | `/api/sessions/presence` | `routes::sessions::presence` |
 | GET | `/api/sessions/projects` | `routes::sessions::projects` |
 | GET | `/api/sessions/recall-coverage` | `routes::sessions::recall_coverage` |
