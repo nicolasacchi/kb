@@ -21,6 +21,19 @@ test.describe("gallery views", () => {
     ).toBeVisible();
   });
 
+  test("desktop: the touch More button stays hidden and hover still reveals the three actions", async ({ page }) => {
+    await page.goto(`http://127.0.0.1:${port()}/`);
+    const card = page.locator(".kb-card").first();
+    await expect(card).toBeVisible();
+    await expect(card.locator(".kb-card__more")).toBeHidden();
+    expect(await card.locator(".kb-card__more").evaluate((el) => getComputedStyle(el).display)).toBe("none");
+    await card.hover();
+    for (const c of [".kb-card__peek", ".kb-card__download", ".kb-card__exclude"]) {
+      await expect(card.locator(c)).toBeVisible();
+      await expect(card.locator(c)).toHaveCSS("opacity", "1");
+    }
+  });
+
   test("the labelled View control reaches every Library view", async ({ page }) => {
     await page.goto(`http://127.0.0.1:${port()}/`);
     const view = page.locator('[data-kb-viewbar-control="view"]');

@@ -367,6 +367,68 @@ test.describe("mobile library landing (OL L6)", () => {
     expect(n).toBeGreaterThan(0);
   });
 
+  test("touch shows exactly one 44px More button that clears the title and progress bar", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
+    const card = page.locator(".kb-card").first();
+    await expect(card).toBeVisible();
+    const vis = card.locator(".kb-card__action:visible");
+    await expect(vis).toHaveCount(1);
+    await expect(vis).toHaveAttribute("data-kb-act", "more");
+    const b = (await vis.boundingBox())!;
+    expect(b.width).toBeGreaterThanOrEqual(43.5);
+    expect(b.height).toBeGreaterThanOrEqual(43.5);
+    const title = (await card.locator(".kb-card__title").boundingBox())!;
+    expect(
+      b.x < title.x + title.width && b.x + b.width > title.x &&
+      b.y < title.y + title.height && b.y + b.height > title.y,
+    ).toBe(false);
+    const card_ = (await card.boundingBox())!;
+    expect(b.y + b.height).toBeLessThanOrEqual(card_.y + card_.height - 2 + 0.5);
+  });
+
+  test("More opens the actions sheet; Esc closes and refocuses More", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
+    const card = page.locator(".kb-card").first();
+    const more = card.locator('[data-kb-act="more"]');
+    const url = page.url();
+    await more.tap();
+    const dlg = page.getByRole("dialog");
+    await expect(dlg).toBeVisible();
+    for (const n of ["Preview", "Download", "Exclude from index"]) {
+      await expect(dlg.getByRole("button", { name: n, exact: true })).toBeVisible();
+    }
+    expect(page.url()).toBe(url);
+    await page.keyboard.press("Escape");
+    await expect(dlg).toBeHidden();
+    await expect(more).toBeFocused();
+  });
+
+  test("More -> Exclude closes the sheet and asks to confirm; cancelling keeps the card", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
+    const cards = page.locator(".kb-card");
+    await expect(cards.first()).toBeVisible();
+    await expect.poll(async () => cards.count()).toBeGreaterThan(0);
+    const n = await cards.count();
+    const more = cards.first().locator('[data-kb-act="more"]');
+    await more.tap();
+    await page.getByRole("dialog").getByRole("button", { name: "Exclude from index", exact: true }).tap();
+    await expect(page.locator(".confirm__go")).toBeVisible();
+    await expect(page.locator("[data-kb-sheet]")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".confirm__go")).toBeHidden();
+    await expect(cards).toHaveCount(n);
+    await expect(more).toBeFocused();
+  });
+
+  test("More -> Download fires a download", async ({ page }) => {
+    await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
+    await page.locator(".kb-card").first().locator('[data-kb-act="more"]').tap();
+    const dl = page.waitForEvent("download");
+    await page.getByRole("dialog").getByRole("button", { name: "Download", exact: true }).tap();
+    await dl;
+    await expect(page.getByRole("dialog")).toBeHidden();
+  });
+
   test("Spine search stays on one line; menu glyph is centred; bottom bar names the Library", async ({ page }) => {
     await page.goto(`${base()}/?kb=canon`);
     const ph = page.locator(".kb-head .kb-search-mini__placeholder");
