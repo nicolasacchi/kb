@@ -63,6 +63,11 @@
 #                                 available.
 #   KB_BEAT_LEASE_SECS           lease_secs sent with every beat (default
 #                                 900 — design §5's own example value).
+#   KB_BEAT_PATHS=0              omit `detail.tool` / `detail.paths` /
+#                                 `detail.root` / `detail.project` (the
+#                                 write-tool file-presence fields, Claude
+#                                 PostToolUse Edit|Write|MultiEdit|
+#                                 NotebookEdit only) even when available.
 #   KB_BEAT_DRYRUN=1             print the JSON body to stdout INSTEAD of
 #                                 posting; no backgrounding, no curl. The
 #                                 test harness's only hook into this
@@ -89,6 +94,55 @@ input="$(cat 2>/dev/null)" || input=""
 # caller (a bad filter or malformed JSON just yields empty stdout).
 jq_field() {
   printf '%s' "$2" | jq -r "$1" 2>/dev/null
+}
+
+# beat_repo_identity — sets detail_root / detail_project for $cwd. Computed
+# ONCE per (session, cwd): the answer is cached in a two-line file under the
+# cache dir (line 1 = worktree root, line 2 = project = basename of the MAIN
+# checkout, so every worktree of one repo shares a project label). Outside git
+# it falls back to the cwd and its basename. Every git call is bounded (1s) and
+# any failure degrades to the fallback — it can never fail the hook.
+beat_repo_identity() {
+  local cdir key f top common
+  cdir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
+  key="$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9_-' '_')"
+  key="${key:0:40}-$(printf '%s\n%s' "$session_id" "$cwd" | cksum | cut -d' ' -f1)"
+  f="$cdir/beat-repo-$key"
+  if [ -r "$f" ]; then
+    { IFS= read -r detail_root; IFS= read -r detail_project; } <"$f" 2>/dev/null || true
+  fi
+  if [ -z "$detail_root" ] || [ -z "$detail_project" ]; then
+    detail_root=""
+    detail_project=""
+    if command -v git >/dev/null 2>&1; then
+      top="$(_beat_t1 git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || top=""
+      common="$(_beat_t1 git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+      if [ -n "$top" ]; then
+        detail_root="$top"
+        if [ -n "$common" ]; then
+          common="${common%/}"
+          detail_project="$(basename "$(dirname "$common")")"
+        else
+          detail_project="$(basename "$top")"
+        fi
+      fi
+    fi
+    if [ -z "$detail_root" ] || [ -z "$detail_project" ]; then
+      detail_root="${cwd%/}"
+      [ -n "$detail_root" ] || detail_root="/"
+      detail_project="$(basename "$cwd")"
+    fi
+    if mkdir -p "$cdir" 2>/dev/null; then
+      printf '%s\n%s\n' "$detail_root" "$detail_project" >"$f.$$" 2>/dev/null \
+        && mv -f "$f.$$" "$f" 2>/dev/null
+      rm -f "$f.$$" 2>/dev/null
+    fi
+  fi
+  return 0
+}
+
+_beat_t1() {
+  if command -v timeout >/dev/null 2>&1; then timeout 1 "$@"; else "$@"; fi
 }
 
 # --- session_id — per-harness, reusing each existing capture adapter's ----
@@ -143,6 +197,57 @@ if [ "$event" = "blocked" ]; then
   detail_reason="$(jq_field '.message // .matcher // empty' "$input")"
 fi
 
+# detail.tool / detail.paths / detail.root / detail.project — a Claude
+# write-tool PostToolUse beat ONLY (event=tool, tool_name in the write-tool
+# set), opt-out via KB_BEAT_PATHS=0. Paths are normalised lexically (NO git
+# realpath, no filesystem access): a relative path is joined onto cwd, "."
+# and ".." segments are resolved, and anything non-absolute, over 1024
+# bytes, carrying a control character, or whose ".." climbs out of its
+# base is dropped; at most 8 survive. root/project (the session's repo
+# identity) are computed ONCE per (session, cwd) and cached under the
+# cache dir, never on every beat.
+detail_tool=""
+detail_paths='[]'
+detail_root=""
+detail_project=""
+if [ "$harness" = "claude" ] && [ "$event" = "tool" ] \
+   && [ "${KB_BEAT_PATHS:-}" != "0" ]; then
+  tool_name="$(jq_field '.tool_name // empty' "$input")"
+  case "$tool_name" in
+    Edit | Write | MultiEdit | NotebookEdit)
+      detail_tool="$tool_name"
+      detail_paths="$(printf '%s' "$input" | jq -c --arg cwd "$cwd" '
+        def norm: reduce (split("/")[]) as $p ([];
+          if . == null then null
+          elif $p == "" or $p == "." then .
+          elif $p == ".." then (if length == 0 then null else .[:-1] end)
+          else . + [$p] end);
+        def okstr: type == "string" and . != "" and utf8bytelength <= 1024
+          and (test("[\u0001-\u001f\u007f]") | not) and (contains("\u0000") | not);
+        def absolute:
+          if okstr | not then empty
+          elif startswith("/") then
+            (norm) as $n | if $n == null then empty else "/" + ($n | join("/")) end
+          else
+            ($cwd | if okstr and startswith("/") then norm else null end) as $c
+            | (norm) as $n
+            | if $c == null or $n == null then empty
+              else "/" + (($c + $n) | join("/")) end
+          end;
+        [ (.tool_input // {}) as $ti
+          | ($ti.file_path, $ti.notebook_path, $ti.filePath, $ti.path,
+             ($ti.edits // [] | if type == "array" then .[] | .file_path? else empty end))
+          | absolute | select(utf8bytelength <= 1024) ]
+        | reduce .[] as $x ([]; if index([$x]) then . else . + [$x] end)
+        | .[:8]' 2>/dev/null)" || detail_paths='[]'
+      [ -n "$detail_paths" ] || detail_paths='[]'
+      if [ "$detail_paths" != "[]" ] && [ -n "$cwd" ]; then
+        beat_repo_identity
+      fi
+      ;;
+  esac
+fi
+
 host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
 pid="${PPID:-0}"
 case "$pid" in '' | *[!0-9]*) pid=0 ;; esac
@@ -163,6 +268,10 @@ body="$(jq -n \
   --argjson lease_secs "$lease_secs" \
   --arg last_line "$last_line" \
   --arg detail_reason "$detail_reason" \
+  --arg detail_tool "$detail_tool" \
+  --argjson detail_paths "$detail_paths" \
+  --arg detail_root "$detail_root" \
+  --arg detail_project "$detail_project" \
   '{v: 1, session_id: $session_id, harness: $harness, event: $event, at: $at}
    + (if $host != "" then {host: $host} else {} end)
    + (if $pid > 0 then {pid: $pid} else {} end)
@@ -170,7 +279,12 @@ body="$(jq -n \
    + (if $model != "" then {model: $model} else {} end)
    + {lease_secs: $lease_secs}
    + (if $last_line != "" then {last_line: $last_line} else {} end)
-   + (if $detail_reason != "" then {detail: {reason: $detail_reason}} else {} end)
+   + ( ( (if $detail_reason != "" then {reason: $detail_reason} else {} end)
+       + (if $detail_tool != "" then {tool: $detail_tool} else {} end)
+       + (if ($detail_paths | length) > 0
+          then {paths: $detail_paths, root: $detail_root, project: $detail_project}
+          else {} end) ) as $d
+     | if ($d | length) > 0 then {detail: $d} else {} end )
   ' 2>/dev/null)"
 [ -n "$body" ] || exit 0
 

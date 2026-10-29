@@ -269,5 +269,171 @@ else
 fi
 
 echo
+echo "== OL PRES1: write-tool beats carry paths =="
+
+HOOKS_JSON="$HOOKS_DIR/hooks.json"
+
+# --- 21. hooks.json: a matcher group runs kb-beat.sh claude tool directly --
+if jq -e '
+     .hooks.PostToolUse as $g
+     | ($g | length) == 2
+     and ($g[0].matcher == null)
+     and ($g[0].hooks | map(.command) == [
+          "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-capture-throttle.sh\"",
+          "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat-throttle.sh\" claude"])
+     and ($g[1].matcher == "Edit|Write|MultiEdit|NotebookEdit")
+     and ($g[1].hooks | length == 1)
+     and ($g[1].hooks[0].command == "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat.sh\" claude tool")
+     and ($g[1].hooks[0].timeout == 5)
+   ' "$HOOKS_JSON" >/dev/null 2>&1; then
+  ok "hooks.json: matcher group calls kb-beat.sh (not the throttle); original PostToolUse group unchanged"
+else
+  bad "hooks.json PostToolUse matcher group shape"
+fi
+
+wt() { # wt <tool_name> <cwd> <tool_input-json> [env...]
+  local tool="$1" cwd="$2" ti="$3"
+  shift 3
+  beat_dryrun claude tool "{\"session_id\":\"s-wt\",\"cwd\":\"$cwd\",\"tool_name\":\"$tool\",\"tool_input\":$ti}" "$@"
+}
+
+# --- 22. the four write tools carry paths; Read/Bash carry none ------------
+for pair in 'Edit:file_path' 'Write:file_path' 'MultiEdit:file_path' 'NotebookEdit:notebook_path'; do
+  t="${pair%%:*}"; k="${pair##*:}"
+  o="$(wt "$t" /tmp/proj-a "{\"$k\":\"/tmp/proj-a/src/x.rs\"}")"
+  if [ "$(jget "$o" '.detail.tool')" = "$t" ] \
+     && [ "$(jget "$o" '.detail.paths | join(",")')" = "/tmp/proj-a/src/x.rs" ] \
+     && [ "$(jget "$o" '.detail.root')" = "/tmp/proj-a" ] \
+     && [ "$(jget "$o" '.detail.project')" = "proj-a" ]; then
+    ok "$t beat carries detail.tool + detail.paths + root/project (non-git cwd falls back to cwd)"
+  else
+    bad "$t beat carries paths (got: $o)"
+  fi
+done
+for t in Read Bash; do
+  o="$(wt "$t" /tmp/proj-a '{"file_path":"/tmp/proj-a/x","command":"ls"}')"
+  if [ "$(jget "$o" '.detail')" = "null" ]; then
+    ok "$t beat carries no detail at all"
+  else
+    bad "$t beat carries no detail (got: $o)"
+  fi
+done
+
+# --- 23. relative path joined onto cwd; lexically normalised ---------------
+o="$(wt Edit /tmp/proj-a '{"file_path":"src/../lib/a.rs"}')"
+if [ "$(jget "$o" '.detail.paths | join(",")')" = "/tmp/proj-a/lib/a.rs" ]; then
+  ok "relative path is joined onto cwd and lexically normalised"
+else
+  bad "relative path join (got: $o)"
+fi
+
+# --- 24. `..` escape, control chars, over-long paths are dropped -----------
+o="$(wt Edit /tmp/proj-a '{"file_path":"../../../../etc/passwd"}')"
+if [ "$(jget "$o" '.detail.paths')" = "null" ]; then
+  ok "a relative path whose .. climbs out of its base is dropped"
+else
+  bad ".. escape dropped (got: $o)"
+fi
+o="$(wt Edit /tmp/proj-a '{"file_path":"/tmp/proj-a/../../../x"}')"
+if [ "$(jget "$o" '.detail.paths')" = "null" ]; then
+  ok "an absolute path whose .. climbs past / is dropped"
+else
+  bad "absolute .. escape dropped (got: $o)"
+fi
+o="$(wt Edit /tmp/proj-a '{"file_path":"/tmp/proj-a/a\tb"}')"
+if [ "$(jget "$o" '.detail.paths')" = "null" ]; then
+  ok "a path carrying a control character is dropped"
+else
+  bad "control char dropped (got: $o)"
+fi
+long="$(printf 'a%.0s' $(seq 1 1100))"
+o="$(wt Edit /tmp/proj-a "{\"file_path\":\"/tmp/proj-a/$long\"}")"
+if [ "$(jget "$o" '.detail.paths')" = "null" ]; then
+  ok "an over-long (>1024 byte) path is dropped"
+else
+  bad "over-long path dropped (got: $o)"
+fi
+
+# --- 25. at most 8 paths ---------------------------------------------------
+edits="$(jq -nc '[range(0;9) | {file_path: "/tmp/proj-a/f\(.).rs"}]')"
+o="$(wt MultiEdit /tmp/proj-a "{\"edits\":$edits}")"
+if [ "$(jget "$o" '.detail.paths | length')" = "8" ] \
+   && [ "$(jget "$o" '.detail.paths[7]')" = "/tmp/proj-a/f7.rs" ]; then
+  ok "the 9th path is truncated (max 8)"
+else
+  bad "9th path truncated (got: $o)"
+fi
+
+# --- 26. KB_BEAT_PATHS=0 removes every file-presence field -----------------
+o="$(wt Edit /tmp/proj-a '{"file_path":"/tmp/proj-a/x"}' KB_BEAT_PATHS=0)"
+if [ "$(jget "$o" '.detail')" = "null" ]; then
+  ok "KB_BEAT_PATHS=0 removes detail.tool/paths/root/project"
+else
+  bad "KB_BEAT_PATHS=0 (got: $o)"
+fi
+
+# --- 27. KB_BEAT=0 prints nothing -----------------------------------------
+o="$(wt Edit /tmp/proj-a '{"file_path":"/tmp/proj-a/x"}' KB_BEAT=0)"
+if [ -z "$o" ]; then ok "KB_BEAT=0 prints nothing"; else bad "KB_BEAT=0 (got: $o)"; fi
+
+# --- 28. non-tool events never carry paths; blocked keeps reason only ------
+o="$(beat_dryrun claude prompt '{"session_id":"s-wt","cwd":"/tmp/proj-a","tool_name":"Edit","tool_input":{"file_path":"/tmp/proj-a/x"}}')"
+if [ "$(jget "$o" '.detail')" = "null" ]; then
+  ok "a non-tool event never carries paths"
+else
+  bad "non-tool event paths (got: $o)"
+fi
+o="$(beat_dryrun claude blocked '{"session_id":"s-wt","cwd":"/tmp/proj-a","message":"needs input","tool_name":"Edit","tool_input":{"file_path":"/tmp/proj-a/x"}}')"
+if [ "$(jget "$o" '.detail | keys | join(",")')" = "reason" ]; then
+  ok "blocked keeps detail.reason only"
+else
+  bad "blocked detail (got: $o)"
+fi
+
+# --- 29. malformed JSON still exits 0 with nothing --------------------------
+o="$(printf '%s' '{not json' | env KB_BEAT_DRYRUN=1 "$BEAT" claude tool 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$o" ]; then ok "malformed JSON still exits 0"; else bad "malformed JSON (rc=$rc, got: $o)"; fi
+o="$(printf '%s' '{"session_id":"s-wt","cwd":"/tmp/proj-a","tool_name":"Edit","tool_input":"oops"}' | env KB_BEAT_DRYRUN=1 "$BEAT" claude tool 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(jget "$o" '.event')" = "tool" ] && [ "$(jget "$o" '.detail.paths')" = "null" ]; then
+  ok "a non-object tool_input degrades to a path-less beat"
+else
+  bad "non-object tool_input (rc=$rc, got: $o)"
+fi
+
+# --- 30. repo identity: worktree root + MAIN checkout project, cached ------
+if command -v git >/dev/null 2>&1; then
+  REPO="$TMPROOT/mainrepo"
+  mkdir -p "$REPO/sub"
+  git -C "$REPO" init -q 2>/dev/null
+  git -C "$REPO" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init 2>/dev/null
+  git -C "$REPO" worktree add -q "$TMPROOT/wt-feature" -b feature 2>/dev/null
+  REPO_REAL="$(cd "$REPO" && pwd -P)"
+  WT_REAL="$(cd "$TMPROOT/wt-feature" && pwd -P)"
+  o="$(wt Edit "$REPO_REAL/sub" "{\"file_path\":\"$REPO_REAL/sub/a.rs\"}")"
+  if [ "$(jget "$o" '.detail.root')" = "$REPO_REAL" ] && [ "$(jget "$o" '.detail.project')" = "mainrepo" ]; then
+    ok "git checkout: root = worktree top-level, project = main checkout basename"
+  else
+    bad "git root/project (got: $o)"
+  fi
+  o="$(beat_dryrun claude tool "{\"session_id\":\"s-wt2\",\"cwd\":\"$WT_REAL\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WT_REAL/b.rs\"}}")"
+  if [ "$(jget "$o" '.detail.root')" = "$WT_REAL" ] && [ "$(jget "$o" '.detail.project')" = "mainrepo" ]; then
+    ok "linked worktree: root = the worktree, project = the MAIN checkout's basename"
+  else
+    bad "worktree root/project (got: $o)"
+  fi
+  # cached: wreck the repo; the second beat for the same (session, cwd) must
+  # still answer from the cache file rather than re-running git.
+  rm -rf "$REPO_REAL/.git"
+  o="$(wt Edit "$REPO_REAL/sub" "{\"file_path\":\"$REPO_REAL/sub/a.rs\"}")"
+  if [ "$(jget "$o" '.detail.project')" = "mainrepo" ] && [ "$(jget "$o" '.detail.root')" = "$REPO_REAL" ]; then
+    ok "repo identity is cached per (session, cwd), not recomputed per beat"
+  else
+    bad "repo identity cache (got: $o)"
+  fi
+else
+  ok "git not installed: repo-identity checks skipped"
+fi
+
+echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
