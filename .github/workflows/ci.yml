@@ -1465,6 +1465,9 @@ jobs:
           # v0.45 OC - the capture spawn path: owned (own process group),
           # terminated on timeout/abort, omp's group never signalled.
           bash plugins/kb-memory/hooks/tests/test-omp-capture-lifecycle.sh
+          # OL PRES1 - the write-tool beat path matrix, KB_BEAT_PATHS=0 and
+          # repo-identity caching (git + jq are preinstalled on the runner).
+          bash plugins/kb-memory/hooks/tests/test-beat.sh
 
   supply-chain:
     permissions:

@@ -115,8 +115,13 @@ The daemon keeps, per session, the last 48 touches in memory only (nothing is
 written to disk; a restart empties them), as paths **relative to the beat's
 `root`** plus `project`; a path outside the root is dropped, and neither the
 absolute path nor the root is stored. Touches older than an hour are pruned,
-and a repeat touch of the same file moves to the front rather than adding a
-row. A touch emits no event: `session.state` still fires only on a state change.
+and a repeat touch of the same file moves to the newest position (its
+timestamp is refreshed) rather than adding a row. A write-tool call can produce
+two `tool` beats (the throttled generic group and the direct path-carrying
+group); this is harmless, since the state mapping is unchanged and no event is
+emitted. A beat whose `root` is `/` is ignored; otherwise the daemon trusts the
+root the beat states and only relativises against it (attribution, not
+authorization). A touch emits no event: `session.state` still fires only on a state change.
 
 `GET /api/sessions/live-touches` serves them (`kb-live-touches/1`:
 `{project, rel, session_id, harness, state, age_secs, tool}` per touch, freshest

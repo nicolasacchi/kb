@@ -7535,7 +7535,16 @@ fn sanitize_touches(
     if event != "tool" || d.paths.is_empty() {
         return Vec::new();
     }
-    let Some(root) = d.root.as_deref().and_then(abs_components) else {
+    // A root of "/" (zero components) would make every absolute path
+    // "inside" it, so the rel would be the whole path. Refuse it. Any other
+    // root is trusted as the beat states it: the scrub is relative-path-only
+    // (attribution, not authorization; invariant #4).
+    let Some(root) = d
+        .root
+        .as_deref()
+        .and_then(abs_components)
+        .filter(|r| !r.is_empty())
+    else {
         return Vec::new();
     };
     let project = d.project.as_deref().map(str::trim).unwrap_or("");
@@ -8231,6 +8240,11 @@ fn build_live_touches(
 ///
 /// `project` is optional and repeatable (max 32); `max_age_secs` defaults to
 /// 900 and clamps to 60..=3600; `harness` is a csv (unknown token => 400).
+/// Clamp a caller's `max_age_secs` to the served window (60 s floor, 1 h ceiling).
+fn clamp_touch_age(v: i64) -> i64 {
+    v.clamp(60, 3600)
+}
+
 pub async fn live_touches(
     State(state): State<Arc<KbHandles>>,
     RawQuery(raw): RawQuery,
@@ -8272,7 +8286,7 @@ pub async fn live_touches(
             _ => {}
         }
     }
-    let max_age = max_age.clamp(60, 3600);
+    let max_age = clamp_touch_age(max_age);
     let now_unix = chrono::Utc::now().timestamp();
     let snap = state.live_registry.touches_snapshot(now_unix);
     let mut resp = Json(build_live_touches(
@@ -8568,9 +8582,11 @@ mod lsc2_tests {
         let t = sanitize_touches("tool", Some(&detail(&refs, Some("/r"), Some("p"))), 1);
         assert_eq!(t.len(), 8);
         assert!(t.iter().all(|x| !x.rel.starts_with('/')));
-        // Root "/" is allowed; rel is still root-relative.
+        // Root "/" is refused: it would turn the whole absolute path into rel.
         let t = sanitize_touches("tool", Some(&detail(&["/x/y"], Some("/"), Some("p"))), 1);
-        assert_eq!(t[0].rel, "x/y");
+        assert!(t.is_empty());
+        let t = sanitize_touches("tool", Some(&detail(&["/x/y"], Some("/x"), Some("p"))), 1);
+        assert_eq!(t[0].rel, "y");
     }
 
     #[test]
@@ -8663,6 +8679,20 @@ mod lsc2_tests {
         assert_eq!(wide.touches.len(), 3);
         let codex = build_live_touches(s, &[], &["codex".to_string()], 900, now);
         assert!(codex.touches.is_empty());
+    }
+
+    #[test]
+    fn live_touches_max_age_clamps_to_floor_ceiling_and_default() {
+        assert_eq!(clamp_touch_age(0), 60);
+        assert_eq!(clamp_touch_age(999_999), 3600);
+        assert_eq!(clamp_touch_age(LIVE_TOUCHES_DEFAULT_AGE_SECS), 900);
+        let now = 10_000;
+        let s = vec![snap("s1", "claude", vec![("alpha", "old.rs", now - 3601)])];
+        let r = build_live_touches(s, &[], &[], clamp_touch_age(999_999), now);
+        assert!(
+            r.touches.is_empty(),
+            "3601 s old is past the 3600 s ceiling"
+        );
     }
 
     #[test]
