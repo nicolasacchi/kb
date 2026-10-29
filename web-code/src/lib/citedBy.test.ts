@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DocRefClaim } from "../api/types";
-import { citedByDocCount, citedByLabel, citedByRowLabel } from "./citedBy";
+import { citedByDocCount, citedByLabel, citedByRowLabel, siblingDocChip } from "./citedBy";
 
 function claim(overrides: Partial<DocRefClaim>): DocRefClaim {
   return {
@@ -9,6 +9,8 @@ function claim(overrides: Partial<DocRefClaim>): DocRefClaim {
     doc_title: "Fixture Doc",
     doc_path: "docs/fixture-doc.html",
     doc_public_href: "https://kb.example/a/platform/docs/fixture-doc.html",
+    group_anchor: null,
+    doc_section_href: null,
     group_label: null,
     raw_hint: "resolver.rs:2",
     line_start: 2,
@@ -133,5 +135,65 @@ describe("citedByRowLabel", () => {
 
   it("strips directories, keeping only the basename", () => {
     expect(citedByRowLabel(claim({ doc_title: "", doc_path: "a/b/c/leaf.html" }))).toBe("leaf.html");
+  });
+});
+
+describe("siblingDocChip", () => {
+  const SEC = "https://kb.example/a/platform/docs/fixture-doc.html?sec=kb-h-a";
+  it("zero claims => null", () => {
+    expect(siblingDocChip([], true, null)).toBeNull();
+  });
+
+  it("two claims in the same doc => one link, preferring the section href", () => {
+    const m = siblingDocChip(
+      [claim({ doc_section_href: SEC }), claim({ raw_hint: "resolver.rs:9", line_start: 9, line_end: 9 })],
+      true,
+      null,
+    );
+    expect(m?.kind).toBe("link");
+    expect(m?.href).toBe(SEC);
+    expect(m?.count).toBe(1);
+    expect(m?.tone).toBe("ok");
+  });
+
+  it("two distinct docs with no overlap => open-strip", () => {
+    const m = siblingDocChip([claim({ doc_id: "doc1" }), claim({ doc_id: "doc4" })], true, null);
+    expect(m?.kind).toBe("open-strip");
+    expect(m?.href).toBeNull();
+    expect(m?.count).toBe(2);
+  });
+
+  it("a line overlap picks the right doc", () => {
+    const a = claim({ doc_id: "doc1", line_start: 2, line_end: 2, doc_public_href: "https://kb.example/a/p/one.html" });
+    const b = claim({ doc_id: "doc4", line_start: 40, line_end: 50, doc_public_href: "https://kb.example/a/p/four.html" });
+    const m = siblingDocChip([a, b], true, 45);
+    expect(m?.kind).toBe("link");
+    expect(m?.href).toBe("https://kb.example/a/p/four.html");
+    // Both docs overlap => still ambiguous.
+    const c = claim({ doc_id: "doc5", line_start: 44, line_end: 46 });
+    expect(siblingDocChip([a, b, c], true, 45)?.kind).toBe("open-strip");
+  });
+
+  it("a null section href falls back to the doc-level href", () => {
+    const m = siblingDocChip([claim({ doc_section_href: null })], true, null);
+    expect(m).toMatchObject({ kind: "link", href: "https://kb.example/a/platform/docs/fixture-doc.html" });
+  });
+
+  it("a null public base (no hrefs) => open-strip", () => {
+    const m = siblingDocChip([claim({ doc_public_href: null, doc_section_href: null })], true, null);
+    expect(m?.kind).toBe("open-strip");
+  });
+
+  it("an unsafe href is never linked", () => {
+    const m = siblingDocChip([claim({ doc_section_href: "javascript:alert(1)", doc_public_href: null })], true, null);
+    expect(m?.kind).toBe("open-strip");
+  });
+
+  it("live=false => warn tone and the label suffix from citedByLabel", () => {
+    const claims = [claim({})];
+    const m = siblingDocChip(claims, false, null);
+    expect(m?.tone).toBe("warn");
+    expect(m?.label).toBe(citedByLabel(claims, false));
+    expect(m?.label).toContain("path no longer present");
   });
 });

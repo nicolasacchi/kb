@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation, useMatch, useSearchParams } from "react-router";
 import RepoPill from "./RepoPill";
 import CurrentReviewChip from "./CurrentReviewChip";
 import NavSheet from "./NavSheet";
@@ -18,7 +18,8 @@ import {
   navTestAttr,
   resolveDoorRepo,
 } from "../lib/navItems";
-import { settingsUrl } from "../lib/codeUrl";
+import { isReaderFilePath, parseLineParam, settingsUrl } from "../lib/codeUrl";
+import SiblingDocChip, { useSiblingDocChip } from "./lens/SiblingDocChip";
 import RefChip from "./RefChip";
 import { ScopeSlot } from "./ScopeSlot";
 
@@ -41,6 +42,18 @@ export default function TopBar() {
   const isMobile = useIsMobile();
   const { pathname } = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  // OL-SIBL1 - on a reader FILE route the open file's citing doc crosses to kb
+  // from the Spine's `crossing` slot. `useDocRefs` is the query CitedBy uses
+  // (same key), disabled until a repo + path exist.
+  const readerMatch = useMatch("/r/:repo/*");
+  const [searchParams] = useSearchParams();
+  const onReaderFile = readerMatch !== null && isReaderFilePath(pathname);
+  const crossingModel = useSiblingDocChip(
+    onReaderFile ? readerMatch.params.repo : undefined,
+    onReaderFile ? readerMatch.params["*"] : undefined,
+    parseLineParam(searchParams.get("line"))?.start ?? null,
+  );
 
   // OL-P5 — the doors exist on EVERY page: they link to the explicit repo,
   // else the last repo the user was in, else the first configured one. The
@@ -120,6 +133,7 @@ export default function TopBar() {
             </>
           }
           search={searchButton}
+          crossing={crossingModel ? <SiblingDocChip model={crossingModel} /> : undefined}
           right={
             !isMobile && (
               <>

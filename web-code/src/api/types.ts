@@ -3459,6 +3459,13 @@ export interface DocRefClaim {
   /// when the cited path has rotted (the doc that mentioned this file is
   /// still a real, live kb artifact either way).
   doc_public_href: string | null;
+  /// The section the claim sits under (kb's `kb-h-<slug>` heading anchor), or
+  /// `null` for a ref before the first heading (OL-SIBL1).
+  group_anchor: string | null;
+  /// `doc_public_href` + `?sec=<group_anchor>`, built server-side by
+  /// `doclens::doc_href_at`. `null` when the public base is unset or the claim
+  /// has no section; fall back to `doc_public_href` (never derive it here).
+  doc_section_href: string | null;
   group_label: string | null;
   raw_hint: string;
   line_start: number | null;

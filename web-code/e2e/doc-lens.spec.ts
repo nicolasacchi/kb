@@ -402,6 +402,41 @@ test.describe("cited-by (DCB-W3.B)", () => {
   // spec that shares this daemon+repo (this harness spawns exactly ONE,
   // `global-setup.ts`) still sees a clean working tree; several later specs
   // drive real checkouts, which 409 on a dirty tree.
+  // OL-SIBL1 - the TopBar crossing chip. `lib.rs` and `resolver.rs` are cited
+  // by exactly one PINNED doc (`doc1`), so the chip is a plain link; the
+  // cited-by demo file is cited by two docs, so the chip is a button that
+  // expands the rail strip. (public_base-unset is pinned by the Rust route
+  // test and citedBy.test.ts: this harness's daemon always sets public_url.)
+  test("the crossing chip links a single citing doc at its section", async ({ page }) => {
+    await page.goto(`${BASE}/r/${REPO_NAME}/lib.rs`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(chip).toHaveAttribute(
+      "href",
+      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_DOC_PATH}?sec=${DOCLENS_GROUP_KEY}`,
+    );
+  });
+
+  test("a claim with no anchor crosses to the doc-level href", async ({ page }) => {
+    // `resolver.rs:9999` is doc1's UNGROUPED citation; the line overlap picks it.
+    await page.goto(`${BASE}/r/${REPO_NAME}/resolver.rs?line=9999`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(chip).toHaveAttribute(
+      "href",
+      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_DOC_PATH}`,
+    );
+  });
+
+  test("with several citing docs the chip expands the Cited-by strip", async ({ page }) => {
+    await page.goto(`${BASE}/r/${REPO_NAME}/${DOCLENS_CITEDBY_FILE}`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("[data-kbc-citedby-list]")).toHaveCount(0);
+    await chip.click();
+    await expect(page.locator("[data-kbc-citedby-list]")).toBeVisible();
+  });
+
   test.describe("the rotted-claim case", () => {
     test.afterAll(() => {
       if (REPO_DIR) writeFileSync(join(REPO_DIR, DOCLENS_CITEDBY_FILE), DOCLENS_CITEDBY_FILE_CONTENT);
