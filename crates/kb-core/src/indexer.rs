@@ -655,6 +655,18 @@ pub async fn resolve_vanished_errors(
     kb_name: &KbName,
     roots: &[&Path],
 ) -> usize {
+    // An unmounted / missing source root makes `try_exists` answer `false`
+    // for every path under it; healing then would dismiss rows for files that
+    // merely sit behind a dead mount. Only roots that exist count.
+    let live: Vec<&Path> = roots
+        .iter()
+        .copied()
+        .filter(|r| matches!(r.try_exists(), Ok(true)))
+        .collect();
+    if live.is_empty() {
+        return 0;
+    }
+    let roots = &live[..];
     let rows = match storage.list_open_errors().await {
         Ok(r) => r,
         Err(e) => {
@@ -2563,7 +2575,7 @@ async fn prepare_doc(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // OL ERR1 — ENOENT during ingest is the rename/delete race (the
             // watcher or walk saw the path, the file was gone by read time),
-            // i.e. a DELETE of that path, not an ingest failure. Record no
+            // i.e. skipped as a delete race, not an ingest failure. Record no
             // error and close any open row a prior binary left for it; the
             // watcher's own delete event / the reconcile delete pass drops
             // the index row. Other io errors still record below.
@@ -9960,5 +9972,27 @@ done
             "only the existing path's row stays: {open:?}"
         );
         assert_eq!(open[0].path, alive);
+    }
+
+    /// OL ERR1 — a missing source root (dead mount) heals nothing.
+    #[tokio::test]
+    async fn resolve_vanished_errors_skips_a_missing_root() {
+        let (_bus, storage, kb, slug, tmp) = setup().await;
+        let root = tmp.path().join("unmounted");
+        let row = root.join("a.md");
+        storage
+            .record_error(
+                "io".into(),
+                slug.clone(),
+                row,
+                "read failed: No such file or directory (os error 2)".into(),
+                None,
+                unix_now(),
+            )
+            .await
+            .unwrap();
+        let n = resolve_vanished_errors(&storage, &kb, &[root.as_path()]).await;
+        assert_eq!(n, 0);
+        assert_eq!(storage.list_open_errors().await.unwrap().len(), 1);
     }
 }
