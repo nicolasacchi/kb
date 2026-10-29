@@ -99,7 +99,9 @@ export function siblingDocChip(
   if (claims.length === 0) return null;
   const docs = new Set(claims.map((c) => `${c.kb} ${c.doc_id}`));
   let pool = claims;
-  if (docs.size > 1 && line !== null) {
+  if (line !== null) {
+    // Narrow to the claims covering `line` when they name exactly one doc; for a
+    // single citing doc this also picks the overlapping claim's own section.
     const hit = claims.filter((c) => overlaps(c, line));
     if (new Set(hit.map((c) => `${c.kb} ${c.doc_id}`)).size === 1) pool = hit;
   }

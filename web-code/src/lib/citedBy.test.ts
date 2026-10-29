@@ -156,6 +156,22 @@ describe("siblingDocChip", () => {
     expect(m?.tone).toBe("ok");
   });
 
+  it("within one doc the claim covering the line decides the section", () => {
+    const grouped = claim({ line_start: 2, line_end: 2, doc_section_href: SEC });
+    const ungrouped = claim({
+      raw_hint: "y.rs:90",
+      line_start: 90,
+      line_end: 90,
+      group_anchor: null,
+      doc_section_href: null,
+      doc_public_href: "https://kb.example/a/platform/docs/fixture-doc.html",
+    });
+    expect(siblingDocChip([grouped, ungrouped], true, 90)?.href).toBe(
+      "https://kb.example/a/platform/docs/fixture-doc.html",
+    );
+    expect(siblingDocChip([grouped, ungrouped], true, 2)?.href).toBe(SEC);
+  });
+
   it("two distinct docs with no overlap => open-strip", () => {
     const m = siblingDocChip([claim({ doc_id: "doc1" }), claim({ doc_id: "doc4" })], true, null);
     expect(m?.kind).toBe("open-strip");

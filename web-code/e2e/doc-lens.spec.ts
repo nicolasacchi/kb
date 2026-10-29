@@ -20,6 +20,7 @@ import {
   DOCLENS_CITEDBY_DOC_B_PATH,
   DOCLENS_CITEDBY_FILE,
   DOCLENS_CITEDBY_FILE_CONTENT,
+  DOCLENS_CITEDBY_GROUP_KEY,
   DOCLENS_CITEDBY_GROUP_LABEL,
   DOCLENS_DOC_TITLE,
   DOCLENS_GROUP_KEY,
@@ -358,7 +359,7 @@ test.describe("cited-by (DCB-W3.B)", () => {
     const linkA = rowA.locator("[data-kbc-citedby-link]");
     await expect(linkA).toHaveAttribute(
       "href",
-      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}`,
+      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}?sec=${DOCLENS_CITEDBY_GROUP_KEY}`,
     );
     await expect(linkA).toHaveAttribute("target", "_blank");
 
@@ -481,7 +482,7 @@ test.describe("cited-by (DCB-W3.B)", () => {
       const rowA = chip.locator("[data-kbc-citedby-row]").filter({ hasText: DOCLENS_CITEDBY_DOC_A_TITLE });
       await expect(rowA.locator("[data-kbc-citedby-link]")).toHaveAttribute(
         "href",
-        `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}`,
+        `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}?sec=${DOCLENS_CITEDBY_GROUP_KEY}`,
       );
     });
   });
