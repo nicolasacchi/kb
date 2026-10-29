@@ -43,6 +43,10 @@
   width: 100%;
 }
 
+.kb-spine__crossing {
+  flex: 0 0 auto;
+}
+
 .kb-spine__right {
   margin-left: auto;
   gap: var(--pad-2);

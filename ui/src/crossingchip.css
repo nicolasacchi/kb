@@ -1,0 +1,53 @@
+.kb-crossing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pad-1);
+  min-height: 28px;
+  padding: 0 var(--pad-2);
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kb-crossing:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.kb-crossing:disabled {
+  color: var(--ink-mute);
+  cursor: default;
+}
+
+.kb-crossing[data-tone="warn"] {
+  border-style: dashed;
+  color: var(--ink-mute);
+}
+
+.kb-crossing__icon {
+  display: inline-flex;
+}
+
+.kb-crossing__count {
+  display: none;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 860px) {
+  .kb-crossing {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  .kb-crossing__label {
+    display: none;
+  }
+  .kb-crossing__count {
+    display: inline;
+  }
+}

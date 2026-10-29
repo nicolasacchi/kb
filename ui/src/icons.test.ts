@@ -13,6 +13,7 @@ const EXPECTED_NAMES = [
   "Brain",
   "Branch",
   "BranchPlus",
+  "Bridge",
   "Check",
   "ChevDown",
   "Chevron",
