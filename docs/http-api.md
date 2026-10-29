@@ -311,7 +311,10 @@ GET  /api/search?q=…&mode=hybrid|keyword|semantic[&kb=NAME]
                                             FUSED value (score-weighted RRF over the
                                             corpora's post-filter hits) - meaningful
                                             only within one response, not comparable
-                                            across requests or with a scope=one score.
+                                            across requests or with a scope=one score. It is a
+                                            bounded heuristic: keyword = BM25 (IDF is
+                                            corpus-local), hybrid = already rank-based
+                                            RRF (arm agreement, not magnitude).
 GET  /api/stats                             cross-kb summary
 GET  /api/kb/{kb}/stats                     per-kb stats
 GET  /api/kb/{kb}/slo                       CT-F5 corpus-health SLOs: five

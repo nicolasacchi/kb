@@ -7678,7 +7678,7 @@ async fn federated_search_mixed_score_kinds_fall_back_to_rank_only() {
 
 #[tokio::test]
 async fn federated_search_r0_filtered_transcript_does_not_affect_order() {
-    // RANK1: a memory-session transcript that matches the query MUCH more
+    // RANK1: a memory-session transcript (in beta) that matches the query MUCH more
     // strongly is filtered out by R0 BEFORE the merge, so it cannot move
     // the visible order (nor scale the survivors' relevance).
     let jsonl = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"zephyrine zephyrine zephyrine zephyrine\"}}\n";
@@ -7700,11 +7700,8 @@ async fn federated_search_r0_filtered_transcript_does_not_affect_order() {
     .await;
     let baseline = fed_hits(addr1, q).await;
 
-    let (_t2, addr2, _a, _b) = boot_with_two_kbs_files(
-        &[alpha_doc, ("alpha-session.html", transcript)],
-        &[beta_doc],
-    )
-    .await;
+    let (_t2, addr2, _a, _b) =
+        boot_with_two_kbs_files(&[alpha_doc], &[beta_doc, ("beta-session.html", transcript)]).await;
     let with_transcript = fed_hits(addr2, q).await;
     assert!(
         !with_transcript
@@ -7713,6 +7710,11 @@ async fn federated_search_r0_filtered_transcript_does_not_affect_order() {
         "transcript must be filtered: {with_transcript:?}"
     );
     assert_eq!(with_transcript, baseline);
+    // The transcript sits in beta and out-scores beta's own doc: had it
+    // leaked into the merge it would take beta's rank 0 and push the strong
+    // beta doc to rank 1, flipping the order to alpha-first. Pin the
+    // relevance order explicitly so a leak cannot pass as "unchanged".
+    assert_eq!(with_transcript[0].0, "beta", "{with_transcript:?}");
 }
 
 #[tokio::test]
