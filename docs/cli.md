@@ -642,8 +642,10 @@ kb sessions status [--local] [--json] [--no-color]
                                     `--watch`: pipe `kb events --follow --types session.state --json`
                                     for a live stream instead. A row blocked on a permission prompt or a question
                                     reads `needs you: permission: <tool>` (else `needs you:
-                                    <reason>`, else `needs you`) in the why column. See
-                                    docs/live-sessions.md.
+                                    <reason>`, else `needs you`) in the why column. A quiet
+                                    agent-held row also names the last tool it started
+                                    (`stalled? · last: Bash 38m`; started, not running; Claude only).
+                                    See docs/live-sessions.md.
 kb sessions show <id> [--json] [--section a,b,..]
                                     Single session detail + memories + artifacts + decisions + effort. OL IDEA3 — a
                                     `checked   <phrase>` line (and `$ <command>`) after `closed`, a `not named` line
