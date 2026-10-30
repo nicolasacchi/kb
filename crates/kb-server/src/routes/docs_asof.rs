@@ -43,8 +43,6 @@ use std::time::Duration;
 pub const MAX_IDS: usize = 100;
 /// Wall deadline for the whole batch; unfinished items return `pending`.
 pub const DEADLINE: Duration = Duration::from_secs(5);
-/// How far past "now" an `at` may be before it is refused as a typo.
-const MAX_FUTURE_SECS: i64 = 86_400;
 
 pub const STATE_HIT: &str = "hit";
 pub const STATE_MISS: &str = "miss";
@@ -221,17 +219,13 @@ fn parse_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
-/// Validate `at`: unix seconds, and not more than a day in the future.
-fn parse_instant(raw: Option<&str>, now: i64) -> Result<i64, String> {
+/// Validate `at`: unix seconds. Any instant is answered (a future one lands
+/// on the working tree, which wins at `t >= mtime`); clients clamp their own
+/// date pickers.
+fn parse_instant(raw: Option<&str>) -> Result<i64, String> {
     let raw =
         raw.ok_or_else(|| "`at` is required: unix seconds, e.g. at=1700000000".to_string())?;
-    let at = parse_at(raw)?;
-    if at > now.saturating_add(MAX_FUTURE_SECS) {
-        return Err(format!(
-            "`at` {at} is more than a day in the future; expected unix seconds"
-        ));
-    }
-    Ok(at)
+    parse_at(raw)
 }
 
 /// `GET /api/kb/{kb}/docs/as-of?at=&ids=`.
@@ -253,7 +247,7 @@ pub(crate) async fn handle(
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    let at = match parse_instant(params.at.as_deref(), chrono::Utc::now().timestamp()) {
+    let at = match parse_instant(params.at.as_deref()) {
         Ok(v) => v,
         Err(e) => return bad_request(e),
     };
@@ -369,20 +363,18 @@ mod tests {
 
     #[test]
     fn asof_bad_at_is_400() {
-        let now = 1_700_000_000;
-        assert!(parse_instant(None, now).is_err());
-        assert!(parse_instant(Some("yesterday"), now).is_err());
-        assert!(parse_instant(Some("2026-07-30"), now).is_err());
-        assert_eq!(parse_instant(Some("1699999999"), now), Ok(1_699_999_999));
+        assert!(parse_instant(None).is_err());
+        assert!(parse_instant(Some("yesterday")).is_err());
+        assert!(parse_instant(Some("2026-07-30")).is_err());
+        assert_eq!(parse_instant(Some("1699999999")), Ok(1_699_999_999));
     }
 
+    /// OL TIME2 dropped the "more than a day ahead is a 400" rule: the façade
+    /// answers any instant (the working tree wins at `t >= mtime`).
     #[test]
-    fn asof_future_at_is_400() {
-        let now = 1_700_000_000;
-        // Exactly one day ahead is still allowed (clock skew); past it is not.
-        assert!(parse_instant(Some(&(now + 86_400).to_string()), now).is_ok());
-        let err = parse_instant(Some(&(now + 86_401).to_string()), now).unwrap_err();
-        assert!(err.contains("future"), "{err}");
+    fn asof_far_future_at_is_accepted() {
+        let far = 1_700_000_000_i64 + 400 * 86_400;
+        assert_eq!(parse_instant(Some(&far.to_string())), Ok(far));
     }
 
     /// The REAL router: a token-less non-loopback peer is refused by

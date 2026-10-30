@@ -98,3 +98,21 @@ export function parsePane2(value: string | null | undefined): PaneLoc | null {
 export function samePane(a: PaneLoc, b: PaneLoc): boolean {
   return a.kb === b.kb && a.sourceRelative === b.sourceRelative;
 }
+
+/// Whether the second pane is shown. Derived PURELY from the URL (+ viewport):
+///   * never on mobile (the v0.23 one-button-one-sheet contract);
+///   * a self-split (the SAME artifact in both panes) is refused — two panes on
+///     one origin could not be told apart by `isOriginOfArtifact` (#8/#19) —
+///     EXCEPT while `?at=` is set (OL TIME2): then the primary pane is a
+///     historical render (it opens no visit and is attributed by frame), and
+///     the second pane holding the same artifact at its working version IS the
+///     then|now split.
+export function paneSplitOpen(
+  pane2: PaneLoc | null,
+  primary: PaneLoc,
+  at: number | null,
+  isMobile: boolean,
+): boolean {
+  if (!pane2 || isMobile) return false;
+  return at !== null || !samePane(pane2, primary);
+}

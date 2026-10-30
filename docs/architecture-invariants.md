@@ -1707,7 +1707,7 @@ query cache (`web/src/lib/memento.ts`, goldens mirrored case-for-case against
 `kb_core::versions`'s) rather than issuing a second fetch — keep the two in
 lock-step, the same way #29's wikilink grammar is kept.
 
-**OL TIME1 (v0.50).** The Library time scrubber's batch read, `GET /api/kb/{kb}/docs/as-of?at=&ids=`, is an OVERLAY over this same façade, not a new resolver: every item is the per-artifact `memento_for` answer (pinned by `asof_item_equals_per_artifact_memento`), `/docs` stays as-of-blind (it ignores `at`), and ranking/search are never as-of.
+**OL TIME1/TIME2 (v0.50).** a batch per-artifact memento read, `GET /api/kb/{kb}/docs/as-of?at=&ids=`, and the reader's `?at=` BODY both resolve through this same façade and ONE resolver (`memento_for`), never a second one: every batch item is the per-artifact `memento_for` answer (pinned by `asof_item_equals_per_artifact_memento`), and `?at=<unix>` on an artifact's own origin serves the nearest-prior version's verbatim source (`VersionCtx::raw_at`) through TODAY'S outbound pipeline (kb-prompt strip on non-loopback, runtime injection), a working-tree hit serves today's file unchanged, and an instant older than the oldest version is a 404 naming the floor. A historical render is not a read (no history row, no reading progress) and never carries the annotator. Any instant is answered (the working tree wins at `t >= mtime`; clients clamp). Still no corpus timeline: `/docs` stays as-of-blind (it ignores `at`), and ranking/search are never as-of.
 
 ### 15. Gallery row-set memo keys on a storage-actor index generation
 
@@ -2775,7 +2775,7 @@ selection) is a client concern that ends in `ids=`; only a genuinely new
 `galleryUrl.ts` + `fetchDocsPage` + `docs_query::matches` + `routes/docs.rs`
 together, with goldens.
 
-**OL TIME1 (v0.50).** The time scrubber does NOT grow this grammar with an `at` atom — `/docs` ignores `at` (pinned by `docs_ignores_at_param_byte_identical`); the as-of answer for the visible page rides the separate overlay route `GET …/docs/as-of?at=&ids=` (ids capped at 100, 400 over the cap, never truncation).
+**OL TIME1/TIME2 (v0.50).** `at` is NOT an atom of this grammar — `/docs` ignores it (pinned by `docs_ignores_at_param_byte_identical`); `?at=` is reader view state (the artifact's own body as it stood), and the batch per-artifact memento read rides the separate route `GET …/docs/as-of?at=&ids=` (ids capped at 100, 400 over the cap, never truncation).
 
 ## Where to find things
 

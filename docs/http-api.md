@@ -171,14 +171,25 @@ GET  /api/kb/{kb}/docs/as-of?at=<unix>&ids=<id>,<id>,...
                                             | error — one failing item never
                                             fails the request) | unknown (no
                                             such id). 400 problem+json: `at`
-                                            missing/malformed or more than a
-                                            day in the future; `ids` empty or
+                                            missing/malformed (ANY instant is
+                                            otherwise answered; the working
+                                            tree wins at `t >= mtime`, so
+                                            clients clamp); `ids` empty or
                                             more than 100 (refused, never
                                             truncated). Ordinary bearer auth
                                             (401 token-less non-loopback), no
                                             loopback gate. An OVERLAY:
                                             `GET .../docs` ignores `at`, and
                                             ranking/search are never as-of.
+                                            Intended consumers: a page of
+                                            visible artifacts that wants
+                                            "which version stood at T" for
+                                            many ids in one call (one request
+                                            instead of N `versions?at=`
+                                            reads). The reader does not use
+                                            it: it opens ONE artifact's body
+                                            via `?at=` on the artifact origin
+                                            (see below).
 GET  /api/kb/{kb}/artifacts/{id}/diff[?from=&to=&mode=text|raw]
                                             diff between two version refs
                                             (defaults: most recent prior
@@ -2214,6 +2225,35 @@ GET  /                                      with Host=<id>.artifacts.localhost
                                             isolated artifact serve
 GET  /  (with ?cm=on)                       same, plus injected window.__KB_COMMENTS
                                             + /_kb/annotate.js (v0.2 annotator)
+GET  /  (with ?at=<unix>)                   OL TIME2, the reader's time
+                                            machine: the artifact's ENTRY
+                                            body as it stood at that instant,
+                                            nearest-prior through the same
+                                            `memento_for` as `versions?at=`,
+                                            fetched with `VersionCtx::raw_at`
+                                            and pushed through TODAY'S
+                                            outbound pipeline (kb-prompt strip
+                                            on non-loopback, probe/runtime
+                                            injection). Response headers:
+                                            `Memento-Datetime` (the resolved
+                                            version's OWN time),
+                                            `X-Kb-As-Of-Relation: exact |
+                                            nearest-prior`, `Cache-Control:
+                                            private, no-store`. A working-tree
+                                            hit (`t >= mtime`) serves today's
+                                            file unchanged. 404 problem+json
+                                            when nothing is that old (the
+                                            note names the oldest version), the
+                                            kb has `versions = "off"`, or the
+                                            artifact is a session transcript;
+                                            400 on a malformed `at`. Never
+                                            appends the annotator (`cm=on` is
+                                            ignored: anchors belong to the
+                                            original DOM) and writes no
+                                            history row or reading progress.
+                                            Sub-pages and sibling assets are
+                                            today's (relative links resolve to
+                                            today's siblings).
 GET  /_kb/annotate.js                       served on artifact subdomains
                                             from web/dist/annotate.js
 GET  /_kb/probe.js                          served on artifact subdomains
