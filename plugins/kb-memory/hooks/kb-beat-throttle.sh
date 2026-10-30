@@ -31,14 +31,18 @@
 # kb-beat.sh) and KB_BEAT_HEARTBEAT=0 (kills only this mid-turn
 # heartbeat, keeping lifecycle beats).
 #
+# Blocked-on-you resolution (claude): the harness has no "permission granted"
+# hook, so the FIRST PostToolUse from the same agent that raised a blocked beat
+# (kb-beat.sh leaves beat-blocked-<sid> holding that agent_id, empty for the
+# main thread) emits an `unblocked` lifecycle beat. It bypasses the interval
+# gate and the KB_BEAT_HEARTBEAT=0 switch (a lifecycle beat, not a heartbeat),
+# once per block.
+#
 # Usage: kb-beat-throttle.sh <harness>   (stdin = the PostToolUse payload,
 # forwarded to `kb-beat.sh <harness> tool` unmodified when not throttled)
 set -u
 
 case "${KB_BEAT:-}" in
-  0 | false | FALSE | no | NO) exit 0 ;;
-esac
-case "${KB_BEAT_HEARTBEAT:-}" in
   0 | false | FALSE | no | NO) exit 0 ;;
 esac
 [ -n "${KB_SESSIONS_DIR:-}" ] || exit 0
@@ -79,6 +83,22 @@ if [ ! -f "$marker" ]; then
   legacy="$marker_dir/beat-heartbeat-$(hook_sid_key_lossy "$sid")"
   [ "$legacy" != "$marker" ] && [ -f "$legacy" ] && gate="$legacy"
 fi
+
+blocked_marker="$marker_dir/beat-blocked-$safe_sid"
+if [ "$harness" = "claude" ] && [ -f "$blocked_marker" ]; then
+  marker_agent="$(cat "$blocked_marker" 2>/dev/null)" || marker_agent=""
+  this_agent="$(printf '%s' "$input" | jq -r '.agent_id // empty' 2>/dev/null)"
+  if [ "$marker_agent" = "$this_agent" ]; then
+    rm -f "$blocked_marker" 2>/dev/null
+    printf '%s' "$input" | "$BEAT_SH" "$harness" unblocked
+    touch "$marker" 2>/dev/null || true
+    gate="$marker"
+  fi
+fi
+
+case "${KB_BEAT_HEARTBEAT:-}" in
+  0 | false | FALSE | no | NO) exit 0 ;;
+esac
 
 now="$(date -u +%s)" || exit 0
 if [ -f "$gate" ]; then

@@ -383,7 +383,7 @@ if [ "$(jget "$o" '.detail')" = "null" ]; then
 else
   bad "non-tool event paths (got: $o)"
 fi
-o="$(beat_dryrun claude blocked '{"session_id":"s-wt","cwd":"/tmp/proj-a","message":"needs input","tool_name":"Edit","tool_input":{"file_path":"/tmp/proj-a/x"}}')"
+o="$(beat_dryrun claude blocked '{"session_id":"s-wt","cwd":"/tmp/proj-a","notification_type":"elicitation_dialog","message":"Claude Code needs your input","tool_name":"Edit","tool_input":{"file_path":"/tmp/proj-a/x"}}')"
 if [ "$(jget "$o" '.detail | keys | join(",")')" = "reason" ]; then
   ok "blocked keeps detail.reason only"
 else
@@ -432,6 +432,142 @@ if command -v git >/dev/null 2>&1; then
   fi
 else
   ok "git not installed: repo-identity checks skipped"
+fi
+
+echo
+echo "== OL IDEA1: blocked on you =="
+
+# marker_path <session_id> — mirrors kb-beat.sh's beat-blocked-<hook_sid_key>.
+# shellcheck disable=SC1091
+. "$HOOKS_DIR/kb-hook-lib.sh"
+marker_path() { printf '%s/kb/beat-blocked-%s' "$XDG_CACHE_HOME" "$(hook_sid_key "$1")"; }
+
+# --- 30. the Notification fixture: which texts block, reason, tool, marker --
+FIXTURE="$SCRIPT_DIR/fixtures/claude-notifications.json"
+ncases="$(jq '.cases | length' "$FIXTURE")"
+if [ "${ncases:-0}" -ge 20 ]; then
+  ok "notification fixture has $ncases cases"
+else
+  bad "notification fixture too small (${ncases:-0})"
+fi
+i=0
+while [ "$i" -lt "${ncases:-0}" ]; do
+  cname="$(jq -r ".cases[$i].case" "$FIXTURE")"
+  charness="$(jq -r ".cases[$i].harness" "$FIXTURE")"
+  cpayload="$(jq -c ".cases[$i].payload" "$FIXTURE")"
+  csid="$(jq -r ".cases[$i].payload.session_id" "$FIXTURE")"
+  cout="$(beat_dryrun "$charness" blocked "$cpayload")"
+  fail=""
+  if [ "$(jq -r ".cases[$i].expect.beat" "$FIXTURE")" = "true" ]; then
+    [ "$(jget "$cout" '.event')" = "blocked" ] || fail="no blocked beat"
+    want_reason="$(jq -r ".cases[$i].expect.reason // empty" "$FIXTURE")"
+    if [ -n "$want_reason" ] && [ "$(jget "$cout" '.detail.reason')" != "$want_reason" ]; then fail="reason"; fi
+    want_len="$(jq -r ".cases[$i].expect.reason_len // empty" "$FIXTURE")"
+    if [ -n "$want_len" ] && [ "$(printf '%s' "$cout" | jq -r '.detail.reason | length')" != "$want_len" ]; then fail="reason length"; fi
+    want_tool="$(jq -r ".cases[$i].expect.tool // empty" "$FIXTURE")"
+    if [ -n "$want_tool" ]; then
+      [ "$(jget "$cout" '.detail.tool')" = "$want_tool" ] || fail="tool"
+    else
+      printf '%s' "$cout" | jq -e '.detail | has("tool")' >/dev/null 2>&1 && fail="unexpected tool"
+    fi
+    mp="$(marker_path "$csid")"
+    if [ "$charness" = "claude" ]; then
+      want_marker="$(jq -r ".cases[$i].expect.marker // empty" "$FIXTURE")"
+      if [ ! -f "$mp" ] || [ "$(cat "$mp")" != "$want_marker" ]; then fail="marker"; fi
+    else
+      [ ! -e "$mp" ] || fail="unexpected marker"
+    fi
+  else
+    [ -z "$cout" ] || fail="a beat was sent: $cout"
+    [ ! -e "$(marker_path "$csid")" ] || fail="unexpected marker"
+  fi
+  if [ -z "$fail" ]; then ok "fixture: $cname"; else bad "fixture: $cname ($fail)"; fi
+  i=$((i + 1))
+done
+
+# --- 31. the blocked beat carries detail.tool (existing case 6 shape) -------
+if [ "$(jget "$out6" '.detail.tool')" = "Bash" ]; then
+  ok "blocked beat carries detail.tool=Bash"
+else
+  bad "blocked beat carries detail.tool (got: $out6)"
+fi
+
+# --- 32. throttle: the first PostToolUse of the blocked agent emits unblocked
+tb() { # tb <session_id> [agent_id] [env...]
+  local sid="$1" agent="${2:-}"
+  shift 2 2>/dev/null || shift $#
+  local p="{\"session_id\":\"$sid\",\"cwd\":\"/tmp/p\""
+  [ -z "$agent" ] || p="$p,\"agent_id\":\"$agent\""
+  printf '%s}' "$p" | env KB_BEAT_DRYRUN=1 "$@" "$BEAT_THROTTLE" claude 2>/dev/null
+}
+bl() { # bl <session_id> [agent_id]
+  local p="{\"session_id\":\"$1\",\"cwd\":\"/tmp/p\",\"notification_type\":\"permission_prompt\",\"message\":\"Claude needs your permission to use Bash\""
+  [ -z "${2:-}" ] || p="$p,\"agent_id\":\"$2\""
+  beat_dryrun claude blocked "$p}" >/dev/null
+}
+bl s-ub1
+o="$(tb s-ub1)"
+if [ "$(jget "$o" '.event')" = "unblocked" ] && [ "$(printf '%s\n' "$o" | grep -c '"event"')" = "1" ] \
+   && [ ! -e "$(marker_path s-ub1)" ]; then
+  ok "blocked(main) then PostToolUse emits exactly one unblocked and clears the marker"
+else
+  bad "unblocked on the first PostToolUse (got: $o)"
+fi
+o="$(tb s-ub1)"
+if [ -z "$o" ]; then ok "a second PostToolUse inside the interval prints nothing"; else bad "second PostToolUse (got: $o)"; fi
+
+# subagent: another agent's tool does not resolve the block.
+bl s-ub2 a1
+mkdir -p "$XDG_CACHE_HOME/kb" && touch "$XDG_CACHE_HOME/kb/beat-heartbeat-$(hook_sid_key s-ub2)"
+o="$(tb s-ub2 a2)"
+if [ -z "$o" ] && [ -f "$(marker_path s-ub2)" ]; then
+  ok "blocked(a1) then PostToolUse(a2) emits no unblocked and keeps the marker"
+else
+  bad "other agent must not unblock (got: $o)"
+fi
+o="$(tb s-ub2 a1)"
+if [ "$(jget "$o" '.event')" = "unblocked" ] && [ ! -e "$(marker_path s-ub2)" ]; then
+  ok "blocked(a1) then PostToolUse(a1) emits unblocked"
+else
+  bad "same agent unblocks (got: $o)"
+fi
+
+# lifecycle beat: KB_BEAT_HEARTBEAT=0 still emits it.
+bl s-ub3
+o="$(tb s-ub3 "" KB_BEAT_HEARTBEAT=0)"
+if [ "$(jget "$o" '.event')" = "unblocked" ]; then
+  ok "KB_BEAT_HEARTBEAT=0 still emits the unblocked lifecycle beat"
+else
+  bad "heartbeat kill switch must not swallow unblocked (got: $o)"
+fi
+
+# a prompt clears the marker, so a later PostToolUse emits no unblocked.
+bl s-ub4
+beat_dryrun claude prompt '{"session_id":"s-ub4","cwd":"/tmp/p"}' >/dev/null
+touch "$XDG_CACHE_HOME/kb/beat-heartbeat-$(hook_sid_key s-ub4)"
+o="$(tb s-ub4)"
+if [ ! -e "$(marker_path s-ub4)" ] && [ -z "$o" ]; then
+  ok "blocked then prompt removes the marker; no later unblocked"
+else
+  bad "prompt must clear the marker (got: $o)"
+fi
+
+# omp never emits unblocked from the throttle.
+beat_dryrun omp blocked '{"session_id":"s-ub5","cwd":"/tmp/p","message":"bash: approval required"}' >/dev/null
+o="$(printf '%s' '{"session_id":"s-ub5","cwd":"/tmp/p"}' | env KB_BEAT_DRYRUN=1 "$BEAT_THROTTLE" omp 2>/dev/null)"
+if [ "$(jget "$o" '.event')" != "unblocked" ]; then
+  ok "omp's throttle input never emits unblocked"
+else
+  bad "omp must not unblock via the throttle (got: $o)"
+fi
+
+# --- 33. hooks.json: Notification stays matcher-less ------------------------
+if jq -e '.hooks.Notification | length == 1 and (.[0] | has("matcher") | not)
+          and (.[0].hooks[0].command | endswith("kb-beat.sh\" claude blocked"))' \
+     "$HOOKS_JSON" >/dev/null 2>&1; then
+  ok "hooks.json: Notification group has no matcher and calls kb-beat.sh claude blocked"
+else
+  bad "hooks.json Notification group shape"
 fi
 
 echo
