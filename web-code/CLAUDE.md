@@ -2208,6 +2208,20 @@ described the pre-OL shape.
   `ui/` included), `ui/nav-budget.json` (kb-code: 4 doors) and
   `ui/chrome-budget.json` (the Playwright `chrome-budget.spec.ts`).
 
+## The blocked line (OL IDEA1)
+
+Home's "Needs you" section leads with a line for sessions kb reports as blocked
+on the operator (`HomeNeedsYou`'s `blockedLane`, fed by `GET /api/kb/blocked`,
+a read relay of kb's `live-status?blocked=1`). It is a #23-style polling
+exception: kb has no event that reaches this daemon, so there is no SSE tie to
+bridge, and `useKbBlocked` carries a finite `staleTime` and a `refetchInterval`
+of 15 s (`KB_BLOCKED_POLL_MS`). TanStack's default
+`refetchIntervalInBackground: false` means a hidden tab does not poll, and
+only `HomeNeedsYou` mounts the hook, so it polls only while Home is open. An
+unavailable or empty relay renders nothing extra. The row links to kb's own
+`/sessions#kb-now-blocked` (an `<a target="_blank">`, like the Inbox page's kb
+links) and only when a public url is configured. No key binding was added.
+
 ## v0.44 notes
 
 The review-store wire types are generated (`web-code/src/api/generated`), and

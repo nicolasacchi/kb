@@ -68,6 +68,9 @@
 #                                 write-tool file-presence fields, Claude
 #                                 PostToolUse Edit|Write|MultiEdit|
 #                                 NotebookEdit only) even when available.
+#   (blocked, claude) a Notification of type permission_prompt |
+#                                 elicitation_dialog | elicitation_url_dialog
+#                                 beats `blocked`; any other type sends nothing.
 #   KB_BEAT_DRYRUN=1             print the JSON body to stdout INSTEAD of
 #                                 posting; no backgrounding, no curl. The
 #                                 test harness's only hook into this
@@ -191,10 +194,60 @@ if [ "$harness" = "claude" ] && [ "$event" = "turn_end" ] \
   last_line="${last_line:0:240}"
 fi
 
-# detail.reason — blocked only, whatever the Notification payload gives.
+# Blocked-marker helper (claude only). hook_sid_key comes from the shared lib;
+# sourced fail-open: without it the marker logic is skipped silently and the
+# daemon flag still sets (it just clears at the next prompt / turn end).
+beat_marker=""
+if [ "$harness" = "claude" ]; then
+  _beat_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _beat_dir=""
+  if [ -n "$_beat_dir" ] && [ -r "$_beat_dir/kb-hook-lib.sh" ]; then
+    . "$_beat_dir/kb-hook-lib.sh" 2>/dev/null || true
+  fi
+  if command -v hook_sid_key >/dev/null 2>&1; then
+    beat_marker="${XDG_CACHE_HOME:-$HOME/.cache}/kb/beat-blocked-$(hook_sid_key "$session_id")"
+  fi
+  case "$event" in
+    start | prompt | turn_end | end)
+      [ -z "$beat_marker" ] || rm -f "$beat_marker" 2>/dev/null
+      ;;
+  esac
+fi
+
+# detail.reason — blocked only, whatever the Notification payload gives,
+# capped at 120 chars (Claude's own UI text, not transcript bytes).
+# detail.tool for a blocked beat (claude only) is the tool named by the
+# canonical "Claude needs your permission to use <Tool>" text, when the
+# captured token is a plain tool name.
+#
+# Claude only: which Notifications are blocks is decided HERE (the harness
+# vocabulary lives in the caller). notification_type permission_prompt |
+# elicitation_dialog | elicitation_url_dialog block; every other type,
+# including unknown future ones (idle_prompt, auth_success, ...), sends no
+# beat at all. A payload with no notification_type (older Claude Code) blocks
+# only on the "Claude needs your permission" text. Other harnesses keep the
+# unfiltered path.
 detail_reason=""
+blocked_tool=""
 if [ "$event" = "blocked" ]; then
   detail_reason="$(jq_field '.message // .matcher // empty' "$input")"
+  if [ "$harness" = "claude" ]; then
+    detail_reason="${detail_reason:0:120}"
+    ntype="$(jq_field '.notification_type // empty' "$input")"
+    nmsg="$(jq_field '.message // empty' "$input")"
+    case "$ntype" in
+      permission_prompt | elicitation_dialog | elicitation_url_dialog) ;;
+      "")
+        case "$nmsg" in
+          "Claude needs your permission"*) ;;
+          *) exit 0 ;;
+        esac
+        ;;
+      *) exit 0 ;;
+    esac
+    if [[ "$nmsg" =~ ^Claude\ needs\ your\ permission\ to\ use\ ([A-Za-z0-9_.:-]{1,128})$ ]]; then
+      blocked_tool="${BASH_REMATCH[1]}"
+    fi
+  fi
 fi
 
 # detail.tool / detail.paths / detail.root / detail.project — a Claude
@@ -206,7 +259,7 @@ fi
 # base is dropped; at most 8 survive. root/project (the session's repo
 # identity) are computed ONCE per (session, cwd) and cached under the
 # cache dir, never on every beat.
-detail_tool=""
+detail_tool="$blocked_tool"
 detail_paths='[]'
 detail_root=""
 detail_project=""
@@ -287,6 +340,15 @@ body="$(jq -n \
      | if ($d | length) > 0 then {detail: $d} else {} end )
   ' 2>/dev/null)"
 [ -n "$body" ] || exit 0
+
+# Blocked marker: records which agent (empty = main thread) owns the pending
+# prompt, so kb-beat-throttle.sh can emit `unblocked` on that agent's next
+# PostToolUse. Written even in DRYRUN so the harness can test it.
+if [ "$harness" = "claude" ] && [ "$event" = "blocked" ] && [ -n "$beat_marker" ]; then
+  if mkdir -p "$(dirname "$beat_marker")" 2>/dev/null; then
+    printf '%s' "$(jq_field '.agent_id // empty' "$input")" >"$beat_marker" 2>/dev/null || true
+  fi
+fi
 
 if [ "${KB_BEAT_DRYRUN:-}" = "1" ]; then
   printf '%s\n' "$body"

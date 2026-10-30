@@ -37,6 +37,11 @@
 import type { LiveStatusRow } from "../api/sessions";
 
 export type LiveLanes = {
+  /// OL IDEA1 — agent rows blocked on the operator (a permission prompt or
+  /// a question): a `blocked` row in working|stalled lives HERE and only
+  /// here, longest-blocked first. Same lane-as-presentation rule as the
+  /// other three: no new state, the flag on an agent-held row.
+  blocked: LiveStatusRow[];
   inProgress: LiveStatusRow[];
   waiting: LiveStatusRow[];
   /// Capped at `cap` (default `FINISHED_LANE_CAP`) — the day-buckets below
@@ -62,6 +67,7 @@ export function bucketLiveSessions(
   rows: readonly LiveStatusRow[],
   cap: number = FINISHED_LANE_CAP,
 ): LiveLanes {
+  const blocked: LiveStatusRow[] = [];
   const inProgress: LiveStatusRow[] = [];
   const waiting: LiveStatusRow[] = [];
   const finished: LiveStatusRow[] = [];
@@ -69,7 +75,11 @@ export function bucketLiveSessions(
     switch (r.state) {
       case "working":
       case "stalled":
-        inProgress.push(r);
+        // A blocked row is the operator's to unblock, not "in progress".
+        // `presumed_ended` stays in finished below: 8 h of silence ends
+        // the claim, as for any agent row.
+        if (r.blocked === true) blocked.push(r);
+        else inProgress.push(r);
         break;
       case "waiting":
       case "cold":
@@ -81,6 +91,8 @@ export function bucketLiveSessions(
         break;
     }
   }
+  // Longest-blocked first (the oldest block is the one costing the most).
+  blocked.sort((a, b) => blockedSince(a) - blockedSince(b));
   // Most-recently-active first: largest since_unix (the most recent
   // instant) sorts first.
   inProgress.sort((a, b) => b.since_unix - a.since_unix);
@@ -91,6 +103,7 @@ export function bucketLiveSessions(
   // Newest-first.
   finished.sort((a, b) => b.since_unix - a.since_unix);
   return {
+    blocked,
     inProgress,
     waiting,
     finished: finished.slice(0, cap),
@@ -104,6 +117,31 @@ export function bucketLiveSessions(
 /// independently-computed count that could disagree with the lane itself).
 export function waitingCount(rows: readonly LiveStatusRow[]): number {
   return bucketLiveSessions(rows).waiting.length;
+}
+
+/// Unix seconds a row has been blocked since: the beat that raised the
+/// flag, else the row's own last-activity instant (an older daemon sends no
+/// `blocked_since_unix`).
+export function blockedSince(
+  row: Pick<LiveStatusRow, "blocked_since_unix" | "since_unix">,
+): number {
+  return row.blocked_since_unix ?? row.since_unix;
+}
+
+/// How many sessions are blocked on the operator right now — the Header
+/// chip and the "Needs you" lane read the same `bucketLiveSessions` output.
+export function blockedCount(rows: readonly LiveStatusRow[]): number {
+  return bucketLiveSessions(rows).blocked.length;
+}
+
+/// The one-line "what is it waiting for": `permission: <tool>` when the hook
+/// named one, else Claude's own (trimmed) reason text, else `needs you`.
+export function blockedLabel(
+  row: Pick<LiveStatusRow, "blocked_tool" | "detail_reason">,
+): string {
+  if (row.blocked_tool) return `permission: ${row.blocked_tool}`;
+  const reason = row.detail_reason?.trim();
+  return reason ? reason : "needs you";
 }
 
 /// CT-E3's honest-staleness idiom (`docs/architecture-invariants.md` §CT-E3

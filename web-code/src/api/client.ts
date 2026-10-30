@@ -91,6 +91,7 @@ import type {
   TreeResponse,
   TreeV2Response,
   UnifiedSearchResponse,
+  KbBlockedOut,
   KbSearchOut,
   KbUiOut,
   AgeOut,
@@ -381,6 +382,14 @@ export function fetchKbSearch(
   signal?: AbortSignal,
 ): Promise<KbSearchOut> {
   return getJson<KbSearchOut>("/api/kb/search", { q, limit: String(limit) }, signal);
+}
+
+/// `GET /api/kb/blocked` - the sessions kb reports as blocked on the operator,
+/// relayed by kb-code-server (OL IDEA1). Always resolves with a body: a missing
+/// kb is `unavailable`, not a rejection. `hooks/useKbBlocked.ts` is the sole
+/// caller.
+export function fetchKbBlocked(signal?: AbortSignal): Promise<KbBlockedOut> {
+  return getJson<KbBlockedOut>("/api/kb/blocked", {}, signal);
 }
 
 /// `GET /api/kb/ui` - kb's theme family, relayed (OL S1). `lib/kbTheme.ts`.

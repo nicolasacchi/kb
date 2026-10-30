@@ -94,6 +94,14 @@
    (the "you are the bottleneck" color, matching the design doc's own
    mockup); finished = muted — the same three-color grammar the design's
    own lane sketches use. */
+.kb-now__lane--blocked .kb-now__lane-head {
+  color: var(--danger);
+}
+.kb-now__row-blocked {
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
 .kb-now__lane--progress .kb-now__lane-head {
   color: var(--accent, #8a7fff);
 }

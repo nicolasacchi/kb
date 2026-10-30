@@ -419,6 +419,20 @@ GET  /api/kb/search?q=&limit=              OL S1: kb's `GET /api/search`
                                             "kb disabled"}`, a kb-sibling/1
                                             mismatch `unavailable:
                                             "kb_sibling_mismatch"`.
+GET  /api/kb/blocked                       OL IDEA1: kb's
+                                            `GET /api/sessions/live-status?
+                                            blocked=1` reduced to `{sessions:
+                                            [{session_id, harness, project?,
+                                            blocked_tool?, since_unix}],
+                                            kb_public_url, total, truncated}`
+                                            (oldest block first, 20 rows max).
+                                            No cwd, title, last line, reason,
+                                            model or host. `kb_public_url` is
+                                            empty unless `[kb_daemon]
+                                            public_url` is set. Always 200:
+                                            `unavailable:"kb disabled" |
+                                            "kb unreachable" |
+                                            "kb_sibling_mismatch"`.
 GET  /api/kb/ui                            OL S1: kb's `theme_family` +
                                             `theme` from `GET /api/settings`
                                             (malformed values -> null), same
@@ -1057,8 +1071,23 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             registry (LF-7), 7-day TTL, capped
                                             at 4096 sessions. Fires
                                             `session.state` SSE only when the
-                                            derived state actually CHANGES
-                                            (never per beat, #24). Response
+                                            derived view `(state, blocked)`
+                                            actually CHANGES (never per beat,
+                                            #24); the payload is
+                                            `{session_id, harness, state,
+                                            holder, project, since_unix,
+                                            blocked, blocked_tool?}`, never
+                                            free text. `blocked` is STICKY
+                                            (OL IDEA1): a `blocked` beat sets
+                                            it, a `tool` beat keeps it,
+                                            `start|prompt|unblocked|turn_end|
+                                            end` clear it. On a `blocked`
+                                            beat `detail.reason` is capped at
+                                            120 chars and `detail.tool` is
+                                            kept only as a plain token
+                                            (`[A-Za-z0-9_.:-]`, 1..128); an
+                                            invalid tool never rejects the
+                                            beat. Response
                                             `{ok, session_id, state, holder,
                                             confidence}`. `auth_bearer` — see
                                             invariant #11's LSC amendment for
@@ -1072,7 +1101,8 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             see
                                             docs/live-sessions.md).
 GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
-     [?state=&harness=&project=&limit=]     every beat-tracked registry row
+     [?state=&harness=&project=&limit=      every beat-tracked registry row
+      &blocked=1]
                                             (`source:"hook"`,
                                             `confidence:"observed"`) PLUS a
                                             Tier-0 degraded layer rebuilt from
@@ -1097,8 +1127,16 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             gets the SAME rows through a
                                             forced-scrub floor (`cwd`
                                             collapsed to its basename,
-                                            `last_line` re-capped) rather
-                                            than a 403. `Cache-Control:
+                                            `last_line` and `detail_reason`
+                                            re-capped) rather than a 403.
+                                            A blocked row also carries
+                                            `blocked_tool?` and
+                                            `blocked_since_unix?`.
+                                            `?blocked=1|true|on` keeps only
+                                            rows blocked on the operator
+                                            (not `presumed_ended`) and skips
+                                            the Tier-0 fan-out, so it is
+                                            memory-only. `Cache-Control:
                                             no-store`. CLI: `kb sessions
                                             status` (this IS the default
                                             mode; `--local` is the

@@ -217,3 +217,53 @@ describe("LiveSessionsNowBand — waiting lane scope", () => {
     );
   });
 });
+
+describe("LiveSessionsNowBand - OL IDEA1 Needs you lane", () => {
+  it("renders the blocked lane FIRST with the tool label and elapsed from blocked_since", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({ session_id: "p", state: "working" }),
+          row({ session_id: "w", state: "waiting", holder: "human" }),
+          row({
+            session_id: "b",
+            blocked: true,
+            blocked_tool: "Bash",
+            detail_reason: "Claude needs your permission to use Bash",
+            blocked_since_unix: NOW_SECS - 600,
+            since_unix: NOW_SECS,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    const lanes = Array.from(
+      screen.getByTestId("sessions-now-band").querySelectorAll("section"),
+    ).map((s) => s.getAttribute("data-testid"));
+    expect(lanes).toEqual(["now-lane-blocked", "now-lane-progress", "now-lane-waiting"]);
+    const lane = screen.getByTestId("now-lane-blocked");
+    expect(lane.id).toBe("kb-now-blocked");
+    expect(lane.textContent).toContain("Needs you");
+    expect(lane.textContent).toContain("Agents waiting on a permission prompt or a question");
+    expect(screen.getByTestId("now-row-blocked-reason").textContent).toBe("permission: Bash");
+    expect(screen.getByTestId("now-row-blocked-reason").getAttribute("title")).toBe(
+      "Claude needs your permission to use Bash",
+    );
+    // elapsed counts from blocked_since (10m), not from the later heartbeat.
+    expect(lane.querySelector(".kb-now__row-time")?.textContent).toBe("10m");
+    // the row is not in the in-progress lane.
+    expect(screen.getByTestId("now-lane-progress").querySelectorAll("li").length).toBe(1);
+  });
+
+  it("shows no stalled? marker on a blocked row and still offers resume", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[row({ session_id: "b", state: "stalled", blocked: true })]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId("now-row-stalled")).toBeNull();
+    expect(screen.getByTestId("now-row-resume-copy")).toBeTruthy();
+    expect(screen.getByTestId("now-row-blocked-reason").textContent).toBe("needs you");
+  });
+});

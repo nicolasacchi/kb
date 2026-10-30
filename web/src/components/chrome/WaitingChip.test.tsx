@@ -79,4 +79,43 @@ describe("WaitingChip", () => {
     expect(chip.textContent).toContain("2");
     expect(chip.getAttribute("href")).toBe("/sessions#kb-now-waiting");
   });
+
+  it("OL IDEA1: blocked only -> 'N blocked', danger class, links to the blocked lane", async () => {
+    vi.mocked(fetchLiveStatus).mockResolvedValueOnce([
+      row({ session_id: "a", state: "working", holder: "agent", blocked: true }),
+    ]);
+    renderChip();
+    await waitFor(() => expect(screen.getByTestId("header-waiting")).toBeTruthy());
+    const chip = screen.getByTestId("header-waiting");
+    expect(chip.textContent).toBe("1 blocked");
+    expect(chip.getAttribute("href")).toBe("/sessions#kb-now-blocked");
+    expect(chip.className).toBe("kb-waiting kb-waiting--blocked");
+    expect(chip.hasAttribute("data-kb-blocked")).toBe(true);
+    expect(chip.getAttribute("aria-label")).toBe("1 blocked: 1 session blocked on you");
+  });
+
+  it("OL IDEA1: blocked + waiting -> both counts and the plural aria text", async () => {
+    vi.mocked(fetchLiveStatus).mockResolvedValueOnce([
+      row({ session_id: "a", state: "working", holder: "agent", blocked: true }),
+      row({ session_id: "b", state: "stalled", holder: "agent", blocked: true }),
+      row({ session_id: "c", state: "waiting" }),
+    ]);
+    renderChip();
+    await waitFor(() => expect(screen.getByTestId("header-waiting")).toBeTruthy());
+    const chip = screen.getByTestId("header-waiting");
+    expect(chip.textContent).toBe("2 blocked · 1 waiting");
+    expect(chip.getAttribute("title")).toBe("2 sessions blocked on you · 1 waiting on you");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "2 blocked · 1 waiting: 2 sessions blocked on you · 1 waiting on you",
+    );
+  });
+
+  it("OL IDEA1: with no blocked rows the chip is the plain waiting chip", async () => {
+    vi.mocked(fetchLiveStatus).mockResolvedValueOnce([row({ session_id: "a", state: "waiting" })]);
+    renderChip();
+    await waitFor(() => expect(screen.getByTestId("header-waiting")).toBeTruthy());
+    const chip = screen.getByTestId("header-waiting");
+    expect(chip.className).toBe("kb-waiting");
+    expect(chip.hasAttribute("data-kb-blocked")).toBe(false);
+  });
 });
