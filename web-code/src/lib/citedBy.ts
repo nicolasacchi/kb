@@ -130,20 +130,22 @@ export interface CitedByNote {
 }
 
 export function citedByNote(claimCount: number, lookup: LiveLookup): CitedByNote | null {
-  const mismatch = lookup.failed.some((f) => f.reason === "sibling_mismatch");
-  if (lookup.state === "failed" || lookup.state === "partial") {
-    const who = lookup.failed.map((f) => f.kb).join(", ");
-    if (claimCount > 0) {
-      return {
-        kind: mismatch ? "mismatch" : "unreachable",
-        text: mismatch
-          ? `kb (${who}) speaks a different sibling contract - this list may be incomplete`
-          : `kb (${who}) did not answer - this list may be incomplete`,
-      };
-    }
-    return mismatch
-      ? { kind: "mismatch", text: `kb (${who}) speaks a different sibling contract - cannot tell which documents cite this file` }
-      : { kind: "unreachable", text: `kb (${who}) did not answer - cannot tell which documents cite this file` };
+  const failing = lookup.state === "failed" || lookup.state === "partial";
+  if (failing) {
+    const mismatched = lookup.failed.filter((f) => f.reason === "sibling_mismatch").map((f) => f.kb);
+    const silent = lookup.failed.filter((f) => f.reason !== "sibling_mismatch").map((f) => f.kb);
+    const parts: string[] = [];
+    if (mismatched.length > 0) parts.push(`kb (${mismatched.join(", ")}) speaks a different sibling contract`);
+    if (silent.length > 0) parts.push(`kb (${silent.join(", ")}) did not answer`);
+    const head = parts.join("; ");
+    const tail =
+      claimCount > 0
+        ? "this list may be incomplete"
+        : "cannot tell which documents cite this file";
+    // Mixed reasons are named separately; the kind follows the contract
+    // mismatch only when EVERY failure is one (otherwise "unreachable").
+    const kind = mismatched.length > 0 && silent.length === 0 ? "mismatch" : "unreachable";
+    return { kind, text: `${head} - ${tail}` };
   }
   if (claimCount > 0) return null;
   if (lookup.state === "off") return { kind: "no-pinned", text: "No pinned document cites this file" };

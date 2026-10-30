@@ -1029,8 +1029,9 @@ pub(crate) fn merge_claims(pinned: Vec<DocRefClaim>, live: Vec<DocRefClaim>) -> 
 
 /// The engine behind `GET /api/doc-refs`: [`doc_refs_for`]'s pinned claims
 /// unioned with kb's live `by_target` answer for the same path, fanned over
-/// the `[doclens] kbs` allowlist (each call bounded by the client's
-/// `SEARCH_TIMEOUT`). A kb that cannot answer is NAMED in
+/// the `[doclens] kbs` allowlist (each `by_target` request is bounded by the
+/// client's `SEARCH_TIMEOUT`; the one-shot sibling handshake that precedes
+/// the first call is a separate request with its own client deadline). A kb that cannot answer is NAMED in
 /// `live_lookup.failed`; it never fails the response, and its silence is not
 /// evidence that nothing cites the file. Nothing is persisted.
 pub(crate) async fn doc_refs_merged(

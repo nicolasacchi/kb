@@ -62,7 +62,7 @@ export default function CitedBy({ repo, path }: CitedByProps) {
   const note = citedByNote(data.claims.length, data.live_lookup);
   if (data.claims.length === 0) {
     return note ? (
-      <div className="kbc-inspector__citedby-note" data-kbc-citedby-absence={note.kind}>
+      <div className="kbc-inspector__citedby-note" role="note" data-kbc-citedby-absence={note.kind}>
         {note.text}
       </div>
     ) : null;
@@ -89,7 +89,7 @@ export default function CitedBy({ repo, path }: CitedByProps) {
         <Icon.ChevDown />
       </button>
       {note && (
-        <div className="kbc-inspector__citedby-note" data-kbc-citedby-note={note.kind}>
+        <div className="kbc-inspector__citedby-note" role="note" data-kbc-citedby-note={note.kind}>
           {note.text}
         </div>
       )}
@@ -135,7 +135,7 @@ export default function CitedBy({ repo, path }: CitedByProps) {
                     data-kbc-citedby-source="kb-live"
                     title="Read live from kb for this exact path; not checked against a pinned checkout"
                   >
-                    unpinned
+                    unpinned - live from kb
                   </span>
                 )}
               </span>

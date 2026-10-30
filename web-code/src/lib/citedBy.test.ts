@@ -234,4 +234,18 @@ describe("citedByNote (OL-SIBL3)", () => {
     expect(n?.kind).toBe("unreachable");
     expect(n?.text).toContain("incomplete");
   });
+  it("names mismatched and silent kbs separately when the reasons are mixed", () => {
+    const n = citedByNote(0, {
+      state: "failed",
+      kbs: ["a", "b"],
+      failed: [
+        { kb: "a", reason: "sibling_mismatch" },
+        { kb: "b", reason: "unreachable" },
+      ],
+    });
+    expect(n?.kind).toBe("unreachable");
+    expect(n?.text).toContain("kb (a) speaks a different sibling contract");
+    expect(n?.text).toContain("kb (b) did not answer");
+    expect(n?.text).not.toContain("kb (a, b)");
+  });
 });

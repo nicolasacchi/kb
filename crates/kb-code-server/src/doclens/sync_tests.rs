@@ -1252,3 +1252,23 @@ async fn with_the_feature_off_the_lookup_is_off_and_kb_is_never_asked() {
     assert!(out.claims.is_empty());
     assert!(fx.hits.by_target.lock().unwrap().is_empty());
 }
+
+#[test]
+fn failure_reason_maps_every_client_error_class() {
+    use crate::join::kb_client::KbClientError as E;
+    assert_eq!(failure_reason(&E::Timeout("u".into())), "timeout");
+    assert_eq!(
+        failure_reason(&E::SiblingMismatch("m".into())),
+        "sibling_mismatch"
+    );
+    assert_eq!(
+        failure_reason(&E::BadStatus(reqwest::StatusCode::BAD_GATEWAY)),
+        "bad_status"
+    );
+    assert_eq!(failure_reason(&E::Parse("p".into())), "parse");
+    assert_eq!(
+        failure_reason(&E::Unreachable("u".into(), "e".into())),
+        "unreachable"
+    );
+    assert_eq!(failure_reason(&E::Disabled), "unreachable");
+}
