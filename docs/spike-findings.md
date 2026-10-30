@@ -1747,8 +1747,8 @@ captures).
   reachability review, an owner and a review-by date of 2027-01-31 (or when a
   lance release supports arrow 60). `supply-chain` and `ci-gate` were red on main
   until that exception landed.
-- Dependabot backlog: the cargo group was taken as Dependabot's own fresh PR
-  (#161, via #163) because the older branch conflicted with main's `Cargo.lock`;
+- Dependabot backlog: the older cargo-group PR conflicted on `Cargo.lock`;
+  Dependabot's fresh PR #161 was closed and the same 20 updates landed through #163;
   `@types/node` majors are now ignored until the runtime moves; mermaid 12 made
   the katex override unnecessary. #160 (GitHub Actions bumps) is open and not part
   of this release.
@@ -1762,7 +1762,7 @@ captures).
 1. *A builder returned "blocked" when its prerequisite branch did not exist yet.*
    A unit briefed to branch from another unit's branch found no such branch and
    stopped. Briefs for dependent units should say which merged PR or sha to use;
-   the fix is to dispatch such units only after the prerequisite has merged.
+   the brief's own example of a remedy is to dispatch such units only after the prerequisite has merged.
 2. *Route-table footer counts drift.* `docs/api-routes.md` states a route total;
    every unit that added a route changed it, so parallel PRs conflicted or
    quietly disagreed. The count is regenerated after merging main, never
