@@ -54,7 +54,7 @@ column above you're reading:**
 
 | Harness | Push (`hook`/`observed`) wiring today | `--local` (pull) |
 |---|---|---|
-| Claude Code | Full lifecycle: `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` + a throttled `PostToolUse` heartbeat. | Reads `~/.claude/projects` directly. |
+| Claude Code | Full lifecycle: `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/`Notification` + a throttled `PostToolUse` heartbeat + a deduped `PreToolUse` tool-start beat. | Reads `~/.claude/projects` directly. |
 | Codex | `UserPromptSubmit`/`Stop` only — no verified `SessionEnd`/`Notification`-equivalent hook exists yet, so "finished" stays ambiguous for codex (it exits after `exec`, lingers interactively). | Reads `~/.codex/sessions`. |
 | Kimi Code | `UserPromptSubmit`/`Stop`/`SessionEnd`. | Reads `~/.kimi-code` (or wherever `KIMI_CODE_HOME` points). |
 | opencode | **Not wired until you apply it** — see below; the plugin file lives outside this repo. | Reads `~/.local/share/opencode/opencode.db` (sqlite; opencode has no durable busy/idle state at all, so this lane is `Presumed`-only by construction — "who spoke last", never a real live signal). |
@@ -66,6 +66,32 @@ capture — just at `confidence: presumed`, aged off that capture, never
 truly live. `kb sessions status --local` bypasses all of this: it reads
 each harness's own files directly, regardless of whether any beat hook
 is wired.
+
+### `last:` — what the session last started
+
+A quiet agent-held row can name the last tool it started: `stalled? · last:
+Bash 38m` in the table, `last: Bash · 38m` beside the `stalled?` marker in the
+Now band. It appears only on `stalled` and `presumed_ended` rows, and on a
+`working` row once it has been silent for 5 minutes (`TOOL_EVIDENCE_QUIET_SECS`);
+never on a waiting, cold or finished row, and never on a capture-derived
+(Tier-0) row. It is **name only**: an MCP tool shows as `mcp`, and a name that
+fails the label grammar (`^[A-Za-z][A-Za-z0-9_.-]{0,31}$`) shows as `unknown`.
+Arguments and paths are never sent. Today it is Claude only; the other
+harnesses carry no field. In daemon mode the fact comes from the
+`PreToolUse` beat; `--local` reads the transcript's last `tool_use` record
+(inside the 256 KiB tail window) instead.
+
+**Started is not running.** kb hears tool starts, never ends, so the label says
+`last:` and the `?` stays. Reading it:
+
+- `stalled? · last: Bash` — a long command or a hung one. Check before killing it.
+- `stalled? · last: AskUserQuestion` — it is waiting on you.
+- bare `stalled?` — no tool started this turn, so the model call itself is quiet.
+- `presumed ended · last: Bash 9h` — the process died mid-call.
+
+The evidence is a label on the row, never an input to the state: it cannot
+move a row between lanes, change `stalled`, or appear in a `session.state`
+event.
 
 ## `kb sessions status`
 
@@ -176,6 +202,8 @@ POST itself is fire-and-forget: a detached background subshell with
 | `KB_SESSIONS_DIR` | unset | **Required gate** for every beat (both scripts) — kb not configured for this project ⇒ silent no-op. Same variable the capture hooks already use. |
 | `KB_BEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` kills **every** beat (lifecycle AND heartbeat), both scripts. |
 | `KB_BEAT_HEARTBEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` disables **only** the `PostToolUse` mid-turn heartbeat (`kb-beat-throttle.sh`); lifecycle beats (`start`/`prompt`/`turn_end`/`end`/`blocked`, and the `unblocked` that resolves a block) keep firing. |
+| `KB_BEAT_TOOLS` | unset | `0`/`false`/`FALSE`/`no`/`NO` disables only the `PreToolUse` tool-start beat (`kb-beat-pretool.sh`). `KB_BEAT_HEARTBEAT=0` also silences it, since it is a mid-turn beat. |
+| `KB_BEAT_TOOLS_MIN_INTERVAL_SECS` | `180` | Min seconds between tool-start beats while the SAME tool name repeats; a change of name always sends. |
 | `KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS` | `180` | Min seconds between heartbeat beats for one session (`kb-beat-throttle.sh`; keyed on a per-session marker file's mtime, since there's no capture artifact to stat here). |
 | `KB_DAEMON_URL` | `http://127.0.0.1:4000` | Daemon base URL the beat POSTs to. |
 | `KB_BEAT_PATH` | `/api/sessions/beat` | The beat route path. Left overridable so a future repoint doesn't require touching the script. |

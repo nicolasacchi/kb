@@ -199,6 +199,18 @@
   padding: 1px 4px;
   white-space: nowrap;
 }
+/* OL IDEA4 — `last: Bash · 38m`, what a quiet agent-held row last started.
+   Same quiet-evidence shape as the honesty marker above; tokens only. */
+.kb-now__row-lasttool {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--ink-dim);
+  border: 1px dashed var(--rule);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
 .kb-now__row-resume {
   flex: none;
   display: inline-flex;

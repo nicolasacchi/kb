@@ -34,6 +34,8 @@ import {
   isLongWait,
   isPresumedEnded,
   isStalled,
+  LAST_TOOL_TITLE,
+  lastToolLabel,
   liveHonestyKind,
   liveHonestyLabel,
   liveHonestyTitle,
@@ -150,6 +152,12 @@ function LiveRow({
   const primary = row.project || row.title || row.cwd || row.session_id;
   const secondary = row.project && row.title ? row.title : row.last_line;
   const elapsed = relativeAge(kind === "blocked" ? blockedSince(row) : row.since_unix, now);
+  // OL IDEA4 — what a quiet agent-held row last started. Never on a waiting
+  // or blocked row; on a finished row only when it is a presumed end.
+  const lastTool =
+    kind === "progress" || (kind === "finished" && isPresumedEnded(row))
+      ? lastToolLabel(row, now)
+      : null;
   return (
     <li className="kb-now__row" data-testid="now-row" data-live-state={row.state}>
       <span
@@ -190,6 +198,15 @@ function LiveRow({
               title="no SessionEnd signal fired — the lease simply expired with nothing landing since. An inference, not an observed end."
             >
               presumed ended
+            </span>
+          )}
+          {lastTool && (
+            <span
+              className="kb-now__row-lasttool"
+              data-testid="now-row-last-tool"
+              title={LAST_TOOL_TITLE}
+            >
+              {lastTool}
             </span>
           )}
           {honesty && (

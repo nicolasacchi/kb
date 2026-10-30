@@ -25206,3 +25206,221 @@ async fn blocked_beats_are_sticky_scrubbed_and_edge_triggered() {
         "free text leaked:\n{buf}"
     );
 }
+
+// --- OL IDEA4: a quiet live session names the last tool it started ----------
+
+/// Like `post_beat`, but with an explicit beat `at` (unix seconds).
+async fn post_tool_beat(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    event: &str,
+    detail: serde_json::Value,
+    at_unix: i64,
+) {
+    let at = chrono::DateTime::from_timestamp(at_unix, 0)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({
+            "v": 1, "session_id": sid, "harness": "claude", "event": event,
+            "at": at, "cwd": "/work/demo/repo", "detail": detail,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "beat {event}: {:?}",
+        resp.text().await
+    );
+}
+
+#[tokio::test]
+async fn live_status_names_the_last_started_tool_scrubbed_for_bearer_peers() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let now = chrono::Utc::now().timestamp();
+    let min = 60;
+    let start = serde_json::json!({});
+    let bash = serde_json::json!({"tool": "Bash", "phase": "start"});
+
+    // A: quiet for 49 minutes behind a Bash start; a later heartbeat keeps it.
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-a",
+        "start",
+        start.clone(),
+        now - 60 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-a",
+        "tool",
+        bash.clone(),
+        now - 50 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-a",
+        "tool",
+        serde_json::json!({}),
+        now - 49 * min,
+    )
+    .await;
+    // B: a hostile tool name reduces to "unknown".
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-b",
+        "start",
+        start.clone(),
+        now - 60 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-b",
+        "tool",
+        serde_json::json!({"tool": "/etc/passwd leak-marker", "phase": "start"}),
+        now - 50 * min,
+    )
+    .await;
+    // C: a fresh Bash start is plain working, no evidence yet.
+    post_tool_beat(&client, addr, "sid-t-c", "start", start.clone(), now - 2).await;
+    post_tool_beat(&client, addr, "sid-t-c", "tool", bash.clone(), now).await;
+    // D: the turn ended after the tool -> waiting, tool cleared.
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-d",
+        "start",
+        start.clone(),
+        now - 60 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-d",
+        "tool",
+        bash.clone(),
+        now - 50 * min,
+    )
+    .await;
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-t-d",
+        "turn_end",
+        start.clone(),
+        now - 49 * min,
+    )
+    .await;
+
+    let resp = client
+        .get(url(addr, "/api/sessions/live-status"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(!text.contains("/etc/passwd"), "{text}");
+    assert!(!text.contains("leak-marker"), "{text}");
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let row = |sid: &str| {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == sid)
+            .unwrap_or_else(|| panic!("no row {sid}: {text}"))
+            .clone()
+    };
+
+    let a = row("sid-t-a");
+    assert_eq!(a["state"], "stalled", "{a}");
+    assert_eq!(a["last_tool"], "Bash", "{a}");
+    assert_eq!(a["last_tool_at"], now - 50 * min, "{a}");
+    let b = row("sid-t-b");
+    assert_eq!(b["state"], "stalled", "{b}");
+    assert_eq!(b["last_tool"], "unknown", "{b}");
+    let c = row("sid-t-c");
+    assert_eq!(c["state"], "working", "{c}");
+    assert!(
+        c.get("last_tool").is_none() && c.get("last_tool_at").is_none(),
+        "{c}"
+    );
+    let d = row("sid-t-d");
+    assert_eq!(d["state"], "waiting", "{d}");
+    assert!(
+        d.get("last_tool").is_none() && d.get("last_tool_at").is_none(),
+        "{d}"
+    );
+}
+
+/// A flood of tool-START beats on an already-working session must put
+/// nothing on the bus beyond the first transition, and the SSE payload
+/// never carries the tool.
+#[tokio::test]
+async fn pretool_beats_on_a_working_session_emit_no_session_state_event() {
+    use futures::StreamExt;
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    let now = chrono::Utc::now().timestamp();
+    post_tool_beat(
+        &client,
+        addr,
+        "sid-pre-flood",
+        "start",
+        serde_json::json!({}),
+        now,
+    )
+    .await;
+    for i in 0..25 {
+        post_tool_beat(
+            &client,
+            addr,
+            "sid-pre-flood",
+            "tool",
+            serde_json::json!({"tool": format!("ToolNo{i}"), "phase": "start"}),
+            now,
+        )
+        .await;
+    }
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(1500), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+    let frames = buf
+        .lines()
+        .filter_map(|l| l.strip_prefix("event:"))
+        .filter(|e| e.trim() == "session.state")
+        .count();
+    assert_eq!(
+        frames, 1,
+        "only the start beat transitions; saw {frames}:\n{buf}"
+    );
+    assert!(
+        !buf.contains("ToolNo"),
+        "tool name leaked onto the bus:\n{buf}"
+    );
+}

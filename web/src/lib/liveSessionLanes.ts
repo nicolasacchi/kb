@@ -35,6 +35,7 @@
 //                                prototype's central failure").
 
 import type { LiveStatusRow } from "../api/sessions";
+import { relativeAge } from "./time";
 
 export type LiveLanes = {
   /// OL IDEA1 — agent rows blocked on the operator (a permission prompt or
@@ -194,4 +195,20 @@ export function isStalled(row: Pick<LiveStatusRow, "state">): boolean {
 /// inference, never rendered as an observed end.
 export function isPresumedEnded(row: Pick<LiveStatusRow, "state">): boolean {
   return row.state === "presumed_ended";
+}
+
+/// OL IDEA4 — the tooltip for the `last:` evidence chip. Started is not
+/// running: kb hears tool STARTS, never ends.
+export const LAST_TOOL_TITLE =
+  "The most recent tool this session started that kb heard about (name only, never its arguments). Started is not running: the process may have died mid-call.";
+
+/// `last: Bash · 38m` — the name of the last tool the session started and
+/// how long ago, or `null` when either wire field is missing. Display only:
+/// bucketing and ordering above never read these fields.
+export function lastToolLabel(
+  row: Pick<LiveStatusRow, "last_tool" | "last_tool_at">,
+  nowMs: number,
+): string | null {
+  if (!row.last_tool || row.last_tool_at == null) return null;
+  return `last: ${row.last_tool} · ${relativeAge(row.last_tool_at, nowMs)}`;
 }

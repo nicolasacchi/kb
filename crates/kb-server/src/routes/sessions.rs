@@ -27,7 +27,10 @@ use axum::{
 };
 // LSC-2 — the two-axis live-session vocabulary (LSC-1, reused verbatim: the
 // beat route/registry never re-derive state logic).
-use kb_core::sessions::live::{derive_state, Holder, LivePolicy, LiveState, StateSource};
+use kb_core::sessions::live::{
+    derive_state, is_tool_label, tool_evidence_visible, tool_label, Holder, LivePolicy, LiveState,
+    StateSource,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -7679,10 +7682,17 @@ pub struct BeatBody {
 pub struct BeatDetail {
     #[serde(default)]
     pub reason: Option<String>,
-    /// The write tool's name (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) on
-    /// an `event == "tool"` beat; stored with each touch.
+    /// The tool a beat names. On an `event == "tool"` write-tool beat
+    /// (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) it is stored with each
+    /// touch; on a `phase == "start"` tool beat it is the started tool
+    /// (OL IDEA4, reduced to a `tool_label`); on a `blocked` beat it is
+    /// the tool the permission prompt names.
     #[serde(default)]
     pub tool: Option<String>,
+    /// OL IDEA4 — `"start"` marks a tool-START beat (Claude `PreToolUse`).
+    /// Any other value, or none, is an ordinary beat.
+    #[serde(default)]
+    pub phase: Option<String>,
     /// OL PRES1 — absolute paths a write-tool beat touched. Only honoured
     /// on `event == "tool"`; see [`sanitize_touches`].
     /// Deliberately `Value`s: a non-string entry is dropped by
@@ -7825,6 +7835,31 @@ fn map_event(event: &str) -> Option<(Holder, bool)> {
         "blocked" => Some((Holder::Agent, true)),
         "end" => Some((Holder::Ended, false)),
         _ => None,
+    }
+}
+
+/// OL IDEA4 — what a beat does to the row's remembered last-started tool.
+/// `start|prompt|turn_end|end` clear it (a turn boundary); a `tool` beat
+/// with `detail.phase == "start"` starts it, the name reduced through
+/// [`tool_label`] and the instant capped at `now`; everything else (a
+/// heartbeat or write-tool `tool` beat, `blocked`, `unblocked`) keeps it.
+fn tool_update_for(
+    event: &str,
+    detail: Option<&BeatDetail>,
+    at_unix: i64,
+    now_unix: i64,
+) -> crate::live_registry::ToolUpdate {
+    use crate::live_registry::{LastTool, ToolUpdate};
+    match event {
+        "start" | "prompt" | "turn_end" | "end" => ToolUpdate::Clear { at_unix },
+        "tool" => match detail {
+            Some(d) if d.phase.as_deref() == Some("start") => ToolUpdate::Started(LastTool {
+                name: tool_label(d.tool.as_deref().unwrap_or("")),
+                at_unix: at_unix.min(now_unix),
+            }),
+            _ => ToolUpdate::Keep,
+        },
+        _ => ToolUpdate::Keep,
     }
 }
 
@@ -7991,6 +8026,7 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         sanitize_touches(&body.event, body.detail.as_ref(), now_unix).into();
     let (detail_reason, blocked_tool) = blocked_detail(&body.event, body.detail.as_ref());
     let effect = block_effect(&body.event);
+    let tool_update = tool_update_for(&body.event, body.detail.as_ref(), at_unix, now_unix);
 
     let row = crate::live_registry::LiveRow {
         session_id: body.session_id,
@@ -8010,6 +8046,8 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         blocked_since_unix: None,
         touched_unix: now_unix,
         touches,
+        tool_update,
+        last_tool: None,
     };
 
     let outcome = state
@@ -8091,6 +8129,16 @@ pub struct LiveStatusRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub blocked_since_unix: Option<i64>,
+    /// The most recent tool this session STARTED that kb heard about (a
+    /// name-only label, never arguments). Started is not running. Quiet
+    /// agent-held hook rows only (OL IDEA4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_tool: Option<String>,
+    /// Unix seconds that tool was started. Present exactly when `last_tool` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_tool_at: Option<i64>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -8216,6 +8264,12 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
             BLOCKED_REASON_MAX_CHARS,
         ));
     }
+    // OL IDEA4 — defence in depth: the label grammar was applied at intake,
+    // but a tool name that fails it must never leave this floor.
+    if row.last_tool.as_deref().is_some_and(|t| !is_tool_label(t)) {
+        row.last_tool = None;
+        row.last_tool_at = None;
+    }
 }
 
 /// V0045/seg1 — the Tier-0 rebuild's grouping step. A segmented session is
@@ -8320,27 +8374,40 @@ pub async fn live_status(
         .live_registry
         .snapshot(now_unix)
         .into_iter()
-        .map(|(r, live_state, confidence)| LiveStatusRow {
-            resume: resume_command(&r.harness, &r.session_id),
-            session_id: r.session_id,
-            harness: r.harness,
-            holder: r.holder,
-            state: live_state,
-            source: StateSource::Hook,
-            confidence,
-            since_unix: r.last_activity_unix,
-            since_secs: (now_unix - r.last_activity_unix).max(0),
-            project: derive_project(r.cwd.as_deref()),
-            cwd: r.cwd,
-            model: r.model,
-            title: r.title,
-            last_line: r.last_line,
-            kb: None,
-            artifact_id: None,
-            blocked: r.blocked,
-            detail_reason: r.detail_reason,
-            blocked_tool: r.blocked_tool,
-            blocked_since_unix: r.blocked_since_unix,
+        .map(|(r, live_state, confidence)| {
+            let since_secs = (now_unix - r.last_activity_unix).max(0);
+            let evidence = r
+                .last_tool
+                .as_ref()
+                .filter(|_| tool_evidence_visible(live_state, since_secs));
+            let (last_tool, last_tool_at) = match evidence {
+                Some(t) => (Some(t.name.clone()), Some(t.at_unix)),
+                None => (None, None),
+            };
+            LiveStatusRow {
+                resume: resume_command(&r.harness, &r.session_id),
+                session_id: r.session_id,
+                harness: r.harness,
+                holder: r.holder,
+                state: live_state,
+                source: StateSource::Hook,
+                confidence,
+                since_unix: r.last_activity_unix,
+                since_secs,
+                project: derive_project(r.cwd.as_deref()),
+                cwd: r.cwd,
+                model: r.model,
+                title: r.title,
+                last_line: r.last_line,
+                kb: None,
+                artifact_id: None,
+                blocked: r.blocked,
+                detail_reason: r.detail_reason,
+                blocked_tool: r.blocked_tool,
+                blocked_since_unix: r.blocked_since_unix,
+                last_tool,
+                last_tool_at,
+            }
         })
         .collect();
 
@@ -8426,6 +8493,9 @@ pub async fn live_status(
                         detail_reason: None,
                         blocked_tool: None,
                         blocked_since_unix: None,
+                        // A capture is not live evidence.
+                        last_tool: None,
+                        last_tool_at: None,
                     }
                 })
                 .collect()
@@ -8659,7 +8729,139 @@ mod lsc2_tests {
             detail_reason: None,
             blocked_tool: None,
             blocked_since_unix: None,
+            last_tool: None,
+            last_tool_at: None,
         }
+    }
+
+    fn bd(tool: Option<&str>, phase: Option<&str>) -> BeatDetail {
+        BeatDetail {
+            tool: tool.map(str::to_string),
+            phase: phase.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tool_update_for_covers_the_closed_event_vocabulary() {
+        use crate::live_registry::{LastTool, ToolUpdate};
+        let started = bd(Some("Bash"), Some("start"));
+        // Turn boundaries clear, whatever the detail.
+        for ev in ["start", "prompt", "turn_end", "end"] {
+            assert_eq!(
+                tool_update_for(ev, Some(&started), 90, 100),
+                ToolUpdate::Clear { at_unix: 90 },
+                "{ev}"
+            );
+            assert_eq!(
+                tool_update_for(ev, None, 90, 100),
+                ToolUpdate::Clear { at_unix: 90 },
+                "{ev}"
+            );
+        }
+        // A start-phase tool beat starts; `at` is capped at now.
+        assert_eq!(
+            tool_update_for("tool", Some(&started), 90, 100),
+            ToolUpdate::Started(LastTool {
+                name: "Bash".into(),
+                at_unix: 90
+            })
+        );
+        assert_eq!(
+            tool_update_for("tool", Some(&started), 500, 100),
+            ToolUpdate::Started(LastTool {
+                name: "Bash".into(),
+                at_unix: 100
+            })
+        );
+        // The name goes through the label grammar.
+        for (raw, want) in [("/etc/passwd leak-marker", "unknown"), ("mcp__x__y", "mcp")] {
+            let d = bd(Some(raw), Some("start"));
+            assert_eq!(
+                tool_update_for("tool", Some(&d), 1, 2),
+                ToolUpdate::Started(LastTool {
+                    name: want.into(),
+                    at_unix: 1
+                })
+            );
+        }
+        assert_eq!(
+            tool_update_for("tool", Some(&bd(None, Some("start"))), 1, 2),
+            ToolUpdate::Started(LastTool {
+                name: "unknown".into(),
+                at_unix: 1
+            })
+        );
+        // Heartbeats, write-tool beats, blocked and unblocked keep.
+        assert_eq!(tool_update_for("tool", None, 1, 2), ToolUpdate::Keep);
+        assert_eq!(
+            tool_update_for("tool", Some(&bd(Some("Edit"), None)), 1, 2),
+            ToolUpdate::Keep
+        );
+        for ev in ["blocked", "unblocked"] {
+            assert_eq!(
+                tool_update_for(ev, Some(&started), 1, 2),
+                ToolUpdate::Keep,
+                "{ev}"
+            );
+        }
+    }
+
+    #[test]
+    fn beat_body_accepts_a_pretool_beat_shape() {
+        use crate::live_registry::ToolUpdate;
+        let b: BeatBody = serde_json::from_value(serde_json::json!({
+            "v": 1, "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Bash", "phase": "start"},
+        }))
+        .unwrap();
+        let d = b.detail.as_ref().unwrap();
+        assert_eq!(d.tool.as_deref(), Some("Bash"));
+        assert_eq!(d.phase.as_deref(), Some("start"));
+        assert!(matches!(
+            tool_update_for(&b.event, b.detail.as_ref(), 10, 20),
+            ToolUpdate::Started(_)
+        ));
+        // An unknown phase is an ordinary beat.
+        let odd: BeatBody = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Bash", "phase": "end"},
+        }))
+        .unwrap();
+        assert_eq!(
+            tool_update_for(&odd.event, odd.detail.as_ref(), 10, 20),
+            ToolUpdate::Keep
+        );
+    }
+
+    #[test]
+    fn live_status_row_omits_last_tool_when_absent() {
+        let r = row(LiveState::Stalled, 3000, "a");
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("last_tool").is_none() && v.get("last_tool_at").is_none());
+        let mut r2 = r.clone();
+        r2.last_tool = Some("Bash".to_string());
+        r2.last_tool_at = Some(42);
+        let v2 = serde_json::to_value(&r2).unwrap();
+        assert_eq!(v2["last_tool"], serde_json::json!("Bash"));
+        assert_eq!(v2["last_tool_at"], serde_json::json!(42));
+    }
+
+    #[test]
+    fn redact_for_non_loopback_drops_a_last_tool_that_fails_the_label_grammar() {
+        let mut bad = row(LiveState::Stalled, 3000, "a");
+        bad.last_tool = Some("/etc/passwd leak".to_string());
+        bad.last_tool_at = Some(1);
+        redact_for_non_loopback(&mut bad);
+        assert!(bad.last_tool.is_none() && bad.last_tool_at.is_none());
+        let mut ok = row(LiveState::Stalled, 3000, "b");
+        ok.last_tool = Some("Bash".to_string());
+        ok.last_tool_at = Some(1);
+        redact_for_non_loopback(&mut ok);
+        assert_eq!(ok.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(ok.last_tool_at, Some(1));
     }
 
     #[test]
@@ -8891,6 +9093,8 @@ mod lsc2_tests {
             blocked_since_unix: None,
             touched_unix: at,
             touches: Default::default(),
+            tool_update: Default::default(),
+            last_tool: None,
         };
         let out = reg.record_beat_effect(row, at, block_effect(event));
         session_state_payload(&out)
@@ -9053,6 +9257,7 @@ mod lsc2_tests {
             root: root.map(str::to_string),
             project: project.map(str::to_string),
             worktree: None,
+            phase: None,
         }
     }
 
@@ -9206,6 +9411,8 @@ mod lsc2_tests {
             blocked_since_unix: None,
             touched_unix: 500,
             touches: ts.into(),
+            tool_update: Default::default(),
+            last_tool: None,
         };
         let a = reg.record_beat(
             mk("a", sanitize_touches("tool", with.detail.as_ref(), 500)),

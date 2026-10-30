@@ -234,6 +234,8 @@ pub fn classify_kimi_session(
         transcript_path: wire_path,
         why: Some(why),
         version: protocol_version,
+        last_tool: None,
+        last_tool_at: None,
     })
 }
 

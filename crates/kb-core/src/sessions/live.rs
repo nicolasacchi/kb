@@ -33,7 +33,10 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use super::constants::{ABANDON_AFTER_SECS, COLD_AFTER_SECS, LIVE_TAIL_BYTES, STALL_AFTER_SECS};
+use super::constants::{
+    ABANDON_AFTER_SECS, COLD_AFTER_SECS, LIVE_TAIL_BYTES, STALL_AFTER_SECS,
+    TOOL_EVIDENCE_QUIET_SECS,
+};
 use super::HARNESS_DEFAULT;
 use crate::session_scrub::{scrub_transcript, ScrubOptions};
 
@@ -185,6 +188,55 @@ pub struct LiveSession {
     /// See the struct doc's "documented deviations" — the harness client
     /// version string, when present on the tailed records.
     pub version: Option<String>,
+    /// OL IDEA4 — the name of the most recent tool this session STARTED
+    /// (a [`tool_label`], never arguments or a path), shown only on a quiet
+    /// agent-held row ([`tool_evidence_visible`]). Started is not running.
+    /// Claude transcripts only; other harnesses carry `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// Unix seconds that tool was started (clamped to `<= now`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_tool_at: Option<i64>,
+}
+
+/// OL IDEA4 — the ONE label grammar for "which tool" evidence, applied at
+/// beat intake, in the `--local` transcript adapter and again in the
+/// non-loopback scrub floor. `mcp__…` collapses to `"mcp"`; a plain tool
+/// name (`^[A-Za-z][A-Za-z0-9_.-]{0,31}$`) is kept verbatim; anything else
+/// (empty, whitespace inside, a path, control characters, non-ASCII, over
+/// 32 bytes) is `"unknown"`. Never arguments, never a path.
+pub fn tool_label(raw: &str) -> String {
+    let t = raw.trim();
+    if t.starts_with("mcp__") {
+        return "mcp".to_string();
+    }
+    if is_tool_label(t) {
+        t.to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+/// The grammar check alone: `^[A-Za-z][A-Za-z0-9_.-]{0,31}$`. `"mcp"` and
+/// `"unknown"` pass; every [`tool_label`] output satisfies it.
+pub fn is_tool_label(s: &str) -> bool {
+    let b = s.as_bytes();
+    (1..=32).contains(&b.len())
+        && b[0].is_ascii_alphabetic()
+        && b.iter()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'-'))
+}
+
+/// OL IDEA4 — whether a row's last-started-tool evidence may be shown:
+/// `Stalled` and `PresumedEnded` always; `Working` once it has been silent
+/// for [`TOOL_EVIDENCE_QUIET_SECS`]; never for a human-held or finished
+/// state. A display gate only: it is never an input to [`derive_state`].
+pub fn tool_evidence_visible(state: LiveState, silent_secs: i64) -> bool {
+    match state {
+        LiveState::Stalled | LiveState::PresumedEnded => true,
+        LiveState::Working => silent_secs >= TOOL_EVIDENCE_QUIET_SECS,
+        LiveState::Waiting | LiveState::Cold | LiveState::Finished => false,
+    }
 }
 
 /// THE core pure function (design §3). Two independent axes in, one lane +
@@ -428,6 +480,10 @@ pub fn classify_claude_transcript(
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut version: Option<String> = None;
+    // OL IDEA4 — the newest `tool_use` an assistant record started, with
+    // the record's own timestamp. A tool we cannot time is not evidence
+    // (None); a human prompt clears it; a `tool_result` keeps it.
+    let mut last_tool_cand: Option<(String, i64)> = None;
     let mut skipped: u32 = 0;
 
     for line in &lines {
@@ -452,6 +508,18 @@ pub fn classify_claude_transcript(
                     model = Some(m.to_string());
                 }
                 last_kind = Some(TailKind::Assistant);
+                let started_at = rec
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                    .map(|t| t.timestamp().min(now_unix));
+                let blocks = msg.and_then(|m| m.get("content")).and_then(Value::as_array);
+                for b in blocks.into_iter().flatten() {
+                    if b.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        let name = b.get("name").and_then(Value::as_str).unwrap_or("");
+                        last_tool_cand = started_at.map(|at| (tool_label(name), at));
+                    }
+                }
             }
             "user" => {
                 // Rule 3's discriminator: only a `content` array containing
@@ -467,6 +535,9 @@ pub fn classify_claude_transcript(
                             .iter()
                             .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
                     });
+                if !is_tool_result {
+                    last_tool_cand = None;
+                }
                 last_kind = Some(if is_tool_result {
                     TailKind::ToolResult
                 } else {
@@ -556,6 +627,11 @@ pub fn classify_claude_transcript(
         StateSource::Transcript,
         policy,
     );
+    let since_secs = (now_unix - last_activity_unix).max(0);
+    let (last_tool, last_tool_at) = match last_tool_cand {
+        Some((name, at)) if tool_evidence_visible(state, since_secs) => (Some(name), Some(at)),
+        _ => (None, None),
+    };
 
     // Invariant #11: the canonical session id IS the file stem.
     let session_id = path.file_stem()?.to_str()?.to_string();
@@ -581,7 +657,7 @@ pub fn classify_claude_transcript(
         source: StateSource::Transcript,
         confidence,
         since_unix: last_activity_unix,
-        since_secs: (now_unix - last_activity_unix).max(0),
+        since_secs,
         project,
         cwd,
         model,
@@ -589,6 +665,8 @@ pub fn classify_claude_transcript(
         transcript_path: path.to_path_buf(),
         why: Some(why),
         version,
+        last_tool,
+        last_tool_at,
     })
 }
 
@@ -705,6 +783,192 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64
+    }
+
+    // --- OL IDEA4: tool evidence ----------------------------------------
+
+    #[test]
+    fn tool_label_keeps_builtin_names_collapses_mcp_and_rejects_paths_and_whitespace() {
+        assert_eq!(tool_label("Bash"), "Bash");
+        assert_eq!(tool_label("AskUserQuestion"), "AskUserQuestion");
+        assert_eq!(tool_label("mcp__plugin_x__browser_navigate"), "mcp");
+        assert_eq!(tool_label("Bash\n"), "Bash");
+        let long = "a".repeat(100);
+        for bad in [
+            "/bin/sh",
+            "../x",
+            "a b",
+            "",
+            long.as_str(),
+            ".hidden",
+            "Bäsh",
+        ] {
+            assert_eq!(tool_label(bad), "unknown", "{bad:?}");
+        }
+        for raw in [
+            "Bash",
+            "AskUserQuestion",
+            "mcp__plugin_x__browser_navigate",
+            "/bin/sh",
+            "../x",
+            "a b",
+            "Bash\n",
+            "",
+            long.as_str(),
+            ".hidden",
+            "Bäsh",
+        ] {
+            let l = tool_label(raw);
+            assert!(is_tool_label(&l), "{l:?}");
+            assert!(
+                !l.contains('/') && !l.chars().any(char::is_whitespace),
+                "{l:?}"
+            );
+        }
+        assert!(is_tool_label("mcp") && is_tool_label("unknown"));
+        assert!(!is_tool_label("") && !is_tool_label("a b") && !is_tool_label("1x"));
+    }
+
+    #[test]
+    fn tool_evidence_is_visible_only_on_quiet_agent_held_states() {
+        let q = TOOL_EVIDENCE_QUIET_SECS;
+        assert!(!tool_evidence_visible(LiveState::Working, 0));
+        assert!(!tool_evidence_visible(LiveState::Working, q - 1));
+        assert!(tool_evidence_visible(LiveState::Working, q));
+        assert!(tool_evidence_visible(LiveState::Stalled, 0));
+        assert!(tool_evidence_visible(LiveState::PresumedEnded, 0));
+        for s in [LiveState::Waiting, LiveState::Cold, LiveState::Finished] {
+            assert!(!tool_evidence_visible(s, i64::MAX), "{s:?}");
+        }
+    }
+
+    fn rfc3339(unix: i64) -> String {
+        chrono::DateTime::from_timestamp(unix, 0)
+            .unwrap()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    fn tool_use_line(name: &str, ts_unix: Option<i64>) -> String {
+        let ts = ts_unix
+            .map(|t| format!(r#","timestamp":"{}""#, rfc3339(t)))
+            .unwrap_or_default();
+        format!(
+            r#"{{"type":"assistant"{ts},"message":{{"stop_reason":"tool_use","content":[{{"type":"text","text":"x"}},{{"type":"tool_use","name":"{name}","input":{{"command":"secret-arg"}}}}]}}}}"#
+        )
+    }
+
+    const TOOL_RESULT_LINE: &str =
+        r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#;
+    const USER_TEXT_LINE: &str = r#"{"type":"user","message":{"content":"hello"}}"#;
+
+    fn classify_lines(lines: &[String], now_offset: i64) -> LiveSession {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut content = lines.join("\n");
+        content.push('\n');
+        let p = write_file(tmp.path(), "sid-tool.jsonl", &content);
+        classify_claude_transcript(&p, real_now() + now_offset, &LivePolicy::default()).unwrap()
+    }
+
+    #[test]
+    fn classify_names_the_last_started_tool_on_a_stalled_transcript() {
+        let t0 = real_now() - 60;
+        let got = classify_lines(&[tool_use_line("Bash", Some(t0))], 50 * 60);
+        assert_eq!(got.state, LiveState::Stalled);
+        assert_eq!(got.last_tool.as_deref(), Some("Bash"));
+        assert_eq!(got.last_tool_at, Some(t0));
+        // An MCP tool collapses; a record we cannot time is no evidence.
+        let m = classify_lines(&[tool_use_line("mcp__a__b", Some(t0))], 50 * 60);
+        assert_eq!(m.last_tool.as_deref(), Some("mcp"));
+        let untimed = classify_lines(&[tool_use_line("Bash", None)], 50 * 60);
+        assert_eq!(untimed.state, LiveState::Stalled);
+        assert!(untimed.last_tool.is_none() && untimed.last_tool_at.is_none());
+        // A timestamp in the future is clamped to now.
+        let fut = classify_lines(&[tool_use_line("Bash", Some(real_now() + 9999))], 50 * 60);
+        assert!(fut.last_tool_at.unwrap() <= real_now() + 50 * 60);
+    }
+
+    #[test]
+    fn classify_keeps_the_last_started_tool_after_its_tool_result() {
+        let t0 = real_now() - 60;
+        let got = classify_lines(
+            &[
+                tool_use_line("Read", Some(t0)),
+                TOOL_RESULT_LINE.to_string(),
+            ],
+            50 * 60,
+        );
+        assert_eq!(got.state, LiveState::Stalled);
+        assert_eq!(got.last_tool.as_deref(), Some("Read"));
+        // The newest started tool wins over an older one.
+        let two = classify_lines(
+            &[
+                tool_use_line("Read", Some(t0)),
+                TOOL_RESULT_LINE.to_string(),
+                tool_use_line("Grep", Some(t0 + 10)),
+            ],
+            50 * 60,
+        );
+        assert_eq!(two.last_tool.as_deref(), Some("Grep"));
+        assert_eq!(two.last_tool_at, Some(t0 + 10));
+    }
+
+    #[test]
+    fn classify_clears_the_last_tool_after_a_human_prompt() {
+        let t0 = real_now() - 60;
+        let got = classify_lines(
+            &[tool_use_line("Bash", Some(t0)), USER_TEXT_LINE.to_string()],
+            50 * 60,
+        );
+        assert_eq!(got.state, LiveState::Stalled);
+        assert!(got.last_tool.is_none() && got.last_tool_at.is_none());
+    }
+
+    #[test]
+    fn classify_hides_tool_evidence_on_a_fresh_working_or_a_waiting_session() {
+        let t0 = real_now() - 60;
+        // Fresh working: not silent long enough.
+        let fresh = classify_lines(&[tool_use_line("Bash", Some(t0))], 0);
+        assert_eq!(fresh.state, LiveState::Working);
+        assert!(fresh.last_tool.is_none());
+        // Quiet working (past the evidence threshold, before the stall).
+        let quiet = classify_lines(&[tool_use_line("Bash", Some(t0))], 10 * 60);
+        assert_eq!(quiet.state, LiveState::Working);
+        assert_eq!(quiet.last_tool.as_deref(), Some("Bash"));
+        // Waiting (human-held): the turn ended after the tool.
+        let end_turn = r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}"#;
+        let waiting = classify_lines(
+            &[tool_use_line("Bash", Some(t0)), end_turn.to_string()],
+            10 * 60,
+        );
+        assert_eq!(waiting.state, LiveState::Waiting);
+        assert!(waiting.last_tool.is_none());
+    }
+
+    #[test]
+    fn classify_last_tool_survives_a_torn_trailing_line() {
+        let t0 = real_now() - 60;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut content = tool_use_line("Bash", Some(t0));
+        content.push('\n');
+        content.push_str(r#"{"type":"assistant","message":{"stop_reason":"end_"#);
+        let p = write_file(tmp.path(), "sid-torn-tool.jsonl", &content);
+        let got =
+            classify_claude_transcript(&p, real_now() + 50 * 60, &LivePolicy::default()).unwrap();
+        assert_eq!(got.last_tool.as_deref(), Some("Bash"));
+    }
+
+    // invariant:11 tool evidence never moves the holder or state
+    #[test]
+    fn classify_state_is_identical_whatever_the_tool_name() {
+        let t0 = real_now() - 60;
+        let a = classify_lines(&[tool_use_line("Bash", Some(t0))], 50 * 60);
+        let b = classify_lines(&[tool_use_line("AskUserQuestion", Some(t0))], 50 * 60);
+        assert_ne!(a.last_tool, b.last_tool);
+        assert_eq!(a.holder, b.holder);
+        assert_eq!(a.state, b.state);
+        assert_eq!(a.confidence, b.confidence);
+        assert_eq!(a.since_secs, b.since_secs);
+        assert_eq!(a.why, b.why);
     }
 
     // --- derive_state ---------------------------------------------------

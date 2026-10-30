@@ -33,4 +33,14 @@ blocked_tool?: string,
 /**
  * Unix seconds of the beat that raised the block. Blocked rows only.
  */
-blocked_since_unix?: number, };
+blocked_since_unix?: number, 
+/**
+ * The most recent tool this session STARTED that kb heard about (a
+ * name-only label, never arguments). Started is not running. Quiet
+ * agent-held hook rows only (OL IDEA4).
+ */
+last_tool?: string, 
+/**
+ * Unix seconds that tool was started. Present exactly when `last_tool` is.
+ */
+last_tool_at?: number, };

@@ -11,8 +11,15 @@
 # ~/.codex/hooks.json, Kimi's config.toml, opencode's plugin `event`
 # handler), not here:
 #
-#   kb-beat.sh <harness> <event>
+#   kb-beat.sh <harness> <event> [phase]
 #   kb-beat.sh claude turn_end
+#   kb-beat.sh claude tool start      (kb-beat-pretool.sh only)
+#
+# The optional third argument is honoured ONLY as `start` on a `tool` event: a
+# tool-START beat (Claude PreToolUse) that carries `detail.tool` (the tool
+# NAME, capped at 64 bytes; `tool_input` is never read) and `detail.phase`
+# ("start"). Any other third argument is ignored and the body is exactly the
+# two-argument one.
 #
 # THE DISCIPLINE (design §5): a beat reports an EVENT, never a STATE.
 # event is one of start|prompt|tool|turn_end|blocked|unblocked|end — this
@@ -71,6 +78,8 @@
 #   (blocked, claude) a Notification of type permission_prompt |
 #                                 elicitation_dialog | elicitation_url_dialog
 #                                 beats `blocked`; any other type sends nothing.
+#   (tool start) KB_BEAT_TOOLS / KB_BEAT_TOOLS_MIN_INTERVAL_SECS are read by
+#                                 kb-beat-pretool.sh, not here.
 #   KB_BEAT_DRYRUN=1             print the JSON body to stdout INSTEAD of
 #                                 posting; no backgrounding, no curl. The
 #                                 test harness's only hook into this
@@ -88,6 +97,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 harness="${1:-}"
 event="${2:-}"
+phase_arg="${3:-}"
 [ -n "$harness" ] && [ -n "$event" ] || exit 0
 
 input="$(cat 2>/dev/null)" || input=""
@@ -271,7 +281,7 @@ detail_paths='[]'
 detail_root=""
 detail_project=""
 detail_worktree=""
-if [ "$harness" = "claude" ] && [ "$event" = "tool" ] \
+if [ "$harness" = "claude" ] && [ "$event" = "tool" ] && [ "$phase_arg" != "start" ] \
    && [ "${KB_BEAT_PATHS:-}" != "0" ]; then
   tool_name="$(jq_field '.tool_name // empty' "$input")"
   case "$tool_name" in
@@ -309,6 +319,20 @@ if [ "$harness" = "claude" ] && [ "$event" = "tool" ] \
   esac
 fi
 
+# detail.tool / detail.phase — a tool-START beat only (event=tool, third
+# argument `start`; kb-beat-pretool.sh is the one caller). The NAME only: the
+# daemon reduces it again through its own label grammar. No path extraction
+# runs for it (above), and tool_input is never read.
+detail_phase=""
+if [ "$event" = "tool" ] && [ "$phase_arg" = "start" ]; then
+  start_tool="$(jq_field '.tool_name // empty' "$input")"
+  start_tool="$(LC_ALL=C; printf '%s' "${start_tool:0:64}")"
+  if [ -n "$start_tool" ]; then
+    detail_tool="$start_tool"
+    detail_phase="start"
+  fi
+fi
+
 host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
 pid="${PPID:-0}"
 case "$pid" in '' | *[!0-9]*) pid=0 ;; esac
@@ -331,6 +355,7 @@ body="$(jq -n \
   --arg detail_reason "$detail_reason" \
   --arg detail_tool "$detail_tool" \
   --argjson detail_paths "$detail_paths" \
+  --arg detail_phase "$detail_phase" \
   --arg detail_root "$detail_root" \
   --arg detail_project "$detail_project" \
   --arg detail_worktree "$detail_worktree" \
@@ -343,6 +368,7 @@ body="$(jq -n \
    + (if $last_line != "" then {last_line: $last_line} else {} end)
    + ( ( (if $detail_reason != "" then {reason: $detail_reason} else {} end)
        + (if $detail_tool != "" then {tool: $detail_tool} else {} end)
+       + (if $detail_phase != "" then {phase: $detail_phase} else {} end)
        + (if ($detail_paths | length) > 0
           then {paths: $detail_paths, root: $detail_root, project: $detail_project}
                + (if $detail_worktree != "" then {worktree: $detail_worktree} else {} end)

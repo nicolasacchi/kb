@@ -1110,7 +1110,21 @@ POST /api/sessions/beat                     LSC-2/3 (live-sessions cockpit
                                             kept only as a plain token
                                             (`[A-Za-z0-9_.:-]`, 1..128); an
                                             invalid tool never rejects the
-                                            beat. Response
+                                            beat. OL IDEA4 — a `tool` beat
+                                            with `detail:{tool, phase:"start"}`
+                                            (Claude `PreToolUse`, deduped
+                                            hook-side) records the newest
+                                            STARTED tool in memory: the name
+                                            is reduced to a label (`mcp` for
+                                            `mcp__…`, `unknown` outside
+                                            `^[A-Za-z][A-Za-z0-9_.-]{0,31}$`)
+                                            and the instant is capped at now;
+                                            `start|prompt|turn_end|end` clear
+                                            it, every other beat keeps it, and
+                                            an older beat never replaces a
+                                            newer one. No event is emitted for
+                                            it and the SSE payload never
+                                            carries it. Response
                                             `{ok, session_id, state, holder,
                                             confidence}`. `auth_bearer` — see
                                             invariant #11's LSC amendment for
@@ -1154,7 +1168,19 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             re-capped) rather than a 403.
                                             A blocked row also carries
                                             `blocked_tool?` and
-                                            `blocked_since_unix?`.
+                                            `blocked_since_unix?`. OL IDEA4:
+                                            a quiet agent-held hook row also
+                                            carries `last_tool?` (a label,
+                                            never arguments) and
+                                            `last_tool_at?` (unix seconds) —
+                                            only when the state is `stalled`
+                                            or `presumed_ended`, or `working`
+                                            and silent >= 5 min; absent
+                                            otherwise and on every Tier-0
+                                            row. Started, not running. A
+                                            non-loopback caller's scrub drops
+                                            a `last_tool` that fails the
+                                            label grammar.
                                             `?blocked=1|true|on` keeps only
                                             rows blocked on the operator
                                             (not `presumed_ended`) and skips

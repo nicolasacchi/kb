@@ -1593,6 +1593,16 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   payload is deliberately NOT `title`/`last_line`/`detail_reason` (free text
   leaks in only through the request/response bodies above, never the SSE
   broadcast).
+- **Tool-start evidence is a sub-label on a quiet agent-held row, never an
+  axis (OL IDEA4).** Claude's `PreToolUse` sends a deduped `tool` beat with
+  `detail.{tool,phase:"start"}`; the registry keeps the newest started tool in
+  memory only (monotonic by beat `at`, cleared by `start|prompt|turn_end|end`)
+  and `live-status` shows it only on `stalled`/`presumed_ended` rows or a
+  `working` row silent >= 5 min. It is never a `derive_state` input (pinned by
+  `tool_evidence_never_changes_the_derived_state`), never in the `session.state`
+  payload, and passes one closed label grammar (`kb_core::sessions::live::
+  tool_label`) at intake and again in the non-loopback scrub floor. `last:`
+  means started, not running.
 - **Push wiring is uneven across harnesses by design, and `--local` and
   daemon mode see different subsets as a result.** LSC-3 wires
   `kb-beat.sh` into Claude Code's full lifecycle (`SessionStart`/

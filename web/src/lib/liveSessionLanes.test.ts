@@ -8,6 +8,8 @@ import {
   isLongWait,
   isPresumedEnded,
   isStalled,
+  LAST_TOOL_TITLE,
+  lastToolLabel,
   liveHonestyKind,
   liveHonestyLabel,
   liveHonestyTitle,
@@ -235,5 +237,42 @@ describe("OL IDEA1 - the blocked lane", () => {
     );
     expect(blockedLabel({})).toBe("needs you");
     expect(blockedLabel({ detail_reason: "   " })).toBe("needs you");
+  });
+});
+
+describe("OL IDEA4 - last-tool evidence", () => {
+  const NOW_MS = NOW * 1000;
+
+  it("lastToolLabel formats name and age, and is null when either field is missing", () => {
+    expect(lastToolLabel({ last_tool: "Bash", last_tool_at: NOW - 38 * 60 }, NOW_MS)).toBe(
+      "last: Bash · 38m",
+    );
+    expect(lastToolLabel({ last_tool: "Bash" }, NOW_MS)).toBeNull();
+    expect(lastToolLabel({ last_tool_at: NOW }, NOW_MS)).toBeNull();
+    expect(lastToolLabel({}, NOW_MS)).toBeNull();
+    expect(lastToolLabel({ last_tool: "", last_tool_at: NOW }, NOW_MS)).toBeNull();
+  });
+
+  it("the tooltip says started is not running", () => {
+    expect(LAST_TOOL_TITLE).toContain("may have died");
+  });
+
+  it("bucketing and ordering are identical with and without the fields", () => {
+    const plain = [
+      row({ session_id: "a", state: "stalled", since_unix: NOW - 3000 }),
+      row({ session_id: "b", state: "working", since_unix: NOW - 10 }),
+      row({ session_id: "c", state: "waiting", since_unix: NOW - 500, holder: "human" }),
+      row({ session_id: "d", state: "presumed_ended", since_unix: NOW - 40000 }),
+      row({ session_id: "e", state: "stalled", since_unix: NOW - 3000, blocked: true }),
+    ];
+    const withTool = plain.map((r) => ({ ...r, last_tool: "Bash", last_tool_at: r.since_unix }));
+    const ids = (rs: ReturnType<typeof bucketLiveSessions>) => ({
+      blocked: rs.blocked.map((r) => r.session_id),
+      inProgress: rs.inProgress.map((r) => r.session_id),
+      waiting: rs.waiting.map((r) => r.session_id),
+      finished: rs.finished.map((r) => r.session_id),
+      total: rs.finishedTotal,
+    });
+    expect(ids(bucketLiveSessions(withTool))).toEqual(ids(bucketLiveSessions(plain)));
   });
 });

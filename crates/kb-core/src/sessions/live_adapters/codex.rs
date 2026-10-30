@@ -215,6 +215,8 @@ pub fn classify_codex_session(
         transcript_path: path.to_path_buf(),
         why: Some(why),
         version: None,
+        last_tool: None,
+        last_tool_at: None,
     })
 }
 

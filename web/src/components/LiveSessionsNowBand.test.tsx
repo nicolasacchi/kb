@@ -267,3 +267,105 @@ describe("LiveSessionsNowBand - OL IDEA1 Needs you lane", () => {
     expect(screen.getByTestId("now-row-blocked-reason").textContent).toBe("needs you");
   });
 });
+
+describe("OL IDEA4 - the last tool a quiet row started", () => {
+  const stalledBash = {
+    session_id: "q",
+    state: "stalled" as const,
+    since_unix: NOW_SECS - 2400,
+    last_tool: "Bash",
+    last_tool_at: NOW_SECS - 38 * 60,
+  };
+
+  it("shows `last: Bash · 38m` beside the stalled? marker, with the honest tooltip", () => {
+    render(<LiveSessionsNowBand rows={[row(stalledBash)]} now={NOW_MS} />);
+    const chip = screen.getByTestId("now-row-last-tool");
+    expect(chip.textContent).toBe("last: Bash · 38m");
+    expect(chip.getAttribute("title")).toContain("may have died");
+    expect(chip.textContent).not.toMatch(/running/i);
+    expect(screen.getByTestId("sessions-now-band").textContent).not.toMatch(/running/i);
+    // the `?` doubt marker is still there: the evidence does not replace it.
+    expect(screen.getByTestId("now-row-stalled")).toBeTruthy();
+  });
+
+  it("shows nothing on a working row that carries no evidence", () => {
+    render(<LiveSessionsNowBand rows={[row({ session_id: "w", state: "working" })]} now={NOW_MS} />);
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows nothing when only one of the two fields is present", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[row({ session_id: "h", state: "stalled", last_tool: "Bash" })]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows nothing on a waiting row even if the fields are present", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({
+            session_id: "wt",
+            state: "waiting",
+            holder: "human",
+            last_tool: "Bash",
+            last_tool_at: NOW_SECS - 600,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.getByTestId("now-lane-waiting")).toBeTruthy();
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows nothing on a blocked row (the Needs you lane is left as it is)", () => {
+    render(
+      <LiveSessionsNowBand rows={[row({ ...stalledBash, session_id: "bl", blocked: true })]} now={NOW_MS} />,
+    );
+    expect(screen.getByTestId("now-lane-blocked")).toBeTruthy();
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+
+  it("shows it on a presumed_ended row in the finished lane", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({
+            session_id: "pe",
+            state: "presumed_ended",
+            holder: "agent",
+            since_unix: NOW_SECS - 9 * 3600,
+            last_tool: "Bash",
+            last_tool_at: NOW_SECS - 9 * 3600,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    const lane = screen.getByTestId("now-lane-finished");
+    expect(lane.querySelector("[data-testid=now-row-last-tool]")?.textContent).toBe("last: Bash · 9h");
+    expect(screen.getByTestId("now-row-presumed-ended")).toBeTruthy();
+  });
+
+  it("does not show it on an ordinary finished row", () => {
+    render(
+      <LiveSessionsNowBand
+        rows={[
+          row({
+            session_id: "f",
+            state: "finished",
+            holder: "none",
+            last_tool: "Bash",
+            last_tool_at: NOW_SECS - 600,
+          }),
+        ]}
+        now={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId("now-row-last-tool")).toBeNull();
+  });
+});
