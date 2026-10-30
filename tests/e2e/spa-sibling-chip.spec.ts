@@ -212,7 +212,7 @@ test.describe("kb Code chip (reader Header)", () => {
   test("upgrades to verified and links to the kb-code reader at the ref's line", async ({ page, request }) => {
     const { id, rel } = await docByFilename(request, "canon", "code-refs-demo.html");
     await mockCodeLens(page, id);
-    await page.route(
+    await page.context().route(
       (url) => codeLensOrigin(url) && url.pathname.startsWith("/r/"),
       (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<html><body>reader</body></html>" }),
     );
@@ -223,7 +223,7 @@ test.describe("kb Code chip (reader Header)", () => {
     const popupP = page.waitForEvent("popup");
     await chip(page).click();
     const popup = await popupP;
-    await popup.waitForURL(href);
+    await expect.poll(() => popup.url(), { timeout: 15_000 }).toBe(href);
   });
 
   test("?sec= targets the ref of that group", async ({ page, request }) => {
