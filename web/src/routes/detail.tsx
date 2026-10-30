@@ -52,7 +52,13 @@ import { artifactHref } from "../lib/artifactHref";
 import { canonicalArtifactLocation } from "../lib/canonicalArtifactLocation";
 import { childFolders } from "../lib/folderTree";
 import { parseAtParam } from "../lib/memento";
-import { formatPane2, parsePane2, samePane, type PaneLoc } from "../lib/paneUrl";
+import {
+  formatPane2,
+  paneSplitOpen,
+  parsePane2,
+  samePane,
+  type PaneLoc,
+} from "../lib/paneUrl";
 import { isEditableTarget } from "../lib/keymap";
 import {
   consumeFlowSeed,
@@ -203,6 +209,15 @@ export default function Detail() {
   // cross-origin iframes each wanting the full viewport height does not
   // degrade by stacking — so the rule is simply "single pane, ignore ?pane2".
   // The param is left untouched, so widening the viewport restores the split.
+  // CT-F6 — `?at=<unix>`: read this artifact AS OF an instant (RFC 7089's
+  // per-resource Memento). URL-derived like `?view=`, so the coordinate is
+  // shareable and survives a reload; TOTAL parse, so a malformed value
+  // degrades to the ordinary reader rather than a fabricated instant.
+  // OL TIME2: the daemon now serves the BODY as it stood for this
+  // coordinate (the pane is a historical render with a caption), and the
+  // versions panel's date control writes it. Per-artifact only — it selects a VERSION of the open doc and nothing
+  // else (no filtering, no ranking, no corpus timeline).
+  const atUnix = parseAtParam(searchParams.get("at"));
   const pane2Param = searchParams.get("pane2");
   const pane2Loc = useMemo(() => parsePane2(pane2Param), [pane2Param]);
   // Refuse a self-split. Two panes on the SAME artifact would share one
@@ -210,10 +225,18 @@ export default function Detail() {
   // artifact iframes apart — would then be unable to attribute a
   // `kb:scroll`/`kb:reading` beacon to one pane's append-only visit row
   // (#8/#19). Cheap here, structurally impossible to get wrong later.
-  const splitOpen =
-    !!pane2Loc &&
-    !isMobile &&
-    !samePane(pane2Loc, { kb: kb ?? "", sourceRelative: relPath });
+  //
+  // The ONE exception (OL TIME2): a then|now split. While `?at=` is set the
+  // primary pane is a HISTORICAL render, so the second pane may hold the SAME
+  // artifact at its working version. The shared origin is made safe by the
+  // pane's frame attribution (`e.source`, ArtifactPane) and by the historical
+  // pane opening no visit at all — only the "now" pane is a read.
+  const splitOpen = paneSplitOpen(
+    pane2Loc,
+    { kb: kb ?? "", sourceRelative: relPath },
+    atUnix,
+    isMobile,
+  );
   // Same by-path query shape (and the same ["doc", kb, rel] cache key family)
   // as the primary doc above, so the SSE bridge's ["doc", kb] invalidation
   // covers both panes for free (#23).
@@ -282,13 +305,6 @@ export default function Detail() {
   // toggling `?view` never reloads the artifact (replace:true keeps one
   // history entry).
   const immersive = searchParams.get("view") === "immersive";
-  // CT-F6 — `?at=<unix>`: read this artifact AS OF an instant (RFC 7089's
-  // per-resource Memento). URL-derived like `?view=`, so the coordinate is
-  // shareable and survives a reload; TOTAL parse, so a malformed value
-  // degrades to the ordinary reader rather than a fabricated instant.
-  // Per-artifact only — it selects a VERSION of the open doc and nothing
-  // else (no filtering, no ranking, no corpus timeline).
-  const atUnix = parseAtParam(searchParams.get("at"));
   const setImmersive = useCallback(
     (on: boolean) => {
       setSearchParams(
@@ -882,6 +898,28 @@ export default function Detail() {
     );
     setFocusedPane(1);
   }, [setSearchParams]);
+  // OL TIME2 — write/clear `?at=`. A plain push (a moment in time IS a place
+  // the reader can come back from, unlike a split arrangement). Clearing it
+  // also drops a then|now `?pane2=` that names this very artifact, since a
+  // self-split is only legal while `?at=` is set.
+  const setAt = useCallback(
+    (next: number | null) => {
+      setSearchParams((prev) => {
+        const q = new URLSearchParams(prev);
+        if (next === null) {
+          q.delete("at");
+          const p2 = parsePane2(q.get("pane2"));
+          if (p2 && samePane(p2, { kb: kb ?? "", sourceRelative: relPath })) {
+            q.delete("pane2");
+          }
+        } else {
+          q.set("at", String(Math.trunc(next)));
+        }
+        return q;
+      });
+    },
+    [setSearchParams, kb, relPath],
+  );
   // The primary offers "open beside" only when there IS somewhere to open and
   // we're not on a phone; the second pane always offers "close this pane".
   const canSplit = !isMobile && !!splitTarget && !splitOpen;
@@ -1440,7 +1478,7 @@ export default function Detail() {
               onVersions={handleToggleVersions}
               panelSlot={
                 showVersions ? (
-                  <VersionsPanel kb={kb} id={id} at={atUnix} />
+                  <VersionsPanel kb={kb} id={id} at={atUnix} onOpenAsOf={setAt} />
                 ) : showPanel ? (
                   review.file ? (
                     <CommentsPanel
@@ -1601,6 +1639,15 @@ export default function Detail() {
       // verb and the `w v` chord use, offered only when the reader can
       // actually split right now.
       onPeekSplit={!isMobile && !splitOpen ? openSplit : undefined}
+      // OL TIME2 — the primary pane is the only one `?at=` can name.
+      at={atUnix}
+      asOfSplit={isMobile ? undefined : splitOpen ? "close" : "open"}
+      onAsOfSplit={
+        splitOpen
+          ? closeSplit
+          : () => openSplit({ kb: kb ?? "", sourceRelative: relPath })
+      }
+      onAsOfToday={() => setAt(null)}
     />
   );
   // The compare pane. Deliberately leaner than the primary: no sibling
@@ -1821,6 +1868,7 @@ export default function Detail() {
                   // artifact than the link asked about (the #30 v0.29
                   // per-pane exactness rule).
                   at={primaryFocused ? atUnix : null}
+                  onOpenAsOf={primaryFocused ? setAt : undefined}
                 />
               ) : showPanel ? (
                 focusedReview.file ? (
