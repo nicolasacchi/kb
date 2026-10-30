@@ -1772,8 +1772,10 @@ captures).
    reliably, so the fix is a fresh Dependabot PR and a port of the reviewed
    config (the `rand_core` skip) rather than a conflict edit.
 4. *A lint regex that was quadratic only on real files.* The css-vars lint passed
-   on its fixtures and on small trees, then crawled on a real stylesheet; the
-   fix made the scan linear. Lints need one test on a realistic input.
+   on its fixtures, then its TypeScript declaration matcher rescanned backwards
+   from every quote on `web/`'s real source: over 60 s locally, and CI cancelled
+   the `web` job at 20 min. Starting at the quote with one bounded backward walk
+   made it linear (0.13 s). Lints need one test on a realistic input.
 5. *Ids collide across corpora, so relevance labels are `kb:id`.* A bare id in a
    `scope=all` bench case matched the wrong corpus's hit; RANK2's labels carry the
    kb and split on the last colon.
@@ -1788,6 +1790,11 @@ captures).
    CLI visit, which deliberately rewrote the test
    `history_record_open_bump_does_not_overwrite_source`; the PR named the
    reversal instead of weakening the test quietly.
+9. *A Dependabot group can split a lockstep set.* The cargo group bumped
+   `arrow-schema` to 58.4.1 on its own, which breaks invariant #1 (arrow, lance,
+   lancedb and datafusion move only as a set), and a tree-sitter-md bump left the
+   kb-code symbol and highlight salts and the syntax golden stale. Review caught
+   both; #163 pins `arrow-schema` back to `=58.4.0` and bumps the salts.
 
 **Not built / open.** A Library time strip (refused, see the design review);
 "Open as of..." in the reader's More menu (versions panel only); moving the
