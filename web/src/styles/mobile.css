@@ -877,10 +877,10 @@ body.kb-immersive .kb-tabbar {
    * itself hidden on mobile, so `?view=list` must stay usable on a phone.
    * Collapse to a 2-line row: title across the first line, folder + the
    * quiet age on the second; every other column and the sticky desktop
-   * header are dropped, and the download button is pinned right and always
-   * visible (no hover on touch). */
+   * header are dropped; the download button is hidden on coarse pointers
+   * (no hover on touch; the reader's More menu owns Download). */
   .list-row {
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto;
     grid-template-rows: auto auto;
     row-gap: 2px;
     height: auto;
@@ -911,14 +911,6 @@ body.kb-immersive .kb-tabbar {
   .list-row__read {
     display: none;
   }
-  .list-row__download {
-    grid-column: 3;
-    grid-row: 1 / 3;
-    align-self: center;
-    opacity: 1;
-    min-width: 40px;
-    min-height: 40px;
-  }
 }
 
 /* ─────────────────────── MB5: touch targets + a11y ──────────────────── */
@@ -946,11 +938,6 @@ body.kb-immersive .kb-tabbar {
   .kb-side__dates button {
     min-height: 40px;
     padding-inline: 14px;
-  }
-  /* Gallery card quick actions (peek / download). */
-  .kb-card__action {
-    min-width: 40px;
-    min-height: 40px;
   }
   /* Inbox row quiet actions (resolve/reply) + the per-artifact archive
    * button — the thumb-zone rail duplicates these at full 44px, but the
@@ -990,7 +977,7 @@ body.kb-immersive .kb-tabbar {
    * holds every dense control row to; bumped to that same 40px (not the
    * 44px reserved for single primary/navigational controls like
    * `.kb-drawer__close` above), since these are dense paired/grouped
-   * actions like `.kb-card__action`/`.inbox-comment__act`. */
+   * actions like `.inbox-comment__act`. */
   .cme__tb-btn {
     min-width: 40px;
     min-height: 40px;
@@ -1231,41 +1218,13 @@ body.kb-immersive .kb-tabbar {
   }
 }
 
-/* OL L6 round 2: card actions, Spine search/menu, reader strip. */
-/* A touch pointer has no hover, so the quick actions are always visible
- * (chrome.css). At 44px they no longer fit in the top-right corner beside the
- * title: lay them out along the card's bottom edge instead, on 48px centres,
- * and keep the meta line out from under them. */
+/* OL TOUCH2: a touch pointer has no hover and the reader is the one home for
+ * per-artifact verbs (Download and Exclude live in its More menu), so cards
+ * and Index rows carry no action chrome at all. */
 @media (pointer: coarse) {
-  .kb-card__action {
-    top: auto;
-    bottom: var(--card-act-gap);
-    width: var(--touch-min);
-    height: var(--touch-min);
-    min-width: var(--touch-min);
-    min-height: var(--touch-min);
-    /* the desktop chip is a dark translucent wash with a muted glyph, which
-     * vanishes on the light theme; on touch it is always visible, so skin it
-     * from the panel tokens */
-    background: var(--bg-panel);
-    color: var(--ink);
-  }
-  /* Slots from the right edge: inset 6px, then one (size + gap) per button.
-   * Applies to any coarse-pointer device, whatever its width. */
-  .kb-card__peek {
-    right: 6px;
-  }
-  .kb-card__download {
-    right: calc(6px + var(--touch-min) + var(--card-act-gap));
-  }
-  .kb-card__exclude {
-    right: calc(6px + 2 * (var(--touch-min) + var(--card-act-gap)));
-  }
-  .kb-card__meta {
-    /* three buttons + their gaps + the edge inset */
-    padding-right: calc(6px + 3 * (var(--touch-min) + var(--card-act-gap)));
-    min-height: var(--touch-min);
-    align-items: center;
+  .kb-card__action,
+  .list-row__download {
+    display: none;
   }
 }
 

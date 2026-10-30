@@ -347,24 +347,24 @@ test.describe("mobile library landing (OL L6)", () => {
     expect(rows).toBeLessThanOrEqual(2);
   });
 
-  test("card quick actions never cover the card title", async ({ page }) => {
+  test("touch cards carry no action buttons; Download lives in the reader More menu", async ({ page }) => {
     await page.goto(`${base()}/?kb=canon&folder=pm&sort=title&dir=asc`);
-    const card = page.locator(".kb-card").first();
-    await expect(card).toBeVisible();
-    const title = await card.locator(".kb-card__title").boundingBox();
-    expect(title).not.toBeNull();
-    let n = 0;
-    for (const a of await card.locator(".kb-card__action").all()) {
-      const b = await a.boundingBox();
-      if (!b || !title) continue;
-      n++;
-      const overlap =
-        b.x < title.x + title.width && b.x + b.width > title.x &&
-        b.y < title.y + title.height && b.y + b.height > title.y;
-      expect(overlap).toBe(false);
-      expect(b.height).toBeGreaterThanOrEqual(43.5);
+    await expect(page.locator(".kb-card").first()).toBeVisible();
+    const actions = await page.locator(".kb-card__action").all();
+    expect(actions.length).toBeGreaterThan(0);
+    for (const a of actions) {
+      await expect(a).toBeHidden();
     }
-    expect(n).toBeGreaterThan(0);
+    await page.goto(`${base()}/?kb=canon&view=list`);
+    await expect(page.locator(".list-row:not(.list-row--head)").first()).toBeVisible();
+    const dls = await page.locator(".list-row__download").all();
+    expect(dls.length).toBeGreaterThan(0);
+    for (const d of dls) {
+      await expect(d).toBeHidden();
+    }
+    await page.goto(`${base()}${ARTIFACT}`);
+    await page.locator('[data-kb-act="more"]').click();
+    await expect(page.locator('[role="menu"] [data-kb-act="download"]')).toBeVisible();
   });
 
   test("Spine search stays on one line; menu glyph is centred; bottom bar names the Library", async ({ page }) => {

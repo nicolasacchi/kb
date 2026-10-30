@@ -125,8 +125,9 @@ with kb-code), plus a per-view control row. It replaced the old 52px header,
 - **On a phone.** A bottom tab bar offers five doors: Library, Search, Memory,
   Lists and Capture. The Library band is one column with the lead title at the
   title size and the coverage below it; ViewBars take at most two rows with 44px
-  controls. On any touch device (`pointer: coarse`, whatever the width) card
-  actions are three 44px chips along each card's bottom edge, always visible.
+  controls. On any touch device (`pointer: coarse`, whatever the width) cards and
+  Index rows carry no action buttons; Download and Exclude live in the reader's
+  More menu, one tap deeper.
   The reader strip at 430px and narrower hides the position label and breadcrumb
   and keeps More visible; from 431px to 860px the breadcrumb returns, ellipsized.
 - **Keys teach themselves.** After a chord prefix (`g`, `w`, marks, registers) a
