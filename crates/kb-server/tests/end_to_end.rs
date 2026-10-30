@@ -24601,3 +24601,75 @@ async fn segmented_session_chain_reads_through_the_routes() {
         "{raw_detail}"
     );
 }
+
+/// OL IDEA3 -- the session evidence card rides the existing routes: the list
+/// row carries the derived verdict and phrase, the detail adds the per-check
+/// list and the unnamed edits. Content is the synthetic verify-after-edit
+/// fixture (Edit -> piped `cargo test` read from its output -> Edit ->
+/// background `cargo clippy` settled by a task-notification).
+#[tokio::test]
+async fn session_detail_carries_evidence_and_checks() {
+    let sid = "5e1c9a42-7b3d-4f08-a6e1-0c2d8b9f4a17";
+    let jsonl = include_str!("../../kb-core/tests/session_fixtures/verify-after-edit.jsonl");
+    let global = vec![(
+        "session-20260610T090000Z-verify-after-edit.html",
+        session_transcript_html(sid, "20260610T090000Z", jsonl),
+    )];
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    wait_for_session(&client, addr, sid).await;
+
+    let list: serde_json::Value = client
+        .get(url(addr, "/api/sessions?limit=50"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == sid)
+        .expect("the session row")
+        .clone();
+    let ev = &row["evidence"];
+    assert_eq!(ev["verdict"], "verified");
+    assert_eq!(ev["phrase"], "cargo clippy passed after the last edit");
+    assert_eq!(
+        ev["deciding"]["cmd"],
+        "cargo clippy -p widget -- -D warnings"
+    );
+    assert_eq!(ev["checks_total"], 2);
+    assert_eq!(ev["checks_after_edit"], 1);
+    assert_eq!(ev["uncommitted"], true, "edited files, no commit detected");
+    assert!(
+        row.get("evidence_full").is_none(),
+        "the full evidence is never serialised"
+    );
+
+    let detail: serde_json::Value = client
+        .get(url(addr, &format!("/api/sessions/{sid}")))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["evidence"]["verdict"], "verified");
+    let checks = detail["checks"].as_array().expect("checks on the detail");
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0]["label"], "cargo test");
+    assert_eq!(checks[0]["text"], "passed (read from its output)");
+    assert_eq!(checks[0]["after_last_edit"], false);
+    assert_eq!(checks[1]["label"], "cargo clippy");
+    assert_eq!(checks[1]["text"], "passed (background run)");
+    assert_eq!(checks[1]["after_last_edit"], true);
+    assert_eq!(detail["unnamed_edits"], serde_json::json!(["render.rs"]));
+    assert_eq!(detail["unnamed_edits_total"], 1);
+}
