@@ -37,6 +37,7 @@ import {
   type FrontRow,
 } from "../lib/frontpage";
 import { ResurfaceReview } from "./ResurfaceReview";
+import { SinceYouLeft } from "./SinceYouLeft";
 import { Icon } from "@kb/ui/icons";
 
 // OL L3 — the Front Page: ONE band at the top of the unfiltered Library that
@@ -269,6 +270,7 @@ export default function FrontPage({ kb, kbs, rows, total, hasMore, loading, sess
       {!collapsed && (
         <div className="kb-fp__page">
           <div className="kb-fp__main">
+            <SinceYouLeft since={since} nowMs={nowMs} kb={kb} />
             {lead && (
               <article className="kb-fp__lead" data-testid="frontpage-lead">
                 <Link
