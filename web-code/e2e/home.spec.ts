@@ -94,6 +94,51 @@ test.describe("Home — One Inbox summary + Continue card (V70-A3S)", () => {
   });
 });
 
+// OL IDEA1 - the kb-blocked line. The e2e harness has no kb, so the relay is
+// stubbed at the network layer; every other Home spec sees no extra line.
+test.describe("Home - blocked on you (OL IDEA1)", () => {
+  test("a blocked session is the first Needs-you line, linking to kb's Sessions page", async ({
+    page,
+  }) => {
+    await page.route("**/api/kb/blocked*", (route) =>
+      route.fulfill({
+        json: {
+          sessions: [
+            { session_id: "s1", harness: "claude", project: "demo", blocked_tool: "Bash", since_unix: 100 },
+          ],
+          kb_public_url: "https://kb.example.com/",
+          total: 1,
+          truncated: false,
+        },
+      }),
+    );
+    await page.goto(`${BASE}/`);
+    const first = page.locator("[data-kbc-home-inbox-summary] [data-kbc-home-inbox-lanes] li").first();
+    const link = first.locator("[data-kbc-home-inbox-lane]");
+    await expect(link).toHaveAttribute("data-kbc-home-inbox-lane", "kb-blocked", { timeout: 10_000 });
+    await expect(link).toHaveText("1 session blocked on you \u00b7 demo \u00b7 permission: Bash");
+    await expect(link).toHaveAttribute("href", "https://kb.example.com/sessions#kb-now-blocked");
+    await expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  test("an unavailable relay adds no blocked line", async ({ page }) => {
+    await page.route("**/api/kb/blocked*", (route) =>
+      route.fulfill({
+        json: {
+          sessions: [],
+          kb_public_url: "",
+          total: 0,
+          truncated: false,
+          unavailable: "kb unreachable",
+        },
+      }),
+    );
+    await page.goto(`${BASE}/`);
+    await expect(page.locator("[data-kbc-home-inbox-summary]")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-kbc-home-inbox-lane="kb-blocked"]')).toHaveCount(0);
+  });
+});
+
 test.describe("Home — Daemon status (OL-C8)", () => {
   test("Home keeps one Daemon status link to Settings, with no diagnostics inline", async ({ page }) => {
     await page.goto(`${BASE}/`);
