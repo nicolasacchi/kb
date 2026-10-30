@@ -355,6 +355,7 @@ mod tests {
         RepoEntry {
             name: name.to_string(),
             path: PathBuf::from(path),
+            projects: Vec::new(),
         }
     }
 
@@ -388,6 +389,7 @@ mod tests {
         let repos = [RepoEntry {
             name: "alpha".into(),
             path: new,
+            projects: Vec::new(),
         }];
         assert_eq!(prune_stale_pins(&store, &repos).unwrap(), 1);
         assert!(store.get_doc_lens_pin("platform", "d1").unwrap().is_none());
@@ -404,6 +406,7 @@ mod tests {
         let repos = [RepoEntry {
             name: "alpha".into(),
             path: root.clone(),
+            projects: Vec::new(),
         }];
         assert_eq!(prune_stale_pins(&store, &repos).unwrap(), 0);
         assert!(store.get_doc_lens_pin("platform", "d1").unwrap().is_some());

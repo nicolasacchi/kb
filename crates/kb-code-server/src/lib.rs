@@ -495,6 +495,8 @@ pub mod tree;
 /// OL S1 — `GET /api/kb/search` + `GET /api/kb/ui`, and OL IDEA1's
 /// `GET /api/kb/blocked`: read-only kb relays.
 pub mod kb_relay;
+/// OL PRES2 — `GET /api/kb/presence`: kb's live-touches mapped onto repos.
+pub mod presence;
 /// V76-R4a — ts-rs export gate + the `skip_serializing_if` → `field?: T`
 /// pin. Empty in the shipping binary; tests live under `#[cfg(test)]`.
 #[cfg(test)]

@@ -67,6 +67,7 @@ async fn boot_with_repo(
         repos: vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

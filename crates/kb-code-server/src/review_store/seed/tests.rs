@@ -154,10 +154,12 @@ fn env_with(fx: Fixture, review: ReviewSection) -> Env {
         RepoEntry {
             name: "widgets-01".into(),
             path: fx.one.clone(),
+            projects: Vec::new(),
         },
         RepoEntry {
             name: "widgets-02".into(),
             path: fx.two.clone(),
+            projects: Vec::new(),
         },
     ];
     let mut ids = HashMap::new();
@@ -603,6 +605,7 @@ fn a_manifest_mismatch_breaks_the_store_instead_of_adopting_it() {
     let repos = vec![RepoEntry {
         name: "widgets-02".into(),
         path: e.fx.two.clone(),
+        projects: Vec::new(),
     }];
     let fresh = ReviewStores::new(&ReviewSection::default(), &e.fx.home, &repos, &e.ids);
     drop(e.rs); // releases the first registry's flock
@@ -624,6 +627,7 @@ fn a_second_process_sees_the_store_locked() {
     let repos = vec![RepoEntry {
         name: "widgets-02".into(),
         path: e.fx.two.clone(),
+        projects: Vec::new(),
     }];
     let other = ReviewStores::new(&ReviewSection::default(), &e.fx.home, &repos, &e.ids);
     assert_eq!(
@@ -969,6 +973,7 @@ async fn the_sync_route_answers_503_while_seeding() {
         repos: vec![RepoEntry {
             name: "widgets-02".into(),
             path: fx.two.clone(),
+            projects: Vec::new(),
         }],
         transcripts: crate::config::TranscriptsSection {
             enabled: false,
@@ -1201,6 +1206,7 @@ fn concurrent_opens_in_one_process_do_not_lock_each_other_out() {
     let repos = vec![RepoEntry {
         name: "widgets-02".into(),
         path: e.fx.two.clone(),
+        projects: Vec::new(),
     }];
     let fresh = std::sync::Arc::new(ReviewStores::new(
         &ReviewSection::default(),

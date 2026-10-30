@@ -273,22 +273,18 @@ echo "== OL PRES1: write-tool beats carry paths =="
 
 HOOKS_JSON="$HOOKS_DIR/hooks.json"
 
-# --- 21. hooks.json: a matcher group runs kb-beat.sh claude tool directly --
+# --- 21. hooks.json: ONE PostToolUse group; the write-tool beat rides the throttle
 if jq -e '
      .hooks.PostToolUse as $g
-     | ($g | length) == 2
+     | ($g | length) == 1
      and ($g[0].matcher == null)
      and ($g[0].hooks | map(.command) == [
           "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-capture-throttle.sh\"",
           "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat-throttle.sh\" claude"])
-     and ($g[1].matcher == "Edit|Write|MultiEdit|NotebookEdit")
-     and ($g[1].hooks | length == 1)
-     and ($g[1].hooks[0].command == "\"${CLAUDE_PLUGIN_ROOT}/hooks/kb-beat.sh\" claude tool")
-     and ($g[1].hooks[0].timeout == 5)
    ' "$HOOKS_JSON" >/dev/null 2>&1; then
-  ok "hooks.json: matcher group calls kb-beat.sh (not the throttle); original PostToolUse group unchanged"
+  ok "hooks.json: a single PostToolUse group (no second hook process tree per edit)"
 else
-  bad "hooks.json PostToolUse matcher group shape"
+  bad "hooks.json PostToolUse must be one group, capture-throttle + beat-throttle"
 fi
 
 wt() { # wt <tool_name> <cwd> <tool_input-json> [env...]
@@ -568,6 +564,82 @@ if jq -e '.hooks.Notification | length == 1 and (.[0] | has("matcher") | not)
   ok "hooks.json: Notification group has no matcher and calls kb-beat.sh claude blocked"
 else
   bad "hooks.json Notification group shape"
+fi
+
+echo "== OL PRES2: worktree basename + write-tool beats through the throttle =="
+
+# --- 34. a linked worktree carries detail.worktree (basename); main does not -
+if command -v git >/dev/null 2>&1; then
+  REPO2="$TMPROOT/wtmain"
+  mkdir -p "$REPO2"
+  git -C "$REPO2" init -q 2>/dev/null
+  git -C "$REPO2" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init 2>/dev/null
+  git -C "$REPO2" worktree add -q "$TMPROOT/wt-x" -b wtx 2>/dev/null
+  R2="$(cd "$REPO2" && pwd -P)"
+  W2="$(cd "$TMPROOT/wt-x" && pwd -P)"
+  o="$(beat_dryrun claude tool "{\"session_id\":\"s-w1\",\"cwd\":\"$W2\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$W2/a.rs\"}}")"
+  if [ "$(jget "$o" '.detail.worktree')" = "wt-x" ] && [ "$(jget "$o" '.detail.project')" = "wtmain" ]; then
+    ok "linked worktree beat carries detail.worktree = basename (never a path)"
+  else
+    bad "detail.worktree for a linked worktree (got: $o)"
+  fi
+  o="$(beat_dryrun claude tool "{\"session_id\":\"s-w2\",\"cwd\":\"$R2\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$R2/a.rs\"}}")"
+  if [ "$(jget "$o" '.detail | has("worktree")')" = "false" ]; then
+    ok "main checkout beat carries no detail.worktree"
+  else
+    bad "main checkout must not carry worktree (got: $o)"
+  fi
+  # same-named worktree dir (basename equals project) is still a worktree
+  mkdir -p "$TMPROOT/same"
+  git -C "$REPO2" worktree add -q "$TMPROOT/same/wtmain" -b same 2>/dev/null
+  S2="$(cd "$TMPROOT/same/wtmain" && pwd -P)"
+  o="$(beat_dryrun claude tool "{\"session_id\":\"s-w3\",\"cwd\":\"$S2\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$S2/a.rs\"}}")"
+  if [ "$(jget "$o" '.detail.worktree')" = "wtmain" ]; then
+    ok "a worktree whose directory is named like the project is still reported"
+  else
+    bad "same-named worktree (got: $o)"
+  fi
+else
+  ok "git not installed: worktree checks skipped"
+fi
+
+# --- 35. write tools bypass the throttle gate; other tools stay throttled ---
+tw() { # tw <session> <tool_name> [env...]
+  local sid="$1" tool="$2"
+  shift 2
+  printf '{"session_id":"%s","cwd":"/tmp/proj-a","tool_name":"%s","tool_input":{"file_path":"/tmp/proj-a/x.rs"}}' "$sid" "$tool" \
+    | env KB_BEAT_DRYRUN=1 KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS=180 "$@" "$BEAT_THROTTLE" claude 2>/dev/null
+}
+tw s-gate Read >/dev/null   # first call opens the gate window
+o="$(tw s-gate Read)"
+if [ -z "$o" ]; then ok "a Read inside the interval stays throttled"; else bad "Read must stay throttled (got: $o)"; fi
+o="$(tw s-gate Bash)"
+if [ -z "$o" ]; then ok "a Bash call inside the interval stays throttled"; else bad "Bash must stay throttled (got: $o)"; fi
+for t in Edit Write MultiEdit NotebookEdit; do
+  o="$(tw s-gate "$t")"
+  if [ "$(jget "$o" '.event')" = "tool" ] && [ "$(jget "$o" '.detail.tool')" = "$t" ] \
+     && [ "$(jget "$o" '.detail.paths | length')" = "1" ]; then
+    ok "$t passes the throttle gate and carries its path"
+  else
+    bad "$t must bypass the throttle (got: $o)"
+  fi
+done
+o="$(tw s-gate2 Edit KB_BEAT_HEARTBEAT=0)"
+if [ "$(jget "$o" '.detail.tool')" = "Edit" ]; then
+  ok "KB_BEAT_HEARTBEAT=0 kills the heartbeat only, not the write-tool presence beat"
+else
+  bad "KB_BEAT_HEARTBEAT=0 must keep write-tool beats (got: $o)"
+fi
+o="$(tw s-gate3 Read KB_BEAT_HEARTBEAT=0)"
+if [ -z "$o" ]; then ok "KB_BEAT_HEARTBEAT=0 still silences a non-write tool"; else bad "heartbeat off (got: $o)"; fi
+o="$(tw s-gate4 Edit KB_BEAT=0)"
+if [ -z "$o" ]; then ok "KB_BEAT=0 silences write-tool beats too"; else bad "KB_BEAT=0 (got: $o)"; fi
+tw s-gate5 Read >/dev/null
+o="$(tw s-gate5 Edit KB_BEAT_PATHS=0)"
+if [ -z "$o" ]; then
+  ok "KB_BEAT_PATHS=0 leaves a write tool throttled like any other tool"
+else
+  bad "KB_BEAT_PATHS=0 must not bypass the gate (got: $o)"
 fi
 
 echo

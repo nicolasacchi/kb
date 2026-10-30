@@ -398,10 +398,12 @@ mod tests {
             RepoEntry {
                 name: "widgets-01".into(),
                 path: "/work/acme/widgets.01".into(),
+                projects: Vec::new(),
             },
             RepoEntry {
                 name: "widgets-02".into(),
                 path: "/work/acme/widgets.02".into(),
+                projects: Vec::new(),
             },
         ]
     }
@@ -578,6 +580,7 @@ mod tests {
             vec![RepoEntry {
                 name: "widgets-01".into(),
                 path: p.to_path_buf(),
+                projects: Vec::new(),
             }]
         };
         let disabled_for = |root: PathBuf| {
@@ -646,6 +649,7 @@ mod tests {
         let repos = vec![RepoEntry {
             name: "widgets-01".into(),
             path: wt.clone(),
+            projects: Vec::new(),
         }];
         let resolve = |root: &Path| {
             let mut review = ReviewSection::default();

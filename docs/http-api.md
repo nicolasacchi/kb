@@ -433,6 +433,29 @@ GET  /api/kb/blocked                       OL IDEA1: kb's
                                             `unavailable:"kb disabled" |
                                             "kb unreachable" |
                                             "kb_sibling_mismatch"`.
+GET  /api/kb/presence[?repo=NAME]          OL PRES2: kb's `GET /api/sessions/
+                                            live-touches` mapped onto the
+                                            configured repos, as
+                                            `kbc-presence/1` `{available,
+                                            caption?, now_unix, files:[{repo,
+                                            worktree?, path, session_id,
+                                            harness, state, age_secs}]}`,
+                                            newest first, one row per
+                                            (repo, worktree, path, session),
+                                            200 rows max. A row with
+                                            `worktree` is an edit in a linked
+                                            worktree, NOT in the main
+                                            checkout's file. Always 200: a
+                                            failure gives `available:false`
+                                            plus a caption ("kb disabled",
+                                            "kb_sibling_mismatch", "kb timed
+                                            out", "kb unreachable", "kb too
+                                            old for presence", "unknown
+                                            repo"); unmapped / ambiguous
+                                            projects are counted in the
+                                            caption ("N edits outside
+                                            configured repos", "N edits in
+                                            ambiguous projects").
 GET  /api/kb/ui                            OL S1: kb's `theme_family` +
                                             `theme` from `GET /api/settings`
                                             (malformed values -> null), same
@@ -1143,9 +1166,12 @@ GET  /api/sessions/live-status              LSC-2 — the merged cockpit read:
                                             direct-disk, every-harness twin).
 GET  /api/sessions/live-touches            OL PRES1 — which files live agent
      [?project=…&project=…                  sessions are touching: per touch
-      &max_age_secs=&harness=]              `{project, rel, session_id,
-                                            harness, state, age_secs, tool}`
-                                            (kb-live-touches/1), freshest
+      &max_age_secs=&harness=]              `{project, worktree?, rel,
+                                            session_id, harness, state,
+                                            age_secs, tool}` (`worktree` =
+                                            a linked worktree's basename,
+                                            absent for the main checkout;
+                                            kb-live-touches/1), freshest
                                             first, 500 cap + `truncated`.
                                             `rel` is relative to a repo root
                                             the daemon never kept, so no

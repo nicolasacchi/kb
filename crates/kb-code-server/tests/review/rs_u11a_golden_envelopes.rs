@@ -151,6 +151,7 @@ fn cfg_with_repo(name: &str, path: &Path) -> KbCodeConfig {
         repos: vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         transcripts: disabled_transcripts(),

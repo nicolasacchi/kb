@@ -2105,6 +2105,27 @@ is unchanged), and a kb-sibling/1 mismatch returns
 `unavailable: "kb_sibling_mismatch"`. The lane shows each as a muted line,
 never an error. Nothing is cached or persisted.
 
+**Agent presence (OL PRES2).** `GET /api/kb/presence[?repo=NAME]` asks kb's
+`GET /api/sessions/live-touches` (kb-live-touches/1, already scrubbed: a project
+label plus a repo-relative path, no absolute path, no transcript text) and maps
+each project label onto a configured repo: first a repo's
+`[[repos]] projects = ["..."]` alias, then its `name`, then the basename of its
+`path`, all case-insensitive. A rule that matches two repos makes the label
+ambiguous: its touches are skipped and counted ("N edits in ambiguous
+projects"), never guessed; a label no rule matches counts toward "N edits
+outside configured repos". The alias exists for a repo whose directory is named
+differently where the agent runs than where kb-code sees it: a repo
+bind-mounted into the container as `/repos/kb-archive` from a host directory
+`kb-archive-checkout` reports the project `kb-archive-checkout`, which matches
+neither the name nor the container-side basename, so it is listed as
+`projects = ["kb-archive-checkout"]`. A touch made in a linked worktree carries
+the worktree's directory basename and is returned as its own row with
+`worktree` set; it must never be drawn on the main checkout's file. The route
+is an ordinary bearer read (not on the doc-lens CORS routes), always answers
+200 (`available:false` plus a closed-vocabulary caption on any failure), reuses
+the short shared `KbClient` timeout, and caches and persists nothing. The
+payload is `kbc-presence/1`; see `docs/http-api.md`.
+
 **Theme family follows kb.** kb stores `theme_family` in its `ui` settings
 (`PATCH /api/settings`). `GET /api/kb/ui` relays `{theme, theme_family}` with
 the same `unavailable` semantics. On boot kb-code's SPA applies that family
@@ -2133,7 +2154,8 @@ query kb-code from the browser: the doc-lens CORS route set is pinned to the
 doc-lens read routes on purpose (any loopback origin passes the CORS
 predicate, so adding the code search route would hand repository contents to
 every page open in the operator's browser), and `/api/kb/search` and
-`/api/kb/ui` are asserted absent from it in `cors_layer_route_set_is_pinned`.
+`/api/kb/ui` (and `/api/kb/presence`) are asserted absent from it in
+`cors_layer_route_set_is_pinned`.
 
 ## Cited-by chip and section crossing (OL SIBL1)
 

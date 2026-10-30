@@ -341,8 +341,8 @@ direct-disk twin (zero daemon required).
 **Beat hook environment (`KB_BEAT_PATHS`).** The Claude write-tool beat
 (`PostToolUse` on `Edit|Write|MultiEdit|NotebookEdit`) carries the touched
 paths so kb-code can show which files an agent is in. `KB_BEAT_PATHS=0` in the
-hook's environment removes `detail.tool`, `detail.paths`, `detail.root` and
-`detail.project` from every beat (the beat itself is still sent); `KB_BEAT=0`
+hook's environment removes `detail.tool`, `detail.paths`, `detail.root`,
+`detail.project` and `detail.worktree` from every beat (the beat itself is still sent); `KB_BEAT=0`
 still kills every beat. There is no daemon-side key: the daemon keeps the
 paths in memory only and relative to the repo root the beat named. See
 [`docs/live-sessions.md`](live-sessions.md#file-presence).
@@ -841,6 +841,13 @@ Room" / lip track), S2-B ("Mobile mutations," kb-code v6.0), V77-P3
 `[comments]`, `[rails_lens]`, `[review]` — with its `[review.store]` and
 `[[review.repos]]` subsections — `[[intel.providers]]`, `[security]`,
 `[search]`, `[behavioral]`, …) is enumerated in that file's own module doc.
+
+`[[repos]]` entries carry `name` and `path`, plus an optional
+`projects = ["..."]` (default `[]`): extra labels kb's presence relay
+(`GET /api/kb/presence`) may call this repo, for a checkout whose directory
+name is neither `name` nor the basename of `path` (a bind mount). Matched
+case-insensitively, alias first, then `name`, then the path basename; see
+`docs/kb-code.md`.
 
 ### `[kb_daemon]`
 

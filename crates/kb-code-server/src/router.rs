@@ -962,6 +962,11 @@ pub fn build_router(state: SharedState, auth: Arc<AuthConfig>) -> Router {
         // OL IDEA1 - the sessions kb reports as blocked on the operator
         // (Home "Needs you"); same bearer-read, never-CORS posture.
         .route("/kb/blocked", get(kb_relay::kb_blocked_route))
+        // OL PRES2 - which files agents are editing right now, kb's
+        // live-touches mapped onto the configured repos (`crate::presence`).
+        // Same posture as the two relays above: a bearer GET, never on a
+        // doc-lens sub-router, degrades to a 200 caption.
+        .route("/kb/presence", get(crate::presence::kb_presence_route))
         // PRR-R9 — the disposition-analytics calibration instrument
         // (design-addendum-2 §C, `crate::review_analytics`). Same
         // literal-before-param placement as `/reviews/inbox` just above.

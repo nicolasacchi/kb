@@ -1098,6 +1098,7 @@ mod tests {
         let entry = RepoEntry {
             name: name.to_string(),
             path: root.path().to_path_buf(),
+            projects: Vec::new(),
         };
         (root, entry)
     }
@@ -1451,6 +1452,7 @@ mod tests {
             repos: vec![RepoEntry {
                 name: repo_name.to_string(),
                 path: repo_root.to_path_buf(),
+                projects: Vec::new(),
             }],
             kb_daemon: crate::config::KbDaemonSection {
                 enabled: false,

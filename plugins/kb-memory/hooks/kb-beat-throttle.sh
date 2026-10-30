@@ -62,7 +62,11 @@ harness="${1:-claude}"
 input="$(cat 2>/dev/null)" || input=""
 [ -n "$input" ] || exit 0
 
-sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
+# One jq for both fields: line 1 = session id, line 2 = tool name.
+{ IFS= read -r sid; IFS= read -r tool_name; } < <(
+  printf '%s' "$input" | jq -r '(.session_id // ""), (.tool_name // "")' 2>/dev/null
+) || true
+
 [ -n "$sid" ] || {
   # No session id to throttle against — let kb-beat.sh make its own
   # (identical) determination rather than silently drop the beat.
@@ -94,6 +98,23 @@ if [ "$harness" = "claude" ] && [ -f "$blocked_marker" ]; then
     touch "$marker" 2>/dev/null || true
     gate="$marker"
   fi
+fi
+
+# OL PRES2 — a Claude write-tool call (Edit/Write/MultiEdit/NotebookEdit)
+# is a file-presence beat, not a heartbeat: it bypasses the min-interval
+# gate (and KB_BEAT_HEARTBEAT=0; it runs AFTER the blocked-on-you resolution,
+# so an edit by the blocked agent still emits `unblocked` first) and goes straight to kb-beat.sh, so one
+# hook process tree serves each edit instead of a second PostToolUse
+# group. KB_BEAT_PATHS=0 removes the paths from the beat, so there is
+# nothing to report and such a call stays an ordinary throttled tool call.
+if [ "$harness" = "claude" ] && [ "${KB_BEAT_PATHS:-}" != "0" ]; then
+  case "$tool_name" in
+    Edit | Write | MultiEdit | NotebookEdit)
+      printf '%s' "$input" | "$BEAT_SH" "$harness" tool
+      touch "$marker" 2>/dev/null || true
+      exit 0
+      ;;
+  esac
 fi
 
 case "${KB_BEAT_HEARTBEAT:-}" in
