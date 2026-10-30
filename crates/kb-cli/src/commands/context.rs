@@ -233,7 +233,7 @@ fn render_human(pack: &serde_json::Value) -> String {
 /// "…N more, not shown" — the ONE place a lane's truncation is worded, so
 /// four lanes can't drift into four phrasings. `total` is the pre-cap count
 /// the route reports; `shown` is what survived.
-fn more_line(total: u64, shown: usize) -> Option<String> {
+pub(crate) fn more_line(total: u64, shown: usize) -> Option<String> {
     let hidden = total.saturating_sub(shown as u64);
     if hidden == 0 {
         return None;

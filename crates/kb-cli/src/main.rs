@@ -883,6 +883,28 @@ enum Cmd {
         #[arg(long)]
         daemon: Option<String>,
     },
+    // Provenance: OL IDEA5
+    /// What landed across your projects since a time: the sessions that ran
+    /// per project (and how they closed), the commits they recorded, and
+    /// what was posted on each project's slate. `--since` takes unix
+    /// seconds, a `YYYY-MM-DD` date, or `<N>h`/`<N>d` (default 24h). Reads
+    /// `GET /api/changes`; the corpus side (artifacts, memories, comments)
+    /// is `kb daycard --since`. Pull-only: nothing is marked read.
+    Changes {
+        /// Window start: unix seconds, `YYYY-MM-DD`, `<N>h` or `<N>d`.
+        #[arg(long)]
+        since: Option<String>,
+        /// Keep only the project whose id or label equals this.
+        #[arg(long)]
+        project: Option<String>,
+        /// YOUR session id — it and its continuation parts are left out.
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        daemon: Option<String>,
+    },
     /// The CLI parity twin of the e-ink desk radiator (`GET
     /// /api/kb/{kb}/daycard`, Unit 2): a deterministic "day at a glance"
     /// digest (worth-picking-back-up + today's activity + a couple of
@@ -6529,6 +6551,24 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Cmd::Changes {
+            since,
+            project,
+            session,
+            json,
+            daemon,
+        } => {
+            let bearer = read_bearer();
+            commands::changes::run(
+                since.as_deref(),
+                project.as_deref(),
+                session.as_deref(),
+                json,
+                daemon.as_deref(),
+                bearer.as_deref(),
+            )
+            .await
+        }
         Cmd::Daycard {
             kb,
             day,
@@ -7901,6 +7941,37 @@ mod tests {
 
     fn s(x: &str) -> Option<String> {
         Some(x.to_string())
+    }
+
+    /// OL IDEA5 — `kb changes` clap wiring.
+    #[test]
+    fn changes_flags_parse() {
+        match Cli::try_parse_from([
+            "kb",
+            "changes",
+            "--since",
+            "2h",
+            "--project",
+            "kb",
+            "--json",
+        ])
+        .unwrap()
+        .cmd
+        {
+            Cmd::Changes {
+                since,
+                project,
+                session,
+                json,
+                ..
+            } => {
+                assert_eq!(since.as_deref(), Some("2h"));
+                assert_eq!(project.as_deref(), Some("kb"));
+                assert_eq!(session, None);
+                assert!(json);
+            }
+            other => panic!("expected changes, got {other:?}"),
+        }
     }
 
     /// v0.44 X4 — `sessions rescrub --dry-run` is a no-op spelling of the

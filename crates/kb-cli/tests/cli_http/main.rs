@@ -7,6 +7,7 @@
 mod common;
 
 mod capture;
+mod changes;
 mod cat_read;
 mod comments;
 mod desk;
