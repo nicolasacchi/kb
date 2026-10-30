@@ -7696,6 +7696,12 @@ pub struct BeatDetail {
     /// The session's project label (basename of the MAIN checkout).
     #[serde(default)]
     pub project: Option<String>,
+    /// OL PRES2 — basename of the root's directory when the session runs in
+    /// a LINKED worktree (absent for the main checkout). A label, never a
+    /// path; an invalid one drops the beat's touches rather than letting a
+    /// worktree edit read as an edit to the main checkout.
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 /// Longest path/root/project string a beat may carry (bytes).
@@ -7757,6 +7763,11 @@ fn sanitize_touches(
     if !beat_str_ok(project) || project.len() > 128 || project.contains('/') {
         return Vec::new();
     }
+    let worktree = match d.worktree.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(w) if beat_str_ok(w) && w.len() <= 128 && !w.contains('/') => Some(w.to_string()),
+        Some(_) => return Vec::new(),
+    };
     let tool = d
         .tool
         .as_deref()
@@ -7778,6 +7789,7 @@ fn sanitize_touches(
             }
             Some(crate::live_registry::Touch {
                 project: project.to_string(),
+                worktree: worktree.clone(),
                 rel: comps[root.len()..].join("/"),
                 at_unix: now_unix,
                 tool: tool.to_string(),
@@ -8467,6 +8479,10 @@ pub async fn live_status(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LiveTouchRow {
     pub project: String,
+    /// Basename of the linked worktree the edit happened in; the key is
+    /// absent for the main checkout (so a pre-PRES2 payload is unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     pub rel: String,
     pub session_id: String,
     pub harness: String,
@@ -8515,6 +8531,7 @@ fn build_live_touches(
             }
             rows.push(LiveTouchRow {
                 project: t.project,
+                worktree: t.worktree,
                 rel: t.rel,
                 session_id: s.session_id.clone(),
                 harness: s.harness.clone(),
@@ -8525,9 +8542,10 @@ fn build_live_touches(
         }
     }
     rows.sort_by(|a, b| {
-        (a.age_secs, &a.project, &a.rel, &a.session_id).cmp(&(
+        (a.age_secs, &a.project, &a.worktree, &a.rel, &a.session_id).cmp(&(
             b.age_secs,
             &b.project,
+            &b.worktree,
             &b.rel,
             &b.session_id,
         ))
@@ -9034,6 +9052,7 @@ mod lsc2_tests {
             paths: paths.iter().map(|s| serde_json::json!(s)).collect(),
             root: root.map(str::to_string),
             project: project.map(str::to_string),
+            worktree: None,
         }
     }
 
@@ -9125,6 +9144,33 @@ mod lsc2_tests {
     }
 
     #[test]
+    fn worktree_label_is_carried_and_a_bad_one_drops_the_touches() {
+        let mut d = detail(&["/w/x/src/a.rs"], Some("/w/x"), Some("repo"));
+        assert_eq!(sanitize_touches("tool", Some(&d), 1)[0].worktree, None);
+        d.worktree = Some("x".to_string());
+        let t = sanitize_touches("tool", Some(&d), 1);
+        assert_eq!(t[0].worktree.as_deref(), Some("x"));
+        assert_eq!(t[0].rel, "src/a.rs");
+        d.worktree = Some("  ".to_string());
+        assert_eq!(sanitize_touches("tool", Some(&d), 1)[0].worktree, None);
+        // A path-shaped, control-char or over-long label must not degrade to
+        // "main checkout": the touches are dropped instead.
+        for bad in ["a/b", "/abs", "a\u{1}b", &"w".repeat(129)] {
+            d.worktree = Some(bad.to_string());
+            assert!(sanitize_touches("tool", Some(&d), 1).is_empty(), "{bad:?}");
+        }
+        let body: BeatBody = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "harness": "claude", "event": "tool",
+            "at": "2026-08-21T20:41:02Z",
+            "detail": {"tool": "Edit", "paths": ["/w/x/a"], "root": "/w/x",
+                       "project": "repo", "worktree": "x"},
+        }))
+        .unwrap();
+        let t = sanitize_touches("tool", body.detail.as_ref(), 1);
+        assert_eq!(t[0].worktree.as_deref(), Some("x"));
+    }
+
+    #[test]
     fn derive_state_is_identical_with_and_without_paths() {
         // map_event/derive_state never see the detail; the same event maps
         // to the same holder either way.
@@ -9182,12 +9228,47 @@ mod lsc2_tests {
                 .into_iter()
                 .map(|(p, r, at)| crate::live_registry::Touch {
                     project: p.to_string(),
+                    worktree: None,
                     rel: r.to_string(),
                     at_unix: at,
                     tool: "Edit".to_string(),
                 })
                 .collect(),
         }
+    }
+
+    fn wt_snap(
+        sid: &str,
+        worktree: Option<&str>,
+        rel: &str,
+        at: i64,
+    ) -> crate::live_registry::TouchSnapshot {
+        let mut s = snap(sid, "claude", vec![("demo", rel, at)]);
+        s.touches[0].worktree = worktree.map(str::to_string);
+        s
+    }
+
+    #[test]
+    fn live_touches_worktree_is_a_separate_row_and_a_basename_only() {
+        let now = 10_000;
+        let r = build_live_touches(
+            vec![
+                wt_snap("s1", None, "src/a.rs", now - 5),
+                wt_snap("s2", Some("v80-x"), "src/a.rs", now - 5),
+            ],
+            &[],
+            &[],
+            900,
+            now,
+        );
+        assert_eq!(r.touches.len(), 2, "same rel, main vs worktree: two rows");
+        let v = serde_json::to_value(&r).unwrap();
+        let rows = v["touches"].as_array().unwrap();
+        let main = rows.iter().find(|t| t["session_id"] == "s1").unwrap();
+        let wt = rows.iter().find(|t| t["session_id"] == "s2").unwrap();
+        assert!(main.get("worktree").is_none(), "main checkout: key absent");
+        assert_eq!(wt["worktree"], "v80-x");
+        assert!(!wt["worktree"].as_str().unwrap().contains('/'));
     }
 
     #[test]
@@ -9301,6 +9382,12 @@ mod lsc2_tests {
                     "22222222-aaaa-4bbb-8ccc-000000000002",
                     "claude",
                     vec![("demo", "src/lib.rs", now - 30)],
+                ),
+                wt_snap(
+                    "33333333-aaaa-4bbb-8ccc-000000000003",
+                    Some("demo-feature"),
+                    "src/lib.rs",
+                    now - 60,
                 ),
             ],
             &[],

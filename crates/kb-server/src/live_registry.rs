@@ -37,9 +37,13 @@ pub const TOUCH_TTL_SECS: i64 = 3600;
 /// One remembered write-tool touch: a path RELATIVE to the session's repo
 /// root (the daemon never stores the absolute path or the root), the project
 /// label the beat carried, the receipt-clock instant and the tool name.
+/// `worktree` is the BASENAME of a linked worktree's directory (OL PRES2),
+/// `None` for the main checkout; it is part of a touch's identity, so the
+/// same `rel` in two worktrees of one project are two touches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Touch {
     pub project: String,
+    pub worktree: Option<String>,
     pub rel: String,
     pub at_unix: i64,
     pub tool: String,
@@ -243,7 +247,7 @@ impl LiveRegistry {
 
         // Touch ring (OL PRES1): carry the old ring forward under this same
         // lock, drop expired entries, then merge this beat's touches —
-        // a repeat of (project, rel) moves to the back with its fresh
+        // a repeat of (project, worktree, rel) moves to the back with its fresh
         // instant, and the oldest entry is evicted past the cap. An `end`
         // beat carries no touches and so leaves the ring intact.
         let mut ring: VecDeque<Touch> = g
@@ -254,7 +258,7 @@ impl LiveRegistry {
         for t in std::mem::take(&mut row.touches) {
             if let Some(pos) = ring
                 .iter()
-                .position(|x| x.project == t.project && x.rel == t.rel)
+                .position(|x| x.project == t.project && x.worktree == t.worktree && x.rel == t.rel)
             {
                 ring.remove(pos);
             }
@@ -379,6 +383,7 @@ mod tests {
     fn touch(rel: &str, at: i64) -> Touch {
         Touch {
             project: "demo".to_string(),
+            worktree: None,
             rel: rel.to_string(),
             at_unix: at,
             tool: "Edit".to_string(),
@@ -638,6 +643,33 @@ mod tests {
             vec!["b.rs", "a.rs"]
         );
         assert_eq!(t[1].at_unix, now + 9);
+    }
+
+    #[test]
+    fn same_rel_in_two_worktrees_stays_two_touches() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let mut wt = touch("a.rs", now);
+        wt.worktree = Some("feat".to_string());
+        reg.record_beat(
+            with_touches(
+                row("a", Holder::Agent, now, now),
+                vec![touch("a.rs", now), wt],
+            ),
+            now,
+        );
+        let mut wt2 = touch("a.rs", now + 3);
+        wt2.worktree = Some("feat".to_string());
+        reg.record_beat(
+            with_touches(row("a", Holder::Agent, now + 3, now + 3), vec![wt2]),
+            now + 3,
+        );
+        let snap = reg.touches_snapshot(now + 3);
+        let t = &snap[0].touches;
+        assert_eq!(t.len(), 2, "main + worktree, the repeat deduped in place");
+        assert_eq!(t[0].worktree, None);
+        assert_eq!(t[1].worktree.as_deref(), Some("feat"));
+        assert_eq!(t[1].at_unix, now + 3);
     }
 
     #[test]
