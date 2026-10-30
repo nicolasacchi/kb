@@ -7,6 +7,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod changes;
 mod coderefs;
 mod docs_asof;
 mod events_filters;
