@@ -6,7 +6,6 @@
 // that link's href. The places the two deliberately differ are asserted as
 // such, not left implicit.
 import { describe, expect, it, vi } from "vitest";
-import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import type { UseQueryResult } from "@tanstack/react-query";
