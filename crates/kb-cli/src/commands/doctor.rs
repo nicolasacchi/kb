@@ -1108,8 +1108,9 @@ struct StaleSlateMarker {
 /// expire on their own. An explicit list, not a glob: a name matches only
 /// when it starts with one of these literals.
 ///
-/// `context-scent-` (`kb-recall.sh`), `beat-heartbeat-` (`kb-beat-throttle.sh`)
-/// and `waked-` (`kb-wake-kimi.sh`'s `waked-kimi-<sid>`) are the other
+/// `context-scent-` (`kb-recall.sh`), `beat-heartbeat-` (`kb-beat-throttle.sh`),
+/// `beat-tool-` (`kb-beat-pretool.sh`, the last tool-start name sent) and
+/// `waked-` (`kb-wake-kimi.sh`'s `waked-kimi-<sid>`) are the other
 /// per-session files that accumulate forever beside the slate cursor/topic
 /// pair. The slate ledger is not in this list and is never touched. Files
 /// younger than [`SLATE_MARKER_MAX_AGE_SECS`] are not selected — a live
@@ -1119,6 +1120,7 @@ const SESSION_MARKER_PREFIXES: &[&str] = &[
     "slate-topic-",
     "context-scent-",
     "beat-heartbeat-",
+    "beat-tool-",
     "waked-",
 ];
 
@@ -3164,6 +3166,7 @@ mod tests {
         assert!(is_slate_marker_name("slate-topic-sess-a"));
         assert!(is_slate_marker_name("context-scent-sess-a"));
         assert!(is_slate_marker_name("beat-heartbeat-sess-a"));
+        assert!(is_slate_marker_name("beat-tool-sess-a"));
         assert!(is_slate_marker_name("waked-kimi-sess-a"));
         // A non-marker is not selected. The slate ledger is not a marker
         // name, and a prefix without the trailing hyphen is not either.
