@@ -88,6 +88,22 @@ and `r` turns it off. Markdown pages and rendered sessions already carry the
 house voice and are not styled twice. A page with its own `<style>` is left
 alone.
 
+Things to know about the house voice:
+
+- It follows `prefers-color-scheme` until the reader posts the SPA's scheme, so
+  a light-pinned SPA on a dark OS can show a dark page (and dark Markdown) in
+  the frame for now.
+- In dark mode fenced code stays a light card (syntax colours are light-theme
+  only), so it reads as a bright block on a dark page.
+- Reader keys `r o b [ ] n p u` pressed with focus inside the artifact are
+  forwarded to the reader unless your page already called `preventDefault` on
+  that keydown earlier in the bubble order. An artifact that binds those keys
+  itself (a deck or visualisation using `n`/`p`) should call `preventDefault`
+  to keep them to itself; only `r` is silenced by the `kb-reading` opt-out.
+- The serve-time sheet is applied to every voice-less page, including ones
+  styled only by inline `style` attributes or script; add a `<style>` block or
+  the `kb-reading` opt-out meta for those.
+
 ### Session provenance (`kb-session`)
 
 Another meta name recognised separately from the two above (like

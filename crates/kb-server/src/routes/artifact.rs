@@ -489,6 +489,11 @@ fn runtime_js(target_origin: &str) -> String {
   var READ_SEQ = 0;                  // latest kb:read request; stale fetches drop out
   var READ_OPTED_OUT = null;         // cached author opt-out (meta is static)
   var READ_STYLE_ID = 'kb-read-style';
+  // The daemon styled this page at serve time (style + data-kb-read="auto" are
+  // already present when the runtime starts). Such a page is never re-judged by
+  // readUnsuitable() when `r` turns the sheet back on.
+  var READ_SERVED = !!document.getElementById(READ_STYLE_ID) &&
+    document.documentElement.getAttribute('data-kb-read') === 'auto';
   function readOptedOut() {{
     if (READ_OPTED_OUT === null) {{
       READ_OPTED_OUT = !!document.querySelector('meta[name="kb-reading"][content="off"]');
@@ -595,7 +600,7 @@ fn runtime_js(target_origin: &str) -> String {
       readAck('on');
       return;
     }}
-    var why = readUnsuitable();
+    var why = READ_SERVED ? (readOptedOut() ? 'author' : '') : readUnsuitable();
     if (why) {{
       // A Markdown page owns its palette; let it follow the SPA's scheme.
       if (why === 'house' && document.body.classList.contains('kb-md-prose')) {{
@@ -1027,7 +1032,12 @@ pub async fn serve(
                     &house_owned
                 }
                 Ok(None) => working_html,
-                Err(e) => return error_to_problem_json(&e),
+                // Styling is decoration: a page the scanner cannot parse is
+                // served as it is rather than refused.
+                Err(e) => {
+                    tracing::warn!(error = %e, "house voice skipped: rewriter error");
+                    working_html
+                }
             }
         };
 
@@ -2093,6 +2103,11 @@ mod tests {
             msg.find("document.getElementById(READ_STYLE_ID)").unwrap()
                 < msg.find("readUnsuitable()").unwrap()
         );
+        // A serve-time-styled page is remembered at startup and skips the
+        // suitability check on re-enable (off-then-on must always work).
+        let js = runtime_between("var READ_SERVED", "function readHouse");
+        assert!(js.contains("getAttribute('data-kb-read') === 'auto'"));
+        assert!(msg.contains("READ_SERVED ? (readOptedOut() ? 'author' : '') : readUnsuitable()"));
         // A Markdown page follows the SPA scheme without gaining a sheet.
         assert!(msg.contains("why === 'house' && document.body.classList.contains('kb-md-prose')"));
     }
