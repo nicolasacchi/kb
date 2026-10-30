@@ -5,6 +5,7 @@ import NoteMarkdown from "./NoteMarkdown";
 import BacklinksSection from "./BacklinksSection";
 import { useConfirm } from "./ConfirmProvider";
 import { Icon } from "@kb/ui/icons";
+import type { CodeDoor } from "../lib/codeDoors";
 
 // N-track — full interactive view + inline editor for one note. Renders the
 // body with clickable checkboxes (toggling persists), a quick "add task"
@@ -17,13 +18,17 @@ type Props = {
   id: string;
   /// Called after a successful delete so the parent can clear its selection.
   onDeleted?: () => void;
+  /// OL IDEA6 - citation doors for the READ-ONLY render only (not the edit
+  /// preview, not the /notes rail): matched inline `code` becomes a link into
+  /// kb-code. Absent everywhere but the Detail view's native note path.
+  codeDoors?: readonly CodeDoor[];
 };
 
 function progressText(done: number, total: number): string {
   return total > 0 ? `${done}/${total}` : "";
 }
 
-export default function NoteEditor({ kb, id, onDeleted }: Props) {
+export default function NoteEditor({ kb, id, onDeleted, codeDoors }: Props) {
   const { note, loading, error, setDirty, save, toggleTask, appendTask, remove } =
     useNote(kb, id);
   const [editing, setEditing] = useState(false);
@@ -205,7 +210,12 @@ export default function NoteEditor({ kb, id, onDeleted }: Props) {
         />
       ) : (
         <>
-          <NoteMarkdown body={note.body_md} onToggle={onToggle} links={note.links} />
+          <NoteMarkdown
+            body={note.body_md}
+            onToggle={onToggle}
+            links={note.links}
+            codeDoors={codeDoors}
+          />
           <form
             className="kb-note__add"
             onSubmit={(e) => {

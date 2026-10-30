@@ -7,6 +7,7 @@ import type { Components } from "react-markdown";
 import { parseCallout } from "../lib/callout";
 import { makeResolver, rehypeWikilinks } from "../lib/wikilink";
 import type { ResolvedLink } from "../api/notes";
+import { rehypeCodeDoors, type CodeDoor } from "../lib/codeDoors";
 
 // N-track — render a note's Markdown body with INTERACTIVE GFM task
 // checkboxes. Toggling a box calls `onToggle(taskIndex, nextChecked)`;
@@ -117,9 +118,12 @@ type Props = {
   /// present, `[[target]]` renders as a clickable internal link; when absent
   /// (e.g. a live edit preview) wikilinks render as muted pending spans.
   links?: ResolvedLink[];
+  /// OL IDEA6 - citation doors (read-only render): a matched inline `code`
+  /// is wrapped in an anchor into kb-code. Absent ⇒ the tree is untouched.
+  codeDoors?: readonly CodeDoor[];
 };
 
-export default function NoteMarkdown({ body, onToggle, className, links }: Props) {
+export default function NoteMarkdown({ body, onToggle, className, links, codeDoors }: Props) {
   const navigate = useNavigate();
   const resolve = useMemo(() => makeResolver(links), [links]);
   const components: Components = {
@@ -137,6 +141,23 @@ export default function NoteMarkdown({ body, onToggle, className, links }: Props
               e.preventDefault();
               navigate(href);
             }}
+          >
+            {children}
+          </a>
+        );
+      }
+      // OL IDEA6 - a citation door keeps its class, title and ordinal (the
+      // line style is the class; the ordinal ties it to the extractor).
+      if (node?.properties?.dataKbCoderef !== undefined) {
+        const cls = node.properties.className;
+        return (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={Array.isArray(cls) ? cls.join(" ") : undefined}
+            title={typeof node.properties.title === "string" ? node.properties.title : undefined}
+            data-kb-coderef={String(node.properties.dataKbCoderef)}
           >
             {children}
           </a>
@@ -187,7 +208,12 @@ export default function NoteMarkdown({ body, onToggle, className, links }: Props
         // → "Cannot read properties of undefined (reading 'children')", crashing
         // every native note render (wikilink.test.ts calls the transformer
         // directly, so it never caught this integration bug).
-        rehypePlugins={[rehypeCallouts, rehypeTaskIndex, [rehypeWikilinks, resolve]]}
+        rehypePlugins={[
+          rehypeCallouts,
+          rehypeTaskIndex,
+          [rehypeWikilinks, resolve],
+          [rehypeCodeDoors, codeDoors],
+        ]}
         components={components}
       >
         {body}

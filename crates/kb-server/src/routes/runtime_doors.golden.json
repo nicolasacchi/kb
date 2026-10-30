@@ -1,0 +1,117 @@
+{
+  "schema": "kb-coderef-doors-golden/1",
+  "cases": [
+    {
+      "name": "reader-fixture",
+      "body": "<h2>Config</h2>\n<p><code>crates/kb-core/src/config.rs:120</code> and <code>crates/kb-core/src/config.rs:120</code></p>\n<p><code data-kb-ref=\"crates/kb-core/src/coderefs.rs#L42\">coderefs.rs</code></p>\n<p><a href=\"https://example.com/docs\"><code>crates/kb-core/src/linked.rs:5</code></a></p>\n<pre><code>see crates/kb-core/src/listing.rs:7 here</code></pre>\n<p><code>crates/kb-core/src/config.rs:120</code></p>\n",
+      "refs": [
+        {
+          "ordinal": 0,
+          "raw": "crates/kb-core/src/config.rs:120",
+          "declared": false
+        },
+        {
+          "ordinal": 1,
+          "raw": "crates/kb-core/src/config.rs:120",
+          "declared": false
+        },
+        {
+          "ordinal": 2,
+          "raw": "crates/kb-core/src/coderefs.rs#L42",
+          "declared": true
+        },
+        {
+          "ordinal": 3,
+          "raw": "crates/kb-core/src/linked.rs:5",
+          "declared": false
+        },
+        {
+          "ordinal": 4,
+          "raw": "crates/kb-core/src/listing.rs:7",
+          "declared": false
+        },
+        {
+          "ordinal": 5,
+          "raw": "crates/kb-core/src/config.rs:120",
+          "declared": false
+        }
+      ],
+      "decorated": [
+        0,
+        1,
+        2,
+        5
+      ]
+    },
+    {
+      "name": "nested-code",
+      "body": "<p><code>see <code>crates/kb-core/src/inner.rs</code></code></p>\n",
+      "refs": [
+        {
+          "ordinal": 0,
+          "raw": "crates/kb-core/src/inner.rs",
+          "declared": false
+        }
+      ],
+      "decorated": []
+    },
+    {
+      "name": "padded-and-nested-markup",
+      "body": "<p><code>  crates/kb-core/src/padded.rs:9  </code> <code>app/models/order.rb:<strong>77</strong></code></p>\n",
+      "refs": [
+        {
+          "ordinal": 0,
+          "raw": "crates/kb-core/src/padded.rs:9",
+          "declared": false
+        },
+        {
+          "ordinal": 1,
+          "raw": "app/models/order.rb:77",
+          "declared": false
+        }
+      ],
+      "decorated": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "summary-consumes-its-ordinal",
+      "body": "<details><summary><code>crates/kb-core/src/summary.rs</code></summary><p>More.</p></details>\n<p><code>crates/kb-core/src/summary.rs</code></p>\n",
+      "refs": [
+        {
+          "ordinal": 0,
+          "raw": "crates/kb-core/src/summary.rs",
+          "declared": false
+        },
+        {
+          "ordinal": 1,
+          "raw": "crates/kb-core/src/summary.rs",
+          "declared": false
+        }
+      ],
+      "decorated": [
+        1
+      ]
+    },
+    {
+      "name": "issue-link-is-a-ref-not-a-code-element",
+      "body": "<p><a href=\"https://github.com/acme/widgets/issues/12\">issue 12</a> then <code>crates/kb-core/src/after_issue.rs</code></p>\n",
+      "refs": [
+        {
+          "ordinal": 0,
+          "raw": "https://github.com/acme/widgets/issues/12",
+          "declared": false
+        },
+        {
+          "ordinal": 1,
+          "raw": "crates/kb-core/src/after_issue.rs",
+          "declared": false
+        }
+      ],
+      "decorated": [
+        1
+      ]
+    }
+  ]
+}

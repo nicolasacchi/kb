@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from "node:child_process";
 import {
   mkdtempSync,
+  readFileSync,
   copyFileSync,
   cpSync,
   mkdirSync,
@@ -88,6 +89,26 @@ function copyCanon(target: string) {
 <h1>Code refs demo two</h1>
 <p>The wire types live in <code data-kb-ref="crates/kb-code-server/src/doclens/wire.rs#L88">wire.rs</code>.</p>
 </body></html>`,
+    "utf-8",
+  );
+  // OL IDEA6 - spa-coderef-doors.spec.ts's fixture. The body is the golden's
+  // reader-fixture case VERBATIM (the same text the Rust extractor test and
+  // the jsdom runtime test run over), so the ordinals the spec asserts are
+  // the ones the extractor mints. The `code-refs-demo` prefix keeps
+  // spa-coderefs' zero-ref scan skipping it.
+  const golden = JSON.parse(
+    readFileSync(
+      resolve(REPO_ROOT, "crates", "kb-server", "src", "routes", "runtime_doors.golden.json"),
+      "utf-8",
+    ),
+  ) as { cases: { name: string; body: string }[] };
+  const readerCase = golden.cases.find((c) => c.name === "reader-fixture");
+  if (!readerCase) throw new Error("runtime_doors.golden.json lost its reader-fixture case");
+  writeFileSync(
+    join(target, "code-refs-demo-doors.html"),
+    `<!doctype html><html><head><meta charset="utf-8"><title>Code refs demo doors</title><meta name="kb-category" content="reference"></head><body>
+<h1>Code refs demo doors</h1>
+${readerCase.body}</body></html>`,
     "utf-8",
   );
 }

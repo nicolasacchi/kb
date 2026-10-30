@@ -46,6 +46,9 @@ import { sse } from "../../api/sse";
 import { artifactOrigin, isOriginOfArtifact } from "../../lib/artifactHost";
 import { artifactHref } from "../../lib/artifactHref";
 import { artifactSrcAt } from "../../lib/asOf";
+import { useCodeDoors } from "../../hooks/useCodeDoors";
+import { useCodeUrlForKb } from "../../hooks/useCodeUrlForKb";
+import { doorsLive, type CodeDoor } from "../../lib/codeDoors";
 import AsOfBar from "./AsOfBar";
 import {
   resolveArtifactHref,
@@ -705,6 +708,49 @@ export default function ArtifactPane({
   // Empty string at the entrypoint; the artifact's own path is the route
   // splat, so the page can't share the path without ambiguity.
   const activePage = searchParams.get("p") ?? "";
+
+  // OL IDEA6 - the citation is the door. The doors are computed from the
+  // Links tab's own queries and POSTED INTO this pane's frame (exact
+  // artifact origin, #7); the runtime decorates matching <code> elements and
+  // opens a door from the click itself, so nothing flows back here. Only the
+  // entry page of a live (non-historical) render is the document the
+  // extractor saw; a kb without a `code_url` enables no query and posts
+  // nothing. Each pane posts its OWN document's doors (#30, v0.29).
+  const doorCodeUrl = useCodeUrlForKb(kb);
+  const doorsAreLive = doorsLive({
+    codeUrl: doorCodeUrl,
+    activePage,
+    historical: at !== null,
+  });
+  const codeDoors = useCodeDoors({
+    kb,
+    docId: id,
+    focused,
+    repoParam: searchParams.get("repo"),
+    enabled: doorsAreLive,
+  });
+  // Read by the long-lived message pump (it does not rebind on a change).
+  const doorsRef = useRef<{ live: boolean; doors: CodeDoor[] }>({
+    live: false,
+    doors: [],
+  });
+  doorsRef.current = { live: doorsAreLive, doors: codeDoors };
+  const doorsKey = JSON.stringify(doorsAreLive ? codeDoors : null);
+  useEffect(() => {
+    if (!doorsAreLive || !id) return;
+    const frame = iframeRef.current?.contentWindow;
+    if (!frame) return;
+    try {
+      frame.postMessage(
+        { kind: "kb:coderefs", doors: doorsRef.current.doors },
+        artifactOrigin(id, kb, hostSuffix),
+      );
+    } catch {
+      // iframe not ready - the kb-probe path re-posts.
+    }
+    // doorsKey is the content-stable dependency for the door array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doorsKey, doorsAreLive, id, kb, hostSuffix]);
 
   // RLs1 — same-artifact section hops (a trail next/prev between two
   // sections of one artifact, or a TOC-copied link opened in place):
@@ -1397,6 +1443,19 @@ export default function ArtifactPane({
               if (useFlowSeed) flowSeedConsumedRef.current = true;
             } catch (err) {
               console.warn("[history] scroll-to post failed", err);
+            }
+          }
+        }
+        // OL IDEA6 - (re)hand the runtime this document's doors. The runtime
+        // keeps the last list and replaces it wholesale, so re-posting on
+        // every probe (an iframe remount lands here too) is idempotent.
+        {
+          const d = doorsRef.current;
+          if (d.live && frame && targetOrigin) {
+            try {
+              frame.postMessage({ kind: "kb:coderefs", doors: d.doors }, targetOrigin);
+            } catch (err) {
+              console.warn("[coderefs] doors post failed", err);
             }
           }
         }
