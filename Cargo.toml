@@ -65,7 +65,7 @@ lance-index = "=11.0.0"
 lance = { version = "=11.0.0", default-features = false }
 arrow = "=58.4.0"
 arrow-array = "=58.4.0"
-arrow-schema = "=58.4.0"
+arrow-schema = "=58.4.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # refinery 0.9 (V76-R4e): refinery-core 0.9.2 moved to toml 1.1, collapsing
 # the old toml 0.8/toml_edit 0.22/winnow 0.7 chain refinery 0.8 dragged in.
@@ -294,7 +294,7 @@ tree-sitter-embedded-template = "0.25"
 #   wrapper that would pull `tree-sitter` in directly) is left OFF.
 tree-sitter-css = "=0.25.0"
 tree-sitter-scss = "=1.0.0"
-tree-sitter-md = { version = "=0.5.3", default-features = false }
+tree-sitter-md = { version = "=0.5.4", default-features = false }
 
 # ripgrep engine (code-search surface) — Unlicense OR MIT. grep-matcher is
 # already pulled in transitively by grep-searcher/grep-regex (see

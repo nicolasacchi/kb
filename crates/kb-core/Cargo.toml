@@ -41,7 +41,7 @@ getrandom = { workspace = true }
 scraper = { workspace = true }
 # Pin ego-tree to scraper 0.27's transitive version so NodeRef<scraper::Node>
 # unifies in the dep graph.
-ego-tree = "=0.11.0"
+ego-tree = "=0.11.1"
 
 # Per-kb sqlite (sources/errors/runs/edges); refinery for migrations.
 rusqlite = { workspace = true }
