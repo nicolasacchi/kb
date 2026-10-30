@@ -64,6 +64,16 @@ updates:
     groups:
       web-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # @types/node must track the Node RUNTIME major (22: setup-node 22,
+      # node:22 Dockerfile stages, engines ^22.22.2 || >=24.15.0), or
+      # typecheck passes on APIs that do not exist at runtime. Dependabot
+      # opened 22 -> 26 major bumps in /web-code, /web-code/e2e and
+      # /tests/e2e (#135, #66, #65). Minor/patch updates still flow.
+      # /web has no direct @types/node dependency, so there this rule is
+      # purely defensive. Drop these rules together with the runtime move.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/tests/e2e"
@@ -73,6 +83,11 @@ updates:
     groups:
       e2e-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # @types/node majors follow the Node 22 runtime: see the note on the
+      # /web entry. Minor/patch still flow.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/web-code"
@@ -83,6 +98,10 @@ updates:
       web-code-minor-patch:
         update-types: ["minor", "patch"]
     ignore:
+      # @types/node majors follow the Node 22 runtime: see the note on the
+      # /web entry. Minor/patch still flow.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
       # react-router 8 hard-requires `react >=19.2.7`; web-code is still on
       # the React 18 line (react/react-dom ^18.3.1, @types/* ^18.3.x) and
       # the React 19 migration is a separate, much larger piece of work
@@ -136,6 +155,11 @@ updates:
     groups:
       web-code-e2e-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # @types/node majors follow the Node 22 runtime: see the note on the
+      # /web entry. Minor/patch still flow.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   # The Dockerfile base images (rust, node, debian) are pinned by digest, so
   # nothing moves them except a human; without this entry they rot silently
