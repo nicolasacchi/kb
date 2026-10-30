@@ -13,5 +13,6 @@ mod docs_asof;
 mod events_filters;
 mod exclusions;
 mod links_suggest;
+mod since_visit;
 mod slates;
 mod slo;
