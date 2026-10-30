@@ -218,6 +218,19 @@ fn i64_as_u64_sat(v: i64) -> u64 {
     u64::try_from(v.max(0)).unwrap_or(u64::MAX)
 }
 
+/// The `sessions` column list [`SessionRow`] is read from — shared by
+/// `sessions_list_with` and `sessions_active_since` so both go through
+/// `Db::map_session_row` with one positional contract.
+const SESSION_ROW_COLS: &str = "artifact_id, session_id, started_at, ended_at,
+                            message_count, first_user_prompt, source_relative,
+                            title, cwd, git_branch, files_read_count, files_edited_count,
+                            token_total, tool_calls, model, error_count,
+                            subagent_count, subagent_tokens, subagent_tool_calls,
+                            subagent_files_edited, subagent_launched_unstatted,
+                            project_key, repo_root, harness, cc_version,
+                            last_assistant_text, all_cwds, commit_count, user_turns,
+                            active_secs, substance, segment_of, segment_idx";
+
 impl Db {
     /// Open (or create) the database at `path` and run all pending migrations.
     /// Idempotent across processes thanks to refinery's `refinery_schema_history`
@@ -5377,15 +5390,6 @@ impl Db {
         harness: &[String],
         collapse_logical: bool,
     ) -> Result<Vec<SessionRow>> {
-        const COLS: &str = "artifact_id, session_id, started_at, ended_at,
-                            message_count, first_user_prompt, source_relative,
-                            title, cwd, git_branch, files_read_count, files_edited_count,
-                            token_total, tool_calls, model, error_count,
-                            subagent_count, subagent_tokens, subagent_tool_calls,
-                            subagent_files_edited, subagent_launched_unstatted,
-                            project_key, repo_root, harness, cc_version,
-                            last_assistant_text, all_cwds, commit_count, user_turns,
-                            active_secs, substance, segment_of, segment_idx";
         // Build the WHERE dynamically: the optional keyset cursor and the
         // optional folder (A1) filter are ANDed; placeholder indices are
         // assigned in bind order so the two stay in lockstep. The folder
@@ -5535,13 +5539,35 @@ impl Db {
             format!("WHERE {}", conds.join(" AND "))
         };
         let sql = format!(
-            "SELECT {COLS} FROM sessions {where_clause} \
+            "SELECT {SESSION_ROW_COLS} FROM sessions {where_clause} \
              ORDER BY started_at DESC, artifact_id ASC LIMIT ?{lim}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
             .query_map(
                 rusqlite::params_from_iter(binds.iter().map(|b| b.as_ref())),
+                Self::map_session_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// OL IDEA5 — sessions with ACTIVITY after `since_unix`, newest activity
+    /// first. Activity is `MAX(ended_at, started_at)`, so a session that began
+    /// before the watermark and kept working after it is included (a
+    /// `started_at` floor would miss it). Newest capture only (#11); parts of
+    /// a segmented session are separate rows (V0045). Bounded by `limit`.
+    pub fn sessions_active_since(&self, since_unix: i64, limit: u32) -> Result<Vec<SessionRow>> {
+        let sql = format!(
+            "SELECT {SESSION_ROW_COLS} FROM sessions \
+             WHERE is_newest = 1 AND MAX(ended_at, started_at) > ?1 \
+             ORDER BY MAX(ended_at, started_at) DESC, session_id ASC, artifact_id ASC \
+             LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![since_unix, limit as i64],
                 Self::map_session_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -10523,6 +10549,75 @@ mod tests {
             segment_of: None,
             segment_idx: None,
         }
+    }
+
+    #[test]
+    fn sessions_active_since_includes_straddlers_and_newest_capture_only() {
+        let mut db = db();
+        // Started before the watermark, ended after it: a straddler.
+        let mut straddler = session_row("art-strad", "sid-strad", 1_000);
+        straddler.ended_at = 5_000;
+        db.sessions_upsert(&straddler).unwrap();
+        // Ended before the watermark: out.
+        let mut old = session_row("art-old", "sid-old", 1_000);
+        old.ended_at = 1_500;
+        db.sessions_upsert(&old).unwrap();
+        // Two captures of one session_id, both active: one row (the newest).
+        let mut cap1 = session_row("art-multi-1", "sid-multi", 3_000);
+        cap1.ended_at = 3_100;
+        db.sessions_upsert(&cap1).unwrap();
+        let mut cap2 = session_row("art-multi-2", "sid-multi", 3_200);
+        cap2.ended_at = 3_300;
+        db.sessions_upsert(&cap2).unwrap();
+
+        let rows = db.sessions_active_since(2_000, 50).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.session_id.as_str()).collect();
+        assert!(ids.contains(&"sid-strad"), "straddler is in: {ids:?}");
+        assert!(
+            !ids.contains(&"sid-old"),
+            "ended before since is out: {ids:?}"
+        );
+        assert_eq!(
+            ids.iter().filter(|s| **s == "sid-multi").count(),
+            1,
+            "two captures of one session_id yield one row: {ids:?}"
+        );
+        let multi = rows.iter().find(|r| r.session_id == "sid-multi").unwrap();
+        assert_eq!(multi.artifact_id, "art-multi-2");
+        // The bound is exclusive.
+        assert!(db
+            .sessions_active_since(5_000, 50)
+            .unwrap()
+            .iter()
+            .all(|r| r.session_id != "sid-strad"));
+    }
+
+    #[test]
+    fn sessions_active_since_orders_by_activity_and_honours_limit() {
+        let mut db = db();
+        for (aid, sid, start, end) in [
+            ("a1", "sid-a", 100, 900),
+            ("b1", "sid-b", 500, 600),
+            ("c1", "sid-c", 700, 700),
+            ("d1", "sid-d", 800, 1_000),
+        ] {
+            let mut r = session_row(aid, sid, start);
+            r.ended_at = end;
+            db.sessions_upsert(&r).unwrap();
+        }
+        let ids = |rows: Vec<SessionRow>| -> Vec<String> {
+            rows.into_iter().map(|r| r.session_id).collect()
+        };
+        assert_eq!(
+            ids(db.sessions_active_since(0, 50).unwrap()),
+            ["sid-d", "sid-a", "sid-c", "sid-b"],
+            "ordered by MAX(ended_at, started_at) desc"
+        );
+        assert_eq!(
+            ids(db.sessions_active_since(0, 2).unwrap()),
+            ["sid-d", "sid-a"],
+            "limit keeps the newest"
+        );
     }
 
     #[test]
