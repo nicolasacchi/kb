@@ -60,6 +60,44 @@ pub struct TouchSnapshot {
     pub touches: Vec<Touch>,
 }
 
+/// OL IDEA4 — the newest tool a session STARTED (a `tool_label`, never
+/// arguments) and the beat `at` that said so. In memory only (LF-7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastTool {
+    pub name: String,
+    pub at_unix: i64,
+}
+
+/// What one beat does to a row's [`LastTool`]. Input only: the stored row
+/// always carries `Keep`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ToolUpdate {
+    /// Leave the remembered tool as it was (heartbeats, blocked, ...).
+    #[default]
+    Keep,
+    /// A turn boundary at this beat `at`: forget the tool.
+    Clear { at_unix: i64 },
+    /// A tool-start beat.
+    Started(LastTool),
+}
+
+/// Apply a [`ToolUpdate`] to the previous tool. Monotonic: a late-arriving
+/// older beat never wins (a start or clear with `at` older than the
+/// remembered tool's keeps it; on a tie the newer arrival wins).
+pub fn next_last_tool(prev: Option<&LastTool>, update: &ToolUpdate) -> Option<LastTool> {
+    match update {
+        ToolUpdate::Keep => prev.cloned(),
+        ToolUpdate::Started(t) => match prev {
+            Some(p) if t.at_unix < p.at_unix => Some(p.clone()),
+            _ => Some(t.clone()),
+        },
+        ToolUpdate::Clear { at_unix } => match prev {
+            Some(p) if *at_unix < p.at_unix => Some(p.clone()),
+            _ => None,
+        },
+    }
+}
+
 /// Cap on distinct `session_id`s held at once. The operator runs ~55
 /// sessions today (design §4's measured evidence); 4096 is generous
 /// headroom that still bounds a runaway fleet (or a misbehaving/duplicating
@@ -117,6 +155,13 @@ pub struct LiveRow {
     /// carried. On the stored row (and the returned [`RecordOutcome::row`]):
     /// the merged ring, oldest first, at most [`TOUCH_RING_CAP`].
     pub touches: VecDeque<Touch>,
+    /// OL IDEA4 — on input: what this beat does to the remembered tool.
+    /// Always `Keep` on the stored row and the returned row.
+    pub tool_update: ToolUpdate,
+    /// OL IDEA4 — stored/computed: the newest started tool, merged by
+    /// [`next_last_tool`] under the registry lock. Ignores any value the
+    /// caller put here; display evidence only, never a `derive_state` input.
+    pub last_tool: Option<LastTool>,
 }
 
 /// The outcome of one [`LiveRegistry::record_beat`] call: the row as
@@ -269,6 +314,14 @@ impl LiveRegistry {
         }
         row.touches = ring;
 
+        // Last started tool (OL IDEA4): merged under this same lock, from the
+        // stored row's value and this beat's update; no `.await` (#15).
+        row.last_tool = next_last_tool(
+            g.get(&row.session_id)
+                .and_then(|old| old.last_tool.as_ref()),
+            &std::mem::take(&mut row.tool_update),
+        );
+
         let (state, confidence) = derive_state(
             row.holder,
             row.last_activity_unix,
@@ -377,7 +430,21 @@ mod tests {
             blocked_since_unix: None,
             touched_unix,
             touches: VecDeque::new(),
+            tool_update: ToolUpdate::Keep,
+            last_tool: None,
         }
+    }
+
+    fn lt(name: &str, at: i64) -> LastTool {
+        LastTool {
+            name: name.to_string(),
+            at_unix: at,
+        }
+    }
+
+    fn with_update(mut r: LiveRow, u: ToolUpdate) -> LiveRow {
+        r.tool_update = u;
+        r
     }
 
     fn touch(rel: &str, at: i64) -> Touch {
@@ -485,6 +552,152 @@ mod tests {
         reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
         reg.record_beat_effect(blocked_row("a", now + 90), now + 90, BlockEffect::Set);
         assert_eq!(stored(&reg, now + 90).blocked_since_unix, Some(now + 90));
+    }
+
+    #[test]
+    fn next_last_tool_starts_keeps_and_clears() {
+        let a = lt("Bash", 100);
+        assert_eq!(next_last_tool(None, &ToolUpdate::Keep), None);
+        assert_eq!(next_last_tool(Some(&a), &ToolUpdate::Keep), Some(a.clone()));
+        assert_eq!(
+            next_last_tool(None, &ToolUpdate::Started(a.clone())),
+            Some(a.clone())
+        );
+        let b = lt("Read", 200);
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Started(b.clone())),
+            Some(b)
+        );
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Clear { at_unix: 150 }),
+            None
+        );
+        assert_eq!(
+            next_last_tool(None, &ToolUpdate::Clear { at_unix: 1 }),
+            None
+        );
+        // A tie: the newer arrival wins, for a start and for a clear.
+        let tie = lt("Grep", 100);
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Started(tie.clone())),
+            Some(tie)
+        );
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Clear { at_unix: 100 }),
+            None
+        );
+    }
+
+    #[test]
+    fn next_last_tool_ignores_an_older_start_or_clear() {
+        let a = lt("Bash", 200);
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Started(lt("Read", 199))),
+            Some(a.clone())
+        );
+        assert_eq!(
+            next_last_tool(Some(&a), &ToolUpdate::Clear { at_unix: 199 }),
+            Some(a)
+        );
+    }
+
+    #[test]
+    fn record_beat_carries_last_tool_across_heartbeats_and_clears_on_turn_boundaries() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let out = reg.record_beat(
+            with_update(
+                row("a", Holder::Agent, now, now),
+                ToolUpdate::Started(lt("Bash", now)),
+            ),
+            now,
+        );
+        assert_eq!(out.row.last_tool, Some(lt("Bash", now)));
+        assert_eq!(out.row.tool_update, ToolUpdate::Keep);
+        // A heartbeat (Keep) carries it.
+        reg.record_beat(row("a", Holder::Agent, now + 30, now + 30), now + 30);
+        assert_eq!(stored(&reg, now + 30).last_tool, Some(lt("Bash", now)));
+        assert_eq!(stored(&reg, now + 30).tool_update, ToolUpdate::Keep);
+        // A caller-supplied `last_tool` on input is ignored (Keep carries the old).
+        let mut forged = row("a", Holder::Agent, now + 40, now + 40);
+        forged.last_tool = Some(lt("Forged", now + 40));
+        reg.record_beat(forged, now + 40);
+        assert_eq!(stored(&reg, now + 40).last_tool, Some(lt("Bash", now)));
+        // A newer start replaces it.
+        reg.record_beat(
+            with_update(
+                row("a", Holder::Agent, now + 50, now + 50),
+                ToolUpdate::Started(lt("Read", now + 50)),
+            ),
+            now + 50,
+        );
+        assert_eq!(stored(&reg, now + 50).last_tool, Some(lt("Read", now + 50)));
+        // A turn boundary clears it.
+        reg.record_beat(
+            with_update(
+                row("a", Holder::Human, now + 60, now + 60),
+                ToolUpdate::Clear { at_unix: now + 60 },
+            ),
+            now + 60,
+        );
+        assert_eq!(stored(&reg, now + 60).last_tool, None);
+        // A first-ever Keep beat has no tool.
+        reg.record_beat(row("b", Holder::Agent, now, now), now);
+        let b = reg
+            .snapshot(now)
+            .into_iter()
+            .find(|(r, _, _)| r.session_id == "b")
+            .unwrap()
+            .0;
+        assert_eq!(b.last_tool, None);
+    }
+
+    // invariant:11 tool evidence never changes the derived state
+    #[test]
+    fn tool_evidence_never_changes_the_derived_state() {
+        let with = LiveRegistry::new();
+        let without = LiveRegistry::new();
+        let t = 1_000_000;
+        let seq: Vec<(Holder, i64, ToolUpdate)> = vec![
+            (Holder::Agent, t, ToolUpdate::Clear { at_unix: t }),
+            (
+                Holder::Agent,
+                t + 10,
+                ToolUpdate::Started(lt("Bash", t + 10)),
+            ),
+            (Holder::Agent, t + 3000, ToolUpdate::Keep),
+            (
+                Holder::Agent,
+                t + 3010,
+                ToolUpdate::Started(lt("Read", t + 3010)),
+            ),
+            (
+                Holder::Human,
+                t + 3020,
+                ToolUpdate::Clear { at_unix: t + 3020 },
+            ),
+            (
+                Holder::Agent,
+                t + 3030,
+                ToolUpdate::Started(lt("Edit", t + 3030)),
+            ),
+            (
+                Holder::Ended,
+                t + 3040,
+                ToolUpdate::Clear { at_unix: t + 3040 },
+            ),
+        ];
+        for (holder, at, upd) in seq {
+            let a = with.record_beat(with_update(row("s", holder, at, at), upd), at);
+            let b = without.record_beat(row("s", holder, at, at), at);
+            assert_eq!(a.state, b.state);
+            assert_eq!(a.confidence, b.confidence);
+            assert_eq!(a.previous_state, b.previous_state);
+            assert_eq!(
+                with.snapshot(at + 5000)[0].1,
+                without.snapshot(at + 5000)[0].1
+            );
+        }
     }
 
     #[test]
