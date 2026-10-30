@@ -169,7 +169,7 @@ POST itself is fire-and-forget: a detached background subshell with
 |---|---|---|
 | `KB_SESSIONS_DIR` | unset | **Required gate** for every beat (both scripts) — kb not configured for this project ⇒ silent no-op. Same variable the capture hooks already use. |
 | `KB_BEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` kills **every** beat (lifecycle AND heartbeat), both scripts. |
-| `KB_BEAT_HEARTBEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` disables **only** the `PostToolUse` mid-turn heartbeat (`kb-beat-throttle.sh`); lifecycle beats (`start`/`prompt`/`turn_end`/`end`/`blocked`) keep firing. |
+| `KB_BEAT_HEARTBEAT` | unset | `0`/`false`/`FALSE`/`no`/`NO` disables **only** the `PostToolUse` mid-turn heartbeat (`kb-beat-throttle.sh`); lifecycle beats (`start`/`prompt`/`turn_end`/`end`/`blocked`, and the `unblocked` that resolves a block) keep firing. |
 | `KB_BEAT_HEARTBEAT_MIN_INTERVAL_SECS` | `180` | Min seconds between heartbeat beats for one session (`kb-beat-throttle.sh`; keyed on a per-session marker file's mtime, since there's no capture artifact to stat here). |
 | `KB_DAEMON_URL` | `http://127.0.0.1:4000` | Daemon base URL the beat POSTs to. |
 | `KB_BEAT_PATH` | `/api/sessions/beat` | The beat route path. Left overridable so a future repoint doesn't require touching the script. |
@@ -212,22 +212,91 @@ no hook payload shape for it yet. Grok sessions are visible via
 `--local` (which reads `events.jsonl` directly) or, once a capture has
 landed, as a Tier-0 `presumed` row in the daemon-backed default.
 
+## Blocked on you
+
+An agent that is stopped on a permission prompt or a question still holds
+the turn, so the state stays `working` (or `stalled`); what changes is a
+sticky `blocked` flag on that row. It is a presentation, not a seventh
+state: the Sessions page lists those rows first under **Needs you**, the
+header chip leads with `N blocked`, `kb sessions status` marks the row
+`needs you: permission: <tool>`, kb-code's Home puts a line for it first in
+its own "Needs you" section, and `session.state` fires when the flag flips.
+
+**Which Claude Code Notifications block.** The hook decides (the harness
+vocabulary lives in the caller). Claude Code sends `notification_type`;
+only the first three rows beat `blocked`, everything else sends no beat at
+all, including types added later.
+
+| `notification_type` | Result |
+|---|---|
+| `permission_prompt` | `blocked` (the reason covers plan approvals and sandbox network prompts too) |
+| `elicitation_dialog` | `blocked` |
+| `elicitation_url_dialog` | `blocked` |
+| `idle_prompt`, `auth_success`, `agent_needs_input`, `worker_permission_prompt`, `agent_completed`, `elicitation_complete`, `elicitation_response`, `plugin_notification`, any unknown type | no beat |
+| none (older Claude Code) | `blocked` only if the message starts `Claude needs your permission`; anything else, no beat |
+
+The last point fixes a live misclassification: Claude sends `idle_prompt`
+about a minute after a turn ends, and the hook used to turn every
+Notification into `blocked`, so an idle session flipped from `waiting` back
+to `working` and later read `stalled?`. The reason text is capped at 120
+characters; `detail.tool` is parsed only from the canonical
+`Claude needs your permission to use <Tool>` text and only when it is a plain
+tool name.
+
+**Effects on the flag.** `blocked` sets it (and stamps when). A `tool`
+heartbeat keeps it, so a parallel subagent's `PostToolUse` cannot silently
+clear a prompt nobody answered. `start`, `prompt`, `unblocked`, `turn_end`
+and `end` clear it.
+
+**The inferred unblock.** Claude Code has no hook between "permission
+granted" and the tool finishing. When a block is raised the hook records
+which agent (`agent_id`, empty for the main thread) it belongs to in a small
+per-session marker; the throttle emits `unblocked` on the first
+`PostToolUse` from that same agent. That beat bypasses the 180 s interval
+gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
+
+| Harness | How a block is raised and cleared |
+|---|---|
+| Claude Code | `Notification` (table above); cleared by the inferred `unblocked`, a prompt, or turn end. |
+| omp | Explicit `tool_approval_requested` / `tool_approval_resolved` events, unchanged. |
+| opencode | Only if its README plugin snippet is applied. |
+| codex, Kimi, Grok | No Notification analogue: their rows are never blocked. |
+
+**Honest gaps.**
+
+- An approved long tool keeps "Needs you" until it finishes, because no hook
+  fires in between; the row shows since when.
+- A denied prompt clears at your next prompt or at turn end.
+- A prompt you answer within about 6 seconds never notifies, so it never
+  blocks.
+- A subagent prompt whose Notification carries no `agent_id` clears only when
+  the subagent returns or the turn ends.
+- A daemon restart loses the flag until the next prompt (the registry is in
+  memory; Tier-0 rows are never blocked).
+- Eight hours of silence ends the claim: the row becomes `presumed_ended`
+  and leaves the lane.
+- A second prompt while a missed unblock still holds the flag is not
+  re-announced (`session.state` fires on a change of `(state, blocked)`).
+
 ## Notification, without writing daemon code
 
 kb has one sanctioned outbound path — the `[webhooks]` event→URL bridge
 (see [`configuration.md` → `[webhooks]`](configuration.md#webhooks)) —
 and one machine-readable event stream (`kb events --follow`). The
-`session.state` SSE kind (fires **only on a derived-state change**,
-never per beat) is what either path subscribes to. No new outbound code
+`session.state` SSE kind (fires **only on a change of the derived
+view `(state, blocked)`**, never per beat) is what either path subscribes to. No new outbound code
 was written for this: both routes below are configuration, or a small
 example script, never a daemon change — kb's own recorded posture is
 "no push mechanics in the daemon" (see README → Non-goals), and building
 an ntfy client into kb would cross it.
 
 The payload on `session.state` is deliberately small:
-`{session_id, harness, state, holder, project, since_unix}` — **no**
-`title`/`last_line` (those only ever ride the request/response bodies,
-never the broadcast).
+`{session_id, harness, state, holder, project, since_unix, blocked,
+blocked_tool?}` — `blocked_tool` is a validated tool-name token and appears
+only while blocked. There is **no** `title`/`last_line`/`detail_reason`
+(those only ever ride the request/response bodies, never the broadcast). It
+fires on a change of `(state, blocked)`, so becoming blocked or unblocked
+is its own event even though the state stays `working`.
 
 This example assumes you already run delivery infrastructure such as ntfy
 (`https://ntfy.example.com`, default access `deny-all` — publishing needs a
@@ -253,7 +322,8 @@ Fields verified against `WebhooksSection`
 (`crates/kb-core/src/config.rs`): `url` (required, `http`/`https` only),
 `types` (exact-match allowlist on the event envelope's `type` — there is
 no payload-level filter, so this forwards **every** `session.state`
-transition matching the type, not just `waiting`), `timeout_ms`
+transition matching the type, not just `waiting`; blocked and unblocked edges
+are forwarded too), `timeout_ms`
 (default 5000), `allow_private` (default `false`; loopback + public
 unicast always pass, link-local/metadata/multicast are refused even with
 it on — see `crates/kb-core/src/webhook_url.rs`).
@@ -294,8 +364,11 @@ back-pressures the daemon. Never build a synchronous decision on it.
 ```bash
 kb events --follow --types session.state --json \
   | jq --unbuffered -r '
-      select(.payload.state == "waiting") |
-      "\(.payload.project // "?") · \(.payload.harness) session \(.payload.session_id[0:8]) is waiting on you"
+      select(.payload.blocked == true or .payload.state == "waiting") |
+      if .payload.blocked == true
+      then "\(.payload.project // "?") · \(.payload.harness) session \(.payload.session_id[0:8]) needs your permission (\(.payload.blocked_tool // "prompt"))"
+      else "\(.payload.project // "?") · \(.payload.harness) session \(.payload.session_id[0:8]) is waiting on you"
+      end
     ' \
   | while IFS= read -r line; do
       curl -fsS \

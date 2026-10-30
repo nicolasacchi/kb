@@ -1559,7 +1559,8 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   elsewhere (e.g. `last_assistant_text`), not raw unscrubbed transcript
   bytes. The forced-scrub floor is real, not aspirational:
   `routes::sessions::redact_for_non_loopback` collapses `cwd` to its
-  basename and re-caps `last_line` (`OUTCOME_WIRE_MAX_CHARS`) for any
+  basename and re-caps `last_line` (`OUTCOME_WIRE_MAX_CHARS`) and the
+  blocked `detail_reason` (`BLOCKED_REASON_MAX_CHARS`, 120) for any
   non-loopback caller, applied AFTER ordering/capping so it never skips a
   row. `ConnectInfo` is read as an axum extractor on `live_status` (the
   house pattern for a route HANDLER; invariant #3's "read from
@@ -1573,17 +1574,23 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   appear in the response and the caller supplies no roots, so there is nothing
   for a loopback-only gate to protect; a tokenless non-loopback request gets
   the ordinary 401.
-- **`session.state` fires ONLY on a derived-state CHANGE, per invariant
-  #24.** `routes::sessions::beat` compares `RecordOutcome::previous_state`
-  (the state `derive_state` would have reported for this session
+- **`session.state` fires ONLY on a CHANGE of the derived view `(state,
+  blocked)`, per invariant #24.** `routes::sessions::beat` builds the frame
+  with `session_state_payload`, which compares `RecordOutcome::previous_state`
+  and `previous_blocked` (what `derive_state` and the row would have reported
   immediately before this beat, against the SAME `now_unix`) to the
-  freshly-derived state and emits iff they differ — never once per beat,
-  or a busy fleet would flood every browser. Registered in
-  `routes/schema.rs`'s `V0_0_1_TYPES` + `per_type` in the same commit, as
-  the drift test requires; payload is `{session_id, harness, state,
-  holder, project, since_unix}` — deliberately NOT `title`/`last_line`
-  (content leaks in only through the request/response bodies above, never
-  the SSE broadcast).
+  freshly-derived pair and emits iff they differ — never once per beat, or a
+  busy fleet would flood every browser. `blocked` is a sticky flag on an
+  agent-held row, not a new `LiveState` (OL IDEA1): a `blocked` beat sets it,
+  a `tool` beat keeps it (the registry carries it forward under the same lock
+  as the touch ring), and `start|prompt|unblocked|turn_end|end` clear it
+  (`block_effect`). Registered in `routes/schema.rs`'s `V0_0_1_TYPES` +
+  `per_type` (`SESSION_STATE_KEYS`, tied to the builder by a test); payload
+  is `{session_id, harness, state, holder, project, since_unix, blocked,
+  blocked_tool?}` — `blocked_tool` is a validated tool-name token, and the
+  payload is deliberately NOT `title`/`last_line`/`detail_reason` (free text
+  leaks in only through the request/response bodies above, never the SSE
+  broadcast).
 - **Push wiring is uneven across harnesses by design, and `--local` and
   daemon mode see different subsets as a result.** LSC-3 wires
   `kb-beat.sh` into Claude Code's full lifecycle (`SessionStart`/

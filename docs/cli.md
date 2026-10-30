@@ -638,7 +638,9 @@ kb sessions status [--local] [--json] [--no-color]
                                     Claude Code root). `--state` is csv over
                                     working/stalled/waiting/cold/finished/presumed_ended. No
                                     `--watch`: pipe `kb events --follow --types session.state --json`
-                                    for a live stream instead. See
+                                    for a live stream instead. A row blocked on a permission prompt or a question
+                                    reads `needs you: permission: <tool>` (else `needs you:
+                                    <reason>`, else `needs you`) in the why column. See
                                     docs/live-sessions.md.
 kb sessions show <id> [--json]         Single session detail + memories + artifacts + decisions + effort
 kb sessions replay <id> [--json]       Replay beat by beat on the transcript's clock: prompts, reads/edits/writes, searches, commits, decisions

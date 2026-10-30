@@ -2032,8 +2032,9 @@ remote review mutations are on), and Sibling (kb-sibling/1 identity and build). 
 "Daemon status" section is now one link to it.
 
 **Home.** Leads with where you were: a Continue hero (the latest location and its
-first lines) and up to four more recent locations; then "Needs you" (non-empty
-inbox lanes only, one quiet line otherwise); then Repos.
+first lines) and up to four more recent locations; then "Needs you" (a line for sessions
+kb reports as blocked on you first, then the non-empty inbox lanes only, one
+quiet line otherwise); then Repos.
 
 **The quiet reader.** The chrome above line 1 is the top bar plus one pane-header
 row. Path breadcrumbs render in the top bar's scope slot; the pane header is
@@ -2087,7 +2088,7 @@ below.
 
 kb and kb-code are one fleet, so each app can show the other's side. The only
 live call direction is still kb-code -> kb (kb-sibling/1; architecture
-invariant #2), so there are two read-only relays on kb-code and one inert
+invariant #2), so there are three read-only relays on kb-code and one inert
 link on kb's side.
 
 **Documents in kb-code's omnibox.** `GET /api/kb/search?q=&limit=` asks kb's
@@ -2111,6 +2112,19 @@ only if the browser has not chosen one in kb-code; a choice made in kb-code
 always wins and is never written back to kb. The theme picker says which one
 is in force: "Following kb" or "Chosen here". The light/dark appearance does
 not follow.
+
+**Blocked sessions on Home.** `GET /api/kb/blocked` asks kb's
+`GET /api/sessions/live-status?blocked=1` through `KbClient` (same handshake,
+the shared 1.5 s timeout) and returns `{sessions: [{session_id, harness,
+project?, blocked_tool?, since_unix}], kb_public_url, total, truncated}`:
+oldest block first, 20 rows at most, and nothing but those fields (no cwd,
+title, last line, reason text, model or host). Home's "Needs you" section
+leads with one line for it, `1 session blocked on you . kb . permission: Bash`
+or `N sessions blocked on you`, linking to kb's `/sessions#kb-now-blocked` when
+`[kb_daemon] public_url` is set (the section badge adds the blocked count). The
+route answers 200 with an `unavailable` caption when kb is disabled,
+unreachable or on a sibling mismatch, and Home then shows nothing extra. Home
+polls it every 15 s while the tab is visible. Nothing is cached or persisted.
 
 **Code in kb's command palette.** kb's Cmd+K shows one row, "Search code for
 "q" in kb-code", linking to `{code_url}/search?q=` in a new tab when the
