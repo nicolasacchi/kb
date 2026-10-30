@@ -2821,7 +2821,8 @@ enum SessionsAction {
         json: bool,
         /// Csv, repeatable: fetch ONLY these
         /// sections (files,decisions,commits,research,memories,touches,
-        /// comments,readings,outcome). Absent = every section (unchanged).
+        /// comments,readings,outcome,checks). Absent = every section (unchanged).
+        /// `checks` is the session evidence card (no extra fetch).
         // Provenance: cli-grok Proposal 2 #4
         #[arg(long, value_delimiter = ',')]
         section: Vec<String>,

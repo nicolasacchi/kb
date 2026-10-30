@@ -642,9 +642,17 @@ kb sessions status [--local] [--json] [--no-color]
                                     `--watch`: pipe `kb events --follow --types session.state --json`
                                     for a live stream instead. See
                                     docs/live-sessions.md.
-kb sessions show <id> [--json]         Single session detail + memories + artifacts + decisions + effort
+kb sessions show <id> [--json] [--section a,b,..]
+                                    Single session detail + memories + artifacts + decisions + effort. OL IDEA3 — a
+                                    `checked   <phrase>` line (and `$ <command>`) after `closed`, a `not named` line
+                                    (edits the closing text never names), a `commit    none detected in this session`
+                                    line, and a `checks (N of total)` block (each check before/after the last edit).
+                                    `--section checks` prints only those lines; with `--json` it returns
+                                    `{evidence, checks, unnamed_edits, unnamed_edits_total}` (no extra fetch).
+                                    A capture that predates V0046 prints `checked   not extracted for this capture
+                                    (predates it; kb reindex <kb> fills it)`. Surfaced, never scored
 kb sessions replay <id> [--json]       Replay beat by beat on the transcript's clock: prompts, reads/edits/writes, searches, commits, decisions
-kb sessions resume <id> [--json]       Resume-context block (goal + branch + edited files + decisions)
+kb sessions resume <id> [--json]       Resume-context block (goal + branch + edited files + decisions); OL IDEA3 adds `Checks: <phrase>` + `  $ <command>` and `Not committed: no commit detected in this session` before `Resume:`
 kb sessions export <id> [--from URL]   Bundle a session as a portable `<sid>.kbsession.zip`
 kb sessions rehydrate <bundle>         Place a bundle's transcript under `~/.claude/projects/` so `claude -r <id>` finds it
 kb sessions pull <id> [--from URL]     Fetch a session bundle from a remote kb daemon, optionally rehydrate
