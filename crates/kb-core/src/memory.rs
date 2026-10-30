@@ -2314,6 +2314,18 @@ mod tests {
     }
 
     #[test]
+    fn rendered_memory_artifact_qualifies_for_the_house_voice() {
+        // Pins the READ1b claim that every memory artifact is voice-less by
+        // construction, against the real renderer rather than a fixture.
+        let html = render_with(None);
+        let out = crate::iframe::inject_house_voice(&html, "p{}", "auto")
+            .unwrap()
+            .expect("a rendered memory has no style of its own");
+        assert!(out.contains(r#"data-kb-read="auto""#), "{out}");
+        assert!(out.contains(r#"id="kb-read-style""#), "{out}");
+    }
+
+    #[test]
     fn render_artifact_records_highlight_provenance() {
         let html = render_with(Some(&highlight_provenance()));
         assert!(html.contains(r#"<meta name="kb-author" content="you">"#));

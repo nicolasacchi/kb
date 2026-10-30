@@ -312,6 +312,119 @@ pub fn inject_inline_head_script(html: &str, js: &str) -> Result<String> {
     Ok(s)
 }
 
+/// Case-insensitive ASCII substring test (no allocation).
+fn contains_ci(hay: &str, needle: &str) -> bool {
+    let n = needle.as_bytes();
+    !n.is_empty()
+        && hay
+            .as_bytes()
+            .windows(n.len())
+            .any(|w| w.eq_ignore_ascii_case(n))
+}
+
+/// Serve-time house voice: give a page that carries NO styling of its own
+/// kb's reading sheet. Returns `Ok(None)` (the page is served untouched) when
+/// the page has a `<style>`, a `<link rel=stylesheet>`, an `<html>` already
+/// carrying `data-kb-read`, the `kb-reading` opt-out meta, or no `<html>`
+/// element to hang the attribute on.
+///
+/// Otherwise it adds `data-kb-read="<attr_value>"` to `<html>` and one
+/// `<style id="kb-read-style">` holding `css` - at the END of `<head>`, or as
+/// the first child of `<html>` when the page has no `<head>`. Head-only: no
+/// body node and no source byte is rewritten (#5/#12), and the runtime's `r`
+/// toggle removes exactly this style + attribute to give the original back.
+pub fn inject_house_voice(html: &str, css: &str, attr_value: &str) -> Result<Option<String>> {
+    use std::cell::Cell;
+    if contains_ci(html, "<style") {
+        return Ok(None);
+    }
+    let has_html = Cell::new(false);
+    let has_head = Cell::new(false);
+    let blocked = Cell::new(false);
+    {
+        let mut rewriter = HtmlRewriter::new(
+            Settings::new()
+                .append_element_content_handler(element!("html", |el| {
+                    has_html.set(true);
+                    if el.get_attribute("data-kb-read").is_some() {
+                        blocked.set(true);
+                    }
+                    Ok(())
+                }))
+                .append_element_content_handler(element!("head", |_el| {
+                    has_head.set(true);
+                    Ok(())
+                }))
+                .append_element_content_handler(element!("link", |el| {
+                    let sheet = el.get_attribute("rel").is_some_and(|r| {
+                        r.to_ascii_lowercase()
+                            .split_whitespace()
+                            .any(|t| t == "stylesheet")
+                    });
+                    if sheet {
+                        blocked.set(true);
+                    }
+                    Ok(())
+                }))
+                .append_element_content_handler(element!("meta", |el| {
+                    let named = el
+                        .get_attribute("name")
+                        .is_some_and(|n| n.trim().eq_ignore_ascii_case("kb-reading"));
+                    let off = el
+                        .get_attribute("content")
+                        .is_some_and(|c| c.trim().eq_ignore_ascii_case("off"));
+                    if named && off {
+                        blocked.set(true);
+                    }
+                    Ok(())
+                })),
+            |_: &[u8]| {},
+        );
+        rewriter
+            .write(html.as_bytes())
+            .map_err(|e| crate::Error::BadRequest(format!("html scan (write): {e}")))?;
+        rewriter
+            .end()
+            .map_err(|e| crate::Error::BadRequest(format!("html scan (end): {e}")))?;
+    }
+    if blocked.get() || !has_html.get() {
+        return Ok(None);
+    }
+    let style = format!(
+        r#"<style id="kb-read-style">{}</style>"#,
+        css.replace("</", "<\\/")
+    );
+    let in_head = has_head.get();
+    let mut output: Vec<u8> = Vec::with_capacity(html.len() + style.len() + 32);
+    {
+        let style_ref = &style;
+        let mut rewriter = HtmlRewriter::new(
+            Settings::new()
+                .append_element_content_handler(element!("html", move |el| {
+                    el.set_attribute("data-kb-read", attr_value)?;
+                    if !in_head {
+                        el.prepend(style_ref, ContentType::Html);
+                    }
+                    Ok(())
+                }))
+                .append_element_content_handler(element!("head", move |el| {
+                    el.append(style_ref, ContentType::Html);
+                    Ok(())
+                })),
+            |c: &[u8]| output.extend_from_slice(c),
+        );
+        rewriter
+            .write(html.as_bytes())
+            .map_err(|e| crate::Error::BadRequest(format!("house voice (write): {e}")))?;
+        rewriter
+            .end()
+            .map_err(|e| crate::Error::BadRequest(format!("house voice (end): {e}")))?;
+    }
+    String::from_utf8(output)
+        .map(Some)
+        .map_err(|e| crate::Error::Internal(anyhow::anyhow!("rewriter output: {e}")))
+}
+
 fn escape_attr(s: &str) -> String {
     // `&` first — escaping it after `"`/`<` would double-escape the `&`
     // inside the `&quot;` / `&lt;` entities those produce.
@@ -720,5 +833,68 @@ mod tests {
                 assert!(!id.contains('\\'), "id {id:?} contains backslash");
             }
         }
+    }
+
+    // --- OL READ1b: serve-time house voice --------------------------------
+
+    const MEMORY_SHAPE: &str = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>t</title>\n</head>\n<body>\n<main>\n<h1>t</h1>\n<p>It mentions a stylesheet in prose.</p>\n</main>\n</body>\n</html>\n";
+
+    #[test]
+    fn house_voice_styles_a_voiceless_page_at_the_end_of_head() {
+        let out = inject_house_voice(MEMORY_SHAPE, "p{}", "auto")
+            .unwrap()
+            .expect("voice-less page qualifies");
+        assert!(
+            out.contains(r#"<html lang="en" data-kb-read="auto">"#),
+            "{out}"
+        );
+        let style = out
+            .find(r#"<style id="kb-read-style">p{}</style>"#)
+            .expect("style");
+        assert!(
+            style < out.find("</head>").unwrap(),
+            "style belongs in head"
+        );
+        assert!(
+            style > out.find("<title>").unwrap(),
+            "appended after existing head content"
+        );
+        // Body bytes are untouched (#12): only head + the html attribute differ.
+        let body = |s: &str| s[s.find("<body>").unwrap()..].to_string();
+        assert_eq!(body(&out), body(MEMORY_SHAPE));
+    }
+
+    #[test]
+    fn house_voice_without_a_head_goes_first_inside_html() {
+        let src = "<!doctype html>\n<html><body><h1>x</h1></body></html>";
+        let out = inject_house_voice(src, "p{}", "auto").unwrap().unwrap();
+        let html = out.find("<html").unwrap();
+        let style = out.find("<style id=\"kb-read-style\">").unwrap();
+        assert!(html < style && style < out.find("<body>").unwrap(), "{out}");
+    }
+
+    #[test]
+    fn house_voice_leaves_pages_with_a_voice_of_their_own_alone() {
+        for src in [
+            "<html><head><style>a{}</style></head><body>x</body></html>",
+            "<html><head><STYLE>a{}</STYLE></head><body>x</body></html>",
+            r#"<html><head><link rel="stylesheet" href="a.css"></head><body>x</body></html>"#,
+            r#"<html><head><link rel="Alternate Stylesheet" href="a.css"></head><body>x</body></html>"#,
+            r#"<html data-kb-read="dark"><head></head><body>x</body></html>"#,
+            r#"<html><head><meta name="kb-reading" content="off"></head><body>x</body></html>"#,
+            "<p>a fragment has no html element</p>",
+        ] {
+            assert_eq!(
+                inject_house_voice(src, "p{}", "auto").unwrap(),
+                None,
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn house_voice_ignores_a_non_stylesheet_link() {
+        let src = r#"<html><head><link rel="icon" href="a.png"></head><body>x</body></html>"#;
+        assert!(inject_house_voice(src, "p{}", "auto").unwrap().is_some());
     }
 }

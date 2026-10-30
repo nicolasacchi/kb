@@ -1,24 +1,63 @@
-/* kb markdown reading theme — self-contained (no external fetches), served
+/* kb markdown reading theme (the house voice: the serif stack, size, leading,
+ * measure and palettes below are the SAME values kb-server's reading.css
+ * applies to reading-mode HTML - a kb-server test pins them identical, so a
+ * Markdown artifact and a reading-mode HTML artifact read alike). — self-contained (no external fetches), served
  * into the sandboxed cross-origin artifact iframe. Mirrors the
  * session_render.css house style: own tokens, system-font stacks with the
  * kb families preferred. The slim top "markdown" bar signals the source
  * format while the body reads as polished long-form prose. */
 
 :root {
-  --md-bg: #fbfaf7;          /* warm paper */
+  --md-bg: #faf7f0;          /* warm paper */
   --md-surface: #ffffff;
-  --md-ink: #1f2530;
-  --md-ink-soft: #4a5260;
-  --md-ink-dim: #7b8493;
+  --md-ink: #1c1b19;
+  --md-ink-soft: #4a4741;
+  --md-ink-dim: #6b665d;
+  --md-link: #0b3d91;
   --md-rule: #e7e3da;
   --md-rule-soft: #f0ece3;
   --md-accent: #6d5ae6;      /* kb purple */
   --md-accent-soft: #efecff;
-  --md-code-bg: #f5f3ee;
+  --md-code-bg: #efeadd;
   --md-code-ink: #2b313c;
-  --md-font-serif: "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
+  --md-font-serif: "Source Serif 4", Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --md-font-sans: "Inter Tight", system-ui, -apple-system, "Segoe UI", sans-serif;
   --md-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Dark palette: the OS preference, or the SPA's theme when the runtime sets
+ * html[data-kb-read="dark"] (data-kb-read="light" pins paper under a dark OS). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-kb-read="light"]) {
+    --md-bg: #16181c;
+    --md-surface: #1d2025;
+    --md-ink: #ebe8e1;
+    --md-ink-soft: #c4c0b6;
+    --md-ink-dim: #9a968c;
+    --md-link: #a9cbff;
+    --md-rule: #34383f;
+    --md-rule-soft: #262a30;
+    --md-accent: #b3a8ff;
+    --md-accent-soft: #2a2745;
+    --md-code-bg: #23262c;
+    --md-code-ink: #ebe8e1;
+    color-scheme: dark;
+  }
+}
+:root[data-kb-read="dark"] {
+  --md-bg: #16181c;
+  --md-surface: #1d2025;
+  --md-ink: #ebe8e1;
+  --md-ink-soft: #c4c0b6;
+  --md-ink-dim: #9a968c;
+  --md-link: #a9cbff;
+  --md-rule: #34383f;
+  --md-rule-soft: #262a30;
+  --md-accent: #b3a8ff;
+  --md-accent-soft: #2a2745;
+  --md-code-bg: #23262c;
+  --md-code-ink: #ebe8e1;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -32,8 +71,8 @@ html, body {
 
 body.kb-md-prose {
   font-family: var(--md-font-serif);
-  font-size: 17px;
-  line-height: 1.68;
+  font-size: clamp(17px, 1.1vw + 14px, 20px);
+  line-height: 1.65;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -67,9 +106,9 @@ body.kb-md-prose {
 
 /* Reading column. */
 .kb-md-doc {
-  max-width: 720px;
+  max-width: min(68ch, 100% - 2 * clamp(16px, 5vw, 40px));
   margin: 0 auto;
-  padding: 40px 28px 96px;
+  padding: 40px 0 96px;
 }
 
 /* Headings — serif, tight top margin, airy below. */
@@ -94,7 +133,7 @@ body.kb-md-prose {
 .kb-md-doc h3:hover .anchor { opacity: 0.4; }
 
 .kb-md-doc p { margin: 0 0 1.05em; }
-.kb-md-doc a { color: var(--md-accent); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+.kb-md-doc a { color: var(--md-link); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
 .kb-md-doc a:hover { text-decoration-thickness: 2px; }
 
 .kb-md-doc ul, .kb-md-doc ol { margin: 0 0 1.05em; padding-left: 1.5em; }
@@ -205,6 +244,19 @@ body.kb-md-prose {
 .kb-md-doc .kb-callout--quote, .kb-md-doc .kb-callout--cite { --cal: var(--md-ink-dim); }
 
 @media (max-width: 640px) {
-  .kb-md-doc { padding: 28px 18px 72px; }
-  body.kb-md-prose { font-size: 16px; }
+  .kb-md-doc { padding: 28px 0 72px; }
+}
+
+/* Dark: syntect paints fenced blocks with a light inline theme, so keep the
+ * block itself a light card (token colours stay legible) rather than flipping
+ * only its container. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-kb-read="light"]) .kb-md-doc pre {
+    background: #efeadd !important;
+    color: #2b313c !important;
+  }
+}
+:root[data-kb-read="dark"] .kb-md-doc pre {
+  background: #efeadd !important;
+  color: #2b313c !important;
 }

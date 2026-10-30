@@ -53,6 +53,7 @@ import {
 } from "../../lib/artifactLinks";
 import type { FlowEntry } from "../../lib/flowStack";
 import type { PaneLoc } from "../../lib/paneUrl";
+import { dispatchForwardedKey, forwardedKey } from "../../lib/artifactKeys";
 import { withKb } from "../../lib/navItems";
 import { buildProvenanceBlock } from "../../lib/quote";
 import { toast } from "../../lib/toast";
@@ -107,6 +108,8 @@ type ArtifactMessage =
     }
   | { kind: "kb:link-clear" }
   | { kind: "kb:link-open"; href: string }
+  // READ1b — a bare reader key forwarded by the runtime's key lane.
+  | { kind: "kb:key"; key: string }
   // RP-track — per-section reading beacon (cumulative per visit).
   | {
       kind: "kb:reading";
@@ -1467,6 +1470,12 @@ export default function ArtifactPane({
         if (!scrollInflight.current) {
           postScrollFlush();
         }
+      } else if (msg.kind === "kb:key") {
+        // READ1b — a bare reader key pressed inside the iframe. Whitelisted
+        // (lib/artifactKeys.ts) then replayed into this window's existing
+        // handlers; anything outside the closed list is ignored.
+        const key = forwardedKey(msg);
+        if (key) dispatchForwardedKey(key);
       } else if (msg.kind === "kb:reading") {
         // RP-track — cumulative per-visit reading snapshot. Mirror the
         // scroll-flush: store the latest, POST when no flush is in flight.
