@@ -16,7 +16,9 @@
 // are per-claim, so a reader comparing "Cited by 2 docs" against 3 visible
 // rows would otherwise wonder if one was a rendering bug.
 
-import type { DocRefClaim } from "../api/types";
+import type { DocRefClaim, DocRefsOut } from "../api/types";
+
+type LiveLookup = DocRefsOut["live_lookup"];
 import { safeHref } from "./safeHref";
 
 /// Distinct `(kb, doc_id)` pairs among `claims` — doc identity on this wire
@@ -116,4 +118,36 @@ export function siblingDocChip(
     if (href) return { kind: "link", href, ...base };
   }
   return { kind: "open-strip", href: null, ...base };
+}
+
+/// OL-SIBL3 - the muted line under (or instead of) the strip. Three absences
+/// stay distinct: nothing cites this file (kb answered), kb could not be asked
+/// (unreachable / sibling-contract mismatch), and the live lookup is off so
+/// only pinned documents were looked at.
+export interface CitedByNote {
+  kind: "none" | "unreachable" | "mismatch" | "no-pinned";
+  text: string;
+}
+
+export function citedByNote(claimCount: number, lookup: LiveLookup): CitedByNote | null {
+  const failing = lookup.state === "failed" || lookup.state === "partial";
+  if (failing) {
+    const mismatched = lookup.failed.filter((f) => f.reason === "sibling_mismatch").map((f) => f.kb);
+    const silent = lookup.failed.filter((f) => f.reason !== "sibling_mismatch").map((f) => f.kb);
+    const parts: string[] = [];
+    if (mismatched.length > 0) parts.push(`kb (${mismatched.join(", ")}) speaks a different sibling contract`);
+    if (silent.length > 0) parts.push(`kb (${silent.join(", ")}) did not answer`);
+    const head = parts.join("; ");
+    const tail =
+      claimCount > 0
+        ? "this list may be incomplete"
+        : "cannot tell which documents cite this file";
+    // Mixed reasons are named separately; the kind follows the contract
+    // mismatch only when EVERY failure is one (otherwise "unreachable").
+    const kind = mismatched.length > 0 && silent.length === 0 ? "mismatch" : "unreachable";
+    return { kind, text: `${head} - ${tail}` };
+  }
+  if (claimCount > 0) return null;
+  if (lookup.state === "off") return { kind: "no-pinned", text: "No pinned document cites this file" };
+  return { kind: "none", text: "No document cites this file" };
 }

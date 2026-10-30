@@ -91,6 +91,8 @@ struct MockHits {
     /// page-clamp/remaining-budget tests read this to prove a LATER kb in
     /// one pass requests only what's left of `batch_cap`, not a fresh page).
     limits: Mutex<Vec<u32>>,
+    /// Every `?by_target=` the feed saw (OL SIBL3).
+    by_target: Mutex<Vec<String>>,
     /// Doc ids the per-doc route 404s even though the feed still lists them.
     gone: Mutex<Vec<String>>,
     /// Every route answers `503` — a deterministic stand-in for "kb is down"
@@ -283,6 +285,28 @@ async fn spawn_mock(
                 let docs = feed_docs.clone();
                 async move {
                     hits.feed.fetch_add(1, Ordering::SeqCst);
+                    // OL SIBL3 - kb's `?by_target=` shape: an exact
+                    // `path_hint` match, no cursor, refs included.
+                    if let Some(target) = q.get("by_target") {
+                        hits.by_target.lock().unwrap().push(target.clone());
+                        if hits.down.load(Ordering::SeqCst) {
+                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        }
+                        let matched: Vec<Value> = docs
+                            .iter()
+                            .filter(|d| {
+                                d["refs"].as_array().is_some_and(|rs| {
+                                    rs.iter().any(|r| r["path_hint"] == json!(target))
+                                })
+                            })
+                            .cloned()
+                            .collect();
+                        let body = json!({
+                            "schema": "coderef-feed/1", "kb": "fixture-kb",
+                            "docs": matched
+                        });
+                        return Json(body).into_response();
+                    }
                     let cursor = q.get("cursor").cloned();
                     hits.cursors.lock().unwrap().push(cursor.clone());
                     if hits.down.load(Ordering::SeqCst) {
@@ -1063,4 +1087,188 @@ async fn the_sync_worker_idles_out_when_the_interval_is_zero() {
         .await
         .expect("the worker returns promptly when periodic sync is off")
         .expect("no panic");
+}
+
+// --- OL SIBL3: the live (kb by_target) half of GET /api/doc-refs -----------
+
+fn claim(kb: &str, doc: &str, raw: &str, source: &'static str) -> DocRefClaim {
+    DocRefClaim {
+        kb: kb.into(),
+        doc_id: doc.into(),
+        doc_title: "t".into(),
+        doc_path: "p.html".into(),
+        doc_public_href: None,
+        group_anchor: None,
+        doc_section_href: None,
+        group_label: None,
+        raw_hint: raw.into(),
+        line_start: None,
+        line_end: None,
+        line_state: (source == SOURCE_PINNED).then(|| "confirmed".to_string()),
+        seen_at: 1,
+        source,
+    }
+}
+
+#[test]
+fn merge_claims_lets_a_pinned_row_replace_the_live_one_and_keeps_live_only_rows() {
+    let merged = merge_claims(
+        vec![claim("k", "d1", "a.rs:3", SOURCE_PINNED)],
+        vec![
+            claim("k", "d1", "a.rs:3", SOURCE_LIVE),
+            claim("k", "d1", "a.rs:9", SOURCE_LIVE),
+            claim("k", "d0", "a.rs", SOURCE_LIVE),
+        ],
+    );
+    let got: Vec<(&str, &str, &str)> = merged
+        .iter()
+        .map(|c| (c.doc_id.as_str(), c.raw_hint.as_str(), c.source))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("d0", "a.rs", SOURCE_LIVE),
+            ("d1", "a.rs:3", SOURCE_PINNED),
+            ("d1", "a.rs:9", SOURCE_LIVE),
+        ]
+    );
+    assert_eq!(merged[1].line_state.as_deref(), Some("confirmed"));
+    assert_eq!(
+        merged[0].line_state, None,
+        "a live row never carries a class"
+    );
+}
+
+#[test]
+fn live_claims_keep_only_the_matching_ref_and_build_the_section_href_from_group() {
+    let docs: Vec<crate::join::kb_client::CodeRefsDoc> = serde_json::from_value(json!([{
+        "doc_id": "d1", "doc_path": "features/d1.html", "title": "",
+        "extracted_at": 7,
+        "groups": [{"key": "kb-h-g1", "label": "G1", "anchor": "kb-h-g1"}],
+        "refs": [
+            {"ordinal": 0, "group": "kb-h-g1", "kind": "path_line", "raw": "src/a.rs:3",
+             "path_hint": "src/a.rs", "line_start": 3},
+            {"ordinal": 1, "group": null, "kind": "path", "raw": "src/b.rs", "path_hint": "src/b.rs"}
+        ]
+    }]))
+    .unwrap();
+    let out = live_claims("kb1", &docs, "src/a.rs", "https://kb.example.com");
+    assert_eq!(out.len(), 1, "the b.rs ref is not a claim about a.rs");
+    let c = &out[0];
+    assert_eq!(c.source, SOURCE_LIVE);
+    assert_eq!(
+        c.doc_title, "d1.html",
+        "title-less falls back to the basename"
+    );
+    assert_eq!(c.group_label.as_deref(), Some("G1"));
+    assert_eq!(c.line_start, Some(3));
+    assert_eq!(c.seen_at, 7);
+    assert_eq!(
+        c.doc_section_href.as_deref(),
+        Some("https://kb.example.com/a/kb1/features/d1.html?sec=kb-h-g1")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unpinned_corpus_still_answers_cited_by_from_kb_live() {
+    let fx = fx().await;
+    // Nothing pinned, nothing synced: the stored index is empty by design.
+    assert!(fx.claims("src/resolver.rs").claims.is_empty());
+
+    let out = doc_refs_merged(&fx.state, "alpha", "src/resolver.rs")
+        .await
+        .unwrap();
+    let docs: Vec<&str> = out.claims.iter().map(|c| c.doc_id.as_str()).collect();
+    assert_eq!(docs, vec!["doc1", "doc2"], "{:?}", out.claims);
+    assert!(out.claims.iter().all(|c| c.source == SOURCE_LIVE));
+    assert!(out.claims.iter().all(|c| c.line_state.is_none()));
+    assert_eq!(out.live_lookup.state, "ok");
+    assert_eq!(out.live_lookup.kbs, vec!["fixture-kb".to_string()]);
+    assert_eq!(
+        fx.hits.by_target.lock().unwrap().as_slice(),
+        ["src/resolver.rs"]
+    );
+    assert_eq!(
+        out.claims[0].doc_section_href.as_deref(),
+        Some("https://kb.example.com/a/fixture-kb/features/doc1.html?sec=kb-h-g1"),
+        "the live row's group gives a section href with no extra field"
+    );
+
+    // A path nothing cites: ok + zero is the "no document cites this file" case.
+    let none = doc_refs_merged(&fx.state, "alpha", "vendor/resolver.rs")
+        .await
+        .unwrap();
+    assert!(none.claims.is_empty());
+    assert_eq!(none.live_lookup.state, "ok");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pinned_claim_upgrades_the_live_one_for_the_same_citation() {
+    let fx = fx().await;
+    fx.pin("fixture-kb", "doc1");
+    let stats = run_doclens_sync(&fx.state, false).await;
+    assert_eq!(stats.docs_resolved, 1, "{stats:?}");
+
+    let out = doc_refs_merged(&fx.state, "alpha", "src/resolver.rs")
+        .await
+        .unwrap();
+    assert_eq!(out.claims.len(), 2, "{:?}", out.claims);
+    assert_eq!(out.claims[0].doc_id, "doc1");
+    assert_eq!(out.claims[0].source, SOURCE_PINNED);
+    assert!(out.claims[0].line_state.is_some());
+    assert_eq!(out.claims[1].doc_id, "doc2");
+    assert_eq!(out.claims[1].source, SOURCE_LIVE);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kb_that_cannot_answer_is_named_and_pinned_claims_survive() {
+    let fx = fx().await;
+    fx.pin("fixture-kb", "doc1");
+    run_doclens_sync(&fx.state, false).await;
+    fx.hits.down.store(true, Ordering::SeqCst);
+
+    let out = doc_refs_merged(&fx.state, "alpha", "src/resolver.rs")
+        .await
+        .unwrap();
+    assert_eq!(out.live_lookup.state, "failed");
+    assert_eq!(
+        out.live_lookup.failed,
+        vec![LiveLookupFailure {
+            kb: "fixture-kb".into(),
+            reason: "bad_status"
+        }]
+    );
+    assert_eq!(out.claims.len(), 1, "only the pinned claim remains");
+    assert_eq!(out.claims[0].source, SOURCE_PINNED);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_the_feature_off_the_lookup_is_off_and_kb_is_never_asked() {
+    let fx = fixture(two_doc_corpus(), 100, &[], 200).await;
+    let out = doc_refs_merged(&fx.state, "alpha", "src/resolver.rs")
+        .await
+        .unwrap();
+    assert_eq!(out.live_lookup.state, "off");
+    assert!(out.claims.is_empty());
+    assert!(fx.hits.by_target.lock().unwrap().is_empty());
+}
+
+#[test]
+fn failure_reason_maps_every_client_error_class() {
+    use crate::join::kb_client::KbClientError as E;
+    assert_eq!(failure_reason(&E::Timeout("u".into())), "timeout");
+    assert_eq!(
+        failure_reason(&E::SiblingMismatch("m".into())),
+        "sibling_mismatch"
+    );
+    assert_eq!(
+        failure_reason(&E::BadStatus(reqwest::StatusCode::BAD_GATEWAY)),
+        "bad_status"
+    );
+    assert_eq!(failure_reason(&E::Parse("p".into())), "parse");
+    assert_eq!(
+        failure_reason(&E::Unreachable("u".into(), "e".into())),
+        "unreachable"
+    );
+    assert_eq!(failure_reason(&E::Disabled), "unreachable");
 }

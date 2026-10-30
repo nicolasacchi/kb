@@ -500,8 +500,8 @@ function codeRefsBodies(shaA: string): Record<string, CodeRefsBody> {
           ordinal: 0,
           group: null,
           kind: "path",
-          raw: "lib.rs",
-          path_hint: "lib.rs",
+          raw: "truncated_a.rs",
+          path_hint: "truncated_a.rs",
           line_start: null,
           line_end: null,
           line_spans: null,
@@ -515,8 +515,8 @@ function codeRefsBodies(shaA: string): Record<string, CodeRefsBody> {
           ordinal: 1,
           group: null,
           kind: "path",
-          raw: "resolver.rs",
-          path_hint: "resolver.rs",
+          raw: "truncated_b.rs",
+          path_hint: "truncated_b.rs",
           line_start: null,
           line_end: null,
           line_spans: null,
@@ -715,6 +715,15 @@ export function startDoclensFixture(repoDir: string): Promise<http.Server> {
       const [, kb] = feed;
       if (kb !== DOCLENS_KB) {
         json(res, 200, { schema: "coderef-feed/1", kb, docs: [] });
+        return;
+      }
+      // OL-SIBL3: kb's `?by_target=` is an exact path_hint match over every doc.
+      const target = url.searchParams.get("by_target");
+      if (target !== null) {
+        const matched = Object.values(bodies)
+          .map(withHashOverride)
+          .filter((b) => (b.refs as Array<{ path_hint?: string | null }>).some((r) => r.path_hint === target));
+        json(res, 200, { schema: "coderef-feed/1", kb, docs: matched });
         return;
       }
       const withRefs = url.searchParams.get("refs") !== "0";
