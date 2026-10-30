@@ -1769,7 +1769,7 @@ async fn share_bundle_carries_no_house_css() {
     let mut saw_page = false;
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut buf = Vec::new();
         std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
         let text = String::from_utf8_lossy(&buf);
