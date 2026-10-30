@@ -1993,6 +1993,10 @@ is no "own wiring" to speak of, only its absence. It carries `staleTime` 30s
 (it reads a live git worktree, which changes with no notification anyone could
 forward), `retry: false`, and a manual `↻` beside the rendered `resolved_unix`
 so the reader can always see how old the resolution is and re-run it.
+The reader's Header Code chip (OL-SIBL2) reads these SAME two queries under the
+same keys (enabled where the Links tab enables them), so it adds no request, no
+store and no breaker; an unreachable kb-code costs the one failed request the
+Links tab already makes, and the chip then stays hint-worded.
 
 Neither category is a licence to skip the bridge: a same-origin, same-daemon
 query whose invalidation the bridge CAN express belongs on the bridge with
