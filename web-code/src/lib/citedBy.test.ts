@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DocRefClaim, LiveLookup } from "../api/types";
+import type { DocRefClaim, DocRefsOut } from "../api/types";
+
+type LiveLookup = DocRefsOut["live_lookup"];
 import { citedByDocCount, citedByLabel, citedByNote, citedByRowLabel, siblingDocChip } from "./citedBy";
 
 function claim(overrides: Partial<DocRefClaim>): DocRefClaim {

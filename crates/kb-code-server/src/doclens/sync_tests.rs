@@ -301,11 +301,11 @@ async fn spawn_mock(
                             })
                             .cloned()
                             .collect();
-                        return Json(json!({
+                        let body = json!({
                             "schema": "coderef-feed/1", "kb": "fixture-kb",
                             "docs": matched
-                        }))
-                        .into_response();
+                        });
+                        return Json(body).into_response();
                     }
                     let cursor = q.get("cursor").cloned();
                     hits.cursors.lock().unwrap().push(cursor.clone());

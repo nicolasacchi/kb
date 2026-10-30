@@ -16,7 +16,9 @@
 // are per-claim, so a reader comparing "Cited by 2 docs" against 3 visible
 // rows would otherwise wonder if one was a rendering bug.
 
-import type { DocRefClaim, LiveLookup } from "../api/types";
+import type { DocRefClaim, DocRefsOut } from "../api/types";
+
+type LiveLookup = DocRefsOut["live_lookup"];
 import { safeHref } from "./safeHref";
 
 /// Distinct `(kb, doc_id)` pairs among `claims` — doc identity on this wire

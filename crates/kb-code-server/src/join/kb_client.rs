@@ -2959,7 +2959,7 @@ mod tests {
                     seen.lock()
                         .unwrap()
                         .push(q.get("by_target").cloned().unwrap_or_default());
-                    Json(serde_json::json!({
+                    let body = serde_json::json!({
                         "schema": "coderef-feed/1",
                         "kb": "k",
                         "docs": [{
@@ -2971,7 +2971,8 @@ mod tests {
                             "refs": [{"ordinal": 0, "group": "kb-h-x", "kind": "path",
                                       "raw": "a b/c.rs", "path_hint": "a b/c.rs"}]
                         }]
-                    }))
+                    });
+                    Json(body)
                 }
             }),
         )
@@ -3015,7 +3016,8 @@ mod tests {
             "/api/kb/{kb}/code-refs",
             get(|| async {
                 tokio::time::sleep(Duration::from_millis(400)).await;
-                Json(serde_json::json!({"docs": []}))
+                let body = serde_json::json!({"docs": []});
+                Json(body)
             }),
         );
         let (addr, _s) = mock_kb_server(router).await;

@@ -3478,21 +3478,7 @@ export interface DocRefClaim {
   source: DocRefSource;
 }
 
-export type DocRefSource = "pinned" | "kb-live";
-
-/// OL-SIBL3 - one kb the live lookup asked and got no answer from.
-export interface LiveLookupFailure {
-  kb: string;
-  reason: "unreachable" | "timeout" | "sibling_mismatch" | "bad_status" | "parse";
-}
-
-/// OL-SIBL3 - what the live half of `/api/doc-refs` could establish: `off`
-/// (nothing to ask), `ok` (every allowlisted kb answered), `partial`, `failed`.
-export interface LiveLookup {
-  state: "off" | "ok" | "partial" | "failed";
-  kbs: string[];
-  failed: LiveLookupFailure[];
-}
+type DocRefSource = "pinned" | "kb-live";
 
 /// `GET /api/doc-refs?repo=&path=` body (`doc-refs/1`).
 export interface DocRefsOut {
@@ -3506,7 +3492,17 @@ export interface DocRefsOut {
   /// per-claim doc links stay live regardless (see `DocRefClaim.doc_public_href`).
   live: boolean;
   claims: DocRefClaim[];
-  live_lookup: LiveLookup;
+  /// OL-SIBL3 - what the live (kb `by_target`) half could establish: `off`
+  /// (nothing to ask), `ok` (every allowlisted kb answered), `partial`,
+  /// `failed`. Inline, not a named export: the wire ratchet counts exports.
+  live_lookup: {
+    state: "off" | "ok" | "partial" | "failed";
+    kbs: string[];
+    failed: Array<{
+      kb: string;
+      reason: "unreachable" | "timeout" | "sibling_mismatch" | "bad_status" | "parse";
+    }>;
+  };
 }
 
 // ── PRR-U2 ── kb v0.39 "The PR Room," unit U2 (Room cockpit + Report tab) ──

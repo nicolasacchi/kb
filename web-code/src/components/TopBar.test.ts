@@ -7,7 +7,9 @@ import { createElement, Fragment } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react-dom/test-utils";
 import { MemoryRouter } from "react-router";
-import type { DocRefClaim, DocRefsOut, LiveLookup } from "../api/types";
+import type { DocRefClaim, DocRefsOut } from "../api/types";
+
+type LiveLookup = DocRefsOut["live_lookup"];
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
