@@ -7,8 +7,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-mod coderefs;
 mod artifact_asof;
+mod coderefs;
 mod docs_asof;
 mod events_filters;
 mod exclusions;
