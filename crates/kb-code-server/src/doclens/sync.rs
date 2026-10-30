@@ -93,6 +93,7 @@ use std::time::Duration;
 
 use super::resolve::{resolve_lens, PathState};
 use super::wire::CodeLensOut;
+use crate::join::kb_client::CodeRefsDoc;
 
 /// `GET /api/doc-refs`'s wire schema.
 pub const DOC_REFS_SCHEMA: &str = "doc-refs/1";
@@ -1057,7 +1058,11 @@ pub(crate) async fn doc_refs_merged(
         return Ok(out);
     }
     let norm_path = out.path.clone();
-    let futs: Vec<futures::future::BoxFuture<'_, _>> = kbs
+    type LiveResult = (
+        String,
+        Result<Vec<CodeRefsDoc>, crate::join::kb_client::KbClientError>,
+    );
+    let futs: Vec<futures::future::BoxFuture<'_, LiveResult>> = kbs
         .iter()
         .map(|kb| {
             let client = state.kb_client.clone();
@@ -1065,7 +1070,7 @@ pub(crate) async fn doc_refs_merged(
             Box::pin(async move {
                 let r = client.code_refs_by_target(&kb, &p).await;
                 (kb, r)
-            }) as futures::future::BoxFuture<'_, _>
+            }) as futures::future::BoxFuture<'_, LiveResult>
         })
         .collect();
     let results = crate::fanout::buffered_join(futs, crate::fanout::DEFAULT_FANOUT_CAP).await;

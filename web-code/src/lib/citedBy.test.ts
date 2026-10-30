@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DocRefClaim } from "../api/types";
+import type { DocRefClaim, LiveLookup } from "../api/types";
 import { citedByDocCount, citedByLabel, citedByNote, citedByRowLabel, siblingDocChip } from "./citedBy";
 
 function claim(overrides: Partial<DocRefClaim>): DocRefClaim {
@@ -216,7 +216,7 @@ describe("siblingDocChip", () => {
 });
 
 describe("citedByNote (OL-SIBL3)", () => {
-  const ok = { state: "ok", kbs: ["k"], failed: [] } as const;
+  const ok: LiveLookup = { state: "ok", kbs: ["k"], failed: [] };
   it("distinguishes the three absences", () => {
     expect(citedByNote(0, ok)?.kind).toBe("none");
     expect(citedByNote(0, { state: "off", kbs: [], failed: [] })?.kind).toBe("no-pinned");
