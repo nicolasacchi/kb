@@ -6,12 +6,14 @@ import {
   CODE_FONT_SIZE_MIN,
   coldSeedRepo,
   loadAttentionOverlay,
+  loadPresenceOverlay,
   loadCodeFontSize,
   loadDiffSyntaxHighlight,
   loadLastRepo,
   loadPrefs,
   loadWrap,
   saveAttentionOverlay,
+  savePresenceOverlay,
   saveCodeFontSize,
   saveDiffSyntaxHighlight,
   saveLastRepo,
@@ -135,6 +137,22 @@ describe("attentionOverlay pref (V3.2-B3)", () => {
     expect(loadAttentionOverlay()).toBe(true);
     saveAttentionOverlay(false);
     expect(loadAttentionOverlay()).toBe(false);
+  });
+});
+
+describe("presenceOverlay pref (OL PRES3)", () => {
+  beforeEach(() => stubLocalStorage());
+
+  it("defaults ON", () => {
+    expect(loadPresenceOverlay()).toBe(true);
+    expect(loadPrefs().presenceOverlay).toBe(true);
+  });
+
+  it("round-trips false and true", () => {
+    savePresenceOverlay(false);
+    expect(loadPresenceOverlay()).toBe(false);
+    savePresenceOverlay(true);
+    expect(loadPresenceOverlay()).toBe(true);
   });
 });
 

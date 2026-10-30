@@ -2222,6 +2222,47 @@ unavailable or empty relay renders nothing extra. The row links to kb's own
 `/sessions#kb-now-blocked` (an `<a target="_blank">`, like the Inbox page's kb
 links) and only when a public url is configured. No key binding was added.
 
+## Presence in the tree (OL PRES3)
+
+A file row glows the instant `kbc:mirror.updated` names it (the SSE bridge
+re-dispatches that frame; `lib/presenceStore.ts` keeps a per-tab, in-memory
+ring of touches and the seen-set). `GET /api/kb/presence` (kbc-presence/1,
+PRES2) never lights anything: it only ATTRIBUTES a touch, in this app's own
+trust vocabulary, and `lib/presence.ts` does it with `performance.now()` times
+(a beat's time is `fetchedPerf - age_secs`, so a skewed client clock cannot
+move a touch in or out of the window):
+
+- **exact**: a main-checkout beat on the same path within 15 s of the touch.
+  Solid 2 px rail in the session hue.
+- **candidate**: no such beat, exactly one `working` session in the repo's
+  main checkout. Dotted rail, "Probably ... session 3f2a".
+- **neutral**: neither. Plain rail, no hue, no session named ("Changed 20 s ago").
+
+Hue is identity only (`provHueIndex(session_id)`; eight hues collide, which is
+why the rail STYLE carries the claim). The rail is the provenance lane's
+channel and never the row background, which the attention overlay owns; both
+can be on. Brightness comes from `--kbc-presence-opacity-1..3` by fade level
+(<60 s, <180 s, <600 s; `stalled` caps at 2; waiting/cold/finished/
+presumed_ended cap at 1). There is no 600 s cut-off: an unopened touch dims to
+level 1 and stays ("changed 25 min ago, not opened since") until the one-hour
+ring expires; opening the file (`markOpened`) clears it, and only a LATER touch
+lights it again. This trail matters because session-diff is loopback-only and
+live capture is off by default in prod. A collapsed directory shows the
+freshest descendant's rail plus a distinct-file count; an expanded one shows
+nothing extra. A worktree touch is a muted count and caption, never a mark on
+the main checkout's file. A single frame naming more than 20 paths is a
+checkout or rebase: it is never marked (the `repo.head_moved` banner already
+tells the operator), and the tree says so in one muted line.
+
+Polling exception (#23-style): kb has no event that reaches this daemon, so
+`usePresence` carries a finite `staleTime`, a 10 s `refetchInterval`, no
+background refetch, and is enabled only while the pref is on AND the document is
+visible. Its key `["presence", repo]` rides the generic per-repo bridge, so a
+mirror event refetches it at once. Home's RepoCard line, the Spine chip and the
+tree read that one key (one poll per repo). The 5 s re-render tick runs only
+while a mark is showing and is dropped under `prefers-reduced-motion`. The pref
+`presenceOverlay` defaults ON. No key binding was added.
+
 ## v0.44 notes
 
 The review-store wire types are generated (`web-code/src/api/generated`), and

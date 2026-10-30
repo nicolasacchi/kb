@@ -6,6 +6,7 @@ import { branchesUrl, codeBasePath, commitUrl, hotspotsUrl, reviewsUrl } from ".
 import { effectiveIntelProviders } from "../../lib/diagnostics";
 import { shortSha } from "../../lib/format";
 import { fullSearchUrl } from "../../lib/searchLanes";
+import { PresenceLine } from "../PresencePulse";
 import MetaLine from "../MetaLine";
 import AttributionCard from "../history/AttributionCard";
 import { BranchAhead, BranchBehind } from "../history/BranchAheadBehind";
@@ -107,6 +108,8 @@ export default function RepoCard({ repo }: RepoCardProps) {
           {repo.file_count} files · {repo.symbol_count} symbols
         </span>
       </div>
+
+      <PresenceLine repo={repo.name} />
 
       {intelProviders.length > 0 && (
         <div className="kbc-home-card__intel" data-kbc-home-intel>
