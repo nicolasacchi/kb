@@ -1664,7 +1664,10 @@ vocabulary from a shared `ui/` source directory (no package, wired by tsconfig
 9. *`css-undefined-vars` accepts `var(--undefined, <literal>)` by design* (the
    F10 ruling: a fallback literal is a deliberate choice). It means a made-up
    token with a fallback passes the lint: `var(--space-1, 4px)` reached P5 and
-   was caught only in review.
+   was caught only in review. *Fixed by LINT1:* an undeclared name is now a hit
+   even with a fallback (a name declared in CSS or assigned from TS keeps its
+   fallback), every existing hit in `web/` and `web-code/` was mapped to a real
+   token, and `ui/scripts/css-undefined-vars.test.mjs` pins the rule on fixtures.
 10. *Phone card actions overlapped titles on every touch device from before OL.*
     `pointer: coarse` made the actions always visible but kept the desktop
     offsets. No existing e2e used a touch context, so nothing failed; only a

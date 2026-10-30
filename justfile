@@ -401,6 +401,7 @@ test-spa:
     scripts/check-ts-shadows.sh
     # OL F10 — the css-vars lint and the literal ratchet (web/ratchet.json) for
     # kb; node-only, so they run before the install (docs/web-internals.md).
+    node --test ui/scripts/css-undefined-vars.test.mjs
     node ui/scripts/css-undefined-vars.mjs web
     node ui/scripts/ratchet.mjs web
     cd web && npm ci && npm run typecheck && npm test

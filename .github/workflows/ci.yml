@@ -1406,6 +1406,7 @@ jobs:
         # font-size / hex / z-index / legacy-alias literal counts vs
         # web/ratchet.json, two-way (docs/web-internals.md "Frontend gates").
         run: |
+          node --test ui/scripts/css-undefined-vars.test.mjs
           node ui/scripts/css-undefined-vars.mjs web
           node ui/scripts/ratchet.mjs web
 

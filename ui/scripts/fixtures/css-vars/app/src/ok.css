@@ -1,0 +1,5 @@
+:root { --fx-defined: 1px; }
+.defined-bare { padding: var(--fx-defined); }
+.defined-with-fallback { padding: var(--fx-defined, 4px); }
+.defined-nested { padding: var(--fx-defined, var(--fx-defined)); }
+.set-from-ts { color: var(--fx-from-ts, red); }
