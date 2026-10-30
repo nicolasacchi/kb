@@ -1499,6 +1499,106 @@ GET  /api/turn?q=…|prompt=…[&session=SID&cwd=PATH&deadline_ms=N
                                             because its query embedder is down
                                             is named `embed`. No re-ranking.
 
+# OL IDEA5 — "since you left", the PROJECT axis
+GET  /api/changes?since=<unix>[&project=ID_OR_LABEL&session=SID]
+                                            what happened across PROJECTS
+                                            since a time: the sessions that
+                                            ran (and how they closed), the
+                                            commits they recorded, and what
+                                            was posted on each project's
+                                            slate. The CORPUS axis (artifacts,
+                                            memory notes, comments raised) is
+                                            NOT rebuilt here: it stays
+                                            GET /api/kb/{kb}/daycard?since=
+                                            (corpus axis = daycard?since), and
+                                            the Front Page strip links to
+                                            /ambient for it. `since` is
+                                            REQUIRED unix seconds (absent or
+                                            unparseable = 400 problem+json). A
+                                            `since` more than 300s in the
+                                            future is a 400; up to 300s ahead
+                                            (client clock skew) is clamped to
+                                            now and answers an empty 200.
+                                            Older than 31 days is clamped to
+                                            31 days with `window_clamped:
+                                            true`. `since_unix` echoes the
+                                            APPLIED bound and `to_unix` is
+                                            now: the window is wall-clock and
+                                            not reproducible across requests.
+                                            Lanes, each labelled "activity
+                                            since", never "events since":
+                                            sessions are keyed on ACTIVITY
+                                            (MAX(ended_at, started_at)), so a
+                                            session that began before `since`
+                                            and kept working after it is
+                                            listed (`started_before_since`);
+                                            newest capture only (#11), at most
+                                            500 per corpus (`sessions_scan_
+                                            capped`), the caller's own
+                                            `session` and its continuation
+                                            parts excluded, trivial sessions
+                                            counted in `trivial_sessions_
+                                            hidden` but not listed, and every
+                                            session COUNT is of LOGICAL
+                                            sessions (parts are listed, a
+                                            chain counts once). Commits are
+                                            listed under the session that
+                                            recorded them (newest first, 5
+                                            per session, `commits_total`);
+                                            kb stores no commit time, so a
+                                            session with `started_before_
+                                            since` may list commits made
+                                            before the watermark. The slate
+                                            lane reads the append-only ledger
+                                            by `at` (daemon receipt clock)
+                                            through the SAME projection's
+                                            hidden map `kb slate` uses, never
+                                            the board-membership delta, so a
+                                            `done` and a take posted and done
+                                            inside the window both count:
+                                            take/idea/tried/mark/drop posts
+                                            count in `other_total`, posts
+                                            dropped or superseded in
+                                            `retracted_total` (neither is
+                                            listed), the rest are listed (8
+                                            max, `closed` where a `done`
+                                            closed them), and a slate rotated
+                                            inside the window sets
+                                            `archived_in_window` (archived
+                                            posts are named, not read).
+                                            Groups: one per project, using the
+                                            SAME identity as
+                                            /api/sessions/projects (registry
+                                            id, else the derived
+                                            `project_key`/cwd key), so a group
+                                            id is accepted by
+                                            /sessions?project=; a slate joins
+                                            the group whose id, else label,
+                                            equals its slug, else is its own
+                                            `source: "slate"` group; rows with
+                                            no project go to one
+                                            "(unattributed)" group. Ordered by
+                                            `latest_unix` (time, never a
+                                            score), at most 20 groups
+                                            (`projects_total`/`projects_
+                                            truncated`). `project=` keeps
+                                            groups whose id or label equals
+                                            the value. A failing corpus is
+                                            named in `degraded[]` and an
+                                            unreadable slate in
+                                            `slates_skipped[]`; neither 500s.
+                                            The wire NEVER carries cwd,
+                                            repo_root, transcript text, or a
+                                            slate post's body/refs/prov (the
+                                            slate read always uses the
+                                            strictest scrub floor), so the
+                                            route is bearer-visible on the
+                                            plain /api tree like /context —
+                                            it narrows /api/sessions* and
+                                            /api/slates*, never widens them.
+                                            Responses are `Cache-Control:
+                                            no-store`. CLI: `kb changes`.
+
 # v0.38 CT-D1 — the ONE context pack
 GET  /api/context?q=…[&cwd=PATH&budget=N&session=SID&no_floor=true
                     &memory_project=SLUG&memory_visible_to=CSV]

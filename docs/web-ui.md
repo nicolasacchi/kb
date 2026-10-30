@@ -87,8 +87,12 @@ with kb-code), plus a per-view control row. It replaced the old 52px header,
   queue). It hides as soon as you filter, search, sort or change view, and comes
   back with the browser Back button. **Collapse** shrinks it to the masthead
   line, remembered per kb. Counts it cannot state honestly are left out rather
-  than guessed ("no earlier visit on record here" on a first visit). It
-  replaced the corpus lobby, sessions strip, resurface strip, echo strip and
+  than guessed ("no earlier visit on record here" on a first visit). On a
+  return visit a "Since you left" strip tops the column: per project, what
+  sessions ran, what they committed and what was posted on its slate since the
+  watermark (`GET /api/changes`), with a link to Ambient for the corpus side;
+  it has no dismiss control and is absent on a first visit, an empty window or
+  a failed fetch. It replaced the corpus lobby, sessions strip, resurface strip, echo strip and
   pinned index card.
 - **Cards.** Shelf cards are calmer: a serif title, a two-line excerpt, at most
   two tags, one meta line and a 2px reading-progress bar. Excerpts skip

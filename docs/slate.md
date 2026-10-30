@@ -70,9 +70,12 @@ already passed the old one sees the change as a new sequence number.
 ## Digest anatomy
 
 `kb slate open` is the one digest verb; every other presenter (hook
-lanes, the SPA board, `kb context`'s scent count) is a read over the
-SAME pure projection. Ordering is fixed and status-driven, never scored
-— it reads as "what would change your next action":
+lanes, the SPA board, `kb context`'s scent count, `kb changes` and the
+Front Page "Since you left" strip) is a read over the SAME pure
+projection; the last two read the ledger by `at` through the projection's
+hidden map rather than the board-membership delta, so a `done` or a take
+posted and done inside the window still shows. Ordering is fixed and
+status-driven, never scored — it reads as "what would change your next action":
 
 ```
 kb slate kb · main ~/project/kb · seq #66 · you: claude/4b7e (seen #58 → #66)
