@@ -119,7 +119,10 @@ with kb-code), plus a per-view control row. It replaced the old 52px header,
   focus, and the decay policy and half-life are said once in the page header.
   The Health column appears only once some memory
   has been recalled. Worklog uses one control row (View · Filters · Find) with
-  the funnel as a muted line; rows are title, outcome and one facts line. Its
+  the funnel as a muted line; rows are title, outcome and one facts line, which
+  ends in the server's one sentence about the checks after the session's last
+  edit ("cargo test passed after the last edit", words only; the inspector's
+  Checks section lists them). Its
   live strip says what it counts ("N active in this list", where active means
   captured in the last 10 minutes), and the waiting lane is captioned "Across
   all projects, not just this list". Search puts its controls in one labelled row

@@ -37,6 +37,46 @@ const RUNTIME_PATH: &str = "/_kb/runtime.js";
 /// reaches a style sink.
 const READING_CSS_PATH: &str = "/_kb/reading.css";
 const READING_CSS: &str = include_str!("reading.css");
+/// READ1b - the artifact host's font route: `/_kb/fonts/<name>.woff2`, served
+/// from the SPA bundle's own `fonts/` directory (the self-hosted Source Serif 4
+/// and JetBrains Mono subsets), so the house sheet's `@font-face` set resolves
+/// without bundling a second copy of the files into the binary.
+const FONTS_PATH_PREFIX: &str = "/_kb/fonts/";
+
+/// What `/_kb/reading.css` serves and the runtime injects on `r`: the scoped
+/// sheet, then the house `@font-face` set (appended, so the sheet still starts
+/// with its first rule).
+fn reading_css_served() -> &'static str {
+    static CSS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CSS.get_or_init(|| format!("{READING_CSS}\n{}", kb_core::markdown::HOUSE_FONT_FACES))
+}
+
+/// The `data-kb-read` value of a serve-time-injected page: it follows the OS
+/// colour scheme until the parent posts `kb:read` with the SPA's own.
+const HOUSE_AUTO: &str = "auto";
+
+/// The dark palette of [`READING_CSS`] re-keyed on `prefers-color-scheme` for
+/// `data-kb-read="auto"`. Derived from the sheet's own dark rule, so the two
+/// palettes cannot drift. The `/_kb/reading.css` file itself carries no
+/// `@media` (it is toggled by attribute only); this exists only in the inline
+/// copy a serve-time-styled page receives.
+fn house_inline_css() -> &'static str {
+    static CSS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CSS.get_or_init(|| {
+        let head = "html[data-kb-read][data-kb-read=\"dark\"] {";
+        let decls = READING_CSS
+            .find(head)
+            .and_then(|i| {
+                let rest = &READING_CSS[i + head.len()..];
+                rest.find('}').map(|j| rest[..j].trim().to_string())
+            })
+            .unwrap_or_default();
+        format!(
+            "{}\n@media (prefers-color-scheme: dark) {{ html[data-kb-read=\"{HOUSE_AUTO}\"] {{ {decls} }} }}",
+            reading_css_served()
+        )
+    })
+}
 
 /// Default-dev `parent_origin` (`http://localhost:4000`). Treated as
 /// the "not configured for production" sentinel - the configured
@@ -449,6 +489,11 @@ fn runtime_js(target_origin: &str) -> String {
   var READ_SEQ = 0;                  // latest kb:read request; stale fetches drop out
   var READ_OPTED_OUT = null;         // cached author opt-out (meta is static)
   var READ_STYLE_ID = 'kb-read-style';
+  // The daemon styled this page at serve time (style + data-kb-read="auto" are
+  // already present when the runtime starts). Such a page is never re-judged by
+  // readUnsuitable() when `r` turns the sheet back on.
+  var READ_SERVED = !!document.getElementById(READ_STYLE_ID) &&
+    document.documentElement.getAttribute('data-kb-read') === 'auto';
   function readOptedOut() {{
     if (READ_OPTED_OUT === null) {{
       READ_OPTED_OUT = !!document.querySelector('meta[name="kb-reading"][content="off"]');
@@ -462,6 +507,15 @@ fn runtime_js(target_origin: &str) -> String {
       window.parent.postMessage(m, SEND);
     }} catch (e) {{}}
   }}
+  // kb's own output that already carries the house voice: a Markdown page
+  // (body.kb-md-prose) or a rendered session (its own light/dark pair). The
+  // runtime never layers a second sheet over them. A page the daemon styled at
+  // serve time is covered by the idempotent branch in onReadMessage (the
+  // style element already exists), so `r` toggles that one sheet off and on.
+  function readHouse() {{
+    var b = document.body;
+    return !!(b && (b.classList.contains('kb-md-prose') || document.querySelector('main.ses-flow')));
+  }}
   function readUnsuitable() {{
     if (readOptedOut()) return 'author';
     var body = document.body;
@@ -474,6 +528,7 @@ fn runtime_js(target_origin: &str) -> String {
       var r = els[i].getBoundingClientRect();
       media += Math.max(0, r.width) * Math.max(0, r.height);
     }}
+    if (readHouse()) return 'house';
     var ratio = media / total;
     if (ratio > 0.5) return 'media';
     var text = (body.innerText || '').trim();
@@ -545,8 +600,15 @@ fn runtime_js(target_origin: &str) -> String {
       readAck('on');
       return;
     }}
-    var why = readUnsuitable();
-    if (why) {{ readAck('unsuitable', why); return; }}
+    var why = READ_SERVED ? (readOptedOut() ? 'author' : '') : readUnsuitable();
+    if (why) {{
+      // A Markdown page owns its palette; let it follow the SPA's scheme.
+      if (why === 'house' && document.body.classList.contains('kb-md-prose')) {{
+        root.setAttribute('data-kb-read', scheme);
+      }}
+      readAck('unsuitable', why);
+      return;
+    }}
     if (READ_CSS !== null) {{ readOn(scheme, pin); return; }}
     var failed = function() {{ if (seq === READ_SEQ) readAck('unsuitable', 'load'); }};
     try {{
@@ -562,19 +624,21 @@ fn runtime_js(target_origin: &str) -> String {
     }} catch (e) {{ failed(); }}
   }}
   window.addEventListener('message', onReadMessage);
-  // Key-forward lane: a bare `r` pressed while the iframe holds focus goes to
-  // the parent, which owns the toggle. Passive, bubble phase, never
-  // preventDefault; silent when the author opted out.
+  // Key-forward lane: a bare reader key pressed while the iframe holds focus
+  // goes to the parent, which whitelists it and runs its own handler. Closed
+  // list, passive, bubble phase, never preventDefault. Only `r` (the reading
+  // toggle) is silenced by the author's opt-out.
+  var FWD_KEYS = ['r', 'o', 'b', '[', ']', 'n', 'p', 'u'];
   document.addEventListener('keydown', function(e) {{
-    if (e.key !== 'r') return;
+    if (FWD_KEYS.indexOf(e.key) < 0) return;
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     if (e.isComposing || e.defaultPrevented) return;
     var t = e.target;
     var tag = t && t.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
-    if (readOptedOut()) return;
+    if (e.key === 'r' && readOptedOut()) return;
     try {{
-      window.parent.postMessage({{ kind: 'kb:key', key: 'r' }}, SEND);
+      window.parent.postMessage({{ kind: 'kb:key', key: e.key }}, SEND);
     }} catch (err) {{}}
   }}, {{ passive: true }});
   function readReady() {{
@@ -748,6 +812,9 @@ pub async fn serve(
     if raw_path == READING_CSS_PATH {
         return with_artifact_csp(serve_reading_css(&headers), &state.origin);
     }
+    if let Some(name) = raw_path.strip_prefix(FONTS_PATH_PREFIX) {
+        return with_artifact_csp(serve_house_font(&state, name), &state.origin);
+    }
 
     // Resolve the file. For `/`, use `<id>.html`. For other paths, use the
     // path relative to the kb source folder. Path traversal is blocked by
@@ -865,11 +932,63 @@ pub async fn serve(
         return error_to_problem_json(&err);
     }
 
-    let bytes = match std::fs::read(&resolved) {
-        Ok(b) => b,
-        Err(e) => {
-            return (StatusCode::NOT_FOUND, format!("read failed: {e}")).into_response();
+    // OL TIME2 — `?at=<unix>` on the ENTRY file serves the body as it stood
+    // (nearest-prior through the same `memento_for` the versions route uses),
+    // pushed through TODAY'S pipeline below. Sibling assets and sub-pages are
+    // never time-travelled (they resolve to today's siblings, as the reader's
+    // caption says). A historical render is NOT a read: this handler writes
+    // no history row and no reading progress for any request, and the SPA
+    // suppresses its visit beacons for an `?at=` pane.
+    let as_of_at = if raw_path == "/" {
+        match requested_as_of(&uri) {
+            Ok(v) => v,
+            Err(e) => return error_to_problem_json(&kb_core::Error::BadRequest(e)),
         }
+    } else {
+        None
+    };
+    let mut historical: Option<HistoricalRender> = None;
+    let mut then_text: Option<String> = None;
+    if let Some(at) = as_of_at {
+        let is_transcript = matches!(
+            ctx.storage.get_by_id(artifact_id.to_string()).await,
+            Ok(Some(d)) if d.kb_category.as_deref() == Some("memory-session")
+        );
+        if is_transcript {
+            // Transcripts are episodic memory (#11), not versioned documents.
+            let err = kb_core::Error::NotFound(
+                "transcripts are not versioned documents; there is no earlier body to open".into(),
+            );
+            return error_to_problem_json(&err);
+        }
+        match super::versions::as_of_body(ctx, &resolved, artifact_id, at).await {
+            super::versions::AsOfBody::Working => {}
+            super::versions::AsOfBody::Then {
+                text,
+                version,
+                exact,
+            } => {
+                historical = Some(HistoricalRender {
+                    at,
+                    version_ts: version.ts_unix,
+                    exact,
+                });
+                then_text = Some(text);
+            }
+            super::versions::AsOfBody::Unserved(note) => {
+                return error_to_problem_json(&kb_core::Error::NotFound(note));
+            }
+        }
+    }
+
+    let bytes = match then_text {
+        Some(t) => t.into_bytes(),
+        None => match std::fs::read(&resolved) {
+            Ok(b) => b,
+            Err(e) => {
+                return (StatusCode::NOT_FOUND, format!("read failed: {e}")).into_response();
+            }
+        },
     };
 
     let content_type = super::guess_content_type(&resolved);
@@ -893,7 +1012,14 @@ pub async fn serve(
         };
         let rendered_md: String;
         let html: &str = if is_md {
-            rendered_md = kb_core::markdown::render_page(src);
+            // The page's own sheet, plus the house @font-face set - added HERE
+            // (not in render_page) because its /_kb/fonts/ URLs only resolve on
+            // an artifact host; shares and exports keep the plain page.
+            rendered_md = kb_core::markdown::render_page(src).replacen(
+                "</style>",
+                &format!("{}</style>", kb_core::markdown::HOUSE_FONT_FACES),
+                1,
+            );
             &rendered_md
         } else {
             src
@@ -943,6 +1069,30 @@ pub async fn serve(
             }
         };
 
+        // READ1b - a page with no voice of its own (every memory artifact)
+        // gets kb's house reading sheet at serve time: head-only, source bytes
+        // never rewritten, deterministic. Markdown and session renders carry
+        // their own `<style>` and are skipped by construction, as is `?raw=1`.
+        let house_owned: String;
+        let working_html: &str = if is_md || wants_raw(&uri) {
+            working_html
+        } else {
+            match kb_core::iframe::inject_house_voice(working_html, house_inline_css(), HOUSE_AUTO)
+            {
+                Ok(Some(styled)) => {
+                    house_owned = styled;
+                    &house_owned
+                }
+                Ok(None) => working_html,
+                // Styling is decoration: a page the scanner cannot parse is
+                // served as it is rather than refused.
+                Err(e) => {
+                    tracing::warn!(error = %e, "house voice skipped: rewriter error");
+                    working_html
+                }
+            }
+        };
+
         // First inject the probe (preserves v0.0.1 behaviour). Then
         // the v0.6+ H3 runtime (scroll capture + resume — unconditional,
         // same shape as the probe). Then, when the SPA toggled annotate
@@ -957,7 +1107,10 @@ pub async fn serve(
             Ok(s) => s,
             Err(e) => return error_to_problem_json(&e),
         };
-        let cm_on = wants_annotator(&uri);
+        // A historical render never carries the annotator: anchors are
+        // cssPath/snippet on the ORIGINAL DOM (#6), so a comment authored
+        // against an old body would anchor to a DOM the file no longer has.
+        let cm_on = historical.is_none() && wants_annotator(&uri);
         let with_annotator = if cm_on {
             match build_comments_payload(&state, ctx, artifact_id) {
                 Ok(payload) => match inject_annotator(
@@ -988,13 +1141,22 @@ pub async fn serve(
         let rel_json = serde_json::to_string(&rel).unwrap_or_else(|_| "\"\"".into());
         let spa_json =
             serde_json::to_string(spa_origin_lit(&state.origin)).unwrap_or_else(|_| "\"\"".into());
+        // A historical render opened as its own tab bounces to the wrapper
+        // WITH its coordinate, so the new tab is the same moment in time.
+        let at_query_json = serde_json::to_string(
+            &historical
+                .as_ref()
+                .map(|h| format!("?at={}", h.at))
+                .unwrap_or_default(),
+        )
+        .unwrap_or_else(|_| "\"\"".into());
         let bounce_js = format!(
             "(function(){{\
                if(window.top!==window.self)return;\
                try{{var r=document.referrer;if(!r||new URL(r).hostname.indexOf('.artifacts.')<0)return;}}catch(e){{return;}}\
                var SPA={spa_json}||(location.protocol+'//'+location.host.replace(/^[^.]+\\.artifacts\\./,''));\
                var KB={kb_json},REL={rel_json};\
-               location.replace(SPA+'/a/'+encodeURIComponent(KB)+'/'+REL.split('/').map(encodeURIComponent).join('/'));\
+               location.replace(SPA+'/a/'+encodeURIComponent(KB)+'/'+REL.split('/').map(encodeURIComponent).join('/')+{at_query_json});\
              }})();"
         );
         let with_bounce = match inject_inline_head_script(&with_annotator, &bounce_js) {
@@ -1016,7 +1178,24 @@ pub async fn serve(
         // a reverse proxy from leaking one user's comments to another)
         // and force private, no-store so no proxy ever caches the
         // user-specific comment payload.
-        if cm_on {
+        if let Some(h) = &historical {
+            // The answer for a given `at` changes the moment the working
+            // tree is rewritten or a newer snapshot lands, so it is never
+            // cached; `Memento-Datetime` (RFC 7089) is the resolved
+            // version's OWN datetime, not the requested one.
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-store"),
+            );
+            if let Some(v) = super::versions::http_date(h.version_ts) {
+                resp.headers_mut().insert("memento-datetime", v);
+            }
+            if let Ok(v) = HeaderValue::from_str(if h.exact { "exact" } else { "nearest-prior" }) {
+                resp.headers_mut().insert("x-kb-as-of-relation", v);
+            }
+            resp.headers_mut()
+                .insert(header::VARY, HeaderValue::from_static("Accept, Cookie"));
+        } else if cm_on {
             resp.headers_mut().insert(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("private, no-store"),
@@ -1046,7 +1225,8 @@ pub async fn serve(
 /// validator and a matching `If-None-Match` is a 304.
 fn serve_reading_css(req_headers: &HeaderMap) -> Response<Body> {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(READING_CSS.as_bytes());
+    let css = reading_css_served();
+    let digest = Sha256::digest(css.as_bytes());
     let etag = format!("\"{}\"", hex::encode(&digest[..16]));
     let fresh = req_headers
         .get(header::IF_NONE_MATCH)
@@ -1056,7 +1236,7 @@ fn serve_reading_css(req_headers: &HeaderMap) -> Response<Body> {
     let mut resp = if fresh {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
-        let mut r = (StatusCode::OK, READING_CSS).into_response();
+        let mut r = (StatusCode::OK, css).into_response();
         r.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/css; charset=utf-8"),
@@ -1076,6 +1256,46 @@ fn serve_reading_css(req_headers: &HeaderMap) -> Response<Body> {
         HeaderValue::from_static("nosniff"),
     );
     resp
+}
+
+/// A house font file name: `SourceSerif4-*` / `JetBrainsMono-*`, `.woff2`, and
+/// nothing that could leave the SPA bundle's `fonts/` directory.
+fn house_font_name_ok(name: &str) -> bool {
+    (name.starts_with("SourceSerif4-") || name.starts_with("JetBrainsMono-"))
+        && name.ends_with(".woff2")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+        && !name.contains("..")
+}
+
+/// Serve `/_kb/fonts/<name>` (READ1b) from `<spa_dist>/fonts/`. The names are
+/// stable, so the response is immutable for a year; a font revision ships under
+/// a new file name.
+fn serve_house_font(state: &Arc<KbHandles>, name: &str) -> Response<Body> {
+    if !house_font_name_ok(name) {
+        return (StatusCode::NOT_FOUND, "unknown font").into_response();
+    }
+    let Some(spa_dist) = state.spa_dist.as_deref() else {
+        return (StatusCode::NOT_FOUND, "fonts unavailable - SPA not built").into_response();
+    };
+    match std::fs::read(spa_dist.join("fonts").join(name)) {
+        Ok(bytes) => {
+            let mut resp = (StatusCode::OK, bytes).into_response();
+            let h = resp.headers_mut();
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_static("font/woff2"));
+            h.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            );
+            h.insert(
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            );
+            resp
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "font not found").into_response(),
+    }
 }
 
 /// Serve `/_kb/annotate.js` from the SPA bundle. The annotator is built
@@ -1140,6 +1360,36 @@ fn find_hashed_annotator(spa_dist: &Path) -> Option<PathBuf> {
                 .is_some_and(|n| n.starts_with("annotate-") && n.ends_with(".js"))
         })
         .max()
+}
+
+/// OL TIME2 — the facts about a historical render that the response headers
+/// carry (the body itself is indistinguishable from today's pipeline output).
+struct HistoricalRender {
+    /// The requested instant (echoed into the new-tab bounce).
+    at: i64,
+    /// The resolved version's OWN timestamp (`Memento-Datetime`).
+    version_ts: i64,
+    /// True only when the version landed on the requested second.
+    exact: bool,
+}
+
+/// `?at=<unix seconds>` on an artifact origin. `Ok(None)` when absent; a
+/// present but malformed value is an explicit 400 rather than a silent
+/// fall-back to today's body (that would present the present as the past).
+/// Any instant is accepted: the façade answers every `at`, and the working
+/// tree wins at `t >= mtime`.
+fn requested_as_of(uri: &Uri) -> Result<Option<i64>, String> {
+    let Some(q) = uri.query() else {
+        return Ok(None);
+    };
+    match q
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "at")
+    {
+        Some((_, v)) => super::versions::parse_at(v).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// True iff the URL has `?cm=on` (or any other truthy `cm=`) in the query string.
@@ -1849,6 +2099,9 @@ mod tests {
             "'media'",
             "'short'",
             "'load'",
+            "'house'",
+            "kb-md-prose",
+            "main.ses-flow",
             "buildToc();",
             "emitActive();",
         ] {
@@ -1919,23 +2172,55 @@ mod tests {
     }
 
     #[test]
-    fn runtime_key_lane_forwards_only_a_bare_r() {
-        let lane = runtime_between("document.addEventListener('keydown'", "function readReady");
+    fn runtime_key_lane_forwards_a_closed_list_of_bare_reader_keys() {
+        let lane = runtime_between("var FWD_KEYS", "function readReady");
+        assert!(
+            lane.contains("var FWD_KEYS = ['r', 'o', 'b', '[', ']', 'n', 'p', 'u'];"),
+            "{lane}"
+        );
         for guard in [
-            "e.key !== 'r'",
+            "FWD_KEYS.indexOf(e.key) < 0",
             "e.ctrlKey || e.metaKey || e.altKey || e.shiftKey",
             "e.isComposing || e.defaultPrevented",
             "tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'",
             "t.isContentEditable",
-            "readOptedOut()",
+            "e.key === 'r' && readOptedOut()",
             "{ passive: true }",
         ] {
             assert!(lane.contains(guard), "key lane lost {guard}");
         }
         assert!(!lane.contains("preventDefault"));
         assert!(!lane.contains("stopPropagation"));
-        assert_eq!(lane.matches("key: '").count(), 1, "lane posts another key");
-        assert!(lane.contains("{ kind: 'kb:key', key: 'r' }"));
+        // The posted key is the pressed one, drawn from the list - one post.
+        assert_eq!(lane.matches("kb:key").count(), 1);
+        assert!(lane.contains("{ kind: 'kb:key', key: e.key }"));
+    }
+
+    #[test]
+    fn runtime_bails_house_pages_and_never_double_styles() {
+        let un = runtime_between("function readHouse", "function readTopBlock");
+        assert!(un.contains("b.classList.contains('kb-md-prose')"));
+        assert!(un.contains("document.querySelector('main.ses-flow')"));
+        assert!(un.contains("if (readHouse()) return 'house';"));
+        // The author's opt-out still outranks it.
+        assert!(un.find("return 'author'").unwrap() < un.find("return 'house'").unwrap());
+        // A page the daemon already styled takes the idempotent branch (the
+        // style element exists) before any suitability check runs.
+        let msg = runtime_between(
+            "function onReadMessage",
+            "window.addEventListener('message', onReadMessage)",
+        );
+        assert!(
+            msg.find("document.getElementById(READ_STYLE_ID)").unwrap()
+                < msg.find("readUnsuitable()").unwrap()
+        );
+        // A serve-time-styled page is remembered at startup and skips the
+        // suitability check on re-enable (off-then-on must always work).
+        let js = runtime_between("var READ_SERVED", "function readHouse");
+        assert!(js.contains("getAttribute('data-kb-read') === 'auto'"));
+        assert!(msg.contains("READ_SERVED ? (readOptedOut() ? 'author' : '') : readUnsuitable()"));
+        // A Markdown page follows the SPA scheme without gaining a sheet.
+        assert!(msg.contains("why === 'house' && document.body.classList.contains('kb-md-prose')"));
     }
 
     #[test]
@@ -1959,6 +2244,21 @@ mod tests {
         }
         let lower = READING_CSS.to_lowercase();
         assert!(!lower.contains("template") && !lower.contains("kb-prompt"));
+        // No nested at-rules: the sheet is flat rules only (no @media, no
+        // @supports), so every `}` closes exactly one top-level rule and the
+        // per-rule scoping check below is sound. Fonts and the dark palette
+        // for a serve-time page are appended elsewhere, never in this file.
+        assert!(!READING_CSS.contains('@'), "reading.css has an at-rule");
+        let mut depth = 0i32;
+        for ch in READING_CSS.chars() {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            assert!((0..=1).contains(&depth), "nested block in reading.css");
+        }
+        assert_eq!(depth, 0, "unbalanced braces");
         let mut rules = 0;
         for rule in READING_CSS.split('}') {
             let rule = rule.trim();
@@ -2005,5 +2305,160 @@ mod tests {
                 "{d}"
             );
         }
+    }
+
+    // --- READ1b: one house voice ----------------------------------------
+
+    /// `name: value;` out of the first block whose selector starts with `sel`.
+    fn decl(css: &str, sel: &str, name: &str) -> String {
+        let start = css.find(sel).unwrap_or_else(|| panic!("no block {sel}"));
+        let rest = &css[start..];
+        let block = &rest[rest.find('{').unwrap() + 1..];
+        let block = &block[..block.find('}').unwrap()];
+        for d in block.split(';') {
+            if let Some((k, v)) = d.split_once(':') {
+                if k.trim() == name {
+                    return v.trim().to_string();
+                }
+            }
+        }
+        panic!("no {name} in {sel}");
+    }
+
+    #[test]
+    fn markdown_and_reading_sheets_share_one_voice() {
+        let md = kb_core::markdown::PROSE_CSS;
+        let rd = READING_CSS;
+        // Serif stack, size, leading, measure: identical strings in both.
+        let serif = decl(md, ":root", "--md-font-serif");
+        assert!(
+            rd.matches(serif.as_str()).count() >= 2,
+            "serif stack {serif}"
+        );
+        assert!(serif.starts_with("\"Source Serif 4\""));
+        let mono = decl(md, ":root", "--md-font-mono");
+        assert!(rd.contains(mono.as_str()), "mono stack {mono}");
+        let size = decl(rd, "html[data-kb-read] body", "font-size");
+        assert_eq!(size, "clamp(17px, 1.1vw + 14px, 20px)");
+        assert_eq!(decl(md, "body.kb-md-prose", "font-size"), size);
+        let lh = decl(rd, "html[data-kb-read] body", "line-height");
+        assert_eq!(decl(md, "body.kb-md-prose", "line-height"), lh);
+        let measure = decl(rd, "html[data-kb-read] body", "max-width");
+        assert_eq!(decl(md, ".kb-md-doc", "max-width"), measure);
+        assert!(measure.starts_with("min(68ch,"));
+        // Palettes: light and dark, token by token.
+        let pairs = [
+            ("--kb-read-bg", "--md-bg"),
+            ("--kb-read-fg", "--md-ink"),
+            ("--kb-read-muted", "--md-ink-soft"),
+            ("--kb-read-link", "--md-link"),
+            ("--kb-read-code-bg", "--md-code-bg"),
+        ];
+        for (r, m) in pairs {
+            assert_eq!(
+                decl(rd, "html[data-kb-read] {", r),
+                decl(md, ":root {", m),
+                "light {r} vs {m}"
+            );
+            let dark = decl(rd, "html[data-kb-read][data-kb-read=\"dark\"]", r);
+            assert_eq!(
+                decl(md, ":root[data-kb-read=\"dark\"]", m),
+                dark,
+                "dark {r} vs {m}"
+            );
+            assert_eq!(
+                decl(md, ":root:not([data-kb-read=\"light\"])", m),
+                dark,
+                "prefers-dark {r} vs {m}"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_sheet_is_dark_on_both_keys() {
+        let md = kb_core::markdown::PROSE_CSS;
+        assert!(md.contains("@media (prefers-color-scheme: dark)"));
+        assert!(md.contains(":root[data-kb-read=\"dark\"]"));
+        // The OS-dark block yields to an explicit light pin from the SPA.
+        assert!(md.contains(":root:not([data-kb-read=\"light\"])"));
+    }
+
+    #[test]
+    fn served_reading_css_appends_the_house_fonts_and_nothing_remote() {
+        let css = reading_css_served();
+        assert!(css.starts_with("html[data-kb-read]"));
+        assert!(css.contains("@font-face"));
+        assert!(css.contains("font-display: swap"));
+        let urls: Vec<&str> = css.split("url(").skip(1).collect();
+        assert!(urls.len() >= 8, "{} font urls", urls.len());
+        for u in urls {
+            assert!(u.starts_with(FONTS_PATH_PREFIX), "non-house url: {u}");
+            let name = u[FONTS_PATH_PREFIX.len()..].split(')').next().unwrap();
+            assert!(house_font_name_ok(name), "{name}");
+        }
+        assert!(!css.contains("@import") && !css.contains("http"));
+    }
+
+    #[test]
+    fn inline_house_css_rekeys_only_the_dark_palette_for_auto() {
+        let inline = house_inline_css();
+        assert!(inline.starts_with(reading_css_served()));
+        let tail = &inline[reading_css_served().len()..];
+        assert!(tail.contains("@media (prefers-color-scheme: dark)"));
+        assert!(tail.contains("html[data-kb-read=\"auto\"]"));
+        for token in [
+            "--kb-read-bg: #16181c",
+            "--kb-read-link: #a9cbff",
+            "color-scheme: dark",
+        ] {
+            assert!(tail.contains(token), "auto-dark lost {token}: {tail}");
+        }
+    }
+
+    #[test]
+    fn house_font_names_cannot_leave_the_fonts_directory() {
+        assert!(house_font_name_ok("SourceSerif4-400-normal-latin.woff2"));
+        assert!(house_font_name_ok(
+            "JetBrainsMono-400-normal-latin-ext.woff2"
+        ));
+        for bad in [
+            "",
+            "../etc/passwd",
+            "SourceSerif4-../x.woff2",
+            "SourceSerif4-400/x.woff2",
+            "InterTight-400-normal-latin.woff2",
+            "SourceSerif4-400-normal-latin.woff",
+            "SourceSerif4-400-normal-latin.woff2/",
+            "SourceSerif4-4%2e%2e.woff2",
+        ] {
+            assert!(!house_font_name_ok(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn forwarded_key_list_matches_the_spa_whitelist() {
+        let js = runtime_js("*");
+        let a = js.find("var FWD_KEYS = [").unwrap() + "var FWD_KEYS = [".len();
+        // `]` is itself in the list, so read to the closing `];`.
+        let end = js[a..].find("];").unwrap();
+        let runtime_keys: Vec<String> = js[a..a + end]
+            .split(',')
+            .map(|k| k.trim().trim_matches('\'').to_string())
+            .collect();
+        let ts = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/src/lib/artifactKeys.ts"
+        ))
+        .expect("web whitelist source");
+        let b = ts.find("FORWARDED_KEYS: readonly string[] = [").unwrap();
+        let block = &ts[b..b + ts[b..].find("];").unwrap()];
+        let spa_keys: Vec<String> = block
+            .lines()
+            .skip(1)
+            .map(|l| l.trim().trim_end_matches(',').trim_matches('"').to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(runtime_keys, spa_keys);
+        assert_eq!(runtime_keys.len(), 8);
     }
 }

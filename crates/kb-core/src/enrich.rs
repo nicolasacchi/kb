@@ -294,6 +294,16 @@ impl EnrichmentHook for SessionCaptureHook {
                 act.user_turns,
             );
 
+            // V0046/IDEA3 -- the closed-grammar check evidence, built from the
+            // tracker the activity parse already ran (before `harness` moves
+            // into the row). Surfaced, never scored; not part of the R1 digest.
+            let evidence_json = serde_json::to_string(&crate::sessions::checks::build_evidence(
+                &act.check_runs,
+                &harness,
+                act.last_assistant_text.as_deref(),
+            ))
+            .ok();
+
             let row = crate::storage::sqlite::SessionRow {
                 artifact_id: artifact_id.clone(),
                 session_id: facts.session_id.clone(),
@@ -328,6 +338,7 @@ impl EnrichmentHook for SessionCaptureHook {
                 substance: Some(substance.to_string()),
                 segment_of: act.segment_of.clone(),
                 segment_idx: act.segment_idx,
+                evidence_json,
             };
             if let Err(e) = ctx.storage.sessions_upsert(row).await {
                 tracing::warn!(
@@ -1856,6 +1867,77 @@ mod tests {
                 .map(|p| (p.session_id.as_str(), p.idx))
                 .collect::<Vec<_>>(),
             [("seg-sess", 1), ("seg-sess-p02", 2)]
+        );
+    }
+
+    /// OL IDEA3 -- the hook builds the evidence column from the activity parse:
+    /// the synthetic verify-after-edit fixture lands with a parseable column
+    /// whose derived verdict is "verified" (clippy ran after the last edit),
+    /// and the hook ran no second parse to get it.
+    #[tokio::test]
+    async fn session_capture_hook_persists_the_evidence_column() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = crate::storage::StorageActor::spawn(
+            tmp.path().join("lance"),
+            tmp.path().join("index.db"),
+            None,
+        )
+        .await
+        .unwrap();
+        let bus = EventBus::default();
+        let kb_name = KbName::new("smoke").unwrap();
+        let source_slug = SourceSlug::from_path(tmp.path());
+        let jsonl = include_str!("../tests/session_fixtures/verify-after-edit.jsonl");
+        let esc = jsonl
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let html = format!(
+            "<html><head><meta name=\"kb-category\" content=\"memory-session\"></head>\
+             <body><pre>{esc}</pre></body></html>"
+        );
+        let file = "ev.html";
+        let path = tmp.path().join(file);
+        let artifact_id = ArtifactId::from_path(file);
+        let ctx = EnrichCtx {
+            kb_name: &kb_name,
+            source_slug: &source_slug,
+            storage: &storage,
+            bus: &bus,
+            quarantine_dir: tmp.path(),
+            source_root: tmp.path(),
+            path: &path,
+            artifact_id: &artifact_id,
+            rel_path: file,
+            html: &html,
+            artifact_host_suffix: crate::iframe::DEFAULT_HOST_SUFFIX,
+            kb_category: Some("memory-session"),
+            mtime_unix: 1_700_000_000,
+            now_unix: 1_700_000_500,
+            seed_global: false,
+            seed_linked_kbs: &[],
+            content_hash: "deadbeef0046",
+            raw_source: &html,
+            versions_mode: crate::vcs::VersionsMode::Off,
+            session_parse: None,
+        };
+        SessionCaptureHook.enrich(&ctx).await.unwrap();
+        let row = storage
+            .sessions_get("5e1c9a42-7b3d-4f08-a6e1-0c2d8b9f4a17".to_string())
+            .await
+            .unwrap()
+            .expect("the session row");
+        let json = row
+            .evidence_json
+            .expect("evidence_json is written at capture");
+        let ev = crate::sessions::checks::parse_evidence(&json).expect("the column parses");
+        assert_eq!(ev.checks_total, 2);
+        assert_eq!(ev.edit_count, 2);
+        let s = crate::sessions::checks::summarize(&ev);
+        assert_eq!(s.verdict, crate::sessions::checks::Verdict::Verified);
+        assert_eq!(
+            s.phrase.as_deref(),
+            Some("cargo clippy passed after the last edit")
         );
     }
 

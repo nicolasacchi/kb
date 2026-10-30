@@ -196,6 +196,138 @@ pub struct SessionOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub segment_count: Option<u32>,
+    /// OL IDEA3 -- the session evidence card: was the code checked after its
+    /// last edit. DERIVED at read time from the persisted
+    /// `sessions.evidence_json` (V0046) by `kb_core::sessions::checks`; always
+    /// `Some` from `from_row` (a NULL or unreadable column reads as
+    /// `not_extracted`). SURFACED, never scored: no route sorts, filters or
+    /// ranks on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub evidence: Option<SessionEvidenceOut>,
+    /// The full parsed evidence, for the detail route's per-check list. Never
+    /// serialised.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts-export", ts(skip))]
+    pub evidence_full: Option<kb_core::sessions::checks::SessionEvidence>,
+}
+
+/// OL IDEA3 -- one check run, as the wire and every presenter show it. The
+/// `text` is the server's own sentence (`checks::check_text`): the CLI and the
+/// SPA print it, they do not re-derive it.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionCheckOut {
+    pub label: String,
+    pub cmd: String,
+    pub runners: Vec<String>,
+    pub outcome: kb_core::sessions::checks::Outcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub basis: Option<kb_core::sessions::checks::Basis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub why: Option<kb_core::sessions::checks::Why>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub at: Option<i64>,
+    /// Did this run happen after the session's last counted edit (a
+    /// gh-checks-only run also needs a push in between).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub after_last_edit: Option<bool>,
+    pub text: String,
+}
+
+/// OL IDEA3 -- the derived verdict over a capture's evidence.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionEvidenceOut {
+    pub verdict: kb_core::sessions::checks::Verdict,
+    /// The ONE sentence for the verdict (absent for `no_edits` and
+    /// `not_extracted`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub phrase: Option<String>,
+    /// The check the verdict rests on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub deciding: Option<SessionCheckOut>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub last_edit_at: Option<i64>,
+    /// Checks the capture kept (the newest 16) are listed on the detail; this
+    /// is the all-time count.
+    pub checks_total: u32,
+    pub checks_after_edit: u32,
+    /// Edits to agent bookkeeping or scratch files that were not counted.
+    pub edits_ignored: u32,
+    /// Files were edited and no commit was detected in this session.
+    pub uncommitted: bool,
+}
+
+fn check_out(
+    ev: &kb_core::sessions::checks::SessionEvidence,
+    c: &kb_core::sessions::checks::SessionCheck,
+) -> SessionCheckOut {
+    SessionCheckOut {
+        label: c.label.clone(),
+        cmd: c.cmd.clone(),
+        runners: c.runners.clone(),
+        outcome: c.outcome,
+        basis: c.basis,
+        why: c.why,
+        exit_code: c.exit_code,
+        at: c.at,
+        after_last_edit: Some(kb_core::sessions::checks::is_after_last_edit(ev, c)),
+        text: kb_core::sessions::checks::check_text(c),
+    }
+}
+
+/// Derive the wire evidence from a persisted column. A NULL, unparseable or
+/// future-versioned column is `not_extracted`, never a guessed verdict.
+fn evidence_out(
+    evidence_json: Option<&str>,
+    files_edited_count: u32,
+    commit_count: u32,
+) -> (
+    SessionEvidenceOut,
+    Option<kb_core::sessions::checks::SessionEvidence>,
+) {
+    use kb_core::sessions::checks;
+    let uncommitted = files_edited_count > 0 && commit_count == 0;
+    match evidence_json.and_then(checks::parse_evidence) {
+        Some(ev) => {
+            let s = checks::summarize(&ev);
+            let out = SessionEvidenceOut {
+                verdict: s.verdict,
+                phrase: s.phrase,
+                deciding: s.deciding.as_ref().map(|c| check_out(&ev, c)),
+                last_edit_at: ev.last_edit_at,
+                checks_total: ev.checks_total,
+                checks_after_edit: s.checks_after_edit,
+                edits_ignored: ev.edits_ignored,
+                uncommitted,
+            };
+            (out, Some(ev))
+        }
+        None => (
+            SessionEvidenceOut {
+                verdict: checks::Verdict::NotExtracted,
+                phrase: None,
+                deciding: None,
+                last_edit_at: None,
+                checks_total: 0,
+                checks_after_edit: 0,
+                edits_ignored: 0,
+                uncommitted,
+            },
+            None,
+        ),
+    }
 }
 
 /// V0045/seg1 — the session ids a session-keyed MEMORY read (the `memories`
@@ -373,6 +505,11 @@ impl SessionOut {
         let outcome = row.last_assistant_text.as_deref().map(|t| {
             kb_core::sessions::truncate_chars_ellipsis(t, kb_core::sessions::OUTCOME_WIRE_MAX_CHARS)
         });
+        let (evidence, evidence_full) = evidence_out(
+            row.evidence_json.as_deref(),
+            row.files_edited_count,
+            row.commit_count,
+        );
         SessionOut {
             id: row.session_id.clone(),
             kb: kb.to_string(),
@@ -411,6 +548,8 @@ impl SessionOut {
             segment_of: row.segment_of,
             segment_idx: row.segment_idx,
             segment_count: None,
+            evidence: Some(evidence),
+            evidence_full,
         }
     }
 
@@ -681,6 +820,22 @@ pub struct SessionDetailResponse {
     /// walks it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub segment_chain: Vec<String>,
+    /// OL IDEA3 -- the newest 16 checks the capture's main transcript ran,
+    /// oldest first, each flagged before or after the last edit. Absent when
+    /// the capture has none (or is `not_extracted`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<SessionCheckOut>,
+    /// OL IDEA3 -- basenames of counted edits the closing text never names
+    /// (capped at 12; absent when none).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unnamed_edits: Vec<String>,
+    /// OL IDEA3 -- the uncapped count behind `unnamed_edits`.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub unnamed_edits_total: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 #[cfg_attr(
@@ -5160,10 +5315,21 @@ pub async fn get(
         .collect();
     memory_ids.sort();
     memory_ids.dedup();
+    let (checks, unnamed_edits, unnamed_edits_total) = match session.evidence_full.as_ref() {
+        Some(ev) => (
+            ev.checks.iter().map(|c| check_out(ev, c)).collect(),
+            ev.unnamed_edits.clone(),
+            ev.unnamed_edits_total,
+        ),
+        None => (Vec::new(), Vec::new(), 0),
+    };
     Json(SessionDetailResponse {
         session,
         memory_ids,
         segment_chain,
+        checks,
+        unnamed_edits,
+        unnamed_edits_total,
     })
     .into_response()
 }
@@ -9900,5 +10066,163 @@ mod seg1_tests {
         assert_eq!(widen_artifact_ids("a-x", "x", &[]), ["a-x"]);
         // A STALE capture's artifact (not the newest of the head) never widens.
         assert_eq!(widen_artifact_ids("a-old", "raw", &c), ["a-old"]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OL IDEA3 -- the session evidence card on the wire.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod evidence_wire_tests {
+    use super::*;
+    use kb_core::sessions::checks::{
+        Basis, Outcome, SessionCheck, SessionEvidence, Verdict, EVIDENCE_VERSION,
+    };
+    use kb_core::storage::sqlite::SessionRow;
+
+    fn check(seq: u32, label: &str, outcome: Outcome) -> SessionCheck {
+        SessionCheck {
+            seq,
+            at: Some(1_700_000_000 + i64::from(seq)),
+            runners: vec!["cargo-test".into()],
+            label: label.into(),
+            cmd: format!("{label} -p widget"),
+            outcome,
+            basis: Some(Basis::Exit),
+            why: None,
+            exit_code: Some(0),
+        }
+    }
+
+    fn evidence(last_edit: u32, checks: Vec<SessionCheck>) -> SessionEvidence {
+        SessionEvidence {
+            v: EVIDENCE_VERSION,
+            checks_total: checks.len() as u32,
+            checks,
+            edit_count: 2,
+            edits_ignored: 3,
+            last_edit_seq: Some(last_edit),
+            last_edit_at: Some(1_700_000_002),
+            first_push_after_edit_seq: None,
+            unnamed_edits: vec!["render.rs".into()],
+            unnamed_edits_total: 1,
+        }
+    }
+
+    fn row(json: Option<String>, edited: u32, commits: u32) -> SessionRow {
+        SessionRow {
+            session_id: "sid-ev".into(),
+            artifact_id: "art-ev".into(),
+            harness: "claude".into(),
+            files_edited_count: edited,
+            commit_count: commits,
+            evidence_json: json,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn from_row_maps_summary_and_phrase() {
+        let ev = evidence(
+            3,
+            vec![
+                check(2, "cargo test", Outcome::Pass),
+                check(4, "cargo clippy", Outcome::Pass),
+            ],
+        );
+        let out = SessionOut::from_row("k", row(Some(serde_json::to_string(&ev).unwrap()), 2, 0));
+        let e = out.evidence.as_ref().expect("always Some from from_row");
+        assert_eq!(e.verdict, Verdict::Verified);
+        assert_eq!(
+            e.phrase.as_deref(),
+            Some("cargo clippy passed after the last edit")
+        );
+        let d = e.deciding.as_ref().expect("a deciding check");
+        assert_eq!(d.cmd, "cargo clippy -p widget");
+        assert_eq!(d.text, "passed");
+        assert_eq!(d.after_last_edit, Some(true));
+        assert_eq!(
+            (
+                e.last_edit_at,
+                e.checks_total,
+                e.checks_after_edit,
+                e.edits_ignored
+            ),
+            (Some(1_700_000_002), 2, 1, 3)
+        );
+        assert!(e.uncommitted, "edited files and no commit detected");
+        assert!(out.evidence_full.is_some());
+
+        // A commit clears `uncommitted`; no edited files never sets it.
+        let committed =
+            SessionOut::from_row("k", row(Some(serde_json::to_string(&ev).unwrap()), 2, 1));
+        assert!(!committed.evidence.unwrap().uncommitted);
+        let read_only = SessionOut::from_row("k", row(None, 0, 0));
+        assert!(!read_only.evidence.unwrap().uncommitted);
+
+        // The wire carries the summary; the full evidence is never serialised.
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["evidence"]["verdict"], "verified");
+        assert_eq!(v["evidence"]["deciding"]["after_last_edit"], true);
+        assert!(v.get("evidence_full").is_none());
+    }
+
+    #[test]
+    fn null_column_is_not_extracted() {
+        let out = SessionOut::from_row("k", row(None, 1, 0));
+        let e = out.evidence.as_ref().expect("always Some");
+        assert_eq!(e.verdict, Verdict::NotExtracted);
+        assert!(e.phrase.is_none() && e.deciding.is_none());
+        assert_eq!((e.checks_total, e.checks_after_edit), (0, 0));
+        assert!(out.evidence_full.is_none());
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["evidence"]["verdict"], "not_extracted");
+    }
+
+    #[test]
+    fn garbage_or_future_version_is_not_extracted() {
+        let future = serde_json::to_string(&SessionEvidence {
+            v: EVIDENCE_VERSION + 1,
+            ..evidence(3, vec![check(4, "cargo test", Outcome::Pass)])
+        })
+        .unwrap();
+        for bad in ["not json", "{}", "{\"v\":1}", "", future.as_str()] {
+            let out = SessionOut::from_row("k", row(Some(bad.to_string()), 1, 0));
+            assert_eq!(
+                out.evidence.as_ref().unwrap().verdict,
+                Verdict::NotExtracted,
+                "column {bad:?} must read as not_extracted, never a guessed verdict"
+            );
+            assert!(out.evidence_full.is_none());
+        }
+    }
+
+    // invariant:11 the server's ranking routes never read session evidence
+    #[test]
+    fn no_ranking_route_reads_session_evidence() {
+        const RANKERS: &[(&str, &str)] = &[
+            ("routes/search.rs", include_str!("search.rs")),
+            ("routes/inbox.rs", include_str!("inbox.rs")),
+            ("routes/resurface.rs", include_str!("resurface.rs")),
+            ("routes/desk.rs", include_str!("desk.rs")),
+            ("routes/context.rs", include_str!("context.rs")),
+            ("routes/memory.rs", include_str!("memory.rs")),
+        ];
+        for (name, src) in RANKERS {
+            for needle in [
+                "checks::",
+                "evidence_json",
+                "EvidenceSummary",
+                "SessionEvidenceOut",
+            ] {
+                assert!(
+                    !src.contains(needle),
+                    "{name} names `{needle}` -- session evidence is SURFACED, NEVER SCORED: \
+                     it may be rendered beside a session row, never folded into a rank, \
+                     a sort key or a filter"
+                );
+            }
+        }
     }
 }

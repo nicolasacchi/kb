@@ -9,6 +9,9 @@ import { currentDaemonBase } from "./base";
 import type { SessionRow } from "./generated/SessionRow";
 import type { SessionsListResponse } from "./generated/SessionsListResponse";
 import type { SessionDetail } from "./generated/SessionDetail";
+import type { SessionEvidenceOut } from "./generated/SessionEvidenceOut";
+import type { SessionCheckOut } from "./generated/SessionCheckOut";
+import type { EvidenceVerdict } from "./generated/EvidenceVerdict";
 import type { SessionMemoryHit } from "./generated/SessionMemoryHit";
 import type { SessionMemoriesResponse } from "./generated/SessionMemoriesResponse";
 import type { SessionRecallHit } from "./generated/SessionRecallHit";
@@ -68,6 +71,9 @@ export type {
   SessionRow,
   SessionsListResponse,
   SessionDetail,
+  SessionEvidenceOut,
+  SessionCheckOut,
+  EvidenceVerdict,
   SessionMemoryHit,
   SessionMemoriesResponse,
   SessionRecallHit,

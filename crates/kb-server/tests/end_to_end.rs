@@ -1569,6 +1569,16 @@ async fn artifact_html_matches_source_apart_from_injected_scripts() {
         rest = &tail[end..];
     }
     stripped.push_str(rest);
+    // READ1b: this page has no voice of its own, so the daemon adds exactly
+    // one house `<style id="kb-read-style">` and the `data-kb-read` attribute
+    // on <html> - nothing else. Remove those two and the rest is the source.
+    let open = stripped
+        .find(r#"<style id="kb-read-style">"#)
+        .expect("house style injected for a voice-less page");
+    let close = stripped[open..].find("</style>").unwrap() + open + "</style>".len();
+    stripped.replace_range(open..close, "");
+    assert_eq!(stripped.matches(r#" data-kb-read="auto""#).count(), 1);
+    let stripped = stripped.replace(r#" data-kb-read="auto""#, "");
     let source = r##"<!doctype html>
 <html><body>
 <h1>With prompt</h1>
@@ -1577,6 +1587,201 @@ async fn artifact_html_matches_source_apart_from_injected_scripts() {
 </body></html>"##;
     let squash = |s: &str| s.split_whitespace().collect::<String>();
     assert_eq!(squash(&stripped), squash(source));
+}
+
+// --- OL READ1b - serve-time house voice, fonts, share ----------------------
+
+const HOUSE_FONT: &str = "SourceSerif4-400-normal-latin.woff2";
+
+/// Canon corpus + three extra pages (a voice-less memory-shaped page, one that
+/// opts out of reading mode, one with its own `<style>`) and a SPA dist that
+/// carries one house font.
+async fn boot_house() -> (tempfile::TempDir, std::net::SocketAddr) {
+    let (tmp, cfg, paths) = fixture_corpus();
+    let source = cfg.kb.values().next().unwrap().path.clone();
+    std::fs::write(
+        source.join("voiceless.html"),
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Voiceless</title>\n</head>\n<body>\n<main>\n<h1>Voiceless</h1>\n<p>Plain memory-shaped body.</p>\n</main>\n</body>\n</html>\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("optout.html"),
+        "<!DOCTYPE html>\n<html><head><meta name=\"kb-reading\" content=\"off\"><title>Optout</title></head>\n<body><h1>Optout</h1></body></html>\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("styled.html"),
+        "<!DOCTYPE html>\n<html><head><title>Styled</title><style>body{color:red}</style></head>\n<body><h1>Styled</h1></body></html>\n",
+    )
+    .unwrap();
+    let dist = tmp.path().join("dist");
+    std::fs::create_dir_all(dist.join("fonts")).unwrap();
+    std::fs::write(
+        dist.join("index.html"),
+        "<!doctype html><html><head></head><body></body></html>",
+    )
+    .unwrap();
+    std::fs::write(dist.join("fonts").join(HOUSE_FONT), b"wOF2-test-bytes").unwrap();
+    std::fs::write(
+        dist.join("fonts").join("InterTight-400-normal-latin.woff2"),
+        b"x",
+    )
+    .unwrap();
+    let (addr, _task) = kb_server::serve_on_random_port_with_paths_and_spa(cfg, paths, Some(dist))
+        .await
+        .expect("serve");
+    common::wait_docs_listed(addr, "smoke", 7).await;
+    (tmp, addr)
+}
+
+async fn get_artifact(addr: std::net::SocketAddr, id: &str, path: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}{path}", addr.port()))
+        .header("Host", format!("{id}.artifacts.localhost:4000"))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn voiceless_page_is_served_in_the_house_voice() {
+    let (_tmp, addr) = boot_house().await;
+    let body = get_artifact(addr, "voiceless", "/")
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains(r#"<html lang="en" data-kb-read="auto">"#),
+        "{body}"
+    );
+    let style = body.find(r#"<style id="kb-read-style">"#).expect("style");
+    assert!(
+        style < body.find("</head>").unwrap(),
+        "style belongs in head"
+    );
+    assert!(body.contains("@media (prefers-color-scheme: dark)"));
+    assert!(body.contains("/_kb/fonts/SourceSerif4-400-normal-latin.woff2"));
+    // The source body is intact and the runtime is still injected.
+    assert!(body.contains("<main>\n<h1>Voiceless</h1>\n<p>Plain memory-shaped body.</p>"));
+    assert!(body.contains(r#"<script src="/_kb/runtime.js" defer></script>"#));
+}
+
+#[tokio::test]
+async fn house_voice_never_doubles_a_page_that_has_its_own() {
+    let (_tmp, addr) = boot_house().await;
+    for id in ["optout", "styled", "fullscreen-viz"] {
+        let body = get_artifact(addr, id, "/").await.text().await.unwrap();
+        assert!(!body.contains("kb-read-style"), "{id} got the house sheet");
+        assert!(!body.contains("data-kb-read"), "{id} got the attribute");
+    }
+    // ?raw=1 is the untouched-bytes view of a transcript; it is never styled.
+    let raw = get_artifact(addr, "voiceless", "/?raw=1")
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(!raw.contains("kb-read-style"));
+}
+
+#[tokio::test]
+async fn house_fonts_are_served_immutable_from_the_spa_bundle() {
+    let (_tmp, addr) = boot_house().await;
+    let resp = get_artifact(addr, "voiceless", &format!("/_kb/fonts/{HOUSE_FONT}")).await;
+    assert_eq!(resp.status(), 200);
+    let hv = |n: &str| {
+        resp.headers()
+            .get(n)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(hv("content-type"), "font/woff2");
+    assert_eq!(hv("cache-control"), "public, max-age=31536000, immutable");
+    assert_eq!(hv("x-content-type-options"), "nosniff");
+    assert!(hv("content-security-policy").starts_with("frame-ancestors "));
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"wOF2-test-bytes");
+
+    // Not a font we declare, a traversal, and a missing file are all 404.
+    for path in [
+        "/_kb/fonts/InterTight-400-normal-latin.woff2",
+        "/_kb/fonts/..%2Findex.html",
+        "/_kb/fonts/SourceSerif4-900-normal-latin.woff2",
+        "/_kb/fonts/",
+    ] {
+        let r = get_artifact(addr, "voiceless", path).await;
+        assert_eq!(r.status(), 404, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn house_fonts_are_404_without_an_spa_bundle() {
+    let (_tmp, addr) = boot().await;
+    let r = get_artifact(addr, "fullscreen-viz", &format!("/_kb/fonts/{HOUSE_FONT}")).await;
+    assert_eq!(r.status(), 404);
+}
+
+#[tokio::test]
+async fn house_fonts_are_not_served_on_the_spa_host() {
+    let (_tmp, addr) = boot_house().await;
+    let r = reqwest::Client::new()
+        .get(format!(
+            "http://127.0.0.1:{}/_kb/fonts/{HOUSE_FONT}",
+            addr.port()
+        ))
+        .send()
+        .await
+        .unwrap();
+    let ct = r
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert_ne!(ct, "font/woff2");
+}
+
+/// The house voice is a serve-time layer only: a share bundle is built by
+/// walking the filesystem (#9) and carries none of it.
+#[tokio::test]
+async fn share_bundle_carries_no_house_css() {
+    let (_tmp, addr) = boot_house().await;
+    let client = reqwest::Client::new();
+    let list = create_list(&client, addr, "House share").await;
+    let lid = list["id"].as_str().unwrap();
+    for path in ["voiceless.html", "kitchen-sink.html"] {
+        let (status, entry) =
+            add_list_entry(&client, addr, lid, serde_json::json!({ "path": path })).await;
+        assert_eq!(status, 201, "entry {path}: {entry}");
+    }
+    let r = client
+        .post(url(
+            addr,
+            &format!("/api/kb/smoke/lists/{lid}/share/export"),
+        ))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let bytes = r.bytes().await.unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("zip");
+    let mut saw_page = false;
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        let name = f.name().expect("entry name").to_string();
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        if name.ends_with("voiceless.html") {
+            saw_page = true;
+            assert!(text.contains("Plain memory-shaped body."));
+        }
+        assert!(!text.contains("kb-read-style"), "{name}");
+        assert!(!text.contains("data-kb-read"), "{name}");
+        assert!(!text.contains("/_kb/fonts/"), "{name}");
+    }
+    assert!(saw_page, "voiceless.html missing from the bundle");
 }
 
 #[tokio::test]
@@ -24600,6 +24805,78 @@ async fn segmented_session_chain_reads_through_the_routes() {
         1,
         "{raw_detail}"
     );
+}
+
+/// OL IDEA3 -- the session evidence card rides the existing routes: the list
+/// row carries the derived verdict and phrase, the detail adds the per-check
+/// list and the unnamed edits. Content is the synthetic verify-after-edit
+/// fixture (Edit -> piped `cargo test` read from its output -> Edit ->
+/// background `cargo clippy` settled by a task-notification).
+#[tokio::test]
+async fn session_detail_carries_evidence_and_checks() {
+    let sid = "5e1c9a42-7b3d-4f08-a6e1-0c2d8b9f4a17";
+    let jsonl = include_str!("../../kb-core/tests/session_fixtures/verify-after-edit.jsonl");
+    let global = vec![(
+        "session-20260610T090000Z-verify-after-edit.html",
+        session_transcript_html(sid, "20260610T090000Z", jsonl),
+    )];
+    let (_tmp, addr) = boot_memory_corpora(&global, &[]).await;
+    let client = reqwest::Client::new();
+    wait_for_session(&client, addr, sid).await;
+
+    let list: serde_json::Value = client
+        .get(url(addr, "/api/sessions?limit=50"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == sid)
+        .expect("the session row")
+        .clone();
+    let ev = &row["evidence"];
+    assert_eq!(ev["verdict"], "verified");
+    assert_eq!(ev["phrase"], "cargo clippy passed after the last edit");
+    assert_eq!(
+        ev["deciding"]["cmd"],
+        "cargo clippy -p widget -- -D warnings"
+    );
+    assert_eq!(ev["checks_total"], 2);
+    assert_eq!(ev["checks_after_edit"], 1);
+    assert_eq!(ev["uncommitted"], true, "edited files, no commit detected");
+    assert!(
+        row.get("evidence_full").is_none(),
+        "the full evidence is never serialised"
+    );
+
+    let detail: serde_json::Value = client
+        .get(url(addr, &format!("/api/sessions/{sid}")))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["evidence"]["verdict"], "verified");
+    let checks = detail["checks"].as_array().expect("checks on the detail");
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0]["label"], "cargo test");
+    assert_eq!(checks[0]["text"], "passed (read from its output)");
+    assert_eq!(checks[0]["after_last_edit"], false);
+    assert_eq!(checks[1]["label"], "cargo clippy");
+    assert_eq!(checks[1]["text"], "passed (background run)");
+    assert_eq!(checks[1]["after_last_edit"], true);
+    assert_eq!(detail["unnamed_edits"], serde_json::json!(["render.rs"]));
+    assert_eq!(detail["unnamed_edits_total"], 1);
 }
 
 // --- OL PRES1: live-touches (scrubbed file presence on auth_bearer) ---------

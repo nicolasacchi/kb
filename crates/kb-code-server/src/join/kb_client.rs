@@ -1162,6 +1162,53 @@ impl KbClient {
 }
 
 impl KbClient {
+    /// `GET {url}/api/kb/{kb}/code-refs?by_target=<path>` (CT-B3) - every doc
+    /// in `kb` whose extracted refs cite `path`, by an EXACT `path_hint`
+    /// match, with the refs. OL SIBL3: the live half of the Cited-by strip,
+    /// so a file nobody pinned a document for still shows who cites it.
+    ///
+    /// Bounded by the same deadline as [`Self::search`] (a strip must not
+    /// hang the reader on a slow peer); a slow answer is
+    /// [`KbClientError::Timeout`], never `Unreachable`. `kb` MUST already
+    /// have passed `doclens::validate_kb_segment`. The `path` rides
+    /// `.query()`, so it is percent-encoded by reqwest, not hand-built.
+    /// The returned docs are HINTS: kb has no tree, the caller classifies.
+    pub async fn code_refs_by_target(&self, kb: &str, path: &str) -> Result<Vec<CodeRefsDoc>> {
+        if !self.cfg.enabled {
+            return Err(KbClientError::Disabled);
+        }
+        self.ensure_sibling().await?;
+        let client = self.client()?;
+        let url = format!(
+            "{}/api/kb/{kb}/code-refs",
+            self.cfg.url_str().trim_end_matches('/')
+        );
+        let resp = self
+            .get(client, &url)
+            .query(&[("by_target", path)])
+            .timeout(self.search_timeout)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    KbClientError::Timeout(url.clone())
+                } else {
+                    KbClientError::Unreachable(url.clone(), e.to_string())
+                }
+            })?;
+        if !resp.status().is_success() {
+            return Err(KbClientError::BadStatus(resp.status()));
+        }
+        let page: CodeRefsFeedPage = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                KbClientError::Timeout(url.clone())
+            } else {
+                KbClientError::Parse(e.to_string())
+            }
+        })?;
+        Ok(page.docs)
+    }
+
     /// `GET {url}/api/search?q=<q>&scope=all&mode=keyword&limit=<limit>` —
     /// OL S1's read-only relay for kb-code's omnibox "Documents" lane.
     /// Keyword mode on purpose: it needs no embedder on kb's side and a
@@ -2898,6 +2945,87 @@ mod tests {
         assert!(matches!(
             client.ui_settings().await.unwrap_err(),
             KbClientError::SiblingMismatch(_)
+        ));
+    }
+
+    // --- OL SIBL3: code_refs_by_target -------------------------------------
+
+    fn by_target_router(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Router {
+        Router::new().route(
+            "/api/kb/{kb}/code-refs",
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock()
+                        .unwrap()
+                        .push(q.get("by_target").cloned().unwrap_or_default());
+                    let body = serde_json::json!({
+                        "schema": "coderef-feed/1",
+                        "kb": "k",
+                        "docs": [{
+                            "doc_id": "aaaaaaaaaaaa",
+                            "doc_path": "d.html",
+                            "title": "D",
+                            "extracted_at": 5,
+                            "groups": [{"key": "kb-h-x", "label": "X"}],
+                            "refs": [{"ordinal": 0, "group": "kb-h-x", "kind": "path",
+                                      "raw": "a b/c.rs", "path_hint": "a b/c.rs"}]
+                        }]
+                    });
+                    Json(body)
+                }
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn code_refs_by_target_sends_the_encoded_path_and_parses_docs() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (addr, _server) = mock_kb_server(by_target_router(seen.clone())).await;
+        let c = KbClient::new(cfg(format!("http://{addr}")));
+        let docs = c.code_refs_by_target("k", "a b/c.rs").await.unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].doc_id, "aaaaaaaaaaaa");
+        assert_eq!(docs[0].refs[0].path_hint.as_deref(), Some("a b/c.rs"));
+        assert_eq!(docs[0].refs[0].group.as_deref(), Some("kb-h-x"));
+        assert_eq!(seen.lock().unwrap().as_slice(), ["a b/c.rs"]);
+    }
+
+    #[tokio::test]
+    async fn code_refs_by_target_disabled_and_bad_status_and_timeout_are_distinct() {
+        let mut off = cfg("http://127.0.0.1:1".to_string());
+        off.enabled = false;
+        assert!(matches!(
+            KbClient::new(off).code_refs_by_target("k", "x.rs").await,
+            Err(KbClientError::Disabled)
+        ));
+
+        let router = Router::new().route(
+            "/api/kb/{kb}/code-refs",
+            get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+        );
+        let (addr, _s) = mock_kb_server(router).await;
+        assert!(matches!(
+            KbClient::new(cfg(format!("http://{addr}")))
+                .code_refs_by_target("k", "x.rs")
+                .await,
+            Err(KbClientError::BadStatus(_))
+        ));
+
+        let router = Router::new().route(
+            "/api/kb/{kb}/code-refs",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let body = serde_json::json!({"docs": []});
+                Json(body)
+            }),
+        );
+        let (addr, _s) = mock_kb_server(router).await;
+        let c = KbClient::new(cfg(format!("http://{addr}")))
+            .with_search_timeout(Duration::from_millis(50));
+        assert!(matches!(
+            c.code_refs_by_target("k", "x.rs").await,
+            Err(KbClientError::Timeout(_))
         ));
     }
 }

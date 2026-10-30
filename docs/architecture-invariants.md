@@ -987,6 +987,8 @@ Segment keys are untrusted transcript content: `segmentOf`/`segmentIdx` are hono
 migrated volume (`refuse_if_volume_ahead`, the same guard that made the
 13.5 h kbc outage loud) — see docs/self-host.md "Rolling back across V0045".
 
+*Evidence amendment (OL IDEA3, 2026-10-30):* `sessions.evidence_json` (V0046) holds the closed-grammar checks a capture ran: which test/lint/build commands the MAIN transcript's Bash calls made (`kb_core::sessions::checks`, no in-daemon LLM; a CLOSED runner table, wrapper strip and shell splitter, an unmatched command is simply not a check), in what order relative to its counted edits (Edit/Write/MultiEdit/NotebookEdit tool calls; edits to agent bookkeeping or scratch paths are counted as ignored, edits made through Bash or by subagents are not seen), and how they ended. An outcome is `pass`/`fail` only when the exit status speaks for the check (a pipe, `||`, `;` or `&` hides it), a harness exit tier exists (claude and codex; the other four fall to the output grammar), a background run was settled by its `<task-notification>`, or a per-runner output marker decides; everything else is `unknown` with a stated `why`, never `passed`. The verdict (`verified`/`failing`/`unconfirmed`/`stale`/`unchecked`/`no_edits`, plus `not_extracted` for a NULL or unreadable column) and its one sentence are DERIVED at read time by `checks::summarize` and are SURFACED, NEVER SCORED: never the R1 digest, the `code` lane, a sort key, a filter, or a recall/recollect/inbox term (pinned by `checks::tests::no_ranking_module_reads_session_evidence`, `sessions_list_order_ignores_evidence` and `digest_ignores_check_tracking`). The column rides the `sessions` row, so the artifact-id lifecycle registries already move and delete it and the newest-capture rule needs no extra scoping. A gh-checks run counts as after the last edit only if a push came between (CI checks the pushed head). *Rollback:* V0046 bumps the refinery epoch — see docs/self-host.md "Rolling back across V0046".
+
 **Episodic-memory retrieval (R0–R5).** Sessions are an *episodic* memory the
 agent PULLS on demand — distinct from the curated *semantic* memory (`kb
 remember`/`recall`), which it pushes every turn. Load-bearing constraints:
@@ -1707,7 +1709,7 @@ query cache (`web/src/lib/memento.ts`, goldens mirrored case-for-case against
 `kb_core::versions`'s) rather than issuing a second fetch — keep the two in
 lock-step, the same way #29's wikilink grammar is kept.
 
-**OL TIME1 (v0.50).** The Library time scrubber's batch read, `GET /api/kb/{kb}/docs/as-of?at=&ids=`, is an OVERLAY over this same façade, not a new resolver: every item is the per-artifact `memento_for` answer (pinned by `asof_item_equals_per_artifact_memento`), `/docs` stays as-of-blind (it ignores `at`), and ranking/search are never as-of.
+**OL TIME1/TIME2 (v0.50).** a batch per-artifact memento read, `GET /api/kb/{kb}/docs/as-of?at=&ids=`, and the reader's `?at=` BODY both resolve through this same façade and ONE resolver (`memento_for`), never a second one: every batch item is the per-artifact `memento_for` answer (pinned by `asof_item_equals_per_artifact_memento`), and `?at=<unix>` on an artifact's own origin serves the nearest-prior version's verbatim source (`VersionCtx::raw_at`) through TODAY'S outbound pipeline (kb-prompt strip on non-loopback, runtime injection), a working-tree hit serves today's file unchanged, and an instant older than the oldest version is a 404 naming the floor. A historical render is not a read (no history row, no reading progress) and never carries the annotator. Any instant is answered (the working tree wins at `t >= mtime`; clients clamp). Still no corpus timeline: `/docs` stays as-of-blind (it ignores `at`), and ranking/search are never as-of.
 
 ### 15. Gallery row-set memo keys on a storage-actor index generation
 
@@ -1993,6 +1995,10 @@ is no "own wiring" to speak of, only its absence. It carries `staleTime` 30s
 (it reads a live git worktree, which changes with no notification anyone could
 forward), `retry: false`, and a manual `↻` beside the rendered `resolved_unix`
 so the reader can always see how old the resolution is and re-run it.
+The reader's Header Code chip (OL-SIBL2) reads these SAME two queries under the
+same keys (enabled where the Links tab enables them), so it adds no request, no
+store and no breaker; an unreachable kb-code costs the one failed request the
+Links tab already makes, and the chip then stays hint-worded.
 
 Neither category is a licence to skip the bridge: a same-origin, same-daemon
 query whose invalidation the bridge CAN express belongs on the bridge with
@@ -2775,7 +2781,7 @@ selection) is a client concern that ends in `ids=`; only a genuinely new
 `galleryUrl.ts` + `fetchDocsPage` + `docs_query::matches` + `routes/docs.rs`
 together, with goldens.
 
-**OL TIME1 (v0.50).** The time scrubber does NOT grow this grammar with an `at` atom — `/docs` ignores `at` (pinned by `docs_ignores_at_param_byte_identical`); the as-of answer for the visible page rides the separate overlay route `GET …/docs/as-of?at=&ids=` (ids capped at 100, 400 over the cap, never truncation).
+**OL TIME1/TIME2 (v0.50).** `at` is NOT an atom of this grammar — `/docs` ignores it (pinned by `docs_ignores_at_param_byte_identical`); `?at=` is reader view state (the artifact's own body as it stood), and the batch per-artifact memento read rides the separate route `GET …/docs/as-of?at=&ids=` (ids capped at 100, 400 over the cap, never truncation).
 
 ## Where to find things
 

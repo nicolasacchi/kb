@@ -15,6 +15,8 @@ import WaitingChip from "./WaitingChip";
 import DeskPill from "./DeskPill";
 import DaemonStatus from "./DaemonStatus";
 import { Spine } from "@kb/ui/Spine";
+import SiblingChip from "./SiblingChip";
+import { useSiblingChip } from "../../hooks/useSiblingChip";
 
 /// The Spine's "Search artifacts…" launcher is absent on /search, which has its
 /// own big field (⌘K still opens the palette).
@@ -50,6 +52,8 @@ export default function Header({
   const loc = useLocation();
   const showSpineSearch = spineHasSearch(loc.pathname);
   const { set, navigate } = useUrl();
+  // OL-SIBL2 - the reader's Code chip; null everywhere else (and on mobile).
+  const siblingChip = useSiblingChip();
 
   const { data: kbs = [] } = useKbs();
   // Resolved kb drives the workspace pill (never blank once kbs load); the
@@ -168,6 +172,7 @@ export default function Header({
             <DaemonStatus warnings={warnings} />
           </>
         }
+        crossing={siblingChip ? <SiblingChip model={siblingChip} /> : undefined}
         onMenu={onToggleDrawer}
         menuOpen={menuOpen}
         menuLabel="open menu"

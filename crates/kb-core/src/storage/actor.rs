@@ -6263,6 +6263,7 @@ mod tests {
             substance: None,
             segment_of: None,
             segment_idx: None,
+            evidence_json: None,
         };
         h.sessions_upsert(row).await.unwrap();
         let g0 = h.index_generation();

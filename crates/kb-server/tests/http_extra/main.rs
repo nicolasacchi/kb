@@ -7,6 +7,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod artifact_asof;
 mod changes;
 mod coderefs;
 mod docs_asof;

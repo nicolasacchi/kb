@@ -25,7 +25,13 @@ use comrak::{markdown_to_html_with_plugins, Options};
 /// Inlined reading-theme stylesheet (kb tokens, serif prose, mono code, the
 /// "markdown" accent bar). Self-contained so the cross-origin iframe needs no
 /// parent-SPA assets — mirrors `session_render.css`.
-const PROSE_CSS: &str = include_str!("markdown_prose.css");
+pub const PROSE_CSS: &str = include_str!("markdown_prose.css");
+
+/// The house `@font-face` set (Source Serif 4 + JetBrains Mono) shared by this
+/// page's sheet and kb-server's reading-mode sheet. It is NOT part of the
+/// stored/exported page: the artifact server appends it at serve time, because
+/// its `url(/_kb/fonts/...)` references only resolve on an artifact host.
+pub const HOUSE_FONT_FACES: &str = include_str!("house_fonts.css");
 
 /// A light syntect theme from `ThemeSet::load_defaults()` that suits the
 /// reading theme; emits self-contained inline-styled highlighted code.

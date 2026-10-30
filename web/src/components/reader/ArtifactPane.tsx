@@ -45,12 +45,15 @@ import { fetchSession } from "../../api/sessions";
 import { sse } from "../../api/sse";
 import { artifactOrigin, isOriginOfArtifact } from "../../lib/artifactHost";
 import { artifactHref } from "../../lib/artifactHref";
+import { artifactSrcAt } from "../../lib/asOf";
+import AsOfBar from "./AsOfBar";
 import {
   resolveArtifactHref,
   type ArtifactLinkCtx,
 } from "../../lib/artifactLinks";
 import type { FlowEntry } from "../../lib/flowStack";
 import type { PaneLoc } from "../../lib/paneUrl";
+import { dispatchForwardedKey, forwardedKey } from "../../lib/artifactKeys";
 import { withKb } from "../../lib/navItems";
 import { buildProvenanceBlock } from "../../lib/quote";
 import { toast } from "../../lib/toast";
@@ -105,6 +108,8 @@ type ArtifactMessage =
     }
   | { kind: "kb:link-clear" }
   | { kind: "kb:link-open"; href: string }
+  // READ1b — a bare reader key forwarded by the runtime's key lane.
+  | { kind: "kb:key"; key: string }
   // RP-track — per-section reading beacon (cumulative per visit).
   | {
       kind: "kb:reading";
@@ -268,6 +273,22 @@ export type ArtifactPaneProps = {
   /// Omitted ⇒ the card hides the button (mobile, split already open, or no
   /// second pane possible).
   onPeekSplit?: (loc: PaneLoc) => void;
+
+  // ── the time machine (OL TIME2) ───────────────────────────────────────
+  /// `?at=<unix>`: open THIS artifact as it stood. The URL names one primary
+  /// artifact, so only the PRIMARY pane is ever handed a coordinate (the
+  /// second pane is the "now" half of a then|now split). Non-null makes the
+  /// pane a HISTORICAL render: the daemon serves the older body, the pane
+  /// carries a caption, appends no `cm=on`, and — a historical render is not
+  /// a read (#8/#19) — opens no visit and posts no scroll/reading beacon.
+  at?: number | null;
+  /// The then|now verb in the caption strip: "open" puts the same artifact at
+  /// its working version in the second pane, "close" closes that split.
+  /// Undefined ⇒ not offered (mobile never splits).
+  asOfSplit?: "open" | "close";
+  onAsOfSplit?: () => void;
+  /// "back to today": the route clears `?at=`.
+  onAsOfToday?: () => void;
 };
 
 /// The per-visit history lifecycle for ONE artifact: the `POST /history/open`
@@ -281,7 +302,14 @@ export type ArtifactPaneProps = {
 /// it so every pane owns its own visit; the route's native-note path (which
 /// renders no pane, but opening a note is still a visit) calls it through the
 /// zero-DOM `NoteVisit` helper in `routes/detail.tsx`.
-export function useArtifactVisit(kb: string | null, id: string | null) {
+export function useArtifactVisit(
+  kb: string | null,
+  id: string | null,
+  // OL TIME2 — false for a HISTORICAL render (`?at=`): no `history.open` row,
+  // so `visitRef.current.id` stays null and every scroll/reading flush bails
+  // (they all gate on a visit id). A historical render is not a read.
+  enabled: boolean = true,
+) {
   // v0.6+ H4/H6 — history visit state. `visit_id` identifies the
   // current open row (returned by POST /history/open). `pendingScrollY`
   // is the Y the iframe should land on the next time it mounts — seeded
@@ -343,7 +371,7 @@ export function useArtifactVisit(kb: string | null, id: string | null) {
   // won). Ordinary (non-prerendered) navigation — effectively all traffic
   // today — takes the `else` branch and is byte-identical to before.
   useEffect(() => {
-    if (!kb || !id) return;
+    if (!kb || !id || !enabled) return;
     let alive = true;
     let offPrerender: (() => void) | undefined;
 
@@ -416,7 +444,7 @@ export function useArtifactVisit(kb: string | null, id: string | null) {
       // run, but it'll see scrollPending=null and exit cleanly.
       scrollInflight.current = false;
     };
-  }, [kb, id]);
+  }, [kb, id, enabled]);
 
   return {
     visitRef,
@@ -495,6 +523,10 @@ export default function ArtifactPane({
   flowStateRef,
   flow,
   onPeekSplit,
+  at = null,
+  asOfSplit,
+  onAsOfSplit,
+  onAsOfToday,
 }: ArtifactPaneProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -540,7 +572,11 @@ export default function ArtifactPane({
     readingSeed,
     kickScrollFlush,
     kickReadingFlush,
-  } = useArtifactVisit(kb, id);
+  } = useArtifactVisit(kb, id, at === null);
+  // OL TIME2 — mirrored for the long-lived message pump (it rebinds only on
+  // kb/id/relPath/hostSuffix).
+  const atRef = useRef(at);
+  atRef.current = at;
   // Mirror `kb`/`id` into refs so the scroll-flush path reads the
   // CURRENT values rather than the values captured by the effect
   // closure when the POST started. Without this, a setTimeout(flush)
@@ -596,6 +632,9 @@ export default function ArtifactPane({
     function onMessage(e: MessageEvent) {
       // W3.P-a — exact origin: the folio header names THIS pane's section.
       if (!isOriginOfArtifact(e.origin, id, kb, hostSuffix)) return;
+      // OL TIME2 — and, in a then|now split, this pane's own frame.
+      const ownFrame = iframeRef.current?.contentWindow;
+      if (ownFrame && e.source && e.source !== ownFrame) return;
       const data = e.data as
         | { kind?: string; id?: string; toc?: { id: string; text: string }[] }
         | null;
@@ -617,6 +656,9 @@ export default function ArtifactPane({
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       if (!isOriginOfArtifact(e.origin, id, kb, hostSuffix)) return;
+      // OL TIME2 — same-origin split panes: only our own frame.
+      const ownFrame = iframeRef.current?.contentWindow;
+      if (ownFrame && e.source && e.source !== ownFrame) return;
       const data = e.data as { kind?: string; id?: string } | null;
       if (
         data &&
@@ -1095,6 +1137,14 @@ export default function ArtifactPane({
       // link that resolves to another indexed artifact), so `open-artifact`
       // still arrives on this origin.
       if (!isOriginOfArtifact(e.origin, id, kb, hostSuffix)) return;
+      // OL TIME2 — a then|now split puts the SAME artifact in both panes, so
+      // the two iframes share one origin and the origin check above can no
+      // longer tell them apart. Attribute by FRAME as well: a message from the
+      // other pane's window is not ours (a historical pane's beacons must
+      // never land in the live pane's visit row). Real cross-window messages
+      // always carry a source; a source-less event (synthetic) is let through.
+      const ownFrame = iframeRef.current?.contentWindow;
+      if (ownFrame && e.source && e.source !== ownFrame) return;
       // This pane's iframe is where the reading is happening — claim focus.
       // Inert while already focused (i.e. always, with one pane).
       if (!focusedRef.current) onFocusRef.current?.();
@@ -1249,6 +1299,7 @@ export default function ArtifactPane({
             page: msg.label,
             list: sp.get("list") ?? undefined,
             entry: sp.get("entry") ?? undefined,
+            at: atRef.current ?? undefined,
           }),
           { replace: true },
         );
@@ -1419,6 +1470,12 @@ export default function ArtifactPane({
         if (!scrollInflight.current) {
           postScrollFlush();
         }
+      } else if (msg.kind === "kb:key") {
+        // READ1b — a bare reader key pressed inside the iframe. Whitelisted
+        // (lib/artifactKeys.ts) then replayed into this window's existing
+        // handlers; anything outside the closed list is ignored.
+        const key = forwardedKey(msg);
+        if (key) dispatchForwardedKey(key);
       } else if (msg.kind === "kb:reading") {
         // RP-track — cumulative per-visit reading snapshot. Mirror the
         // scroll-flush: store the latest, POST when no flush is in flight.
@@ -1563,7 +1620,15 @@ export default function ArtifactPane({
   const baseUrl = activePage
     ? `${artifactBase}/${activePage.replace(/^\//, "")}`
     : `${artifactBase}/`;
-  const artifactUrl = reviewActive ? `${baseUrl}?cm=on` : baseUrl;
+  // OL TIME2 — a historical pane asks for `?at=` INSTEAD of `?cm=on`: the
+  // annotator anchors to the ORIGINAL DOM (#6), so it is never appended to an
+  // old body. Only the entry document is time-travelled (see artifactSrcAt).
+  const historical = at !== null;
+  const artifactUrl = historical
+    ? artifactSrcAt(baseUrl, at, activePage)
+    : reviewActive
+      ? `${baseUrl}?cm=on`
+      : baseUrl;
 
   const filename = relPath.includes("/")
     ? relPath.slice(relPath.lastIndexOf("/") + 1)
@@ -1615,10 +1680,10 @@ export default function ArtifactPane({
             onPrev={siblingNav?.onPrev}
             onNext={siblingNav?.onNext}
             onFullscreen={() => onSetImmersive(true)}
-            bareUrl={baseUrl}
+            bareUrl={historical ? artifactUrl : baseUrl}
             reviewActive={reviewActive}
             annotateMode={annotateMode}
-            onToggleAnnotate={onToggleAnnotate}
+            onToggleAnnotate={historical ? undefined : onToggleAnnotate}
             commentCount={commentCount}
             inspectorOpen={inspectorOpen}
             onToggleInspector={onToggleInspector}
@@ -1629,7 +1694,17 @@ export default function ArtifactPane({
             flow={flow}
           />
         )}
-        {doc && <DeskChangedBanner kb={kb} id={id} />}
+        {doc && !historical && <DeskChangedBanner kb={kb} id={id} />}
+        {doc && historical && at !== null && (
+          <AsOfBar
+            kb={kb}
+            id={id}
+            at={at}
+            split={asOfSplit}
+            onSplit={onAsOfSplit}
+            onToday={onAsOfToday ?? (() => {})}
+          />
+        )}
 
         {isPrimary && searchParams.get("list") && (
           <QueueBar

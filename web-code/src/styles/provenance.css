@@ -385,6 +385,15 @@ a.kbc-inspector__citedby-title:hover {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }
+.kbc-inspector__citedby-source {
+  font-style: italic;
+}
+/* OL-SIBL3: the muted absence/degrade line (no strip, or under it). */
+.kbc-inspector__citedby-note {
+  padding: 4px 10px 6px;
+  color: var(--ink-mute);
+  font-size: var(--fs-sm);
+}
 
 /* --- Framework card (T1, design-ui.md §9.4a, FrameworkCard.tsx) — mounted
  * the SAME always-visible way `.kbc-inspector__citedby` is: between
