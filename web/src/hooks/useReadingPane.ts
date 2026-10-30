@@ -96,7 +96,7 @@ export function useReadingPane(o: UseReadingPaneOptions): ReadingMode {
   // than waiting for its `kb:read-ready` (which is the backstop).
   const onFrameLoad = useCallback(() => {
     ref.current.onFrameLoad();
-    ref.current.sync();
+    ref.current.sync(true);
   }, []);
   const reading: ReadingMode = { ...base, onFrameLoad };
 
@@ -125,7 +125,7 @@ export function useReadingPane(o: UseReadingPaneOptions): ReadingMode {
       const data = e.data as { kind?: unknown } | null;
       if (!data || typeof data !== "object") return;
       if (data.kind === "kb:read-ready") {
-        ref.current.sync();
+        ref.current.sync(true);
         return;
       }
       const ack = parseReadAck(data);

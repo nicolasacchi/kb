@@ -85,6 +85,16 @@ describe("useReadingMode", () => {
     expect(result.current.state).toBe("off");
   });
 
+  it("an unforced sync does not repeat what toggle just sent; a forced one always does", () => {
+    const { result } = setup();
+    act(() => result.current.toggle());
+    expect(sent).toHaveLength(1);
+    act(() => result.current.sync());
+    expect(sent).toHaveLength(1);
+    act(() => result.current.sync(true));
+    expect(sent).toHaveLength(2);
+  });
+
   it("an explicit off survives a reload of the frame (sync re-sends off)", () => {
     savePrefs({ ...loadPrefs(), readingDefault: { docs: true } });
     const { result } = setup("docs");

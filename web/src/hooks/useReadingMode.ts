@@ -103,8 +103,10 @@ export interface ReadingMode {
   toggle: () => void;
   /// Feed a validated `kb:read-state` ack.
   onAck: (ack: { state: "on" | "off" | "unsuitable"; why?: string }) => void;
-  /// (Re)send the standing intent: mount, iframe load, `kb:read-ready`.
-  sync: () => void;
+  /// Send the standing intent. Unforced (the effective-setting effect) skips a
+  /// message identical to the last one sent; `force` (iframe load,
+  /// `kb:read-ready`) always sends, because the document is new.
+  sync: (force?: boolean) => void;
   /// The SPA theme changed: refresh the scheme of an applied sheet.
   syncScheme: () => void;
   /// The iframe loaded a new document: the old ack describes a page that is gone.
@@ -144,7 +146,12 @@ export function useReadingMode({
     return clearTimer;
   }, [id, clearTimer]);
 
+  // What was last posted for which artifact, so the effective-setting effect
+  // does not repeat a message `toggle` has just sent. A frame load / ready
+  // (a new document that starts from "off") restates the intent regardless.
+  const lastSent = useRef<{ id: string; on: boolean } | null>(null);
   const send = useCallback((on: boolean): boolean => {
+    lastSent.current = { id: live.current.id, on };
     return live.current.post({ kind: "kb:read", on, scheme: resolveScheme() });
   }, []);
 
@@ -186,19 +193,26 @@ export function useReadingMode({
     [clearTimer],
   );
 
-  const sync = useCallback(() => {
-    const cur = live.current;
-    // Nothing asked and no default: leave the page exactly as served. (Posting
-    // `off` would also strip a sheet the daemon applied at serve time.)
-    if (cur.o === null && !cur.effective) return;
-    send(cur.effective);
-  }, [send]);
+  const sync = useCallback(
+    (force = false) => {
+      const cur = live.current;
+      // Nothing asked and no default: leave the page exactly as served.
+      // (Posting `off` would also strip a sheet the daemon applied at serve
+      // time.)
+      if (cur.o === null && !cur.effective) return;
+      const last = lastSent.current;
+      if (!force && last && last.id === cur.id && last.on === cur.effective) return;
+      send(cur.effective);
+    },
+    [send],
+  );
 
   const syncScheme = useCallback(() => {
     if (live.current.state === "on") send(true);
   }, [send]);
 
   const onFrameLoad = useCallback(() => {
+    lastSent.current = null;
     setAckRaw(null);
   }, []);
 
