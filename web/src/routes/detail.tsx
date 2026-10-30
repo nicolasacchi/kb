@@ -38,6 +38,7 @@ import ArtifactPane, {
 import CommentsPanel from "../components/CommentsPanel";
 import VersionsPanel from "../components/VersionsPanel";
 import NoteEditor from "../components/NoteEditor";
+import { useCodeDoors } from "../hooks/useCodeDoors";
 import { useReview } from "../hooks/useReview";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
@@ -1353,6 +1354,17 @@ export default function Detail() {
   // render via the iframe (the notes API 404s on them), so require `.md`.
   const isNote =
     doc?.kb_category === "note" && !!doc?.source_relative?.endsWith(".md");
+  // OL IDEA6 - a native note has no iframe runtime, so its citation doors are
+  // anchors wrapped by a hast pass (NoteMarkdown). Computed here, before the
+  // note branch returns, because hooks cannot follow an early return; enabled
+  // for a native note only (the iframe path computes its own in ArtifactPane).
+  const noteDoors = useCodeDoors({
+    kb,
+    docId: id,
+    focused: true,
+    repoParam: searchParams.get("repo"),
+    enabled: isNote && !rawView && !removed,
+  });
   if (isNote && !rawView && !removed) {
     // Comments thread in-place on the native note view via the same
     // CommentsPanel the iframe path uses — but file-scope only (no iframe
@@ -1437,7 +1449,12 @@ export default function Detail() {
             </button>
           </div>
           <div className="detail__note-scroll" key="note-scroll">
-            <NoteEditor kb={kb} id={id} onDeleted={() => navigate("/notes")} />
+            <NoteEditor
+              kb={kb}
+              id={id}
+              onDeleted={() => navigate("/notes")}
+              codeDoors={noteDoors}
+            />
           </div>
           {folio && doc && <FolioColophon kb={kb} doc={doc} />}
         </div>
