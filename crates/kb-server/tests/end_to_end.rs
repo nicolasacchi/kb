@@ -7331,25 +7331,44 @@ async fn boot_with_two_kbs() -> (
     /* alpha_id */ String,
     /* beta_id */ String,
 ) {
+    boot_with_two_kbs_files(
+        &[(
+            "alpha-note.html",
+            "<!doctype html><html><body><h1>alpha kb note</h1></body></html>".to_string(),
+        )],
+        &[(
+            "beta-note.html",
+            "<!doctype html><html><body><h1>beta kb note</h1></body></html>".to_string(),
+        )],
+    )
+    .await
+}
+
+/// [`boot_with_two_kbs`] with caller-supplied files per kb. The returned
+/// ids are each kb's first listed doc (only meaningful for one-file kbs).
+async fn boot_with_two_kbs_files(
+    alpha_files: &[(&str, String)],
+    beta_files: &[(&str, String)],
+) -> (
+    tempfile::TempDir,
+    std::net::SocketAddr,
+    /* alpha_id */ String,
+    /* beta_id */ String,
+) {
     let tmp = tempfile::tempdir().unwrap();
     let alpha_root = tmp.path().join("alpha-src");
     let beta_root = tmp.path().join("beta-src");
     std::fs::create_dir_all(&alpha_root).unwrap();
     std::fs::create_dir_all(&beta_root).unwrap();
-    // Distinct relative paths per kb: artifact ids are now path-based
-    // (hash of the source-relative path), so two files both at
-    // `note.html` would collide on one id. Distinct names keep the
-    // two artifacts — and the subdomains the test hits — distinct.
-    std::fs::write(
-        alpha_root.join("alpha-note.html"),
-        "<!doctype html><html><body><h1>alpha kb note</h1></body></html>",
-    )
-    .unwrap();
-    std::fs::write(
-        beta_root.join("beta-note.html"),
-        "<!doctype html><html><body><h1>beta kb note</h1></body></html>",
-    )
-    .unwrap();
+    // Distinct relative paths per kb: artifact ids are path-based (hash of
+    // the source-relative path), so two files both at `note.html` would
+    // collide on one id.
+    for (name, html) in alpha_files {
+        std::fs::write(alpha_root.join(name), html).unwrap();
+    }
+    for (name, html) in beta_files {
+        std::fs::write(beta_root.join(name), html).unwrap();
+    }
 
     let daemon_name = format!("test-{}", tmp.path().file_name().unwrap().to_string_lossy());
     let mut kb_map: BTreeMap<KbName, KbSection> = BTreeMap::new();
@@ -7437,8 +7456,8 @@ async fn boot_with_two_kbs() -> (
     let (addr, _task) = kb_server::serve_on_random_port_with_paths(cfg, paths)
         .await
         .expect("serve");
-    common::wait_docs_listed(addr, "alpha", 1).await;
-    common::wait_docs_listed(addr, "beta", 1).await;
+    common::wait_docs_listed(addr, "alpha", alpha_files.len()).await;
+    common::wait_docs_listed(addr, "beta", beta_files.len()).await;
 
     let client = reqwest::Client::new();
     let mut ids: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
@@ -7470,11 +7489,19 @@ async fn federated_search_scope_all_is_deterministic_and_attributes_kbs() {
     // (`scope=all`) keyword search must return BOTH corpora's hits, each
     // attributed to its OWNING kb, in a DETERMINISTIC, submission-ordered
     // (BTreeMap: alpha < beta) order. Each corpus contributes one rank-0 hit,
-    // so the cross-kb RRF ties and the output reflects arm (submission) order.
+    // so the cross-kb RRF ties (RANK1: a true score tie too) and the output
+    // reflects arm (submission) order.
     // The fan-out refactor (buffered + submission-order fold) must keep this
     // byte-identical — a completion-order collect would flip the arm order
     // under load. Keyword mode is used so the test needs no embedder.
-    let (_tmp, addr, alpha_id, beta_id) = boot_with_two_kbs().await;
+    // RANK1: the two rank-0 docs carry IDENTICAL title and body text, so
+    // their raw scores tie exactly and only submission order separates them.
+    let same = "<!doctype html><html><head><title>shared tie note</title></head><body><h1>shared tie note</h1></body></html>".to_string();
+    let (_tmp, addr, alpha_id, beta_id) = boot_with_two_kbs_files(
+        &[("alpha-note.html", same.clone())],
+        &[("beta-note.html", same)],
+    )
+    .await;
     let client = reqwest::Client::new();
 
     let fetch = || async {
@@ -7543,6 +7570,151 @@ async fn federated_search_scope_all_is_deterministic_and_attributes_kbs() {
         vec!["alpha".to_string(), "beta".to_string()],
         "sort=title asc order"
     );
+}
+
+/// RANK1 helper: federated keyword hits as `(kb, title)` in response order.
+async fn fed_hits(addr: std::net::SocketAddr, query: &str) -> Vec<(String, String)> {
+    let v: serde_json::Value = reqwest::Client::new()
+        .get(url(addr, query))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| {
+            (
+                h["kb"].as_str().unwrap().to_string(),
+                h["title"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect()
+}
+
+fn rank_doc(title: &str, body: &str) -> String {
+    format!(
+        "<!doctype html><html><head><title>{title}</title></head><body><h1>{title}</h1><p>{body}</p></body></html>"
+    )
+}
+
+// invariant:28 btree-fanout
+#[tokio::test]
+async fn federated_search_scope_all_orders_by_relevance_across_kbs() {
+    // RANK1: alpha (alphabetically first) holds a weak match, beta a strong
+    // one (term in the title and repeated). Rank-only RRF put alpha first;
+    // the score-weighted merge puts beta first, attributed to beta.
+    let (_tmp, addr, _a, _b) = boot_with_two_kbs_files(
+        &[(
+            "alpha-weak.html",
+            rank_doc(
+                "Gardening diary",
+                "many unrelated words and one mention of zephyrine here",
+            ),
+        )],
+        &[(
+            "beta-strong.html",
+            rank_doc(
+                "Zephyrine zephyrine guide",
+                "zephyrine zephyrine zephyrine zephyrine zephyrine",
+            ),
+        )],
+    )
+    .await;
+    let q = "/api/search?q=zephyrine&mode=keyword&scope=all&limit=10";
+    let first = fed_hits(addr, q).await;
+    assert_eq!(first.len(), 2, "{first:?}");
+    assert_eq!(first[0].0, "beta", "strong match first: {first:?}");
+    assert_eq!(first[0].1, "Zephyrine zephyrine guide");
+    assert_eq!(first[1].0, "alpha", "{first:?}");
+    for _ in 0..5 {
+        assert_eq!(fed_hits(addr, q).await, first, "must be deterministic");
+    }
+}
+
+#[tokio::test]
+async fn federated_search_mixed_score_kinds_fall_back_to_rank_only() {
+    // RANK1: mode=semantic with NO embedder anywhere falls back to keyword
+    // per corpus, so raw scores are not comparable across arms; the merge
+    // must use weight 0 and keep the old rank-only (alpha-first) order,
+    // while mode=keyword on the same data orders by relevance.
+    let (_tmp, addr, _a, _b) = boot_with_two_kbs_files(
+        &[(
+            "alpha-weak.html",
+            rank_doc(
+                "Gardening diary",
+                "many unrelated words and one mention of zephyrine here",
+            ),
+        )],
+        &[(
+            "beta-strong.html",
+            rank_doc(
+                "Zephyrine zephyrine guide",
+                "zephyrine zephyrine zephyrine zephyrine zephyrine",
+            ),
+        )],
+    )
+    .await;
+    let kw = fed_hits(
+        addr,
+        "/api/search?q=zephyrine&mode=keyword&scope=all&limit=10",
+    )
+    .await;
+    assert_eq!(kw[0].0, "beta", "{kw:?}");
+    let sem = fed_hits(
+        addr,
+        "/api/search?q=zephyrine&mode=semantic&scope=all&limit=10",
+    )
+    .await;
+    assert_eq!(sem.len(), 2, "{sem:?}");
+    assert_eq!(
+        sem[0].0, "alpha",
+        "rank-only fallback keeps kb order: {sem:?}"
+    );
+}
+
+#[tokio::test]
+async fn federated_search_r0_filtered_transcript_does_not_affect_order() {
+    // RANK1: a memory-session transcript (in beta) that matches the query MUCH more
+    // strongly is filtered out by R0 BEFORE the merge, so it cannot move
+    // the visible order (nor scale the survivors' relevance).
+    let jsonl = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"zephyrine zephyrine zephyrine zephyrine\"}}\n";
+    let transcript = session_transcript_html("sess-rank1-001", "20260601T100000Z", jsonl);
+    let alpha_doc = (
+        "alpha-weak.html",
+        rank_doc("Gardening diary", "one mention of zephyrine here"),
+    );
+    let beta_doc = (
+        "beta-strong.html",
+        rank_doc("Zephyrine zephyrine guide", "zephyrine zephyrine zephyrine"),
+    );
+    let q = "/api/search?q=zephyrine&mode=keyword&scope=all&limit=10";
+
+    let (_t1, addr1, _a, _b) = boot_with_two_kbs_files(
+        std::slice::from_ref(&alpha_doc),
+        std::slice::from_ref(&beta_doc),
+    )
+    .await;
+    let baseline = fed_hits(addr1, q).await;
+
+    let (_t2, addr2, _a, _b) =
+        boot_with_two_kbs_files(&[alpha_doc], &[beta_doc, ("beta-session.html", transcript)]).await;
+    let with_transcript = fed_hits(addr2, q).await;
+    assert!(
+        !with_transcript
+            .iter()
+            .any(|(_, t)| t.starts_with("Session transcript")),
+        "transcript must be filtered: {with_transcript:?}"
+    );
+    assert_eq!(with_transcript, baseline);
+    // The transcript sits in beta and out-scores beta's own doc: had it
+    // leaked into the merge it would take beta's rank 0 and push the strong
+    // beta doc to rank 1, flipping the order to alpha-first. Pin the
+    // relevance order explicitly so a leak cannot pass as "unchanged".
+    assert_eq!(with_transcript[0].0, "beta", "{with_transcript:?}");
 }
 
 #[tokio::test]

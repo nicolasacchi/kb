@@ -1350,6 +1350,26 @@ pub async fn get(
     .into_response()
 }
 
+/// RANK1 — may the federated fuse weight by raw per-corpus scores?
+///
+/// Score kinds per mode: `keyword` arms carry raw BM25 (IDF is corpus-local,
+/// so only a bounded heuristic across corpora); `hybrid` arms carry an
+/// already rank-based RRF value (1/60 per arm + title/graph boost), so the
+/// modulation reflects within-corpus arm agreement and boosts, not an
+/// absolute relevance magnitude; `semantic` arms carry vector similarity.
+/// Whatever the kind, mixing kinds is meaningless, so weighting is allowed
+/// only when no vector lane is wanted, or when EVERY contributing arm ran
+/// its vector lane on ONE embedding model. Derived from the arms that
+/// actually returned hits, never from the configured corpus set.
+fn fed_scores_comparable(
+    wants_vector: bool,
+    contributing: usize,
+    vector_arms: usize,
+    distinct_models: usize,
+) -> bool {
+    !wants_vector || (contributing > 0 && vector_arms == contributing && distinct_models == 1)
+}
+
 /// SQ3 — federated search across every kb on the daemon (`scope=all`).
 /// Mirrors the memory-recall fan-out: per-corpus over-fetch, embed once
 /// per model via the shared cache, keyword fallback for embedder-less
@@ -1719,6 +1739,10 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
         bm25_rank: std::collections::HashMap<String, u32>,
         vec_rank: std::collections::HashMap<String, u32>,
         degraded: Option<crate::routes::context::DegradedLane>,
+        /// RANK1 — the embedding model whose vector arm actually ran for this
+        /// corpus (None = keyword-only: no embedder, failed embed, or a skipped
+        /// corpus). Feeds the score-kind comparability check at the fuse.
+        vector_model: Option<String>,
     }
     let filters = &filters;
     let vec_by_model = &vec_by_model;
@@ -1742,6 +1766,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                         hits: None,
                         bm25_rank: std::collections::HashMap::new(),
                         vec_rank: std::collections::HashMap::new(),
+                        vector_model: None,
                         degraded: Some(crate::routes::context::degraded_of(
                             name.as_str(),
                             "search",
@@ -1751,6 +1776,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                 );
             }
             let mut embed_miss: Option<crate::routes::context::QueryErrorClass> = None;
+            let mut arm_model: Option<String> = None;
             let query_vec: Option<Vec<f32>> = if wants_vector {
                 if let Some(emb) = &ctx.embedder {
                     // SQ5 — ensure the index the vector arm queries.
@@ -1769,6 +1795,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                                 hits: None,
                                 bm25_rank: std::collections::HashMap::new(),
                                 vec_rank: std::collections::HashMap::new(),
+                                vector_model: None,
                                 degraded: Some(crate::routes::context::degraded_of(
                                     name.as_str(),
                                     "search",
@@ -1779,6 +1806,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                     }
                     let model = crate::embed_cache::embedder_model_name(emb).to_string();
                     let v = vec_by_model.get(&model).cloned();
+                    arm_model = Some(model.clone());
                     if v.is_none() {
                         embed_miss = Some(
                             embed_failures
@@ -1801,6 +1829,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                 std::collections::HashMap::new();
             let mut vec_rank: std::collections::HashMap<String, u32> =
                 std::collections::HashMap::new();
+            let vector_ran = query_vec.is_some();
             let result = match (params.mode.as_str(), query_vec) {
                 ("semantic", Some(v)) => {
                     let r = if ctx.chunked {
@@ -1889,6 +1918,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                             hits: None,
                             bm25_rank: std::collections::HashMap::new(),
                             vec_rank: std::collections::HashMap::new(),
+                            vector_model: None,
                             degraded: Some(crate::routes::context::degraded_of(
                                 name.as_str(),
                                 "search",
@@ -1952,6 +1982,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                     hits: Some(hits),
                     bm25_rank,
                     vec_rank,
+                    vector_model: if vector_ran { arm_model } else { None },
                     // A3-5 — the hits are real (keyword fallback) but the
                     // requested vector lane did not run for this corpus.
                     degraded: embed_miss.map(|class| {
@@ -1970,6 +2001,7 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                         hits: None,
                         bm25_rank: std::collections::HashMap::new(),
                         vec_rank: std::collections::HashMap::new(),
+                        vector_model: None,
                         degraded: Some(crate::routes::context::degraded_of(
                             name.as_str(),
                             "search",
@@ -1991,6 +2023,10 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     // byte-identical to the old hardcoded `super::FANOUT_CAP`).
     let arms_out = super::buffered_join(futs, state.fanout_cap).await;
     let mut degraded = Vec::new();
+    // RANK1 — which arms contributed hits, and which of those ran a vector lane.
+    let mut contributing = 0usize;
+    let mut vector_arms = 0usize;
+    let mut vector_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (name, arm) in arms_out {
         let kb = name.to_string();
         if let Some(d) = arm.degraded {
@@ -2011,6 +2047,11 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
                 .map(|(id, r)| (hit_key(&kb, &id), r)),
         );
         if let Some(hits) = arm.hits {
+            contributing += 1;
+            if let Some(m) = arm.vector_model {
+                vector_arms += 1;
+                vector_models.insert(m);
+            }
             arms.push((kb, hits));
         }
     }
@@ -2026,8 +2067,28 @@ async fn federated_search(state: &Arc<KbHandles>, params: &Params, user: String)
     } else {
         limit as usize
     };
+    // RANK1 — score-weighted only when the CONTRIBUTING arms' scores are one
+    // kind. Derived from the arms that actually returned hits (not from every
+    // configured corpus): in a vector-bearing mode every contributing arm must
+    // have run its vector lane and all on one embedding model; a corpus that
+    // fell back to keyword (no embedder, failed/late embed) or a deployment
+    // mixing models yields rank-only (weight 0). A skipped corpus
+    // (`hits: None`) or an embedder-less corpus that returned nothing no
+    // longer disables weighting. Conservative: SQ5-chunked vs unchunked
+    // corpora on one model are not distinguished.
+    let rel_ok =
+        fed_scores_comparable(wants_vector, contributing, vector_arms, vector_models.len());
     let mut fused: Vec<(String, kb_core::storage::lance::DocSummary)> =
-        kb_core::fusion::rrf_fuse_keyed(arms, kb_core::fusion::RRF_K, fuse_to);
+        kb_core::fusion::rrf_fuse_keyed_scored(
+            arms,
+            kb_core::fusion::RRF_K,
+            fuse_to,
+            if rel_ok {
+                kb_core::fusion::FED_SCORE_WEIGHT
+            } else {
+                0.0
+            },
+        );
     // Q-track — whole-library read-state facet + sort over the merged list.
     if !read_filter.is_empty() {
         fused.retain(|(kb, r)| {
@@ -2280,6 +2341,23 @@ mod tests {
     use kb_core::storage::lance::DocSummary;
     use std::collections::HashMap;
     use std::path::Path;
+
+    #[test]
+    fn fed_scores_comparable_pins_every_branch() {
+        // keyword: always comparable (one score kind).
+        assert!(fed_scores_comparable(false, 3, 0, 0));
+        // vector mode, all arms ran vector on one model.
+        assert!(fed_scores_comparable(true, 2, 2, 1));
+        // one contributing arm fell back to keyword (embedder-less / failed embed).
+        assert!(!fed_scores_comparable(true, 2, 1, 1));
+        // multiple embedding models.
+        assert!(!fed_scores_comparable(true, 2, 2, 2));
+        // nothing contributed.
+        assert!(!fed_scores_comparable(true, 0, 0, 0));
+        // an embedder-less corpus that returned NO hits does not disable
+        // weighting: it is simply not a contributing arm.
+        assert!(fed_scores_comparable(true, 2, 2, 1));
+    }
 
     fn doc(id: &str, path: &str) -> DocSummary {
         DocSummary {

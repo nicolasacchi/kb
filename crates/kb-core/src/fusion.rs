@@ -106,13 +106,66 @@ pub fn rrf_fuse_keyed<K: Clone + Eq + std::hash::Hash>(
     k: f32,
     limit: usize,
 ) -> Vec<(K, DocSummary)> {
+    rrf_fuse_keyed_scored(arms, k, limit, 0.0)
+}
+
+/// RANK1 — weight of the raw-score relevance factor in the federated
+/// (cross-corpus) merge. `factor = (1 - w) + w * rel`, so a rank-0 hit with
+/// no relevance (`rel = 0`) still keeps 75% of a full rank contribution.
+pub const FED_SCORE_WEIGHT: f32 = 0.25;
+
+/// [`rrf_fuse_keyed`] with a bounded, deterministic score modulation.
+///
+/// Plain RRF is rank-only: every corpus's rank-0 hit contributes `1/k`, so
+/// across corpora the tie falls to submission order (kb name). With
+/// `score_weight > 0` each hit's contribution is scaled by
+/// `factor = (1 - w) + w * rel`, `rel = clamp(score / m, 0, 1)` where `m` is
+/// the largest finite positive score across all arms. A missing, NaN or
+/// non-positive score is `rel = 0`. Within an arm a contribution is clamped
+/// to at most the previous one, so an arm's own order is never inverted.
+///
+/// `score_weight == 0`, no usable `m`, or fewer than two non-empty arms
+/// skips the modulation entirely (factor 1.0, no multiplication) and the
+/// output is byte-identical to the pre-RANK1 rank-only fuse. Only `+ - * /`
+/// and comparisons are used. The final order is `total_cmp` on the fused
+/// score descending (NaN last), then first-appearance ordinal ascending.
+pub fn rrf_fuse_keyed_scored<K: Clone + Eq + std::hash::Hash>(
+    arms: Vec<(K, Vec<DocSummary>)>,
+    k: f32,
+    limit: usize,
+    score_weight: f32,
+) -> Vec<(K, DocSummary)> {
     use std::collections::HashMap;
+    let non_empty = arms.iter().filter(|(_, a)| !a.is_empty()).count();
+    let mut m = 0.0f32;
+    for (_, arm) in &arms {
+        for d in arm {
+            if let Some(s) = d.score {
+                if s.is_finite() && s > m {
+                    m = s;
+                }
+            }
+        }
+    }
+    let modulate = score_weight > 0.0 && m > 0.0 && non_empty >= 2;
     // (key, id) -> (accumulated score, first-appearance ordinal, key, hit).
     let mut acc: HashMap<(K, String), (f32, usize, K, DocSummary)> = HashMap::new();
     let mut order = 0usize;
     for (key, arm) in arms {
+        let mut prev = f32::INFINITY;
         for (rank, doc) in arm.into_iter().enumerate() {
-            let contrib = 1.0 / (k + rank as f32);
+            let mut contrib = 1.0 / (k + rank as f32);
+            if modulate {
+                let rel = match doc.score {
+                    Some(s) if s.is_finite() && s > 0.0 => (s / m).clamp(0.0, 1.0),
+                    _ => 0.0,
+                };
+                contrib *= (1.0 - score_weight) + score_weight * rel;
+                if contrib > prev {
+                    contrib = prev;
+                }
+                prev = contrib;
+            }
             let acc_key = (key.clone(), doc.id.clone());
             if let Some(entry) = acc.get_mut(&acc_key) {
                 entry.0 += contrib;
@@ -124,9 +177,9 @@ pub fn rrf_fuse_keyed<K: Clone + Eq + std::hash::Hash>(
     }
     let mut scored: Vec<(f32, usize, K, DocSummary)> = acc.into_values().collect();
     scored.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.1.cmp(&b.1))
+        // NaN sorts lowest: map it below every finite score.
+        let (x, y) = (nan_low(a.0), nan_low(b.0));
+        y.total_cmp(&x).then(a.1.cmp(&b.1))
     });
     scored
         .into_iter()
@@ -136,6 +189,14 @@ pub fn rrf_fuse_keyed<K: Clone + Eq + std::hash::Hash>(
             (key, doc)
         })
         .collect()
+}
+
+fn nan_low(x: f32) -> f32 {
+    if x.is_nan() {
+        f32::NEG_INFINITY
+    } else {
+        x
+    }
 }
 
 /// Default title-match boost. A flat BM25 over `[title, body, headings,
@@ -410,6 +471,165 @@ mod tests {
         let arm = vec![doc("a"), doc("b"), doc("c")];
         let out = rrf_fuse_keyed(vec![("k", arm)], RRF_K, 2);
         assert_eq!(out.len(), 2);
+    }
+
+    // ---- RANK1 — rrf_fuse_keyed_scored ---------------------------------
+
+    fn scored(id: &str, s: Option<f32>) -> DocSummary {
+        DocSummary {
+            id: id.to_string(),
+            score: s,
+            ..Default::default()
+        }
+    }
+
+    fn keyed_ids(out: &[(&str, DocSummary)]) -> Vec<String> {
+        out.iter().map(|(k, d)| format!("{k}:{}", d.id)).collect()
+    }
+
+    #[test]
+    fn scored_fuse_weight_zero_is_byte_identical_to_rrf_fuse_keyed() {
+        let mk = || {
+            vec![
+                ("a", vec![scored("x", Some(3.0)), scored("y", Some(1.0))]),
+                ("b", vec![scored("z", Some(9.0)), scored("x", None)]),
+                ("a", vec![scored("y", Some(2.0))]),
+            ]
+        };
+        let plain = rrf_fuse_keyed(mk(), RRF_K, 10);
+        let zero = rrf_fuse_keyed_scored(mk(), RRF_K, 10, 0.0);
+        assert_eq!(plain.len(), zero.len());
+        for (p, z) in plain.iter().zip(zero.iter()) {
+            assert_eq!(p.0, z.0);
+            assert_eq!(p.1.id, z.1.id);
+            assert_eq!(p.1.score.unwrap().to_bits(), z.1.score.unwrap().to_bits());
+        }
+    }
+
+    #[test]
+    fn scored_fuse_breaks_rank0_ties_by_raw_score() {
+        let out = rrf_fuse_keyed_scored(
+            vec![
+                ("a", vec![scored("p", Some(3.0))]),
+                ("b", vec![scored("q", Some(9.0))]),
+            ],
+            RRF_K,
+            10,
+            FED_SCORE_WEIGHT,
+        );
+        assert_eq!(keyed_ids(&out), vec!["b:q", "a:p"]);
+    }
+
+    #[test]
+    fn scored_fuse_preserves_within_arm_order() {
+        // Non-monotone raw scores inside arm "a": rank 1 scores higher than
+        // rank 0. The clamp keeps rank 0 ahead.
+        let out = rrf_fuse_keyed_scored(
+            vec![
+                (
+                    "a",
+                    vec![
+                        scored("a0", Some(1.0)),
+                        scored("a1", Some(10.0)),
+                        scored("a2", Some(5.0)),
+                    ],
+                ),
+                ("b", vec![scored("b0", Some(10.0))]),
+            ],
+            RRF_K,
+            10,
+            FED_SCORE_WEIGHT,
+        );
+        let a: Vec<&str> = out
+            .iter()
+            .filter(|(k, _)| *k == "a")
+            .map(|(_, d)| d.id.as_str())
+            .collect();
+        assert_eq!(a, vec!["a0", "a1", "a2"]);
+    }
+
+    #[test]
+    fn scored_fuse_missing_nan_negative_scores_are_neutral() {
+        let mk = |sa, sb| vec![("a", vec![scored("p", sa)]), ("b", vec![scored("q", sb)])];
+        // Both unusable: no m, so identical to rank-only (alpha first).
+        for bad in [None, Some(f32::NAN), Some(-4.0)] {
+            let out = rrf_fuse_keyed_scored(mk(bad, bad), RRF_K, 10, FED_SCORE_WEIGHT);
+            assert_eq!(keyed_ids(&out), vec!["a:p", "b:q"]);
+            assert!((out[0].1.score.unwrap() - 1.0 / RRF_K).abs() < 1e-9);
+        }
+        // One usable: the unusable one gets rel 0 and loses the tie.
+        for bad in [None, Some(f32::NAN), Some(-4.0)] {
+            let out = rrf_fuse_keyed_scored(mk(bad, Some(2.0)), RRF_K, 10, FED_SCORE_WEIGHT);
+            assert_eq!(keyed_ids(&out), vec!["b:q", "a:p"]);
+        }
+        // Single non-empty arm: unmodulated, scores are plain RRF.
+        let out = rrf_fuse_keyed_scored(
+            vec![
+                ("a", vec![scored("p", Some(5.0)), scored("r", Some(1.0))]),
+                ("b", vec![]),
+            ],
+            RRF_K,
+            10,
+            FED_SCORE_WEIGHT,
+        );
+        assert_eq!(keyed_ids(&out), vec!["a:p", "a:r"]);
+        assert_eq!(
+            out[0].1.score.unwrap().to_bits(),
+            (1.0f32 / RRF_K).to_bits()
+        );
+    }
+
+    #[test]
+    fn scored_fuse_bounded_influence() {
+        // Corpus "b" has a rel=0 rank-0 hit; corpus "a" is the leader with
+        // 30 strong hits. b's rank-0 must still beat a's rank-25.
+        let a_arm: Vec<DocSummary> = (0..30)
+            .map(|i| scored(&format!("a{i}"), Some(10.0)))
+            .collect();
+        let b_arm = vec![scored("b0", Some(0.0))];
+        let out = rrf_fuse_keyed_scored(
+            vec![("a", a_arm), ("b", b_arm)],
+            RRF_K,
+            100,
+            FED_SCORE_WEIGHT,
+        );
+        let pos = |k: &str, id: &str| {
+            out.iter()
+                .position(|(kk, d)| *kk == k && d.id == id)
+                .unwrap()
+        };
+        assert!(pos("b", "b0") < pos("a", "a25"));
+    }
+
+    #[test]
+    fn scored_fuse_equal_scores_tie_by_arm_order() {
+        let mk = || {
+            vec![
+                ("a", vec![scored("p", Some(4.0))]),
+                ("b", vec![scored("q", Some(4.0))]),
+                ("c", vec![scored("r", Some(4.0))]),
+            ]
+        };
+        let first = keyed_ids(&rrf_fuse_keyed_scored(mk(), RRF_K, 10, FED_SCORE_WEIGHT));
+        assert_eq!(first, vec!["a:p", "b:q", "c:r"]);
+        for _ in 0..100 {
+            let again = keyed_ids(&rrf_fuse_keyed_scored(mk(), RRF_K, 10, FED_SCORE_WEIGHT));
+            assert_eq!(again, first);
+        }
+    }
+
+    #[test]
+    fn scored_fuse_keeps_same_id_distinct_across_keys() {
+        let out = rrf_fuse_keyed_scored(
+            vec![
+                ("alpha", vec![scored("same", Some(2.0))]),
+                ("beta", vec![scored("same", Some(8.0))]),
+            ],
+            RRF_K,
+            10,
+            FED_SCORE_WEIGHT,
+        );
+        assert_eq!(keyed_ids(&out), vec!["beta:same", "alpha:same"]);
     }
 
     #[test]
