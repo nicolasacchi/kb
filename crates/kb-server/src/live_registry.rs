@@ -100,6 +100,12 @@ pub struct LiveRow {
     /// within the working/stalled lane.
     pub blocked: bool,
     pub detail_reason: Option<String>,
+    /// The tool a `blocked` beat named (`detail.tool`), validated at intake;
+    /// only ever set on a blocked row.
+    pub blocked_tool: Option<String>,
+    /// Unix seconds of the `blocked` beat that set the flag (that beat's own
+    /// `at`); only ever set on a blocked row.
+    pub blocked_since_unix: Option<i64>,
     /// Wall-clock receipt time (unix seconds) — the TTL/LRU-by-touch clock.
     /// Distinct from `last_activity_unix`; see that field's doc comment.
     pub touched_unix: i64,
@@ -121,6 +127,19 @@ pub struct RecordOutcome {
     pub state: LiveState,
     pub confidence: Confidence,
     pub previous_state: Option<LiveState>,
+    /// The `blocked` flag the session carried immediately BEFORE this beat
+    /// (`None` for a session's first-ever beat).
+    pub previous_blocked: Option<bool>,
+}
+
+/// What a beat does to the sticky `blocked` flag (OL IDEA1): `blocked` sets
+/// it, a `tool` heartbeat keeps whatever the row had, every other event
+/// clears it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockEffect {
+    Set,
+    Keep,
+    Clear,
 }
 
 /// The daemon-wide live registry. `std::sync::Mutex` — every method here is
@@ -140,7 +159,23 @@ impl LiveRegistry {
     /// first and evicting the least-recently-touched row if inserting a
     /// brand-new key would exceed [`REGISTRY_CAP`]. Returns the derived
     /// state before/after so the caller can detect a transition.
-    pub fn record_beat(&self, mut row: LiveRow, now_unix: i64) -> RecordOutcome {
+    pub fn record_beat(&self, row: LiveRow, now_unix: i64) -> RecordOutcome {
+        let effect = if row.blocked {
+            BlockEffect::Set
+        } else {
+            BlockEffect::Clear
+        };
+        self.record_beat_effect(row, now_unix, effect)
+    }
+
+    /// [`Self::record_beat`] with an explicit effect on the sticky blocked
+    /// flag, applied under the same lock as the touch-ring carry-forward.
+    pub fn record_beat_effect(
+        &self,
+        mut row: LiveRow,
+        now_unix: i64,
+        effect: BlockEffect,
+    ) -> RecordOutcome {
         let policy = LivePolicy::default();
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -158,6 +193,40 @@ impl LiveRegistry {
             )
             .0
         });
+
+        let previous_blocked = g.get(&row.session_id).map(|old| old.blocked);
+
+        // Blocked flag (OL IDEA1), resolved under this one lock: Set takes
+        // this beat's reason/tool and stamps `since` with the beat's own
+        // `at` (Claude sends one notification per prompt, so a second blocked
+        // beat is a new prompt); Keep carries a blocked old row's four fields
+        // forward; Clear drops them all.
+        match effect {
+            BlockEffect::Set => {
+                row.blocked = true;
+                row.blocked_since_unix = Some(row.last_activity_unix);
+            }
+            BlockEffect::Keep => match g.get(&row.session_id).filter(|old| old.blocked) {
+                Some(old) => {
+                    row.blocked = true;
+                    row.detail_reason = old.detail_reason.clone();
+                    row.blocked_tool = old.blocked_tool.clone();
+                    row.blocked_since_unix = old.blocked_since_unix;
+                }
+                None => {
+                    row.blocked = false;
+                    row.detail_reason = None;
+                    row.blocked_tool = None;
+                    row.blocked_since_unix = None;
+                }
+            },
+            BlockEffect::Clear => {
+                row.blocked = false;
+                row.detail_reason = None;
+                row.blocked_tool = None;
+                row.blocked_since_unix = None;
+            }
+        }
 
         // Cap enforcement: only relevant when inserting a KEY THAT DOESN'T
         // ALREADY EXIST (an update to an existing session never grows the
@@ -210,6 +279,7 @@ impl LiveRegistry {
             state,
             confidence,
             previous_state,
+            previous_blocked,
         }
     }
 
@@ -299,6 +369,8 @@ mod tests {
             last_line: None,
             blocked: false,
             detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
             touched_unix,
             touches: VecDeque::new(),
         }
@@ -323,6 +395,91 @@ mod tests {
             .into_iter()
             .flat_map(|s| s.touches.into_iter().map(|t| t.rel))
             .collect()
+    }
+
+    fn blocked_row(sid: &str, at: i64) -> LiveRow {
+        let mut r = row(sid, Holder::Agent, at, at);
+        r.blocked = true;
+        r.detail_reason = Some("Claude needs your permission to use Bash".to_string());
+        r.blocked_tool = Some("Bash".to_string());
+        r
+    }
+
+    fn stored(reg: &LiveRegistry, now: i64) -> LiveRow {
+        reg.snapshot(now).remove(0).0
+    }
+
+    #[test]
+    fn set_then_keep_carries_all_four_blocked_fields() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        let out = reg.record_beat_effect(
+            row("a", Holder::Agent, now + 30, now + 30),
+            now + 30,
+            BlockEffect::Keep,
+        );
+        assert_eq!(out.previous_blocked, Some(true));
+        let r = stored(&reg, now + 30);
+        assert!(r.blocked);
+        assert_eq!(r.blocked_tool.as_deref(), Some("Bash"));
+        assert_eq!(
+            r.detail_reason.as_deref(),
+            Some("Claude needs your permission to use Bash")
+        );
+        assert_eq!(r.blocked_since_unix, Some(now));
+    }
+
+    #[test]
+    fn set_then_clear_drops_the_blocked_fields() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        reg.record_beat(row("a", Holder::Agent, now + 5, now + 5), now + 5);
+        let r = stored(&reg, now + 5);
+        assert!(!r.blocked);
+        assert!(r.detail_reason.is_none() && r.blocked_tool.is_none());
+        assert!(r.blocked_since_unix.is_none());
+    }
+
+    #[test]
+    fn set_then_turn_end_clears_and_the_holder_is_human() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        let out = reg.record_beat_effect(
+            row("a", Holder::Human, now + 5, now + 5),
+            now + 5,
+            BlockEffect::Clear,
+        );
+        assert_eq!(out.state, LiveState::Waiting);
+        let r = stored(&reg, now + 5);
+        assert!(!r.blocked && r.blocked_since_unix.is_none());
+    }
+
+    #[test]
+    fn keep_with_no_prior_blocked_row_is_not_blocked() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let first =
+            reg.record_beat_effect(row("a", Holder::Agent, now, now), now, BlockEffect::Keep);
+        assert_eq!(first.previous_blocked, None);
+        assert!(!stored(&reg, now).blocked);
+        reg.record_beat_effect(
+            row("a", Holder::Agent, now + 1, now + 1),
+            now + 1,
+            BlockEffect::Keep,
+        );
+        assert!(!stored(&reg, now + 1).blocked);
+    }
+
+    #[test]
+    fn a_second_set_resets_since_to_the_new_beat() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat_effect(blocked_row("a", now), now, BlockEffect::Set);
+        reg.record_beat_effect(blocked_row("a", now + 90), now + 90, BlockEffect::Set);
+        assert_eq!(stored(&reg, now + 90).blocked_since_unix, Some(now + 90));
     }
 
     #[test]

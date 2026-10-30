@@ -133,6 +133,21 @@ async fn fetch_daemon_rows(daemon: Option<&str>, bearer: Option<&str>) -> Result
     Ok(raw.iter().filter_map(live_session_from_wire).collect())
 }
 
+/// The `why` of a row blocked on the operator (OL IDEA1): `needs you:
+/// permission: <tool>` when the hook named a tool, else `needs you:
+/// <reason>`, else a bare `needs you`. `None` for a row that is not blocked.
+fn blocked_why(blocked: bool, tool: Option<&str>, reason: Option<&str>) -> Option<String> {
+    if !blocked {
+        return None;
+    }
+    let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+    Some(match (tool.filter(|t| !t.is_empty()), reason) {
+        (Some(t), _) => format!("needs you: permission: {t}"),
+        (None, Some(r)) => format!("needs you: {r}"),
+        (None, None) => "needs you".to_string(),
+    })
+}
+
 /// One `kb-server::routes::sessions::LiveStatusRow` JSON object → a
 /// `LiveSession`. Deliberately re-parses the wire JSON by hand (rather than
 /// importing the server's struct directly) — the established convention in
@@ -173,12 +188,11 @@ fn live_session_from_wire(v: &serde_json::Value) -> Option<LiveSession> {
         _ => return None,
     };
     let blocked = v["blocked"].as_bool().unwrap_or(false);
-    let detail_reason = v["detail_reason"].as_str().map(str::to_string);
-    let why = if blocked {
-        Some(detail_reason.unwrap_or_else(|| "blocked".to_string()))
-    } else {
-        None
-    };
+    let why = blocked_why(
+        blocked,
+        v["blocked_tool"].as_str(),
+        v["detail_reason"].as_str(),
+    );
 
     Some(LiveSession {
         session_id,
@@ -628,5 +642,48 @@ mod tests {
         let err = filter_and_render(rows, true, None, None, Some("bogus"), None, true, "empty")
             .unwrap_err();
         assert!(err.to_string().contains("unknown --harness value"));
+    }
+
+    fn wire(extra: serde_json::Value) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "session_id": "s", "harness": "claude", "holder": "agent",
+            "state": "working", "source": "hook", "confidence": "observed",
+            "since_unix": 1, "since_secs": 2,
+        });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    }
+
+    #[test]
+    fn a_blocked_row_reads_needs_you_in_three_forms() {
+        let with_tool = live_session_from_wire(&wire(serde_json::json!({
+            "blocked": true, "blocked_tool": "Bash", "detail_reason": "Claude needs your permission to use Bash"
+        })))
+        .unwrap();
+        assert_eq!(
+            with_tool.why.as_deref(),
+            Some("needs you: permission: Bash")
+        );
+        let reason_only = live_session_from_wire(&wire(serde_json::json!({
+            "blocked": true, "detail_reason": "Claude Code needs your input"
+        })))
+        .unwrap();
+        assert_eq!(
+            reason_only.why.as_deref(),
+            Some("needs you: Claude Code needs your input")
+        );
+        let bare = live_session_from_wire(&wire(serde_json::json!({"blocked": true}))).unwrap();
+        assert_eq!(bare.why.as_deref(), Some("needs you"));
+    }
+
+    #[test]
+    fn a_non_blocked_row_has_no_why() {
+        let r = live_session_from_wire(&wire(serde_json::json!({
+            "blocked": false, "detail_reason": "stale text"
+        })))
+        .unwrap();
+        assert_eq!(r.why, None);
     }
 }

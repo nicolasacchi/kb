@@ -24809,3 +24809,123 @@ async fn touch_beat_on_already_working_session_emits_no_session_state_event() {
         "only the start beat transitions; saw {frames}:\n{buf}"
     );
 }
+
+// --- OL IDEA1: blocked on you (sticky flag, ?blocked=1, scrub, SSE edges) ---
+
+/// Every `session.state` payload in a captured `/api/events` body that names
+/// `session_id`, in order.
+fn session_state_frames(body: &str, session_id: &str) -> Vec<serde_json::Value> {
+    let mut kind = String::new();
+    body.lines()
+        .filter_map(|line| {
+            if let Some(e) = line.strip_prefix("event:") {
+                kind = e.trim().to_string();
+                return None;
+            }
+            let data = line.strip_prefix("data:")?;
+            let v: serde_json::Value = serde_json::from_str(data.trim()).ok()?;
+            (kind == "session.state").then_some(v["payload"].clone())
+        })
+        .filter(|p| p["session_id"] == session_id)
+        .collect()
+}
+
+#[tokio::test]
+async fn blocked_beats_are_sticky_scrubbed_and_edge_triggered() {
+    use futures::StreamExt;
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let sid = "sid-blocked-1";
+    let reason = "Claude needs your permission to use Bash";
+
+    post_beat(&client, addr, sid, "start", serde_json::json!({})).await;
+    post_beat(
+        &client,
+        addr,
+        sid,
+        "blocked",
+        serde_json::json!({"reason": reason, "tool": "Bash"}),
+    )
+    .await;
+    post_beat(&client, addr, sid, "tool", serde_json::json!({})).await;
+    post_beat(&client, addr, sid, "tool", serde_json::json!({})).await;
+
+    let get_blocked = |extra: Vec<(&'static str, String)>| {
+        let client = client.clone();
+        async move {
+            let mut req = client.get(url(addr, "/api/sessions/live-status?blocked=1"));
+            for (k, v) in extra {
+                req = req.header(k, v);
+            }
+            let resp = req.send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 200);
+            resp.json::<serde_json::Value>().await.unwrap()
+        }
+    };
+
+    let body = get_blocked(vec![]).await;
+    let rows = body["sessions"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{body}");
+    assert_eq!(rows[0]["session_id"], sid);
+    assert_eq!(rows[0]["blocked"], true);
+    assert_eq!(rows[0]["blocked_tool"], "Bash");
+    assert!(rows[0]["blocked_since_unix"].as_i64().is_some(), "{body}");
+    assert_eq!(rows[0]["detail_reason"], reason);
+
+    // A bearer, non-loopback caller sees a re-capped reason.
+    let scrubbed = get_blocked(vec![
+        ("X-Forwarded-For", "8.8.8.8".to_string()),
+        ("Authorization", format!("Bearer {FIXTURE_TOKEN}")),
+    ])
+    .await;
+    let r = scrubbed["sessions"][0]["detail_reason"].as_str().unwrap();
+    assert!(r.chars().count() <= 120, "{r}");
+
+    post_beat(&client, addr, sid, "unblocked", serde_json::json!({})).await;
+    let after = get_blocked(vec![]).await;
+    assert!(after["sessions"].as_array().unwrap().is_empty(), "{after}");
+
+    // An invalid tool name never rejects the beat and is never stored.
+    let sid2 = "sid-blocked-2";
+    post_beat(&client, addr, sid2, "start", serde_json::json!({})).await;
+    post_beat(
+        &client,
+        addr,
+        sid2,
+        "blocked",
+        serde_json::json!({"reason": reason, "tool": "Bash; rm"}),
+    )
+    .await;
+    let body2 = get_blocked(vec![]).await;
+    let rows2 = body2["sessions"].as_array().unwrap();
+    assert_eq!(rows2.len(), 1, "{body2}");
+    assert_eq!(rows2[0]["session_id"], sid2);
+    assert!(rows2[0].get("blocked_tool").is_none(), "{body2}");
+
+    // SSE: start, the blocked edge, the unblocked edge -- and no free text.
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(800), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+    let frames = session_state_frames(&buf, sid);
+    assert_eq!(
+        frames.len(),
+        3,
+        "start + blocked edge + unblocked edge: {frames:?}"
+    );
+    assert_eq!(frames[0]["blocked"], false);
+    assert_eq!(frames[1]["blocked"], true);
+    assert_eq!(frames[1]["blocked_tool"], "Bash");
+    assert_eq!(frames[2]["blocked"], false);
+    assert!(
+        !buf.contains("needs your permission"),
+        "free text leaked:\n{buf}"
+    );
+}

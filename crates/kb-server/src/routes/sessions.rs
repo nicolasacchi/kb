@@ -7610,6 +7610,82 @@ fn map_event(event: &str) -> Option<(Holder, bool)> {
     }
 }
 
+/// Longest blocked-reason text kept (chars). The reason is Claude's own UI
+/// text, never transcript bytes; the forced scrub re-caps it to the same
+/// bound for non-loopback callers.
+const BLOCKED_REASON_MAX_CHARS: usize = 120;
+
+/// What a beat does to the sticky blocked flag: `blocked` sets, a `tool`
+/// heartbeat keeps, every other event clears.
+pub(crate) fn block_effect(event: &str) -> crate::live_registry::BlockEffect {
+    use crate::live_registry::BlockEffect;
+    match event {
+        "blocked" => BlockEffect::Set,
+        "tool" => BlockEffect::Keep,
+        _ => BlockEffect::Clear,
+    }
+}
+
+/// A tool name safe to broadcast and render: 1..=128 chars of
+/// `[A-Za-z0-9_.:-]`.
+fn valid_tool_name(t: &str) -> bool {
+    (1..=128).contains(&t.len())
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+}
+
+/// The `(detail_reason, blocked_tool)` a beat stores: on a `blocked` event
+/// only, the trimmed reason capped at [`BLOCKED_REASON_MAX_CHARS`] and the
+/// tool iff [`valid_tool_name`]; on every other event both are `None`. An
+/// invalid tool never rejects the beat.
+fn blocked_detail(event: &str, detail: Option<&BeatDetail>) -> (Option<String>, Option<String>) {
+    if event != "blocked" {
+        return (None, None);
+    }
+    let Some(d) = detail else { return (None, None) };
+    let reason = d
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| kb_core::sessions::truncate_chars_ellipsis(s, BLOCKED_REASON_MAX_CHARS));
+    let tool = d
+        .tool
+        .as_deref()
+        .filter(|t| valid_tool_name(t))
+        .map(str::to_string);
+    (reason, tool)
+}
+
+/// The `session.state` SSE payload for one beat, or `None` when the derived
+/// view `(state, blocked)` did not change. Never carries free text
+/// (`detail_reason`, `title`, `last_line`, `cwd`); `blocked_tool` is a
+/// validated token and appears only on a blocked row.
+pub(crate) fn session_state_payload(
+    outcome: &crate::live_registry::RecordOutcome,
+) -> Option<serde_json::Value> {
+    if (outcome.previous_state, outcome.previous_blocked)
+        == (Some(outcome.state), Some(outcome.row.blocked))
+    {
+        return None;
+    }
+    let mut v = serde_json::json!({
+        "session_id": outcome.row.session_id,
+        "harness": outcome.row.harness,
+        "state": outcome.state,
+        "holder": outcome.row.holder,
+        "project": derive_project(outcome.row.cwd.as_deref()),
+        "since_unix": outcome.row.last_activity_unix,
+        "blocked": outcome.row.blocked,
+    });
+    if outcome.row.blocked {
+        if let Some(t) = &outcome.row.blocked_tool {
+            v["blocked_tool"] = serde_json::Value::String(t.clone());
+        }
+    }
+    Some(v)
+}
+
 /// Parse the beat's `at` field: RFC 3339 (`kb-beat.sh` emits `date -u
 /// +%Y-%m-%dT%H:%M:%SZ`), falling back to a bare unix-seconds integer
 /// (forward-compat for an adapter that skips the ISO round-trip). `None` on
@@ -7695,10 +7771,8 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
     });
     let touches: std::collections::VecDeque<_> =
         sanitize_touches(&body.event, body.detail.as_ref(), now_unix).into();
-    let detail_reason = body
-        .detail
-        .and_then(|d| d.reason)
-        .filter(|s| !s.trim().is_empty());
+    let (detail_reason, blocked_tool) = blocked_detail(&body.event, body.detail.as_ref());
+    let effect = block_effect(&body.event);
 
     let row = crate::live_registry::LiveRow {
         session_id: body.session_id,
@@ -7714,24 +7788,18 @@ pub async fn beat(State(state): State<Arc<KbHandles>>, Json(body): Json<BeatBody
         last_line,
         blocked,
         detail_reason,
+        blocked_tool,
+        blocked_since_unix: None,
         touched_unix: now_unix,
         touches,
     };
 
-    let outcome = state.live_registry.record_beat(row, now_unix);
+    let outcome = state
+        .live_registry
+        .record_beat_effect(row, now_unix, effect);
 
-    if outcome.previous_state != Some(outcome.state) {
-        state.bus.emit(
-            "session.state",
-            serde_json::json!({
-                "session_id": outcome.row.session_id,
-                "harness": outcome.row.harness,
-                "state": outcome.state,
-                "holder": outcome.row.holder,
-                "project": derive_project(outcome.row.cwd.as_deref()),
-                "since_unix": outcome.row.last_activity_unix,
-            }),
-        );
+    if let Some(payload) = session_state_payload(&outcome) {
+        state.bus.emit("session.state", payload);
     }
 
     Json(serde_json::json!({
@@ -7788,13 +7856,23 @@ pub struct LiveStatusRow {
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub artifact_id: Option<String>,
     /// [`map_event`]'s holder mapping keeps `blocked` a flag on
-    /// `Holder::Agent` rather than a new `LiveState` variant — a presenter
-    /// may render this + `detail_reason` as a distinct sub-label inside the
-    /// working/stalled lane.
+    /// `Holder::Agent` rather than a new `LiveState` variant. It feeds the
+    /// "Needs you" lane: a sticky flag on a working/stalled agent row, set
+    /// by a `blocked` beat, kept by `tool` beats and cleared by any other
+    /// event (OL IDEA1). Tier-0 rows are never blocked.
     pub blocked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-export", ts(optional))]
     pub detail_reason: Option<String>,
+    /// The tool the pending permission prompt names, when the hook parsed
+    /// one (a validated `[A-Za-z0-9_.:-]` token). Blocked rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub blocked_tool: Option<String>,
+    /// Unix seconds of the beat that raised the block. Blocked rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub blocked_since_unix: Option<i64>,
 }
 
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(export))]
@@ -7814,6 +7892,15 @@ pub struct LiveStatusQuery {
     pub project: Option<String>,
     /// Caps EACH lane independently — see [`order_and_cap_live_status_rows`].
     pub limit: Option<usize>,
+    /// `1|true|on` — only rows blocked on the operator (and still inside
+    /// the presumed-ended horizon). Skips the Tier-0 fan-out entirely: a
+    /// capture-derived row can never be blocked, so this read is in-memory.
+    pub blocked: Option<String>,
+}
+
+/// Whether the Tier-0 (capture-derived) fan-out is worth running for `q`.
+fn tier0_wanted(q: &LiveStatusQuery) -> bool {
+    !wants_raw_flag(&q.blocked)
 }
 
 /// csv over the six-state wire vocabulary. Unknown tokens are DROPPED
@@ -7897,6 +7984,12 @@ fn redact_for_non_loopback(row: &mut LiveStatusRow) {
         row.last_line = Some(kb_core::sessions::truncate_chars_ellipsis(
             &ll,
             kb_core::sessions::OUTCOME_WIRE_MAX_CHARS,
+        ));
+    }
+    if let Some(reason) = row.detail_reason.take() {
+        row.detail_reason = Some(kb_core::sessions::truncate_chars_ellipsis(
+            &reason,
+            BLOCKED_REASON_MAX_CHARS,
         ));
     }
 }
@@ -8022,6 +8115,8 @@ pub async fn live_status(
             artifact_id: None,
             blocked: r.blocked,
             detail_reason: r.detail_reason,
+            blocked_tool: r.blocked_tool,
+            blocked_since_unix: r.blocked_since_unix,
         })
         .collect();
 
@@ -8032,7 +8127,7 @@ pub async fn live_status(
     // MAX(started_at) query.
     let known_ids = &known_ids;
     let mut tier0_futs: Vec<super::CorpusFut<'_, Vec<LiveStatusRow>>> = Vec::new();
-    for (kb_name, ctx) in state.kbs.iter() {
+    for (kb_name, ctx) in state.kbs.iter().filter(|_| tier0_wanted(&q)) {
         tier0_futs.push(Box::pin(async move {
             let list = match ctx
                 .storage
@@ -8105,6 +8200,8 @@ pub async fn live_status(
                         artifact_id: Some(row.artifact_id),
                         blocked: false,
                         detail_reason: None,
+                        blocked_tool: None,
+                        blocked_since_unix: None,
                     }
                 })
                 .collect()
@@ -8119,6 +8216,10 @@ pub async fn live_status(
         .collect();
     rows.extend(tier0);
 
+    if wants_raw_flag(&q.blocked) {
+        // Eight hours of silence ends the claim, as for any agent row.
+        rows.retain(|r| r.blocked && r.state != LiveState::PresumedEnded);
+    }
     if !wanted_states.is_empty() {
         rows.retain(|r| wanted_states.contains(&r.state));
     }
@@ -8326,6 +8427,8 @@ mod lsc2_tests {
             artifact_id: None,
             blocked: false,
             detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
         }
     }
 
@@ -8452,6 +8555,218 @@ mod lsc2_tests {
         // OMITTED (skip_serializing_if), not emitted as null.
         assert!(v.get("kb").is_none());
         assert!(v.get("artifact_id").is_none());
+        // OL IDEA1: the two blocked fields are omitted when None.
+        assert!(v.get("blocked_tool").is_none());
+        assert!(v.get("blocked_since_unix").is_none());
+        let mut b = r.clone();
+        b.blocked = true;
+        b.blocked_tool = Some("Bash".to_string());
+        b.blocked_since_unix = Some(42);
+        let v = serde_json::to_value(&b).unwrap();
+        assert_eq!(v["blocked_tool"], serde_json::json!("Bash"));
+        assert_eq!(v["blocked_since_unix"], serde_json::json!(42));
+    }
+
+    #[test]
+    fn block_effect_covers_all_seven_events() {
+        use crate::live_registry::BlockEffect::{Clear, Keep, Set};
+        for (ev, want) in [
+            ("blocked", Set),
+            ("tool", Keep),
+            ("start", Clear),
+            ("prompt", Clear),
+            ("unblocked", Clear),
+            ("turn_end", Clear),
+            ("end", Clear),
+        ] {
+            assert_eq!(block_effect(ev), want, "{ev}");
+        }
+    }
+
+    #[test]
+    fn valid_tool_name_accepts_tokens_and_rejects_everything_else() {
+        for ok in ["Bash", "mcp__github__create_issue", "plugin:x.y-z"] {
+            assert!(valid_tool_name(ok), "{ok}");
+        }
+        let long = "a".repeat(129);
+        for bad in [
+            "",
+            " ",
+            "a b",
+            "a/b",
+            "a;b",
+            "a\u{7}b",
+            "caf\u{e9}",
+            long.as_str(),
+        ] {
+            assert!(!valid_tool_name(bad), "{bad:?}");
+        }
+        assert!(valid_tool_name(&"a".repeat(128)));
+    }
+
+    #[test]
+    fn blocked_detail_caps_the_reason_and_ignores_non_blocked_events() {
+        let d = BeatDetail {
+            reason: Some(format!("  {}  ", "x".repeat(300))),
+            tool: Some("Bash".to_string()),
+            ..Default::default()
+        };
+        let (reason, tool) = blocked_detail("blocked", Some(&d));
+        assert_eq!(reason.unwrap().chars().count(), BLOCKED_REASON_MAX_CHARS);
+        assert_eq!(tool.as_deref(), Some("Bash"));
+        for ev in ["tool", "prompt", "turn_end", "unblocked", "start", "end"] {
+            assert_eq!(blocked_detail(ev, Some(&d)), (None, None), "{ev}");
+        }
+        let bad = BeatDetail {
+            reason: Some("r".to_string()),
+            tool: Some("Bash; rm".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            blocked_detail("blocked", Some(&bad)),
+            (Some("r".to_string()), None)
+        );
+        assert_eq!(blocked_detail("blocked", None), (None, None));
+    }
+
+    /// Drive one beat through the real registry + payload builder.
+    fn drive(
+        reg: &crate::live_registry::LiveRegistry,
+        event: &str,
+        tool: Option<&str>,
+        at: i64,
+    ) -> Option<serde_json::Value> {
+        let (holder, blocked) = map_event(event).unwrap();
+        let d = BeatDetail {
+            reason: blocked.then(|| "Claude needs your permission to use Bash".to_string()),
+            tool: tool.map(str::to_string),
+            ..Default::default()
+        };
+        let (detail_reason, blocked_tool) = blocked_detail(event, Some(&d));
+        let row = crate::live_registry::LiveRow {
+            session_id: "s".to_string(),
+            harness: "claude".to_string(),
+            holder,
+            last_activity_unix: at,
+            lease_secs: 900,
+            host: None,
+            pid: None,
+            cwd: Some("/w/proj".to_string()),
+            model: None,
+            title: Some("secret title".to_string()),
+            last_line: Some("secret line".to_string()),
+            blocked,
+            detail_reason,
+            blocked_tool,
+            blocked_since_unix: None,
+            touched_unix: at,
+            touches: Default::default(),
+        };
+        let out = reg.record_beat_effect(row, at, block_effect(event));
+        session_state_payload(&out)
+    }
+
+    #[test]
+    fn session_state_fires_on_a_change_of_state_or_blocked_never_per_beat() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        let first = drive(&reg, "start", None, 1_000).expect("first beat fires");
+        assert_eq!(first["blocked"], serde_json::json!(false));
+        assert!(first.get("blocked_tool").is_none());
+        // prompt: same (working, not blocked) -> no frame.
+        assert!(drive(&reg, "prompt", None, 1_001).is_none());
+        // blocked edge: state unchanged (working), blocked flips.
+        let b = drive(&reg, "blocked", Some("Bash"), 1_002).expect("blocked edge fires");
+        assert_eq!(b["blocked"], serde_json::json!(true));
+        assert_eq!(b["blocked_tool"], serde_json::json!("Bash"));
+        assert_eq!(b["state"], serde_json::json!("working"));
+        // tool keeps the flag: no frame.
+        assert!(drive(&reg, "tool", None, 1_003).is_none());
+        // a second blocked beat while blocked: no frame.
+        assert!(drive(&reg, "blocked", Some("Bash"), 1_004).is_none());
+        // unblocked clears: frame.
+        let u = drive(&reg, "unblocked", None, 1_005).expect("unblock edge fires");
+        assert_eq!(u["blocked"], serde_json::json!(false));
+        assert!(u.get("blocked_tool").is_none());
+        // blocked then turn_end: exactly one frame (state AND flag change together).
+        drive(&reg, "blocked", Some("Bash"), 1_006).expect("blocked again");
+        let te = drive(&reg, "turn_end", None, 1_007).expect("turn_end fires once");
+        assert_eq!(te["state"], serde_json::json!("waiting"));
+        assert_eq!(te["blocked"], serde_json::json!(false));
+        assert!(drive(&reg, "turn_end", None, 1_008).is_none());
+    }
+
+    #[test]
+    fn session_state_payload_never_carries_free_text() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        drive(&reg, "start", None, 1_000);
+        let b = drive(&reg, "blocked", Some("Bash"), 1_001).unwrap();
+        let text = b.to_string();
+        for banned in [
+            "detail_reason",
+            "title",
+            "last_line",
+            "cwd",
+            "needs your permission",
+            "secret",
+        ] {
+            assert!(!text.contains(banned), "{banned} leaked into {text}");
+        }
+    }
+
+    #[test]
+    fn session_state_payload_keys_match_the_schema() {
+        let reg = crate::live_registry::LiveRegistry::new();
+        drive(&reg, "start", None, 1_000);
+        let blocked = drive(&reg, "blocked", Some("Bash"), 1_001).unwrap();
+        let plain = drive(&reg, "unblocked", None, 1_002).unwrap();
+        let mut declared_all: Vec<String> = super::super::schema::SESSION_STATE_KEYS
+            .iter()
+            .map(|k| k.trim_end_matches('?').to_string())
+            .collect();
+        let mut declared_required: Vec<String> = super::super::schema::SESSION_STATE_KEYS
+            .iter()
+            .filter(|k| !k.ends_with('?'))
+            .map(|k| k.to_string())
+            .collect();
+        let keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        declared_all.sort();
+        declared_required.sort();
+        assert_eq!(keys(&blocked), declared_all);
+        assert_eq!(keys(&plain), declared_required);
+    }
+
+    #[test]
+    fn tier0_is_skipped_only_for_the_blocked_read() {
+        let q = LiveStatusQuery::default();
+        assert!(tier0_wanted(&q));
+        for on in ["1", "true", "on"] {
+            let q = LiveStatusQuery {
+                blocked: Some(on.to_string()),
+                ..Default::default()
+            };
+            assert!(!tier0_wanted(&q), "{on}");
+        }
+        let q = LiveStatusQuery {
+            blocked: Some("0".to_string()),
+            ..Default::default()
+        };
+        assert!(tier0_wanted(&q));
+    }
+
+    #[test]
+    fn redact_for_non_loopback_recaps_the_blocked_reason() {
+        let mut r = row(LiveState::Working, 10, "a");
+        r.blocked = true;
+        r.detail_reason = Some("y".repeat(400));
+        redact_for_non_loopback(&mut r);
+        assert_eq!(
+            r.detail_reason.unwrap().chars().count(),
+            BLOCKED_REASON_MAX_CHARS
+        );
     }
 
     #[test]
@@ -8621,6 +8936,8 @@ mod lsc2_tests {
             last_line: None,
             blocked: false,
             detail_reason: None,
+            blocked_tool: None,
+            blocked_since_unix: None,
             touched_unix: 500,
             touches: ts.into(),
         };
