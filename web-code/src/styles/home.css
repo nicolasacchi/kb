@@ -528,3 +528,13 @@ a.kbc-home-card__head:hover {
 .kbc-home-card__footer a:hover {
   color: var(--accent-soft);
 }
+
+/* OL PRES3 - the presence pulse line on a repo card. */
+.kbc-home-card__presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+}

@@ -814,6 +814,77 @@
   border-left-color: var(--accent-bor);
   color: var(--ink);
 }
+.kbc-tree__note--muted {
+  color: var(--ink-dim);
+}
+
+/* --- OL PRES3: presence rail ------------------------------------------
+ * The provenance lane's channel: a 2 px rail on the row's left edge, in the
+ * session's hue (identity only). The attention overlay owns the row
+ * BACKGROUND, so both can be on together. Trust is the rail STYLE: exact =
+ * solid, candidate = dotted, neutral = solid in a plain ink (no hue, no
+ * session claimed). */
+.kbc-tree__row--presence {
+  --kbc-presence-opacity: var(--kbc-presence-opacity-3);
+}
+.kbc-tree__row--presence[data-kbc-presence-level="1"] {
+  --kbc-presence-opacity: var(--kbc-presence-opacity-1);
+}
+.kbc-tree__row--presence[data-kbc-presence-level="2"] {
+  --kbc-presence-opacity: var(--kbc-presence-opacity-2);
+}
+.kbc-tree__row--presence::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  opacity: var(--kbc-presence-opacity);
+  background: var(--kbc-prov-hue, var(--ink-dim));
+  transition: opacity 400ms ease;
+}
+.kbc-tree__row--presence-candidate::before {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--kbc-prov-hue, var(--ink-dim)) 0 3px,
+    transparent 3px 6px
+  );
+}
+.kbc-tree__presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  color: var(--kbc-prov-hue, var(--ink-dim));
+  opacity: var(--kbc-presence-opacity, 1);
+}
+.kbc-tree__presence-count {
+  font-size: var(--fs-xs);
+  color: var(--ink-mute);
+}
+.kbc-tree__presence-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 0 6px;
+  font-size: var(--fs-sm);
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.kbc-tree__presence-toggle[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--rule);
+}
+@media (prefers-reduced-motion: reduce) {
+  .kbc-tree__row--presence::before {
+    transition: none;
+  }
+}
 .kbc-tree__sticky {
   flex: 0 0 auto;
   border-bottom: 1px solid var(--rule);

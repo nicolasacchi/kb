@@ -558,6 +558,12 @@
    * line overlay is the pre-Lane-Budget implementation and is deliberately
    * untouched by this unit — these are the tokens a later unit moves it to,
    * on GUTTER A where the Lane Budget puts it. */
+  /* OL PRES3 - presence rail brightness by fade level (3 = changed < 60 s
+   * ago). Opacity is the weak extra channel of the provenance lane; the 2 px
+   * rail itself is the lane's channel (themes/LANE-BUDGET.md). */
+  --kbc-presence-opacity-1: 0.45;
+  --kbc-presence-opacity-2: 0.7;
+  --kbc-presence-opacity-3: 1;
   --age-band-0: color-mix(in oklch, var(--blue) 20%, var(--bg));
   --age-band-1: color-mix(in oklch, var(--blue) 18.4%, var(--bg));
   --age-band-2: color-mix(in oklch, var(--blue) 16.8%, var(--bg));

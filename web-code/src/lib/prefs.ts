@@ -86,6 +86,10 @@ export interface Prefs {
   codeLenses?: boolean;
   /// V3.2-B3 — FileTree hotspot attention overlay (default OFF).
   attentionOverlay?: boolean;
+  /// OL PRES3 - FileTree presence marks: rows light when the live mirror
+  /// names them and carry kb's attribution. Default ON (it renders nothing
+  /// until a file changes, and polls only while the tab is visible).
+  presenceOverlay?: boolean;
   /// V70-A6 — the provisional-pane gradient (§P7). **Default OFF**, which is
   /// the design's own ruling, not a shipping compromise: VS Code's preview
   /// editors are the measured failure the research cites (right mechanism,
@@ -170,6 +174,7 @@ const DEFAULT_PREFS: Prefs = {
   paramHints: true,
   codeLenses: true,
   attentionOverlay: false,
+  presenceOverlay: true,
   provisionalPanes: false,
   wrap: false,
   codeFontSize: CODE_FONT_SIZE_DEFAULT,
@@ -428,6 +433,21 @@ export function saveAttentionOverlay(on: boolean): void {
   const cur = loadPrefs();
   if (cur.attentionOverlay === on) return;
   savePrefs({ ...cur, attentionOverlay: on });
+}
+
+/// OL PRES3 - FileTree presence marks (default TRUE when unset: only an
+/// explicit `false` turns them off). Broadcasts `PRESENCE_PREF_EVENT` so the
+/// tree toggle, Home and the Spine chip stay in step within one tab.
+export const PRESENCE_PREF_EVENT = "kbc:presence-pref";
+
+export function loadPresenceOverlay(): boolean {
+  return loadPrefs().presenceOverlay !== false;
+}
+
+export function savePresenceOverlay(on: boolean): void {
+  const cur = loadPrefs();
+  if (cur.presenceOverlay !== on) savePrefs({ ...cur, presenceOverlay: on });
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PRESENCE_PREF_EVENT));
 }
 
 /// V70-A6 — provisional panes (default false when unset; see the field doc).
