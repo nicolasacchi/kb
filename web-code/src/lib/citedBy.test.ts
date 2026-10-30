@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DocRefClaim } from "../api/types";
-import { citedByDocCount, citedByLabel, citedByRowLabel, siblingDocChip } from "./citedBy";
+import { citedByDocCount, citedByLabel, citedByNote, citedByRowLabel, siblingDocChip } from "./citedBy";
 
 function claim(overrides: Partial<DocRefClaim>): DocRefClaim {
   return {
@@ -17,6 +17,7 @@ function claim(overrides: Partial<DocRefClaim>): DocRefClaim {
     line_end: 2,
     line_state: "confirmed",
     seen_at: 1_754_500_000,
+    source: "pinned",
     ...overrides,
   };
 }
@@ -211,5 +212,24 @@ describe("siblingDocChip", () => {
     expect(m?.tone).toBe("warn");
     expect(m?.label).toBe(citedByLabel(claims, false));
     expect(m?.label).toContain("path no longer present");
+  });
+});
+
+describe("citedByNote (OL-SIBL3)", () => {
+  const ok = { state: "ok", kbs: ["k"], failed: [] } as const;
+  it("distinguishes the three absences", () => {
+    expect(citedByNote(0, ok)?.kind).toBe("none");
+    expect(citedByNote(0, { state: "off", kbs: [], failed: [] })?.kind).toBe("no-pinned");
+    expect(citedByNote(0, { state: "failed", kbs: ["k"], failed: [{ kb: "k", reason: "timeout" }] })?.kind).toBe("unreachable");
+    expect(citedByNote(0, { state: "failed", kbs: ["k"], failed: [{ kb: "k", reason: "sibling_mismatch" }] })?.kind).toBe("mismatch");
+  });
+  it("is silent when claims exist and every kb answered, or the lookup is off", () => {
+    expect(citedByNote(2, ok)).toBeNull();
+    expect(citedByNote(2, { state: "off", kbs: [], failed: [] })).toBeNull();
+  });
+  it("warns about an incomplete list when claims exist but a kb failed", () => {
+    const n = citedByNote(1, { state: "partial", kbs: ["a", "b"], failed: [{ kb: "b", reason: "unreachable" }] });
+    expect(n?.kind).toBe("unreachable");
+    expect(n?.text).toContain("incomplete");
   });
 });

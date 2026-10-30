@@ -3472,6 +3472,26 @@ export interface DocRefClaim {
   line_end: number | null;
   line_state: string | null;
   seen_at: number;
+  /// OL-SIBL3 - `pinned`: a synced claim for a pinned doc (carries
+  /// `line_state`); `kb-live`: read live from kb's `by_target` for this exact
+  /// path, a hint with no `line_state`. A pinned row replaces a live one.
+  source: DocRefSource;
+}
+
+export type DocRefSource = "pinned" | "kb-live";
+
+/// OL-SIBL3 - one kb the live lookup asked and got no answer from.
+export interface LiveLookupFailure {
+  kb: string;
+  reason: "unreachable" | "timeout" | "sibling_mismatch" | "bad_status" | "parse";
+}
+
+/// OL-SIBL3 - what the live half of `/api/doc-refs` could establish: `off`
+/// (nothing to ask), `ok` (every allowlisted kb answered), `partial`, `failed`.
+export interface LiveLookup {
+  state: "off" | "ok" | "partial" | "failed";
+  kbs: string[];
+  failed: LiveLookupFailure[];
 }
 
 /// `GET /api/doc-refs?repo=&path=` body (`doc-refs/1`).
@@ -3486,6 +3506,7 @@ export interface DocRefsOut {
   /// per-claim doc links stay live regardless (see `DocRefClaim.doc_public_href`).
   live: boolean;
   claims: DocRefClaim[];
+  live_lookup: LiveLookup;
 }
 
 // ── PRR-U2 ── kb v0.39 "The PR Room," unit U2 (Room cockpit + Report tab) ──
