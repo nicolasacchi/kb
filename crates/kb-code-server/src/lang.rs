@@ -62,7 +62,7 @@
 //! `tree-sitter-bash 0.25.1`, `tree-sitter-yaml 0.7.2`, `tree-sitter-go
 //! 0.25.0`, `tree-sitter-toml-ng 0.7.0`, `tree-sitter-json 0.24.8`,
 //! `tree-sitter-css 0.25.0`, `tree-sitter-scss 1.0.0`, `tree-sitter-md
-//! 0.5.3`) —
+//! 0.5.4`) —
 //! Cargo.toml only pins the minor version, so bump the salt by hand whenever
 //! `cargo update` moves one of these crates forward.
 
@@ -209,8 +209,8 @@ pub const SCSS: LangInfo = LangInfo {
 /// see `highlights_query`'s own arm.
 pub const MARKDOWN: LangInfo = LangInfo {
     id: "markdown",
-    symbol_salt: "markdown@0.5.3+q1",
-    highlight_salt: "markdown@0.5.3+h1+roles2",
+    symbol_salt: "markdown@0.5.4+q1",
+    highlight_salt: "markdown@0.5.4+h1+roles2",
 };
 /// PRR-N3 — ERB (Rails' embedded-template grammar; also covers EJS, unused
 /// here). Registered as its own [`LangInfo`] so `files.lang`/cache-key salt
