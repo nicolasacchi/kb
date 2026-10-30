@@ -32,6 +32,11 @@ const ANNOTATE_PATH: &str = "/_kb/annotate.js";
 /// Posts debounced scroll updates to the parent SPA and listens for
 /// `kb:scroll-to` resume messages. See `runtime_js` for the source.
 const RUNTIME_PATH: &str = "/_kb/runtime.js";
+/// READ1 - the server-owned reading-mode stylesheet. The runtime fetches it
+/// once when the parent posts `kb:read`; no parent-supplied string ever
+/// reaches a style sink.
+const READING_CSS_PATH: &str = "/_kb/reading.css";
+const READING_CSS: &str = include_str!("reading.css");
 
 /// Default-dev `parent_origin` (`http://localhost:4000`). Treated as
 /// the "not configured for production" sentinel - the configured
@@ -396,7 +401,8 @@ fn runtime_js(target_origin: &str) -> String {
         // reading-list trail hops set `flash: true`): one ~1.8s amber
         // wash + left-edge bar that holds ~600ms then fades. Web
         // Animations API only — no CSS injection, no persistent DOM
-        // state, one flash per message.
+        // state, one flash per message (except the parent-requested
+        // kb:read layer, /_kb/reading.css).
         if (data.flash && el.animate) {{
           try {{
             el.animate(
@@ -432,6 +438,155 @@ fn runtime_js(target_origin: &str) -> String {
       return;
     }}
   }});
+
+  // --- READ1: parent-requested reading layer (kb:read) -------------------
+  // CSS-only and reversible: one <style id="kb-read-style"> whose text is the
+  // daemon's own /_kb/reading.css, plus a data-kb-read attribute on <html>.
+  // Nothing is read from the message beyond two validated flags, and no DOM
+  // node or text is rewritten, so #6 anchors (body-rooted cssPath + text
+  // snippets) stay valid. Inert until the parent posts kb:read.
+  var READ_CSS = null;               // cached /_kb/reading.css text
+  var READ_SEQ = 0;                  // latest kb:read request; stale fetches drop out
+  var READ_OPTED_OUT = null;         // cached author opt-out (meta is static)
+  var READ_STYLE_ID = 'kb-read-style';
+  function readOptedOut() {{
+    if (READ_OPTED_OUT === null) {{
+      READ_OPTED_OUT = !!document.querySelector('meta[name="kb-reading"][content="off"]');
+    }}
+    return READ_OPTED_OUT;
+  }}
+  function readAck(state, why) {{
+    var m = {{ kind: 'kb:read-state', state: state }};
+    if (why) m.why = why;
+    try {{
+      window.parent.postMessage(m, SEND);
+    }} catch (e) {{}}
+  }}
+  function readUnsuitable() {{
+    if (readOptedOut()) return 'author';
+    var body = document.body;
+    if (!body) return 'short';
+    var root = document.documentElement;
+    var total = Math.max(1, (root.scrollWidth || 0) * (root.scrollHeight || 0));
+    var media = 0;
+    var els = body.querySelectorAll('img, video, canvas, svg, iframe, object, embed');
+    for (var i = 0; i < els.length; i++) {{
+      var r = els[i].getBoundingClientRect();
+      media += Math.max(0, r.width) * Math.max(0, r.height);
+    }}
+    var ratio = media / total;
+    if (ratio > 0.5) return 'media';
+    var text = (body.innerText || '').trim();
+    if (text.length < 400 && ratio > 0.2) return 'short';
+    return '';
+  }}
+  function readTopBlock() {{
+    var el = document.elementFromPoint(20, 8);
+    while (el && el !== document.body && el !== document.documentElement) {{
+      var d = getComputedStyle(el).display;
+      if (d === 'block' || d === 'list-item' || d === 'table' || d === 'flex' || d === 'grid') break;
+      el = el.parentElement;
+    }}
+    if (!el || el === document.body || el === document.documentElement) return null;
+    return {{ el: el, top: el.getBoundingClientRect().top }};
+  }}
+  function readSettle(pin) {{
+    try {{
+      if (pin) {{
+        var dy = pin.el.getBoundingClientRect().top - pin.top;
+        if (dy) window.scrollBy(0, dy);
+      }}
+    }} catch (e) {{}}
+    buildToc();
+    emitActive();
+  }}
+  function readOff(pin) {{
+    var st = document.getElementById(READ_STYLE_ID);
+    if (st && st.parentNode) st.parentNode.removeChild(st);
+    document.documentElement.removeAttribute('data-kb-read');
+    readSettle(pin);
+    readAck('off');
+  }}
+  function readOn(scheme, pin) {{
+    var root = document.documentElement;
+    var st = document.getElementById(READ_STYLE_ID);
+    if (!st) {{
+      st = document.createElement('style');
+      st.id = READ_STYLE_ID;
+      st.textContent = READ_CSS;
+      (document.head || root).appendChild(st);
+    }}
+    root.setAttribute('data-kb-read', scheme);
+    var mw = '';
+    try {{ mw = getComputedStyle(document.body).maxWidth; }} catch (e) {{}}
+    if (!mw || mw === 'none') {{
+      var bad = document.getElementById(READ_STYLE_ID);
+      if (bad && bad.parentNode) bad.parentNode.removeChild(bad);
+      root.removeAttribute('data-kb-read');
+      readAck('unsuitable', 'load');
+      return;
+    }}
+    readSettle(pin);
+    readAck('on');
+  }}
+  function onReadMessage(ev) {{
+    if (!ev || ev.source !== window.parent) return;
+    if (TARGET !== '*' && ev.origin !== TARGET) return;
+    var data = ev.data;
+    if (!data || data.kind !== 'kb:read') return;
+    var seq = ++READ_SEQ;
+    var on = !!data.on;
+    var scheme = data.scheme === 'dark' ? 'dark' : 'light';
+    var pin = readTopBlock();
+    if (!on) {{ readOff(pin); return; }}
+    var root = document.documentElement;
+    if (document.getElementById(READ_STYLE_ID)) {{   // idempotent: scheme only
+      root.setAttribute('data-kb-read', scheme);
+      readAck('on');
+      return;
+    }}
+    var why = readUnsuitable();
+    if (why) {{ readAck('unsuitable', why); return; }}
+    if (READ_CSS !== null) {{ readOn(scheme, pin); return; }}
+    var failed = function() {{ if (seq === READ_SEQ) readAck('unsuitable', 'load'); }};
+    try {{
+      fetch('/_kb/reading.css', {{ credentials: 'omit' }}).then(function(r) {{
+        if (!r.ok) throw new Error('status');
+        return r.text();
+      }}).then(function(css) {{
+        if (!css) {{ failed(); return; }}
+        READ_CSS = css;
+        if (seq !== READ_SEQ) return;   // a newer kb:read superseded this one
+        readOn(scheme, readTopBlock());
+      }}).catch(failed);
+    }} catch (e) {{ failed(); }}
+  }}
+  window.addEventListener('message', onReadMessage);
+  // Key-forward lane: a bare `r` pressed while the iframe holds focus goes to
+  // the parent, which owns the toggle. Passive, bubble phase, never
+  // preventDefault; silent when the author opted out.
+  document.addEventListener('keydown', function(e) {{
+    if (e.key !== 'r') return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (e.isComposing || e.defaultPrevented) return;
+    var t = e.target;
+    var tag = t && t.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+    if (readOptedOut()) return;
+    try {{
+      window.parent.postMessage({{ kind: 'kb:key', key: 'r' }}, SEND);
+    }} catch (err) {{}}
+  }}, {{ passive: true }});
+  function readReady() {{
+    try {{
+      window.parent.postMessage({{ kind: 'kb:read-ready' }}, SEND);
+    }} catch (e) {{}}
+  }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', readReady);
+  }} else {{
+    readReady();
+  }}
 
   // Link-peek relay — a delegated mouseover/mouseout pair reports the
   // anchor under the pointer to the parent, which owns every decision
@@ -589,6 +744,9 @@ pub async fn serve(
     }
     if raw_path == ANNOTATE_PATH {
         return with_artifact_csp(serve_annotate_js(&state), &state.origin);
+    }
+    if raw_path == READING_CSS_PATH {
+        return with_artifact_csp(serve_reading_css(&headers), &state.origin);
     }
 
     // Resolve the file. For `/`, use `<id>.html`. For other paths, use the
@@ -881,6 +1039,43 @@ pub async fn serve(
         );
         with_artifact_csp(resp, &state.origin)
     }
+}
+
+/// Serve `/_kb/reading.css` (READ1): the compiled-in stylesheet with a
+/// content-hash ETag, so a daemon upgrade that changes the file changes the
+/// validator and a matching `If-None-Match` is a 304.
+fn serve_reading_css(req_headers: &HeaderMap) -> Response<Body> {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(READING_CSS.as_bytes());
+    let etag = format!("\"{}\"", hex::encode(&digest[..16]));
+    let fresh = req_headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').any(|t| t.trim() == etag))
+        .unwrap_or(false);
+    let mut resp = if fresh {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        let mut r = (StatusCode::OK, READING_CSS).into_response();
+        r.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/css; charset=utf-8"),
+        );
+        r
+    };
+    let h = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        h.insert(header::ETAG, v);
+    }
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    resp
 }
 
 /// Serve `/_kb/annotate.js` from the SPA bundle. The annotator is built
@@ -1626,5 +1821,189 @@ mod tests {
         assert!(body.contains(r#"kind:"open-artifact""#));
         assert!(body.contains("abc123abc123"));
         assert!(body.contains("parent.postMessage(M,\"https://kb.example.com\")"));
+    }
+
+    // --- READ1: reading-mode layer -------------------------------------
+
+    /// The text of the runtime between two anchors, so a pin reads only the
+    /// branch it names.
+    fn runtime_between(from: &str, to: &str) -> String {
+        let js = runtime_js("*");
+        let a = js.find(from).unwrap_or_else(|| panic!("missing {from}"));
+        let b = js[a..].find(to).unwrap_or_else(|| panic!("missing {to}")) + a;
+        js[a..b].to_string()
+    }
+
+    #[test]
+    fn runtime_carries_the_reading_layer_vocabulary() {
+        let js = runtime_js("*");
+        for needle in [
+            "kb:read",
+            "kb:read-state",
+            "kb:read-ready",
+            "kb-read-style",
+            "data-kb-read",
+            "/_kb/reading.css",
+            "meta[name=\"kb-reading\"][content=\"off\"]",
+            "'author'",
+            "'media'",
+            "'short'",
+            "'load'",
+            "buildToc();",
+            "emitActive();",
+        ] {
+            assert!(js.contains(needle), "runtime lost {needle}");
+        }
+        assert!(
+            !js.contains("</"),
+            "the runtime must stay inline-script-safe (no closing tag)"
+        );
+    }
+
+    #[test]
+    fn runtime_read_fetch_continuation_drops_when_a_newer_request_arrived() {
+        let branch = runtime_between(
+            "function onReadMessage",
+            "window.addEventListener('message', onReadMessage)",
+        );
+        // Every message takes a token before any branch; the async
+        // continuation applies only while its token is still the latest and
+        // re-captures the scroll pin just before applying.
+        let token = branch.find("var seq = ++READ_SEQ;").expect("token");
+        let off = branch.find("readOff(pin)").expect("off branch");
+        assert!(token < off, "token must be taken before the off branch");
+        assert!(branch.contains("if (seq !== READ_SEQ) return;"));
+        assert!(branch.contains("readOn(scheme, readTopBlock())"));
+        assert!(branch.contains("if (seq === READ_SEQ) readAck('unsuitable', 'load')"));
+    }
+
+    #[test]
+    fn runtime_read_branch_is_source_checked_and_never_reads_css_from_the_message() {
+        let branch = runtime_between(
+            "function onReadMessage",
+            "window.addEventListener('message', onReadMessage)",
+        );
+        assert!(branch.contains("ev.source !== window.parent"), "{branch}");
+        assert!(branch.contains("TARGET !== '*' && ev.origin !== TARGET"));
+        assert!(branch.contains("data.scheme === 'dark' ? 'dark' : 'light'"));
+        assert!(branch.contains("!!data.on"));
+        // The whole read layer, not just the handler: no parent string
+        // reaches a style or markup sink.
+        let layer = runtime_between("// --- READ1", "// Link-peek relay");
+        for bad in [
+            "data.css",
+            "textContent = data",
+            "innerHTML",
+            "insertAdjacentHTML",
+            "outerHTML",
+            "data.href",
+            "data.url",
+        ] {
+            assert!(!layer.contains(bad), "read layer uses {bad}");
+        }
+        // The only thing read off the message is kind/on/scheme.
+        let reads: Vec<&str> = layer.matches("data.").collect();
+        assert_eq!(reads.len(), 3, "unexpected message reads: {reads:?}");
+        // Fetched once and cached.
+        assert!(layer.contains("if (READ_CSS !== null) { readOn(scheme, pin); return; }"));
+    }
+
+    #[test]
+    fn runtime_announces_read_ready_once_at_load() {
+        let tail = runtime_between("function readReady", "// Link-peek relay");
+        assert!(tail.contains("kind: 'kb:read-ready'"));
+        assert!(tail.contains("document.readyState === 'loading'"));
+        assert!(tail.contains("addEventListener('DOMContentLoaded', readReady)"));
+        assert!(tail.contains("}, SEND)"));
+        assert_eq!(runtime_js("*").matches("kb:read-ready").count(), 1);
+    }
+
+    #[test]
+    fn runtime_key_lane_forwards_only_a_bare_r() {
+        let lane = runtime_between("document.addEventListener('keydown'", "function readReady");
+        for guard in [
+            "e.key !== 'r'",
+            "e.ctrlKey || e.metaKey || e.altKey || e.shiftKey",
+            "e.isComposing || e.defaultPrevented",
+            "tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'",
+            "t.isContentEditable",
+            "readOptedOut()",
+            "{ passive: true }",
+        ] {
+            assert!(lane.contains(guard), "key lane lost {guard}");
+        }
+        assert!(!lane.contains("preventDefault"));
+        assert!(!lane.contains("stopPropagation"));
+        assert_eq!(lane.matches("key: '").count(), 1, "lane posts another key");
+        assert!(lane.contains("{ kind: 'kb:key', key: 'r' }"));
+    }
+
+    #[test]
+    fn runtime_stays_under_its_size_budget() {
+        let n = runtime_js("*").len();
+        assert!(n < 32 * 1024, "runtime grew to {n} bytes");
+    }
+
+    #[test]
+    fn reading_css_is_scoped_inert_and_small() {
+        assert!(READING_CSS.len() < 4096, "{} bytes", READING_CSS.len());
+        let compact: String = READING_CSS.split_whitespace().collect::<Vec<_>>().join("");
+        for bad in [
+            "display:none",
+            "visibility",
+            "@import",
+            "url(",
+            "@font-face",
+        ] {
+            assert!(!compact.contains(bad), "reading.css contains {bad}");
+        }
+        let lower = READING_CSS.to_lowercase();
+        assert!(!lower.contains("template") && !lower.contains("kb-prompt"));
+        let mut rules = 0;
+        for rule in READING_CSS.split('}') {
+            let rule = rule.trim();
+            if rule.is_empty() {
+                continue;
+            }
+            rules += 1;
+            let selectors = rule.split('{').next().unwrap();
+            // Split on top-level commas only; `:is(a, b)` keeps its own.
+            let mut groups = vec![String::new()];
+            let mut depth = 0i32;
+            for ch in selectors.chars() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        groups.push(String::new());
+                        continue;
+                    }
+                    _ => {}
+                }
+                groups.last_mut().unwrap().push(ch);
+            }
+            for sel in &groups {
+                assert!(
+                    sel.trim().starts_with("html[data-kb-read]"),
+                    "unscoped selector {sel:?}"
+                );
+            }
+        }
+        assert!(rules >= 8, "only {rules} rules parsed");
+        // dark differs from light by variables only.
+        let dark = READING_CSS
+            .split('}')
+            .find(|r| {
+                r.trim()
+                    .starts_with("html[data-kb-read][data-kb-read=\"dark\"]")
+            })
+            .expect("dark block");
+        for decl in dark.split('{').nth(1).unwrap().split(';') {
+            let d = decl.trim();
+            assert!(
+                d.is_empty() || d.starts_with("--kb-read-") || d.starts_with("color-scheme"),
+                "{d}"
+            );
+        }
     }
 }

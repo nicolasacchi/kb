@@ -2198,6 +2198,11 @@ GET  /_kb/probe.js                          served on artifact subdomains
 GET  /_kb/runtime.js                        scroll capture/resume runtime
                                             injected into iframed artifacts
                                             (v0.6+ H3; drives history scroll)
+GET  /_kb/reading.css                       reading-mode stylesheet, served on
+                                            artifact subdomains only; the
+                                            runtime fetches it when the parent
+                                            posts kb:read (content-hash ETag,
+                                            304 on If-None-Match, 1h max-age)
 ```
 
 The Origin allowlist accepts `localhost:4000` (back-compat), any `*.artifacts.localhost`, the daemon's own `Host:` (same-origin SPA → daemon), and any `localhost`/`127.0.0.1` when `KB_DEV_ORIGIN_ANY=1`. Errors are RFC 7807 `application/problem+json`.

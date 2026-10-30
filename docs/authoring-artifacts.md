@@ -70,6 +70,15 @@ re-indexes it. The artifact source stays the source of truth; the UI just
 saves you opening the file. (Clearing all tags reverts to the path-derived
 fallback, since there is no "no tags" representation.)
 
+### Opting out of reading mode (`kb-reading`)
+
+Reading mode re-typesets an artifact with a CSS-only layer the reader can toggle
+and undo; it never rewrites your markup. An artifact whose own layout must not be
+touched (a dashboard, a slide deck, a hand-set page) can opt out with
+`<meta name="kb-reading" content="off">`: the runtime then refuses the layer and
+does not forward the `r` key. This meta is not an indexed field and does not
+affect tags or category.
+
 ### Session provenance (`kb-session`)
 
 Another meta name recognised separately from the two above (like

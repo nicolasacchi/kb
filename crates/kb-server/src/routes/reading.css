@@ -1,0 +1,80 @@
+html[data-kb-read] {
+  --kb-read-bg: #faf7f0;
+  --kb-read-fg: #1c1b19;
+  --kb-read-muted: #4a4741;
+  --kb-read-link: #0b3d91;
+  --kb-read-rule: #8a8478;
+  --kb-read-code-bg: #efeadd;
+  background: var(--kb-read-bg);
+  color: var(--kb-read-fg);
+  color-scheme: light;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html[data-kb-read][data-kb-read="dark"] {
+  --kb-read-bg: #16181c;
+  --kb-read-fg: #ebe8e1;
+  --kb-read-muted: #c4c0b6;
+  --kb-read-link: #a9cbff;
+  --kb-read-rule: #8f8b82;
+  --kb-read-code-bg: #23262c;
+  color-scheme: dark;
+}
+html[data-kb-read] body {
+  font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font-size: clamp(17px, 1.1vw + 14px, 20px);
+  line-height: 1.65;
+  max-width: min(68ch, 100% - 2 * clamp(16px, 5vw, 40px));
+  margin: 0 auto;
+  padding: 2.5rem 0 4rem;
+  overflow-wrap: anywhere;
+  background: transparent;
+  color: var(--kb-read-fg);
+}
+html[data-kb-read] body :is(p, li, dd, dt, td, th, blockquote, figcaption, span, div, section, article, main, header, footer, aside, label, small) {
+  font-family: inherit;
+  color: inherit;
+}
+html[data-kb-read] body :is(h1, h2, h3, h4, h5, h6) {
+  font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  color: var(--kb-read-fg);
+  line-height: 1.25;
+  font-weight: 700;
+  margin: 1.8em 0 0.6em;
+}
+html[data-kb-read] body h1 { font-size: 2em; }
+html[data-kb-read] body h2 { font-size: 1.6em; }
+html[data-kb-read] body h3 { font-size: 1.3em; }
+html[data-kb-read] body :is(h4, h5, h6) { font-size: 1.1em; }
+html[data-kb-read] body a {
+  color: var(--kb-read-link);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+html[data-kb-read] body blockquote {
+  margin: 1.2em 0;
+  padding: 0 0 0 1em;
+  border-left: 3px solid var(--kb-read-rule);
+  color: var(--kb-read-muted);
+}
+html[data-kb-read] body:lang(ja), html[data-kb-read] body:lang(zh), html[data-kb-read]:lang(ja) body, html[data-kb-read]:lang(zh) body {
+  max-width: 40em;
+}
+html[data-kb-read] body :is(code, pre, kbd, samp) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+html[data-kb-read] body pre {
+  overflow: auto;
+  max-width: 100%;
+  padding: 0.8em 1em;
+  background: var(--kb-read-code-bg);
+  color: var(--kb-read-fg);
+  overflow-wrap: normal;
+}
+html[data-kb-read] body :is(img, video, canvas, svg, iframe, table) {
+  max-width: 100%;
+}
+html[data-kb-read] body :is(img, video, canvas, svg) {
+  height: auto;
+}
