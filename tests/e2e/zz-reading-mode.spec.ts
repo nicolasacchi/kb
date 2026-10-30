@@ -440,7 +440,9 @@ test.describe("reading mode", () => {
         const p = join(d, n);
         return statSync(p).isDirectory() ? walk(p) : [p];
       });
-    const files = walk(out).filter((p) => /\.(html|md)$/.test(p));
+    // The Markdown page is rendered with kb's own prose sheet (which names
+    // data-kb-read itself), so only the authored HTML fixtures are checked.
+    const files = walk(out).filter((p) => /\.html$/.test(p) && !p.endsWith("note.html"));
     expect(files.length).toBeGreaterThan(0);
     for (const p of files) {
       const text = readFileSync(p, "utf-8");
