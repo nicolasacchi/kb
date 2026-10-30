@@ -34,6 +34,9 @@ export function SinceYouLeft({ since, nowMs, kb }: Props) {
     queryFn: ({ signal }) => fetchChanges({ since: since as number }, signal),
     enabled: since != null,
     staleTime: Infinity,
+    // A failure is an error state (not cached data): one retry, then the
+    // strip stays silent and the next mount refetches.
+    retry: 1,
   });
   if (since == null || !data || data.projects.length === 0) return null;
 

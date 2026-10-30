@@ -1,7 +1,8 @@
 // OL IDEA5 — client for GET /api/changes, the project axis of "since you
 // left" (sessions + commits + slate posts, grouped by project). Best-effort,
-// the inbox.ts shape: a daemon hiccup logs and returns null so a transient
-// miss can never hard-fail the Front Page band that hosts the strip.
+// A daemon hiccup throws; the strip's useQuery holds it as an ERROR (never
+// cached as data, so it refetches on remount) and renders nothing, so a
+// transient miss can never hard-fail the Front Page band that hosts the strip.
 
 import { currentDaemonBase } from "./base";
 // Wire types are the generated ts-rs bindings (routes/changes.rs is the
@@ -25,7 +26,7 @@ export type {
 export async function fetchChanges(
   opts: { since: number },
   signal?: AbortSignal,
-): Promise<ChangesResponse | null> {
+): Promise<ChangesResponse> {
   const params = new URLSearchParams({ since: String(opts.since) });
   let r: Response;
   try {
@@ -36,16 +37,11 @@ export async function fetchChanges(
   } catch (e) {
     if (signal?.aborted) throw e;
     console.warn("[changes] fetch failed", e);
-    return null;
+    throw e;
   }
   if (!r.ok) {
     console.warn(`[changes] ${r.url}: ${r.status} ${r.statusText}`);
-    return null;
+    throw new Error(`changes: ${r.status} ${r.statusText}`);
   }
-  try {
-    return (await r.json()) as ChangesResponse;
-  } catch (e) {
-    console.warn(`[changes] ${r.url}: bad JSON`, e);
-    return null;
-  }
+  return (await r.json()) as ChangesResponse;
 }

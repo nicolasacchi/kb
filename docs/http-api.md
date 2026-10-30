@@ -1583,7 +1583,10 @@ GET  /api/changes?since=<unix>[&project=ID_OR_LABEL&session=SID]
                                             (`projects_total`/`projects_
                                             truncated`). `project=` keeps
                                             groups whose id or label equals
-                                            the value. A failing corpus is
+                                            the value, and filters ONLY `projects[]`: `trivial_sessions_hidden`,
+                                            `sessions_scan_capped` and
+                                            `degraded[]` stay fleet-wide.
+                                            A failing corpus is
                                             named in `degraded[]` and an
                                             unreadable slate in
                                             `slates_skipped[]`; neither 500s.

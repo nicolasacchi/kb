@@ -44,7 +44,7 @@ const RESP: ChangesResponse = {
   trivial_sessions_hidden: 0,
 };
 
-function mount(since: number | null, seeded: ChangesResponse | null | undefined, kb: string | null = "canon") {
+function mount(since: number | null, seeded: ChangesResponse | undefined, kb: string | null = "canon") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (seeded !== undefined) qc.setQueryData(["changes", since], seeded);
   return render(
@@ -67,9 +67,24 @@ describe("SinceYouLeft", () => {
     const empty = mount(SINCE, { ...RESP, projects: [], projects_total: 0 });
     expect(empty.container.innerHTML).toBe("");
     cleanup();
-    // fetchChanges resolves null on any failure; that is what the cache holds.
-    const failed = mount(SINCE, null);
+    cleanup();
+    // fetchChanges throws on failure; the query holds an error, not data.
+    const failed = mount(SINCE, undefined);
     expect(failed.container.innerHTML).toBe("");
+  });
+
+  it("failed_fetch_is_not_cached_as_data", async () => {
+    const { fetchChanges } = await import("../api/changes");
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("boom", { status: 500 })) as typeof fetch;
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      await expect(fetchChanges({ since: SINCE })).rejects.toThrow();
+    } finally {
+      globalThis.fetch = orig;
+      console.warn = warn;
+    }
   });
 
   it("renders_rows_and_footer_link", () => {

@@ -542,6 +542,14 @@ pub(crate) fn build_slate(
     })
 }
 
+fn file_mtime_secs(path: &std::path::Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
 /// One blocking walk of every slate. A slate whose meta or ledger is
 /// unreadable is named in the second tuple member, never a 500.
 pub(crate) fn slate_lane(
@@ -553,6 +561,16 @@ pub(crate) fn slate_lane(
     let mut out = Vec::new();
     let mut skipped = Vec::new();
     for slug in list_slugs(paths) {
+        // Cheap pre-check: an append bumps the ledger mtime and a rotate or
+        // close rewrites the meta, so both older than `since` means no post
+        // can have `at > since` and no rotation landed in the window. Skip
+        // before reading and scrubbing the whole ledger. Any stat failure
+        // falls through to the full load.
+        let m_ledger = file_mtime_secs(&paths.slate_ledger_file(&slug));
+        let m_meta = file_mtime_secs(&paths.slate_meta_file(&slug));
+        if matches!((m_ledger, m_meta), (Some(a), Some(b)) if a < since && b < since) {
+            continue;
+        }
         // `loopback = false`: the strictest scrub floor, always.
         let loaded = match load_for_read(paths, &slug, false) {
             Ok(Some(l)) => l,
@@ -1354,5 +1372,25 @@ mod tests {
         assert!(v.get("degraded").is_none());
         assert!(v.get("slates_skipped").is_none());
         assert!(v.get("project").is_none());
+    }
+
+    #[test]
+    fn slate_lane_skips_untouched_slates_before_loading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = KbPaths::rooted_at(tmp.path(), "smoke".to_string());
+        let slug = SlateSlug::new("stale-one").unwrap();
+        // A corrupt meta: a full load would name it in `skipped`.
+        std::fs::create_dir_all(paths.slate_dir(&slug)).unwrap();
+        std::fs::write(paths.slate_meta_file(&slug), "not json").unwrap();
+        std::fs::write(paths.slate_ledger_file(&slug), "not json\n").unwrap();
+        let now = chrono::Utc::now().timestamp();
+        // Files were touched before `since`: skipped without a load.
+        let (lanes, skipped) = slate_lane(&paths, now + 3600, now + 3600, &[]);
+        assert!(lanes.is_empty());
+        assert!(skipped.is_empty(), "the pre-check must precede the load");
+        // Files touched inside the window: the load runs and the corrupt
+        // slate is named.
+        let (_, skipped) = slate_lane(&paths, 0, now, &[]);
+        assert_eq!(skipped, vec!["stale-one".to_string()]);
     }
 }
