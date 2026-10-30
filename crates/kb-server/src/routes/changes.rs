@@ -486,7 +486,7 @@ pub(crate) fn build_slate(
     if fresh.is_empty() && !archived_in_window {
         return None;
     }
-    fresh.sort_by(|a, b| b.seq.cmp(&a.seq));
+    fresh.sort_by_key(|p| std::cmp::Reverse(p.seq));
     let digest = slate::project(
         posts,
         now,
