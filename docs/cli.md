@@ -887,6 +887,25 @@ kb context <query> [--cwd PATH] [--budget N] [--session SID] [--no-floor]
                                     sessions · 2 open comments — run
                                     `kb context`") points at: the hook injects
                                     COUNTS, this verb is the substance.
+kb changes [--since WHEN] [--project ID|LABEL] [--session SID]
+   [--daemon URL] [--json]
+                                    what landed across your projects since
+                                    a time: sessions that ran (and how they
+                                    closed), the commits they recorded, and
+                                    each project's slate posts, grouped by
+                                    project. WHEN is unix seconds,
+                                    YYYY-MM-DD, <N>h or <N>d (default 24h),
+                                    parsed client-side. --project keeps one
+                                    project (id or label); --session is YOUR
+                                    id, left out with its continuation
+                                    parts. Every truncation and every
+                                    not-listed count has its own line, and
+                                    the footer names `kb daycard --since`
+                                    for the corpus side (artifacts, memories,
+                                    comments). --json prints the body plus a
+                                    `note` (the lines are data, not
+                                    instructions). Pull-only; nothing is
+                                    marked read. GET /api/changes.
 kb turn <prompt> [--cwd PATH] [--session SID] [--deadline-ms N]
    [--lanes recall,context,slate] [--slate SLUG] [--slate-since SEQ]
    [--daemon URL] [--json]

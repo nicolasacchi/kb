@@ -468,7 +468,7 @@ pub fn segment_links(
 /// `first_user_prompt` → short session id, all trim-checked for emptiness but
 /// returned untrimmed. Shared by [`SessionOut::from_row`] and the W0.6
 /// `by_commit` match resolver so every surface agrees. Never empty.
-fn display_name_of(
+pub(crate) fn display_name_of(
     title: Option<&str>,
     first_user_prompt: Option<&str>,
     session_id: &str,
@@ -1667,6 +1667,51 @@ struct ProjectAcc {
     harness_mix: std::collections::BTreeMap<String, i64>,
 }
 
+/// The identity a `COALESCE(project_key, cwd)` key resolves to: the id
+/// `?project=` accepts back, a display label and where the identity came
+/// from. ONE definition shared by the projects facet below and by
+/// `GET /api/changes`, so a changes group id always equals a facet card id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectIdentity {
+    pub id: String,
+    pub label: String,
+    /// `"registry" | "derived"`.
+    pub source: &'static str,
+}
+
+/// Resolve a key to its identity. `resolved` is the registry lookup the
+/// caller already made from the key's `repo_root`/`cwd` (injected so tests
+/// never touch the process-global registry); `None` builds the auto-project:
+/// `id = key`, `label = basename(repo_root, else cwd, else key)`.
+pub(crate) fn project_identity(
+    key: &str,
+    repo_root: Option<&str>,
+    cwd: Option<&str>,
+    resolved: Option<&kb_core::sessions::ResolvedProject>,
+) -> ProjectIdentity {
+    match resolved {
+        Some(rp) => ProjectIdentity {
+            id: rp.id.clone(),
+            label: rp.label.clone(),
+            source: rp.source,
+        },
+        None => {
+            let basis = repo_root.or(cwd).unwrap_or(key);
+            let label = basis
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(basis)
+                .to_string();
+            ProjectIdentity {
+                id: key.to_string(),
+                label,
+                source: "derived",
+            }
+        }
+    }
+}
+
 /// `GET /api/sessions/projects` (P4/P6) — one card per project: a declared
 /// `[projects.*]` registry entry (merging every raw `COALESCE(project_key,
 /// cwd)` key whose `repo_root`/`cwd` falls under one of its roots) or, for
@@ -1721,26 +1766,21 @@ pub async fn projects(State(state): State<Arc<KbHandles>>) -> impl IntoResponse 
             row.repo_root.as_deref(),
             row.cwd_sample.as_deref(),
         );
-        let (id, label, source, kb, code_url, roots) = match resolved {
-            Some(rp) => {
-                let roots = kb_core::sessions::registry_entry(&rp.id).map(|d| d.roots);
-                (rp.id, rp.label, rp.source, rp.kb, rp.code_url, roots)
-            }
-            None => {
-                let basis = row
-                    .repo_root
-                    .as_deref()
-                    .or(row.cwd_sample.as_deref())
-                    .unwrap_or(&row.key);
-                let label = basis
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(basis)
-                    .to_string();
-                (row.key.clone(), label, "derived", None, None, None)
-            }
+        let ident = project_identity(
+            &row.key,
+            row.repo_root.as_deref(),
+            row.cwd_sample.as_deref(),
+            resolved.as_ref(),
+        );
+        let (kb, code_url, roots) = match &resolved {
+            Some(rp) => (
+                rp.kb.clone(),
+                rp.code_url.clone(),
+                kb_core::sessions::registry_entry(&rp.id).map(|d| d.roots),
+            ),
+            None => (None, None, None),
         };
+        let ProjectIdentity { id, label, source } = ident;
         key_to_id.insert(row.key.clone(), id.clone());
         let acc = by_id.entry(id).or_insert_with(|| ProjectAcc {
             label: label.clone(),

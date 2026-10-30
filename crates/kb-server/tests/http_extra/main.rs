@@ -8,6 +8,7 @@
 mod common;
 
 mod artifact_asof;
+mod changes;
 mod coderefs;
 mod docs_asof;
 mod events_filters;
