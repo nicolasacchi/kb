@@ -402,6 +402,25 @@ async fn boot_at(
     kb_addr: Option<SocketAddr>,
     doclens: DoclensSection,
 ) -> Boot {
+    boot_at_with_public(
+        tmp,
+        repos,
+        kb_addr,
+        doclens,
+        Some("https://kb.example.com".to_string()),
+    )
+    .await
+}
+
+/// [`boot_at`] with the `[kb_daemon] public_url` chosen by the caller (`None`
+/// leaves the public base unset, so no kb link-out can be built).
+async fn boot_at_with_public(
+    tmp: tempfile::TempDir,
+    repos: &[(&str, &Path)],
+    kb_addr: Option<SocketAddr>,
+    doclens: DoclensSection,
+    public_url: Option<String>,
+) -> Boot {
     let cfg = KbCodeConfig {
         repos: repos
             .iter()
@@ -415,7 +434,7 @@ async fn boot_at(
             url: kb_addr.map(|a| format!("http://{a}")),
             token_file: None,
             // Pinned so `doc_href` is deterministic in the wire assertions.
-            public_url: Some("https://kb.example.com".to_string()),
+            public_url,
         },
         doclens,
         ..KbCodeConfig::default()
@@ -3072,4 +3091,101 @@ async fn path_lens_refuses_a_missing_path_an_empty_path_and_an_unchosen_checkout
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// --- OL SIBL1 — section crossing on the doc-refs wire -----------------------
+
+/// Seed one doc's claims (one grouped with a special-character anchor, one
+/// ungrouped) under a healthy pin, then boot over that state root with the
+/// given `public_url`.
+async fn boot_with_seeded_claims(public_url: Option<&str>) -> Boot {
+    let alpha = fixture_alpha();
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let store = store_at(tmp.path());
+        let root = std::fs::canonicalize(alpha.path()).unwrap();
+        let repo_id = store.upsert_repo("alpha", &root.to_string_lossy()).unwrap();
+        seed_pin(&store, FIX_DOC_ID, "alpha", &root.to_string_lossy());
+        let claim = |ordinal: i64, line: i64, key: Option<&str>| kb_code_server::store::NewDocRef {
+            ordinal,
+            kind: "path_line".into(),
+            raw_hint: format!("carts_controller.rb:{line}"),
+            resolved_path: "app/controllers/carts_controller.rb".into(),
+            line_start: Some(line),
+            line_end: None,
+            line_state: Some("confirmed".into()),
+            group_key: key.map(str::to_string),
+            group_label: key.map(|_| "Checkout".to_string()),
+        };
+        store
+            .replace_doc_refs(
+                &kb_code_server::store::DocRefWrite {
+                    kb: "platform",
+                    doc_id: FIX_DOC_ID,
+                    repo_id,
+                    doc_title: "Checkout flow",
+                    doc_path: "features/check out.html",
+                    doc_hash: None,
+                    head_sha: None,
+                    dirty: false,
+                    seen_at: 1,
+                },
+                &[
+                    claim(0, 12, Some("kb-h-the-cart & co#1")),
+                    claim(1, 40, None),
+                ],
+            )
+            .unwrap();
+    }
+    boot_at_with_public(
+        tmp,
+        &[("alpha", alpha.path())],
+        None,
+        doclens_cfg(&["platform"], &[]),
+        public_url.map(str::to_string),
+    )
+    .await
+}
+
+const SEEDED_PATH: &str = "/api/doc-refs?repo=alpha&path=app/controllers/carts_controller.rb";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn doc_refs_claim_carries_group_anchor_and_a_section_href() {
+    let boot = boot_with_seeded_claims(Some("https://kb.example.com")).await;
+    wait_for_indexed(&boot.base, "alpha", 1).await;
+    let (status, body) = http_get(&boot.base, SEEDED_PATH).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["schema"], "doc-refs/1", "schema string unchanged");
+    let claims = body["claims"].as_array().unwrap();
+    assert_eq!(claims.len(), 2, "{body}");
+    // (a) grouped: anchor + golden section href (special characters encoded)
+    assert_eq!(claims[0]["group_anchor"], "kb-h-the-cart & co#1");
+    assert_eq!(
+        claims[0]["doc_section_href"],
+        "https://kb.example.com/a/platform/features/check%20out.html?sec=kb-h-the-cart%20%26%20co%231"
+    );
+    assert_eq!(
+        claims[0]["doc_public_href"],
+        "https://kb.example.com/a/platform/features/check%20out.html"
+    );
+    // (b) NULL group_key: null anchor + null section href, doc-level href kept
+    assert!(claims[1]["group_anchor"].is_null(), "{body}");
+    assert!(claims[1]["doc_section_href"].is_null(), "{body}");
+    assert_eq!(
+        claims[1]["doc_public_href"],
+        "https://kb.example.com/a/platform/features/check%20out.html"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn doc_refs_without_a_public_base_has_no_hrefs_but_keeps_the_anchor() {
+    let boot = boot_with_seeded_claims(None).await;
+    wait_for_indexed(&boot.base, "alpha", 1).await;
+    let (status, body) = http_get(&boot.base, SEEDED_PATH).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for c in body["claims"].as_array().unwrap() {
+        assert!(c["doc_public_href"].is_null(), "{body}");
+        assert!(c["doc_section_href"].is_null(), "{body}");
+    }
+    assert_eq!(body["claims"][0]["group_anchor"], "kb-h-the-cart & co#1");
 }

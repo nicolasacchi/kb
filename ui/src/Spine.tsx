@@ -8,6 +8,12 @@ export interface SpineProps {
   scope?: ReactNode;
   /** Centred search. */
   search?: ReactNode;
+  /**
+   * Optional crossing slot (OL-SIBL1): where the current thing crosses to its
+   * sibling app (e.g. the citing doc). Rendered between `search` and `right`,
+   * only when defined, and NOT hidden at <=860px (the chip collapses itself).
+   */
+  crossing?: ReactNode;
   /** Right: status and identity. View controls never live here (ViewBar). */
   right?: ReactNode;
   /** When given, a menu button is rendered (visible only at <=860px). */
@@ -24,6 +30,7 @@ export function Spine({
   switcher,
   scope,
   search,
+  crossing,
   right,
   onMenu,
   menuOpen,
@@ -42,6 +49,11 @@ export function Spine({
       <div data-kb-spine-slot="search" className="kb-spine__slot kb-spine__search">
         {search}
       </div>
+      {crossing !== undefined ? (
+        <div data-kb-spine-slot="crossing" className="kb-spine__slot kb-spine__crossing">
+          {crossing}
+        </div>
+      ) : null}
       <div data-kb-spine-slot="right" className="kb-spine__slot kb-spine__right">
         {right}
       </div>

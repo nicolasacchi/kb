@@ -94,6 +94,7 @@ export const DEFAULT_ICON_SIZES = {
   Palette: 14,
   Record: 14,
   Fork: 14,
+  Bridge: 14,
 } as const;
 
 export type IconSizeOverrides = Partial<Record<keyof typeof DEFAULT_ICON_SIZES, number>>;
@@ -656,6 +657,15 @@ export function createIconSet(overrides: IconSizeOverrides = {}) {
         <circle cx="5" cy="2" r="1.4" />
         <circle cx="12.2" cy="9.2" r="1.4" />
         <circle cx="5" cy="14" r="1.4" />
+      </svg>
+    ),
+    // OL-SIBL1 — the doc<->code bridge: a deck over a single arch, two
+    // piers. Marks the crossing chip between kb and kb-code.
+    Bridge: (p: P) => (
+      <svg {...base(sz("Bridge"))} {...p} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M1.5 6.5h13" />
+        <path d="M3 6.5v6M13 6.5v6" />
+        <path d="M3 12.5a5 5 0 0 1 10 0" />
       </svg>
     ),
   };

@@ -49,8 +49,16 @@
   flex: 1 1 auto;
   text-align: left;
 }
+/* OL-SIBL1 - the crossing chip is rigid (`flex: 0 0 auto`), so on a crowded
+ * 1280px bar the search slot (flex-basis 0, min-width 0) used to collapse to
+ * nothing and its box spilled under the chip. Give it a floor so the scope
+ * crumbs (which ellipsize) absorb the squeeze instead. */
+.kbc-topbar .kb-spine__search {
+  min-width: 9rem;
+}
 @media (max-width: 860px) {
   .kbc-topbar .kb-spine__search {
+    min-width: 0;
     flex: 0 0 auto;
     margin: 0 0 0 auto;
   }

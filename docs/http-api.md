@@ -2050,6 +2050,9 @@ POST   /api/kb/{kb}/links/apply             {src,dst} artifact ids — splices
 # DCB — code references extracted from a doc's own bytes (coderef/1). HINTS
 # ONLY: kb has no working tree and never resolves them (invariant #2/#4); the
 # code daemon's /api/doc-lens turns these into resolved, trust-labelled links.
+# A group's `key` (= its `kb-h-<slug>` anchor) is what kb-code stores as a
+# claim's `group_anchor` and appends to the permalink as `?sec=<anchor>` (the
+# `doc_section_href` on its `GET /api/doc-refs` claims, docs/kb-code.md).
 GET    /api/kb/{kb}/docs/{id}/code-refs      one doc's refs + heading groups
 GET    /api/kb/{kb}/code-refs?cursor=&limit=&refs=0
                                             corpus cursor feed (ASC keyset on

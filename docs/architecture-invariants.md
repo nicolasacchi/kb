@@ -162,6 +162,8 @@ agree, m24).
 
 **Canary (v0.44 F1):** `ci/canaries/03-sweep-memory-recalls.sh` drops `memory_recalls` from `SWEEP_TABLES`; `cascade_cleanup_tables_are_pinned` and `sweep_reclaims_orphan_capture_recalls_but_spares_live_serves` must then FAIL (the registry-completeness test accepts either registry and does not see it).
 
+*SIBL1 (v0.50):* `group_key` is the SECTION anchor kb-code exposes as a claim's `group_anchor` and `doc_section_href` (`?sec=<anchor>`); it stays a stored claim re-validated on read, never a new trust class, column or table.
+
 ### 3. `ConnectInfo<SocketAddr>` read from request extensions
 
 Not as an extractor (`req.extensions().get::<ConnectInfo<SocketAddr>>()`). A
@@ -2570,6 +2572,8 @@ focus-keyed rather than pane-local:
     `ArtifactPane`) — two triggers, one home. The flow stack is per-tab
     sessionStorage (like the scroll-restoration tier, not the registers tier)
     and browser-local ⇒ same **recorded CLI-parity exemption** as registers.
+
+*SIBL1 (v0.50):* the shared Spine gained an optional `crossing` slot (not hidden at <=860px) that kb-code's TopBar fills with a Cited-by chip reusing the rail strip's `useDocRefs` query; it is chrome beside the single inspector rail, not a second home for an action, and adds no key binding.
 
 ### 31. Scroll restoration keys on the full URL; the in-app back must replay it (X1)
 

@@ -104,6 +104,7 @@ import {
   type UsageChips,
 } from "../lib/usages2";
 import { pillRows, resolveOp } from "../lib/actionOps";
+import { CITEDBY_OPEN_EVENT } from "../lib/citedBy";
 import type { ActionRow, ActionsOut, ActionTarget, Usages2Out, UsageRow2 } from "../api/types";
 import type { LinkifyCallbacks } from "../editor/linkify";
 import type { LineMarkerSpec } from "../editor/lineGutter";
@@ -3734,6 +3735,17 @@ export default function Reader() {
       );
     },
   });
+
+  // OL-SIBL1 - on mobile the Cited-by strip lives inside the reader-tools
+  // sheet, so the TopBar crossing chip's open-strip request must open that
+  // sheet too (CitedBy itself only expands its list). Desktop: the strip is
+  // always docked, nothing to open.
+  useEffect(() => {
+    if (!isMobile) return;
+    const onOpen = () => setInspectorOpen(true);
+    window.addEventListener(CITEDBY_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(CITEDBY_OPEN_EVENT, onOpen);
+  }, [isMobile]);
 
   // F5 — Esc closes the mobile reader-tools sheet (mirrors `MobileDrawer`'s
   // own Esc handling for the tree drawer). Skips typing targets + anything

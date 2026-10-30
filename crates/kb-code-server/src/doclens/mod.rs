@@ -549,6 +549,22 @@ pub(crate) fn doc_href(public_base: &str, kb: &str, doc_path: &str) -> Option<St
     Some(format!("{base}/a/{}/{path}", encode_uri_component(kb)))
 }
 
+/// [`doc_href`] plus `?sec=<anchor>` — the permalink AT a section. `anchor`
+/// is the claim's stored `group_key` (kb's `kb-h-<slug>` heading anchor), run
+/// through the SAME encoder as every other component. `None` when
+/// [`doc_href`] is `None` or the anchor is absent/empty: a missing section
+/// never invents one, the caller falls back to the doc-level href.
+pub(crate) fn doc_href_at(
+    public_base: &str,
+    kb: &str,
+    doc_path: &str,
+    anchor: Option<&str>,
+) -> Option<String> {
+    let anchor = anchor.filter(|a| !a.is_empty())?;
+    let base = doc_href(public_base, kb, doc_path)?;
+    Some(format!("{base}?sec={}", encode_uri_component(anchor)))
+}
+
 /// JavaScript `encodeURIComponent`'s exact unreserved set
 /// (`A-Za-z0-9 - _ . ! ~ * ' ( )`); everything else is percent-encoded
 /// byte-wise, uppercase hex. Hand-rolled rather than pulling in
@@ -692,6 +708,39 @@ mod tests {
         assert_eq!(doc_href("", "platform", "a.html"), None);
         assert_eq!(doc_href("   ", "platform", "a.html"), None);
         assert_eq!(doc_href("https://kb.example.com", "platform", ""), None);
+    }
+
+    #[test]
+    fn doc_href_at_appends_an_encoded_sec_and_is_none_without_an_anchor_or_base() {
+        assert_eq!(
+            doc_href_at(
+                "https://kb.example.com",
+                "platform",
+                "features/a b.html",
+                Some("kb-h-checkout")
+            )
+            .as_deref(),
+            Some("https://kb.example.com/a/platform/features/a%20b.html?sec=kb-h-checkout")
+        );
+        assert_eq!(
+            doc_href_at(
+                "https://kb.example.com",
+                "platform",
+                "a.html",
+                Some("x&y=1#z")
+            )
+            .as_deref(),
+            Some("https://kb.example.com/a/platform/a.html?sec=x%26y%3D1%23z")
+        );
+        assert_eq!(
+            doc_href_at("https://kb.example.com", "platform", "a.html", None),
+            None
+        );
+        assert_eq!(
+            doc_href_at("https://kb.example.com", "platform", "a.html", Some("")),
+            None
+        );
+        assert_eq!(doc_href_at("", "platform", "a.html", Some("kb-h-a")), None);
     }
 
     #[test]

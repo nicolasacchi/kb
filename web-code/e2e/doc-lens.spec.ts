@@ -20,6 +20,7 @@ import {
   DOCLENS_CITEDBY_DOC_B_PATH,
   DOCLENS_CITEDBY_FILE,
   DOCLENS_CITEDBY_FILE_CONTENT,
+  DOCLENS_CITEDBY_GROUP_KEY,
   DOCLENS_CITEDBY_GROUP_LABEL,
   DOCLENS_DOC_TITLE,
   DOCLENS_GROUP_KEY,
@@ -358,7 +359,7 @@ test.describe("cited-by (DCB-W3.B)", () => {
     const linkA = rowA.locator("[data-kbc-citedby-link]");
     await expect(linkA).toHaveAttribute(
       "href",
-      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}`,
+      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}?sec=${DOCLENS_CITEDBY_GROUP_KEY}`,
     );
     await expect(linkA).toHaveAttribute("target", "_blank");
 
@@ -395,6 +396,78 @@ test.describe("cited-by (DCB-W3.B)", () => {
     await expect(page.locator(".kbc-codeview")).toBeVisible({ timeout: 10_000 });
     await docRefsResponse;
     await expect(page.locator("[data-kbc-citedby]")).toHaveCount(0);
+  });
+
+  // OL-SIBL1 - the TopBar crossing chip. `lib.rs` and `resolver.rs` are cited
+  // by exactly one PINNED doc (`doc1`), so the chip is a plain link; the
+  // cited-by demo file is cited by two docs, so the chip is a button that
+  // expands the rail strip. (public_base-unset is pinned by the Rust route
+  // test and citedBy.test.ts: this harness's daemon always sets public_url.)
+  test("the crossing chip links a single citing doc at its section", async ({ page }) => {
+    await page.goto(`${BASE}/r/${REPO_NAME}/lib.rs`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(chip).toHaveAttribute(
+      "href",
+      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_DOC_PATH}?sec=${DOCLENS_GROUP_KEY}`,
+    );
+    // The chip must not paint over the search slot (it once collapsed to 0 width).
+    const search = await page.locator("[data-kb-spine-slot=search]").boundingBox();
+    const box = await chip.boundingBox();
+    expect(search && search.width).toBeGreaterThan(100);
+    expect(search!.x + search!.width).toBeLessThanOrEqual(box!.x + 1);
+  });
+
+  test("a claim with no anchor crosses to the doc-level href", async ({ page }) => {
+    // `resolver.rs:9999` is doc1's UNGROUPED citation; the line overlap picks it.
+    await page.goto(`${BASE}/r/${REPO_NAME}/resolver.rs?line=9999`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(chip).toHaveAttribute(
+      "href",
+      `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_DOC_PATH}`,
+    );
+  });
+
+  test("with several citing docs the chip expands the Cited-by strip", async ({ page }) => {
+    await page.goto(`${BASE}/r/${REPO_NAME}/${DOCLENS_CITEDBY_FILE}`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("[data-kbc-citedby-list]")).toHaveCount(0);
+    await chip.click();
+    await expect(page.locator("[data-kbc-citedby-list]")).toBeVisible();
+  });
+
+  test("without a public base the chip falls back to expanding the strip", async ({ page }) => {
+    // The harness daemon always sets public_url, so strip both hrefs from the
+    // real response: this is the wire a daemon with public_base unset sends.
+    await page.route("**/api/doc-refs*", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      for (const c of body.claims) {
+        c.doc_public_href = null;
+        c.doc_section_href = null;
+      }
+      await route.fulfill({ response: res, json: body });
+    });
+    await page.goto(`${BASE}/r/${REPO_NAME}/lib.rs`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(chip).not.toHaveAttribute("href", /.*/);
+    await expect(page.locator("[data-kbc-citedby-list]")).toHaveCount(0);
+    await chip.click();
+    await expect(page.locator("[data-kbc-citedby-list]")).toBeVisible();
+  });
+
+  test("on a phone the chip opens the reader-tools sheet with the strip expanded", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${BASE}/r/${REPO_NAME}/${DOCLENS_CITEDBY_FILE}`);
+    const chip = page.locator("[data-kb-spine-slot=crossing] [data-testid=sibling-doc-chip]");
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(0);
+    await chip.click();
+    await expect(page.locator(".kbc-reader--sheet-open")).toHaveCount(1);
+    await expect(page.locator("[data-kbc-citedby-list]")).toBeVisible();
   });
 
   // Deliberately LAST in this describe block — it deletes the one file the
@@ -446,7 +519,7 @@ test.describe("cited-by (DCB-W3.B)", () => {
       const rowA = chip.locator("[data-kbc-citedby-row]").filter({ hasText: DOCLENS_CITEDBY_DOC_A_TITLE });
       await expect(rowA.locator("[data-kbc-citedby-link]")).toHaveAttribute(
         "href",
-        `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}`,
+        `http://127.0.0.1:${DOCLENS_FIXTURE_PORT}/a/${DOCLENS_KB}/${DOCLENS_CITEDBY_DOC_A_PATH}?sec=${DOCLENS_CITEDBY_GROUP_KEY}`,
       );
     });
   });
