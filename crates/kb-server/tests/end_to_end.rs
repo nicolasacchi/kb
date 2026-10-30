@@ -24601,3 +24601,211 @@ async fn segmented_session_chain_reads_through_the_routes() {
         "{raw_detail}"
     );
 }
+
+// --- OL PRES1: live-touches (scrubbed file presence on auth_bearer) ---------
+
+async fn post_beat(
+    client: &reqwest::Client,
+    addr: std::net::SocketAddr,
+    sid: &str,
+    event: &str,
+    detail: serde_json::Value,
+) {
+    let resp = client
+        .post(url(addr, "/api/sessions/beat"))
+        .header("Origin", ORIGIN)
+        .json(&serde_json::json!({
+            "v": 1, "session_id": sid, "harness": "claude", "event": event,
+            "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "cwd": "/work/demo/repo/sub", "detail": detail,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "beat {event}: {:?}",
+        resp.text().await
+    );
+}
+
+async fn seed_touch_session(client: &reqwest::Client, addr: std::net::SocketAddr) {
+    post_beat(client, addr, "sid-touch-1", "start", serde_json::json!({})).await;
+    post_beat(
+        client,
+        addr,
+        "sid-touch-1",
+        "tool",
+        serde_json::json!({
+            "tool": "Edit",
+            // Two inside the root, two outside it (one a sibling-prefix, one
+            // a system path): the outside ones must leave no trace.
+            "paths": [
+                "/work/demo/repo/src/lib.rs",
+                "/work/demo/repo/README.md",
+                "/work/demo/repo2/secret.txt",
+                "/etc/passwd-leak-marker",
+            ],
+            "root": "/work/demo/repo",
+            "project": "repo",
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn live_touches_loopback_and_bearer_peers_get_identical_scrubbed_rows() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    seed_touch_session(&client, addr).await;
+
+    let loop_resp = client
+        .get(url(addr, "/api/sessions/live-touches"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(loop_resp.status().as_u16(), 200);
+    assert_eq!(
+        loop_resp.headers().get("cache-control").unwrap(),
+        "no-store"
+    );
+    let loop_body: serde_json::Value = loop_resp.json().await.unwrap();
+
+    let bearer_resp = client
+        .get(url(addr, "/api/sessions/live-touches"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .header("Authorization", format!("Bearer {FIXTURE_TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bearer_resp.status().as_u16(), 200);
+    let bearer_text = bearer_resp.text().await.unwrap();
+    let bearer_body: serde_json::Value = serde_json::from_str(&bearer_text).unwrap();
+
+    // Ages can differ by a second between the two calls; compare the rest.
+    let strip = |mut v: serde_json::Value| {
+        for t in v["touches"].as_array_mut().unwrap() {
+            t.as_object_mut().unwrap().remove("age_secs");
+        }
+        v
+    };
+    assert_eq!(strip(loop_body.clone()), strip(bearer_body.clone()));
+
+    assert_eq!(bearer_body["schema"], "kb-live-touches/1");
+    assert_eq!(bearer_body["truncated"], false);
+    let touches = bearer_body["touches"].as_array().unwrap();
+    let mut rels: Vec<&str> = touches.iter().map(|t| t["rel"].as_str().unwrap()).collect();
+    rels.sort();
+    assert_eq!(rels, ["README.md", "src/lib.rs"]);
+    for t in touches {
+        let mut keys: Vec<&str> = t.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "age_secs",
+                "harness",
+                "project",
+                "rel",
+                "session_id",
+                "state",
+                "tool"
+            ]
+        );
+        assert_eq!(t["project"], "repo");
+        assert_eq!(t["tool"], "Edit");
+        assert_eq!(t["state"], "working");
+        assert!(!t["rel"].as_str().unwrap().starts_with('/'));
+    }
+    // Structural scrub: nothing absolute, no root, no cwd, no outside path.
+    for needle in ["/work", "/etc", "secret.txt", "passwd-leak-marker", "cwd"] {
+        assert!(
+            !bearer_text.contains(needle),
+            "response leaks {needle:?}: {bearer_text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn live_touches_non_loopback_without_token_is_401() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url(addr, "/api/sessions/live-touches"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401);
+}
+
+#[tokio::test]
+async fn live_touches_filters_and_clamps() {
+    let (_tmp, addr) = boot_with_token().await;
+    let client = reqwest::Client::new();
+    seed_touch_session(&client, addr).await;
+    let get = |q: &str| {
+        let u = url(addr, &format!("/api/sessions/live-touches{q}"));
+        let c = client.clone();
+        async move { c.get(u).send().await.unwrap() }
+    };
+    let n = |v: serde_json::Value| v["touches"].as_array().unwrap().len();
+    let ok = get("?project=repo").await;
+    assert_eq!(n(ok.json().await.unwrap()), 2);
+    let other = get("?project=nope&project=also-nope").await;
+    assert_eq!(n(other.json().await.unwrap()), 0);
+    let both = get("?project=nope&project=repo").await;
+    assert_eq!(n(both.json().await.unwrap()), 2);
+    // max_age_secs below the 60 floor clamps up (a 5 s-old touch survives 0).
+    let clamped = get("?max_age_secs=0").await;
+    assert_eq!(n(clamped.json().await.unwrap()), 2);
+    let bad = get("?harness=not-a-harness").await;
+    assert_eq!(bad.status().as_u16(), 400);
+    let many: String = (0..33).map(|i| format!("&project=p{i}")).collect();
+    let too_many = get(&format!("?{}", &many[1..])).await;
+    assert_eq!(too_many.status().as_u16(), 400);
+}
+
+/// A flood of touch beats on an already-working session must put NOTHING on
+/// the bus: `session.state` fires once (the first beat), never per touch.
+#[tokio::test]
+async fn touch_beat_on_already_working_session_emits_no_session_state_event() {
+    use futures::StreamExt;
+    let (_tmp, addr) = boot().await;
+    let client = reqwest::Client::new();
+    post_beat(&client, addr, "sid-flood", "start", serde_json::json!({})).await;
+    for i in 0..25 {
+        post_beat(
+            &client,
+            addr,
+            "sid-flood",
+            "tool",
+            serde_json::json!({
+                "tool": "Write", "paths": [format!("/r/f{i}.rs")],
+                "root": "/r", "project": "r",
+            }),
+        )
+        .await;
+    }
+    let resp = client.get(url(addr, "/api/events")).send().await.unwrap();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    let _ = tokio::time::timeout(Duration::from_millis(1500), async {
+        while let Some(chunk) = stream.next().await {
+            if let Ok(bytes) = chunk {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    })
+    .await;
+    let frames = buf
+        .lines()
+        .filter_map(|l| l.strip_prefix("event:"))
+        .filter(|e| e.trim() == "session.state")
+        .count();
+    assert_eq!(
+        frames, 1,
+        "only the start beat transitions; saw {frames}:\n{buf}"
+    );
+}
