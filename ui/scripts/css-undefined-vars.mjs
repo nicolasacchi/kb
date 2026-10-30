@@ -118,17 +118,45 @@ for (const f of cssFiles) {
 // `style={{ ["--x" as string]: v }}` or `el.style.setProperty("--x", v)`. They
 // are real values on a real element, not made-up tokens. A `var(--x)` of such
 // a name is still allowed to carry a fallback for the elements that do not set it.
-const TS_DEF_RES = [
-  // Object-key position only (after `{`, `,` or at line start) so a ternary
-  // branch like `c ? "--x" : y` does not count as a declaration.
-  /(?:^|[{,])\s*\[?\s*["'`](--[a-zA-Z0-9-]+)["'`](?:\s+as\s+string)?\s*\]?\s*:/gm,
-  /setProperty\(\s*["'`](--[a-zA-Z0-9-]+)["'`]/g,
-];
+// Linear-time by construction: the regexes start at a quote (never at
+// whitespace), so no `\s*` is re-entered from every position of a long
+// whitespace run (comment stripping blanks comments into such runs, and the
+// earlier `(?:^|[{,])\s*\[?\s*"…` form went quadratic on them). The
+// object-key context is then checked by one bounded backward walk per match.
+const TS_KEY_RE = /["'`](--[a-zA-Z0-9-]+)["'`](?:\s+as\s+string)?\s*\]?\s*:/g;
+const TS_SET_PROP_RE = /setProperty\(\s*["'`](--[a-zA-Z0-9-]+)["'`]/g;
+
+// Object-key position only (after `{`, `,` or at line start, optionally inside
+// `[ … ]`) so a ternary branch like `c ? "--x" : y` does not count.
+function isObjectKeyPosition(text, quoteIdx) {
+  let i = quoteIdx - 1;
+  let sawNewline = false;
+  const skipWs = () => {
+    while (i >= 0 && /\s/.test(text[i])) {
+      if (text[i] === "\n") sawNewline = true;
+      i--;
+    }
+  };
+  skipWs();
+  if (i >= 0 && text[i] === "[") {
+    i--;
+    skipWs();
+  }
+  return i < 0 || sawNewline || text[i] === "{" || text[i] === ",";
+}
+
+function tsDeclaredNames(text) {
+  const names = [];
+  for (const found of text.matchAll(TS_KEY_RE)) {
+    if (isObjectKeyPosition(text, found.index)) names.push(found[1]);
+  }
+  for (const found of text.matchAll(TS_SET_PROP_RE)) names.push(found[1]);
+  return names;
+}
 for (const f of tsFiles) {
   const raw = readFileSync(f, "utf8");
   if (!raw.includes("--")) continue;
-  const text = stripJsComments(raw);
-  for (const re of TS_DEF_RES) for (const found of text.matchAll(re)) defined.add(found[1]);
+  for (const name of tsDeclaredNames(stripJsComments(raw))) defined.add(name);
 }
 
 // ── Fallback-chain resolution --------------------------------------------
