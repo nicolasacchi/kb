@@ -49,6 +49,12 @@ re-rendered through the `session-view/1` engine by `kb-cli`'s
 | `ask-user-question.jsonl` | 38 | THREE genuine `AskUserQuestion` steering decisions (one `tool_use`; the paired `toolUseResult` carries `questions[]` + `answers{}`, and the ORDER comes from `questions[]`), plus THREE completed subagent delegations summed together |
 | `tool-heavy-research.jsonl` | 75 | the tool-heavy research turn: TWO **async** (`status:"async_launched"`) Agent launches that must land in `subagent_launched_unstatted` and never contribute a zero-valued `subagent_count`; a `WebFetch`; two `kb search` Bash calls; a `Skill` invocation; `ToolSearch`/`TaskCreate`/`TaskUpdate`/`Write`/`Edit`/`Read`; four `is_error` results; a first prompt longer than `PROMPT_PREVIEW_MAX_CHARS` (so the 200-char truncation is exercised); two human turns |
 
+### The evidence fixture (OL IDEA3)
+
+| fixture | records | what it exercises |
+|---|---|---|
+| `verify-after-edit.jsonl` | 12 | the session evidence card (`sessions::checks`): `Edit` -> a wrapped, PIPED `cargo test -p widget 2>&1 \| tail -5` whose `test result: ok.` line decides (the exit status is `tail`'s) -> `Edit` -> a BACKGROUND `cargo clippy` settled by a `<task-notification>` -> a closing text that names only one of the two edited files. Consumed by `../session_checks.rs`; also one of the six fixtures the R1 digest isolation pin runs over |
+
 ### Properties the consumers actually assert
 
 The snapshots pin everything, but three test files assert *values* directly —
