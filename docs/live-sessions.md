@@ -266,6 +266,9 @@ gate and `KB_BEAT_HEARTBEAT=0` (it is a lifecycle beat), once per block.
 
 - An approved long tool keeps "Needs you" until it finishes, because no hook
   fires in between; the row shows since when.
+- Parallel tool calls on the same agent can clear a block that is still
+  pending: the inferred unblock fires on the first PostToolUse from that
+  agent, even if another tool is still waiting on its prompt.
 - A denied prompt clears at your next prompt or at turn end.
 - A prompt you answer within about 6 seconds never notifies, so it never
   blocks.

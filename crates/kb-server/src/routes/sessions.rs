@@ -7903,6 +7903,12 @@ fn tier0_wanted(q: &LiveStatusQuery) -> bool {
     !wants_raw_flag(&q.blocked)
 }
 
+/// `?blocked=1` keeps a row only while its claim is live: blocked AND not
+/// yet `presumed_ended` (eight hours of silence ends the claim).
+fn blocked_claim_live(blocked: bool, state: LiveState) -> bool {
+    blocked && state != LiveState::PresumedEnded
+}
+
 /// csv over the six-state wire vocabulary. Unknown tokens are DROPPED
 /// (never a 400) — this filter's own rule, UNCHANGED by the OK1 amendment
 /// to [`parse_harness_csv`] (harness now 400s on an unknown EXPLICIT
@@ -8218,7 +8224,7 @@ pub async fn live_status(
 
     if wants_raw_flag(&q.blocked) {
         // Eight hours of silence ends the claim, as for any agent row.
-        rows.retain(|r| r.blocked && r.state != LiveState::PresumedEnded);
+        rows.retain(|r| blocked_claim_live(r.blocked, r.state));
     }
     if !wanted_states.is_empty() {
         rows.retain(|r| wanted_states.contains(&r.state));
@@ -8737,6 +8743,14 @@ mod lsc2_tests {
         declared_required.sort();
         assert_eq!(keys(&blocked), declared_all);
         assert_eq!(keys(&plain), declared_required);
+    }
+
+    #[test]
+    fn blocked_read_drops_presumed_ended_rows() {
+        assert!(blocked_claim_live(true, LiveState::Working));
+        assert!(blocked_claim_live(true, LiveState::Waiting));
+        assert!(!blocked_claim_live(true, LiveState::PresumedEnded));
+        assert!(!blocked_claim_live(false, LiveState::Working));
     }
 
     #[test]

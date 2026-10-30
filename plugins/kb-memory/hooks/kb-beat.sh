@@ -230,8 +230,8 @@ detail_reason=""
 blocked_tool=""
 if [ "$event" = "blocked" ]; then
   detail_reason="$(jq_field '.message // .matcher // empty' "$input")"
-  detail_reason="${detail_reason:0:120}"
   if [ "$harness" = "claude" ]; then
+    detail_reason="${detail_reason:0:120}"
     ntype="$(jq_field '.notification_type // empty' "$input")"
     nmsg="$(jq_field '.message // empty' "$input")"
     case "$ntype" in

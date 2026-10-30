@@ -91,7 +91,7 @@ describe("WaitingChip", () => {
     expect(chip.getAttribute("href")).toBe("/sessions#kb-now-blocked");
     expect(chip.className).toBe("kb-waiting kb-waiting--blocked");
     expect(chip.hasAttribute("data-kb-blocked")).toBe(true);
-    expect(chip.getAttribute("aria-label")).toBe("1 session blocked on you");
+    expect(chip.getAttribute("aria-label")).toBe("1 blocked: 1 session blocked on you");
   });
 
   it("OL IDEA1: blocked + waiting -> both counts and the plural aria text", async () => {
@@ -105,7 +105,9 @@ describe("WaitingChip", () => {
     const chip = screen.getByTestId("header-waiting");
     expect(chip.textContent).toBe("2 blocked · 1 waiting");
     expect(chip.getAttribute("title")).toBe("2 sessions blocked on you · 1 waiting on you");
-    expect(chip.getAttribute("aria-label")).toBe("2 sessions blocked on you · 1 waiting on you");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "2 blocked · 1 waiting: 2 sessions blocked on you · 1 waiting on you",
+    );
   });
 
   it("OL IDEA1: with no blocked rows the chip is the plain waiting chip", async () => {

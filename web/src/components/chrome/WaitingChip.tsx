@@ -31,15 +31,17 @@ export default function WaitingChip() {
   if (blocked > 0) {
     const plural = (n: number) => `${n} session${n === 1 ? "" : "s"}`;
     const text = `${blocked} blocked${count > 0 ? ` · ${count} waiting` : ""}`;
-    const label =
+    const title =
       `${plural(blocked)} blocked on you` + (count > 0 ? ` · ${count} waiting on you` : "");
+    // The accessible name starts with the visible text (WCAG 2.5.3).
+    const label = `${text}: ${title}`;
     return (
       <Link
         to="/sessions#kb-now-blocked"
         className="kb-waiting kb-waiting--blocked"
         data-testid="header-waiting"
         data-kb-blocked=""
-        title={label}
+        title={title}
         aria-label={label}
       >
         <Icon.Terminal aria-hidden />
