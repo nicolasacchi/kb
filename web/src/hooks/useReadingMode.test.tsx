@@ -85,6 +85,25 @@ describe("useReadingMode", () => {
     expect(result.current.state).toBe("off");
   });
 
+  it("with the per-kb default on and no ack yet, the first press switches it OFF", () => {
+    savePrefs({ ...loadPrefs(), readingDefault: { docs: true } });
+    const { result } = setup("docs");
+    expect(result.current.state).toBe("unknown");
+    act(() => result.current.toggle());
+    expect(sent.at(-1)).toMatchObject({ kind: "kb:read", on: false });
+  });
+
+  it("a runtime ack that lands between kb:read-ready and the frame load survives the load", () => {
+    const { result } = setup();
+    act(() => result.current.onReady());
+    act(() => result.current.onAck({ state: "on" }));
+    act(() => result.current.onFrameLoad());
+    expect(result.current.state).toBe("on");
+    // The next load without a ready in front of it still voids the ack.
+    act(() => result.current.onFrameLoad());
+    expect(result.current.state).toBe("unknown");
+  });
+
   it("an unforced sync does not repeat what toggle just sent; a forced one always does", () => {
     const { result } = setup();
     act(() => result.current.toggle());

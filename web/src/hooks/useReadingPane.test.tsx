@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { THEME_APPLIED_EVENT } from "@kb/ui/themes/apply";
 import { loadPrefs, savePrefs } from "../api/prefs";
+import { dispatchForwardedKey } from "../lib/artifactKeys";
 import { artifactOrigin } from "../lib/artifactHost";
 import { toast } from "../lib/toast";
 import {
@@ -154,6 +155,18 @@ describe("useReadingPane", () => {
     expect(p.frame.post.mock.calls[0][0]).toMatchObject({ kind: "kb:read", on: true });
   });
 
+  it("a page the daemon styled at serve time acks 'on' after its ready: the row is pressed and the first r turns it OFF", () => {
+    const p = pane();
+    deliver({ kind: "kb:read-ready" }, p.origin, p.frame.win);
+    deliver(ack("on"), p.origin, p.frame.win);
+    // The iframe's load event follows the ready; it must not erase the ack.
+    act(() => p.result.current.onFrameLoad());
+    expect(p.result.current.pressed).toBe(true);
+    p.frame.post.mockClear();
+    act(() => p.result.current.toggle());
+    expect(p.frame.post.mock.calls[0][0]).toMatchObject({ kind: "kb:read", on: false });
+  });
+
   it("sends nothing at mount when there is neither a default nor a request", () => {
     const p = pane();
     expect(p.frame.post).not.toHaveBeenCalled();
@@ -209,6 +222,16 @@ describe("useReadingPane", () => {
 });
 
 describe("bare r key", () => {
+  it("a forwarded kb:key r (replayed on body) toggles the focused pane only", () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    renderHook(() => useReadingKey(true, a));
+    renderHook(() => useReadingKey(false, b));
+    dispatchForwardedKey("r");
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).not.toHaveBeenCalled();
+  });
+
   const key = (init: KeyboardEventInit = {}, target: EventTarget = document.body) =>
     act(() => {
       target.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true, ...init }));

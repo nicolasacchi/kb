@@ -110,7 +110,11 @@ export interface ReadingMode {
   /// The SPA theme changed: refresh the scheme of an applied sheet.
   syncScheme: () => void;
   /// The iframe loaded a new document: the old ack describes a page that is gone.
+  /// (Unless the runtime's `kb:read-ready` already reset it for this document -
+  /// its served-page ack may have landed between the ready and the load.)
   onFrameLoad: () => void;
+  /// The runtime announced a new document (`kb:read-ready`): drop the old ack.
+  onReady: () => void;
 }
 
 export function useReadingMode({
@@ -161,7 +165,9 @@ export function useReadingMode({
       toast.info(readingWhyCopy(cur.why));
       return;
     }
-    const next = cur.state !== "on";
+    // Before any ack the page's look is unknown: flip what we believe is
+    // applied (the per-kb default), so the first press never re-sends it.
+    const next = cur.state === "unknown" ? !cur.effective : cur.state !== "on";
     setOverrideRaw({ id: cur.id, v: next });
     userPending.current = true;
     send(next);
@@ -211,8 +217,19 @@ export function useReadingMode({
     if (live.current.state === "on") send(true);
   }, [send]);
 
+  const readySeen = useRef(false);
+  const onReady = useCallback(() => {
+    readySeen.current = true;
+    lastSent.current = null;
+    setAckRaw(null);
+  }, []);
   const onFrameLoad = useCallback(() => {
     lastSent.current = null;
+    if (readySeen.current) {
+      // This document already announced itself and may have acked since.
+      readySeen.current = false;
+      return;
+    }
     setAckRaw(null);
   }, []);
 
@@ -226,5 +243,6 @@ export function useReadingMode({
     sync,
     syncScheme,
     onFrameLoad,
+    onReady,
   };
 }

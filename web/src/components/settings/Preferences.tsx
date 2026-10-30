@@ -155,11 +155,11 @@ export default function Preferences() {
         </p>
         {kbs.length > 0 && (
           <>
-            <div className="settings__field">
-              <span className="settings__label">Open artifacts in reading mode</span>
-              <span className="settings__hint">
+            <fieldset className="settings__field settings__group">
+              <legend className="settings__label">Open artifacts in reading mode</legend>
+              <span className="settings__hint settings__checks">
                 {kbs.map((k) => (
-                  <label key={k.name} style={{ marginRight: 12 }}>
+                  <label key={k.name}>
                     <input
                       type="checkbox"
                       data-kb-act={`reading-default-${k.name}`}
@@ -175,7 +175,7 @@ export default function Preferences() {
                   </label>
                 ))}
               </span>
-            </div>
+            </fieldset>
             <p className="settings__hint">
               Artifacts opened from a ticked corpus start in kb&apos;s reading
               style (serif, narrow measure); pages that are mostly media or that

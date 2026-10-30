@@ -53,7 +53,7 @@ import {
 } from "../../lib/artifactLinks";
 import type { FlowEntry } from "../../lib/flowStack";
 import type { PaneLoc } from "../../lib/paneUrl";
-import { dispatchForwardedKey, forwardedKey } from "../../lib/artifactKeys";
+import { routeForwardedKey } from "../../lib/artifactKeys";
 import { readingWhyCopy } from "../../hooks/useReadingMode";
 import { useReadingKey, useReadingPane } from "../../hooks/useReadingPane";
 import { withKb } from "../../lib/navItems";
@@ -1498,9 +1498,7 @@ export default function ArtifactPane({
         // it toggles THIS pane instead of replaying into a window handler
         // that acts on whichever pane the route thinks is focused (that
         // focus claim, a few lines up, has not rendered yet).
-        const key = forwardedKey(msg);
-        if (key === "r") readingRef.current.toggle();
-        else if (key) dispatchForwardedKey(key);
+        routeForwardedKey(msg, () => readingRef.current.toggle());
       } else if (msg.kind === "kb:reading") {
         // RP-track — cumulative per-visit reading snapshot. Mirror the
         // scroll-flush: store the latest, POST when no flush is in flight.

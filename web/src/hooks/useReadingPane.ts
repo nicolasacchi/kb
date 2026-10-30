@@ -124,6 +124,7 @@ export function useReadingPane(o: UseReadingPaneOptions): ReadingMode {
       const data = e.data as { kind?: unknown } | null;
       if (!data || typeof data !== "object") return;
       if (data.kind === "kb:read-ready") {
+        ref.current.onReady();
         ref.current.sync(true);
         return;
       }

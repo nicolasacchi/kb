@@ -36,3 +36,19 @@ export function dispatchForwardedKey(key: string, doc: Document = document): voi
     new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
   );
 }
+
+/// Route a `kb:key` message from ONE pane's frame: `r` toggles that pane's
+/// reading mode directly (the frame it came from is unambiguous, so two panes
+/// never both act); every other whitelisted key is replayed into the window's
+/// handlers. Returns the key acted on, or null when the message was dropped.
+export function routeForwardedKey(
+  msg: unknown,
+  toggleReading: () => void,
+  replay: (key: string) => void = dispatchForwardedKey,
+): string | null {
+  const key = forwardedKey(msg);
+  if (!key) return null;
+  if (key === "r") toggleReading();
+  else replay(key);
+  return key;
+}
