@@ -100,23 +100,25 @@ jq_field() {
 }
 
 # beat_repo_identity — sets detail_root / detail_project for $cwd. Computed
-# ONCE per (session, cwd): the answer is cached in a two-line file under the
+# ONCE per (session, cwd): the answer is cached in a three-line file under the
 # cache dir (line 1 = worktree root, line 2 = project = basename of the MAIN
-# checkout, so every worktree of one repo shares a project label). Outside git
+# checkout, so every worktree of one repo shares a project label, line 3 =
+# worktree = basename of the root when it is a LINKED worktree, else empty). Outside git
 # it falls back to the cwd and its basename. Every git call is bounded (1s) and
 # any failure degrades to the fallback — it can never fail the hook.
 beat_repo_identity() {
-  local cdir key f top common
+  local cdir key f top common main_top
   cdir="${XDG_CACHE_HOME:-$HOME/.cache}/kb"
   key="$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9_-' '_')"
   key="${key:0:40}-$(printf '%s\n%s' "$session_id" "$cwd" | cksum | cut -d' ' -f1)"
-  f="$cdir/beat-repo-$key"
+  f="$cdir/beat-repo2-$key"
   if [ -r "$f" ]; then
-    { IFS= read -r detail_root; IFS= read -r detail_project; } <"$f" 2>/dev/null || true
+    { IFS= read -r detail_root; IFS= read -r detail_project; IFS= read -r detail_worktree; } <"$f" 2>/dev/null || true
   fi
   if [ -z "$detail_root" ] || [ -z "$detail_project" ]; then
     detail_root=""
     detail_project=""
+    detail_worktree=""
     if command -v git >/dev/null 2>&1; then
       top="$(_beat_t1 git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || top=""
       common="$(_beat_t1 git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
@@ -124,7 +126,11 @@ beat_repo_identity() {
         detail_root="$top"
         if [ -n "$common" ]; then
           common="${common%/}"
-          detail_project="$(basename "$(dirname "$common")")"
+          main_top="$(dirname "$common")"
+          detail_project="$(basename "$main_top")"
+          # A LINKED worktree (its top-level is not the main checkout):
+          # name it by basename, never a path.
+          [ "$top" = "$main_top" ] || detail_worktree="$(basename "$top")"
         else
           detail_project="$(basename "$top")"
         fi
@@ -134,9 +140,10 @@ beat_repo_identity() {
       detail_root="${cwd%/}"
       [ -n "$detail_root" ] || detail_root="/"
       detail_project="$(basename "$cwd")"
+      detail_worktree=""
     fi
     if mkdir -p "$cdir" 2>/dev/null; then
-      printf '%s\n%s\n' "$detail_root" "$detail_project" >"$f.$$" 2>/dev/null \
+      printf '%s\n%s\n%s\n' "$detail_root" "$detail_project" "$detail_worktree" >"$f.$$" 2>/dev/null \
         && mv -f "$f.$$" "$f" 2>/dev/null
       rm -f "$f.$$" 2>/dev/null
     fi
@@ -250,7 +257,7 @@ if [ "$event" = "blocked" ]; then
   fi
 fi
 
-# detail.tool / detail.paths / detail.root / detail.project — a Claude
+# detail.tool / detail.paths / detail.root / detail.project / detail.worktree — a Claude
 # write-tool PostToolUse beat ONLY (event=tool, tool_name in the write-tool
 # set), opt-out via KB_BEAT_PATHS=0. Paths are normalised lexically (NO git
 # realpath, no filesystem access): a relative path is joined onto cwd, "."
@@ -263,6 +270,7 @@ detail_tool="$blocked_tool"
 detail_paths='[]'
 detail_root=""
 detail_project=""
+detail_worktree=""
 if [ "$harness" = "claude" ] && [ "$event" = "tool" ] \
    && [ "${KB_BEAT_PATHS:-}" != "0" ]; then
   tool_name="$(jq_field '.tool_name // empty' "$input")"
@@ -325,6 +333,7 @@ body="$(jq -n \
   --argjson detail_paths "$detail_paths" \
   --arg detail_root "$detail_root" \
   --arg detail_project "$detail_project" \
+  --arg detail_worktree "$detail_worktree" \
   '{v: 1, session_id: $session_id, harness: $harness, event: $event, at: $at}
    + (if $host != "" then {host: $host} else {} end)
    + (if $pid > 0 then {pid: $pid} else {} end)
@@ -336,6 +345,7 @@ body="$(jq -n \
        + (if $detail_tool != "" then {tool: $detail_tool} else {} end)
        + (if ($detail_paths | length) > 0
           then {paths: $detail_paths, root: $detail_root, project: $detail_project}
+               + (if $detail_worktree != "" then {worktree: $detail_worktree} else {} end)
           else {} end) ) as $d
      | if ($d | length) > 0 then {detail: $d} else {} end )
   ' 2>/dev/null)"
