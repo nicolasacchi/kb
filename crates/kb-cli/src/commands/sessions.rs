@@ -140,11 +140,129 @@ pub async fn list(
             chip = segment_chip(r),
         );
         println!(
-            "      {mc:>4} msg  {mem:>2} mem  {fr:>3} read  {fe:>3} edited  {prompt}",
+            "      {mc:>4} msg  {mem:>2} mem  {fr:>3} read  {fe:>3} edited  {prompt}{ev}",
             prompt = truncate(prompt, 60),
+            ev = evidence_list_suffix(r),
         );
     }
     Ok(())
+}
+
+/// OL IDEA3 -- the list row's trailing `  . {phrase}` (the server's own
+/// sentence about the checks after the last edit); empty when the row has no
+/// phrase (`no_edits`, `not_extracted`, an older daemon). Pure over the wire
+/// row.
+pub(crate) fn evidence_list_suffix(row: &serde_json::Value) -> String {
+    match row["evidence"]["phrase"].as_str().filter(|p| !p.is_empty()) {
+        Some(p) => format!("  \u{b7} {p}"),
+        None => String::new(),
+    }
+}
+
+/// OL IDEA3 -- the `show` evidence lines: `checked` (the phrase, plus the
+/// deciding command), `not named` (counted edits the closing text never
+/// names) and `commit` (edited files, no commit detected). Pure over the
+/// session detail wire; prints what the server derived, never re-derives it.
+pub(crate) fn evidence_lines(detail: &serde_json::Value) -> Vec<String> {
+    let ev = &detail["evidence"];
+    let mut out = Vec::new();
+    match ev["verdict"].as_str() {
+        Some("not_extracted") => out.push(format!(
+            "checked   not extracted for this capture (predates it; kb reindex {} fills it)",
+            detail["kb"].as_str().unwrap_or("<kb>")
+        )),
+        Some("no_edits") | None => {}
+        Some(_) => {
+            if let Some(p) = ev["phrase"].as_str().filter(|p| !p.is_empty()) {
+                out.push(format!("checked   {p}"));
+                if let Some(c) = ev["deciding"]["cmd"].as_str() {
+                    out.push(format!("          $ {c}"));
+                }
+            }
+        }
+    }
+    let names: Vec<&str> = detail["unnamed_edits"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|n| n.as_str()).collect())
+        .unwrap_or_default();
+    if !names.is_empty() {
+        let total = detail["unnamed_edits_total"]
+            .as_u64()
+            .unwrap_or(names.len() as u64);
+        let more = total.saturating_sub(names.len() as u64);
+        let mut line = format!("not named  {}", names.join(", "));
+        if more > 0 {
+            line.push_str(&format!(" (+{more} more)"));
+        }
+        out.push(line);
+    }
+    if ev["uncommitted"].as_bool().unwrap_or(false) {
+        out.push("commit    none detected in this session".to_string());
+    }
+    out
+}
+
+/// OL IDEA3 -- the `checks (N of total)` block of `show`: per check its text,
+/// label and whether it ran before or after the last edit, with `$ cmd` on
+/// the next line. Empty when the capture kept no checks.
+pub(crate) fn checks_block_lines(detail: &serde_json::Value) -> Vec<String> {
+    let Some(checks) = detail["checks"].as_array().filter(|c| !c.is_empty()) else {
+        return Vec::new();
+    };
+    let total = detail["evidence"]["checks_total"]
+        .as_u64()
+        .unwrap_or(checks.len() as u64);
+    let mut out = vec![format!("checks ({} of {})", checks.len(), total)];
+    for c in checks {
+        let when = match c["after_last_edit"].as_bool() {
+            Some(true) => "after the last edit",
+            Some(false) => "before the last edit",
+            None => "",
+        };
+        out.push(format!(
+            "  {}  {}  {}",
+            c["text"].as_str().unwrap_or("-"),
+            c["label"].as_str().unwrap_or("-"),
+            when
+        ));
+        if let Some(cmd) = c["cmd"].as_str() {
+            out.push(format!("      $ {cmd}"));
+        }
+    }
+    out
+}
+
+/// OL IDEA3 -- what scoped `show --section checks --json` prints: the detail
+/// wire's own evidence fields, no extra fetch.
+pub(crate) fn checks_section_json(detail: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "evidence": detail["evidence"],
+        "checks": detail.get("checks").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "unnamed_edits": detail.get("unnamed_edits").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "unnamed_edits_total": detail.get("unnamed_edits_total").cloned().unwrap_or_else(|| serde_json::json!(0)),
+    })
+}
+
+/// OL IDEA3 -- the `resume` block's evidence lines: `Checks:` with the
+/// deciding command, and `Not committed:` when files were edited and no
+/// commit was detected.
+pub(crate) fn resume_evidence_lines(detail: &serde_json::Value) -> Vec<String> {
+    let ev = &detail["evidence"];
+    let mut out = Vec::new();
+    if !matches!(ev["verdict"].as_str(), None | Some("no_edits")) {
+        if let Some(p) = ev["phrase"].as_str().filter(|p| !p.is_empty()) {
+            out.push(format!("Checks: {p}"));
+            if let Some(c) = ev["deciding"]["cmd"].as_str() {
+                out.push(format!("  $ {c}"));
+            }
+        } else if ev["verdict"].as_str() == Some("not_extracted") {
+            out.push("Checks: not extracted for this capture".to_string());
+        }
+    }
+    if ev["uncommitted"].as_bool().unwrap_or(false) {
+        out.push("Not committed: no commit detected in this session".to_string());
+    }
+    out
 }
 
 /// V0045/seg1 — the `part k/N` chip for a segmented session's row (empty for
@@ -813,6 +931,8 @@ pub async fn save_thread(
 /// The `--section` csv vocabulary (cli-grok Proposal 2 #4). `outcome` is the
 /// one entry with no dedicated `/sessions/{id}/<sub>` route — it rides
 /// `GET /sessions/{id}/view?fields=header` (`ViewHeader.opening`/`.outcome`).
+/// `checks` (OL IDEA3) needs no fetch at all: the evidence fields ride the
+/// detail wire `show` always reads.
 pub const SHOW_SECTIONS: &[&str] = &[
     "files",
     "decisions",
@@ -823,6 +943,7 @@ pub const SHOW_SECTIONS: &[&str] = &[
     "comments",
     "readings",
     "outcome",
+    "checks",
 ];
 
 /// `kb sessions show <sid> [--section a,b,...]` — session detail report.
@@ -967,6 +1088,7 @@ pub async fn show(
                 "research" => raw(&research, "research"),
                 "comments" => raw(&comments, "artifacts"),
                 "outcome" => outcome_header.clone(),
+                "checks" => checks_section_json(&detail),
                 other => {
                     return Err(anyhow!(
                         "unknown --section {other:?} — expected one of {}",
@@ -1063,6 +1185,14 @@ pub async fn show(
     if let Some(closed) = detail["outcome"].as_str().filter(|s| !s.is_empty()) {
         println!("closed    {}", truncate(closed, 200));
     }
+    // OL IDEA3 -- was the code checked after it was last edited: the
+    // server's own phrase and deciding command, the edits the closing text
+    // never names, and a missing commit.
+    if want("checks") {
+        for line in evidence_lines(&detail) {
+            println!("{line}");
+        }
+    }
     // S9 — the decisions log.
     let decision_rows = decisions["decisions"].as_array();
     if let Some(arr) = decision_rows {
@@ -1121,6 +1251,17 @@ pub async fn show(
                         truncate(c["subject"].as_str().unwrap_or(""), 60),
                     );
                 }
+            }
+        }
+    }
+    // OL IDEA3 -- the checks the capture ran, newest 16, each flagged before
+    // or after the last edit.
+    if want("checks") {
+        let block = checks_block_lines(&detail);
+        if !block.is_empty() {
+            println!();
+            for line in block {
+                println!("{line}");
             }
         }
     }
@@ -1562,6 +1703,15 @@ pub async fn resume(
                         .unwrap_or(c["kind"].as_str().unwrap_or("")),
                 );
             }
+        }
+    }
+    // OL IDEA3 -- the checks line and the missing-commit line, before the
+    // resume command.
+    let evidence = resume_evidence_lines(&detail);
+    if !evidence.is_empty() {
+        println!();
+        for line in evidence {
+            println!("{line}");
         }
     }
     // W4/R13/O4 — the resume hint is harness-aware: `SessionOut.harness`
@@ -3172,5 +3322,128 @@ mod f10_tests {
                 .all(|l| serde_json::from_str::<serde_json::Value>(l).is_ok()),
             "every line is still one JSON object"
         );
+    }
+}
+
+// OL IDEA3 -- the session evidence card in the terminal.
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn detail() -> serde_json::Value {
+        json!({
+            "kb": "sessions",
+            "evidence": {
+                "verdict": "verified",
+                "phrase": "cargo clippy passed after the last edit",
+                "deciding": {"cmd": "cargo clippy -p widget -- -D warnings"},
+                "checks_total": 2, "checks_after_edit": 1,
+                "edits_ignored": 0, "uncommitted": true
+            },
+            "checks": [
+                {"label": "cargo test", "cmd": "cargo test -p widget 2>&1 | tail -5",
+                 "text": "passed (read from its output)", "after_last_edit": false},
+                {"label": "cargo clippy", "cmd": "cargo clippy -p widget -- -D warnings",
+                 "text": "passed (background run)", "after_last_edit": true}
+            ],
+            "unnamed_edits": ["render.rs", "mod.rs"],
+            "unnamed_edits_total": 5
+        })
+    }
+
+    #[test]
+    fn show_sections_include_checks() {
+        assert!(SHOW_SECTIONS.contains(&"checks"));
+        // Scoped JSON carries exactly the detail wire's evidence fields.
+        let j = checks_section_json(&detail());
+        assert_eq!(j["evidence"]["verdict"], "verified");
+        assert_eq!(j["checks"].as_array().unwrap().len(), 2);
+        assert_eq!(j["unnamed_edits_total"], 5);
+        let bare = checks_section_json(&json!({"evidence": {"verdict": "no_edits"}}));
+        assert_eq!(bare["checks"], json!([]));
+        assert_eq!(bare["unnamed_edits"], json!([]));
+        assert_eq!(bare["unnamed_edits_total"], 0);
+    }
+
+    #[test]
+    fn evidence_lines_print_the_phrase_the_command_and_the_gaps() {
+        assert_eq!(
+            evidence_lines(&detail()),
+            vec![
+                "checked   cargo clippy passed after the last edit".to_string(),
+                "          $ cargo clippy -p widget -- -D warnings".to_string(),
+                "not named  render.rs, mod.rs (+3 more)".to_string(),
+                "commit    none detected in this session".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn evidence_lines_for_not_extracted_name_the_fix() {
+        let d = json!({"kb": "sessions", "evidence": {"verdict": "not_extracted", "uncommitted": false}});
+        assert_eq!(
+            evidence_lines(&d),
+            vec!["checked   not extracted for this capture (predates it; kb reindex sessions fills it)"]
+        );
+    }
+
+    #[test]
+    fn evidence_lines_stay_quiet_without_edits() {
+        let d = json!({"evidence": {"verdict": "no_edits", "uncommitted": false}});
+        assert!(evidence_lines(&d).is_empty());
+        // An older daemon sends no evidence at all.
+        assert!(evidence_lines(&json!({"session_id": "x"})).is_empty());
+        assert!(checks_block_lines(&json!({"session_id": "x"})).is_empty());
+    }
+
+    #[test]
+    fn evidence_lines_unchecked_has_no_command_line() {
+        let d = json!({"evidence": {"verdict": "unchecked", "phrase": "edited, no checks ran",
+                                     "uncommitted": false}});
+        assert_eq!(evidence_lines(&d), vec!["checked   edited, no checks ran"]);
+    }
+
+    #[test]
+    fn evidence_block_lists_each_check_before_or_after() {
+        assert_eq!(
+            checks_block_lines(&detail()),
+            vec![
+                "checks (2 of 2)".to_string(),
+                "  passed (read from its output)  cargo test  before the last edit".to_string(),
+                "      $ cargo test -p widget 2>&1 | tail -5".to_string(),
+                "  passed (background run)  cargo clippy  after the last edit".to_string(),
+                "      $ cargo clippy -p widget -- -D warnings".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn evidence_list_suffix_appends_the_phrase_only_when_present() {
+        let row = json!({"evidence": {"verdict": "stale",
+            "phrase": "edited after the last check: cargo test passed"}});
+        assert_eq!(
+            evidence_list_suffix(&row),
+            "  \u{b7} edited after the last check: cargo test passed"
+        );
+        assert_eq!(
+            evidence_list_suffix(&json!({"evidence": {"verdict": "no_edits"}})),
+            ""
+        );
+        assert_eq!(evidence_list_suffix(&json!({})), "");
+    }
+
+    #[test]
+    fn evidence_resume_lines_carry_the_phrase_and_the_missing_commit() {
+        assert_eq!(
+            resume_evidence_lines(&detail()),
+            vec![
+                "Checks: cargo clippy passed after the last edit".to_string(),
+                "  $ cargo clippy -p widget -- -D warnings".to_string(),
+                "Not committed: no commit detected in this session".to_string(),
+            ]
+        );
+        let clean = json!({"evidence": {"verdict": "no_edits", "uncommitted": false}});
+        assert!(resume_evidence_lines(&clean).is_empty());
     }
 }
