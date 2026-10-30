@@ -10,7 +10,7 @@
 //
 // The earlier guard only inspected the START of the bundle, so
 // `(function(){})();var x=1;` passed. This one PARSES the file (the
-// @babel/parser that web/'s toolchain already installs) as a script and
+// @babel/parser, a declared devDependency of web/) as a script and
 // inspects every top-level statement.
 //
 // Usage (run from web/): node ../scripts/ci/check-annotate-bundle.cjs dist/annotate.js
