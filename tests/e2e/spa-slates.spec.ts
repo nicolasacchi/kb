@@ -328,7 +328,10 @@ test.describe("slate board — pin, composer, refusals, drawings", () => {
   // in the sandboxed frame. (Inside the opaque-origin frame the module
   // script is a CORS-mode load of a same-daemon asset, which the daemon does
   // not grant — the frame-level wiring is pinned by the sandbox test above;
-  // this one pins mermaid itself.)
+  // this one pins mermaid itself.) The assertions are deliberately limited
+  // to "mermaid 12 renders an svg without error": initialize() sets
+  // htmlLabels:false, so the test does not claim the `$$` label was typeset
+  // by katex, only that a math-bearing source does not crash the render.
   for (const [name, label] of [
     ["plain", "plain label"],
     ["math", "$$x^2 + y^2$$"],
