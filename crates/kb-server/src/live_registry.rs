@@ -23,8 +23,38 @@
 //! explained, and corrected" principle (§5) demands.
 
 use kb_core::sessions::live::{derive_state, Confidence, Holder, LivePolicy, LiveState};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
+
+/// Per-session cap on remembered touches (OL PRES1). The ring is in memory
+/// only (LF-7) and dies with its row.
+pub const TOUCH_RING_CAP: usize = 48;
+
+/// A touch older than this (receipt clock) is pruned on the next beat for
+/// its session and filtered out of every read.
+pub const TOUCH_TTL_SECS: i64 = 3600;
+
+/// One remembered write-tool touch: a path RELATIVE to the session's repo
+/// root (the daemon never stores the absolute path or the root), the project
+/// label the beat carried, the receipt-clock instant and the tool name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Touch {
+    pub project: String,
+    pub rel: String,
+    pub at_unix: i64,
+    pub tool: String,
+}
+
+/// What [`LiveRegistry::touches_snapshot`] hands the live-touches route: the
+/// derived state plus a clone of the (already TTL-filtered) ring. Narrow on
+/// purpose: no cwd, title, last_line or model can reach the route.
+#[derive(Debug, Clone)]
+pub struct TouchSnapshot {
+    pub session_id: String,
+    pub harness: String,
+    pub state: LiveState,
+    pub touches: Vec<Touch>,
+}
 
 /// Cap on distinct `session_id`s held at once. The operator runs ~55
 /// sessions today (design §4's measured evidence); 4096 is generous
@@ -73,6 +103,10 @@ pub struct LiveRow {
     /// Wall-clock receipt time (unix seconds) — the TTL/LRU-by-touch clock.
     /// Distinct from `last_activity_unix`; see that field's doc comment.
     pub touched_unix: i64,
+    /// On input to [`LiveRegistry::record_beat`]: the touches THIS beat
+    /// carried. On the stored row (and the returned [`RecordOutcome::row`]):
+    /// the merged ring, oldest first, at most [`TOUCH_RING_CAP`].
+    pub touches: VecDeque<Touch>,
 }
 
 /// The outcome of one [`LiveRegistry::record_beat`] call: the row as
@@ -106,7 +140,7 @@ impl LiveRegistry {
     /// first and evicting the least-recently-touched row if inserting a
     /// brand-new key would exceed [`REGISTRY_CAP`]. Returns the derived
     /// state before/after so the caller can detect a transition.
-    pub fn record_beat(&self, row: LiveRow, now_unix: i64) -> RecordOutcome {
+    pub fn record_beat(&self, mut row: LiveRow, now_unix: i64) -> RecordOutcome {
         let policy = LivePolicy::default();
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -137,6 +171,30 @@ impl LiveRegistry {
                 g.remove(&oldest);
             }
         }
+
+        // Touch ring (OL PRES1): carry the old ring forward under this same
+        // lock, drop expired entries, then merge this beat's touches —
+        // a repeat of (project, rel) moves to the back with its fresh
+        // instant, and the oldest entry is evicted past the cap. An `end`
+        // beat carries no touches and so leaves the ring intact.
+        let mut ring: VecDeque<Touch> = g
+            .get(&row.session_id)
+            .map(|old| old.touches.clone())
+            .unwrap_or_default();
+        ring.retain(|t| now_unix - t.at_unix <= TOUCH_TTL_SECS);
+        for t in std::mem::take(&mut row.touches) {
+            if let Some(pos) = ring
+                .iter()
+                .position(|x| x.project == t.project && x.rel == t.rel)
+            {
+                ring.remove(pos);
+            }
+            ring.push_back(t);
+            while ring.len() > TOUCH_RING_CAP {
+                ring.pop_front();
+            }
+        }
+        row.touches = ring;
 
         let (state, confidence) = derive_state(
             row.holder,
@@ -176,6 +234,38 @@ impl LiveRegistry {
             .collect()
     }
 
+    /// Every session's non-expired touches with its freshly-derived state.
+    /// The guard is dropped before this returns (invariant #15): the route
+    /// filters, sorts and serialises the owned clones.
+    pub fn touches_snapshot(&self, now_unix: i64) -> Vec<TouchSnapshot> {
+        let policy = LivePolicy::default();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let out = g
+            .values()
+            .filter(|r| !r.touches.is_empty())
+            .map(|r| TouchSnapshot {
+                session_id: r.session_id.clone(),
+                harness: r.harness.clone(),
+                state: derive_state(
+                    r.holder,
+                    r.last_activity_unix,
+                    now_unix,
+                    kb_core::sessions::live::StateSource::Hook,
+                    &policy,
+                )
+                .0,
+                touches: r
+                    .touches
+                    .iter()
+                    .filter(|t| now_unix - t.at_unix <= TOUCH_TTL_SECS)
+                    .cloned()
+                    .collect(),
+            })
+            .collect();
+        drop(g);
+        out
+    }
+
     /// The set of session ids currently tracked — used by the `live-status`
     /// route to know which Tier-0 capture-derived rows to SKIP (design §6:
     /// "a registry entry always wins over a capture-derived row").
@@ -210,7 +300,29 @@ mod tests {
             blocked: false,
             detail_reason: None,
             touched_unix,
+            touches: VecDeque::new(),
         }
+    }
+
+    fn touch(rel: &str, at: i64) -> Touch {
+        Touch {
+            project: "demo".to_string(),
+            rel: rel.to_string(),
+            at_unix: at,
+            tool: "Edit".to_string(),
+        }
+    }
+
+    fn with_touches(mut r: LiveRow, ts: Vec<Touch>) -> LiveRow {
+        r.touches = ts.into();
+        r
+    }
+
+    fn rels(reg: &LiveRegistry, now: i64) -> Vec<String> {
+        reg.touches_snapshot(now)
+            .into_iter()
+            .flat_map(|s| s.touches.into_iter().map(|t| t.rel))
+            .collect()
     }
 
     #[test]
@@ -323,5 +435,129 @@ mod tests {
         let ids = reg.known_session_ids();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains("a") && ids.contains("b"));
+    }
+
+    #[test]
+    fn fresh_registry_has_no_touches() {
+        assert!(LiveRegistry::new().touches_snapshot(1_000_000).is_empty());
+    }
+
+    #[test]
+    fn touch_ring_carries_across_a_path_less_beat() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat(
+            with_touches(row("a", Holder::Agent, now, now), vec![touch("x.rs", now)]),
+            now,
+        );
+        // A path-less beat (e.g. turn_end) must not clear the ring.
+        let out = reg.record_beat(row("a", Holder::Human, now + 5, now + 5), now + 5);
+        assert_eq!(out.row.touches.len(), 1);
+        assert_eq!(rels(&reg, now + 5), vec!["x.rs"]);
+    }
+
+    #[test]
+    fn touch_dedupe_updates_the_instant_and_moves_to_the_back() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat(
+            with_touches(
+                row("a", Holder::Agent, now, now),
+                vec![touch("a.rs", now), touch("b.rs", now + 1)],
+            ),
+            now + 1,
+        );
+        reg.record_beat(
+            with_touches(
+                row("a", Holder::Agent, now + 9, now + 9),
+                vec![touch("a.rs", now + 9)],
+            ),
+            now + 9,
+        );
+        let snap = reg.touches_snapshot(now + 9);
+        let t = &snap[0].touches;
+        assert_eq!(
+            t.iter().map(|x| x.rel.as_str()).collect::<Vec<_>>(),
+            vec!["b.rs", "a.rs"]
+        );
+        assert_eq!(t[1].at_unix, now + 9);
+    }
+
+    #[test]
+    fn touch_ring_cap_evicts_the_oldest() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        let ts: Vec<Touch> = (0..TOUCH_RING_CAP + 2)
+            .map(|i| touch(&format!("f{i}.rs"), now))
+            .collect();
+        reg.record_beat(with_touches(row("a", Holder::Agent, now, now), ts), now);
+        let r = rels(&reg, now);
+        assert_eq!(r.len(), TOUCH_RING_CAP);
+        assert_eq!(r[0], "f2.rs");
+        assert_eq!(r[TOUCH_RING_CAP - 1], format!("f{}.rs", TOUCH_RING_CAP + 1));
+    }
+
+    #[test]
+    fn touches_older_than_3600s_are_pruned() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat(
+            with_touches(
+                row("a", Holder::Agent, now, now),
+                vec![touch("old.rs", now)],
+            ),
+            now,
+        );
+        let later = now + TOUCH_TTL_SECS + 1;
+        // Read-side filter, before any further write.
+        assert!(rels(&reg, later).is_empty());
+        // Write-side prune: the next beat drops it from the stored ring.
+        let out = reg.record_beat(row("a", Holder::Agent, later, later), later);
+        assert!(out.row.touches.is_empty());
+    }
+
+    #[test]
+    fn end_keeps_the_ring() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat(
+            with_touches(row("a", Holder::Agent, now, now), vec![touch("x.rs", now)]),
+            now,
+        );
+        reg.record_beat(row("a", Holder::Ended, now + 2, now + 2), now + 2);
+        let snap = reg.touches_snapshot(now + 2);
+        assert_eq!(snap[0].state, LiveState::Finished);
+        assert_eq!(rels(&reg, now + 2), vec!["x.rs"]);
+    }
+
+    #[test]
+    fn ttl_and_lru_eviction_drop_the_ring() {
+        let reg = LiveRegistry::new();
+        let now = 1_000_000;
+        reg.record_beat(
+            with_touches(
+                row("stale", Holder::Agent, now, now),
+                vec![touch("x.rs", now)],
+            ),
+            now,
+        );
+        let later = now + REGISTRY_TTL_SECS + 1;
+        reg.record_beat(row("fresh", Holder::Agent, later, later), later);
+        assert!(reg.touches_snapshot(later).is_empty());
+
+        // LRU: fill to the cap with the first session holding a touch.
+        let reg = LiveRegistry::new();
+        reg.record_beat(
+            with_touches(row("s0", Holder::Agent, now, now), vec![touch("x.rs", now)]),
+            now,
+        );
+        for i in 1..REGISTRY_CAP {
+            let t = now + i as i64;
+            reg.record_beat(row(&format!("s{i}"), Holder::Agent, t, t), t);
+        }
+        let t = now + REGISTRY_CAP as i64;
+        reg.record_beat(row("new", Holder::Agent, t, t), t);
+        assert!(!reg.known_session_ids().contains("s0"));
+        assert!(rels(&reg, t).is_empty());
     }
 }

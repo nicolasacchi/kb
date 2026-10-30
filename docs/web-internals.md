@@ -339,7 +339,9 @@ locked in by the PR that makes it. **Lower the baseline in the same PR.**
   json. A deliberate literal carries `kb-literal: <reason>` on its line and is
   counted under `kbLiteralOptOuts`. Runs in `web-unit` and `code-spa`.
 - **css-vars lint** — `node ui/scripts/css-undefined-vars.mjs <appdir>` fails on
-  any `var(--x)` in `<app>/src` or `ui/src` that nothing declares. An optional
+  any `var(--x)` in `<app>/src` or `ui/src` that nothing declares, even when it carries a fallback (LINT1: a literal
+  fallback hides a made-up token; a name declared in CSS or assigned from TS
+  keeps its fallback). Fixtures: `ui/scripts/css-undefined-vars.test.mjs`. An optional
   `<app>/scripts/ci/css-vars-allowlist.txt` (one `--name` per line) grandfathers
   names; an entry that no longer matches a reference fails, so it only shrinks.
 - **Chrome budget** — `ui/chrome-budget.json` holds the pixels of fixed/sticky

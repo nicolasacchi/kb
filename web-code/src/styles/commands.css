@@ -45,12 +45,12 @@
   transform: translate(-50%, -50%);
   background: var(--accent);
   color: var(--accent-fg, #fff);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
   font-size: var(--fs-xs);
   font-weight: 600;
   font-family: var(--font-mono);
-  box-shadow: var(--shadow-1, 0 2px 8px rgb(0 0 0 / 0.3));
+  box-shadow: var(--shadow-card);
 }
 
 /* ── the palette in command mode ────────────────────────────────────────
@@ -61,13 +61,13 @@
   display: grid;
   grid-template-columns: 1fr auto auto;
   align-items: baseline;
-  gap: var(--space-2, 8px);
+  gap: var(--pad-2);
   width: 100%;
   text-align: left;
   background: none;
   border: 0;
-  border-radius: var(--radius-1, 4px);
-  padding: var(--space-1, 4px) var(--space-2, 8px);
+  border-radius: var(--radius-sm);
+  padding: var(--pad-1) var(--pad-2);
   color: inherit;
   font: inherit;
   cursor: pointer;
@@ -113,8 +113,8 @@
 .kbc-omnibox__cmdtoggle {
   display: block;
   width: 100%;
-  margin-top: var(--space-2, 8px);
-  padding: var(--space-1, 4px);
+  margin-top: var(--pad-2);
+  padding: var(--pad-1);
   background: none;
   border: 0;
   border-top: 1px dashed var(--rule);
@@ -136,7 +136,7 @@
 
 .kbc-omnibox__legend {
   display: inline-block;
-  margin-top: var(--space-2, 8px);
+  margin-top: var(--pad-2);
   color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
@@ -146,15 +146,15 @@
  * elements, both dismissible, neither ever shown twice.
  */
 .kbc-spacehint kbd {
-  padding: 0 var(--space-1, 4px);
+  padding: 0 var(--pad-1);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
 }
 .kbc-spacehint {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1, 4px);
+  gap: var(--pad-1);
   color: var(--ink-mute);
   font-size: var(--fs-sm);
   white-space: nowrap;
@@ -162,15 +162,15 @@
 
 .kbc-coachmark {
   position: fixed;
-  right: var(--space-4, 16px);
-  bottom: var(--space-4, 16px);
+  right: var(--pad-3);
+  bottom: var(--pad-3);
   z-index: var(--z-hint);
   max-width: 340px;
   background: var(--bg-panel);
   border: 1px solid var(--accent);
-  border-radius: var(--radius-2, 8px);
-  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
-  padding: var(--space-3, 12px);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+  padding: calc(var(--pad-2) + var(--pad-1));
   font-size: var(--fs-sm);
   animation: kbc-coach-in 160ms ease-out;
 }
@@ -195,8 +195,8 @@
 .kbc-coachmark__head {
   display: flex;
   align-items: baseline;
-  gap: var(--space-2, 8px);
-  margin-bottom: var(--space-2, 8px);
+  gap: var(--pad-2);
+  margin-bottom: var(--pad-2);
   font-weight: 600;
 }
 
@@ -212,7 +212,7 @@
 .kbc-coachmark__ramp {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 2px var(--space-2, 8px);
+  gap: 2px var(--pad-2);
   align-items: baseline;
 }
 

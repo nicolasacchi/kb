@@ -1566,6 +1566,15 @@ live_adapters/{codex,grok,kimi,opencode}.rs` — the four sibling adapters +
   row. `ConnectInfo` is read as an axum extractor on `live_status` (the
   house pattern for a route HANDLER; invariant #3's "read from
   extensions" rule targets generic Request-taking middleware, not this).
+- **File presence (OL PRES1) rides the same graduation, with the scrub made
+  structural.** A Claude write-tool beat carries absolute `detail.paths` plus
+  the session's `detail.root`/`detail.project`; the registry keeps only the
+  path relative to that root (at most 48 per session, 3600 s, in memory only,
+  no bus event), and `GET /api/sessions/live-touches` rides `auth_bearer` like
+  `live-status`, identical for loopback and bearer peers. Absolute paths cannot
+  appear in the response and the caller supplies no roots, so there is nothing
+  for a loopback-only gate to protect; a tokenless non-loopback request gets
+  the ordinary 401.
 - **`session.state` fires ONLY on a derived-state CHANGE, per invariant
   #24.** `routes::sessions::beat` compares `RecordOutcome::previous_state`
   (the state `derive_state` would have reported for this session

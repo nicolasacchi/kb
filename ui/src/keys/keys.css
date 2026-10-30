@@ -9,7 +9,7 @@
 .kbc-whichkey {
   position: fixed;
   left: 50%;
-  bottom: var(--space-3, 12px);
+  bottom: calc(var(--pad-2) + var(--pad-1));
   transform: translateX(-50%);
   z-index: var(--z-hint);
   max-width: min(920px, calc(100vw - 32px));
@@ -18,19 +18,19 @@
   pointer-events: none;
   background: var(--bg-panel);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-2, 8px);
-  box-shadow: var(--shadow-2, 0 6px 24px rgb(0 0 0 / 0.35));
-  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+  padding: var(--pad-2) calc(var(--pad-2) + var(--pad-1));
   font-size: var(--fs-sm);
 }
 
 .kbc-whichkey__head {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
-  padding-bottom: var(--space-1, 4px);
+  gap: var(--pad-2);
+  padding-bottom: var(--pad-1);
   border-bottom: 1px solid var(--rule);
-  margin-bottom: var(--space-1, 4px);
+  margin-bottom: var(--pad-1);
 }
 
 .kbc-whichkey__pending {
@@ -52,13 +52,13 @@
 .kbc-whichkey__rows {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 2px var(--space-3, 12px);
+  gap: 2px calc(var(--pad-2) + var(--pad-1));
 }
 
 .kbc-whichkey__cell {
   display: flex;
   align-items: baseline;
-  gap: var(--space-2, 8px);
+  gap: var(--pad-2);
   min-width: 0;
 }
 
@@ -74,7 +74,7 @@
   font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-top: var(--space-1, 4px);
+  margin-top: var(--pad-1);
 }
 
 .kbc-whichkey__label {
@@ -221,10 +221,10 @@
 
 .kbc-kbdhelp__preset {
   margin-left: auto;
-  margin-right: var(--space-2, 8px);
+  margin-right: var(--pad-2);
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1, 4px);
+  gap: var(--pad-1);
   color: var(--ink-mute);
   font-size: var(--fs-sm);
 }
@@ -233,7 +233,7 @@
   background: var(--bg-card);
   color: var(--ink);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-1, 4px);
+  border-radius: var(--radius-sm);
   padding: 1px 4px;
   font: inherit;
 }
@@ -256,7 +256,7 @@
 }
 
 .kbc-kbdhelp__foot {
-  padding: var(--space-2, 8px) var(--space-3, 12px);
+  padding: var(--pad-2) calc(var(--pad-2) + var(--pad-1));
   border-top: 1px solid var(--rule);
   color: var(--ink-mute);
   font-size: var(--fs-sm);

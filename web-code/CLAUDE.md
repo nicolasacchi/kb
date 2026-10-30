@@ -435,12 +435,11 @@ render that is simply wrong, and worse under a theme nobody's screen was on.
 `npm run lint:css-vars` (`../ui/scripts/css-undefined-vars.mjs`, wired into
 `ci-code-spa`) statically scans every `var(--…)` under `src/**/*.css` (and
 `.ts`/`.tsx` string literals) and fails on any reference that has no
-fallback, or whose fallback chain (however many `var(--x, var(--y, …))`
-levels deep) never bottoms out on a name some `--name:` declaration actually
-defines. A literal fallback (`var(--x, 8px)`) is accepted as resolved — CSS
-guarantees a real value there in every theme — so it is not itself a
-mandate to add the token; a `var(--x, var(--y))` where `--y` is ALSO
-undefined is not.
+fallback, or whose name no `--name:` declaration (or TS/TSX assignment, e.g.
+an inline `style={{ "--x": … }}`) defines. Since LINT1 a fallback does NOT
+rescue an undeclared name: `var(--space-1, 4px)` is a hit, because a literal
+only hides a made-up token. A declared-but-sometimes-unset name keeps its
+fallback; the nested `var(--a, var(--b))` is checked at every level.
 
 ## The Desk (`V70-A4`, design §P1)
 

@@ -277,7 +277,7 @@
   padding: 4px 12px;
   font-size: var(--fs-sm);
   color: var(--ink-mute);
-  background: var(--bg-raised, var(--bg-panel));
+  background: var(--bg-panel);
   border-bottom: 1px solid var(--rule);
 }
 

@@ -32,7 +32,7 @@
 .kbc-comment-card__keyword {
   padding: 1px 6px;
   border-radius: var(--radius-pill);
-  background: var(--warn-bg, var(--bg-elev));
+  background: var(--bg-elev);
   color: var(--warn);
   font-size: var(--fs-xs);
 }
