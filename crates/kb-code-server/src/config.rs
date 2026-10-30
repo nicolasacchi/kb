@@ -437,7 +437,7 @@ pub struct RepoEntry {
     /// basename of `path` as seen by kb-code (a bind mount: the compose
     /// service sees `/repos/kb-archive`, the agent's hook reports the host
     /// directory `kb-archive-checkout`). Matched case-insensitively, after
-    /// `name` and before the path basename; see [`crate::presence`].
+    /// first, before `name` and the path basename; see [`crate::presence`].
     #[serde(default)]
     pub projects: Vec<String>,
 }

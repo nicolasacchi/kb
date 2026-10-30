@@ -329,3 +329,40 @@ async fn token_configured_enforces_on_nonloopback_and_loopback_bypasses() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+/// OL PRES2 - `GET /api/kb/presence` sits in the bearer tier: a simulated
+/// non-loopback caller with no bearer is refused 401, and a POST to the
+/// route is a 405 (the route is GET-only).
+#[tokio::test]
+async fn kb_presence_route_is_bearer_gated_and_get_only() {
+    const FIXTURE_TOKEN: &str = "kb-code-test-token-fixture";
+    let _guard = ENV_TEST_LOCK.lock().await;
+    std::env::remove_var("KB_ALLOW_NO_AUTH");
+    std::env::set_var("KB_CODE_TOKEN", FIXTURE_TOKEN);
+    let tmp = tempfile::tempdir().unwrap();
+
+    let boot = kb_code_server::serve_on_random_port_with_paths(
+        KbCodeConfig::default(),
+        isolated_paths(tmp.path()),
+    )
+    .await;
+    std::env::remove_var("KB_CODE_TOKEN");
+
+    let (addr, _task) = boot.expect("serve with KB_CODE_TOKEN set");
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(url(addr, "/api/kb/presence"))
+        .header("X-Forwarded-For", "8.8.8.8")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "no bearer on a non-loopback caller");
+
+    let resp = client
+        .post(url(addr, "/api/kb/presence"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405, "the presence route is GET-only");
+}

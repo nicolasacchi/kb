@@ -842,6 +842,13 @@ Room" / lip track), S2-B ("Mobile mutations," kb-code v6.0), V77-P3
 `[[review.repos]]` subsections — `[[intel.providers]]`, `[security]`,
 `[search]`, `[behavioral]`, …) is enumerated in that file's own module doc.
 
+`[[repos]]` entries carry `name` and `path`, plus an optional
+`projects = ["..."]` (default `[]`): extra labels kb's presence relay
+(`GET /api/kb/presence`) may call this repo, for a checkout whose directory
+name is neither `name` nor the basename of `path` (a bind mount). Matched
+case-insensitively, alias first, then `name`, then the path basename; see
+`docs/kb-code.md`.
+
 ### `[kb_daemon]`
 
 Where the Search-Everywhere box's sessions lane, the join ladder's

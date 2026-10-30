@@ -187,6 +187,8 @@ async fn a_rebound_host_is_refused_on_every_tier() {
         ("GET", "/api/repos"),
         // the audit read
         ("GET", "/api/audit"),
+        // OL PRES2 - the kb presence relay
+        ("GET", "/api/kb/presence"),
         // loopback-only tier — normally a 404 for a stranger, a 403 here:
         // the guard runs OUTSIDE `loopback_only`. That is not a route
         // oracle: an UNMATCHED `/api/...` path never reaches the nested
@@ -385,6 +387,15 @@ async fn a_foreign_origin_is_refused_and_a_loopback_one_is_not() {
 
     let resp = client
         .get(format!("{base}/api/repos"))
+        .header("Origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_problem(resp, "urn:kb:errors:origin-refused").await;
+
+    // OL PRES2 - the presence relay is behind the same Origin guard.
+    let resp = client
+        .get(format!("{base}/api/kb/presence"))
         .header("Origin", "https://evil.example")
         .send()
         .await
