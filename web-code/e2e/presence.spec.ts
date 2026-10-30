@@ -56,6 +56,19 @@ async function open(page: Page) {
 }
 
 test.describe("Presence in the file tree", () => {
+  // The harness daemon is shared with parallel specs that edit the fixture
+  // repo, so its REAL mirror events would mark rows under these tests. Hold the
+  // tab's SSE stream silent; the tests dispatch `kbc:mirror.updated` themselves.
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/api/events*", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: "retry: 3600000\n\n",
+      }),
+    );
+  });
+
   test("is on by default, glows nothing until the mirror names a file, then attributes it exactly", async ({
     page,
   }) => {
