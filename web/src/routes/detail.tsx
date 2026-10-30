@@ -1142,6 +1142,22 @@ export default function Detail() {
   // (The `o` / `b` / `y p` reader keybinds live in `ArtifactPane` — they act
   // on ONE artifact, so they bind only while that pane is focused.)
 
+  // Mirror the server's `notes::is_note`: a note is *Markdown* + category
+  // note. HTML artifacts merely tagged `note` are ordinary content and must
+  // render via the iframe (the notes API 404s on them), so require `.md`.
+  const isNote =
+    doc?.kb_category === "note" && !!doc?.source_relative?.endsWith(".md");
+  // OL IDEA6 - a native note has no iframe runtime, so its citation doors are
+  // anchors wrapped by a hast pass (NoteMarkdown). Computed here, above every
+  // early return of this component (hooks cannot follow one); enabled
+  // for a native note only (the iframe path computes its own in ArtifactPane).
+  const noteDoors = useCodeDoors({
+    kb,
+    docId: id,
+    focused: true,
+    repoParam: searchParams.get("repo"),
+    enabled: isNote && !rawView && !removed,
+  });
   if (!kb || !relPath) {
     return <div className="empty">missing artifact path in URL</div>;
   }
@@ -1349,22 +1365,6 @@ export default function Detail() {
   // permalink are unchanged; `rawView` swaps back to the served-HTML iframe
   // (falls through to the normal return below). PreviewInspector + the
   // Versions panel still work (they read `doc`, no iframe needed).
-  // Mirror the server's `notes::is_note`: a note is *Markdown* + category
-  // note. HTML artifacts merely tagged `note` are ordinary content and must
-  // render via the iframe (the notes API 404s on them), so require `.md`.
-  const isNote =
-    doc?.kb_category === "note" && !!doc?.source_relative?.endsWith(".md");
-  // OL IDEA6 - a native note has no iframe runtime, so its citation doors are
-  // anchors wrapped by a hast pass (NoteMarkdown). Computed here, before the
-  // note branch returns, because hooks cannot follow an early return; enabled
-  // for a native note only (the iframe path computes its own in ArtifactPane).
-  const noteDoors = useCodeDoors({
-    kb,
-    docId: id,
-    focused: true,
-    repoParam: searchParams.get("repo"),
-    enabled: isNote && !rawView && !removed,
-  });
   if (isNote && !rawView && !removed) {
     // Comments thread in-place on the native note view via the same
     // CommentsPanel the iframe path uses — but file-scope only (no iframe
