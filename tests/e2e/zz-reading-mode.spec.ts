@@ -446,7 +446,10 @@ test.describe("reading mode", () => {
     expect(files.length).toBeGreaterThan(0);
     for (const p of files) {
       const text = readFileSync(p, "utf-8");
-      for (const bad of ["kb-read", "reading.css", "data-kb-read"]) {
+      // `kb-reading` is the opt-out fixture's own <meta>, so `kb-read` is
+      // matched only when it is not the start of that word.
+      expect(text, `${p} contains kb-read`).not.toMatch(/kb-read(?!ing)/);
+      for (const bad of ["reading.css", "data-kb-read"]) {
         expect(text, `${p} contains ${bad}`).not.toContain(bad);
       }
     }
