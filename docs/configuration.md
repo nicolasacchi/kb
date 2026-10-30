@@ -1230,6 +1230,10 @@ Origins are checked against the same allowlist (plus the request's own
 matching kb's own `origin_allowlist` rule for curl/CLI/in-process callers.
 Full admission table: `crates/kb-code-server/src/security/origin.rs`.
 
+The kb reader's Code chip (hint-first, upgraded by kb-code's doc-lens reads) needs
+the kb origin in `[doclens] origins`; without it the browser blocks those reads
+and the chip stays hint-worded, never reading as verified.
+
 ### `[security]`
 
 V70-A2's denylist + strict-mode knobs (SEC-13, SEC-02).

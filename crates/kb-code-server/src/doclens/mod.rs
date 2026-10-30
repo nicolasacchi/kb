@@ -36,6 +36,11 @@
 //!   the EVIDENCE, not a correction to the citation, so a confirmed ref keeps
 //!   `resolved_line = line_hint` and reports the matched line separately as
 //!   `token_line` (D6). Only `drifted` (and W2.A's `rev_remap`) move the line.
+//! * **Decision 1 scopes VERDICTS, not link targets.** A checkout is never
+//!   auto-selected for a lens answer; kb's SPA may still build a plain
+//!   navigation link into the one checkout whose scorecard measured
+//!   `present > 0` with every other at 0, captioned "not pinned" - not a pin
+//!   write and not a verdict.
 //! * **`never_scanned` is a third state**, distinct from "zero refs": kb has
 //!   no extraction row for this doc at all. Every consumer renders "not
 //!   scanned yet — reindex to populate", never "no code refs".
