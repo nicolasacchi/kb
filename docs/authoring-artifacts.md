@@ -76,8 +76,17 @@ Reading mode re-typesets an artifact with a CSS-only layer the reader can toggle
 and undo; it never rewrites your markup. An artifact whose own layout must not be
 touched (a dashboard, a slide deck, a hand-set page) can opt out with
 `<meta name="kb-reading" content="off">`: the runtime then refuses the layer and
-does not forward the `r` key. This meta is not an indexed field and does not
-affect tags or category.
+does not forward the `r` key, and the daemon does not style the page at serve
+time either. This meta is not an indexed field and does not affect tags or
+category.
+
+A page with no styling of its own (no `<style>`, no `<link rel=stylesheet>`;
+every memory artifact is one) is served in kb's house reading voice: the daemon
+adds one `<style id="kb-read-style">` to `<head>` and `data-kb-read` to `<html>`
+at serve time. Your file is never rewritten, a share bundle never carries it,
+and `r` turns it off. Markdown pages and rendered sessions already carry the
+house voice and are not styled twice. A page with its own `<style>` is left
+alone.
 
 ### Session provenance (`kb-session`)
 

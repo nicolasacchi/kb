@@ -2205,7 +2205,12 @@ GET  /_kb/reading.css                       reading-mode stylesheet, served on
                                             artifact subdomains only; the
                                             runtime fetches it when the parent
                                             posts kb:read (content-hash ETag,
-                                            304 on If-None-Match, 1h max-age)
+                                            304 on If-None-Match, 1h max-age;
+                                            ends with the house @font-face set)
+GET  /_kb/fonts/<name>.woff2                the house fonts (Source Serif 4,
+                                            JetBrains Mono) from the SPA
+                                            bundle's fonts/ directory, artifact
+                                            subdomains only; immutable, 1y
 ```
 
 The Origin allowlist accepts `localhost:4000` (back-compat), any `*.artifacts.localhost`, the daemon's own `Host:` (same-origin SPA → daemon), and any `localhost`/`127.0.0.1` when `KB_DEV_ORIGIN_ANY=1`. Errors are RFC 7807 `application/problem+json`.
