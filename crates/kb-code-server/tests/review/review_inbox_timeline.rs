@@ -215,6 +215,7 @@ async fn inbox_route_scores_orders_and_is_deterministic_across_repeated_calls() 
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: dir,
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -282,6 +283,7 @@ async fn inbox_route_human_open_excludes_agent_authored_threads_and_includes_eve
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: dir,
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -347,10 +349,12 @@ async fn inbox_route_scans_every_configured_repo_when_repo_param_is_absent_and_s
         RepoEntry {
             name: "ra".to_string(),
             path: dir_a,
+            projects: Vec::new(),
         },
         RepoEntry {
             name: "rb".to_string(),
             path: dir_b,
+            projects: Vec::new(),
         },
     ])
     .await;
@@ -397,6 +401,7 @@ async fn inbox_route_rejects_an_unknown_state_value() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: dir,
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -419,6 +424,7 @@ async fn timeline_route_returns_ascending_events_end_to_end() {
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: dir,
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();
@@ -478,6 +484,7 @@ async fn timeline_route_on_a_brand_new_review_has_only_review_created_and_patchs
     let (_tmp, base) = boot(vec![RepoEntry {
         name: "r".to_string(),
         path: dir,
+        projects: Vec::new(),
     }])
     .await;
     let client = reqwest::Client::new();

@@ -203,6 +203,7 @@ async fn full_scenario_two_prompts_two_commits_one_uncommitted_edit() {
     let repos = vec![RepoEntry {
         name: "myrepo".to_string(),
         path: repo_dir.to_path_buf(),
+        projects: Vec::new(),
     }];
 
     let diff = session_diff("sess-1", None, &repos, &store, root, &kb_client)
@@ -369,6 +370,7 @@ async fn unreachable_kb_daemon_degrades_only_the_commits_half() {
     let repos = vec![RepoEntry {
         name: "myrepo".to_string(),
         path: repo_dir.to_path_buf(),
+        projects: Vec::new(),
     }];
 
     let diff = session_diff("sess-2", None, &repos, &store, root, &kb_client)
@@ -460,6 +462,7 @@ async fn sidechain_and_non_edit_tool_turns_are_excluded_from_the_narrative() {
     let repos = vec![RepoEntry {
         name: "myrepo".to_string(),
         path: repo_dir.to_path_buf(),
+        projects: Vec::new(),
     }];
     let diff = session_diff("sess-4", None, &repos, &store, root, &kb_client)
         .await
@@ -507,10 +510,12 @@ async fn repo_filter_excludes_commits_and_edits_outside_it() {
         RepoEntry {
             name: "repo-a".to_string(),
             path: repo_a.path().to_path_buf(),
+            projects: Vec::new(),
         },
         RepoEntry {
             name: "repo-b".to_string(),
             path: repo_b.path().to_path_buf(),
+            projects: Vec::new(),
         },
     ];
 

@@ -341,8 +341,8 @@ direct-disk twin (zero daemon required).
 **Beat hook environment (`KB_BEAT_PATHS`).** The Claude write-tool beat
 (`PostToolUse` on `Edit|Write|MultiEdit|NotebookEdit`) carries the touched
 paths so kb-code can show which files an agent is in. `KB_BEAT_PATHS=0` in the
-hook's environment removes `detail.tool`, `detail.paths`, `detail.root` and
-`detail.project` from every beat (the beat itself is still sent); `KB_BEAT=0`
+hook's environment removes `detail.tool`, `detail.paths`, `detail.root`,
+`detail.project` and `detail.worktree` from every beat (the beat itself is still sent); `KB_BEAT=0`
 still kills every beat. There is no daemon-side key: the daemon keeps the
 paths in memory only and relative to the repo root the beat named. See
 [`docs/live-sessions.md`](live-sessions.md#file-presence).

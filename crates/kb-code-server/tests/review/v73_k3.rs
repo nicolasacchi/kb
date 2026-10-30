@@ -130,6 +130,7 @@ fn repo_entry(dir: &Path) -> RepoEntry {
     RepoEntry {
         name: "fixture".to_string(),
         path: std::fs::canonicalize(dir).unwrap(),
+        projects: Vec::new(),
     }
 }
 

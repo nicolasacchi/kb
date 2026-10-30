@@ -427,6 +427,7 @@ async fn boot_at_with_public(
             .map(|(name, path)| RepoEntry {
                 name: (*name).to_string(),
                 path: std::fs::canonicalize(path).unwrap(),
+                projects: Vec::new(),
             })
             .collect(),
         kb_daemon: KbDaemonSection {
@@ -2319,6 +2320,14 @@ async fn cors_layer_route_set_is_pinned() {
             false,
             true,
             "OL IDEA1 — same-origin only, never CORS'd",
+        ),
+        // OL PRES2 - which files agents are editing (repo-relative, no
+        // transcript text); same posture as the two relays above.
+        (
+            "/api/kb/presence",
+            false,
+            true,
+            "OL PRES2 - same-origin only, never CORS'd",
         ),
         // RS-U3/RS-U7/RS-U9 — the review-store family, every route of it
         // mounted on the `loopback_only` `transcripts_api` router on purpose.

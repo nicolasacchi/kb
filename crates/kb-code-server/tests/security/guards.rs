@@ -52,6 +52,7 @@ async fn boot(
         repos: vec![RepoEntry {
             name: "fx".to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

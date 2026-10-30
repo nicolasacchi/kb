@@ -432,6 +432,14 @@ pub struct SecuritySection {
 pub struct RepoEntry {
     pub name: String,
     pub path: PathBuf,
+    /// OL PRES2 — extra project labels kb's presence relay may call this
+    /// repo, for a checkout whose directory name is neither `name` nor the
+    /// basename of `path` as seen by kb-code (a bind mount: the compose
+    /// service sees `/repos/kb-archive`, the agent's hook reports the host
+    /// directory `kb-archive-checkout`). Matched case-insensitively, after
+    /// `name` and before the path basename; see [`crate::presence`].
+    #[serde(default)]
+    pub projects: Vec<String>,
 }
 
 /// `[search]` — V71-D1 (design D3): one boolean per ranking FACTOR,
@@ -1824,6 +1832,7 @@ fn resolve_repos(repos: Vec<RepoEntry>) -> Vec<RepoEntry> {
         resolved.push(RepoEntry {
             name: repo.name,
             path: canon,
+            projects: repo.projects,
         });
     }
     resolved

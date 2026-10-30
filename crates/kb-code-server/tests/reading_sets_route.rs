@@ -88,6 +88,7 @@ async fn boot_with_repo(name: &str, path: &Path) -> Boot {
         vec![RepoEntry {
             name: name.to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         None,
     )
@@ -103,6 +104,7 @@ async fn boot_from_doc(repo_name: &str, repo_path: &Path, kb_addr: SocketAddr) -
         repos: vec![RepoEntry {
             name: repo_name.to_string(),
             path: std::fs::canonicalize(repo_path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,
@@ -644,10 +646,12 @@ async fn pack_route_404s_an_unknown_or_cross_repo_set() {
             RepoEntry {
                 name: "a".to_string(),
                 path: std::fs::canonicalize(repo_a.path()).unwrap(),
+                projects: Vec::new(),
             },
             RepoEntry {
                 name: "b".to_string(),
                 path: std::fs::canonicalize(repo_b.path()).unwrap(),
+                projects: Vec::new(),
             },
         ],
         None,
@@ -751,6 +755,7 @@ async fn from_session_materializes_uncommitted_evidence_in_first_touch_order() {
         vec![RepoEntry {
             name: "fixture".to_string(),
             path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+            projects: Vec::new(),
         }],
         Some(TranscriptsSection {
             enabled: true,
@@ -791,6 +796,7 @@ async fn from_session_honours_an_explicit_name_and_409s_a_repeat() {
         vec![RepoEntry {
             name: "fixture".to_string(),
             path: std::fs::canonicalize(repo_tmp.path()).unwrap(),
+            projects: Vec::new(),
         }],
         Some(TranscriptsSection {
             enabled: true,

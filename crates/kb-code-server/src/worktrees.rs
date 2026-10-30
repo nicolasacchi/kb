@@ -1726,6 +1726,7 @@ mod tests {
         let repos = vec![RepoEntry {
             name: "acme".into(),
             path: PathBuf::from("/repos/acme-app"),
+            projects: Vec::new(),
         }];
         let err = path_is_allowed(Path::new("/elsewhere/nope"), &repos).unwrap_err();
         let msg = err.to_string();
@@ -1741,6 +1742,7 @@ mod tests {
         let repos = vec![RepoEntry {
             name: "acme".into(),
             path: main.clone(),
+            projects: Vec::new(),
         }];
         path_is_allowed(&main.join("inside"), &repos).unwrap();
         path_is_allowed(&tmp.path().join("wt-feature"), &repos).unwrap();

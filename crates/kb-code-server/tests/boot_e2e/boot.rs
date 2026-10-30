@@ -194,6 +194,7 @@ async fn identity_reports_configured_repos() {
         repos: vec![kb_code_server::config::RepoEntry {
             name: "myrepo".to_string(),
             path: std::fs::canonicalize(&repo).unwrap(),
+            projects: Vec::new(),
         }],
         ..KbCodeConfig::default()
     };

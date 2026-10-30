@@ -53,6 +53,7 @@ async fn boot_at(state: &Path, path: &Path, enabled: &[&str]) -> String {
         repos: vec![RepoEntry {
             name: "fx".to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,

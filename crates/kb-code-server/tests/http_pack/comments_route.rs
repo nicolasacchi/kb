@@ -128,6 +128,7 @@ async fn boot(path: &Path, comments: CommentsSection) -> Boot {
         repos: vec![RepoEntry {
             name: "r".to_string(),
             path: std::fs::canonicalize(path).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: disabled_kb_daemon(),
         comments,

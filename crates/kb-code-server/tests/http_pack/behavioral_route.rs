@@ -140,6 +140,7 @@ async fn boot(repo_name: &str, repo_dir: &Path) -> Boot {
         repos: vec![RepoEntry {
             name: repo_name.to_string(),
             path: std::fs::canonicalize(repo_dir).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: false,
@@ -355,6 +356,7 @@ fn incremental_advances_without_full_rebuild() {
     let repo_entry = RepoEntry {
         name: "demo".into(),
         path: root,
+        projects: Vec::new(),
     };
     let cfg = BehavioralSection {
         enabled: true,

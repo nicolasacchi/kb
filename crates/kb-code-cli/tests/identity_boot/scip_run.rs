@@ -39,6 +39,7 @@ async fn boot_with_scip(
         repos: vec![RepoEntry {
             name: repo_name.to_string(),
             path: std::fs::canonicalize(repo_dir).unwrap(),
+            projects: Vec::new(),
         }],
         scip,
         ..KbCodeConfig::default()

@@ -106,25 +106,30 @@ a `tool` beat that also names the file it touched, so kb-code can mark files
 agents are in right now. `kb-beat.sh` sends `detail.paths` (absolute,
 lexically normalised, at most 8, anything over 1024 bytes, with a control
 character or with a `..` escape is dropped), plus the session's repo identity:
-`detail.root` (the worktree root) and `detail.project` (the basename of the
-main checkout, so every worktree of one repo shares a label). The identity is
+`detail.root` (the worktree root), `detail.project` (the basename of the
+main checkout, so every worktree of one repo shares a label) and, when the
+session runs in a linked worktree, `detail.worktree` (the basename of that
+worktree's directory, never a path; absent for the main checkout). The identity is
 computed once per session and cwd and cached under the cache dir, never on each
-beat. `KB_BEAT_PATHS=0` removes all four fields.
+beat. `KB_BEAT_PATHS=0` removes all of these fields.
 
 The daemon keeps, per session, the last 48 touches in memory only (nothing is
 written to disk; a restart empties them), as paths **relative to the beat's
 `root`** plus `project`; a path outside the root is dropped, and neither the
 absolute path nor the root is stored. Touches older than an hour are pruned,
 and a repeat touch of the same file moves to the newest position (its
-timestamp is refreshed) rather than adding a row. A write-tool call can produce
-two `tool` beats (the throttled generic group and the direct path-carrying
-group); this is harmless, since the state mapping is unchanged and no event is
-emitted. A beat whose `root` is `/` is ignored; otherwise the daemon trusts the
+timestamp is refreshed) rather than adding a row. A write-tool call
+sends exactly one `tool` beat: `kb-beat-throttle.sh` forwards it past its
+min-interval gate (a `KB_BEAT_HEARTBEAT=0` still silences only the ordinary
+heartbeat; `KB_BEAT_PATHS=0` leaves a write tool throttled like any other
+tool, since there is nothing to report). A beat whose `root` is `/` is ignored; otherwise the daemon trusts the
 root the beat states and only relativises against it (attribution, not
 authorization). A touch emits no event: `session.state` still fires only on a state change.
 
 `GET /api/sessions/live-touches` serves them (`kb-live-touches/1`:
-`{project, rel, session_id, harness, state, age_secs, tool}` per touch, freshest
+`{project, worktree?, rel, session_id, harness, state, age_secs, tool}` per touch
+(`worktree` is the linked worktree's basename and is absent for the main
+checkout, so the same `rel` in two worktrees is two touches), freshest
 first, at most 500 with `truncated`). It rides `auth_bearer` like
 `live-status` and is identical for loopback and bearer callers, because the
 response cannot contain an absolute path and the caller supplies no roots.
@@ -133,7 +138,7 @@ response cannot contain an absolute path and the caller supplies no roots.
 
 | Harness | File presence | Notes |
 |---|---|---|
-| Claude Code | yes | Write tools only, via the `PostToolUse` matcher group. |
+| Claude Code | yes | Write tools only, through `kb-beat-throttle.sh` on `PostToolUse`. |
 | codex, Kimi, opencode, grok, omp | no | Their beats carry no paths. |
 
 Known gaps: files changed through `Bash` (a `sed -i`, a formatter, a `git
@@ -148,9 +153,10 @@ the relative paths and the project label, never the host's directory layout.
 
 Claude Code's own `hooks.json` (`plugins/kb-memory/hooks/hooks.json`) is
 already wired for `SessionStart`/`UserPromptSubmit`/`Stop`/`SessionEnd`/
-`Notification`, plus `kb-beat-throttle.sh` on `PostToolUse` and a second
-`PostToolUse` group that runs `kb-beat.sh claude tool` directly for the write
-tools (file presence, below) — the same
+`Notification`, plus `kb-beat-throttle.sh` on `PostToolUse`, which also
+carries the write-tool file-presence beat (below): an `Edit`/`Write`/
+`MultiEdit`/`NotebookEdit` call skips the min-interval gate and goes straight
+to `kb-beat.sh claude tool`, so one hook process tree serves each edit — the same
 plugin install that wires memory recall/capture wires this too, no
 extra step. The gate is the same one every capture hook already uses:
 if `KB_SESSIONS_DIR` isn't set for a project, every beat script no-ops

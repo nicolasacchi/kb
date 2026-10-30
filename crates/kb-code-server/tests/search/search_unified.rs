@@ -81,6 +81,7 @@ fn base_config(repo_dir: &Path) -> KbCodeConfig {
         repos: vec![RepoEntry {
             name: "fixture".to_string(),
             path: std::fs::canonicalize(repo_dir).unwrap(),
+            projects: Vec::new(),
         }],
         kb_daemon: KbDaemonSection {
             enabled: true,
