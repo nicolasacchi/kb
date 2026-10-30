@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { KNOWN_FILE } from "./fixture-repo";
+import { CALLER_FILE, KNOWN_FILE } from "./fixture-repo";
 import { BASE, REPO_NAME } from "./helpers";
 
 /// OL PRES3 - presence in the tree. The relay is mocked (`GET /api/kb/presence`,
@@ -110,6 +110,8 @@ test.describe("Presence in the file tree", () => {
     await expect(row(page)).toHaveAttribute("data-kbc-presence-level", "3");
     await row(page).click();
     await expect(row(page)).not.toHaveAttribute("data-kbc-presence-level", /.+/);
+    // Open a different file: a later touch on the first lights it again.
+    await page.locator(".kbc-tree__row", { hasText: CALLER_FILE }).first().click();
     await mirrorTouch(page, [KNOWN_FILE]);
     await expect(row(page)).toHaveAttribute("data-kbc-presence-level", /.+/);
   });
