@@ -11,6 +11,7 @@ import {
   type Prefs,
   type Theme,
 } from "../../api/prefs";
+import { useKbs } from "../../hooks/useKbs";
 import DaemonsManager from "../DaemonsManager";
 
 const DENSITIES: Density[] = ["compact", "comfy", "spacious"];
@@ -33,6 +34,7 @@ const HOMES: { value: Home; label: string; hint: string }[] = [
 // because these settings are per-user-per-browser, not per-daemon.
 export default function Preferences() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
+  const kbs = useKbs().data ?? [];
 
   // The shared picker reads and writes through this controller; the ref keeps
   // it pointing at the CURRENT prefs without re-creating it per render.
@@ -151,6 +153,37 @@ export default function Preferences() {
           Ctrl-wheel or a trackpad pinch over the Library steps Atlas, Index and
           Shelf. Off leaves pinch to the browser; <code>-</code> and <code>=</code> still work.
         </p>
+        {kbs.length > 0 && (
+          <>
+            <fieldset className="settings__field settings__group">
+              <legend className="settings__label">Open artifacts in reading mode</legend>
+              <span className="settings__hint settings__checks">
+                {kbs.map((k) => (
+                  <label key={k.name}>
+                    <input
+                      type="checkbox"
+                      data-kb-act={`reading-default-${k.name}`}
+                      checked={prefs.readingDefault?.[k.name] === true}
+                      onChange={(e) => {
+                        const next = { ...(prefs.readingDefault ?? {}) };
+                        if (e.target.checked) next[k.name] = true;
+                        else delete next[k.name];
+                        setPrefs({ ...prefs, readingDefault: next });
+                      }}
+                    />{" "}
+                    {k.name}
+                  </label>
+                ))}
+              </span>
+            </fieldset>
+            <p className="settings__hint">
+              Artifacts opened from a ticked corpus start in kb&apos;s reading
+              style (serif, narrow measure); pages that are mostly media or that
+              opt out stay as authored. Press <code>r</code> in the reader to
+              switch it for one artifact. Browser-local.
+            </p>
+          </>
+        )}
       </section>
 
       <DaemonsManager />

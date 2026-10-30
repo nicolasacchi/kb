@@ -126,6 +126,17 @@ describe("W2.6b — hints/marks single-key globals resolve without a pending ste
     expect(REGISTRY.find((b) => b.actionId === "lists.queuePrev")?.keys).toBe("p");
   });
 
+  // OL READ2 - `r` toggles reading mode. Doc-only; the pane owns execution.
+  test("r is a doc-only reader binding, bound nowhere else, and starts no chord", () => {
+    const rows = REGISTRY.filter((b) => b.keys === "r");
+    expect(rows.map((b) => b.actionId)).toEqual(["reader.toggleReading"]);
+    expect(rows[0].scope).toBe("reader");
+    expect(rows[0].group).toBe("Reader");
+    expect(resolve(initialKeymapState(), { key: "r" }, "global").kind).toBe("none");
+    // No `r <x>` chord, and no other row's chord ends in a bare `r` prefix.
+    expect(REGISTRY.filter((b) => b.keys.startsWith("r "))).toEqual([]);
+  });
+
   test("y p is doc-only (reader scope) — resolve() never sees it at scope global", () => {
     const yankRow = REGISTRY.find((b) => b.actionId === "reader.yankProvenance");
     expect(yankRow?.scope).toBe("reader");

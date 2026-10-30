@@ -53,7 +53,9 @@ import {
 } from "../../lib/artifactLinks";
 import type { FlowEntry } from "../../lib/flowStack";
 import type { PaneLoc } from "../../lib/paneUrl";
-import { dispatchForwardedKey, forwardedKey } from "../../lib/artifactKeys";
+import { routeForwardedKey } from "../../lib/artifactKeys";
+import { readingWhyCopy } from "../../hooks/useReadingMode";
+import { useReadingKey, useReadingPane } from "../../hooks/useReadingPane";
 import { withKb } from "../../lib/navItems";
 import { buildProvenanceBlock } from "../../lib/quote";
 import { toast } from "../../lib/toast";
@@ -599,6 +601,24 @@ export default function ArtifactPane({
   // independent copy for its overlay). Only tracked while folio is on.
   const [folioToc, setFolioToc] = useState<{ id: string; text: string }[]>([]);
   const [folioSectionId, setFolioSectionId] = useState<string | null>(null);
+
+  // OL READ2 - reading mode, per pane (hooks/useReadingPane.ts): posts to
+  // THIS pane's iframe at its exact artifact origin, accepts acks only from
+  // that origin AND that frame, repaints the annotator after a reflow.
+  const reading = useReadingPane({
+    kb,
+    id,
+    hostSuffix,
+    iframeRef,
+    annotateActive: reviewActive && at === null,
+    reviewFile,
+    bridgeRef,
+    onSelectionChange,
+  });
+  // Latest handle for the long-lived message pump below.
+  const readingRef = useRef(reading);
+  readingRef.current = reading;
+  useReadingKey(focused, reading.toggle);
 
   // Fresh artifact — drop the per-pane signals that describe the artifact we
   // just left. (The route resets its own per-artifact UI state in parallel;
@@ -1474,8 +1494,11 @@ export default function ArtifactPane({
         // READ1b — a bare reader key pressed inside the iframe. Whitelisted
         // (lib/artifactKeys.ts) then replayed into this window's existing
         // handlers; anything outside the closed list is ignored.
-        const key = forwardedKey(msg);
-        if (key) dispatchForwardedKey(key);
+        // `r` is this pane's own: the frame it came from is unambiguous, so
+        // it toggles THIS pane instead of replaying into a window handler
+        // that acts on whichever pane the route thinks is focused (that
+        // focus claim, a few lines up, has not rendered yet).
+        routeForwardedKey(msg, () => readingRef.current.toggle());
       } else if (msg.kind === "kb:reading") {
         // RP-track — cumulative per-visit reading snapshot. Mirror the
         // scroll-flush: store the latest, POST when no flush is in flight.
@@ -1689,6 +1712,18 @@ export default function ArtifactPane({
             onToggleInspector={onToggleInspector}
             folio={folio}
             onToggleFolio={onToggleFolio}
+            reading={
+              removed
+                ? undefined
+                : {
+                    pressed: reading.pressed,
+                    unsuitable:
+                      reading.state === "unsuitable"
+                        ? readingWhyCopy(reading.why)
+                        : null,
+                    onToggle: reading.toggle,
+                  }
+            }
             splitMode={splitMode}
             onSplit={onSplit}
             flow={flow}
@@ -1804,6 +1839,10 @@ export default function ArtifactPane({
               title={doc?.title || `artifact ${id}`}
               src={artifactUrl}
               sandbox={SANDBOX}
+              onLoad={() => {
+                // A new document: the old ack described a page that is gone.
+                reading.onFrameLoad();
+              }}
             />
             {/* v0.12 P3 — TOC mini-spy overlays the iframe's right edge.
                 Explicit key (recon-flagged) — the folio header above is a new

@@ -132,3 +132,95 @@ describe("ContextBar More menu", () => {
     await vi.waitFor(() => expect(excludeMock).toHaveBeenCalledWith("k", "f.html"));
   });
 });
+
+describe("ContextBar reading-mode row (OL READ2)", () => {
+  const open = (c: HTMLElement) =>
+    fireEvent.click(c.querySelector('[data-kb-act="more"]')!);
+  const row = (c: HTMLElement) =>
+    c.querySelector<HTMLButtonElement>('[role="menu"] [data-kb-act="reading"]')!;
+
+  it("is the FIRST menu row, shows its key, and leaves the folio row where it was", () => {
+    const { container } = bar({
+      reading: { pressed: false, onToggle: () => {} },
+    });
+    open(container);
+    expect(acts(container.querySelector('[role="menu"]')!)).toEqual([
+      "reading",
+      "anchor",
+      "copy-link",
+      "split",
+      "folio",
+      "fullscreen",
+      "bare",
+      "download",
+      "exclude",
+    ]);
+    expect(row(container).querySelector(".kb-ctxbar__mi-key")?.textContent).toBe("r");
+  });
+
+  it("is absent without a reading prop (native notes, panes with no iframe)", () => {
+    const { container } = bar();
+    open(container);
+    expect(row(container)).toBeNull();
+  });
+
+  it("pressed follows the prop (the ack), and a click toggles and closes", () => {
+    const onToggle = vi.fn();
+    const { container, rerender } = bar({ reading: { pressed: false, onToggle } });
+    open(container);
+    expect(row(container).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(row(container));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    rerender(
+      <MemoryRouter>
+        <ContextBar
+          kb="k"
+          id="a1"
+          title="T"
+          filename="f.html"
+          isIndex={false}
+          sourceRelative="f.html"
+          onFullscreen={() => {}}
+          reading={{ pressed: true, onToggle }}
+        />
+      </MemoryRouter>,
+    );
+    open(container);
+    expect(row(container).getAttribute("aria-pressed")).toBe("true");
+    expect(row(container).className).toContain("is-on");
+  });
+
+  it("an unsuitable page disables the row, shows why, and a click does nothing", () => {
+    const onToggle = vi.fn();
+    const { container } = bar({
+      reading: { pressed: false, unsuitable: "This page opts out", onToggle },
+    });
+    open(container);
+    expect(row(container).disabled).toBe(true);
+    expect(row(container).querySelector(".kb-ctxbar__mi-cap")?.textContent).toBe(
+      "This page opts out",
+    );
+    fireEvent.click(row(container));
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("folio and reading toggle independently", () => {
+    const onToggle = vi.fn();
+    const onToggleFolio = vi.fn();
+    const { container } = bar({
+      folio: true,
+      onToggleFolio,
+      reading: { pressed: false, onToggle },
+    });
+    open(container);
+    expect(
+      container.querySelector('[data-kb-act="folio"]')!.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(row(container).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(row(container));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggleFolio).not.toHaveBeenCalled();
+  });
+});
+

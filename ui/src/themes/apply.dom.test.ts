@@ -3,7 +3,7 @@
 // generated CSS selects on, for a host with no builtin family (kb) and one
 // with a builtin (kb-code).
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyTheme, setThemeAttributes } from "./apply";
+import { THEME_APPLIED_EVENT, applyTheme, setThemeAttributes } from "./apply";
 
 const root = () => document.documentElement;
 
@@ -51,5 +51,17 @@ describe("setThemeAttributes", () => {
   it("is the preview half: attributes only", () => {
     setThemeAttributes("light", "kb-classic");
     expect(root().getAttribute("data-kbc-theme")).toBe("kb-classic-light");
+  });
+});
+
+describe("THEME_APPLIED_EVENT (OL READ2)", () => {
+  it("fires on window after the attributes are set, once per applyTheme and once per preview", () => {
+    const seen: (string | null)[] = [];
+    const on = () => seen.push(root().getAttribute("data-theme"));
+    window.addEventListener(THEME_APPLIED_EVENT, on);
+    applyTheme("light", "kb-classic");
+    setThemeAttributes("dark", "kb-classic");
+    window.removeEventListener(THEME_APPLIED_EVENT, on);
+    expect(seen).toEqual(["light", "dark"]);
   });
 });

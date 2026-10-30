@@ -7,6 +7,8 @@ import {
   loadLastKb,
   loadLastSessionsView,
   loadPinchZoom,
+  loadReadingDefault,
+  saveReadingDefault,
   loadPrefs,
   saveHome,
   savePrefs,
@@ -276,5 +278,36 @@ describe("loadPinchZoom (OL FX4)", () => {
     expect(loadPinchZoom()).toBe(true);
     localStorage.setItem("kb:prefs", JSON.stringify({ theme: "dark" }));
     expect(loadPinchZoom()).toBe(true);
+  });
+});
+
+describe("readingDefault (OL READ2)", () => {
+  it("is off for every kb until set, and is per kb", () => {
+    stubLocalStorage();
+    expect(loadReadingDefault("pages")).toBe(false);
+    saveReadingDefault("pages", true);
+    expect(loadReadingDefault("pages")).toBe(true);
+    expect(loadReadingDefault("kb-docs")).toBe(false);
+    saveReadingDefault("pages", false);
+    expect(loadReadingDefault("pages")).toBe(false);
+    expect(loadPrefs().readingDefault).toEqual({});
+  });
+
+  it("survives other pref writes and only a literal true counts", () => {
+    stubLocalStorage();
+    saveReadingDefault("pages", true);
+    savePrefs({ ...loadPrefs(), density: "compact" });
+    expect(loadReadingDefault("pages")).toBe(true);
+    localStorage.setItem("kb:prefs", JSON.stringify({ readingDefault: { pages: "yes", other: 1 } }));
+    expect(loadReadingDefault("pages")).toBe(false);
+    expect(loadReadingDefault("other")).toBe(false);
+    localStorage.setItem("kb:prefs", JSON.stringify({ readingDefault: "pages" }));
+    expect(loadReadingDefault("pages")).toBe(false);
+  });
+
+  it("is never sent to the daemon", () => {
+    const body = settingsPatchBody({ ...DEFAULT_PREFS, readingDefault: { pages: true } });
+    expect(JSON.stringify(body)).not.toContain("pages");
+    expect(Object.keys(body).sort()).toEqual(["density", "themeFamily", "theme"].sort());
   });
 });

@@ -43,6 +43,7 @@ export const DEFAULT_ICON_SIZES = {
   Spark: 14,
   Table: 14,
   BookOpen: 14,
+  Type: 14,
   Cmd: 12,
   Pen: 14,
   Note: 14,
@@ -263,6 +264,12 @@ export function createIconSet(overrides: IconSizeOverrides = {}) {
     BookOpen: (p: P) => (
       <svg {...base(sz("BookOpen"))} {...p}>
         <path d="M8 4v9M2 3.5h3a2.5 2.5 0 0 1 3 2.5v7c0-1.5-1-2.5-2.5-2.5H2zM14 3.5h-3A2.5 2.5 0 0 0 8 6v7c0-1.5 1-2.5 2.5-2.5H14z" />
+      </svg>
+    ),
+    // Reading mode (OL READ2) - a serif "T": the typography glyph.
+    Type: (p: P) => (
+      <svg {...base(sz("Type"))} {...p}>
+        <path d="M3 4.5V3h10v1.5M8 3v10M6 13h4" />
       </svg>
     ),
     Cmd: (p: P) => (

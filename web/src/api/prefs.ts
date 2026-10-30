@@ -73,6 +73,11 @@ export type Prefs = {
   // the Library steps atlas, index, shelf. Default on (absent = on); browser-local
   // like the other display prefs, OUT of the patchSettings allow-list.
   pinchZoom?: boolean;
+  // OL READ2 — reading mode as the DEFAULT for a corpus's artifacts, per kb
+  // (`{ "captured-pages": true }`): a docs corpus wants the author's own
+  // styling, a captured-pages corpus wants the house voice. Absent / false =
+  // off. Browser-local like `lastKb`, OUT of the patchSettings allow-list.
+  readingDefault?: Record<string, boolean>;
 };
 
 const PREFS_KEY = "kb:prefs";
@@ -240,6 +245,22 @@ export function saveHideSessionsTrivial(hide: boolean) {
   const cur = loadPrefs();
   if (cur.hideSessionsTrivial === hide) return;
   savePrefs({ ...cur, hideSessionsTrivial: hide });
+}
+
+// OL READ2 — per-kb "open artifacts in reading mode". Only a literal `true`
+// counts, so a hand-edited or older localStorage blob can never switch it on.
+export function loadReadingDefault(kb: string): boolean {
+  const map = loadPrefs().readingDefault;
+  return !!map && typeof map === "object" && map[kb] === true;
+}
+
+export function saveReadingDefault(kb: string, on: boolean) {
+  const cur = loadPrefs();
+  if (loadReadingDefault(kb) === on) return;
+  const next = { ...(cur.readingDefault ?? {}) };
+  if (on) next[kb] = true;
+  else delete next[kb];
+  savePrefs({ ...cur, readingDefault: next });
 }
 
 // Apply prefs to <html>: density as a CSS var, and the theme via the shared

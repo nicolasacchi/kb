@@ -5836,6 +5836,19 @@ a.proposal-row__chip:hover {
 .kb-ctxbar__mi-lbl {
   flex: 1;
 }
+.kb-ctxbar__mi:disabled {
+  cursor: default;
+  color: var(--ink-dim);
+  flex-wrap: wrap;
+}
+.kb-ctxbar__mi:disabled:hover {
+  background: none;
+}
+.kb-ctxbar__mi-cap {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--ink-dim);
+}
 .kb-ctxbar__mi-key {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
